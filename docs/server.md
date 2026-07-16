@@ -80,7 +80,7 @@ If you want the well-known manifest at a separate path, add an explicit route to
 `clank/node` provides the dependency-free adapter for Node 22.13+:
 
 ```ts
-import { serve, staticFiles } from "clank/node";
+import { serve, staticFiles } from "clank.run/node";
 
 const publicFiles = staticFiles("./public", { prefix: "/assets" });
 const app = createApp()

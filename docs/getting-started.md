@@ -81,7 +81,7 @@ clank build src dist
 clank watch src dist
 ```
 
-The default generated TSX import is `clank`. For direct browser modules without an import map, point it at the served framework module:
+The default generated TSX import is `clank.run`, the official npm package. For direct browser modules without an import map, point it at the served framework module:
 
 ```sh
 clank build src dist --jsx-import-source=/vendor/clank/index.js
@@ -105,18 +105,18 @@ npm run dev     # rebuild on changes and serve the example
 The root module exports everything. Smaller public paths are also available:
 
 ```ts
-import { signal } from "clank/core";
-import { h, render } from "clank/dom";
-import { createRouter } from "clank/router";
-import { defineAction, s } from "clank/ai";
-import { createForm } from "clank/forms";
-import { createDialog, createTabs } from "clank/ui";
-import { createApp, json } from "clank/server";
-import { defineAuth, createAuthClient } from "clank/auth";
-import { defineBackend, defineDatabase, defineTable } from "clank/backend";
-import { renderDocument } from "clank/ssr";
-import { serve, staticFiles } from "clank/node";
-import { compile, transformTSX } from "clank/compiler";
+import { signal } from "clank.run/core";
+import { h, render } from "clank.run/dom";
+import { createRouter } from "clank.run/router";
+import { defineAction, s } from "clank.run/ai";
+import { createForm } from "clank.run/forms";
+import { createDialog, createTabs } from "clank.run/ui";
+import { createApp, json } from "clank.run/server";
+import { defineAuth, createAuthClient } from "clank.run/auth";
+import { defineBackend, defineDatabase, defineTable } from "clank.run/backend";
+import { renderDocument } from "clank.run/ssr";
+import { serve, staticFiles } from "clank.run/node";
+import { compile, transformTSX } from "clank.run/compiler";
 ```
 
 No API mutates global state merely by being imported.

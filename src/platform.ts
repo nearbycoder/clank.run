@@ -11,6 +11,14 @@ import {
   backupSQLite,
   restoreSQLiteBackup,
 } from "./migrations.ts";
+import { openBackupManager } from "./recovery.ts";
+import { openDeploymentOrchestrator } from "./orchestration.ts";
+import {
+  createDomainManager,
+  createManagedIngress,
+  type DomainChallenge,
+  type DomainChallengeStore,
+} from "./data-plane.ts";
 import { requestOriginAllowed, RequestInputError, readJsonRequest } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
 
@@ -46,6 +54,13 @@ export interface ClankPlatformOptions {
   allowUnsafeMigrations?: boolean;
   deviceCodeLifetimeMs?: number;
   accessTokenLifetimeMs?: number;
+  ingress?: {
+    enabled?: boolean;
+    baseDomain?: string;
+    timeoutMs?: number;
+    maxBodyBytes?: number;
+    resolveTxt?: (hostname: string) => Promise<readonly (readonly string[])[]>;
+  };
   exposeErrors?: boolean;
   onError?: (error: unknown) => void;
 }
@@ -77,6 +92,7 @@ interface ActiveProcess {
 interface ProjectRow {
   id: string;
   ownerId: string;
+  organizationId: string | null;
   name: string;
   slug: string;
   port: number;
@@ -107,6 +123,17 @@ interface TokenPrincipal {
   tokenId: string;
   userId: string;
   email: string;
+  organizationId: string | null;
+  projectId: string | null;
+  permissions: readonly ProjectPermission[];
+}
+
+type OrganizationRole = "owner" | "admin" | "developer" | "viewer";
+type ProjectPermission = "read" | "deploy" | "rollback" | "secrets" | "tokens" | "audit";
+
+interface ProjectAccess {
+  project: ProjectRow;
+  role: OrganizationRole;
 }
 
 interface PlatformDatabase {
@@ -137,13 +164,21 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   // SQLite journals, backups, logs, and generated launchers owner-readable only.
   (globalThis as any).process.umask?.(0o077);
   const publicUrl = normalizePublicUrl(options.publicUrl);
+  const baseDomain = options.ingress?.baseDomain
+    ? normalizeHostname(options.ingress.baseDomain)
+    : undefined;
   const appUrlTemplate = normalizeAppUrlTemplate(
-    options.appUrlTemplate ?? `http://${options.appHostname ?? "127.0.0.1"}:{port}`,
+    options.appUrlTemplate
+      ?? (baseDomain
+        ? `https://{slug}.${baseDomain}`
+        : `http://${options.appHostname ?? "127.0.0.1"}:{port}`),
   );
   const paths = await prepareDirectories(options.dataDirectory);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, signupMode !== false);
+  const orchestrator = openDeploymentOrchestrator(storage.database);
+  const leaseOwner = `control-${(globalThis as any).process?.pid ?? 0}-${crypto.randomUUID()}`;
   const active = new Map<string, ActiveProcess>();
   const locks = new Map<string, Promise<unknown>>();
   const restartState = new Map<string, {
@@ -156,6 +191,49 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   let bootstrapRegistrationActive = false;
   let closed = false;
 
+  const domainStore: DomainChallengeStore = {
+    save(challenge) {
+      storage.internal.prepare(`INSERT INTO clank_platform_domains
+        (id, project_id, hostname, record_name, record_value, status, expires_at, verified_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(hostname) DO UPDATE SET id = excluded.id, project_id = excluded.project_id,
+          record_name = excluded.record_name, record_value = excluded.record_value,
+          status = excluded.status, expires_at = excluded.expires_at,
+          verified_at = excluded.verified_at`)
+        .run(
+          challenge.id,
+          challenge.projectId,
+          challenge.hostname,
+          challenge.recordName,
+          challenge.recordValue,
+          challenge.status,
+          challenge.expiresAt,
+          challenge.verifiedAt ?? null,
+          Date.now(),
+        );
+    },
+    get(id) {
+      const row = storage.internal.prepare("SELECT * FROM clank_platform_domains WHERE id = ?").get(id);
+      return row ? domainChallengeFromRow(row) : undefined;
+    },
+    byHostname(hostname) {
+      const row = storage.internal.prepare("SELECT * FROM clank_platform_domains WHERE hostname = ?").get(hostname);
+      return row ? domainChallengeFromRow(row) : undefined;
+    },
+  };
+  const domains = createDomainManager({
+    store: domainStore,
+    ...(options.ingress?.resolveTxt ? { resolveTxt: options.ingress.resolveTxt } : {}),
+  });
+  const ingressEnabled = options.ingress?.enabled === true || Boolean(baseDomain);
+  const ingress = ingressEnabled
+    ? createManagedIngress({
+        routes: () => ingressRoutes(storage.internal, baseDomain),
+        timeoutMs: options.ingress?.timeoutMs,
+        maxBodyBytes: options.ingress?.maxBodyBytes,
+      })
+    : undefined;
+
   const withProjectLock = async <Value>(projectId: string, operation: () => Promise<Value>): Promise<Value> => {
     const previous = locks.get(projectId) ?? Promise.resolve();
     let release!: () => void;
@@ -163,9 +241,38 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const queued = previous.catch(() => undefined).then(() => gate);
     locks.set(projectId, queued);
     await previous.catch(() => undefined);
+    let distributedLease;
     try {
-      return await operation();
+      const leaseDeadline = Date.now() + 30_000;
+      distributedLease = await orchestrator.acquireLease(`project:${projectId}`, leaseOwner);
+      while (!distributedLease && Date.now() < leaseDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 100)));
+        distributedLease = await orchestrator.acquireLease(`project:${projectId}`, leaseOwner);
+      }
+      if (!distributedLease) {
+        throw new PlatformError(409, "PROJECT_BUSY", "Another control-plane worker is changing this project.");
+      }
+    } catch (error) {
+      release();
+      if (locks.get(projectId) === queued) locks.delete(projectId);
+      throw error;
+    }
+    let currentLease = distributedLease;
+    let leaseLost = false;
+    const renewer = setInterval(() => {
+      void orchestrator.renewLease(currentLease).then((renewed) => {
+        if (renewed) currentLease = renewed;
+        else leaseLost = true;
+      }).catch(() => { leaseLost = true; });
+    }, 10_000);
+    renewer.unref?.();
+    try {
+      const value = await operation();
+      if (leaseLost) throw new PlatformError(409, "PROJECT_LEASE_LOST", "The project lease was lost during the operation.");
+      return value;
     } finally {
+      clearInterval(renewer);
+      await orchestrator.releaseLease(currentLease).catch(() => false);
       release();
       if (locks.get(projectId) === queued) locks.delete(projectId);
     }
@@ -498,6 +605,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
       const url = new URL(request.url);
+      if (ingress && normalizeHostname(url.hostname) !== normalizeHostname(new URL(publicUrl).hostname)) {
+        return await ingress.handle(request);
+      }
       if (url.pathname === "/healthz" && request.method === "GET") {
         return api({ ok: true, status: "ready" });
       }
@@ -619,19 +729,38 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
 
       const principal = await requireToken(storage.internal, request);
       if (url.pathname === "/api/account" && request.method === "GET") {
-        return api({ ok: true, account: { id: principal.userId, email: principal.email } });
+        return api({
+          ok: true,
+          account: { id: principal.userId, email: principal.email },
+          token: {
+            id: principal.tokenId,
+            organizationId: principal.organizationId,
+            projectId: principal.projectId,
+            permissions: principal.permissions,
+          },
+        });
       }
       if (url.pathname === "/api/tokens" && request.method === "GET") {
-        const rows = storage.internal.prepare(`SELECT id, name, created_at, last_used_at, expires_at
-          FROM clank_platform_tokens
-          WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
-          ORDER BY created_at DESC`).all(principal.userId, Date.now());
-        return api({ ok: true, tokens: rows.map((row) => ({
+        const tokenRows = principal.projectId
+          ? storage.internal.prepare(`SELECT id, name, organization_id, project_id, permissions,
+              created_at, last_used_at, expires_at
+            FROM clank_platform_tokens
+            WHERE user_id = ? AND id = ? AND revoked_at IS NULL AND expires_at > ?
+            ORDER BY created_at DESC`).all(principal.userId, principal.tokenId, Date.now())
+          : storage.internal.prepare(`SELECT id, name, organization_id, project_id, permissions,
+              created_at, last_used_at, expires_at
+            FROM clank_platform_tokens
+            WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+            ORDER BY created_at DESC`).all(principal.userId, Date.now());
+        return api({ ok: true, tokens: tokenRows.map((row) => ({
           id: String(row.id),
           name: String(row.name),
           createdAt: Number(row.created_at),
           lastUsedAt: row.last_used_at === null ? null : Number(row.last_used_at),
           expiresAt: Number(row.expires_at),
+          organizationId: row.organization_id === null ? null : String(row.organization_id),
+          projectId: row.project_id === null ? null : String(row.project_id),
+          permissions: parseProjectPermissions(row.permissions),
           current: String(row.id) === principal.tokenId,
         })) });
       }
@@ -645,6 +774,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       const tokenMatch = /^\/api\/tokens\/([A-Za-z0-9_-]{8,128})$/.exec(url.pathname);
       if (tokenMatch && request.method === "DELETE") {
+        if (principal.projectId && tokenMatch[1] !== principal.tokenId) {
+          throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens can revoke only themselves.");
+        }
         const result = storage.internal.prepare(
           "UPDATE clank_platform_tokens SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
         ).run(Date.now(), tokenMatch[1], principal.userId);
@@ -654,25 +786,199 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         });
         return api({ ok: true });
       }
-      if (url.pathname === "/api/projects" && request.method === "GET") {
-        const rows = storage.internal.prepare(
-          "SELECT * FROM clank_platform_projects WHERE owner_id = ? ORDER BY created_at",
-        ).all(principal.userId);
-        return api({ ok: true, projects: rows.map((row) => projectPayload(projectRow(row))) });
+      if (url.pathname === "/api/organizations" && request.method === "GET") {
+        if (principal.projectId) throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot list organizations.");
+        const rows = storage.internal.prepare(`SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, m.role
+          FROM clank_platform_organizations o
+          JOIN clank_platform_memberships m ON m.organization_id = o.id
+          WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
+        return api({ ok: true, organizations: rows.map((row) => ({
+          id: String(row.id),
+          name: String(row.name),
+          slug: String(row.slug),
+          role: String(row.role),
+          createdAt: Number(row.created_at),
+          updatedAt: Number(row.updated_at),
+        })) });
       }
-      if (url.pathname === "/api/projects" && request.method === "POST") {
+      if (url.pathname === "/api/organizations" && request.method === "POST") {
+        if (principal.projectId) throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot create organizations.");
         const input = plainObject(await readJsonRequest(request, 16 * 1024));
         exact(input, ["name", "slug"]);
         const name = boundedString(input.name, "name", 1, 100);
         const slug = normalizeSlug(input.slug === undefined ? name : boundedString(input.slug, "slug", 1, 50));
+        const organization = await createOrganization(storage.internal, principal.userId, name, slug);
+        audit(storage.internal, principal.userId, principal.tokenId, null, "organization.create", {
+          organizationId: organization.id,
+          name,
+          slug,
+        });
+        return api({ ok: true, organization }, 201);
+      }
+      if (url.pathname === "/api/invitations/accept" && request.method === "POST") {
+        if (principal.projectId) throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot accept invitations.");
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["token"]);
+        const token = boundedString(input.token, "token", 20, 300);
+        const invitation = storage.internal.prepare(`SELECT * FROM clank_platform_invitations
+          WHERE token_hash = ?`).get(syncHash(token));
+        if (
+          !invitation
+          || invitation.accepted_at !== null
+          || invitation.revoked_at !== null
+          || Number(invitation.expires_at) <= Date.now()
+          || String(invitation.email).toLowerCase() !== principal.email.toLowerCase()
+        ) throw new PlatformError(400, "INVALID_INVITATION", "Invitation is invalid or expired.");
+        const now = Date.now();
+        storage.internal.transaction((changes) => {
+          const accepted = storage.internal.prepare(`UPDATE clank_platform_invitations SET accepted_at = ?
+            WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+            .run(now, invitation.id, now);
+          if (Number(accepted.changes) !== 1) {
+            throw new PlatformError(409, "INVITATION_USED", "Invitation was already handled.");
+          }
+          storage.internal.prepare(`INSERT INTO clank_platform_memberships
+            (organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(organization_id, user_id) DO UPDATE SET
+              role = CASE WHEN clank_platform_memberships.role = 'owner' THEN 'owner' ELSE excluded.role END,
+              updated_at = excluded.updated_at`)
+            .run(invitation.organization_id, principal.userId, invitation.role, now, now);
+          changes.record("__platform", String(invitation.organization_id));
+        });
+        audit(storage.internal, principal.userId, principal.tokenId, null, "invitation.accept", {
+          organizationId: String(invitation.organization_id),
+          invitationId: String(invitation.id),
+        });
+        return api({ ok: true, organizationId: String(invitation.organization_id), role: String(invitation.role) });
+      }
+      const organizationMatch = /^\/api\/organizations\/([A-Za-z0-9_-]{8,128})(?:\/(.*))?$/.exec(url.pathname);
+      if (organizationMatch) {
+        if (principal.projectId) throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot administer organizations.");
+        const organizationId = organizationMatch[1]!;
+        const membership = organizationMembership(storage.internal, organizationId, principal.userId);
+        const operation = organizationMatch[2] ?? "";
+        if (!operation && request.method === "GET") {
+          const members = storage.internal.prepare(`SELECT u.id, u.email, m.role, m.created_at, m.updated_at
+            FROM clank_platform_memberships m JOIN clank_auth_users u ON u.id = m.user_id
+            WHERE m.organization_id = ? ORDER BY m.created_at`).all(organizationId);
+          return api({
+            ok: true,
+            organization: { id: organizationId, name: membership.name, slug: membership.slug, role: membership.role },
+            members: members.map((row) => ({
+              id: String(row.id),
+              email: String(row.email),
+              role: String(row.role),
+              createdAt: Number(row.created_at),
+              updatedAt: Number(row.updated_at),
+            })),
+          });
+        }
+        if (operation === "invitations" && request.method === "POST") {
+          requireOrganizationAdministration(membership.role);
+          const input = plainObject(await readJsonRequest(request, 16 * 1024));
+          exact(input, ["email", "role", "expiresIn"]);
+          const email = normalizeEmail(input.email);
+          const role = validateOrganizationRole(String(input.role ?? "developer"), false);
+          const expiresIn = input.expiresIn === undefined
+            ? 7 * 24 * 60 * 60
+            : integerInRange(input.expiresIn, "expiresIn", 300, 30 * 24 * 60 * 60);
+          const token = `clnki_${await randomToken(32)}`;
+          const id = await randomId(18);
+          const expiresAt = Date.now() + expiresIn * 1_000;
+          storage.internal.prepare(`INSERT INTO clank_platform_invitations
+            (id, token_hash, organization_id, email, role, invited_by, expires_at, accepted_at, revoked_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`)
+            .run(id, syncHash(token), organizationId, email, role, principal.userId, expiresAt, Date.now());
+          audit(storage.internal, principal.userId, principal.tokenId, null, "invitation.create", {
+            organizationId,
+            invitationId: id,
+            email,
+            role,
+          });
+          return api({ ok: true, invitation: { id, token, email, role, expiresAt } }, 201);
+        }
+        const memberMatch = /^members\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
+        if (memberMatch && (request.method === "PATCH" || request.method === "DELETE")) {
+          requireOrganizationAdministration(membership.role);
+          const memberId = memberMatch[1]!;
+          const target = storage.internal.prepare(`SELECT role FROM clank_platform_memberships
+            WHERE organization_id = ? AND user_id = ?`).get(organizationId, memberId);
+          if (!target) throw new PlatformError(404, "MEMBER_NOT_FOUND", "Organization member not found.");
+          const targetRole = validateOrganizationRole(String(target.role), true);
+          if (targetRole === "owner" && membership.role !== "owner") {
+            throw new PlatformError(403, "ROLE_DENIED", "Only an owner can change another owner.");
+          }
+          let nextRole: OrganizationRole | null = null;
+          if (request.method === "PATCH") {
+            const input = plainObject(await readJsonRequest(request, 8 * 1024));
+            exact(input, ["role"]);
+            nextRole = validateOrganizationRole(String(input.role), true);
+            if (nextRole === "owner" && membership.role !== "owner") {
+              throw new PlatformError(403, "ROLE_DENIED", "Only an owner can grant the owner role.");
+            }
+          }
+          if (targetRole === "owner" && nextRole !== "owner") {
+            const owners = Number(storage.internal.prepare(`SELECT count(*) AS count FROM clank_platform_memberships
+              WHERE organization_id = ? AND role = 'owner'`).get(organizationId)?.count ?? 0);
+            if (owners <= 1) throw new PlatformError(409, "LAST_OWNER", "An organization must retain at least one owner.");
+          }
+          const now = Date.now();
+          storage.internal.transaction((changes) => {
+            if (request.method === "DELETE") {
+              storage.internal.prepare("DELETE FROM clank_platform_memberships WHERE organization_id = ? AND user_id = ?")
+                .run(organizationId, memberId);
+              storage.internal.prepare(`UPDATE clank_platform_tokens SET revoked_at = ?
+                WHERE user_id = ? AND revoked_at IS NULL
+                  AND (organization_id = ? OR project_id IN (
+                    SELECT id FROM clank_platform_projects WHERE organization_id = ?
+                  ))`).run(now, memberId, organizationId, organizationId);
+            } else {
+              storage.internal.prepare(`UPDATE clank_platform_memberships SET role = ?, updated_at = ?
+                WHERE organization_id = ? AND user_id = ?`).run(nextRole, now, organizationId, memberId);
+            }
+            changes.record("__platform", organizationId);
+          });
+          audit(storage.internal, principal.userId, principal.tokenId, null, request.method === "DELETE"
+            ? "member.remove"
+            : "member.role", { organizationId, memberId, role: nextRole });
+          return api({ ok: true, memberId, ...(nextRole ? { role: nextRole } : { removed: true }) });
+        }
+        throw new PlatformError(404, "NOT_FOUND", "Organization endpoint not found.");
+      }
+      if (url.pathname === "/api/projects" && request.method === "GET") {
+        if (principal.projectId && !principal.permissions.includes("read")) {
+          throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metadata.");
+        }
+        const rows = principal.projectId
+          ? storage.internal.prepare(`SELECT p.* FROM clank_platform_projects p
+              JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
+              WHERE p.id = ? AND m.user_id = ?`).all(principal.projectId, principal.userId)
+          : storage.internal.prepare(`SELECT DISTINCT p.* FROM clank_platform_projects p
+              LEFT JOIN clank_platform_memberships m
+                ON m.organization_id = p.organization_id AND m.user_id = ?
+              WHERE m.user_id IS NOT NULL OR p.owner_id = ? ORDER BY p.created_at`)
+              .all(principal.userId, principal.userId);
+        return api({ ok: true, projects: rows.map((row) => projectPayload(projectRow(row))) });
+      }
+      if (url.pathname === "/api/projects" && request.method === "POST") {
+        if (principal.projectId) throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot create projects.");
+        const input = plainObject(await readJsonRequest(request, 16 * 1024));
+        exact(input, ["name", "slug", "organizationId"]);
+        const name = boundedString(input.name, "name", 1, 100);
+        const slug = normalizeSlug(input.slug === undefined ? name : boundedString(input.slug, "slug", 1, 50));
+        const organizationId = input.organizationId === undefined
+          ? await ensurePersonalOrganization(storage.internal, principal)
+          : boundedString(input.organizationId, "organizationId", 8, 128);
+        const membership = organizationMembership(storage.internal, organizationId, principal.userId);
+        requireOrganizationAdministration(membership.role);
         const id = await randomId(18);
         const port = allocatePort(storage.internal, options.appPortStart ?? 4300, options.appPortEnd ?? 4999);
         const now = Date.now();
         try {
           storage.internal.prepare(`INSERT INTO clank_platform_projects
-            (id, owner_id, name, slug, port, active_release_id, database_path, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`)
-            .run(id, principal.userId, name, slug, port, now, now);
+            (id, owner_id, organization_id, name, slug, port, active_release_id, database_path, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`)
+            .run(id, principal.userId, organizationId, name, slug, port, now, now);
         } catch (error) {
           if (safeError(error).toLowerCase().includes("unique")) {
             throw new PlatformError(409, "SLUG_UNAVAILABLE", "That project slug is unavailable.");
@@ -680,14 +986,35 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw error;
         }
         const project = projectById(storage.internal, id)!;
-        audit(storage.internal, principal.userId, principal.tokenId, id, "project.create", { name, slug, port });
+        audit(storage.internal, principal.userId, principal.tokenId, id, "project.create", {
+          name,
+          slug,
+          port,
+          organizationId,
+        });
         return api({ ok: true, project: projectPayload(project) }, 201);
       }
 
       const matched = /^\/api\/projects\/([A-Za-z0-9_-]{8,128})(?:\/(.*))?$/.exec(url.pathname);
       if (!matched) throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
-      const project = ownedProject(storage.internal, matched[1]!, principal.userId);
       const operation = matched[2] ?? "";
+      const requiredPermission: ProjectPermission = operation === "releases" && request.method === "POST"
+        ? "deploy"
+        : operation === "rollback"
+          ? "rollback"
+          : operation.startsWith("backups") && request.method !== "GET"
+            ? "rollback"
+          : operation.startsWith("domains")
+            ? "tokens"
+          : operation === "secrets" || operation.startsWith("secrets/")
+            ? "secrets"
+            : operation === "tokens"
+              ? "tokens"
+              : operation === "audit"
+                ? "audit"
+                : "read";
+      const access = accessibleProject(storage.internal, matched[1]!, principal, requiredPermission);
+      const project = access.project;
       if (!operation && request.method === "GET") {
         const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
         return api({ ok: true, project: projectPayload(project), activeRelease: release ? publicRelease(release) : null });
@@ -728,6 +1055,185 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? undefined
           : boundedString(input.confirmation, "confirmation", 1, 200);
         return api({ ok: true, release: await rollback(principal, project, releaseId, restoreData, confirmation) });
+      }
+      if (operation === "backups" && request.method === "GET") {
+        const manager = await projectBackupManager(paths.projects, project, masterKey);
+        try {
+          return api({ ok: true, backups: await manager.list() });
+        } finally {
+          manager.close();
+        }
+      }
+      if (operation === "backups" && request.method === "POST") {
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["reason"]);
+        const reason = input.reason === undefined
+          ? "manual"
+          : boundedString(input.reason, "reason", 1, 200);
+        const manager = await projectBackupManager(paths.projects, project, masterKey);
+        try {
+          const backup = await manager.create({ reason });
+          audit(storage.internal, principal.userId, principal.tokenId, project.id, "backup.create", {
+            backupId: backup.id,
+            reason,
+            databaseSha256: backup.databaseSha256,
+          });
+          return api({ ok: true, backup }, 201);
+        } finally {
+          manager.close();
+        }
+      }
+      const backupMatch = /^backups\/(bk_[A-Za-z0-9_-]{16,128})\/(verify|restore)$/.exec(operation);
+      if (backupMatch && request.method === "POST") {
+        const manager = await projectBackupManager(paths.projects, project, masterKey);
+        try {
+          if (backupMatch[2] === "verify") {
+            const verification = await manager.verify(backupMatch[1]!);
+            audit(storage.internal, principal.userId, principal.tokenId, project.id, "backup.verify", {
+              backupId: backupMatch[1],
+              durationMs: verification.durationMs,
+            });
+            return api({ ok: true, verification });
+          }
+          const input = plainObject(await readJsonRequest(request, 8 * 1024));
+          exact(input, ["confirmation"]);
+          const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
+          const expectedConfirmation = `restore-backup ${project.slug} ${backupMatch[1]}`;
+          if (confirmation !== expectedConfirmation) {
+            throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expectedConfirmation}".`);
+          }
+          return await withProjectLock(project.id, async () => {
+            cancelRestart(project.id);
+            const activeRelease = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
+            const safety = await manager.create({ reason: `automatic safety copy before restoring ${backupMatch[1]}` });
+            await stopProject(project.id);
+            try {
+              const verification = await manager.restore(backupMatch[1]!, {
+                confirmation: `restore ${backupMatch[1]}`,
+              });
+              if (activeRelease) {
+                await startRelease(project, activeRelease, decryptProjectSecrets(storage.internal, project.id, masterKey));
+              }
+              audit(storage.internal, principal.userId, principal.tokenId, project.id, "backup.restore", {
+                backupId: backupMatch[1],
+                safetyBackupId: safety.id,
+              });
+              return api({ ok: true, verification, safetyBackupId: safety.id });
+            } catch (error) {
+              try {
+                await manager.restore(safety.id, { confirmation: `restore ${safety.id}` });
+                if (activeRelease) {
+                  await startRelease(project, activeRelease, decryptProjectSecrets(storage.internal, project.id, masterKey));
+                }
+              } catch (recoveryError) {
+                options.onError?.(recoveryError);
+              }
+              throw new PlatformError(422, "BACKUP_RESTORE_FAILED", safeError(error));
+            }
+          });
+        } finally {
+          manager.close();
+        }
+      }
+      if (operation === "tokens" && request.method === "POST") {
+        const input = plainObject(await readJsonRequest(request, 16 * 1024));
+        exact(input, ["name", "permissions", "expiresIn"]);
+        const name = boundedString(input.name ?? "Project automation", "name", 1, 100);
+        const permissions = inputProjectPermissions(input.permissions);
+        for (const permission of permissions) {
+          if (!roleAllows(access.role, permission)) {
+            throw new PlatformError(403, "ROLE_DENIED", `Your role cannot grant ${permission} permission.`);
+          }
+        }
+        const expiresIn = input.expiresIn === undefined
+          ? 30 * 24 * 60 * 60
+          : integerInRange(input.expiresIn, "expiresIn", 300, 365 * 24 * 60 * 60);
+        const rawToken = `${TOKEN_PREFIX}${await randomToken(32)}`;
+        const tokenId = await randomId(18);
+        const expiresAt = Date.now() + expiresIn * 1_000;
+        storage.internal.prepare(`INSERT INTO clank_platform_tokens
+          (id, token_hash, user_id, name, created_at, last_used_at, expires_at, revoked_at,
+           organization_id, project_id, permissions)
+          VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)`)
+          .run(
+            tokenId,
+            syncHash(rawToken),
+            principal.userId,
+            name,
+            Date.now(),
+            expiresAt,
+            project.organizationId,
+            project.id,
+            JSON.stringify(permissions),
+          );
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "project-token.create", {
+          tokenId,
+          name,
+          permissions,
+          expiresAt,
+        });
+        return api({
+          ok: true,
+          token: {
+            id: tokenId,
+            accessToken: rawToken,
+            projectId: project.id,
+            organizationId: project.organizationId,
+            permissions,
+            expiresAt,
+          },
+        }, 201);
+      }
+      if (operation === "domains" && request.method === "GET") {
+        const rows = storage.internal.prepare(`SELECT id, hostname, record_name, record_value, status,
+            expires_at, verified_at, created_at
+          FROM clank_platform_domains WHERE project_id = ? ORDER BY created_at`).all(project.id);
+        return api({ ok: true, domains: rows.map((row) => ({
+          id: String(row.id),
+          hostname: String(row.hostname),
+          recordName: String(row.record_name),
+          recordType: "TXT",
+          recordValue: String(row.record_value),
+          status: String(row.status),
+          expiresAt: Number(row.expires_at),
+          verifiedAt: row.verified_at === null ? null : Number(row.verified_at),
+          createdAt: Number(row.created_at),
+        })) });
+      }
+      if (operation === "domains" && request.method === "POST") {
+        if (!ingress) throw new PlatformError(409, "INGRESS_DISABLED", "Managed ingress is not enabled.");
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["hostname"]);
+        const hostname = boundedString(input.hostname, "hostname", 1, 253);
+        const challenge = await domains.begin(project.id, hostname);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "domain.begin", {
+          domainId: challenge.id,
+          hostname: challenge.hostname,
+        });
+        return api({ ok: true, domain: challenge }, 201);
+      }
+      const domainMatch = /^domains\/(dom_[A-Za-z0-9_-]{12,128})(?:\/(verify))?$/.exec(operation);
+      if (domainMatch && domainMatch[2] === "verify" && request.method === "POST") {
+        if (!ingress) throw new PlatformError(409, "INGRESS_DISABLED", "Managed ingress is not enabled.");
+        const current = await domainStore.get(domainMatch[1]!);
+        if (!current || current.projectId !== project.id) {
+          throw new PlatformError(404, "DOMAIN_NOT_FOUND", "Domain not found.");
+        }
+        const verified = await domains.verify(current.id);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "domain.verify", {
+          domainId: verified.id,
+          hostname: verified.hostname,
+        });
+        return api({ ok: true, domain: verified });
+      }
+      if (domainMatch && !domainMatch[2] && request.method === "DELETE") {
+        const result = storage.internal.prepare("DELETE FROM clank_platform_domains WHERE id = ? AND project_id = ?")
+          .run(domainMatch[1], project.id);
+        if (Number(result.changes) !== 1) throw new PlatformError(404, "DOMAIN_NOT_FOUND", "Domain not found.");
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "domain.delete", {
+          domainId: domainMatch[1],
+        });
+        return api({ ok: true });
       }
       if (operation === "logs" && request.method === "GET") {
         const limit = Math.min(1_000, Math.max(1, Number(url.searchParams.get("limit") ?? 200) || 200));
@@ -838,6 +1344,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       restartState.clear();
       await Promise.all([...active.keys()].map(stopProject));
       storage.auth.close();
+      orchestrator.close();
       storage.database.close();
     },
   };
@@ -852,6 +1359,10 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
   for (const table of [
     "tokens",
     "device_codes",
+    "organizations",
+    "memberships",
+    "invitations",
+    "domains",
     "projects",
     "releases",
     "secrets",
@@ -868,8 +1379,21 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     created_at INTEGER NOT NULL,
     last_used_at INTEGER,
     expires_at INTEGER NOT NULL,
-    revoked_at INTEGER
+    revoked_at INTEGER,
+    organization_id TEXT,
+    project_id TEXT,
+    permissions TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(permissions))
   )`);
+  const tokenColumns = internal.prepare("PRAGMA table_info(clank_platform_tokens)").all();
+  if (!tokenColumns.some((column) => column.name === "organization_id")) {
+    internal.exec("ALTER TABLE clank_platform_tokens ADD COLUMN organization_id TEXT");
+  }
+  if (!tokenColumns.some((column) => column.name === "project_id")) {
+    internal.exec("ALTER TABLE clank_platform_tokens ADD COLUMN project_id TEXT");
+  }
+  if (!tokenColumns.some((column) => column.name === "permissions")) {
+    internal.exec("ALTER TABLE clank_platform_tokens ADD COLUMN permissions TEXT NOT NULL DEFAULT '[]'");
+  }
   internal.exec("DROP INDEX IF EXISTS proact_platform_tokens_user");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_tokens_user ON clank_platform_tokens (user_id)");
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_device_codes (
@@ -883,9 +1407,40 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     last_poll_at INTEGER NOT NULL,
     consumed_at INTEGER
   )`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_organizations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    created_by TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE RESTRICT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_memberships (
+    organization_id TEXT NOT NULL REFERENCES clank_platform_organizations(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'developer', 'viewer')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (organization_id, user_id)
+  )`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_memberships_user ON clank_platform_memberships (user_id, organization_id)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_invitations (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    organization_id TEXT NOT NULL REFERENCES clank_platform_organizations(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('admin', 'developer', 'viewer')),
+    invited_by TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL,
+    accepted_at INTEGER,
+    revoked_at INTEGER,
+    created_at INTEGER NOT NULL
+  )`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_invitations_org ON clank_platform_invitations (organization_id, created_at)");
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_projects (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    organization_id TEXT REFERENCES clank_platform_organizations(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
     port INTEGER NOT NULL UNIQUE,
@@ -894,6 +1449,23 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`);
+  const projectColumns = internal.prepare("PRAGMA table_info(clank_platform_projects)").all();
+  if (!projectColumns.some((column) => column.name === "organization_id")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN organization_id TEXT");
+  }
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_projects_org ON clank_platform_projects (organization_id, created_at)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_domains (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    hostname TEXT NOT NULL UNIQUE,
+    record_name TEXT NOT NULL,
+    record_value TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'verified')),
+    expires_at INTEGER NOT NULL,
+    verified_at INTEGER,
+    created_at INTEGER NOT NULL
+  )`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_domains_project ON clank_platform_domains (project_id, created_at)");
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_releases (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
@@ -942,6 +1514,32 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
   )`);
   internal.prepare("DELETE FROM clank_platform_device_codes WHERE expires_at <= ?").run(Date.now());
   internal.prepare("DELETE FROM clank_platform_tokens WHERE expires_at <= ?").run(Date.now());
+  internal.prepare("DELETE FROM clank_platform_invitations WHERE expires_at <= ? OR revoked_at IS NOT NULL").run(Date.now());
+  const legacyOwners = internal.prepare(`SELECT DISTINCT p.owner_id, u.email
+    FROM clank_platform_projects p
+    JOIN clank_auth_users u ON u.id = p.owner_id
+    WHERE p.organization_id IS NULL`).all();
+  for (const row of legacyOwners) {
+    const userId = String(row.owner_id);
+    let organization = internal.prepare(
+      "SELECT id FROM clank_platform_organizations WHERE created_by = ? ORDER BY created_at LIMIT 1",
+    ).get(userId);
+    if (!organization) {
+      const id = await randomId(18);
+      const base = normalizeSlug(`personal-${id.slice(0, 10)}`);
+      const now = Date.now();
+      internal.prepare(`INSERT INTO clank_platform_organizations
+        (id, name, slug, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(id, "Personal workspace", base, userId, now, now);
+      organization = { id };
+    }
+    const organizationId = String(organization.id);
+    internal.prepare(`INSERT OR IGNORE INTO clank_platform_memberships
+      (organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, 'owner', ?, ?)`)
+      .run(organizationId, userId, Date.now(), Date.now());
+    internal.prepare("UPDATE clank_platform_projects SET organization_id = ? WHERE owner_id = ? AND organization_id IS NULL")
+      .run(organizationId, userId);
+  }
   return { database, internal, auth };
 }
 
@@ -959,7 +1557,8 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
   const authorization = request.headers.get("authorization") ?? "";
   const matched = /^Bearer ((?:clnk|prct)_[A-Za-z0-9_-]{40,200})$/.exec(authorization);
   if (!matched) throw new PlatformError(401, "INVALID_TOKEN", "A valid CLI access token is required.");
-  const row = internal.prepare(`SELECT t.id, t.user_id, t.expires_at, t.revoked_at, u.email, u.disabled
+  const row = internal.prepare(`SELECT t.id, t.user_id, t.organization_id, t.project_id, t.permissions,
+      t.expires_at, t.revoked_at, u.email, u.disabled
     FROM clank_platform_tokens t
     JOIN clank_auth_users u ON u.id = t.user_id
     WHERE t.token_hash = ?`).get(syncHash(matched[1]!));
@@ -967,13 +1566,23 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
     throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
   }
   internal.prepare("UPDATE clank_platform_tokens SET last_used_at = ? WHERE id = ?").run(Date.now(), row.id);
-  return { tokenId: String(row.id), userId: String(row.user_id), email: String(row.email) };
+  return {
+    tokenId: String(row.id),
+    userId: String(row.user_id),
+    email: String(row.email),
+    organizationId: row.organization_id === null ? null : String(row.organization_id),
+    projectId: row.project_id === null ? null : String(row.project_id),
+    permissions: parseProjectPermissions(row.permissions),
+  };
 }
 
 function projectRow(row: Record<string, unknown>): ProjectRow {
   return {
     id: String(row.id),
     ownerId: String(row.owner_id),
+    organizationId: row.organization_id === null || row.organization_id === undefined
+      ? null
+      : String(row.organization_id),
     name: String(row.name),
     slug: String(row.slug),
     port: Number(row.port),
@@ -1013,17 +1622,42 @@ function releaseById(internal: SQLiteInternal, id: string): ReleaseRow | null {
   return row ? releaseRow(row) : null;
 }
 
-function ownedProject(internal: SQLiteInternal, id: string, userId: string): ProjectRow {
-  const row = internal.prepare(
-    "SELECT * FROM clank_platform_projects WHERE id = ? AND owner_id = ?",
-  ).get(id, userId);
-  if (!row) throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
-  return projectRow(row);
+function accessibleProject(
+  internal: SQLiteInternal,
+  id: string,
+  principal: TokenPrincipal,
+  permission: ProjectPermission,
+): ProjectAccess {
+  if (principal.projectId && principal.projectId !== id) {
+    throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
+  }
+  const row = internal.prepare(`SELECT p.*, COALESCE(m.role,
+      CASE WHEN p.owner_id = ? THEN 'owner' ELSE NULL END) AS membership_role
+    FROM clank_platform_projects p
+    LEFT JOIN clank_platform_memberships m
+      ON m.organization_id = p.organization_id AND m.user_id = ?
+    WHERE p.id = ?`).get(principal.userId, principal.userId, id);
+  if (!row || row.membership_role === null) {
+    throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
+  }
+  const project = projectRow(row);
+  const role = validateOrganizationRole(String(row.membership_role), true);
+  if (principal.organizationId && project.organizationId !== principal.organizationId) {
+    throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
+  }
+  if (principal.projectId && !principal.permissions.includes(permission)) {
+    throw new PlatformError(403, "TOKEN_SCOPE_DENIED", `This token cannot perform ${permission} operations.`);
+  }
+  if (!roleAllows(role, permission)) {
+    throw new PlatformError(403, "ROLE_DENIED", `The ${role} role cannot perform ${permission} operations.`);
+  }
+  return { project, role };
 }
 
 function projectPayload(project: ProjectRow): Record<string, unknown> {
   return {
     id: project.id,
+    organizationId: project.organizationId,
     name: project.name,
     slug: project.slug,
     port: project.port,
@@ -1032,6 +1666,38 @@ function projectPayload(project: ProjectRow): Record<string, unknown> {
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };
+}
+
+function domainChallengeFromRow(row: Record<string, unknown>): DomainChallenge {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    hostname: String(row.hostname),
+    recordName: String(row.record_name),
+    recordType: "TXT",
+    recordValue: String(row.record_value),
+    status: String(row.status) as DomainChallenge["status"],
+    expiresAt: Number(row.expires_at),
+    ...(row.verified_at === null ? {} : { verifiedAt: Number(row.verified_at) }),
+  };
+}
+
+function ingressRoutes(internal: SQLiteInternal, baseDomain?: string) {
+  const projects = internal.prepare(`SELECT id, slug, port FROM clank_platform_projects
+    WHERE active_release_id IS NOT NULL ORDER BY id`).all();
+  return projects.map((project) => {
+    const hosts = internal.prepare(`SELECT hostname FROM clank_platform_domains
+      WHERE project_id = ? AND status = 'verified' ORDER BY hostname`).all(project.id)
+      .map((row) => String(row.hostname));
+    if (baseDomain) hosts.unshift(`${String(project.slug)}.${baseDomain}`);
+    return {
+      id: `route_${String(project.id)}`,
+      projectId: String(project.id),
+      hosts,
+      upstream: `http://127.0.0.1:${Number(project.port)}`,
+      active: hosts.length > 0,
+    };
+  });
 }
 
 function publicRelease(release: ReleaseRow): Record<string, unknown> {
@@ -1443,6 +2109,33 @@ async function projectDataDirectory(projectsRoot: string, projectId: string): Pr
   return root;
 }
 
+async function projectBackupManager(
+  projectsRoot: string,
+  project: ProjectRow,
+  masterKey: Uint8Array,
+) {
+  if (!project.databasePath) {
+    throw new PlatformError(409, "DATABASE_UNAVAILABLE", "Deploy the project before creating a database backup.");
+  }
+  const pathName = "node:path";
+  const path = await import(pathName) as unknown as { join(...segments: string[]): string };
+  const dataRoot = await projectDataDirectory(projectsRoot, project.id);
+  const databasePath = await safeProjectDataPath(dataRoot, project.databasePath);
+  const material = new Uint8Array(masterKey.byteLength + project.id.length);
+  material.set(masterKey);
+  material.set(new TextEncoder().encode(project.id), masterKey.byteLength);
+  const encryptionKey = new Uint8Array(await crypto.subtle.digest("SHA-256", material));
+  return openBackupManager({
+    databasePath,
+    repositoryDirectory: path.join(projectsRoot, project.id, "recovery"),
+    encryptionKey,
+    keyId: `project-${project.id.slice(0, 12)}`,
+    maxBackups: 30,
+    maxAgeMs: 90 * 24 * 60 * 60 * 1_000,
+    verifyAfterCreate: true,
+  });
+}
+
 async function newReleaseDirectory(projectsRoot: string, projectId: string, releaseId: string): Promise<string> {
   const fsName = "node:fs/promises";
   const pathName = "node:path";
@@ -1583,6 +2276,133 @@ function normalizeSlug(value: unknown): string {
   return slug;
 }
 
+function normalizeHostname(value: string): string {
+  const hostname = value.trim().toLowerCase().replace(/\.$/u, "");
+  if (
+    hostname.length < 1
+    || hostname.length > 253
+    || !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(hostname)
+  ) throw new PlatformError(422, "INVALID_HOSTNAME", "Hostname is invalid.");
+  return hostname;
+}
+
+const PROJECT_PERMISSIONS: readonly ProjectPermission[] = [
+  "read",
+  "deploy",
+  "rollback",
+  "secrets",
+  "tokens",
+  "audit",
+];
+
+function parseProjectPermissions(value: unknown): ProjectPermission[] {
+  let parsed: unknown;
+  try { parsed = typeof value === "string" ? JSON.parse(value) : value; }
+  catch { throw new PlatformError(500, "INVALID_TOKEN_SCOPE", "Stored token scope is invalid."); }
+  if (!Array.isArray(parsed)) throw new PlatformError(500, "INVALID_TOKEN_SCOPE", "Stored token scope is invalid.");
+  const permissions = [...new Set(parsed.map((entry) => String(entry)))];
+  if (permissions.some((entry) => !PROJECT_PERMISSIONS.includes(entry as ProjectPermission))) {
+    throw new PlatformError(500, "INVALID_TOKEN_SCOPE", "Stored token scope is invalid.");
+  }
+  return permissions as ProjectPermission[];
+}
+
+function inputProjectPermissions(value: unknown): ProjectPermission[] {
+  if (value === undefined) return ["read", "deploy"];
+  if (!Array.isArray(value) || value.length === 0 || value.length > PROJECT_PERMISSIONS.length) {
+    throw new PlatformError(422, "INVALID_PERMISSIONS", "permissions must be a non-empty array of project permissions.");
+  }
+  const permissions = [...new Set(value.map((entry) => boundedString(entry, "permission", 1, 32)))] as ProjectPermission[];
+  if (permissions.some((permission) => !PROJECT_PERMISSIONS.includes(permission))) {
+    throw new PlatformError(422, "INVALID_PERMISSIONS", `Valid permissions: ${PROJECT_PERMISSIONS.join(", ")}.`);
+  }
+  return permissions;
+}
+
+function validateOrganizationRole(value: string, allowOwner: boolean): OrganizationRole {
+  const roles: OrganizationRole[] = allowOwner
+    ? ["owner", "admin", "developer", "viewer"]
+    : ["admin", "developer", "viewer"];
+  if (!roles.includes(value as OrganizationRole)) {
+    throw new PlatformError(422, "INVALID_ROLE", `Role must be one of ${roles.join(", ")}.`);
+  }
+  return value as OrganizationRole;
+}
+
+function roleAllows(role: OrganizationRole, permission: ProjectPermission): boolean {
+  if (role === "owner" || role === "admin") return true;
+  if (role === "developer") return ["read", "deploy", "rollback", "audit"].includes(permission);
+  return permission === "read";
+}
+
+function organizationMembership(
+  internal: SQLiteInternal,
+  organizationId: string,
+  userId: string,
+): { role: OrganizationRole; name: string; slug: string } {
+  const row = internal.prepare(`SELECT m.role, o.name, o.slug
+    FROM clank_platform_memberships m
+    JOIN clank_platform_organizations o ON o.id = m.organization_id
+    WHERE m.organization_id = ? AND m.user_id = ?`).get(organizationId, userId);
+  if (!row) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "Organization not found.");
+  return {
+    role: validateOrganizationRole(String(row.role), true),
+    name: String(row.name),
+    slug: String(row.slug),
+  };
+}
+
+function requireOrganizationAdministration(role: OrganizationRole): void {
+  if (role !== "owner" && role !== "admin") {
+    throw new PlatformError(403, "ROLE_DENIED", "Organization administration requires the owner or admin role.");
+  }
+}
+
+async function createOrganization(
+  internal: SQLiteInternal,
+  userId: string,
+  name: string,
+  slug: string,
+): Promise<Record<string, unknown>> {
+  const id = await randomId(18);
+  const now = Date.now();
+  try {
+    internal.transaction((changes) => {
+      internal.prepare(`INSERT INTO clank_platform_organizations
+        (id, name, slug, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(id, name, slug, userId, now, now);
+      internal.prepare(`INSERT INTO clank_platform_memberships
+        (organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, 'owner', ?, ?)`)
+        .run(id, userId, now, now);
+      changes.record("__platform", id);
+    });
+  } catch (error) {
+    if (safeError(error).toLowerCase().includes("unique")) {
+      throw new PlatformError(409, "SLUG_UNAVAILABLE", "That organization slug is unavailable.");
+    }
+    throw error;
+  }
+  return { id, name, slug, role: "owner", createdAt: now, updatedAt: now };
+}
+
+async function ensurePersonalOrganization(
+  internal: SQLiteInternal,
+  principal: TokenPrincipal,
+): Promise<string> {
+  const existing = internal.prepare(`SELECT o.id
+    FROM clank_platform_organizations o
+    JOIN clank_platform_memberships m ON m.organization_id = o.id
+    WHERE m.user_id = ? AND m.role = 'owner'
+    ORDER BY o.created_at LIMIT 1`).get(principal.userId);
+  if (existing) return String(existing.id);
+  const id = await randomId(18);
+  const baseName = principal.email.split("@")[0]?.replace(/[^A-Za-z0-9 ]+/g, " ").trim() || "Personal";
+  const slug = normalizeSlug(`personal-${id.slice(0, 10)}`);
+  await createOrganization(internal, principal.userId, `${baseName}'s workspace`, slug);
+  const created = internal.prepare("SELECT id FROM clank_platform_organizations WHERE slug = ?").get(slug);
+  return String(created!.id);
+}
+
 function validateSecretName(name: string): void {
   if (!SECRET_NAME.test(name)
     || name.startsWith("CLANK_")
@@ -1620,6 +2440,21 @@ function boundedString(value: unknown, name: string, minimum: number, maximum: n
     throw new PlatformError(422, "INVALID_INPUT", `${name} must be a string from ${minimum} to ${maximum} characters.`);
   }
   return value;
+}
+
+function normalizeEmail(value: unknown): string {
+  const email = boundedString(value, "email", 3, 254).trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
+    throw new PlatformError(422, "INVALID_INPUT", "email must be a valid email address.");
+  }
+  return email;
+}
+
+function integerInRange(value: unknown, name: string, minimum: number, maximum: number): number {
+  if (!Number.isSafeInteger(value) || Number(value) < minimum || Number(value) > maximum) {
+    throw new PlatformError(422, "INVALID_INPUT", `${name} must be an integer from ${minimum} to ${maximum}.`);
+  }
+  return Number(value);
 }
 
 function normalizeUserCode(value: string): string {

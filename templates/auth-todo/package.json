@@ -9,6 +9,6 @@
     "deploy": "clank deploy"
   },
   "dependencies": {
-    "clank": "^__CLANK_VERSION__"
+    "clank.run": "^__CLANK_VERSION__"
   }
 }

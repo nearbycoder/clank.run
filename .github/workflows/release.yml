@@ -1,0 +1,67 @@
+name: Publish release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify, attest, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: npm
+    steps:
+      - name: Check out the release tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Select trusted-publishing Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Match package version to release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
+          test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
+
+      - name: Run complete release gate
+        run: npm run check
+
+      - name: Produce release tarball
+        id: pack
+        run: |
+          TARBALL="$(npm pack --json | node -e 'let value="";process.stdin.on("data",c=>value+=c).on("end",()=>process.stdout.write(JSON.parse(value)[0].filename))')"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the tarball
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-path: ${{ steps.pack.outputs.tarball }}
+
+      - name: Attach tarball to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: gh release upload "$RELEASE_TAG" "$TARBALL" --clobber
+
+      - name: Publish to npm through trusted publishing
+        run: npm publish

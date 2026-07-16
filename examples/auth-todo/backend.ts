@@ -6,7 +6,7 @@ import {
   DatabaseConflictError,
   s,
   type DocumentFor,
-} from "clank";
+} from "clank.run";
 
 const environment = (globalThis as unknown as {
   process?: { env?: Record<string, string | undefined> };

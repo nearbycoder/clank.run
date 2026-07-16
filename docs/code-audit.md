@@ -14,7 +14,7 @@ The audit covered:
 - form state, validation, submission, focus, and cancellation;
 - accessible disclosure, dialog, tabs, pagination, and directives;
 - semantic agent inspection and operation;
-- auth, data ownership, requests, files, deployment artifacts, migrations, secrets, and release supervision;
+- auth, passkeys, organization RBAC, data ownership, requests, files, deployment artifacts, migrations, secrets, ingress, backup, and release supervision;
 - examples, strict types, package contents, documentation, desktop rendering, and narrow viewports.
 
 ## Findings resolved
@@ -35,6 +35,12 @@ The audit covered:
 | Generated apps did not declare their runtime for local development and editor types | Scaffolds now depend only on their matching Clank release and include build, dev, start, and deploy scripts | Package-consumer scaffold verification |
 | A refreshed authenticated deployment page still displayed the `Sign in` heading | The server-rendered and client-rendered auth card now derive their heading from the same session state | Platform regression test and browser refresh verification |
 | The Proact name remained embedded across package, CLI, storage, protocol, and UI surfaces | Renamed the product to Clank with in-place data migration and narrowly scoped legacy readers | Rename compatibility tests and migrated production-state copy |
+| Authentication lacked production recovery and phishing-resistant credentials | Added email verification, generic single-use recovery, bounded MFA, WebAuthn passkeys, and atomic counter advancement | Auth and synthetic WebAuthn tests |
+| Project authority was account-wide | Added organizations, invitations, four roles, scoped tokens, permission intersection, and removal-time revocation | Platform RBAC and isolation tests |
+| Deploy coordination was local-only | Added durable authenticated leases, fences, nodes, desired generations, idempotent operations, retry, and stale-worker rejection | Orchestration and chaos tests |
+| Backups were release-local snapshots only | Added encrypted authenticated backup repositories, retention, verification, restore confirmation, safety copies, API, and CLI | Recovery, platform, conformance, and chaos tests |
+| The platform lacked a managed host/data-plane layer | Added exact-host ingress, DNS ownership challenges, external PostgreSQL transactions/migrations, and database provisioning contracts | Data-plane and platform tests |
+| Release security evidence was manual | Added ASVS-oriented mapping, threat model, package/secret audit, immutable CI actions, CodeQL, chaos tests, and beta gate | `npm run check` and GitHub workflows |
 
 ## Readability decisions
 
@@ -84,9 +90,9 @@ These examples demonstrate framework breadth. They do not replace domain-specifi
 - No built-in file-upload storage or image pipeline exists.
 - No virtualized list is included yet; large datasets should page server-side.
 - Dialogs are rendered in place rather than through a portal.
-- The deployment control plane is currently single-instance.
+- The built-in process supervisor remains single-leader even though durable distributed coordination primitives are available.
 - The trusted process runner is not a sandbox; use the Docker runner for stronger isolation.
-- Organization RBAC, MFA/recovery, signed provenance, and distributed deployment coordination remain future platform work.
+- TLS certificate automation, WAF/DDoS service, WebSocket ingress, remote worker integration, and globally distributed control storage remain future platform work.
 - Tailwind's browser build is suitable for examples and zero-install prototyping; production applications should serve compiled CSS.
 
 ## Release gate
@@ -99,5 +105,8 @@ A release is acceptable only after:
 4. package contents contain no databases, environment files, credentials, or platform state;
 5. fresh package consumers can type-check, scaffold, and build;
 6. representative applications pass browser interaction, console/error, accessibility-tree, and responsive-layout checks.
+7. `npm run conformance` passes against a packed release through browser auth, CLI device authorization, live synchronization, user isolation, deployment, migration, failed activation, rollback, and data restoration.
+8. `npm run security:audit` verifies dependency, package-content, credential-pattern, governance, least-privilege, immutable-action, OIDC, and evidence requirements.
+9. deterministic chaos tests prove worker reclaim/fencing, corrupt-backup fail-closed behavior, and ingress recovery.
 
 See `docs/security.md` and `docs/platform-security.md` for the separate security checklists.

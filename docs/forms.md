@@ -7,7 +7,7 @@ This keeps generated code readable. There is no component DSL to learn and no re
 ## Create a form
 
 ```tsx
-import { createForm, s } from "clank";
+import { createForm, s } from "clank.run";
 
 const signup = createForm({
   id: "signup",

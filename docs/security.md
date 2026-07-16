@@ -33,6 +33,9 @@ Clank treats browser input, agent input, URLs, cookies, request bodies, and pers
 - Only SHA-256 token hashes are stored in SQLite; raw session tokens exist only in cookies and the immediate response construction path.
 - Authenticated mutations require a constant-time CSRF-token comparison.
 - Login errors do not reveal whether an account exists or is disabled.
+- Email verification and password recovery tokens are hashed, expiring, and single-use; password reset revokes prior sessions.
+- Email-code MFA challenges are expiring, attempt-bounded, hashed, and single-use.
+- Passkeys verify challenge, origin, RP ID hash, user presence/verification, signature, and atomic signature-counter advancement.
 - Owned tables enforce the current user in SQL reads and writes.
 - Owner IDs also scope live-query invalidation, so one account's private writes do not republish another account's query.
 - Disabling users, role changes, and revoking sessions close associated live streams across same-host processes.
@@ -71,7 +74,9 @@ Clank treats browser input, agent input, URLs, cookies, request bodies, and pers
 - Database and backup paths reject final symbolic links and use private file permissions.
 - Migration, startup, or health failure restores the prior database and process.
 - Code rollback is health-gated; data rollback is narrowly scoped and confirmed.
-- Project ownership is checked for every release, log, secret, audit, and rollback.
+- Organization membership, role, project token scope, and project ownership are checked for every release, log, secret, token, domain, backup, audit, and rollback.
+- Encrypted backup manifests and ciphertext are authenticated and verified before restore.
+- Managed ingress uses exact unique hosts, constrained upstreams, bounded bodies/timeouts, hop-header stripping, safe retries, and circuits.
 
 See [Platform security](platform-security.md) for the runner trust boundary.
 
@@ -109,10 +114,10 @@ Also:
 - keep the SQLite file and backups outside static roots with restrictive OS permissions;
 - compile and serve Tailwind CSS locally in production;
 - add a shared rate limiter when running more than one process;
-- add email verification, reset, and MFA when the application's risk warrants them;
+- configure email verification, recovery, MFA, passkeys, and bot protection to match the application's risk;
 - log internal exceptions through `onError` without returning them to clients;
 - keep Node and Clank patched and back up the database.
-- run one control-plane instance per platform data directory;
+- run one active built-in process supervisor per project/data directory until a remote worker/leader topology is configured;
 - use Docker or stronger isolation for mutually untrusted deployers;
 - supply the platform master key from external secret management;
 - export scheduled backups and pre-release snapshots off-host.
@@ -171,3 +176,5 @@ Before release, verify:
 - the complete app works in two independent browser contexts.
 
 Clank's test suite contains executable checks for these invariants. Security is iterative: repeat this review when adding a new transport, credential type, storage backend, raw-HTML path, or deployment topology.
+
+See the [ASVS-oriented verification map](security-asvs.md), [threat model](threat-model.md), and [chaos drills](chaos-testing.md) for release evidence and residual responsibilities.

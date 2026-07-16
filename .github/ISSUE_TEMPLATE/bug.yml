@@ -1,0 +1,47 @@
+name: Bug report
+description: Report reproducible incorrect behavior in Clank.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, tokens, private source, or undisclosed security vulnerabilities. Use SECURITY.md for sensitive reports.
+  - type: input
+    id: version
+    attributes:
+      label: Clank version
+      placeholder: 0.7.0
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      placeholder: 22.13.0
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest source or repository that reproduces the behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant diagnostics
+      description: Redact secrets, cookies, tokens, personal data, database contents, and private URLs.

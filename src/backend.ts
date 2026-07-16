@@ -1260,7 +1260,9 @@ export async function openBackend<
     definition.auth ? { db, auth, user: auth?.user ?? null } : { db };
 
   const authorize = (fn: AnyBackendFunction, auth: AuthRequest<any> | null) => {
-    if (fn.access === "required" && !auth?.user) throw new AuthError("UNAUTHENTICATED", "Authentication is required.", 401);
+    if (fn.access !== "required") return;
+    if (!auth?.user) throw new AuthError("UNAUTHENTICATED", "Authentication is required.", 401);
+    if (definition.auth?.emailVerification.required) auth.requireVerified();
   };
 
   const setCache = (key: string, entry: CacheEntry) => {
