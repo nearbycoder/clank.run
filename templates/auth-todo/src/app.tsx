@@ -1,4 +1,4 @@
-/* @clankImportSource clank */
+/* @clankImportSource clank.run */
 import {
   AuthGate,
   createClient,
@@ -8,7 +8,7 @@ import {
   signal,
   type AuthState,
   type DefaultAuthProfile,
-} from "clank";
+} from "clank.run";
 import type { backend, Todo } from "./backend.ts";
 import { TodoView } from "./view.tsx";
 

@@ -12,7 +12,7 @@ npm install
 npm run dev
 ```
 
-The generated app includes auth, an owned Todo table, SSR, hydration, live updates, Tailwind, a health route, deployment configuration, and its first migration. Its only dependency is Clank itself, which has no transitive dependencies. The exact CLI runtime is still embedded into deployment artifacts, so the platform never runs an install hook.
+The generated app includes auth, an owned Todo table, SSR, hydration, live updates, Tailwind, a health route, deployment configuration, and its first migration. Its only dependency is the official `clank.run` package, which has no transitive dependencies. The exact CLI runtime is still embedded into deployment artifacts, so the platform never runs an install hook.
 
 ## Authenticate
 
@@ -83,6 +83,6 @@ Production migrations always run inside the deployment transaction.
 
 ## Automation
 
-Use a dedicated short-lived token and isolated `CLANK_HOME` for CI. Current tokens are user-scoped; project-scoped service accounts are future work.
+Use `clank token create` to issue a short-lived project token containing only the CI job's required permissions, and isolate it with a dedicated `CLANK_HOME`. Membership and token scope are re-evaluated on every request; removing the member or revoking the token stops future access.
 
 Successful commands exit `0`; input, auth, build, upload, migration, or health failures exit non-zero. Failed server revocation prevents `logout` from silently deleting the only local token reference. `--local` is for platform recovery.

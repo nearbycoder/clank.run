@@ -1,4 +1,4 @@
-/* @clankImportSource clank */
+/* @clankImportSource clank.run */
 import {
   AuthGate,
   authState,
@@ -11,7 +11,7 @@ import {
   securityHeaders,
   serve,
   staticFiles,
-} from "clank";
+} from "clank.run";
 import { backend } from "./backend.ts";
 import { TodoView } from "./view.tsx";
 
@@ -19,7 +19,7 @@ const environment = (globalThis as unknown as {
   process?: { env?: Record<string, string | undefined> };
 }).process?.env;
 const root = decodeURIComponent(new URL("./", import.meta.url).pathname);
-const frameworkRoot = decodeURIComponent(new URL("../node_modules/clank/dist/", import.meta.url).pathname);
+const frameworkRoot = decodeURIComponent(new URL("../node_modules/clank.run/dist/", import.meta.url).pathname);
 const databasePath = environment?.CLANK_DATABASE_PATH
   ?? environment?.CLANK_DATABASE
   ?? environment?.PROACT_DATABASE_PATH

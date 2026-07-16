@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { chmod, cp, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname, platform as operatingSystem } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createDeploymentBundle,
@@ -9,6 +9,12 @@ import {
   deploymentDigest,
   readDeploymentConfig,
 } from "../dist/deploy.js";
+import {
+  createAppPlan,
+  explainApp,
+  generateAppFiles,
+  parseAppBlueprint,
+} from "../dist/blueprint.js";
 import { applyMigrations, loadMigrations, planMigrations } from "../dist/migrations.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -20,15 +26,23 @@ export async function run(command, args) {
       case "help": return help();
       case "version": return version();
       case "create": return createProject(args);
+      case "plan": return blueprintPlan(args);
+      case "generate": return generateProject(args);
+      case "explain": return explainBlueprint(args);
       case "login": return login(args);
       case "logout": return logout(args);
       case "whoami": return whoami(args);
+      case "org":
+      case "organization": return organizationCommand(args);
       case "project": return projectCommand(args);
+      case "token": return tokenCommand(args);
+      case "domain": return domainCommand(args);
       case "deploy": return deploy(args);
       case "status": return status(args);
       case "releases": return releases(args);
       case "logs": return logs(args);
       case "rollback": return rollback(args);
+      case "backup": return backupCommand(args);
       case "secrets": return secrets(args);
       case "migrate": return migrate(args);
       case "inspect": return inspectArtifact(args);
@@ -49,6 +63,9 @@ function help() {
 
 Build:
   clank create <directory>             Create a deploy-ready authenticated app
+  clank plan [clank.app.ts]            Print a deterministic generated-file plan
+  clank explain [clank.app.ts]         Explain an app blueprint in plain language
+  clank generate [directory]           Generate from clank.app.ts without executing it
   clank build [src] [dist]             Compile TypeScript and TSX
   clank watch [src] [dist]             Rebuild when source files change
 
@@ -56,15 +73,32 @@ Platform:
   clank login --server <url>           Authorize this CLI in your browser
   clank logout [--server <url>]        Revoke and remove the CLI token
   clank whoami                          Show the active platform account
+  clank org list                        List organizations and roles
+  clank org create <name>               Create an organization
+  clank org invite <org> <email>        Create a single-use invitation
+  clank org accept <token>              Accept an invitation
+  clank org members <org>               List organization membership
+  clank org remove <org> <user>         Remove a member and revoke scoped tokens
   clank project create <name>          Create and link a project
   clank project list                   List projects
   clank project link <project-id>      Link this directory
+  clank token create                    Create a scoped token for the linked project
+  clank token list                      List active CLI and project tokens
+  clank token revoke <token-id>         Revoke a token
+  clank domain add <hostname>           Begin DNS ownership verification
+  clank domain list                     List custom domains
+  clank domain verify <domain-id>       Verify the published TXT record
+  clank domain remove <domain-id>       Remove a custom domain
   clank deploy [directory]             Build, package, migrate, and atomically deploy
   clank status                         Show the linked project and active release
   clank releases                       List release history
   clank logs [--limit=200]             Read application logs
   clank rollback <release-id>          Roll back code after a health check
   clank rollback <id> --restore-data --confirm="restore <slug>"
+  clank backup create [--reason <text>]
+  clank backup list
+  clank backup verify <backup-id>
+  clank backup restore <backup-id> --confirm="restore-backup <slug> <id>"
   clank secrets list
   clank secrets set NAME               Read a secret value from stdin
   clank secrets delete NAME
@@ -74,6 +108,86 @@ Platform:
 
 Deployment configuration is explicit in clank.deploy.json. No server-side
 package hooks are run, and no secrets are read from the project directory.`);
+}
+
+async function blueprintPlan(args) {
+  const path = await blueprintPath(positionals(args)[0] ?? option(args, "blueprint"));
+  const blueprint = parseAppBlueprint(await readFile(path, "utf8"), path);
+  const plan = await createAppPlan(blueprint, { frameworkVersion: packageJson.version });
+  const output = `${JSON.stringify(plan, null, 2)}\n`;
+  const outputPath = option(args, "output");
+  if (outputPath) {
+    const target = resolve(outputPath);
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await writeFile(target, output, { mode: 0o600 });
+    console.log(target);
+  } else {
+    process.stdout.write(output);
+  }
+}
+
+async function explainBlueprint(args) {
+  const path = await blueprintPath(positionals(args)[0] ?? option(args, "blueprint"));
+  const blueprint = parseAppBlueprint(await readFile(path, "utf8"), path);
+  process.stdout.write(explainApp(blueprint));
+}
+
+async function generateProject(args) {
+  const target = resolve(positionals(args)[0] ?? ".");
+  const path = await blueprintPath(option(args, "blueprint"));
+  const blueprint = parseAppBlueprint(await readFile(path, "utf8"), path);
+  const files = generateAppFiles(blueprint, { frameworkVersion: packageJson.version });
+  const force = flag(args, "force");
+  let created = 0;
+  let unchanged = 0;
+  await mkdir(target, { recursive: true });
+  for (const file of files) {
+    const destination = resolve(target, file.path);
+    if (!inside(target, destination)) throw new CliError(`Generated path escaped the target: ${file.path}`);
+    let existing;
+    try { existing = await readFile(destination, "utf8"); }
+    catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (existing === file.contents) {
+      unchanged++;
+      continue;
+    }
+    const isSourceBlueprint = resolve(path) === destination;
+    if (existing !== undefined && !force && !isSourceBlueprint) {
+      throw new CliError(`Refusing to overwrite ${destination}. Re-run with --force after reviewing the plan.`);
+    }
+    if (isSourceBlueprint && existing !== undefined && !force) {
+      unchanged++;
+      continue;
+    }
+    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+    const temporary = `${destination}.clank-generate-${process.pid}`;
+    await writeFile(temporary, file.contents, { mode: file.mode ?? 0o600 });
+    await rename(temporary, destination);
+    created++;
+  }
+  const plan = await createAppPlan(blueprint, { frameworkVersion: packageJson.version });
+  const planPath = join(target, ".clank", "plan.json");
+  await mkdir(dirname(planPath), { recursive: true, mode: 0o700 });
+  await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+  console.log(`Generated ${blueprint.name}: ${created} files written, ${unchanged} unchanged.`);
+  console.log(`Plan ${plan.digest}`);
+  console.log(`Next: cd ${target} && npm install && npm run dev`);
+}
+
+async function blueprintPath(value) {
+  if (value) return resolve(value);
+  for (const name of ["clank.app.ts", "clank.app.json"]) {
+    const path = resolve(name);
+    try {
+      await stat(path);
+      return path;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  throw new CliError("No app blueprint found. Create clank.app.ts or pass --blueprint <path>.");
 }
 
 async function createProject(args) {
@@ -160,6 +274,83 @@ async function whoami() {
   console.log(profile.server);
 }
 
+async function organizationCommand(args) {
+  const subcommand = args.shift();
+  const profile = await requireProfile();
+  if (subcommand === "list") {
+    const payload = await platformRequest(profile.server, "/api/organizations", { token: profile.token });
+    if (!payload.organizations.length) return console.log("No organizations.");
+    for (const organization of payload.organizations) {
+      console.log(`${organization.id}  ${organization.slug}  ${organization.role}`);
+    }
+    return;
+  }
+  if (subcommand === "create") {
+    const name = positionals(args)[0];
+    if (!name) throw new CliError("Usage: clank org create <name> [--slug <slug>]");
+    const payload = await platformRequest(profile.server, "/api/organizations", {
+      method: "POST",
+      token: profile.token,
+      body: { name, ...(option(args, "slug") ? { slug: option(args, "slug") } : {}) },
+    });
+    console.log(`Created ${payload.organization.slug} (${payload.organization.id})`);
+    return;
+  }
+  if (subcommand === "invite") {
+    const [organizationId, email] = positionals(args);
+    if (!organizationId || !email) {
+      throw new CliError("Usage: clank org invite <organization-id> <email> [--role developer]");
+    }
+    const payload = await platformRequest(
+      profile.server,
+      `/api/organizations/${encodeURIComponent(organizationId)}/invitations`,
+      {
+        method: "POST",
+        token: profile.token,
+        body: { email, role: option(args, "role") ?? "developer" },
+      },
+    );
+    console.log(`Invitation for ${payload.invitation.email} (${payload.invitation.role})`);
+    console.log(payload.invitation.token);
+    console.log(`Expires: ${new Date(payload.invitation.expiresAt).toISOString()}`);
+    return;
+  }
+  if (subcommand === "accept") {
+    const invitationToken = positionals(args)[0];
+    if (!invitationToken) throw new CliError("Usage: clank org accept <invitation-token>");
+    const payload = await platformRequest(profile.server, "/api/invitations/accept", {
+      method: "POST",
+      token: profile.token,
+      body: { token: invitationToken },
+    });
+    console.log(`Joined ${payload.organizationId} as ${payload.role}.`);
+    return;
+  }
+  if (subcommand === "members") {
+    const organizationId = positionals(args)[0];
+    if (!organizationId) throw new CliError("Usage: clank org members <organization-id>");
+    const payload = await platformRequest(
+      profile.server,
+      `/api/organizations/${encodeURIComponent(organizationId)}`,
+      { token: profile.token },
+    );
+    for (const member of payload.members) console.log(`${member.id}  ${member.email}  ${member.role}`);
+    return;
+  }
+  if (subcommand === "remove") {
+    const [organizationId, userId] = positionals(args);
+    if (!organizationId || !userId) throw new CliError("Usage: clank org remove <organization-id> <user-id>");
+    await platformRequest(
+      profile.server,
+      `/api/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}`,
+      { method: "DELETE", token: profile.token },
+    );
+    console.log(`Removed ${userId} and revoked its project-scoped tokens.`);
+    return;
+  }
+  throw new CliError("Usage: clank org <list|create|invite|accept|members|remove>");
+}
+
 async function projectCommand(args) {
   const subcommand = args.shift();
   const profile = await requireProfile();
@@ -176,7 +367,11 @@ async function projectCommand(args) {
     const payload = await platformRequest(profile.server, "/api/projects", {
       method: "POST",
       token: profile.token,
-      body: { name, ...(option(args, "slug") ? { slug: option(args, "slug") } : {}) },
+      body: {
+        name,
+        ...(option(args, "slug") ? { slug: option(args, "slug") } : {}),
+        ...(option(args, "org") ? { organizationId: option(args, "org") } : {}),
+      },
     });
     await saveLink(process.cwd(), profile.server, payload.project.id);
     console.log(`Created and linked ${payload.project.slug} (${payload.project.id})`);
@@ -191,6 +386,105 @@ async function projectCommand(args) {
     return;
   }
   throw new CliError("Usage: clank project <create|list|link>");
+}
+
+async function tokenCommand(args) {
+  const subcommand = args.shift();
+  const profile = await requireProfile();
+  if (subcommand === "list") {
+    const payload = await platformRequest(profile.server, "/api/tokens", { token: profile.token });
+    for (const token of payload.tokens) {
+      const scope = token.projectId ? `project:${token.projectId}` : "account";
+      console.log(`${token.id}  ${scope}  ${token.permissions.join(",") || "all accessible"}  ${token.current ? "(current)" : ""}`);
+    }
+    return;
+  }
+  if (subcommand === "create") {
+    const link = await readLink(process.cwd());
+    if (!link) throw new CliError("This directory is not linked to a project.");
+    if (link.server !== profile.server) throw new CliError(`This directory is linked to ${link.server}.`);
+    const permissions = (option(args, "permissions") ?? "read,deploy")
+      .split(",")
+      .map((permission) => permission.trim())
+      .filter(Boolean);
+    const expiresIn = option(args, "expires-in");
+    const payload = await platformRequest(
+      profile.server,
+      `/api/projects/${encodeURIComponent(link.projectId)}/tokens`,
+      {
+        method: "POST",
+        token: profile.token,
+        body: {
+          name: option(args, "name") ?? `${hostname()} project automation`,
+          permissions,
+          ...(expiresIn ? { expiresIn: Number(expiresIn) } : {}),
+        },
+      },
+    );
+    console.log(`Created project token ${payload.token.id}. This secret is shown once:`);
+    console.log(payload.token.accessToken);
+    console.log(`Expires: ${new Date(payload.token.expiresAt).toISOString()}`);
+    return;
+  }
+  if (subcommand === "revoke") {
+    const id = positionals(args)[0];
+    if (!id) throw new CliError("Usage: clank token revoke <token-id>");
+    await platformRequest(profile.server, `/api/tokens/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      token: profile.token,
+    });
+    console.log(`Revoked ${id}.`);
+    return;
+  }
+  throw new CliError("Usage: clank token <create|list|revoke>");
+}
+
+async function domainCommand(args) {
+  const subcommand = args.shift();
+  const { profile, link } = await linkedContext(process.cwd());
+  const base = `/api/projects/${encodeURIComponent(link.projectId)}/domains`;
+  if (subcommand === "list") {
+    const payload = await platformRequest(profile.server, base, { token: profile.token });
+    if (!payload.domains.length) return console.log("No custom domains.");
+    for (const domain of payload.domains) {
+      console.log(`${domain.id}  ${domain.hostname}  ${domain.status}`);
+    }
+    return;
+  }
+  if (subcommand === "add") {
+    const hostname = positionals(args)[0];
+    if (!hostname) throw new CliError("Usage: clank domain add <hostname>");
+    const payload = await platformRequest(profile.server, base, {
+      method: "POST",
+      token: profile.token,
+      body: { hostname },
+    });
+    console.log(`Add this DNS record, then run clank domain verify ${payload.domain.id}:`);
+    console.log(`${payload.domain.recordType} ${payload.domain.recordName} ${payload.domain.recordValue}`);
+    return;
+  }
+  if (subcommand === "verify") {
+    const id = positionals(args)[0];
+    if (!id) throw new CliError("Usage: clank domain verify <domain-id>");
+    const payload = await platformRequest(profile.server, `${base}/${encodeURIComponent(id)}/verify`, {
+      method: "POST",
+      token: profile.token,
+      body: {},
+    });
+    console.log(`Verified ${payload.domain.hostname}.`);
+    return;
+  }
+  if (subcommand === "remove") {
+    const id = positionals(args)[0];
+    if (!id) throw new CliError("Usage: clank domain remove <domain-id>");
+    await platformRequest(profile.server, `${base}/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      token: profile.token,
+    });
+    console.log(`Removed ${id}.`);
+    return;
+  }
+  throw new CliError("Usage: clank domain <add|list|verify|remove>");
 }
 
 async function deploy(args) {
@@ -285,6 +579,57 @@ async function rollback(args) {
     },
   });
   console.log(`Active release: ${payload.release.id}`);
+}
+
+async function backupCommand(args) {
+  const subcommand = args.shift();
+  const { profile, link } = await linkedContext(process.cwd());
+  const base = `/api/projects/${encodeURIComponent(link.projectId)}/backups`;
+  if (subcommand === "list") {
+    const payload = await platformRequest(profile.server, base, { token: profile.token });
+    if (!payload.backups.length) return console.log("No backups.");
+    for (const backup of payload.backups) {
+      console.log(`${backup.id}  ${new Date(backup.createdAt).toISOString()}  ${backup.databaseBytes} bytes  ${backup.reason}`);
+    }
+    return;
+  }
+  if (subcommand === "create") {
+    const payload = await platformRequest(profile.server, base, {
+      method: "POST",
+      token: profile.token,
+      body: { ...(option(args, "reason") ? { reason: option(args, "reason") } : {}) },
+    });
+    console.log(`Created and verified ${payload.backup.id}`);
+    console.log(`SHA-256: ${payload.backup.databaseSha256}`);
+    return;
+  }
+  if (subcommand === "verify") {
+    const id = positionals(args)[0];
+    if (!id) throw new CliError("Usage: clank backup verify <backup-id>");
+    const payload = await platformRequest(profile.server, `${base}/${encodeURIComponent(id)}/verify`, {
+      method: "POST",
+      token: profile.token,
+      body: {},
+    });
+    console.log(`Verified ${payload.verification.id} in ${payload.verification.durationMs}ms`);
+    return;
+  }
+  if (subcommand === "restore") {
+    const id = positionals(args)[0];
+    const confirmation = option(args, "confirm");
+    if (!id || !confirmation) {
+      throw new CliError("Usage: clank backup restore <backup-id> --confirm=\"restore-backup <slug> <backup-id>\"");
+    }
+    const payload = await platformRequest(profile.server, `${base}/${encodeURIComponent(id)}/restore`, {
+      method: "POST",
+      token: profile.token,
+      body: { confirmation },
+    });
+    console.log(`Restored ${payload.verification.id}`);
+    console.log(`Safety backup: ${payload.safetyBackupId}`);
+    return;
+  }
+  throw new CliError("Usage: clank backup <create|list|verify|restore>");
 }
 
 async function secrets(args) {
@@ -533,12 +878,17 @@ function positionals(args) {
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
     if (argument.startsWith("--")) {
-      if (!argument.includes("=") && !["--dry-run", "--no-open", "--restore-data", "--local"].includes(argument)) index++;
+      if (!argument.includes("=") && !["--dry-run", "--no-open", "--restore-data", "--local", "--force"].includes(argument)) index++;
       continue;
     }
     output.push(argument);
   }
   return output;
+}
+
+function inside(parent, child) {
+  const path = relative(parent, child);
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
 }
 
 async function replaceInFile(path, search, replacement) {

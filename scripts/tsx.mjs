@@ -14,7 +14,7 @@ export function transformTSX(source, options = {}) {
   // conventional jsx-runtime module while `jsx: preserve` is enabled.
   const importSource = source.match(/@clankImportSource\s+([^\s*]+)/)?.[1]
     ?? options.importSource
-    ?? "clank";
+    ?? "clank.run";
   const state = { source, transformed: false };
   const code = transformRegion(state, 0, source.length);
   if (!state.transformed) return { code: source, transformed: false };

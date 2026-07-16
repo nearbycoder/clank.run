@@ -13,6 +13,7 @@ export interface DefaultAuthProfile {
 export interface AuthUser<Profile extends object = DefaultAuthProfile> {
     id: AuthUserId;
     email: string;
+    emailVerified: boolean;
     role: string;
     profile: Profile;
     createdAt: number;
@@ -31,6 +32,7 @@ export interface AuthState<Profile extends object = DefaultAuthProfile> {
 }
 export interface AuthRequest<Profile extends object = DefaultAuthProfile> extends AuthState<Profile> {
     requireUser(): AuthUser<Profile>;
+    requireVerified(): AuthUser<Profile>;
     requireRole(...roles: string[]): AuthUser<Profile>;
 }
 export interface AuthCookieOptions {
@@ -52,6 +54,49 @@ export interface PasswordOptions {
 export interface AuthRateLimitOptions {
     attempts?: number;
     windowMs?: number;
+    store?: AuthRateLimitStore;
+}
+export interface AuthRateLimitStore {
+    consume(key: string, limit: number, windowMs: number): number | undefined | Promise<number | undefined>;
+    clear?(key: string): void | Promise<void>;
+    close?(): void | Promise<void>;
+}
+export interface AuthDelivery {
+    userId: AuthUserId;
+    email: string;
+    token: string;
+    expiresAt: number;
+}
+export interface AuthEmailVerificationOptions {
+    required?: boolean;
+    tokenLifetimeMs?: number;
+    send?: (delivery: AuthDelivery) => void | Promise<void>;
+}
+export interface AuthPasswordRecoveryOptions {
+    tokenLifetimeMs?: number;
+    send?: (delivery: AuthDelivery) => void | Promise<void>;
+}
+export interface AuthMfaOptions {
+    required?: boolean;
+    codeLifetimeMs?: number;
+    send?: (delivery: AuthDelivery & {
+        code: string;
+    }) => void | Promise<void>;
+}
+export interface AuthPasskeyOptions {
+    enabled?: boolean;
+    rpName?: string;
+    rpId?: string;
+    allowedOrigins?: readonly string[];
+    challengeLifetimeMs?: number;
+    requireUserVerification?: boolean;
+}
+export interface AuthBotProtectionOptions {
+    verify(input: {
+        request: Request;
+        action: "register" | "login" | "recover";
+        token?: string;
+    }): boolean | Promise<boolean>;
 }
 export interface AuthDefinitionOptions<ProfileShape extends SchemaShape> {
     profile?: ProfileShape;
@@ -63,6 +108,11 @@ export interface AuthDefinitionOptions<ProfileShape extends SchemaShape> {
     cookie?: AuthCookieOptions;
     password?: PasswordOptions;
     rateLimit?: AuthRateLimitOptions;
+    emailVerification?: AuthEmailVerificationOptions;
+    passwordRecovery?: AuthPasswordRecoveryOptions;
+    mfa?: AuthMfaOptions;
+    passkeys?: AuthPasskeyOptions;
+    botProtection?: AuthBotProtectionOptions;
 }
 export interface AuthDefinition<Profile extends object = DefaultAuthProfile> {
     readonly profile: Schema<Profile>;
@@ -77,7 +127,23 @@ export interface AuthDefinition<Profile extends object = DefaultAuthProfile> {
     readonly password: Required<Omit<PasswordOptions, "pepper">> & {
         pepper?: string;
     };
-    readonly rateLimit: Required<AuthRateLimitOptions>;
+    readonly rateLimit: Required<Omit<AuthRateLimitOptions, "store">> & {
+        store?: AuthRateLimitStore;
+    };
+    readonly emailVerification: Required<Omit<AuthEmailVerificationOptions, "send">> & {
+        send?: AuthEmailVerificationOptions["send"];
+    };
+    readonly passwordRecovery: Required<Omit<AuthPasswordRecoveryOptions, "send">> & {
+        send?: AuthPasswordRecoveryOptions["send"];
+    };
+    readonly mfa: Required<Omit<AuthMfaOptions, "send">> & {
+        send?: AuthMfaOptions["send"];
+    };
+    readonly passkeys: Required<Omit<AuthPasskeyOptions, "rpId" | "allowedOrigins">> & {
+        rpId?: string;
+        allowedOrigins: readonly string[];
+    };
+    readonly botProtection?: AuthBotProtectionOptions;
 }
 export declare function defineAuth(): AuthDefinition<DefaultAuthProfile>;
 export declare function defineAuth<const ProfileShape extends SchemaShape>(options: AuthDefinitionOptions<ProfileShape>): AuthDefinition<InferSchemaShape<ProfileShape>>;
@@ -89,10 +155,24 @@ type RegisterProfile<Profile extends object> = {} extends Profile ? {
 export type AuthRegisterInput<Profile extends object> = {
     email: string;
     password: string;
+    botToken?: string;
 } & RegisterProfile<Profile>;
 export interface AuthLoginInput {
     email: string;
     password: string;
+    botToken?: string;
+}
+export interface AuthMfaChallenge {
+    required: true;
+    challengeId: string;
+    expiresAt: number;
+}
+export interface AuthPasskeyRecord {
+    id: string;
+    name: string;
+    transports: readonly string[];
+    createdAt: number;
+    lastUsedAt?: number;
 }
 export declare class AuthError extends Error {
     readonly code: string;
@@ -131,12 +211,22 @@ export declare function openAuth<Profile extends object, DB extends DatabaseSche
 export interface AuthClient<Profile extends object = DefaultAuthProfile> {
     readonly user: ReactiveSignal<AuthUser<Profile> | null>;
     readonly session: ReactiveSignal<AuthSession | null>;
+    readonly mfa: ReactiveSignal<AuthMfaChallenge | null>;
     readonly loading: ReactiveSignal<boolean>;
     readonly error: ReactiveSignal<unknown>;
     readonly authenticated: Computed<boolean>;
     reload(): Promise<AuthState<Profile>>;
     register(input: AuthRegisterInput<Profile>): Promise<AuthUser<Profile> | null>;
     login(input: AuthLoginInput): Promise<AuthUser<Profile> | null>;
+    verifyMfa(code: string, challengeId?: string): Promise<AuthUser<Profile> | null>;
+    requestEmailVerification(): Promise<void>;
+    verifyEmail(token: string): Promise<void>;
+    requestPasswordReset(email: string, botToken?: string): Promise<void>;
+    resetPassword(token: string, password: string): Promise<AuthUser<Profile> | null>;
+    listPasskeys(): Promise<readonly AuthPasskeyRecord[]>;
+    registerPasskey(name?: string): Promise<AuthPasskeyRecord>;
+    loginWithPasskey(email: string): Promise<AuthUser<Profile> | null>;
+    deletePasskey(id: string): Promise<void>;
     logout(): Promise<void>;
     logoutAll(): Promise<void>;
     changePassword(input: {

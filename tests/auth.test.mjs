@@ -40,7 +40,7 @@ function sessionFrom(response, payload) {
   };
 }
 
-async function createFixture() {
+async function createFixture(authOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), "clank-auth-"));
   const path = join(directory, "app.sqlite");
   const schema = defineDatabase({
@@ -55,6 +55,7 @@ async function createFixture() {
       cost: 1024,
       maxMemory: 4 * 1024 * 1024,
     },
+    ...authOptions,
   });
   const backend = defineBackend({ schema, auth }).functions(({ query, mutation, publicQuery }) => ({
     status: publicQuery({
@@ -311,6 +312,155 @@ test("cross-process auth revisions refresh callers and close stale privileged li
     assert.throws(() => caller.query("admin", {}), /required role/);
   } finally {
     second?.close();
+    await fixture.close();
+  }
+});
+
+test("email verification and password recovery use expiring single-use tokens and revoke old sessions", async () => {
+  const verifications = [];
+  const recoveries = [];
+  const fixture = await createFixture({
+    emailVerification: {
+      required: true,
+      send: (delivery) => verifications.push(delivery),
+    },
+    passwordRecovery: {
+      send: (delivery) => recoveries.push(delivery),
+    },
+  });
+  try {
+    const alice = await register(fixture.runtime, "verified@example.com");
+    assert.equal(alice.user.emailVerified, false);
+    assert.equal(verifications.length, 1);
+    assert.equal(verifications[0].email, "verified@example.com");
+
+    const blocked = await fixture.runtime.handle(request("/__clank/mutation/todos.add", {
+      method: "POST",
+      body: { title: "Blocked until verified" },
+      cookie: alice.cookie,
+      csrf: alice.csrf,
+    }));
+    assert.equal(blocked.status, 403);
+    assert.equal((await blocked.json()).error.code, "EMAIL_UNVERIFIED");
+
+    const verified = await fixture.runtime.handle(request("/__clank/auth/email/verify", {
+      method: "POST",
+      body: { token: verifications[0].token },
+    }));
+    assert.equal(verified.status, 200);
+    const replay = await fixture.runtime.handle(request("/__clank/auth/email/verify", {
+      method: "POST",
+      body: { token: verifications[0].token },
+    }));
+    assert.equal(replay.status, 400);
+    assert.equal((await replay.json()).error.code, "INVALID_TOKEN");
+
+    const session = await fixture.runtime.handle(request("/__clank/auth/session", { cookie: alice.cookie }));
+    assert.equal((await session.json()).user.emailVerified, true);
+    const allowed = await fixture.runtime.handle(request("/__clank/mutation/todos.add", {
+      method: "POST",
+      body: { title: "Allowed after verification" },
+      cookie: alice.cookie,
+      csrf: alice.csrf,
+    }));
+    assert.equal(allowed.status, 200);
+
+    const missingRecovery = await fixture.runtime.handle(request("/__clank/auth/password/recover", {
+      method: "POST",
+      body: { email: "missing@example.com" },
+    }));
+    const existingRecovery = await fixture.runtime.handle(request("/__clank/auth/password/recover", {
+      method: "POST",
+      body: { email: "verified@example.com" },
+    }));
+    assert.equal(missingRecovery.status, 202);
+    assert.equal(existingRecovery.status, 202);
+    assert.deepEqual(await missingRecovery.json(), await existingRecovery.json());
+    assert.equal(recoveries.length, 1);
+
+    const reset = await fixture.runtime.handle(request("/__clank/auth/password/reset", {
+      method: "POST",
+      body: { token: recoveries[0].token, password: "a completely new strong password" },
+    }));
+    assert.equal(reset.status, 200);
+    const oldSession = await fixture.runtime.handle(request("/__clank/auth/session", { cookie: alice.cookie }));
+    assert.equal((await oldSession.json()).user, null);
+    const oldPassword = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      body: { email: "verified@example.com", password: "correct horse battery staple" },
+    }));
+    assert.equal(oldPassword.status, 401);
+    const newPassword = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      body: { email: "verified@example.com", password: "a completely new strong password" },
+    }));
+    assert.equal(newPassword.status, 200);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("MFA, bot protection, and a shared rate-limit store compose without leaking credentials", async () => {
+  const codes = [];
+  const limiterCalls = [];
+  const fixture = await createFixture({
+    mfa: {
+      required: true,
+      send: (delivery) => codes.push(delivery),
+    },
+    botProtection: {
+      verify: ({ action, token }) => action === "login" ? token === "human-proof" : true,
+    },
+    rateLimit: {
+      attempts: 3,
+      windowMs: 60_000,
+      store: {
+        async consume(key, limit, windowMs) {
+          limiterCalls.push({ key, limit, windowMs });
+          return undefined;
+        },
+      },
+    },
+  });
+  try {
+    await register(fixture.runtime, "mfa@example.com");
+    const blocked = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      body: { email: "mfa@example.com", password: "correct horse battery staple" },
+    }));
+    assert.equal(blocked.status, 403);
+    assert.equal((await blocked.json()).error.code, "BOT_CHECK_FAILED");
+
+    const started = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      body: {
+        email: "mfa@example.com",
+        password: "correct horse battery staple",
+        botToken: "human-proof",
+      },
+    }));
+    assert.equal(started.status, 202);
+    const startedPayload = await started.json();
+    assert.equal(startedPayload.mfa.required, true);
+    assert.equal(codes.length, 1);
+    assert.ok(limiterCalls.some((call) => call.key.startsWith("login\n")));
+
+    const wrong = await fixture.runtime.handle(request("/__clank/auth/mfa/verify", {
+      method: "POST",
+      body: { challengeId: startedPayload.mfa.challengeId, code: "000000" },
+    }));
+    assert.equal(wrong.status, 401);
+    const completed = await fixture.runtime.handle(request("/__clank/auth/mfa/verify", {
+      method: "POST",
+      body: { challengeId: startedPayload.mfa.challengeId, code: codes[0].code },
+    }));
+    assert.equal(completed.status, 200);
+    const replay = await fixture.runtime.handle(request("/__clank/auth/mfa/verify", {
+      method: "POST",
+      body: { challengeId: startedPayload.mfa.challengeId, code: codes[0].code },
+    }));
+    assert.equal(replay.status, 401);
+  } finally {
     await fixture.close();
   }
 });

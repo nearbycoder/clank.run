@@ -1,4 +1,4 @@
-/* @clankImportSource clank */
+/* @clankImportSource clank.run */
 import {
   AuthGate,
   authState,
@@ -11,7 +11,7 @@ import {
   securityHeaders,
   serve,
   staticFiles,
-} from "clank";
+} from "clank.run";
 import { backend } from "./backend.ts";
 import { TodoWorkspace } from "./view.tsx";
 

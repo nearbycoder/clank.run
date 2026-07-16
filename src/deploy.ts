@@ -200,7 +200,7 @@ export async function createDeploymentBundle(
         files,
         options,
         path,
-        "node_modules/clank",
+        "node_modules/clank.run",
       );
     }
   }

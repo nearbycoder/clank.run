@@ -27,7 +27,14 @@ export interface ClankPlatformOptions {
     allowUnsafeMigrations?: boolean;
     deviceCodeLifetimeMs?: number;
     accessTokenLifetimeMs?: number;
-    exposeErrors?: boolean;
+    ingress?: {
+        enabled?: boolean;
+        baseDomain?: string;
+        timeoutMs?: number;
+        maxBodyBytes?: number;
+        resolveTxt?: (hostname: string) => Promise<readonly (readonly string[])[]>;
+    };
+    /** Receives unexpected failures for private operator logging. */
     onError?: (error: unknown) => void;
 }
 export interface PlatformRuntime {

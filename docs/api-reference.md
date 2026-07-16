@@ -97,6 +97,12 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 
 ## AI
 
+- `defineApp(input)`: normalize and freeze a `clank-app/1` application blueprint.
+- `parseAppBlueprint(source, filename?)`: statically parse a JSON or constrained TypeScript data module without executing it.
+- `generateAppFiles(blueprint, options?)`: return deterministic full-stack application files.
+- `createAppPlan(blueprint, options?)`: checksum every generated file and return a `clank-plan/1` review artifact.
+- `explainApp(blueprint)`: summarize identity, data, routes, services, deployment requirements, and warnings.
+
 - `s`: runtime schema builders and JSON Schema generation. Includes string, email, URL, date, date-time, number, boolean, literal, enum, array, record, object, optional, nullable, default, refinement, union, and numeric/boolean coercion.
 - `ValidationError`: aggregate issues with paths.
 - `defineAction(definition)` → callable `Action` with `.manifest` and `.definition`.

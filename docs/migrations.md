@@ -70,4 +70,4 @@ clank migrate plan
 clank migrate apply
 ```
 
-Large online backfills should be application jobs rather than one long deployment transaction. JavaScript migration files and multi-node external-database drivers are future work.
+Large online backfills should be application jobs rather than one long deployment transaction. JavaScript migration files are intentionally unsupported. External PostgreSQL uses the structured HTTPS driver and immutable transactional ledger described in [Managed ingress and external data](data-plane.md).

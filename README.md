@@ -7,7 +7,7 @@ Clank is a dependency-free, AI-first full-stack TypeScript framework and open-so
 - Humans receive accessible HTML, responsive state, forms, navigation, and Tailwind styling.
 - Agents receive named actions with JSON Schema, explicit side-effect and confirmation metadata, and a compact semantic view of the interactive UI.
 
-The framework itself has no dependencies, dev dependencies, peer dependencies, virtual DOM, runtime compiler, or bundler. Clank's build-time TSX compiler is included; Node 22.13+ supplies the final TypeScript-to-JavaScript transform.
+The framework itself has no dependencies, dev dependencies, peer dependencies, virtual DOM, runtime compiler, or bundler. Clank's build-time TSX compiler is included; Node 22.16+ supplies the final TypeScript-to-JavaScript transform and consistent built-in SQLite backups.
 
 ## What works
 
@@ -107,8 +107,22 @@ render(document.querySelector("#app")!, <App />);
 - [Headless UI behavior](docs/ui.md)
 - [Performance model](docs/performance.md)
 - [AI-first contracts](docs/ai-first.md)
+- [AI application blueprints](docs/blueprints.md)
+- [Authentication, MFA, passkeys, and recovery](docs/authentication.md)
+- [Organizations, RBAC, invitations, and scoped tokens](docs/organizations.md)
+- [Service drivers for files, email, jobs, and webhooks](docs/services.md)
+- [Structured logs, traces, metrics, and health](docs/observability.md)
+- [Encrypted backups and disaster recovery](docs/recovery.md)
+- [Durable distributed deployment and agent fencing](docs/distributed-deployment.md)
+- [Managed ingress, custom domains, and external PostgreSQL](docs/data-plane.md)
+- [ASVS-oriented security verification](docs/security-asvs.md)
+- [Threat model](docs/threat-model.md)
+- [Chaos and failure testing](docs/chaos-testing.md)
+- [Public beta readiness](docs/public-beta.md)
 - [Application recipes for humans and agents](docs/application-recipes.md)
+- [Packaged-release conformance](docs/conformance.md)
 - [Code and product audit](docs/code-audit.md)
+- [Release process](docs/releases.md)
 - [Authentication](docs/auth.md)
 - [Security and deployment](docs/security.md)
 - [Deployment platform](docs/deployment-platform.md)
@@ -136,3 +150,5 @@ render(document.querySelector("#app")!, <App />);
 7. **Deployment should be a verifiable transaction.** Build inputs, artifact contents, migration history, activation, failure recovery, and rollback are explicit and auditable.
 
 Clank is MIT licensed.
+
+The official npm package is `clank.run`; the installed executables are `clank` and `clank-platform`. The unrelated unscoped `clank` package on npm is not this framework.

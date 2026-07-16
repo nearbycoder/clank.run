@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - "22.16"
+          - "24"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Select Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      - name: Verify lock-free dependency contract
+        run: |
+          test ! -f package-lock.json
+          test ! -f npm-shrinkwrap.json
+          node -e 'const p=require("./package.json"); for (const k of ["dependencies","devDependencies","peerDependencies","optionalDependencies"]) if (p[k] && Object.keys(p[k]).length) process.exit(1)'
+
+      - name: Build and run unit/integration tests
+        run: npm test
+
+      - name: Verify published file set
+        run: npm pack --dry-run
+
+  conformance:
+    name: Packaged-release conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Select minimum Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22.16"
+          package-manager-cache: false
+
+      - name: Run complete release gate
+        run: npm run check

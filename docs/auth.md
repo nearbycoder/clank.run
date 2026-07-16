@@ -11,7 +11,7 @@ import {
   defineDatabase,
   defineTable,
   s,
-} from "clank";
+} from "clank.run";
 
 export const auth = defineAuth();
 
@@ -45,7 +45,7 @@ An `.owned()` table automatically writes the current user ID on insert and adds 
 ## Browser client
 
 ```tsx
-import { AuthGate, createClient, onCleanup } from "clank";
+import { AuthGate, createClient, onCleanup } from "clank.run";
 import type { backend } from "./backend.ts";
 
 const client = createClient<typeof backend>();
@@ -214,6 +214,17 @@ With the default backend prefix:
 | `/__clank/auth/session` | `GET` | Current safe auth state |
 | `/__clank/auth/register` | `POST` | Create account and session |
 | `/__clank/auth/login` | `POST` | Verify credentials and create session |
+| `/__clank/auth/mfa/verify` | `POST` | Complete an email-code MFA challenge |
+| `/__clank/auth/email/verify` | `POST` | Consume a single-use email-verification token |
+| `/__clank/auth/email/resend` | `POST` | Issue another verification message |
+| `/__clank/auth/password/recover` | `POST` | Request a generic password-recovery response |
+| `/__clank/auth/password/reset` | `POST` | Consume a recovery token and revoke old sessions |
+| `/__clank/auth/passkeys` | `GET` | List the current verified user's passkeys |
+| `/__clank/auth/passkeys/register/start` | `POST` | Start passkey registration |
+| `/__clank/auth/passkeys/register/finish` | `POST` | Verify and store a passkey |
+| `/__clank/auth/passkeys/authenticate/start` | `POST` | Start passkey authentication |
+| `/__clank/auth/passkeys/authenticate/finish` | `POST` | Verify an assertion and create a session |
+| `/__clank/auth/passkeys/delete` | `POST` | Remove one owned passkey |
 | `/__clank/auth/logout` | `POST` | Revoke the current session |
 | `/__clank/auth/logout-all` | `POST` | Revoke every session for the user |
 | `/__clank/auth/change-password` | `POST` | Verify current password, rotate hash, revoke sessions |
@@ -222,6 +233,8 @@ JSON content type and body limits are enforced. State-changing authenticated req
 
 ## Security boundaries and current scope
 
-Built-in auth provides email/password registration, login, sessions, CSRF protection, roles, owned data, and revocation. It does not yet provide email ownership verification, password-reset email, MFA/passkeys, OAuth/social login, organization membership, bot detection, or distributed rate limiting. Applications that require those controls must add them before treating an account as high assurance.
+Built-in auth provides email/password registration, sessions, CSRF protection, roles, owned data, verification, generic recovery, email-code MFA, WebAuthn passkeys, bot-verification hooks, and revocation. Applications supply their email transport and can supply a shared rate-limit store.
+
+OAuth/social identity, enterprise federation, hardware-attestation policy, risk scoring, account-linking policy, and provider-specific bot challenges remain integrations. Organization membership and CLI project authority belong to the deployment platform rather than application auth.
 
 See [Security](security.md) for deployment requirements and [the authenticated Todo](../examples/auth-todo/backend.ts) for the complete working example.

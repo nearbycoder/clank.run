@@ -1,7 +1,15 @@
 {
-  "name": "clank",
+  "name": "clank.run",
   "version": "0.7.0",
   "description": "An AI-first, dependency-free full-stack TypeScript framework and open-source deployment platform.",
+  "homepage": "https://github.com/nearbycoder/clank.run#readme",
+  "bugs": {
+    "url": "https://github.com/nearbycoder/clank.run/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nearbycoder/clank.run.git"
+  },
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -15,6 +23,13 @@
     "./dom": { "types": "./dist/dom.d.ts", "import": "./dist/dom.js" },
     "./router": { "types": "./dist/router.d.ts", "import": "./dist/router.js" },
     "./ai": { "types": "./dist/ai.d.ts", "import": "./dist/ai.js" },
+    "./blueprint": { "types": "./dist/blueprint.d.ts", "import": "./dist/blueprint.js" },
+    "./webauthn": { "types": "./dist/webauthn.d.ts", "import": "./dist/webauthn.js" },
+    "./services": { "types": "./dist/services.d.ts", "import": "./dist/services.js" },
+    "./observability": { "types": "./dist/observability.d.ts", "import": "./dist/observability.js" },
+    "./recovery": { "types": "./dist/recovery.d.ts", "import": "./dist/recovery.js" },
+    "./orchestration": { "types": "./dist/orchestration.d.ts", "import": "./dist/orchestration.js" },
+    "./data-plane": { "types": "./dist/data-plane.d.ts", "import": "./dist/data-plane.js" },
     "./forms": { "types": "./dist/forms.d.ts", "import": "./dist/forms.js" },
     "./ui": { "types": "./dist/ui.d.ts", "import": "./dist/ui.js" },
     "./server": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
@@ -46,22 +61,30 @@
     "scripts/clank.mjs",
     "scripts/cli-deploy.mjs",
     "scripts/clank-platform.mjs",
+    "scripts/conformance.mjs",
     "scripts/tsx.mjs",
     "templates",
+    "CHANGELOG.md",
+    "SECURITY.md",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "build": "node --disable-warning=ExperimentalWarning scripts/build.mjs",
+    "conformance": "node --disable-warning=ExperimentalWarning scripts/conformance.mjs",
     "dev": "node --disable-warning=ExperimentalWarning scripts/dev.mjs",
     "dev:fullstack": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/fullstack/server.js",
     "dev:auth": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/auth-todo/server.js",
     "dev:platform": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/clank-platform.mjs",
     "test": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning --test",
+    "security:audit": "node --disable-warning=ExperimentalWarning scripts/security-audit.mjs",
     "check": "node --disable-warning=ExperimentalWarning scripts/check.mjs"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.16"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "reactive",

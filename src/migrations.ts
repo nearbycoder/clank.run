@@ -213,8 +213,11 @@ export async function backupSQLite(sourcePath: string, destinationPath: string):
   const sqliteName = "node:sqlite";
   const { DatabaseSync, backup } = await import(sqliteName) as unknown as {
     DatabaseSync: DatabaseSyncConstructor;
-    backup(source: DatabaseSyncLike, path: string): Promise<void>;
+    backup?: (source: DatabaseSyncLike, path: string) => Promise<void>;
   };
+  if (typeof backup !== "function") {
+    throw new Error("SQLite backups require Node.js 22.16 or newer.");
+  }
   const sourceName = await requireRegularDatabaseFile(sourcePath, "Backup source");
   const destinationName = await resolveDatabaseDestination(destinationPath);
   const temporary = `${destinationName}.tmp-${globalThis.crypto.randomUUID()}`;

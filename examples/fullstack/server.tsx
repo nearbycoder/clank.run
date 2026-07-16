@@ -1,4 +1,4 @@
-/* @clankImportSource clank */
+/* @clankImportSource clank.run */
 import {
   createApi,
   createApp,
@@ -7,7 +7,7 @@ import {
   renderDocument,
   serve,
   staticFiles,
-} from "clank";
+} from "clank.run";
 import { backend } from "./backend.ts";
 import { TodoApp } from "./view.tsx";
 

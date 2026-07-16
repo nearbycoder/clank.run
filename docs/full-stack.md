@@ -7,7 +7,7 @@ The implementation uses only platform modules: Node's built-in SQLite and HTTP A
 ## Define data once
 
 ```ts
-import { defineDatabase, defineTable, s, type DocumentFor } from "clank";
+import { defineDatabase, defineTable, s, type DocumentFor } from "clank.run";
 
 export const schema = defineDatabase({
   todos: defineTable({
@@ -40,7 +40,7 @@ Owned documents also include `_ownerId`. Auth-scoped database views add the owne
 ## Define server functions
 
 ```ts
-import { defineBackend, s } from "clank";
+import { defineBackend, s } from "clank.run";
 import { schema } from "./schema.ts";
 
 export const backend = defineBackend({ schema }).functions(({ query, mutation }) => ({
@@ -104,7 +104,7 @@ Supported comparisons are `eq`, `neq`, `lt`, `lte`, `gt`, and `gte`. `_id`, `_cr
 ## Open the backend
 
 ```ts
-import { createApi, openBackend } from "clank";
+import { createApi, openBackend } from "clank.run";
 import { backend } from "./backend.ts";
 
 const api = createApi<typeof backend>();
@@ -153,7 +153,7 @@ The live transport uses standard SSE framing, sends the persisted revision as th
 ## Use the inferred browser client
 
 ```tsx
-import { createApi, createSyncClient } from "clank";
+import { createApi, createSyncClient } from "clank.run";
 import type { backend } from "./backend.ts";
 
 const api = createApi<typeof backend>();
@@ -223,7 +223,7 @@ Hydration attaches bindings, listeners, refs, directives, lifecycle callbacks, a
 ## Run on Node
 
 ```ts
-import { serve, staticFiles } from "clank/node";
+import { serve, staticFiles } from "clank.run/node";
 
 const assets = staticFiles("./public", { cacheControl: "public, max-age=3600" });
 const server = await serve(app, { hostname: "127.0.0.1", port: 3000 });

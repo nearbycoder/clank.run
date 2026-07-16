@@ -4,7 +4,7 @@ Clank Deploy is one Node control-plane process plus one supervised process or co
 
 ## Requirements
 
-- Node 22.13+;
+- Node 22.16+;
 - persistent local storage;
 - HTTPS proxy outside loopback;
 - Docker for mutually untrusted deployers;
@@ -85,7 +85,7 @@ Back up the control database, project data, recoverable artifacts/source, and ma
 1. Back up data and key.
 2. Stop new deploys and the platform.
 3. Install and verify the new Clank build.
-4. Start one platform instance.
-5. Verify browser login, CLI login, project status, app health, test deploy, and rollback.
+4. Start the selected active supervisor/worker topology.
+5. Verify browser login, CLI login, organization and scoped-token access, project status, ingress/domain state, app health, test deploy, backup verification, and rollback.
 
-Current scaling is deliberately single-host/single-control-plane. Distributed locks, remote artifact storage, multi-node runners, automatic wildcard routing, organization RBAC, and managed external databases are future infrastructure.
+Durable distributed locks, authenticated nodes, desired generations, operations/fencing, wildcard base-domain routing, custom-domain verification, organization RBAC, and external database drivers are implemented. The included child-process supervisor remains single-leader and artifacts/backups are local by default; a hosted multi-region service still needs leader/remote-runner integration, external object storage, globally transactional control storage, certificate automation, and an edge service.

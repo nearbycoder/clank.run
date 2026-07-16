@@ -109,7 +109,7 @@ test("create scaffolds a named, buildable authenticated application", async () =
     const tsconfig = JSON.parse(await readFile(join(target, "tsconfig.json"), "utf8"));
     const gitignore = await readFile(join(target, ".gitignore"), "utf8");
     assert.equal(packageJson.name, "team-tasks");
-    assert.equal(packageJson.dependencies.clank, `^${frameworkVersion}`);
+    assert.equal(packageJson.dependencies["clank.run"], `^${frameworkVersion}`);
     assert.match(packageJson.scripts.dev, /dist\/server\.js/);
     assert.doesNotMatch(server, /__PROJECT_TITLE__/);
     assert.doesNotMatch(view, /__PROJECT_TITLE__/);

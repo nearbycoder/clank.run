@@ -14,13 +14,13 @@ Never operate the process runner as a public code sandbox.
 
 ## Authentication
 
-Browser accounts inherit Clank's scrypt passwords, hardened cookies, CSRF, generic login errors, expiry, idle timeout, and revocation.
+Browser accounts inherit Clank's scrypt passwords, hardened cookies, CSRF, generic login errors, expiry, idle timeout, verification, recovery, email-code MFA, WebAuthn passkeys, and revocation.
 
-Registration defaults to a race-guarded first-account bootstrap. Public signup must be enabled explicitly. Email verification, recovery, MFA, invitations, and organization RBAC are not yet built in.
+Registration defaults to a race-guarded first-account bootstrap. Public signup must be enabled explicitly. Organizations include owner/admin/developer/viewer roles, invitations, last-owner protection, and project-scoped CLI tokens whose permissions are intersected with current membership on every request.
 
 CLI flow follows [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628/): hashed high-entropy device codes, short expiry, rate limiting, visible client identity/code, same-origin CSRF approval, throttled polling, and single use.
 
-Bearer tokens are returned once and hashed at rest. Follow [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750): TLS, no tokens in URLs/logs, revocation, and rotation. Current tokens inherit all user projects; project-scoped tokens are future work.
+Bearer tokens are returned once and hashed at rest. Follow [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750): TLS, no tokens in URLs/logs, revocation, and rotation. Account tokens can create or administer organizations according to membership; project tokens are restricted to one project and explicit `read`, `deploy`, `rollback`, `secrets`, `tokens`, and `audit` permissions.
 
 ## Artifact intake
 
@@ -71,7 +71,9 @@ Also pin image digests, patch the kernel/runtime, apply seccomp/AppArmor/SELinux
 - Validate allowed hosts.
 - Add upstream auth/upload/request rate limits.
 
-The control plane is currently single-instance: deploy locks and process ownership are in memory. Two active control planes over one data directory are unsupported.
+Distributed leases, authenticated workers, desired generations, durable idempotent operations, node draining, retries, and monotonic fences are available. The built-in child-process supervisor still keeps process ownership in memory, so run one active supervisor per project/data directory unless using a remote worker/leader integration.
+
+Managed ingress routes only exact verified hosts to loopback or explicit allowlisted upstreams, strips hop-by-hop and `Connection`-nominated headers, bounds request bodies and timeouts, retries only safe methods, and opens failure circuits. TLS certificates, DNS automation, WAF/DDoS controls, and WebSocket proxying belong at the external edge.
 
 ## Audit checklist
 
@@ -82,3 +84,4 @@ The control plane is currently single-instance: deploy locks and process ownersh
 - Failed deploy leaves prior app healthy.
 - Migration and data rollback rehearsed.
 - Full browser-login, CLI-login, deploy, app, and rollback smoke test after upgrades.
+- `npm run check`, CodeQL, ASVS evidence review, and the staging chaos/restore drills.

@@ -5,7 +5,7 @@ import {
   createTabs,
   s,
   signal,
-} from "clank";
+} from "clank.run";
 
 const newsletter = createForm({
   id: "newsletter",

@@ -3,7 +3,7 @@ import {
   parseDeploymentConfig,
   type DeploymentConfig,
   type PlatformRunnerOptions,
-} from "clank";
+} from "clank.run";
 
 const config: DeploymentConfig = parseDeploymentConfig({
   version: 1,

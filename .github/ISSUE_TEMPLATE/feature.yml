@@ -1,0 +1,27 @@
+name: Feature proposal
+description: Propose an addition to the framework, CLI, or deployment platform.
+title: "[Proposal] "
+labels:
+  - proposal
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user or agent workflow that is currently difficult.
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Proposed contract
+      description: Show the smallest API, CLI, manifest, or deployment configuration that would solve it.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Security and compatibility
+      description: Explain authorization, data migration, rollback, and backward-compatibility considerations.
+    validations:
+      required: true

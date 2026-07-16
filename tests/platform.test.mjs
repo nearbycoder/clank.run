@@ -112,12 +112,17 @@ async function deploy(platform, projectId, token, artifact, key) {
 test("platform device auth, ownership, encrypted secrets, atomic deploy, migrations, and rollback work end to end", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-"));
   const source = join(root, "source");
+  const dns = new Map();
   const platform = await openPlatform({
     dataDirectory: join(root, "platform"),
     publicUrl: "http://127.0.0.1:4200",
     appPortStart: 4510,
     appPortEnd: 4520,
     signup: true,
+    ingress: {
+      baseDomain: "apps.example.test",
+      resolveTxt: async (hostname) => dns.get(hostname) ?? [],
+    },
   });
   try {
     const owner = await authorizeCli(platform, "owner@example.com");
@@ -169,6 +174,22 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     const first = await deploy(platform, projectId, owner.accessToken, firstArtifact, "first-release-key-0001");
     assert.equal(first.response.status, 201, JSON.stringify(first.body));
     assert.equal(await fetch(first.body.release.directUrl).then((response) => response.text()), "release-one");
+    const managed = await platform.handle(new Request("https://atomic-todo.apps.example.test/"));
+    assert.equal(managed.status, 200);
+    assert.equal(await managed.text(), "release-one");
+    const customDomain = await payload(platform, jsonRequest(`/api/projects/${projectId}/domains`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { hostname: "tasks.customer.test" },
+    }), 201);
+    dns.set(customDomain.domain.recordName, [[customDomain.domain.recordValue]]);
+    await payload(platform, jsonRequest(
+      `/api/projects/${projectId}/domains/${customDomain.domain.id}/verify`,
+      { method: "POST", token: owner.accessToken, body: {} },
+    ));
+    const customIngress = await platform.handle(new Request("https://tasks.customer.test/"));
+    assert.equal(customIngress.status, 200);
+    assert.equal(await customIngress.text(), "release-one");
     await fetch(`${first.body.release.directUrl}/crash`);
     await new Promise((resolve) => setTimeout(resolve, 400));
     await waitFor(async () =>
@@ -191,6 +212,41 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     assert.equal(await fetch(second.body.release.directUrl).then((response) => response.text()), "release-two");
     database = new DatabaseSync(databasePath, { readOnly: true });
     assert.equal(database.prepare("SELECT count(*) AS count FROM clank_migrations").get().count, 2);
+    database.close();
+
+    const backup = await payload(platform, jsonRequest(`/api/projects/${projectId}/backups`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { reason: "before bulk import" },
+    }), 201);
+    const listedBackups = await payload(platform, jsonRequest(`/api/projects/${projectId}/backups`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(listedBackups.backups[0].id, backup.backup.id);
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/backups/${backup.backup.id}/verify`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: {},
+    }));
+    database = new DatabaseSync(databasePath);
+    database.prepare("INSERT INTO items (value) VALUES (?)").run("remove on restore");
+    database.close();
+    const wrongBackupConfirmation = await platform.handle(jsonRequest(
+      `/api/projects/${projectId}/backups/${backup.backup.id}/restore`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { confirmation: "restore it" },
+      },
+    ));
+    assert.equal(wrongBackupConfirmation.status, 400);
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/backups/${backup.backup.id}/restore`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { confirmation: `restore-backup atomic-todo ${backup.backup.id}` },
+    }));
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    assert.deepEqual(database.prepare("SELECT value FROM items ORDER BY id").all().map((row) => row.value), ["preserve me"]);
     database.close();
 
     const rolledBack = await payload(platform, jsonRequest(`/api/projects/${projectId}/rollback`, {
@@ -237,6 +293,111 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
   }
 });
 
+test("organizations enforce RBAC, invitations, membership revocation, and project-scoped CLI credentials", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-orgs-"));
+  const platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4540,
+    appPortEnd: 4550,
+    signup: true,
+  });
+  try {
+    const owner = await authorizeCli(platform, "org-owner@example.com");
+    const admin = await authorizeCli(platform, "org-admin@example.com");
+    const outsider = await authorizeCli(platform, "outsider@example.com");
+    const first = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Organization Todo", slug: "organization-todo" },
+    }), 201);
+    const second = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Other Project", slug: "other-project" },
+    }), 201);
+    const projectId = first.project.id;
+    const organizationId = first.project.organizationId;
+    assert.equal(second.project.organizationId, organizationId);
+
+    const invitation = await payload(platform, jsonRequest(`/api/organizations/${organizationId}/invitations`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { email: "org-admin@example.com", role: "admin" },
+    }), 201);
+    await payload(platform, jsonRequest("/api/invitations/accept", {
+      method: "POST",
+      token: admin.accessToken,
+      body: { token: invitation.invitation.token },
+    }));
+    const replay = await platform.handle(jsonRequest("/api/invitations/accept", {
+      method: "POST",
+      token: admin.accessToken,
+      body: { token: invitation.invitation.token },
+    }));
+    assert.equal(replay.status, 400);
+
+    const visible = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: admin.accessToken,
+    }));
+    assert.equal(visible.project.id, projectId);
+    const hidden = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      token: outsider.accessToken,
+    }));
+    assert.equal(hidden.status, 404);
+
+    const scoped = await payload(platform, jsonRequest(`/api/projects/${projectId}/tokens`, {
+      method: "POST",
+      token: admin.accessToken,
+      body: {
+        name: "Project deploy bot",
+        permissions: ["read", "deploy"],
+        expiresIn: 3600,
+      },
+    }), 201);
+    const projectToken = scoped.token.accessToken;
+    const scopedAccount = await payload(platform, jsonRequest("/api/account", { token: projectToken }));
+    assert.equal(scopedAccount.token.projectId, projectId);
+    assert.deepEqual(scopedAccount.token.permissions, ["read", "deploy"]);
+    await payload(platform, jsonRequest(`/api/projects/${projectId}`, { token: projectToken }));
+    const otherProject = await platform.handle(jsonRequest(`/api/projects/${second.project.id}`, {
+      token: projectToken,
+    }));
+    assert.equal(otherProject.status, 404);
+    const scopedSecrets = await platform.handle(jsonRequest(`/api/projects/${projectId}/secrets`, {
+      token: projectToken,
+    }));
+    assert.equal(scopedSecrets.status, 403);
+    assert.equal((await scopedSecrets.json()).error.code, "TOKEN_SCOPE_DENIED");
+
+    const adminCannotRemoveOwner = await platform.handle(jsonRequest(
+      `/api/organizations/${organizationId}/members/${owner.user.id}`,
+      { method: "DELETE", token: admin.accessToken, body: {} },
+    ));
+    assert.equal(adminCannotRemoveOwner.status, 403);
+    await payload(platform, jsonRequest(`/api/organizations/${organizationId}/members/${admin.user.id}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {},
+    }));
+    const revokedScoped = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      token: projectToken,
+    }));
+    assert.equal(revokedScoped.status, 401);
+    const revokedMembership = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      token: admin.accessToken,
+    }));
+    assert.equal(revokedMembership.status, 404);
+    const adminAccountStillWorks = await platform.handle(jsonRequest("/api/account", {
+      token: admin.accessToken,
+    }));
+    assert.equal(adminAccountStillWorks.status, 200);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("platform signup defaults to one-time first-account bootstrap", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-bootstrap-"));
   const platform = await openPlatform({
@@ -272,6 +433,60 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     }));
     assert.equal(second.status, 403);
     assert.equal((await second.json()).error.code, "SIGNUP_DISABLED");
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("platform reports unexpected failures privately without exposing exception text", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-errors-"));
+  const privateMessage = "internal resolver credential: operator-secret";
+  const observed = [];
+  const platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4560,
+    appPortEnd: 4561,
+    signup: true,
+    ingress: {
+      baseDomain: "apps.example.test",
+      resolveTxt: async () => {
+        throw new Error(privateMessage);
+      },
+    },
+    onError(error) {
+      observed.push(error);
+    },
+  });
+  try {
+    const owner = await authorizeCli(platform, "error-owner@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Error Boundary", slug: "error-boundary" },
+    }), 201);
+    const domain = await payload(platform, jsonRequest(`/api/projects/${created.project.id}/domains`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { hostname: "errors.example.test" },
+    }), 201);
+    const response = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}/domains/${domain.domain.id}/verify`,
+      { method: "POST", token: owner.accessToken, body: {} },
+    ));
+    const result = await response.json();
+    assert.equal(response.status, 500);
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: "PLATFORM_ERROR",
+        message: "The platform operation failed.",
+      },
+    });
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].message, privateMessage);
+    assert.doesNotMatch(JSON.stringify(result), /operator-secret/);
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
