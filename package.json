@@ -1,0 +1,79 @@
+{
+  "name": "clank",
+  "version": "0.7.0",
+  "description": "An AI-first, dependency-free full-stack TypeScript framework and open-source deployment platform.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },
+    "./dom": { "types": "./dist/dom.d.ts", "import": "./dist/dom.js" },
+    "./router": { "types": "./dist/router.d.ts", "import": "./dist/router.js" },
+    "./ai": { "types": "./dist/ai.d.ts", "import": "./dist/ai.js" },
+    "./forms": { "types": "./dist/forms.d.ts", "import": "./dist/forms.js" },
+    "./ui": { "types": "./dist/ui.d.ts", "import": "./dist/ui.js" },
+    "./server": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
+    "./auth": { "types": "./dist/auth.d.ts", "import": "./dist/auth.js" },
+    "./backend": { "types": "./dist/backend.d.ts", "import": "./dist/backend.js" },
+    "./deploy": { "types": "./dist/deploy.d.ts", "import": "./dist/deploy.js" },
+    "./migrations": { "types": "./dist/migrations.d.ts", "import": "./dist/migrations.js" },
+    "./platform": { "types": "./dist/platform.d.ts", "import": "./dist/platform.js" },
+    "./ssr": { "types": "./dist/ssr.d.ts", "import": "./dist/ssr.js" },
+    "./node": { "types": "./dist/node.d.ts", "import": "./dist/node.js" },
+    "./compiler": {
+      "types": "./scripts/compiler.d.mts",
+      "import": "./scripts/compiler.mjs"
+    }
+  },
+  "bin": {
+    "clank": "./scripts/clank.mjs",
+    "clank-platform": "./scripts/clank-platform.mjs"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "examples",
+    "!examples/**/*.sqlite",
+    "!examples/**/*.sqlite-shm",
+    "!examples/**/*.sqlite-wal",
+    "scripts/compiler.mjs",
+    "scripts/compiler.d.mts",
+    "scripts/clank.mjs",
+    "scripts/cli-deploy.mjs",
+    "scripts/clank-platform.mjs",
+    "scripts/tsx.mjs",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node --disable-warning=ExperimentalWarning scripts/build.mjs",
+    "dev": "node --disable-warning=ExperimentalWarning scripts/dev.mjs",
+    "dev:fullstack": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/fullstack/server.js",
+    "dev:auth": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/auth-todo/server.js",
+    "dev:platform": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/clank-platform.mjs",
+    "test": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning --test",
+    "check": "node --disable-warning=ExperimentalWarning scripts/check.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "keywords": [
+    "reactive",
+    "framework",
+    "typescript",
+    "ai",
+    "agents",
+    "ssr",
+    "sqlite",
+    "realtime",
+    "deployment",
+    "platform"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,14 @@
+dist/
+clank-*.tgz
+examples/fullstack/*.sqlite
+examples/fullstack/*.sqlite-shm
+examples/fullstack/*.sqlite-wal
+examples/auth-todo/*.sqlite
+examples/auth-todo/*.sqlite-shm
+examples/auth-todo/*.sqlite-wal
+.clank-platform/
+.clank/
+*.clank.gz
+.proact-platform/
+.proact/
+*.proact.gz

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Clank framework interactive example" />
+    <title>Clank — AI-first reactivity</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style type="text/tailwindcss">
+      @theme {
+        --color-ink: #17213b;
+        --color-coral: #ff6b4a;
+        --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+      }
+      body { @apply m-0 bg-[#f7f4ee] text-ink antialiased; }
+      button, input { @apply outline-none; }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <noscript>Clank needs JavaScript enabled.</noscript>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

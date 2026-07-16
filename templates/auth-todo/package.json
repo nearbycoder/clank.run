@@ -1,0 +1,14 @@
+{
+  "name": "__PROJECT_NAME__",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "clank build src dist",
+    "dev": "clank build src dist && node --disable-warning=ExperimentalWarning dist/server.js",
+    "start": "node --disable-warning=ExperimentalWarning dist/server.js",
+    "deploy": "clank deploy"
+  },
+  "dependencies": {
+    "clank": "^__CLANK_VERSION__"
+  }
+}

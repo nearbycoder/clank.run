@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="A responsive SaaS administration dashboard built with Clank" />
+    <title>Relay Admin · Clank Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style type="text/tailwindcss">
+      @theme {
+        --color-navy: #111827;
+        --color-electric: #5b5ef7;
+        --color-lilac: #ececff;
+        --color-cloud: #f5f7fb;
+      }
+      button, input, select { outline: none; }
+    </style>
+  </head>
+  <body class="m-0 bg-cloud text-navy antialiased">
+    <div id="app"></div>
+    <noscript>Relay Admin needs JavaScript enabled.</noscript>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
