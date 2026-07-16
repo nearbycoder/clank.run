@@ -18,7 +18,7 @@ for (const field of ["dependencies", "devDependencies", "peerDependencies", "opt
 if (packageJson.name !== "clank.run") fail("The official published package name must be clank.run.");
 if (packageJson.publishConfig?.access !== "public") fail("npm publishing must be explicitly public.");
 if (packageJson.bin?.clank !== "./scripts/clank.mjs") fail("The clank CLI entry point is missing or unexpected.");
-if (!String(packageJson.engines?.node ?? "").includes("22.13")) fail("The minimum supported Node release must remain explicit.");
+if (packageJson.engines?.node !== ">=22.16") fail("The minimum supported Node release must remain exactly >=22.16.");
 pass("zero-dependency package metadata is constrained");
 
 const required = [

@@ -138,6 +138,19 @@ test("TypeScript blueprint modules are statically parsed without executing code"
   delete globalThis.__clankBlueprintExecuted;
 });
 
+test("blueprint suffix parsing stays linear and requires a real satisfies type", () => {
+  assert.deepEqual(
+    parseAppBlueprint(`export default ${JSON.stringify(todoist)} as
+      const;`),
+    defineApp(todoist),
+  );
+  const whitespaceOnlyType = `export default ${JSON.stringify(todoist)} satisfies ${" ".repeat(200_000)};`;
+  assert.throws(
+    () => parseAppBlueprint(whitespaceOnlyType),
+    /Only a data literal and optional `satisfies` or `as const` clause/,
+  );
+});
+
 test("blueprint plans and generated files are deterministic and checksummed", async () => {
   const first = await createAppPlan(todoist, { frameworkVersion: version });
   const second = await createAppPlan(structuredClone(todoist), { frameworkVersion: version });

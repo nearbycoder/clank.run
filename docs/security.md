@@ -22,7 +22,7 @@ Clank treats browser input, agent input, URLs, cookies, request bodies, and pers
 - Bodies are streamed through hard byte limits and strict UTF-8/JSON decoding.
 - Same-origin and Fetch Metadata checks reject cross-site state changes.
 - Validation errors omit received values so secrets are not reflected.
-- Production 500 responses are generic unless `exposeErrors` is explicitly enabled.
+- Production 500 responses are generic. Framework development adapters may expose errors only when explicitly enabled; the deployment platform never returns unexpected exception text to clients.
 - Backend cache and live-query keys are partitioned by auth session.
 - Request, live-argument, live-connection, and cache limits are configurable.
 

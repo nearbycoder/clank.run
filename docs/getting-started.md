@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Node.js 22.13 or newer for the zero-package TypeScript build.
+- Node.js 22.16 or newer for the zero-package TypeScript build and built-in SQLite backup support.
 - A modern browser with ES modules, Proxy, AbortController, and the DOM APIs.
 
 There is no install step in this repository. The `package.json` contains no dependency fields. Run:

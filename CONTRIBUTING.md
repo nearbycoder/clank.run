@@ -19,7 +19,7 @@ Typographical fixes, tests for existing behavior, and narrow bug fixes do not re
 
 Requirements:
 
-- Node 22.13 or newer;
+- Node 22.16 or newer;
 - no runtime or development NPM dependencies; and
 - a filesystem that supports normal SQLite locking and atomic rename semantics.
 

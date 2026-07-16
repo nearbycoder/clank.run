@@ -4,7 +4,7 @@ Clank Deploy is one Node control-plane process plus one supervised process or co
 
 ## Requirements
 
-- Node 22.13+;
+- Node 22.16+;
 - persistent local storage;
 - HTTPS proxy outside loopback;
 - Docker for mutually untrusted deployers;

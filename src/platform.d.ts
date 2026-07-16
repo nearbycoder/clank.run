@@ -34,7 +34,7 @@ export interface ClankPlatformOptions {
         maxBodyBytes?: number;
         resolveTxt?: (hostname: string) => Promise<readonly (readonly string[])[]>;
     };
-    exposeErrors?: boolean;
+    /** Receives unexpected failures for private operator logging. */
     onError?: (error: unknown) => void;
 }
 export interface PlatformRuntime {

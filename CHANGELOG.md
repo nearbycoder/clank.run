@@ -19,6 +19,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Failed distributed-lease acquisition now releases the local project queue.
 - Managed ingress strips `Connection`-nominated headers and retries safe requests after transient upstream 5xx responses.
 - WebAuthn CBOR parsing now bounds collection size and nesting, and passkey counter advancement is atomic.
+- Blueprint suffix parsing and local-file endpoint normalization are linear on adversarial input.
+- Unexpected deployment-platform failures are logged privately and never reflected to HTTP clients.
+- The minimum runtime is Node 22.16, the first Node 22 release with the built-in SQLite backup API used by migrations and recovery.
 - The official package name is `clank.run`, avoiding collision with the unrelated npm package named `clank`; binaries remain `clank` and `clank-platform`.
 
 ## 0.7.0 - 2026-07-16

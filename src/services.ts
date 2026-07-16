@@ -375,7 +375,7 @@ export async function openLocalFileStore(options: {
     },
     async handle(request, prefix = "/__clank/files") {
       const url = new URL(request.url);
-      const normalizedPrefix = `/${prefix.replace(/^\/+|\/+$/gu, "")}`;
+      const normalizedPrefix = normalizeEndpointPrefix(prefix);
       if (!url.pathname.startsWith(`${normalizedPrefix}/`)) return fileProblem(404, "NOT_FOUND", "File endpoint not found.");
       let token: string;
       try { token = decodeURIComponent(url.pathname.slice(normalizedPrefix.length + 1)); }
@@ -950,6 +950,15 @@ function fromBase64Url(value: string): Uint8Array {
 async function retryDelay(attempt: number): Promise<void> {
   const delay = Math.min(5_000, 100 * 2 ** attempt) + Math.floor(Math.random() * 50);
   await new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+function normalizeEndpointPrefix(input: string): string {
+  if (typeof input !== "string") throw new TypeError("File endpoint prefix must be a string.");
+  let start = 0;
+  let end = input.length;
+  while (start < end && input.charCodeAt(start) === 47) start++;
+  while (end > start && input.charCodeAt(end - 1) === 47) end--;
+  return `/${input.slice(start, end)}`;
 }
 
 function safeError(error: unknown): string {

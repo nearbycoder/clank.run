@@ -7,7 +7,7 @@ Clank is a dependency-free, AI-first full-stack TypeScript framework and open-so
 - Humans receive accessible HTML, responsive state, forms, navigation, and Tailwind styling.
 - Agents receive named actions with JSON Schema, explicit side-effect and confirmation metadata, and a compact semantic view of the interactive UI.
 
-The framework itself has no dependencies, dev dependencies, peer dependencies, virtual DOM, runtime compiler, or bundler. Clank's build-time TSX compiler is included; Node 22.13+ supplies the final TypeScript-to-JavaScript transform.
+The framework itself has no dependencies, dev dependencies, peer dependencies, virtual DOM, runtime compiler, or bundler. Clank's build-time TSX compiler is included; Node 22.16+ supplies the final TypeScript-to-JavaScript transform and consistent built-in SQLite backups.
 
 ## What works
 

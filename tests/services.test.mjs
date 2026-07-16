@@ -87,6 +87,13 @@ test("local files use integrity metadata and operation-scoped expiring capabilit
     assert.equal(await downloaded.text(), "avatar");
     assert.equal(downloaded.headers.get("content-type"), "text/plain");
     assert.match(downloaded.headers.get("etag"), /^"sha256-[a-f0-9]{64}"$/);
+    const paddedPrefix = `${"/".repeat(50_000)}__clank/files${"/".repeat(50_000)}`;
+    const paddedDownload = await files.handle(
+      new Request(`https://todo.test/__clank/files/${readToken}`),
+      paddedPrefix,
+    );
+    assert.equal(paddedDownload.status, 200);
+    assert.equal(await paddedDownload.text(), "avatar");
 
     const wrongOperation = await files.handle(new Request(`https://todo.test/__clank/files/${writeToken}`));
     assert.equal(wrongOperation.status, 403);

@@ -1004,6 +1004,39 @@ function primaryEntity(app: AppBlueprint): string {
   return app.routes.find((route) => route.entity)?.entity ?? Object.keys(app.entities)[0];
 }
 
+function allowedDataModuleSuffix(input: string): boolean {
+  let end = input.length;
+  if (input.charCodeAt(end - 1) === 59) {
+    end--;
+    while (end > 0 && isWhitespaceCharacter(input[end - 1])) end--;
+  }
+  if (end === 0) return true;
+  const suffix = input.slice(0, end);
+  if (wordSequence(suffix, ["as", "const"])) return true;
+  const keyword = "satisfies";
+  if (!suffix.startsWith(keyword) || !isWhitespaceCharacter(suffix[keyword.length])) return false;
+  let index = keyword.length + 1;
+  while (index < suffix.length && isWhitespaceCharacter(suffix[index])) index++;
+  return index < suffix.length;
+}
+
+function wordSequence(input: string, words: readonly string[]): boolean {
+  let index = 0;
+  for (let wordIndex = 0; wordIndex < words.length; wordIndex++) {
+    const word = words[wordIndex]!;
+    if (!input.startsWith(word, index)) return false;
+    index += word.length;
+    if (wordIndex === words.length - 1) return index === input.length;
+    if (!isWhitespaceCharacter(input[index])) return false;
+    while (index < input.length && isWhitespaceCharacter(input[index])) index++;
+  }
+  return index === input.length;
+}
+
+function isWhitespaceCharacter(character: string | undefined): boolean {
+  return character !== undefined && character.trim() === "";
+}
+
 class DataModuleParser {
   private index = 0;
   constructor(private readonly source: string, private readonly filename: string) {}
@@ -1015,11 +1048,9 @@ class DataModuleParser {
     const value = this.value();
     this.space();
     const remainder = this.source.slice(this.index).trim();
-    if (
-      remainder
-      && !/^;$/.test(remainder)
-      && !/^(?:as\s+const|satisfies\s+[\s\S]+?);?$/.test(remainder)
-    ) throw this.error("Only a data literal and optional `satisfies` or `as const` clause are allowed.");
+    if (remainder && !allowedDataModuleSuffix(remainder)) {
+      throw this.error("Only a data literal and optional `satisfies` or `as const` clause are allowed.");
+    }
     return value;
   }
 

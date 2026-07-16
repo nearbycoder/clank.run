@@ -4,7 +4,7 @@ Clank's public beta is suitable for controlled self-hosted evaluation once every
 
 ## Go/no-go gate
 
-- `npm run check` passes from a clean clone on Node 22.13 and Node 24.
+- `npm run check` passes from a clean clone on Node 22.16 and Node 24.
 - GitHub CI and CodeQL pass with no accepted critical or high-severity finding.
 - The release tag exactly matches `package.json`; the tarball is attested and published through npm OIDC.
 - Private vulnerability reporting, branch protection, secret scanning, and protected release environments are enabled.

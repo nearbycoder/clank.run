@@ -439,6 +439,60 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
   }
 });
 
+test("platform reports unexpected failures privately without exposing exception text", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-errors-"));
+  const privateMessage = "internal resolver credential: operator-secret";
+  const observed = [];
+  const platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4560,
+    appPortEnd: 4561,
+    signup: true,
+    ingress: {
+      baseDomain: "apps.example.test",
+      resolveTxt: async () => {
+        throw new Error(privateMessage);
+      },
+    },
+    onError(error) {
+      observed.push(error);
+    },
+  });
+  try {
+    const owner = await authorizeCli(platform, "error-owner@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Error Boundary", slug: "error-boundary" },
+    }), 201);
+    const domain = await payload(platform, jsonRequest(`/api/projects/${created.project.id}/domains`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { hostname: "errors.example.test" },
+    }), 201);
+    const response = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}/domains/${domain.domain.id}/verify`,
+      { method: "POST", token: owner.accessToken, body: {} },
+    ));
+    const result = await response.json();
+    assert.equal(response.status, 500);
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: "PLATFORM_ERROR",
+        message: "The platform operation failed.",
+      },
+    });
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].message, privateMessage);
+    assert.doesNotMatch(JSON.stringify(result), /operator-secret/);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 async function waitFor(check, timeout = 5_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {

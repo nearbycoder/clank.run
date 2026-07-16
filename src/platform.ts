@@ -61,7 +61,7 @@ export interface ClankPlatformOptions {
     maxBodyBytes?: number;
     resolveTxt?: (hostname: string) => Promise<readonly (readonly string[])[]>;
   };
-  exposeErrors?: boolean;
+  /** Receives unexpected failures for private operator logging. */
   onError?: (error: unknown) => void;
 }
 
@@ -1307,11 +1307,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
       options.onError?.(error);
-      return problem(
-        500,
-        "PLATFORM_ERROR",
-        options.exposeErrors ? safeError(error) : "The platform operation failed.",
-      );
+      return problem(500, "PLATFORM_ERROR", "The platform operation failed.");
     }
   };
 

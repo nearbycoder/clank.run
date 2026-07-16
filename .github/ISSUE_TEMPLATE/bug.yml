@@ -18,7 +18,7 @@ body:
     id: node
     attributes:
       label: Node version
-      placeholder: 22.13.0
+      placeholder: 22.16.0
     validations:
       required: true
   - type: textarea
