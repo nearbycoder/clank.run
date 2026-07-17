@@ -10,6 +10,14 @@ export interface DockerRunnerOptions {
     pidsLimit?: number;
 }
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
+export interface PlatformLimits {
+    /** Maximum sites in one organization. Defaults to 10. */
+    projectsPerOrganization?: number;
+    /** Maximum custom domains attached to one site. Defaults to 5. */
+    domainsPerProject?: number;
+    /** Retention for minute-level ingress metrics. Defaults to 30 days. */
+    metricRetentionDays?: number;
+}
 export interface ClankPlatformOptions {
     dataDirectory: string;
     publicUrl: string;
@@ -27,12 +35,22 @@ export interface ClankPlatformOptions {
     allowUnsafeMigrations?: boolean;
     deviceCodeLifetimeMs?: number;
     accessTokenLifetimeMs?: number;
+    limits?: PlatformLimits;
     ingress?: {
         enabled?: boolean;
         baseDomain?: string;
+        /** CNAME target shown to custom-domain owners. Defaults to baseDomain. */
+        customDomainTarget?: string;
+        /** Edge IPv4/IPv6 values accepted for apex/flattened DNS. */
+        customDomainAddresses?: readonly string[];
+        /** Secret embedded in the private Caddy on-demand TLS permission URL. */
+        tlsAskToken?: string;
         timeoutMs?: number;
         maxBodyBytes?: number;
         resolveTxt?: (hostname: string) => Promise<readonly (readonly string[])[]>;
+        resolveCname?: (hostname: string) => Promise<readonly string[]>;
+        resolve4?: (hostname: string) => Promise<readonly string[]>;
+        resolve6?: (hostname: string) => Promise<readonly string[]>;
     };
     /** Receives unexpected failures for private operator logging. */
     onError?: (error: unknown) => void;

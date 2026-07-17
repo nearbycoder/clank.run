@@ -1,4 +1,4 @@
-import { defineAuth, openAuth, type AuthRequest, type AuthRuntime, type DefaultAuthProfile } from "./auth.ts";
+import { AuthError, defineAuth, openAuth, type AuthRequest, type AuthRuntime, type DefaultAuthProfile } from "./auth.ts";
 import { defineDatabase, openSQLite, type SQLiteDatabase } from "./backend.ts";
 import {
   decodeDeploymentBundle,
@@ -16,9 +16,15 @@ import { openDeploymentOrchestrator } from "./orchestration.ts";
 import {
   createDomainManager,
   createManagedIngress,
+  inspectDomainRouting,
+  DomainVerificationError,
   type DomainChallenge,
   type DomainChallengeStore,
+  type DomainDnsResolver,
+  type DomainRoutingReport,
+  type IngressRequestMetric,
 } from "./data-plane.ts";
+import { platformConsolePage } from "./platform-console.ts";
 import { requestOriginAllowed, RequestInputError, readJsonRequest } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
 
@@ -37,6 +43,15 @@ export interface DockerRunnerOptions {
 
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
 
+export interface PlatformLimits {
+  /** Maximum sites in one organization. Defaults to 10. */
+  projectsPerOrganization?: number;
+  /** Maximum custom domains attached to one site. Defaults to 5. */
+  domainsPerProject?: number;
+  /** Retention for minute-level ingress metrics. Defaults to 30 days. */
+  metricRetentionDays?: number;
+}
+
 export interface ClankPlatformOptions {
   dataDirectory: string;
   publicUrl: string;
@@ -54,12 +69,22 @@ export interface ClankPlatformOptions {
   allowUnsafeMigrations?: boolean;
   deviceCodeLifetimeMs?: number;
   accessTokenLifetimeMs?: number;
+  limits?: PlatformLimits;
   ingress?: {
     enabled?: boolean;
     baseDomain?: string;
+    /** CNAME target shown to custom-domain owners. Defaults to baseDomain. */
+    customDomainTarget?: string;
+    /** Edge IPv4/IPv6 values accepted for apex/flattened DNS. */
+    customDomainAddresses?: readonly string[];
+    /** Secret embedded in the private Caddy on-demand TLS permission URL. */
+    tlsAskToken?: string;
     timeoutMs?: number;
     maxBodyBytes?: number;
     resolveTxt?: (hostname: string) => Promise<readonly (readonly string[])[]>;
+    resolveCname?: DomainDnsResolver["resolveCname"];
+    resolve4?: DomainDnsResolver["resolve4"];
+    resolve6?: DomainDnsResolver["resolve6"];
   };
   /** Receives unexpected failures for private operator logging. */
   onError?: (error: unknown) => void;
@@ -120,7 +145,7 @@ interface ReleaseRow {
 }
 
 interface TokenPrincipal {
-  tokenId: string;
+  tokenId: string | null;
   userId: string;
   email: string;
   organizationId: string | null;
@@ -157,6 +182,8 @@ const TOKEN_PREFIX = "clnk_";
 const DEVICE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const PROJECT_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
+const METRIC_BUCKET_MS = 60_000;
+const LATENCY_BOUNDS_MS = [50, 100, 250, 500, 1_000, 2_500, 5_000] as const;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -164,9 +191,38 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   // SQLite journals, backups, logs, and generated launchers owner-readable only.
   (globalThis as any).process.umask?.(0o077);
   const publicUrl = normalizePublicUrl(options.publicUrl);
+  const publicHostname = normalizeHostname(new URL(publicUrl).hostname);
   const baseDomain = options.ingress?.baseDomain
     ? normalizeHostname(options.ingress.baseDomain)
     : undefined;
+  const customDomainTarget = options.ingress?.customDomainTarget
+    ? normalizeHostname(options.ingress.customDomainTarget)
+    : baseDomain;
+  const customDomainAddresses = Object.freeze(normalizeEdgeAddresses(options.ingress?.customDomainAddresses ?? []));
+  const limits = Object.freeze({
+    projectsPerOrganization: integerInRange(
+      options.limits?.projectsPerOrganization ?? 10,
+      "limits.projectsPerOrganization",
+      1,
+      10_000,
+    ),
+    domainsPerProject: integerInRange(
+      options.limits?.domainsPerProject ?? 5,
+      "limits.domainsPerProject",
+      1,
+      1_000,
+    ),
+    metricRetentionDays: integerInRange(
+      options.limits?.metricRetentionDays ?? 30,
+      "limits.metricRetentionDays",
+      1,
+      365,
+    ),
+  });
+  const tlsAskToken = options.ingress?.tlsAskToken === undefined
+    ? undefined
+    : boundedString(options.ingress.tlsAskToken, "ingress.tlsAskToken", 16, 512);
+  const customDomainRoutingConfigured = Boolean(customDomainTarget || customDomainAddresses.length);
   const appUrlTemplate = normalizeAppUrlTemplate(
     options.appUrlTemplate
       ?? (baseDomain
@@ -193,13 +249,23 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
 
   const domainStore: DomainChallengeStore = {
     save(challenge) {
-      storage.internal.prepare(`INSERT INTO clank_platform_domains
+      const result = storage.internal.prepare(`INSERT INTO clank_platform_domains
         (id, project_id, hostname, record_name, record_value, status, expires_at, verified_at, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(hostname) DO UPDATE SET id = excluded.id, project_id = excluded.project_id,
+        ON CONFLICT(hostname) DO UPDATE SET id = excluded.id,
           record_name = excluded.record_name, record_value = excluded.record_value,
           status = excluded.status, expires_at = excluded.expires_at,
-          verified_at = excluded.verified_at`)
+          verified_at = excluded.verified_at, created_at = excluded.created_at,
+          routing_status = CASE WHEN clank_platform_domains.id = excluded.id THEN routing_status ELSE 'pending' END,
+          certificate_status = CASE WHEN clank_platform_domains.id = excluded.id THEN certificate_status ELSE 'pending' END,
+          resolved_records = CASE WHEN clank_platform_domains.id = excluded.id THEN resolved_records ELSE '{"cnames":[],"addresses":[]}' END,
+          last_checked_at = CASE WHEN clank_platform_domains.id = excluded.id THEN last_checked_at ELSE NULL END,
+          last_error = CASE WHEN clank_platform_domains.id = excluded.id THEN last_error ELSE NULL END
+        WHERE clank_platform_domains.id = excluded.id OR (
+          clank_platform_domains.project_id = excluded.project_id
+          AND clank_platform_domains.status = 'pending'
+          AND clank_platform_domains.expires_at <= excluded.created_at
+        )`)
         .run(
           challenge.id,
           challenge.projectId,
@@ -211,6 +277,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           challenge.verifiedAt ?? null,
           Date.now(),
         );
+      if (Number(result.changes) !== 1) {
+        throw new PlatformError(409, "DOMAIN_UNAVAILABLE", "That hostname is already assigned to another site.");
+      }
     },
     get(id) {
       const row = storage.internal.prepare("SELECT * FROM clank_platform_domains WHERE id = ?").get(id);
@@ -225,12 +294,23 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     store: domainStore,
     ...(options.ingress?.resolveTxt ? { resolveTxt: options.ingress.resolveTxt } : {}),
   });
+  const domainDnsResolver = domainResolver(options.ingress);
+  let lastMetricPrune = 0;
+  const recordIngressMetric = (metric: IngressRequestMetric): void => {
+    recordMetric(storage.internal, metric);
+    if (metric.recordedAt - lastMetricPrune >= 60 * 60_000) {
+      lastMetricPrune = metric.recordedAt;
+      storage.internal.prepare("DELETE FROM clank_platform_metrics WHERE bucket_started_at < ?")
+        .run(metric.recordedAt - limits.metricRetentionDays * 24 * 60 * 60_000);
+    }
+  };
   const ingressEnabled = options.ingress?.enabled === true || Boolean(baseDomain);
   const ingress = ingressEnabled
     ? createManagedIngress({
         routes: () => ingressRoutes(storage.internal, baseDomain),
         timeoutMs: options.ingress?.timeoutMs,
         maxBodyBytes: options.ingress?.maxBodyBytes,
+        onRequest: recordIngressMetric,
       })
     : undefined;
 
@@ -605,7 +685,38 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
       const url = new URL(request.url);
-      if (ingress && normalizeHostname(url.hostname) !== normalizeHostname(new URL(publicUrl).hostname)) {
+      // Caddy calls this permission endpoint over loopback, so it must be
+      // handled before Host-based application dispatch. The secret is still
+      // required because the path can also arrive through a public listener.
+      if (url.pathname === "/_clank/tls/ask" && request.method === "GET") {
+        if (!tlsAskToken || !await timingSafeStringEqual(url.searchParams.get("token") ?? "", tlsAskToken)) {
+          return new Response(null, { status: 404 });
+        }
+        let hostname: string;
+        try {
+          hostname = normalizeHostname(url.searchParams.get("domain") ?? "");
+        } catch {
+          return new Response(null, { status: 403 });
+        }
+        const allowed = storage.internal.prepare(`SELECT d.id FROM clank_platform_domains d
+          JOIN clank_platform_projects p ON p.id = d.project_id
+          WHERE d.hostname = ? AND d.status = 'verified' AND d.routing_status = 'ready'
+            AND p.active_release_id IS NOT NULL`).get(hostname);
+        const builtInSlug = baseDomain && hostname.endsWith(`.${baseDomain}`)
+          ? hostname.slice(0, -(baseDomain.length + 1))
+          : "";
+        const builtInAllowed = builtInSlug && !builtInSlug.includes(".")
+          ? storage.internal.prepare(`SELECT id FROM clank_platform_projects
+              WHERE slug = ? AND active_release_id IS NOT NULL`).get(builtInSlug)
+          : undefined;
+        if (!allowed && !builtInAllowed) return new Response(null, { status: 403 });
+        if (allowed) {
+          storage.internal.prepare(`UPDATE clank_platform_domains SET certificate_status = 'eligible'
+            WHERE id = ? AND certificate_status = 'pending'`).run(allowed.id);
+        }
+        return new Response(null, { status: 200, headers: { "cache-control": "no-store" } });
+      }
+      if (ingress && normalizeHostname(url.hostname) !== publicHostname) {
         return await ingress.handle(request);
       }
       if (url.pathname === "/healthz" && request.method === "GET") {
@@ -632,7 +743,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (url.pathname === "/" && request.method === "GET") {
         const auth = await storage.auth.resolve(request);
         const userCount = Number(storage.internal.prepare("SELECT count(*) AS count FROM clank_auth_users").get()?.count ?? 0);
-        return consolePage(
+        return platformConsolePage(
           publicUrl,
           auth,
           url.searchParams.get("code") ?? "",
@@ -727,12 +838,29 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         return api({ ok: true, status });
       }
 
-      const principal = await requireToken(storage.internal, request);
+      const principal = await requirePlatformPrincipal(storage, request);
+      if (url.pathname === "/api/dashboard" && request.method === "GET") {
+        if (principal.projectId && !principal.permissions.includes("read")) {
+          throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metrics.");
+        }
+        if (!principal.projectId) await ensurePersonalOrganization(storage.internal, principal);
+        return api(dashboardPayload(
+          storage.internal,
+          principal,
+          active,
+          appUrlTemplate,
+          limits,
+          options.maxArtifactBytes,
+          customDomainTarget,
+          customDomainAddresses,
+          Boolean(tlsAskToken),
+        ));
+      }
       if (url.pathname === "/api/account" && request.method === "GET") {
         return api({
           ok: true,
           account: { id: principal.userId, email: principal.email },
-          token: {
+          token: principal.tokenId === null ? null : {
             id: principal.tokenId,
             organizationId: principal.organizationId,
             projectId: principal.projectId,
@@ -765,6 +893,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         })) });
       }
       if (url.pathname === "/api/tokens/current" && request.method === "DELETE") {
+        if (principal.tokenId === null) throw new PlatformError(400, "CLI_TOKEN_REQUIRED", "This endpoint revokes only the current CLI token.");
         storage.internal.prepare("UPDATE clank_platform_tokens SET revoked_at = ? WHERE id = ? AND user_id = ?")
           .run(Date.now(), principal.tokenId, principal.userId);
         audit(storage.internal, principal.userId, principal.tokenId, null, "token.revoke", {
@@ -958,7 +1087,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 ON m.organization_id = p.organization_id AND m.user_id = ?
               WHERE m.user_id IS NOT NULL OR p.owner_id = ? ORDER BY p.created_at`)
               .all(principal.userId, principal.userId);
-        return api({ ok: true, projects: rows.map((row) => projectPayload(projectRow(row))) });
+        const usageRows = storage.internal.prepare(`SELECT organization_id, count(*) AS count
+          FROM clank_platform_projects WHERE organization_id IN (
+            SELECT organization_id FROM clank_platform_memberships WHERE user_id = ?
+          ) GROUP BY organization_id`).all(principal.userId);
+        return api({
+          ok: true,
+          projects: rows.map((row) => projectPayload(projectRow(row))),
+          limits: publicLimits(limits, options.maxArtifactBytes),
+          usage: Object.fromEntries(usageRows.map((row) => [String(row.organization_id), Number(row.count)])),
+        });
       }
       if (url.pathname === "/api/projects" && request.method === "POST") {
         if (principal.projectId) throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot create projects.");
@@ -972,14 +1110,29 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const membership = organizationMembership(storage.internal, organizationId, principal.userId);
         requireOrganizationAdministration(membership.role);
         const id = await randomId(18);
-        const port = allocatePort(storage.internal, options.appPortStart ?? 4300, options.appPortEnd ?? 4999);
+        let port = 0;
         const now = Date.now();
         try {
-          storage.internal.prepare(`INSERT INTO clank_platform_projects
-            (id, owner_id, organization_id, name, slug, port, active_release_id, database_path, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`)
-            .run(id, principal.userId, organizationId, name, slug, port, now, now);
+          storage.internal.transaction((changes) => {
+            const count = Number(storage.internal.prepare(
+              "SELECT count(*) AS count FROM clank_platform_projects WHERE organization_id = ?",
+            ).get(organizationId)?.count ?? 0);
+            if (count >= limits.projectsPerOrganization) {
+              throw new PlatformError(
+                409,
+                "PROJECT_LIMIT_REACHED",
+                `This organization has reached its ${limits.projectsPerOrganization}-site limit.`,
+              );
+            }
+            port = allocatePort(storage.internal, options.appPortStart ?? 4300, options.appPortEnd ?? 4999);
+            storage.internal.prepare(`INSERT INTO clank_platform_projects
+              (id, owner_id, organization_id, name, slug, port, active_release_id, database_path, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`)
+              .run(id, principal.userId, organizationId, name, slug, port, now, now);
+            changes.record("__platform", organizationId);
+          });
         } catch (error) {
+          if (error instanceof PlatformError) throw error;
           if (safeError(error).toLowerCase().includes("unique")) {
             throw new PlatformError(409, "SLUG_UNAVAILABLE", "That project slug is unavailable.");
           }
@@ -1004,7 +1157,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? "rollback"
           : operation.startsWith("backups") && request.method !== "GET"
             ? "rollback"
-          : operation.startsWith("domains")
+          : operation.startsWith("domains") && request.method !== "GET"
             ? "tokens"
           : operation === "secrets" || operation.startsWith("secrets/")
             ? "secrets"
@@ -1017,7 +1170,21 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const project = access.project;
       if (!operation && request.method === "GET") {
         const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
-        return api({ ok: true, project: projectPayload(project), activeRelease: release ? publicRelease(release) : null });
+        const domainCount = Number(storage.internal.prepare(
+          "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
+        ).get(project.id)?.count ?? 0);
+        return api({
+          ok: true,
+          project: {
+            ...projectPayload(project),
+            url: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
+            directUrl: `http://127.0.0.1:${project.port}`,
+            runtimeStatus: active.has(project.id) ? "online" : release ? "degraded" : "not_deployed",
+          },
+          activeRelease: release ? publicRelease(release) : null,
+          limits: publicLimits(limits, options.maxArtifactBytes),
+          usage: { domains: domainCount },
+        });
       }
       if (operation === "releases" && request.method === "GET") {
         const rows = storage.internal.prepare(
@@ -1185,46 +1352,99 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }, 201);
       }
       if (operation === "domains" && request.method === "GET") {
-        const rows = storage.internal.prepare(`SELECT id, hostname, record_name, record_value, status,
-            expires_at, verified_at, created_at
+        const rows = storage.internal.prepare(`SELECT *
           FROM clank_platform_domains WHERE project_id = ? ORDER BY created_at`).all(project.id);
-        return api({ ok: true, domains: rows.map((row) => ({
-          id: String(row.id),
-          hostname: String(row.hostname),
-          recordName: String(row.record_name),
-          recordType: "TXT",
-          recordValue: String(row.record_value),
-          status: String(row.status),
-          expiresAt: Number(row.expires_at),
-          verifiedAt: row.verified_at === null ? null : Number(row.verified_at),
-          createdAt: Number(row.created_at),
-        })) });
+        return api({
+          ok: true,
+          domains: rows.map((row) => publicDomain(row, customDomainTarget, customDomainAddresses)),
+          limit: limits.domainsPerProject,
+        });
       }
       if (operation === "domains" && request.method === "POST") {
         if (!ingress) throw new PlatformError(409, "INGRESS_DISABLED", "Managed ingress is not enabled.");
+        if (!customDomainRoutingConfigured) {
+          throw new PlatformError(503, "DOMAIN_ROUTING_UNCONFIGURED", "The operator has not configured a custom-domain target.");
+        }
         const input = plainObject(await readJsonRequest(request, 8 * 1024));
         exact(input, ["hostname"]);
-        const hostname = boundedString(input.hostname, "hostname", 1, 253);
+        const inputHostname = boundedString(input.hostname, "hostname", 1, 253);
+        let hostname: string;
+        try { hostname = normalizeHostname(inputHostname); }
+        catch { throw new PlatformError(422, "INVALID_DOMAIN", "hostname must be a valid DNS hostname."); }
+        if (
+          hostname === publicHostname
+          || hostname === customDomainTarget
+          || hostname === baseDomain
+          || (baseDomain && hostname.endsWith(`.${baseDomain}`))
+        ) {
+          throw new PlatformError(409, "DOMAIN_RESERVED", "That hostname belongs to the Clank platform namespace.");
+        }
+        const assigned = await domainStore.byHostname(hostname);
+        if (assigned && assigned.projectId !== project.id) {
+          throw new PlatformError(409, "DOMAIN_UNAVAILABLE", "That hostname is already assigned to another site.");
+        }
         const challenge = await domains.begin(project.id, hostname);
+        try {
+          storage.internal.transaction(() => {
+            const count = Number(storage.internal.prepare(
+              "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
+            ).get(project.id)?.count ?? 0);
+            if (count > limits.domainsPerProject) {
+              storage.internal.prepare("DELETE FROM clank_platform_domains WHERE id = ? AND project_id = ?")
+                .run(challenge.id, project.id);
+              throw new PlatformError(
+                409,
+                "DOMAIN_LIMIT_REACHED",
+                `This site has reached its ${limits.domainsPerProject}-domain limit.`,
+              );
+            }
+          });
+          const report = await inspectDomainRouting(challenge.hostname, {
+            ...(customDomainTarget ? { cname: customDomainTarget } : {}),
+            addresses: customDomainAddresses,
+          }, domainDnsResolver);
+          saveDomainRouting(storage.internal, challenge.id, report);
+        } catch (error) {
+          if (error instanceof PlatformError) throw error;
+          saveDomainRoutingError(storage.internal, challenge.id);
+        }
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "domain.begin", {
           domainId: challenge.id,
           hostname: challenge.hostname,
         });
-        return api({ ok: true, domain: challenge }, 201);
+        const row = storage.internal.prepare("SELECT * FROM clank_platform_domains WHERE id = ?").get(challenge.id)!;
+        return api({ ok: true, domain: publicDomain(row, customDomainTarget, customDomainAddresses) }, 201);
       }
-      const domainMatch = /^domains\/(dom_[A-Za-z0-9_-]{12,128})(?:\/(verify))?$/.exec(operation);
-      if (domainMatch && domainMatch[2] === "verify" && request.method === "POST") {
+      const domainMatch = /^domains\/(dom_[A-Za-z0-9_-]{12,128})(?:\/(verify|check))?$/.exec(operation);
+      if (domainMatch && domainMatch[2] && request.method === "POST") {
         if (!ingress) throw new PlatformError(409, "INGRESS_DISABLED", "Managed ingress is not enabled.");
         const current = await domainStore.get(domainMatch[1]!);
         if (!current || current.projectId !== project.id) {
           throw new PlatformError(404, "DOMAIN_NOT_FOUND", "Domain not found.");
         }
-        const verified = await domains.verify(current.id);
-        audit(storage.internal, principal.userId, principal.tokenId, project.id, "domain.verify", {
-          domainId: verified.id,
-          hostname: verified.hostname,
+        let challenge = current;
+        if (domainMatch[2] === "verify") {
+          try {
+            challenge = await domains.verify(current.id);
+          } catch (error) {
+            if (error instanceof DomainVerificationError) {
+              throw new PlatformError(422, "DOMAIN_OWNERSHIP_PENDING", error.message);
+            }
+            throw error;
+          }
+        }
+        const report = await inspectDomainRouting(challenge.hostname, {
+          ...(customDomainTarget ? { cname: customDomainTarget } : {}),
+          addresses: customDomainAddresses,
+        }, domainDnsResolver);
+        saveDomainRouting(storage.internal, challenge.id, report);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, `domain.${domainMatch[2]}`, {
+          domainId: challenge.id,
+          hostname: challenge.hostname,
+          routingStatus: report.status,
         });
-        return api({ ok: true, domain: verified });
+        const row = storage.internal.prepare("SELECT * FROM clank_platform_domains WHERE id = ?").get(challenge.id)!;
+        return api({ ok: true, domain: publicDomain(row, customDomainTarget, customDomainAddresses) });
       }
       if (domainMatch && !domainMatch[2] && request.method === "DELETE") {
         const result = storage.internal.prepare("DELETE FROM clank_platform_domains WHERE id = ? AND project_id = ?")
@@ -1234,6 +1454,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           domainId: domainMatch[1],
         });
         return api({ ok: true });
+      }
+      if (operation === "metrics" && request.method === "GET") {
+        return api({ ok: true, ...metricSeries(storage.internal, project.id, url.searchParams.get("range") ?? "24h") });
       }
       if (operation === "logs" && request.method === "GET") {
         const limit = Math.min(1_000, Math.max(1, Number(url.searchParams.get("limit") ?? 200) || 200));
@@ -1306,6 +1529,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     } catch (error) {
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
+      if (error instanceof AuthError) return problem(error.status, error.code, error.message, error.retryAfter);
       options.onError?.(error);
       return problem(500, "PLATFORM_ERROR", "The platform operation failed.");
     }
@@ -1359,6 +1583,7 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     "memberships",
     "invitations",
     "domains",
+    "metrics",
     "projects",
     "releases",
     "secrets",
@@ -1457,11 +1682,62 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     record_name TEXT NOT NULL,
     record_value TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('pending', 'verified')),
+    routing_status TEXT NOT NULL DEFAULT 'pending' CHECK (routing_status IN ('pending', 'ready', 'misconfigured', 'error')),
+    certificate_status TEXT NOT NULL DEFAULT 'pending' CHECK (certificate_status IN ('pending', 'eligible', 'active', 'error')),
+    resolved_records TEXT NOT NULL DEFAULT '{"cnames":[],"addresses":[]}' CHECK (json_valid(resolved_records)),
+    last_checked_at INTEGER,
+    last_error TEXT,
     expires_at INTEGER NOT NULL,
     verified_at INTEGER,
     created_at INTEGER NOT NULL
   )`);
+  const domainColumns = internal.prepare("PRAGMA table_info(clank_platform_domains)").all();
+  const hasDomainColumn = (name: string) => domainColumns.some((column) => column.name === name);
+  let upgradedRoutingStatus = false;
+  if (!hasDomainColumn("routing_status")) {
+    internal.exec("ALTER TABLE clank_platform_domains ADD COLUMN routing_status TEXT NOT NULL DEFAULT 'pending'");
+    upgradedRoutingStatus = true;
+  }
+  if (!hasDomainColumn("certificate_status")) {
+    internal.exec("ALTER TABLE clank_platform_domains ADD COLUMN certificate_status TEXT NOT NULL DEFAULT 'pending'");
+  }
+  if (!hasDomainColumn("resolved_records")) {
+    internal.exec(`ALTER TABLE clank_platform_domains ADD COLUMN resolved_records TEXT NOT NULL DEFAULT '{"cnames":[],"addresses":[]}'`);
+  }
+  if (!hasDomainColumn("last_checked_at")) {
+    internal.exec("ALTER TABLE clank_platform_domains ADD COLUMN last_checked_at INTEGER");
+  }
+  if (!hasDomainColumn("last_error")) {
+    internal.exec("ALTER TABLE clank_platform_domains ADD COLUMN last_error TEXT");
+  }
+  if (upgradedRoutingStatus) {
+    internal.exec("UPDATE clank_platform_domains SET routing_status = 'ready', certificate_status = 'eligible' WHERE status = 'verified'");
+  }
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_domains_project ON clank_platform_domains (project_id, created_at)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_metrics (
+    project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    bucket_started_at INTEGER NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    status_2xx INTEGER NOT NULL DEFAULT 0,
+    status_3xx INTEGER NOT NULL DEFAULT 0,
+    status_4xx INTEGER NOT NULL DEFAULT 0,
+    status_5xx INTEGER NOT NULL DEFAULT 0,
+    duration_sum_ms REAL NOT NULL DEFAULT 0,
+    duration_max_ms REAL NOT NULL DEFAULT 0,
+    latency_le_50 INTEGER NOT NULL DEFAULT 0,
+    latency_le_100 INTEGER NOT NULL DEFAULT 0,
+    latency_le_250 INTEGER NOT NULL DEFAULT 0,
+    latency_le_500 INTEGER NOT NULL DEFAULT 0,
+    latency_le_1000 INTEGER NOT NULL DEFAULT 0,
+    latency_le_2500 INTEGER NOT NULL DEFAULT 0,
+    latency_le_5000 INTEGER NOT NULL DEFAULT 0,
+    latency_inf INTEGER NOT NULL DEFAULT 0,
+    request_bytes INTEGER NOT NULL DEFAULT 0,
+    response_bytes INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (project_id, bucket_started_at)
+  )`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_metrics_time ON clank_platform_metrics (bucket_started_at)");
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_releases (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
@@ -1569,6 +1845,22 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
     organizationId: row.organization_id === null ? null : String(row.organization_id),
     projectId: row.project_id === null ? null : String(row.project_id),
     permissions: parseProjectPermissions(row.permissions),
+  };
+}
+
+async function requirePlatformPrincipal(storage: PlatformDatabase, request: Request): Promise<TokenPrincipal> {
+  if (request.headers.has("authorization")) return requireToken(storage.internal, request);
+  const auth = await requireBrowserAuth(storage.auth, request);
+  if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+    await storage.auth.verifyCsrf(request, auth);
+  }
+  return {
+    tokenId: null,
+    userId: auth.user!.id,
+    email: auth.user!.email,
+    organizationId: null,
+    projectId: null,
+    permissions: [],
   };
 }
 
@@ -1683,7 +1975,7 @@ function ingressRoutes(internal: SQLiteInternal, baseDomain?: string) {
     WHERE active_release_id IS NOT NULL ORDER BY id`).all();
   return projects.map((project) => {
     const hosts = internal.prepare(`SELECT hostname FROM clank_platform_domains
-      WHERE project_id = ? AND status = 'verified' ORDER BY hostname`).all(project.id)
+      WHERE project_id = ? AND status = 'verified' AND routing_status = 'ready' ORDER BY hostname`).all(project.id)
       .map((row) => String(row.hostname));
     if (baseDomain) hosts.unshift(`${String(project.slug)}.${baseDomain}`);
     return {
@@ -1694,6 +1986,364 @@ function ingressRoutes(internal: SQLiteInternal, baseDomain?: string) {
       active: hosts.length > 0,
     };
   });
+}
+
+function recordMetric(internal: SQLiteInternal, metric: IngressRequestMetric): void {
+  const bucket = Math.floor(metric.recordedAt / METRIC_BUCKET_MS) * METRIC_BUCKET_MS;
+  const duration = Math.min(10 * 60_000, Math.max(0, Number(metric.durationMs) || 0));
+  const requestBytes = boundedMetricBytes(metric.requestBytes);
+  const responseBytes = boundedMetricBytes(metric.responseBytes);
+  const status = Number.isSafeInteger(metric.statusCode) ? metric.statusCode : 500;
+  const latency = LATENCY_BOUNDS_MS.map((bound) => duration <= bound ? 1 : 0);
+  internal.prepare(`INSERT INTO clank_platform_metrics (
+      project_id, bucket_started_at, request_count, error_count,
+      status_2xx, status_3xx, status_4xx, status_5xx,
+      duration_sum_ms, duration_max_ms,
+      latency_le_50, latency_le_100, latency_le_250, latency_le_500,
+      latency_le_1000, latency_le_2500, latency_le_5000, latency_inf,
+      request_bytes, response_bytes
+    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    ON CONFLICT(project_id, bucket_started_at) DO UPDATE SET
+      request_count = request_count + 1,
+      error_count = error_count + excluded.error_count,
+      status_2xx = status_2xx + excluded.status_2xx,
+      status_3xx = status_3xx + excluded.status_3xx,
+      status_4xx = status_4xx + excluded.status_4xx,
+      status_5xx = status_5xx + excluded.status_5xx,
+      duration_sum_ms = duration_sum_ms + excluded.duration_sum_ms,
+      duration_max_ms = max(duration_max_ms, excluded.duration_max_ms),
+      latency_le_50 = latency_le_50 + excluded.latency_le_50,
+      latency_le_100 = latency_le_100 + excluded.latency_le_100,
+      latency_le_250 = latency_le_250 + excluded.latency_le_250,
+      latency_le_500 = latency_le_500 + excluded.latency_le_500,
+      latency_le_1000 = latency_le_1000 + excluded.latency_le_1000,
+      latency_le_2500 = latency_le_2500 + excluded.latency_le_2500,
+      latency_le_5000 = latency_le_5000 + excluded.latency_le_5000,
+      latency_inf = latency_inf + 1,
+      request_bytes = request_bytes + excluded.request_bytes,
+      response_bytes = response_bytes + excluded.response_bytes`)
+    .run(
+      metric.projectId,
+      bucket,
+      status >= 500 ? 1 : 0,
+      status >= 200 && status < 300 ? 1 : 0,
+      status >= 300 && status < 400 ? 1 : 0,
+      status >= 400 && status < 500 ? 1 : 0,
+      status >= 500 && status < 600 ? 1 : 0,
+      duration,
+      duration,
+      ...latency,
+      requestBytes,
+      responseBytes,
+    );
+}
+
+function boundedMetricBytes(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.floor(value));
+}
+
+interface MetricRange {
+  name: "1h" | "24h" | "7d" | "30d";
+  durationMs: number;
+  intervalMs: number;
+}
+
+function metricRange(input: string): MetricRange {
+  if (input === "1h") return { name: "1h", durationMs: 60 * 60_000, intervalMs: 60_000 };
+  if (input === "7d") return { name: "7d", durationMs: 7 * 24 * 60 * 60_000, intervalMs: 60 * 60_000 };
+  if (input === "30d") return { name: "30d", durationMs: 30 * 24 * 60 * 60_000, intervalMs: 6 * 60 * 60_000 };
+  return { name: "24h", durationMs: 24 * 60 * 60_000, intervalMs: 15 * 60_000 };
+}
+
+function metricSeries(internal: SQLiteInternal, projectId: string, requestedRange: string): Record<string, unknown> {
+  const range = metricRange(requestedRange);
+  const now = Date.now();
+  const start = now - range.durationMs;
+  const rows = internal.prepare(`SELECT
+      bucket_started_at - (bucket_started_at % ?) AS point_at,
+      sum(request_count) AS request_count,
+      sum(error_count) AS error_count,
+      sum(status_2xx) AS status_2xx,
+      sum(status_3xx) AS status_3xx,
+      sum(status_4xx) AS status_4xx,
+      sum(status_5xx) AS status_5xx,
+      sum(duration_sum_ms) AS duration_sum_ms,
+      max(duration_max_ms) AS duration_max_ms,
+      sum(latency_le_50) AS latency_le_50,
+      sum(latency_le_100) AS latency_le_100,
+      sum(latency_le_250) AS latency_le_250,
+      sum(latency_le_500) AS latency_le_500,
+      sum(latency_le_1000) AS latency_le_1000,
+      sum(latency_le_2500) AS latency_le_2500,
+      sum(latency_le_5000) AS latency_le_5000,
+      sum(latency_inf) AS latency_inf,
+      sum(request_bytes) AS request_bytes,
+      sum(response_bytes) AS response_bytes
+    FROM clank_platform_metrics
+    WHERE project_id = ? AND bucket_started_at >= ?
+    GROUP BY point_at ORDER BY point_at`).all(range.intervalMs, projectId, start);
+  const points = rows.map(publicMetricPoint);
+  return {
+    range: range.name,
+    start,
+    end: now,
+    intervalMs: range.intervalMs,
+    summary: summarizeMetricRows(rows, range.durationMs),
+    points,
+  };
+}
+
+function publicMetricPoint(row: Record<string, unknown>): Record<string, unknown> {
+  const requests = Number(row.request_count ?? 0);
+  const durationSum = Number(row.duration_sum_ms ?? 0);
+  return {
+    at: Number(row.point_at),
+    requests,
+    errors: Number(row.error_count ?? 0),
+    averageLatencyMs: requests ? durationSum / requests : 0,
+    p95LatencyMs: histogramPercentile(row, requests, 0.95),
+    maxLatencyMs: Number(row.duration_max_ms ?? 0),
+    requestBytes: Number(row.request_bytes ?? 0),
+    responseBytes: Number(row.response_bytes ?? 0),
+    status: {
+      success: Number(row.status_2xx ?? 0),
+      redirect: Number(row.status_3xx ?? 0),
+      clientError: Number(row.status_4xx ?? 0),
+      serverError: Number(row.status_5xx ?? 0),
+    },
+  };
+}
+
+function summarizeMetricRows(rows: Record<string, unknown>[], durationMs: number): Record<string, number> {
+  const aggregate: Record<string, number> = {
+    request_count: 0,
+    error_count: 0,
+    duration_sum_ms: 0,
+    duration_max_ms: 0,
+    request_bytes: 0,
+    response_bytes: 0,
+    status_2xx: 0,
+    status_3xx: 0,
+    status_4xx: 0,
+    status_5xx: 0,
+    latency_le_50: 0,
+    latency_le_100: 0,
+    latency_le_250: 0,
+    latency_le_500: 0,
+    latency_le_1000: 0,
+    latency_le_2500: 0,
+    latency_le_5000: 0,
+    latency_inf: 0,
+  };
+  for (const row of rows) {
+    for (const key of Object.keys(aggregate)) {
+      if (key === "duration_max_ms") aggregate[key] = Math.max(aggregate[key]!, Number(row[key] ?? 0));
+      else aggregate[key] = aggregate[key]! + Number(row[key] ?? 0);
+    }
+  }
+  const requests = aggregate.request_count!;
+  return {
+    requests,
+    errors: aggregate.error_count!,
+    errorRate: requests ? aggregate.error_count! / requests : 0,
+    requestsPerMinute: requests / Math.max(1, durationMs / 60_000),
+    averageLatencyMs: requests ? aggregate.duration_sum_ms! / requests : 0,
+    p95LatencyMs: histogramPercentile(aggregate, requests, 0.95),
+    maxLatencyMs: aggregate.duration_max_ms!,
+    requestBytes: aggregate.request_bytes!,
+    responseBytes: aggregate.response_bytes!,
+    bandwidthBytes: aggregate.request_bytes! + aggregate.response_bytes!,
+  };
+}
+
+function histogramPercentile(row: Record<string, unknown>, requests: number, percentile: number): number {
+  if (requests <= 0) return 0;
+  const target = requests * percentile;
+  const columns = [
+    "latency_le_50",
+    "latency_le_100",
+    "latency_le_250",
+    "latency_le_500",
+    "latency_le_1000",
+    "latency_le_2500",
+    "latency_le_5000",
+  ];
+  for (let index = 0; index < columns.length; index++) {
+    if (Number(row[columns[index]!] ?? 0) >= target) return LATENCY_BOUNDS_MS[index]!;
+  }
+  return Math.max(5_000, Number(row.duration_max_ms ?? 0));
+}
+
+function saveDomainRouting(internal: SQLiteInternal, id: string, report: DomainRoutingReport): void {
+  const error = report.error
+    ?? (report.status === "misconfigured" ? "DNS does not point to the configured Clank edge." : null);
+  internal.prepare(`UPDATE clank_platform_domains SET
+      routing_status = ?, resolved_records = ?, last_checked_at = ?, last_error = ?,
+      certificate_status = CASE
+        WHEN status = 'verified' AND ? = 'ready' AND certificate_status = 'active' THEN 'active'
+        WHEN status = 'verified' AND ? = 'ready' THEN 'eligible'
+        ELSE 'pending'
+      END
+    WHERE id = ?`).run(
+      report.status,
+      JSON.stringify(report.observed),
+      report.checkedAt,
+      error,
+      report.status,
+      report.status,
+      id,
+    );
+}
+
+function saveDomainRoutingError(internal: SQLiteInternal, id: string): void {
+  internal.prepare(`UPDATE clank_platform_domains SET routing_status = 'error', certificate_status = 'pending',
+    last_checked_at = ?, last_error = ? WHERE id = ?`)
+    .run(Date.now(), "DNS lookup is temporarily unavailable.", id);
+}
+
+function publicDomain(
+  row: Record<string, unknown>,
+  customDomainTarget: string | undefined,
+  customDomainAddresses: readonly string[],
+): Record<string, unknown> {
+  let observed: { cnames: string[]; addresses: string[] } = { cnames: [], addresses: [] };
+  try {
+    const parsed = JSON.parse(String(row.resolved_records ?? "{}"));
+    if (parsed && typeof parsed === "object") {
+      observed = {
+        cnames: Array.isArray(parsed.cnames) ? parsed.cnames.map(String).slice(0, 32) : [],
+        addresses: Array.isArray(parsed.addresses) ? parsed.addresses.map(String).slice(0, 32) : [],
+      };
+    }
+  } catch { /* Preserve an empty, safe observation. */ }
+  const ownershipStatus = String(row.status);
+  const routingStatus = String(row.routing_status ?? "pending");
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    hostname: String(row.hostname),
+    status: ownershipStatus === "verified" && routingStatus === "ready" ? "ready" : "pending",
+    ownership: {
+      status: ownershipStatus,
+      record: { name: String(row.record_name), type: "TXT", value: String(row.record_value) },
+      expiresAt: Number(row.expires_at),
+      verifiedAt: row.verified_at === null ? null : Number(row.verified_at),
+    },
+    routing: {
+      status: routingStatus,
+      recommendedRecord: customDomainTarget
+        ? { name: String(row.hostname), type: "CNAME", value: customDomainTarget }
+        : null,
+      edgeAddresses: customDomainAddresses,
+      observed,
+      checkedAt: row.last_checked_at === null || row.last_checked_at === undefined
+        ? null
+        : Number(row.last_checked_at),
+      error: row.last_error === null || row.last_error === undefined ? null : String(row.last_error),
+    },
+    certificate: { status: String(row.certificate_status ?? "pending"), mode: "edge-managed" },
+    recordName: String(row.record_name),
+    recordType: "TXT",
+    recordValue: String(row.record_value),
+    expiresAt: Number(row.expires_at),
+    verifiedAt: row.verified_at === null ? null : Number(row.verified_at),
+    createdAt: Number(row.created_at),
+  };
+}
+
+function publicLimits(limits: Required<PlatformLimits>, maxArtifactBytes?: number): Record<string, number> {
+  return {
+    projectsPerOrganization: limits.projectsPerOrganization,
+    domainsPerProject: limits.domainsPerProject,
+    metricRetentionDays: limits.metricRetentionDays,
+    maxArtifactBytes: maxArtifactBytes ?? 100 * 1024 * 1024,
+  };
+}
+
+function dashboardPayload(
+  internal: SQLiteInternal,
+  principal: TokenPrincipal,
+  active: ReadonlyMap<string, ActiveProcess>,
+  appUrlTemplate: string,
+  limits: Required<PlatformLimits>,
+  maxArtifactBytes: number | undefined,
+  customDomainTarget: string | undefined,
+  customDomainAddresses: readonly string[],
+  automaticTls: boolean,
+): Record<string, unknown> {
+  const organizationRows = principal.organizationId
+    ? internal.prepare(`SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, m.role,
+        (SELECT count(*) FROM clank_platform_projects p WHERE p.organization_id = o.id) AS project_count
+      FROM clank_platform_organizations o
+      JOIN clank_platform_memberships m ON m.organization_id = o.id
+      WHERE m.user_id = ? AND o.id = ? ORDER BY o.created_at`).all(principal.userId, principal.organizationId)
+    : internal.prepare(`SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, m.role,
+        (SELECT count(*) FROM clank_platform_projects p WHERE p.organization_id = o.id) AS project_count
+      FROM clank_platform_organizations o
+      JOIN clank_platform_memberships m ON m.organization_id = o.id
+      WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
+  const organizations = organizationRows.map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      slug: String(row.slug),
+      role: String(row.role),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      usage: { projects: Number(row.project_count), limit: limits.projectsPerOrganization },
+    }));
+  const projectRows = principal.projectId
+    ? internal.prepare(`SELECT p.* FROM clank_platform_projects p
+        JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
+        WHERE p.id = ? AND m.user_id = ?`).all(principal.projectId, principal.userId)
+    : internal.prepare(`SELECT DISTINCT p.* FROM clank_platform_projects p
+        LEFT JOIN clank_platform_memberships m
+          ON m.organization_id = p.organization_id AND m.user_id = ?
+        WHERE m.user_id IS NOT NULL OR p.owner_id = ? ORDER BY p.created_at`).all(principal.userId, principal.userId);
+  const projects = projectRows.map((source) => {
+    const project = projectRow(source);
+    const release = project.activeReleaseId ? releaseById(internal, project.activeReleaseId) : null;
+    const domainUsage = internal.prepare(`SELECT count(*) AS count,
+      sum(CASE WHEN status = 'verified' AND routing_status = 'ready' THEN 1 ELSE 0 END) AS ready
+      FROM clank_platform_domains WHERE project_id = ?`).get(project.id);
+    const metrics = metricSeries(internal, project.id, "24h").summary as Record<string, number>;
+    return {
+      ...projectPayload(project),
+      url: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
+      directUrl: `http://127.0.0.1:${project.port}`,
+      runtimeStatus: active.has(project.id) ? "online" : release ? "degraded" : "not_deployed",
+      activeRelease: release ? publicRelease(release) : null,
+      domains: { count: Number(domainUsage?.count ?? 0), ready: Number(domainUsage?.ready ?? 0), limit: limits.domainsPerProject },
+      metrics,
+    };
+  });
+  const metricTotals = projects.reduce((total, project) => {
+    const metrics = project.metrics as Record<string, number>;
+    total.requests += metrics.requests ?? 0;
+    total.errors += metrics.errors ?? 0;
+    total.bandwidthBytes += metrics.bandwidthBytes ?? 0;
+    return total;
+  }, { requests: 0, errors: 0, bandwidthBytes: 0 });
+  return {
+    ok: true,
+    account: { id: principal.userId, email: principal.email },
+    limits: publicLimits(limits, maxArtifactBytes),
+    organizations,
+    projects,
+    totals: {
+      projects: projects.length,
+      online: projects.filter((project) => project.runtimeStatus === "online").length,
+      requests: metricTotals.requests,
+      errors: metricTotals.errors,
+      errorRate: metricTotals.requests ? metricTotals.errors / metricTotals.requests : 0,
+      bandwidthBytes: metricTotals.bandwidthBytes,
+    },
+    domains: {
+      cnameTarget: customDomainTarget ?? null,
+      addresses: customDomainAddresses,
+      automaticTls,
+    },
+  };
 }
 
 function publicRelease(release: ReleaseRow): Record<string, unknown> {
@@ -1753,68 +2403,6 @@ function api(value: unknown, status = 200): Response {
 
 function problem(status: number, code: string, message: string, retryAfter?: number): Response {
   return api({ ok: false, error: { code, message, ...(retryAfter ? { retryAfter } : {}) } }, status);
-}
-
-function consolePage(
-  publicUrl: string,
-  auth: AuthRequest<DefaultAuthProfile>,
-  deviceCode: string,
-  signupAllowed: boolean,
-): Response {
-  const nonce = syncRandomToken(18);
-  const state = JSON.stringify({
-    authenticated: Boolean(auth.user),
-    email: auth.user?.email ?? null,
-    csrfToken: auth.csrfToken ?? null,
-    deviceCode,
-    publicUrl,
-    signupAllowed,
-  }).replaceAll("<", "\\u003c");
-  const body = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Clank Deploy</title><style>
-*{box-sizing:border-box}body{margin:0;background:#070b14;color:#e8edf7;font:16px/1.5 ui-sans-serif,system-ui,sans-serif}
-[hidden]{display:none!important}
-main{max-width:720px;margin:0 auto;padding:64px 24px}.eyebrow{color:#75e6c4;font-size:12px;font-weight:800;letter-spacing:.18em;text-transform:uppercase}
-h1{font-size:clamp(38px,8vw,72px);line-height:1;margin:.15em 0}.card{background:#111827;border:1px solid #263247;border-radius:22px;padding:24px;margin-top:28px}
-label{display:block;margin:14px 0 6px;color:#b9c5d8}input{width:100%;padding:13px;border-radius:10px;border:1px solid #3a4962;background:#09101e;color:white}
-button{margin-top:16px;padding:12px 18px;border:0;border-radius:10px;background:#75e6c4;color:#062019;font-weight:800;cursor:pointer}
-button.secondary{background:#263247;color:white;margin-left:8px}.muted{color:#91a0b7}.error{color:#ff9eaa;min-height:24px}code{color:#75e6c4}
-</style></head><body><main><p class="eyebrow">Open-source control plane</p><h1>Clank Deploy</h1>
-<p class="muted">Authenticate once in the browser, then deploy deterministic Clank releases from the CLI.</p>
-<section class="card" id="auth-card"><h2 id="auth-title">${auth.user ? "Account" : "Sign in"}</h2>
-<form id="auth-form"><label>Email</label><input id="email" type="email" autocomplete="email" required>
-<label>Password</label><input id="password" type="password" autocomplete="current-password" minlength="12" required>
-<label id="name-label" hidden>Name</label><input id="name" autocomplete="name" hidden>
-<p class="error" id="auth-error"></p><button type="submit" id="auth-submit">Sign in</button>
-<button type="button" class="secondary" id="auth-switch">Create account</button></form>
-<div id="signed-in" hidden><p>Signed in as <strong id="account-email"></strong>.</p><button id="sign-out">Sign out</button></div></section>
-<section class="card" id="device-card" hidden><p class="eyebrow">CLI authorization</p><h2>Authorize this device?</h2>
-<p>Code <code id="device-code"></code> requested by <strong id="client-name"></strong>.</p>
-<p class="error" id="device-error"></p><button id="approve">Authorize</button><button class="secondary" id="deny">Deny</button></section>
-<section class="card"><h2>Transparent by design</h2><p class="muted">Every artifact is checksummed, every release is auditable, migrations are immutable, secrets are encrypted, and rollback behavior is explicit.</p></section>
-</main><script nonce="${nonce}">const state=${state};
-const q=(s)=>document.querySelector(s);let register=false;
-function showAuth(){q("#auth-title").textContent=state.authenticated?"Account":register?"Create account":"Sign in";q("#auth-form").hidden=state.authenticated;q("#signed-in").hidden=!state.authenticated;q("#account-email").textContent=state.email||"";q("#auth-switch").hidden=!state.signupAllowed}
-async function request(path,body,csrf=false){const response=await fetch(path,{method:body===undefined?"GET":"POST",headers:body===undefined?{}:{"content-type":"application/json",...(csrf&&state.csrfToken?{"x-clank-csrf":state.csrfToken}:{})},body:body===undefined?undefined:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error?.message||"Request failed.");return data}
-q("#auth-switch").onclick=()=>{register=!register;q("#auth-submit").textContent=register?"Create account":"Sign in";q("#auth-switch").textContent=register?"Use existing account":"Create account";q("#name").hidden=q("#name-label").hidden=!register;showAuth()};
-q("#auth-form").onsubmit=async(e)=>{e.preventDefault();q("#auth-error").textContent="";try{const data=await request("/__clank/auth/"+(register?"register":"login"),{email:q("#email").value,password:q("#password").value,...(register?{profile:{name:q("#name").value||undefined}}:{})});state.authenticated=true;state.email=data.user.email;state.csrfToken=data.csrfToken;showAuth();await loadDevice()}catch(error){q("#auth-error").textContent=error.message}};
-q("#sign-out").onclick=async()=>{await request("/__clank/auth/logout",{},true);state.authenticated=false;state.email=null;state.csrfToken=null;register=false;q("#auth-submit").textContent="Sign in";q("#auth-switch").textContent="Create account";q("#name").hidden=q("#name-label").hidden=true;showAuth();q("#device-card").hidden=true};
-async function loadDevice(){if(!state.authenticated||!state.deviceCode)return;try{const data=await request("/api/device/info?code="+encodeURIComponent(state.deviceCode));q("#device-card").hidden=false;q("#device-code").textContent=data.code;q("#client-name").textContent=data.clientName}catch(error){q("#device-card").hidden=false;q("#device-error").textContent=error.message}}
-async function decide(action){try{await request("/api/device/"+action,{code:state.deviceCode},true);q("#device-error").textContent=action==="approve"?"Device authorized. Return to the CLI.":"Device denied.";q("#approve").disabled=q("#deny").disabled=true}catch(error){q("#device-error").textContent=error.message}}
-q("#approve").onclick=()=>decide("approve");q("#deny").onclick=()=>decide("deny");showAuth();loadDevice();</script></body></html>`;
-  return new Response(body, {
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "content-security-policy": `default-src 'self'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'`,
-      "x-content-type-options": "nosniff",
-      "x-frame-options": "DENY",
-      "referrer-policy": "no-referrer",
-      "permissions-policy": "camera=(), microphone=(), geolocation=()",
-      "cross-origin-opener-policy": "same-origin",
-    },
-  });
 }
 
 async function prepareDirectories(directory: string): Promise<{
@@ -2247,6 +2835,50 @@ function normalizePublicUrl(value: string): string {
   return trimTrailingSlashes(url.href);
 }
 
+function domainResolver(options: ClankPlatformOptions["ingress"]): DomainDnsResolver | undefined {
+  if (!options?.resolveCname && !options?.resolve4 && !options?.resolve6) return undefined;
+  return {
+    resolveCname: options.resolveCname ?? ((hostname) => nativeDnsLookup("resolveCname", hostname)),
+    resolve4: options.resolve4 ?? ((hostname) => nativeDnsLookup("resolve4", hostname)),
+    resolve6: options.resolve6 ?? ((hostname) => nativeDnsLookup("resolve6", hostname)),
+  };
+}
+
+async function nativeDnsLookup(kind: "resolveCname" | "resolve4" | "resolve6", hostname: string): Promise<string[]> {
+  const moduleName = "node:dns/promises";
+  const dns = await import(moduleName) as unknown as Record<typeof kind, (name: string) => Promise<string[]>>;
+  return dns[kind](hostname);
+}
+
+function normalizeEdgeAddresses(values: readonly string[]): string[] {
+  if (!Array.isArray(values) || values.length > 32) {
+    throw new PlatformError(422, "INVALID_INPUT", "ingress.customDomainAddresses must contain at most 32 IP addresses.");
+  }
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const input of values) {
+    const raw = boundedString(input, "ingress.customDomainAddresses entry", 2, 64).trim().toLowerCase();
+    let address: string;
+    if (raw.includes(":")) {
+      if (!/^[0-9a-f:]+$/u.test(raw) || !raw.includes(":")) {
+        throw new PlatformError(422, "INVALID_INPUT", `Invalid edge IP address: ${raw}`);
+      }
+      address = raw;
+    } else {
+      const segments = raw.split(".");
+      if (segments.length !== 4 || segments.some((segment) => !/^\d{1,3}$/u.test(segment) || Number(segment) > 255)) {
+        throw new PlatformError(422, "INVALID_INPUT", `Invalid edge IP address: ${raw}`);
+      }
+      address = segments.map(Number).join(".");
+    }
+    if (!seen.has(address)) {
+      seen.add(address);
+      output.push(address);
+    }
+  }
+  return output;
+}
+
 function normalizeAppUrlTemplate(value: string): string {
   if (!value.includes("{port}") && !value.includes("{slug}")) {
     throw new Error("appUrlTemplate must contain {port} or {slug}.");
@@ -2503,10 +3135,6 @@ async function randomToken(bytes: number): Promise<string> {
   return base64Url(crypto.getRandomValues(new Uint8Array(bytes)));
 }
 
-function syncRandomToken(bytes: number): string {
-  return base64Url(crypto.getRandomValues(new Uint8Array(bytes)));
-}
-
 async function hash(value: string): Promise<string> {
   return syncHash(value);
 }
@@ -2515,6 +3143,16 @@ function syncHash(value: string): string {
   const module = (globalThis as any).process.getBuiltinModule?.("node:crypto");
   if (!module) throw new Error("Node crypto module is unavailable.");
   return module.createHash("sha256").update(value).digest("base64url");
+}
+
+async function timingSafeStringEqual(left: string, right: string): Promise<boolean> {
+  const cryptoName = "node:crypto";
+  const nodeCrypto = await import(cryptoName) as unknown as {
+    timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean;
+  };
+  const leftDigest = new TextEncoder().encode(syncHash(left));
+  const rightDigest = new TextEncoder().encode(syncHash(right));
+  return nodeCrypto.timingSafeEqual(leftDigest, rightDigest);
 }
 
 function base64Url(value: Uint8Array): string {

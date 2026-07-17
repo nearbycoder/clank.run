@@ -58,7 +58,7 @@ async function authorizeCli(platform, email) {
     method: "POST",
     body: { deviceCode: started.deviceCode },
   }));
-  return { accessToken: token.accessToken, user: session.user };
+  return { accessToken: token.accessToken, user: session.user, cookie, csrfToken: session.csrfToken };
 }
 
 async function appArtifact(root, label, migrations, allowUnsafeMigrations = false) {
@@ -109,10 +109,101 @@ async function deploy(platform, projectId, token, artifact, key) {
   return { response, body: await response.json() };
 }
 
+test("browser project management enforces organization and custom-domain quotas transactionally", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-quota-"));
+  const dns = new Map();
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4590,
+    appPortEnd: 4595,
+    signup: true,
+    limits: { projectsPerOrganization: 1, domainsPerProject: 1, metricRetentionDays: 7 },
+    ingress: {
+      enabled: true,
+      customDomainTarget: "edge.example.test",
+      tlsAskToken: "quota-test-tls-token",
+      resolveTxt: async (hostname) => dns.get(hostname) ?? [],
+      resolveCname: async () => ["edge.example.test"],
+      resolve4: async () => [],
+      resolve6: async () => [],
+    },
+  });
+  try {
+    const owner = await authorizeCli(platform, "quota@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", { cookie: owner.cookie }));
+    const organizationId = dashboard.organizations[0].id;
+    const refreshedPage = await platform.handle(new Request("http://127.0.0.1:4200/", {
+      headers: { cookie: owner.cookie },
+    }));
+    const refreshedHtml = await refreshedPage.text();
+    assert.match(refreshedHtml, /const initial=\{"authenticated":true,/);
+    assert.match(refreshedHtml, /"email":"quota@example\.com"/);
+
+    const missingCsrf = await platform.handle(jsonRequest("/api/projects", {
+      method: "POST",
+      cookie: owner.cookie,
+      body: { name: "No CSRF", slug: "no-csrf", organizationId },
+    }));
+    assert.equal(missingCsrf.status, 403);
+
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
+      body: { name: "Only Site", slug: "only-site", organizationId },
+    }), 201);
+    const overLimit = await platform.handle(jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Second Site", slug: "second-site", organizationId },
+    }));
+    assert.equal(overLimit.status, 409);
+    assert.equal((await overLimit.json()).error.code, "PROJECT_LIMIT_REACHED");
+
+    const reservedDomain = await platform.handle(jsonRequest(`/api/projects/${created.project.id}/domains`, {
+      method: "POST",
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
+      body: { hostname: "edge.example.test" },
+    }));
+    assert.equal(reservedDomain.status, 409);
+    assert.equal((await reservedDomain.json()).error.code, "DOMAIN_RESERVED");
+
+    const firstDomain = await payload(platform, jsonRequest(`/api/projects/${created.project.id}/domains`, {
+      method: "POST",
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
+      body: { hostname: "one.customer.test" },
+    }), 201);
+    dns.set(firstDomain.domain.recordName, [[firstDomain.domain.recordValue]]);
+    const verified = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/domains/${firstDomain.domain.id}/verify`,
+      { method: "POST", cookie: owner.cookie, csrf: owner.csrfToken, body: {} },
+    ));
+    assert.equal(verified.domain.ownership.status, "verified");
+    assert.equal(verified.domain.routing.status, "ready");
+    assert.equal((await platform.handle(new Request(
+      "http://127.0.0.1:4200/_clank/tls/ask?token=quota-test-tls-token&domain=one.customer.test",
+    ))).status, 403, "sites without a deployed release cannot allocate a certificate");
+    const domainOverLimit = await platform.handle(jsonRequest(`/api/projects/${created.project.id}/domains`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { hostname: "two.customer.test" },
+    }));
+    assert.equal(domainOverLimit.status, 409);
+    assert.equal((await domainOverLimit.json()).error.code, "DOMAIN_LIMIT_REACHED");
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("platform device auth, ownership, encrypted secrets, atomic deploy, migrations, and rollback work end to end", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-"));
   const source = join(root, "source");
   const dns = new Map();
+  const cnames = new Map();
   const platform = await openPlatform({
     dataDirectory: join(root, "platform"),
     publicUrl: "http://127.0.0.1:4200",
@@ -121,7 +212,12 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     signup: true,
     ingress: {
       baseDomain: "apps.example.test",
+      customDomainTarget: "edge.example.test",
+      tlsAskToken: "test-only-tls-ask-token",
       resolveTxt: async (hostname) => dns.get(hostname) ?? [],
+      resolveCname: async (hostname) => cnames.get(hostname) ?? [],
+      resolve4: async () => [],
+      resolve6: async () => [],
     },
   });
   try {
@@ -177,12 +273,16 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     const managed = await platform.handle(new Request("https://atomic-todo.apps.example.test/"));
     assert.equal(managed.status, 200);
     assert.equal(await managed.text(), "release-one");
+    assert.equal((await platform.handle(new Request(
+      "http://127.0.0.1:4200/_clank/tls/ask?token=test-only-tls-ask-token&domain=atomic-todo.apps.example.test",
+    ))).status, 200, "deployed built-in site hostnames are eligible for edge certificates");
     const customDomain = await payload(platform, jsonRequest(`/api/projects/${projectId}/domains`, {
       method: "POST",
       token: owner.accessToken,
       body: { hostname: "tasks.customer.test" },
     }), 201);
     dns.set(customDomain.domain.recordName, [[customDomain.domain.recordValue]]);
+    cnames.set(customDomain.domain.hostname, ["edge.example.test"]);
     await payload(platform, jsonRequest(
       `/api/projects/${projectId}/domains/${customDomain.domain.id}/verify`,
       { method: "POST", token: owner.accessToken, body: {} },
@@ -190,6 +290,26 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     const customIngress = await platform.handle(new Request("https://tasks.customer.test/"));
     assert.equal(customIngress.status, 200);
     assert.equal(await customIngress.text(), "release-one");
+    const tlsAllowed = await platform.handle(new Request(
+      "http://127.0.0.1:4200/_clank/tls/ask?token=test-only-tls-ask-token&domain=tasks.customer.test",
+    ));
+    assert.equal(tlsAllowed.status, 200);
+    assert.equal((await platform.handle(new Request(
+      "http://localhost:4200/_clank/tls/ask?token=test-only-tls-ask-token&domain=tasks.customer.test",
+    ))).status, 200, "the private TLS endpoint is reachable through a loopback Host before ingress dispatch");
+    assert.equal((await platform.handle(new Request(
+      "http://127.0.0.1:4200/_clank/tls/ask?token=wrong-token-value&domain=tasks.customer.test",
+    ))).status, 404);
+    const metrics = await payload(platform, jsonRequest(`/api/projects/${projectId}/metrics?range=24h`, {
+      token: owner.accessToken,
+    }));
+    assert.ok(metrics.summary.requests >= 2);
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      cookie: owner.cookie,
+    }));
+    assert.equal(dashboard.projects[0].id, projectId);
+    assert.equal(dashboard.projects[0].runtimeStatus, "online");
+    assert.ok(dashboard.projects[0].metrics.requests >= 2);
     await fetch(`${first.body.release.directUrl}/crash`);
     await new Promise((resolve) => setTimeout(resolve, 400));
     await waitFor(async () =>
@@ -359,6 +479,9 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
     const scopedAccount = await payload(platform, jsonRequest("/api/account", { token: projectToken }));
     assert.equal(scopedAccount.token.projectId, projectId);
     assert.deepEqual(scopedAccount.token.permissions, ["read", "deploy"]);
+    const scopedDashboard = await payload(platform, jsonRequest("/api/dashboard", { token: projectToken }));
+    assert.deepEqual(scopedDashboard.projects.map((project) => project.id), [projectId]);
+    assert.deepEqual(scopedDashboard.organizations.map((organization) => organization.id), [organizationId]);
     await payload(platform, jsonRequest(`/api/projects/${projectId}`, { token: projectToken }));
     const otherProject = await platform.handle(jsonRequest(`/api/projects/${second.project.id}`, {
       token: projectToken,
@@ -421,8 +544,9 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     const signedInConsole = await platform.handle(jsonRequest("/", { cookie: signedInCookie }));
     assert.equal(signedInConsole.status, 200);
     const signedInHtml = await signedInConsole.text();
-    assert.match(signedInHtml, /<h2 id="auth-title">Account<\/h2>/);
-    assert.doesNotMatch(signedInHtml, /<h2 id="auth-title">Sign in<\/h2>/);
+    assert.match(signedInHtml, /"authenticated":true/);
+    assert.match(signedInHtml, /<section class="app-shell" id="app-view" hidden>/);
+    assert.match(signedInHtml, /Ship fast\./);
     const second = await platform.handle(jsonRequest("/__clank/auth/register", {
       method: "POST",
       body: {

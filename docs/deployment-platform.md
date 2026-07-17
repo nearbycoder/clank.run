@@ -13,6 +13,8 @@ The platform is intentionally inspectable:
 - secret values are encrypted and never returned by the API;
 - failed migrations or health checks restore the prior database and process.
 
+The browser console is also an operating surface, not only a login page. It shows site health, 1-hour through 30-day ingress performance, enforced capacity, releases, logs, and the full custom-domain lifecycle. See [Deployment dashboard, quotas, and domains](platform-dashboard.md).
+
 ## Five-minute path
 
 ```sh
@@ -183,6 +185,9 @@ Device/public:
 
 Browser session:
 
+- `GET /api/dashboard`
+- project status, metrics, releases, logs, and domains;
+- project and domain creation/removal with CSRF;
 - `GET /api/device/info`
 - `POST /api/device/approve`
 - `POST /api/device/deny`
@@ -195,4 +200,8 @@ Bearer:
 - release upload/history/rollback;
 - logs, encrypted secrets, and audit events.
 
-See [CLI](cli.md), [Migrations](migrations.md), [Platform security](platform-security.md), and [Self-hosting](self-hosting.md).
+Managed edge:
+
+- `GET /_clank/tls/ask` — token-protected, constant-time Caddy certificate permission lookup.
+
+See [CLI](cli.md), [Migrations](migrations.md), [Dashboard and domains](platform-dashboard.md), [Platform security](platform-security.md), and [Self-hosting](self-hosting.md).

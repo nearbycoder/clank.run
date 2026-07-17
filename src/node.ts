@@ -215,19 +215,30 @@ async function dispatch(
     }
   }
   const method = incoming.method ?? "GET";
-  const body = method === "GET" || method === "HEAD"
-    ? undefined
-    : await readBody(incoming, options.maxBodySize ?? 1024 * 1024, headers.get("content-length"));
   const abort = new AbortController();
   incoming.once("aborted", () => abort.abort(new Error("Request aborted.")));
   outgoing.once("close", () => abort.abort(new Error("Connection closed.")));
-  const request = new Request(`${protocol}://${parsedHost.host}${incoming.url ?? "/"}`, {
+  const body = method === "GET" || method === "HEAD"
+    ? undefined
+    : boundedRequestBody(incoming, options.maxBodySize ?? 1024 * 1024, headers.get("content-length"));
+  const init: RequestInit & { duplex?: "half" } = {
     method,
     headers,
-    body: body?.buffer as ArrayBuffer | undefined,
+    body: body?.stream,
     signal: abort.signal,
+  };
+  if (body) init.duplex = "half";
+  const request = new Request(`${protocol}://${parsedHost.host}${incoming.url ?? "/"}`, {
+    ...init,
   });
   const response = await handler(request);
+  // If an application translated the stream error into its own response, the
+  // transport limit still wins. Otherwise a chunked upload could turn a 413
+  // into an application-level 500 after crossing the adapter boundary.
+  if (body?.state.limitExceeded) {
+    throw new NodeRequestError(413, `Request body exceeds ${body.state.maximum} bytes.`);
+  }
+  if (request.body && !request.bodyUsed) await request.body.cancel().catch(() => undefined);
   outgoing.statusCode = response.status;
   outgoing.statusMessage = response.statusText;
   const responseHeaders = response.headers as Headers & { getSetCookie?: () => string[] };
@@ -253,25 +264,53 @@ async function dispatch(
   }
 }
 
-async function readBody(request: AsyncIterable<Uint8Array>, maxBytes: number, contentLength: string | null): Promise<Uint8Array> {
+function boundedRequestBody(
+  request: AsyncIterable<Uint8Array>,
+  maxBytes: number,
+  contentLength: string | null,
+): {
+  stream: ReadableStream<Uint8Array>;
+  state: { limitExceeded: boolean; maximum: number };
+} {
   const declared = Number(contentLength);
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new NodeRequestError(413, `Request body exceeds ${maxBytes} bytes.`);
   }
-  const chunks: Uint8Array[] = [];
+  const iterator = request[Symbol.asyncIterator]();
+  const state = { limitExceeded: false, maximum: maxBytes };
   let length = 0;
-  for await (const chunk of request) {
-    chunks.push(chunk);
-    length += chunk.byteLength;
-    if (length > maxBytes) throw new NodeRequestError(413, `Request body exceeds ${maxBytes} bytes.`);
-  }
-  const output = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    output.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return output;
+  let finished = false;
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (finished) return;
+      try {
+        const result = await iterator.next();
+        if (result.done) {
+          finished = true;
+          controller.close();
+          return;
+        }
+        length += result.value.byteLength;
+        if (length > maxBytes) {
+          finished = true;
+          state.limitExceeded = true;
+          await iterator.return?.();
+          controller.error(new NodeRequestError(413, `Request body exceeds ${maxBytes} bytes.`));
+          return;
+        }
+        controller.enqueue(result.value);
+      } catch (error) {
+        finished = true;
+        controller.error(error);
+      }
+    },
+    async cancel() {
+      if (finished) return;
+      finished = true;
+      await iterator.return?.();
+    },
+  });
+  return { stream, state };
 }
 
 function safeHost(value: string): { host: string; hostname: string } {

@@ -17,6 +17,8 @@ The proxy:
 - streams response bodies, including SSE;
 - tracks per-route circuit failures; and
 - exposes active-route health checks.
+- records bounded per-project ingress metrics; and
+- constructs every target from the trusted upstream origin before assigning the request path, so a scheme-relative path cannot replace the upstream host.
 
 The Clank platform can enable ingress directly:
 
@@ -41,9 +43,9 @@ clank domain verify <domain-id>
 clank domain list
 ```
 
-Custom hosts do not enter the ingress route set until the exact `_clank.<hostname>` TXT challenge is present. Challenges are project bound, expiring, and unique by hostname. A verified hostname cannot be claimed by another project.
+Custom hosts do not enter the ingress route set until the exact `_clank.<hostname>` TXT challenge is present **and** the hostname resolves to the configured CNAME target or edge A/AAAA address. Challenges are project bound, expiring, and unique by hostname. Pending and verified hostnames cannot be claimed by another project.
 
-Certificate issuance is intentionally outside DNS ownership verification. A production edge should consume verified domain state, request ACME certificates, store private keys in its certificate manager, and activate TLS only after issuance succeeds.
+Ownership, routing, and certificate status are separate. Clank provides a constant-time, token-protected permission endpoint for Caddy On-Demand TLS; Caddy or another edge remains responsible for ACME, certificate/key storage, and renewal. See [Deployment dashboard, quotas, and domains](platform-dashboard.md) for the DNS lifecycle and production Caddy configuration.
 
 ## External PostgreSQL over HTTPS
 

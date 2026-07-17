@@ -66,7 +66,7 @@ test("Node adapter serves Fetch apps and streams live SQLite updates over HTTP",
 });
 
 test("Node adapter enforces Host/body limits and static files contain symlinks and dotfiles", async () => {
-  const server = await serve(() => new Response("ok"), {
+  const server = await serve(async (request) => new Response(await request.text()), {
     port: 0,
     maxBodySize: 8,
   });
@@ -93,6 +93,23 @@ test("Node adapter enforces Host/body limits and static files contain symlinks a
     });
     assert.equal(oversized.status, 413);
     assert.equal(oversized.headers.get("x-content-type-options"), "nosniff");
+
+    const chunkedStatus = await new Promise((resolve, reject) => {
+      const url = new URL(server.url);
+      const outgoing = httpRequest({
+        method: "POST",
+        hostname: url.hostname,
+        port: Number(url.port),
+        path: "/",
+      }, (response) => {
+        response.resume();
+        response.once("end", () => resolve(response.statusCode));
+      });
+      outgoing.once("error", reject);
+      outgoing.write("1234");
+      outgoing.end("56789");
+    });
+    assert.equal(chunkedStatus, 413);
   } finally {
     await server.close();
   }

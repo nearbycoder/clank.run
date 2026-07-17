@@ -75,11 +75,18 @@ Distributed leases, authenticated workers, desired generations, durable idempote
 
 Managed ingress routes only exact verified hosts to loopback or explicit allowlisted upstreams, strips hop-by-hop and `Connection`-nominated headers, bounds request bodies and timeouts, retries only safe methods, and opens failure circuits. TLS certificates, DNS automation, WAF/DDoS controls, and WebSocket proxying belong at the external edge.
 
+Ingress constructs the upstream URL from trusted route configuration before assigning the untrusted path, preventing scheme-relative path SSRF. The Node adapter exposes request bodies as capped streams, so authentication and smaller route-level limits run without first buffering the deployment-wide artifact maximum. Bodies without `Content-Length` are stopped at the same transport and ingress limits. Metrics are project-only aggregates with fixed histogram columns; they do not create host/path/user label cardinality.
+
+Custom domains require an exact random TXT ownership proof and a separate CNAME/A/AAAA routing check. A pending or verified hostname cannot move between projects, and Clank's own console, target, base domain, and base-domain namespace are reserved. Site and domain ceilings are enforced inside SQLite transactions.
+
+The Caddy TLS permission route uses a high-entropy shared token and an indexed local lookup. It allows only deployed built-in hosts or deployed custom domains with verified ownership and ready routing; it never performs DNS during a TLS handshake. Keep it on loopback/private networking, persist Caddy certificate storage, avoid logging its token-bearing URL, and enable strict SNI/Host matching at the edge.
+
 ## Audit checklist
 
 - External master key and tested off-host backup.
 - Docker or stronger isolation for untrusted users.
 - Explicit TLS, hosts, proxy trust, resource quotas, and image digests.
+- Private token-protected TLS permission route, persistent certificate storage, and strict SNI/Host matching.
 - Scheduled token/audit review.
 - Failed deploy leaves prior app healthy.
 - Migration and data rollback rehearsed.

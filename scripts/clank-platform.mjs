@@ -30,6 +30,18 @@ const runner = environment("CLANK_RUNNER", "PROACT_RUNNER") === "docker"
       pidsLimit: number(environment("CLANK_APP_PIDS", "PROACT_APP_PIDS"), 128),
     }
   : { kind: "process" };
+const ingressBaseDomain = environment("CLANK_INGRESS_BASE_DOMAIN", "PROACT_INGRESS_BASE_DOMAIN");
+const customDomainTarget = environment("CLANK_CUSTOM_DOMAIN_TARGET", "PROACT_CUSTOM_DOMAIN_TARGET");
+const customDomainAddresses = list(environment("CLANK_CUSTOM_DOMAIN_ADDRESSES", "PROACT_CUSTOM_DOMAIN_ADDRESSES"));
+const ingressEnabled = environment("CLANK_INGRESS", "PROACT_INGRESS") === "1" || Boolean(ingressBaseDomain);
+const ingress = ingressEnabled ? {
+  enabled: true,
+  ...(ingressBaseDomain ? { baseDomain: ingressBaseDomain } : {}),
+  ...(customDomainTarget ? { customDomainTarget } : {}),
+  ...(customDomainAddresses.length ? { customDomainAddresses } : {}),
+  ...(process.env.CLANK_TLS_ASK_TOKEN ? { tlsAskToken: process.env.CLANK_TLS_ASK_TOKEN } : {}),
+  maxBodyBytes: number(process.env.CLANK_INGRESS_MAX_BODY_BYTES, 25 * 1024 * 1024),
+} : undefined;
 
 const platform = await openPlatform({
   dataDirectory,
@@ -43,6 +55,12 @@ const platform = await openPlatform({
   appPortEnd: number(environment("CLANK_APP_PORT_END", "PROACT_APP_PORT_END"), 4999),
   maxArtifactBytes: number(environment("CLANK_MAX_ARTIFACT_BYTES", "PROACT_MAX_ARTIFACT_BYTES"), 100 * 1024 * 1024),
   allowUnsafeMigrations: environment("CLANK_ALLOW_UNSAFE_MIGRATIONS", "PROACT_ALLOW_UNSAFE_MIGRATIONS") === "1",
+  limits: {
+    projectsPerOrganization: number(process.env.CLANK_MAX_PROJECTS_PER_ORGANIZATION, 10),
+    domainsPerProject: number(process.env.CLANK_MAX_DOMAINS_PER_PROJECT, 5),
+    metricRetentionDays: number(process.env.CLANK_METRICS_RETENTION_DAYS, 30),
+  },
+  ...(ingress ? { ingress } : {}),
   onError: (error) => console.error("[platform]", error),
 });
 
@@ -55,13 +73,14 @@ const server = await serve(platform, {
   port,
   trustProxy: process.env.TRUST_PROXY === "1",
   maxBodySize: number(environment("CLANK_MAX_ARTIFACT_BYTES", "PROACT_MAX_ARTIFACT_BYTES"), 100 * 1024 * 1024) + 1024,
-  ...(allowedHosts?.length ? { allowedHosts } : {}),
+  ...(ingressEnabled ? { allowedHosts: [] } : allowedHosts?.length ? { allowedHosts } : {}),
   onError: (error) => console.error("[http]", error),
 });
 
 console.log(`Clank deployment platform: ${publicUrl}`);
 console.log(`Platform data: ${platform.dataDirectory}`);
 console.log(`Runner: ${runner.kind}`);
+console.log(`Managed ingress: ${ingressEnabled ? "enabled" : "disabled"}`);
 
 let closing = false;
 const close = async () => {
@@ -95,4 +114,8 @@ function number(value, fallback) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`Invalid numeric environment value: ${value}`);
   return parsed;
+}
+
+function list(value) {
+  return value?.split(",").map((entry) => entry.trim()).filter(Boolean) ?? [];
 }

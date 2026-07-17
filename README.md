@@ -25,7 +25,7 @@ The framework itself has no dependencies, dev dependencies, peer dependencies, v
 | SSR | Async string rendering, full-document templates, safe state serialization, CSP nonces, context and keyed lists, marker-based DOM-preserving hydration |
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, Tailwind Play CDN and compiled Tailwind CSS compatibility |
-| Deploy | Browser-approved CLI auth, projects, deterministic artifacts, encrypted secrets, immutable migrations, SQLite backups, health-gated releases, logs, audit, rollback |
+| Deploy | Full browser console, ingress performance metrics, enforced site/domain quotas, custom DNS/TLS onboarding, browser-approved CLI auth, deterministic artifacts, encrypted secrets, immutable migrations, SQLite backups, health-gated releases, logs, audit, rollback |
 
 ## Run it
 
@@ -126,6 +126,7 @@ render(document.querySelector("#app")!, <App />);
 - [Authentication](docs/auth.md)
 - [Security and deployment](docs/security.md)
 - [Deployment platform](docs/deployment-platform.md)
+- [Deployment dashboard, quotas, metrics, and custom domains](docs/platform-dashboard.md)
 - [Deployment CLI](docs/cli.md)
 - [Renaming from Proact](docs/renaming-from-proact.md)
 - [SQLite migrations](docs/migrations.md)

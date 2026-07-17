@@ -6,6 +6,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- A fully authenticated deployment dashboard with site status, 1-hour through 30-day ingress charts, releases, logs, and guided custom-domain setup.
+- Transactionally enforced per-organization site and per-project custom-domain limits, with operator-configurable metric retention.
+- Minute-level fixed-histogram ingress metrics plus DNS routing inspection and a Caddy On-Demand TLS permission endpoint for deployed built-in and verified custom hosts.
 - Packaged-release conformance covering scaffold, browser and CLI auth, live synchronization, isolation, deployment, migration, failed health activation, rollback, and data restoration.
 - GitHub CI and OIDC trusted-publishing release workflows.
 - Security reporting, contribution, conduct, ownership, and release-governance documentation.
@@ -16,6 +19,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- Managed ingress now fixes the upstream origin before applying a request path and streaming-bounds bodies without `Content-Length`, closing scheme-relative SSRF and unbounded-buffer paths.
+- Pending custom-domain assignments can no longer be moved between projects; platform-owned DNS namespaces are reserved.
+- Refreshed dashboard sessions now render one consistent authentication state and return to sign-in when a session expires.
 - Failed distributed-lease acquisition now releases the local project queue.
 - Managed ingress strips `Connection`-nominated headers and retries safe requests after transient upstream 5xx responses.
 - WebAuthn CBOR parsing now bounds collection size and nesting, and passkey counter advancement is atomic.

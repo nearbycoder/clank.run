@@ -72,6 +72,12 @@ Metric and label names are validated, label sets must match their declaration, h
 
 Expose `observability.metrics.response()` only on an operator-protected endpoint or private network.
 
+### Deployment ingress metrics
+
+Clank Deploy separately records per-project traffic that passes through managed ingress. Minute rows contain status classes, 5xx errors, duration sum/max, fixed cumulative latency buckets, and bounded byte counts. The dashboard returns bounded `1h`, `24h`, `7d`, and `30d` series without storing host, path, user, or email labels.
+
+Ingress latency ends when upstream response headers arrive; it is not streamed-response completion time. Response size is known only when `Content-Length` is present. See [Deployment dashboard, quotas, and domains](platform-dashboard.md) for exact semantics and retention.
+
 ## Readiness
 
 Critical checks determine the HTTP status. Optional dependencies remain visible without taking the service out of rotation:
@@ -82,4 +88,3 @@ observability.health.register("email", checkMail, { critical: false });
 ```
 
 Checks run concurrently with individual timeouts. Responses use `no-store` and return `503` when a critical dependency fails.
-

@@ -92,7 +92,7 @@ These examples demonstrate framework breadth. They do not replace domain-specifi
 - Dialogs are rendered in place rather than through a portal.
 - The built-in process supervisor remains single-leader even though durable distributed coordination primitives are available.
 - The trusted process runner is not a sandbox; use the Docker runner for stronger isolation.
-- TLS certificate automation, WAF/DDoS service, WebSocket ingress, remote worker integration, and globally distributed control storage remain future platform work.
+- Clank now provides verified domain eligibility for Caddy On-Demand TLS, but certificate/key custody, WAF/DDoS service, WebSocket ingress, remote worker integration, and globally distributed control storage remain external or future platform work.
 - Tailwind's browser build is suitable for examples and zero-install prototyping; production applications should serve compiled CSS.
 
 ## Release gate

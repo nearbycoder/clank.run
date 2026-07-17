@@ -90,10 +90,18 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 
 ## Deployment platform
 
-- `openPlatform(options)`: device authorization, tokens, projects, encrypted secrets, audit, release transaction, logs, rollback, and supervision.
+- `openPlatform(options)`: browser dashboard, device authorization, tokens, projects, transactionally enforced limits, ingress metrics, DNS/domain lifecycle, TLS eligibility, encrypted secrets, audit, release transaction, logs, rollback, and supervision.
 - `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, async `.close()`.
 - Runners: dependency-free process runner or constrained Docker runner.
-- Types: `ClankPlatformOptions`, `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`.
+- Types: `ClankPlatformOptions`, `PlatformLimits`, `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`.
+
+## Managed data plane
+
+- `createManagedIngress(options)`: exact-host reverse proxy with fixed upstream origins, bounded streaming request bodies, hop-header stripping, safe retries, circuits, health, and request observation.
+- `inspectDomainRouting(hostname, target, resolver?)`: compare live CNAME/A/AAAA results to a configured edge target.
+- `createDomainManager(options)`: project-bound random TXT ownership challenges.
+- `createMemoryDomainStore()`: in-memory domain challenge store for local use and tests.
+- Types: `IngressRoute`, `IngressRequestMetric`, `ManagedIngress`, `DomainChallenge`, `DomainDnsResolver`, `DomainRoutingReport`.
 
 ## AI
 
