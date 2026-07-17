@@ -21,6 +21,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - WebAuthn CBOR parsing now bounds collection size and nesting, and passkey counter advancement is atomic.
 - Blueprint suffix parsing and local-file endpoint normalization are linear on adversarial input.
 - Unexpected deployment-platform failures are logged privately and never reflected to HTTP clients.
+- Every HTTP/runtime adapter now keeps unexpected exception text private, and adversarial prefix, identifier, URL, and numeric-literal parsing is linear.
+- CLI device login prints its browser approval URL without launching an operating-system command.
 - The minimum runtime is Node 22.16, the first Node 22 release with the built-in SQLite backup API used by migrations and recovery.
 - The official package name is `clank.run`, avoiding collision with the unrelated npm package named `clank`; binaries remain `clank` and `clank-platform`.
 

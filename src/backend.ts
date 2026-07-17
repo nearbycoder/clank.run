@@ -1205,7 +1205,6 @@ export interface OpenBackendOptions extends SQLiteOptions {
   maxLivePayloadBytes?: number;
   maxLiveConnections?: number;
   maxCacheEntries?: number;
-  exposeErrors?: boolean;
   onError?: (error: unknown) => void;
 }
 
@@ -1239,7 +1238,7 @@ export async function openBackend<
   const cache = new Map<string, CacheEntry>();
   const subscribers = new Map<string, SubscriberEntry>();
   const liveDisconnects = new Set<Cleanup>();
-  const prefix = `/${(options.prefix ?? "__clank").replace(/^\/+|\/+$/g, "")}`;
+  const prefix = `/${trimBoundarySlashes(options.prefix ?? "__clank")}`;
   let closed = false;
   let liveConnections = 0;
   const reportError = (error: unknown) => {
@@ -1530,9 +1529,7 @@ export async function openBackend<
           return problem(500, "BACKEND_ERROR", "The backend operation failed.");
         }
         reportError(error);
-        return problem(500, "BACKEND_ERROR", options.exposeErrors
-          ? error instanceof Error ? error.message : String(error)
-          : "The backend operation failed.");
+        return problem(500, "BACKEND_ERROR", "The backend operation failed.");
       }
     },
     close() {
@@ -1548,6 +1545,14 @@ export async function openBackend<
     },
   };
   return runtime;
+}
+
+function trimBoundarySlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 47) start++;
+  while (end > start && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(start, end);
 }
 
 function liveResponse(

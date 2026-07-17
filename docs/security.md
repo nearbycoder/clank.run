@@ -16,13 +16,15 @@ Clank treats browser input, agent input, URLs, cookies, request bodies, and pers
 
 `dangerouslySetInnerHTML` deliberately bypasses escaping. Use it only with trusted static content or an application-selected sanitizer. Clank does not include an HTML sanitizer because safe policies depend on the tags, attributes, and URL schemes an application intends to allow.
 
+The TSX transform is a source-to-source compiler, not a data sandbox. It deliberately preserves application-authored JavaScript and TypeScript expressions in generated modules. Compile only trusted project source, never request or database values; execute mutually untrusted generated applications inside the documented runner isolation boundary.
+
 ### Requests and RPC
 
 - JSON endpoints require an `application/json` or `+json` content type.
 - Bodies are streamed through hard byte limits and strict UTF-8/JSON decoding.
 - Same-origin and Fetch Metadata checks reject cross-site state changes.
 - Validation errors omit received values so secrets are not reflected.
-- Production 500 responses are generic. Framework development adapters may expose errors only when explicitly enabled; the deployment platform never returns unexpected exception text to clients.
+- Production 500 responses are generic across request apps, the Node adapter, agent actions, backends, and the deployment platform. Unexpected exception text is available only to private `onError` hooks.
 - Backend cache and live-query keys are partitioned by auth session.
 - Request, live-argument, live-connection, and cache limits are configurable.
 

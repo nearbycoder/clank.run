@@ -116,7 +116,6 @@ try {
     "login",
     "--server",
     platformUrl,
-    "--no-open",
   ], { cwd: toolsDirectory });
   const loginOutput = capture(login);
   const codeMatch = await loginOutput.waitFor(/Enter code: ([A-Z0-9-]+)/);

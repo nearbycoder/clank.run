@@ -481,7 +481,6 @@ export interface AgentBridgeOptions {
   allowedOrigins?: readonly string[];
   requireOrigin?: boolean;
   maxRequestBytes?: number;
-  exposeErrors?: boolean;
 }
 
 export function createAgentBridge(actions: Action<any, any>[], options: AgentBridgeOptions = {}): AgentBridge {
@@ -535,9 +534,7 @@ export function createAgentBridge(actions: Action<any, any>[], options: AgentBri
         if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
         if (error instanceof ValidationError) return problem(422, "INVALID_INPUT", error.message, publicValidationIssues(error.issues));
         if (error instanceof ActionError) return problem(error.status, error.code, error.message, error.details);
-        return problem(500, "ACTION_FAILED", options.exposeErrors
-          ? error instanceof Error ? error.message : String(error)
-          : "The action failed.");
+        return problem(500, "ACTION_FAILED", "The action failed.");
       }
     },
   };

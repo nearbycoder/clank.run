@@ -634,7 +634,15 @@ function formId(value: string): string {
 }
 
 function safeId(value: string): string {
-  return value.trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  return trimBoundaryCharacter(value.trim().replace(/[^A-Za-z0-9_-]+/g, "-"), "-");
+}
+
+function trimBoundaryCharacter(value: string, character: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === character) start++;
+  while (end > start && value[end - 1] === character) end--;
+  return value.slice(start, end);
 }
 
 function displayValue(value: unknown): string | number {

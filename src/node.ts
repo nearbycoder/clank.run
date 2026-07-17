@@ -12,7 +12,6 @@ export interface ServeOptions {
   headersTimeout?: number;
   requestTimeout?: number;
   keepAliveTimeout?: number;
-  exposeErrors?: boolean;
   onError?: (error: unknown) => void;
 }
 
@@ -93,7 +92,7 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
         outgoing.end(JSON.stringify({
           error: {
             code: status === 413 ? "PAYLOAD_TOO_LARGE" : status === 400 ? "BAD_REQUEST" : "INTERNAL_ERROR",
-            message: status < 500 || effectiveOptions.exposeErrors
+            message: status < 500
               ? error instanceof Error ? error.message : String(error)
               : "An internal server error occurred.",
           },
@@ -122,7 +121,8 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
 
 /** Serves a directory through Fetch responses with traversal protection and streaming-friendly MIME headers. */
 export function staticFiles(root: string, options: StaticFilesOptions = {}): FetchApplication {
-  const prefix = `/${(options.prefix ?? "").replace(/^\/+|\/+$/g, "")}`.replace(/\/$/, "");
+  const normalizedPrefix = trimBoundarySlashes(options.prefix ?? "");
+  const prefix = normalizedPrefix ? `/${normalizedPrefix}` : "";
   let basePromise: Promise<string> | undefined;
   return {
     async handle(request) {
@@ -180,6 +180,14 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
       }
     },
   };
+}
+
+function trimBoundarySlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 47) start++;
+  while (end > start && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(start, end);
 }
 
 async function dispatch(

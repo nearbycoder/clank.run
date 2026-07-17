@@ -143,7 +143,6 @@ export interface AgentBridgeOptions {
     allowedOrigins?: readonly string[];
     requireOrigin?: boolean;
     maxRequestBytes?: number;
-    exposeErrors?: boolean;
 }
 export declare function createAgentBridge(actions: Action<any, any>[], options?: AgentBridgeOptions): AgentBridge;
 export interface ActionRunner<I, O> {

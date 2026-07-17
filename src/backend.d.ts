@@ -323,7 +323,6 @@ export interface OpenBackendOptions extends SQLiteOptions {
     maxLivePayloadBytes?: number;
     maxLiveConnections?: number;
     maxCacheEntries?: number;
-    exposeErrors?: boolean;
     onError?: (error: unknown) => void;
 }
 export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined>(definition: BackendDefinition<Schema, Functions, Auth>, options?: OpenBackendOptions): Promise<BackendRuntime<Schema, Functions, Auth>>;

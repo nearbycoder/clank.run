@@ -67,3 +67,10 @@ test("expressions containing nested arrow callbacks remain reactive", () => {
   assert.match(code, /__clankExpression\(\(\) => \(todos\.filter/);
   assert.match(code, /"disabled": __clankExpression\(\(\) => \(todos\.some/);
 });
+
+test("numeric literal detection remains linear on long invalid expressions", () => {
+  const expression = `${"00".repeat(100_000)}x`;
+  const { code } = transformTSX(`const view = <span>{${expression}}</span>;`);
+  assert.match(code, /__clankExpression/);
+  assert.match(code, /x\)\)/);
+});

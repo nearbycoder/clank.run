@@ -121,3 +121,11 @@ test("forms reject dangerous field names and focus the first invalid named contr
   assert.throws(() => form.setErrors({ missing: "No such field." }), /Unknown form error field/);
   assert.throws(() => form.reset({ subject: "Incomplete" }), /exactly the original fields/);
 });
+
+test("form IDs normalize adversarial boundary input in linear time", () => {
+  const form = createForm({
+    id: `${"-".repeat(100_000)}profile${"-".repeat(100_000)}`,
+    initial: { name: "" },
+  });
+  assert.equal(form.field("name").input().id, "profile-name");
+});

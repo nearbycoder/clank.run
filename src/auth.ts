@@ -633,11 +633,11 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     resolve,
     async handle(request, prefix = "/__clank/auth") {
       const url = new URL(request.url);
-      const normalizedPrefix = `/${prefix.replace(/^\/+|\/+$/g, "")}`;
+      const normalizedPrefix = `/${trimBoundarySlashes(prefix)}`;
       if (url.pathname !== normalizedPrefix && !url.pathname.startsWith(`${normalizedPrefix}/`)) {
         return authProblem(404, "NOT_FOUND", "Auth endpoint not found.");
       }
-      const operation = url.pathname.slice(normalizedPrefix.length).replace(/^\/+/, "");
+      const operation = trimLeadingSlashes(url.pathname.slice(normalizedPrefix.length));
       try {
         if (request.method === "GET" && operation === "session") {
           const auth = await resolve(request);
@@ -1093,8 +1093,8 @@ export function createAuthClient<Profile extends object = DefaultAuthProfile>(
   const error = signal<unknown>(undefined);
   const authenticated = computed(() => user.value !== null);
   const fetcher = options.fetch ?? globalThis.fetch;
-  const prefix = `/${(options.prefix ?? "__clank/auth").replace(/^\/+|\/+$/g, "")}`;
-  const base = (options.url ?? "").replace(/\/$/, "");
+  const prefix = `/${trimBoundarySlashes(options.prefix ?? "__clank/auth")}`;
+  const base = trimTrailingSlashes(options.url ?? "");
   let csrfToken = options.initial?.csrfToken;
 
   const apply = (state: AuthState<Profile>) => {
@@ -1920,6 +1920,22 @@ function cookieValue(header: string | null, name: string): string | undefined {
     if (entry.slice(0, separator).trim() === name) return entry.slice(separator + 1).trim();
   }
   return undefined;
+}
+
+function trimLeadingSlashes(value: string): string {
+  let start = 0;
+  while (start < value.length && value.charCodeAt(start) === 47) start++;
+  return value.slice(start);
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+}
+
+function trimBoundarySlashes(value: string): string {
+  return trimTrailingSlashes(trimLeadingSlashes(value));
 }
 
 function migrateLegacyTable(internal: SQLiteInternal, legacy: string, current: string): void {

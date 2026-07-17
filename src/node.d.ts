@@ -11,7 +11,6 @@ export interface ServeOptions {
     headersTimeout?: number;
     requestTimeout?: number;
     keepAliveTimeout?: number;
-    exposeErrors?: boolean;
     onError?: (error: unknown) => void;
 }
 export interface ServerHandle {
