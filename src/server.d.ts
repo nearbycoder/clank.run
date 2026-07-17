@@ -15,7 +15,6 @@ export interface RequestContext<Path extends string = string, State extends Reco
 export type RequestHandler<Path extends string = string, State extends Record<string, unknown> = Record<string, unknown>> = (context: RequestContext<Path, State>) => Response | Promise<Response>;
 export type Middleware<State extends Record<string, unknown> = Record<string, unknown>> = (context: RequestContext<string, State>, next: () => Promise<Response>) => Response | Promise<Response>;
 export interface CreateAppOptions {
-    exposeErrors?: boolean;
     onError?: (error: unknown, context: RequestContext<string, any>) => void;
 }
 export interface RequestApp<State extends Record<string, unknown> = Record<string, unknown>> {

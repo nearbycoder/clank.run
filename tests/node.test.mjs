@@ -105,11 +105,12 @@ test("Node adapter enforces Host/body limits and static files contain symlinks a
   await writeFile(outside, "private");
   await writeFile(join(root, ".env"), "SECRET=true");
   await symlink(outside, join(root, "leak.txt"));
-  const files = staticFiles(root);
+  const paddedPrefix = `${"/".repeat(100_000)}assets${"/".repeat(100_000)}`;
+  const files = staticFiles(root, { prefix: paddedPrefix });
   try {
-    assert.equal((await files.handle(new Request("http://test/.env"))).status, 404);
-    assert.equal((await files.handle(new Request("http://test/leak.txt"))).status, 404);
-    assert.equal((await files.handle(new Request("http://test/%2e%2e/secret.txt"))).status, 404);
+    assert.equal((await files.handle(new Request("http://test/assets/.env"))).status, 404);
+    assert.equal((await files.handle(new Request("http://test/assets/leak.txt"))).status, 404);
+    assert.equal((await files.handle(new Request("http://test/assets/%2e%2e/secret.txt"))).status, 404);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

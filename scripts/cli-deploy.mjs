@@ -218,7 +218,6 @@ async function login(args) {
   });
   console.log(`Open ${started.verificationUri}`);
   console.log(`Enter code: ${started.userCode}`);
-  if (!flag(args, "no-open")) openBrowser(started.verificationUri);
   const deadline = Date.now() + started.expiresIn * 1000;
   let interval = Math.max(3, Number(started.interval) || 3);
   while (Date.now() < deadline) {
@@ -847,20 +846,8 @@ function normalizeServer(value) {
   if (url.username || url.password || url.search || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)))) {
     throw new CliError("Platform URL must use HTTPS, except for loopback development.");
   }
-  url.pathname = url.pathname.replace(/\/+$/, "");
-  return url.href.replace(/\/$/, "");
-}
-
-function openBrowser(url) {
-  const command = operatingSystem() === "darwin"
-    ? ["open", [url]]
-    : operatingSystem() === "win32"
-      ? ["cmd", ["/c", "start", "", url]]
-      : ["xdg-open", [url]];
-  try {
-    const child = spawn(command[0], command[1], { detached: true, stdio: "ignore", shell: false });
-    child.unref();
-  } catch { /* Printing the URL is the reliable fallback. */ }
+  url.pathname = trimTrailingSlashes(url.pathname);
+  return trimTrailingSlashes(url.href);
 }
 
 function option(args, name) {
@@ -878,7 +865,7 @@ function positionals(args) {
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
     if (argument.startsWith("--")) {
-      if (!argument.includes("=") && !["--dry-run", "--no-open", "--restore-data", "--local", "--force"].includes(argument)) index++;
+      if (!argument.includes("=") && !["--dry-run", "--restore-data", "--local", "--force"].includes(argument)) index++;
       continue;
     }
     output.push(argument);
@@ -896,7 +883,21 @@ async function replaceInFile(path, search, replacement) {
 }
 
 function packageName(value) {
-  return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "clank-app";
+  return trimBoundaryHyphens(value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-")) || "clank-app";
+}
+
+function trimTrailingSlashes(value) {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+}
+
+function trimBoundaryHyphens(value) {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 45) start++;
+  while (end > start && value.charCodeAt(end - 1) === 45) end--;
+  return value.slice(start, end);
 }
 
 function displayName(value) {

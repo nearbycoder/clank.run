@@ -225,7 +225,38 @@ function isFunction(code) {
 }
 
 function isLiteral(code) {
-  return /^(?:true|false|null|undefined|NaN|Infinity|-?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?|["'][\s\S]*["'])$/i.test(code);
+  const input = code.trim();
+  if (["true", "false", "null", "undefined", "NaN", "Infinity"].includes(input)) return true;
+  const quote = input[0];
+  if ((quote === '"' || quote === "'") && input.length >= 2 && input.at(-1) === quote) return true;
+  return isNumericLiteral(input);
+}
+
+function isNumericLiteral(input) {
+  let index = input[0] === "-" ? 1 : 0;
+  const integerStart = index;
+  while (decimalDigit(input[index])) index++;
+  const integerDigits = index - integerStart;
+  let fractionDigits = 0;
+  if (input[index] === ".") {
+    index++;
+    const fractionStart = index;
+    while (decimalDigit(input[index])) index++;
+    fractionDigits = index - fractionStart;
+  }
+  if (integerDigits === 0 && fractionDigits === 0) return false;
+  if (input[index] === "e" || input[index] === "E") {
+    index++;
+    if (input[index] === "+" || input[index] === "-") index++;
+    const exponentStart = index;
+    while (decimalDigit(input[index])) index++;
+    if (index === exponentStart) return false;
+  }
+  return index === input.length;
+}
+
+function decimalDigit(character) {
+  return character !== undefined && character >= "0" && character <= "9";
 }
 
 function tagExpression(tag) {

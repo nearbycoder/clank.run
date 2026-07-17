@@ -47,7 +47,7 @@ app.use(async (context, next) => {
 });
 ```
 
-Middleware executes in registration order and unwinds in reverse order. Calling `next()` twice throws. Unhandled errors become a generic JSON 500 response. Use `createApp({ onError })` for private logging; enable `exposeErrors` only during controlled development.
+Middleware executes in registration order and unwinds in reverse order. Calling `next()` twice throws. Unhandled errors become a generic JSON 500 response. Use `createApp({ onError })` for private logging; unexpected exception text is never returned to the client.
 
 Built-ins:
 

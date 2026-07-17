@@ -2243,8 +2243,8 @@ function normalizePublicUrl(value: string): string {
   if (url.username || url.password || url.search || url.hash || (url.protocol !== "https:" && !isLoopbackUrl(url))) {
     throw new Error("Platform publicUrl must be HTTPS, except for loopback development.");
   }
-  url.pathname = url.pathname.replace(/\/+$/, "");
-  return url.href.replace(/\/$/, "");
+  url.pathname = trimTrailingSlashes(url.pathname);
+  return trimTrailingSlashes(url.href);
 }
 
 function normalizeAppUrlTemplate(value: string): string {
@@ -2259,7 +2259,7 @@ function normalizeAppUrlTemplate(value: string): string {
   if (url.username || url.password || url.search || url.hash) {
     throw new Error("appUrlTemplate cannot contain credentials, search, or fragments.");
   }
-  return value.replace(/\/+$/, "");
+  return trimTrailingSlashes(value);
 }
 
 function isLoopbackUrl(url: URL): boolean {
@@ -2267,9 +2267,23 @@ function isLoopbackUrl(url: URL): boolean {
 }
 
 function normalizeSlug(value: unknown): string {
-  const slug = String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const slug = trimBoundaryHyphens(String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-"));
   if (!PROJECT_SLUG.test(slug)) throw new PlatformError(422, "INVALID_SLUG", "Project slug must use 1-48 lowercase letters, numbers, or interior hyphens.");
   return slug;
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+}
+
+function trimBoundaryHyphens(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 45) start++;
+  while (end > start && value.charCodeAt(end - 1) === 45) end--;
+  return value.slice(start, end);
 }
 
 function normalizeHostname(value: string): string {

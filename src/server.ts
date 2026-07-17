@@ -31,7 +31,6 @@ interface Endpoint {
 }
 
 export interface CreateAppOptions {
-  exposeErrors?: boolean;
   onError?: (error: unknown, context: RequestContext<string, any>) => void;
 }
 
@@ -91,9 +90,7 @@ export function createApp<State extends Record<string, unknown> = Record<string,
         return json({
           error: {
             code: "INTERNAL_ERROR",
-            message: options.exposeErrors
-              ? error instanceof Error ? error.message : String(error)
-              : "An internal server error occurred.",
+            message: "An internal server error occurred.",
           },
         }, {
           status: 500,

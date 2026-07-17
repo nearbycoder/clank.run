@@ -33,6 +33,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 7. Framework to external email, file, job, webhook, database, and provisioning providers.
 8. Live database to encrypted backup repository and restore target.
 9. Git source to CI, attestation, GitHub release, and npm publication.
+10. Trusted application source through the TSX compiler to generated executable modules.
 
 ## Primary abuse cases
 
@@ -49,12 +50,14 @@ This model covers the Clank framework, generated authenticated applications, CLI
 | Worker split brain | Expired worker completes after reassignment | Authenticated leases, monotonic fences, idempotent durable operations | Highly available backing store and supervisor integration |
 | Backup tampering | Ciphertext/manifest alteration, restore wrong copy | AES-GCM envelope, manifest HMAC/AAD, digest/integrity checks, explicit confirmation | Separate key custody, off-host replication, retention |
 | Supply-chain compromise | Mutable CI action, leaked npm token, package includes local state | Commit-pinned actions, least privilege, OIDC trusted publishing, attestation, package allowlist, zero dependencies | GitHub/npm account security and protected release environment |
+| Compiler boundary confusion | Treat attacker-controlled data as TSX source or assume generated code is sandboxed | Compiler accepts project source only, performs no build-time evaluation, and emits reviewable modules | Never compile request/database values; isolate mutually untrusted app execution |
 | Denial of service | Oversized request/CBOR/artifact, scrypt exhaustion, failing upstream | Byte/count/time bounds, CBOR depth/collection limits, password queue, circuits, leases/retries | Edge rate limits, quotas, autoscaling, capacity planning |
 
 ## Explicit assumptions
 
 - The operating-system administrator and master-key holder are trusted.
 - The process runner executes trusted applications. Use Docker or stronger isolation for mutually untrusted deployers.
+- TypeScript and TSX files are trusted executable application source. The compiler is not a sanitizer for attacker-controlled data.
 - TLS termination, certificate issuance, DDoS protection, WAF rules, and public network policy are external to the core package.
 - An application process can read its own decrypted environment and database.
 - SQLite is a strong single-node transactional default, not a globally replicated database.

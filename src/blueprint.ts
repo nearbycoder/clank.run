@@ -1219,7 +1219,7 @@ function slugValue(value: unknown): string {
 }
 
 function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 63) || "clank-app";
+  return trimBoundaryCode(value.toLowerCase().replace(/[^a-z0-9]+/gu, "-"), 45).slice(0, 63) || "clank-app";
 }
 
 function routePath(value: unknown, path: string): string {
@@ -1269,7 +1269,15 @@ function humanize(value: string): string {
 }
 
 function fileName(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/gu, "_").replace(/^_+|_+$/gu, "") || "migration";
+  return trimBoundaryCode(value.toLowerCase().replace(/[^a-z0-9]+/gu, "_"), 95) || "migration";
+}
+
+function trimBoundaryCode(value: string, code: number): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === code) start++;
+  while (end > start && value.charCodeAt(end - 1) === code) end--;
+  return value.slice(start, end);
 }
 
 function json(value: unknown): string {
