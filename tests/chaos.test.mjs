@@ -23,7 +23,9 @@ test("a crashed deployment worker is reclaimed and its stale completion is fence
     path: join(root, "control.sqlite"),
     wal: false,
   });
-  const orchestrator = openDeploymentOrchestrator(database, { operationLeaseMs: 100 });
+  // Keep the reclaimed lease long enough for cryptographic verification even
+  // when the full suite is contending for CPU on slower CI runtimes.
+  const orchestrator = openDeploymentOrchestrator(database, { operationLeaseMs: 1_000 });
   try {
     const node = await orchestrator.registerNode({ id: "chaos-node", region: "test", capacity: 1 });
     await orchestrator.enqueue({
@@ -35,7 +37,7 @@ test("a crashed deployment worker is reclaimed and its stale completion is fence
     const [abandoned] = await orchestrator.claim(node.node.id, node.token, 1);
     assert.equal(abandoned.fence, 1);
 
-    await new Promise((resolve) => setTimeout(resolve, 175));
+    await new Promise((resolve) => setTimeout(resolve, 1_150));
     const [reclaimed] = await orchestrator.claim(node.node.id, node.token, 1);
     assert.equal(reclaimed.id, abandoned.id);
     assert.equal(reclaimed.fence, 2);
