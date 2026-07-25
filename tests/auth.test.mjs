@@ -19,11 +19,18 @@ const jsonHeaders = {
   "x-clank-client-ip": "127.0.0.1",
 };
 
-function request(path, { method = "GET", body, cookie, csrf, origin = "https://todo.test" } = {}) {
+function request(path, {
+  method = "GET",
+  body,
+  cookie,
+  csrf,
+  origin = "https://todo.test",
+  clientIp = "127.0.0.1",
+} = {}) {
   return new Request(`https://todo.test${path}`, {
     method,
     headers: {
-      ...(body === undefined ? {} : { ...jsonHeaders, origin }),
+      ...(body === undefined ? {} : { ...jsonHeaders, origin, "x-clank-client-ip": clientIp }),
       ...(cookie ? { cookie } : {}),
       ...(csrf ? { "x-clank-csrf": csrf } : {}),
     },
@@ -271,6 +278,71 @@ test("auth errors avoid account lookup details and enforce request limits", asyn
   }
 });
 
+test("caller-controlled IP headers cannot bypass authentication rate limits", async () => {
+  const fixture = await createFixture({ rateLimit: { attempts: 1, windowMs: 60_000 } });
+  try {
+    await register(fixture.runtime, "limited@example.com");
+    const first = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      clientIp: "198.51.100.10",
+      body: { email: "limited@example.com", password: "wrong password" },
+    }));
+    assert.equal(first.status, 401);
+    const spoofed = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      clientIp: "203.0.113.99",
+      body: { email: "limited@example.com", password: "wrong password" },
+    }));
+    assert.equal(spoofed.status, 429);
+    assert.equal((await spoofed.json()).error.code, "RATE_LIMITED");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("passkey discovery does not reveal whether an account or credential exists", async () => {
+  const fixture = await createFixture();
+  try {
+    const registered = await register(fixture.runtime, "passkey@example.com");
+    const database = new DatabaseSync(fixture.path);
+    database.prepare(`INSERT INTO clank_auth_passkeys
+      (id, credential_id, user_id, name, public_key, algorithm, counter, transports, created_at, last_used_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).run(
+      "passkey_test_id",
+      "known-credential-id",
+      registered.user.id,
+      "Test passkey",
+      JSON.stringify({ kty: "EC", crv: "P-256", x: "AA", y: "AA" }),
+      -7,
+      0,
+      "[]",
+      Date.now(),
+    );
+    database.close();
+    const known = await fixture.runtime.handle(request("/__clank/auth/passkeys/authenticate/start", {
+      method: "POST",
+      body: { email: "passkey@example.com" },
+    }));
+    const missing = await fixture.runtime.handle(request("/__clank/auth/passkeys/authenticate/start", {
+      method: "POST",
+      body: { email: "missing@example.com" },
+    }));
+    assert.equal(known.status, 200);
+    assert.equal(missing.status, 200);
+    const knownPayload = await known.json();
+    const missingPayload = await missing.json();
+    assert.deepEqual(knownPayload.options.allowCredentials, []);
+    assert.deepEqual(missingPayload.options.allowCredentials, []);
+    const challengeDatabase = new DatabaseSync(fixture.path, { readOnly: true });
+    assert.equal(challengeDatabase.prepare(
+      "SELECT count(*) AS count FROM clank_auth_passkey_challenges WHERE type = 'authentication' AND user_id IS NOT NULL",
+    ).get().count, 0);
+    challengeDatabase.close();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("cross-process auth revisions refresh callers and close stale privileged live streams", async () => {
   const fixture = await createFixture();
   let second;
@@ -376,6 +448,7 @@ test("email verification and password recovery use expiring single-use tokens an
     assert.equal(missingRecovery.status, 202);
     assert.equal(existingRecovery.status, 202);
     assert.deepEqual(await missingRecovery.json(), await existingRecovery.json());
+    await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(recoveries.length, 1);
 
     const reset = await fixture.runtime.handle(request("/__clank/auth/password/reset", {
@@ -396,6 +469,36 @@ test("email verification and password recovery use expiring single-use tokens an
     }));
     assert.equal(newPassword.status, 200);
   } finally {
+    await fixture.close();
+  }
+});
+
+test("password recovery responses do not wait for account-specific delivery", async () => {
+  let deliveryStarted = false;
+  let finishDelivery;
+  const fixture = await createFixture({
+    passwordRecovery: {
+      send: () => {
+        deliveryStarted = true;
+        return new Promise((resolve) => { finishDelivery = resolve; });
+      },
+    },
+  });
+  try {
+    await register(fixture.runtime, "recover-timing@example.com");
+    const response = await Promise.race([
+      fixture.runtime.handle(request("/__clank/auth/password/recover", {
+        method: "POST",
+        body: { email: "recover-timing@example.com" },
+      })),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Recovery response waited for delivery.")), 500)),
+    ]);
+    assert.equal(response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(deliveryStarted, true);
+    finishDelivery();
+  } finally {
+    finishDelivery?.();
     await fixture.close();
   }
 });

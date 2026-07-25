@@ -35,9 +35,10 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 - Only SHA-256 token hashes are stored in SQLite; raw session tokens exist only in cookies and the immediate response construction path.
 - Authenticated mutations require a constant-time CSRF-token comparison.
 - Login errors do not reveal whether an account exists or is disabled.
-- Email verification and password recovery tokens are hashed, expiring, and single-use; password reset revokes prior sessions.
+- Rate limits use trusted adapter identity rather than caller-selected IP headers.
+- Email verification and password recovery tokens are hashed, expiring, and single-use; recovery delivery is removed from the response-timing path, and password reset revokes prior sessions.
 - Email-code MFA challenges are expiring, attempt-bounded, hashed, and single-use.
-- Passkeys verify challenge, origin, RP ID hash, user presence/verification, signature, and atomic signature-counter advancement.
+- Passkeys require discoverable credentials and begin without account lookup; they verify challenge, origin, RP ID hash, user presence/verification, signature, and atomic signature-counter advancement.
 - Owned tables enforce the current user in SQL reads and writes.
 - Owner IDs also scope live-query invalidation, so one account's private writes do not republish another account's query.
 - Disabling users, role changes, and revoking sessions close associated live streams across same-host processes.
@@ -66,6 +67,7 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 ### Deployment platform
 
 - CLI login uses short-lived browser-approved device codes; raw access tokens are returned once and stored only as hashes.
+- Local CLI credentials and project links are bounded, structurally validated, URL-canonicalized, owner-only, and atomically replaced; platform responses are time- and byte-bounded before strict UTF-8/JSON decoding.
 - Artifacts and every contained file are SHA-256 verified before exclusive extraction.
 - Paths, links, special files, sensitive dotfiles, sizes, counts, modes, and decompression output are validated.
 - Builds run locally without a shell; uploaded install/build hooks are never executed by the platform.
@@ -77,8 +79,10 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 - Migration, startup, or health failure restores the prior database and process.
 - Code rollback is health-gated; data rollback is narrowly scoped and confirmed.
 - Organization membership, role, project token scope, and project ownership are checked for every release, log, secret, token, domain, backup, audit, and rollback.
+- Account, organization-site, and project-domain quotas are enforced transactionally with their inserts.
 - Encrypted backup manifests and ciphertext are authenticated and verified before restore.
 - Managed ingress uses exact unique hosts, constrained upstreams, bounded bodies/timeouts, hop-header stripping, safe retries, and circuits.
+- Client disconnects abort proxied upstream work and cancel streamed Node responses.
 
 See [Platform security](platform-security.md) for the runner trust boundary.
 

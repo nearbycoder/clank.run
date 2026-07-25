@@ -58,7 +58,7 @@ Export backups off-host.
 
 ## Runner hardening
 
-Docker mode adds read-only root, dropped capabilities, no-new-privileges, non-root UID/GID, PID/memory/CPU limits, narrow bind mounts, and a constrained temporary filesystem.
+Docker mode adds read-only root, dropped capabilities, no-new-privileges, non-root UID/GID, PID/memory/CPU limits, narrow bind mounts, and a constrained temporary filesystem. Runtime secret values are supplied through the Docker client's environment with name-only `-e NAME` arguments, so values do not appear in the Docker CLI process arguments. Privileged host/container administrators can still inspect runtime environment state.
 
 Also pin image digests, patch the kernel/runtime, apply seccomp/AppArmor/SELinux, restrict network egress, protect the Docker socket, set disk quotas, isolate customer tiers, and prefer microVMs for hostile code.
 
@@ -77,7 +77,7 @@ Managed ingress routes only exact verified hosts to loopback or explicit allowli
 
 Ingress constructs the upstream URL from trusted route configuration before assigning the untrusted path, preventing scheme-relative path SSRF. The Node adapter exposes request bodies as capped streams, so authentication and smaller route-level limits run without first buffering the deployment-wide artifact maximum. Bodies without `Content-Length` are stopped at the same transport and ingress limits. Metrics are project-only aggregates with fixed histogram columns; they do not create host/path/user label cardinality.
 
-Custom domains require an exact random TXT ownership proof and a separate CNAME/A/AAAA routing check. A pending or verified hostname cannot move between projects, and Clank's own console, target, base domain, and base-domain namespace are reserved. Site and domain ceilings are enforced inside SQLite transactions.
+Custom domains require an exact random TXT ownership proof and a separate CNAME/A/AAAA routing check. A pending or verified hostname cannot move between projects, and Clank's own console, target, base domain, and base-domain namespace are reserved. Account organization/site, organization site, and project domain ceilings are enforced inside SQLite transactions.
 
 The Caddy TLS permission route uses a high-entropy shared token and an indexed local lookup. It allows only deployed built-in hosts or deployed custom domains with verified ownership and ready routing; it never performs DNS during a TLS handshake. Keep it on loopback/private networking, persist Caddy certificate storage, avoid logging its token-bearing URL, and enable strict SNI/Host matching at the edge.
 

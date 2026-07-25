@@ -25,7 +25,7 @@ The framework itself has no dependencies, dev dependencies, peer dependencies, v
 | SSR | Async string rendering, full-document templates, safe state serialization, CSP nonces, context and keyed lists, marker-based DOM-preserving hydration |
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, Tailwind Play CDN and compiled Tailwind CSS compatibility |
-| Deploy | Full browser console, ingress performance metrics, enforced site/domain quotas, custom DNS/TLS onboarding, browser-approved CLI auth, deterministic artifacts, encrypted secrets, immutable migrations, SQLite backups, health-gated releases, logs, audit, rollback |
+| Deploy | Full browser console, ingress performance metrics, enforced account/organization/site/domain quotas, custom DNS/TLS onboarding, browser-approved CLI auth, deterministic artifacts, encrypted secrets, immutable migrations, SQLite backups, storage-backed readiness, health-gated releases, logs, audit, rollback |
 
 ## Run it
 
@@ -122,6 +122,7 @@ render(document.querySelector("#app")!, <App />);
 - [Application recipes for humans and agents](docs/application-recipes.md)
 - [Packaged-release conformance](docs/conformance.md)
 - [Code and product audit](docs/code-audit.md)
+- [Maintenance and release certification](docs/maintenance.md)
 - [Release process](docs/releases.md)
 - [Authentication](docs/auth.md)
 - [Security and deployment](docs/security.md)

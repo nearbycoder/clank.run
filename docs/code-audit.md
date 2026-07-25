@@ -1,6 +1,6 @@
 # Code and product audit
 
-Audit date: 2026-07-16
+Audit date: 2026-07-25
 
 This document records what was inspected, what changed, and what remains intentionally out of scope. It is evidence for maintainers, not a claim that any framework can make every application correct automatically.
 
@@ -41,6 +41,14 @@ The audit covered:
 | Backups were release-local snapshots only | Added encrypted authenticated backup repositories, retention, verification, restore confirmation, safety copies, API, and CLI | Recovery, platform, conformance, and chaos tests |
 | The platform lacked a managed host/data-plane layer | Added exact-host ingress, DNS ownership challenges, external PostgreSQL transactions/migrations, and database provisioning contracts | Data-plane and platform tests |
 | Release security evidence was manual | Added ASVS-oriented mapping, threat model, package/secret audit, immutable CI actions, CodeQL, chaos tests, and beta gate | `npm run check` and GitHub workflows |
+| Hosted quotas could be bypassed through extra organizations and rejected domains could survive rollback | Added account organization/site limits and moved domain capacity checks into the insert transaction | Platform quota and direct SQLite row-count regressions |
+| Caller IP headers, passkey start responses, and recovery delivery timing exposed authentication side channels | Bound rate limits to trusted adapter identity, switched to discoverable passkeys, and removed delivery from the response path | Authentication enumeration, spoofing, and blocked-delivery regressions |
+| Binary uploads and remote SQL responses could buffer past route limits | Added shared bounded streaming readers that cancel at the first over-limit chunk | Artifact, file-service, and PostgreSQL streaming regressions |
+| Disconnects did not cancel every downstream stream and Docker arguments contained secret values | Propagated cancellation through ingress/Node and changed Docker to name-only environment arguments | Ingress, Node disconnect, and fake-Docker process-argument regressions |
+| Repository leak checks covered only the package and a small credential set | Expanded credential patterns and scan current repository files plus all reachable Git history | `npm run security:audit` |
+| A green release did not enforce coverage or documentation/declaration integrity | Added minimum line/branch/function coverage and checked local links, guide indexing, declaration parity, and export targets | `npm run check` and `npm run docs:audit` |
+| CLI state writes and control-plane responses lacked complete interruption/resource bounds | Added strict bounded config/link parsing, atomic private replacement, request deadlines, strict UTF-8 JSON parsing, and response byte caps | CLI regression tests and packaged conformance |
+| `/healthz` reported a constant result and signal shutdown could skip platform cleanup after an HTTP close failure | Added storage-backed readiness, separate liveness, and bounded cleanup that attempts both layers | Platform readiness tests and conformance process shutdown |
 
 ## Readability decisions
 
@@ -87,7 +95,7 @@ These examples demonstrate framework breadth. They do not replace domain-specifi
 ## Known limits
 
 - Form paths are intentionally top-level. Compose controllers for nested editors and independent wizard steps.
-- No built-in file-upload storage or image pipeline exists.
+- A capability-gated local file store and upload endpoint are included for trusted single-host deployments; production object storage, CDN delivery, and image transformation remain provider integrations.
 - No virtualized list is included yet; large datasets should page server-side.
 - Dialogs are rendered in place rather than through a portal.
 - The built-in process supervisor remains single-leader even though durable distributed coordination primitives are available.
@@ -99,14 +107,16 @@ These examples demonstrate framework breadth. They do not replace domain-specifi
 
 A release is acceptable only after:
 
-1. strict TypeScript succeeds;
-2. the zero-dependency contract succeeds;
-3. all unit and end-to-end tests pass;
+1. the zero-dependency TS/TSX syntax-lowering build succeeds;
+2. checked-in declarations match built declarations, package export targets resolve, and local documentation links remain valid;
+3. all unit and end-to-end tests pass above the enforced 80% line, 65% branch, and 80% function coverage floors;
 4. package contents contain no databases, environment files, credentials, or platform state;
-5. fresh package consumers can type-check, scaffold, and build;
-6. representative applications pass browser interaction, console/error, accessibility-tree, and responsive-layout checks.
-7. `npm run conformance` passes against a packed release through browser auth, CLI device authorization, live synchronization, user isolation, deployment, migration, failed activation, rollback, and data restoration.
-8. `npm run security:audit` verifies dependency, package-content, credential-pattern, governance, least-privilege, immutable-action, OIDC, and evidence requirements.
+5. fresh package consumers can scaffold and build;
+6. representative applications pass browser interaction, console/error, accessibility-tree, and responsive-layout checks;
+7. `npm run conformance` passes against a packed release through browser auth, CLI device authorization, live synchronization, user isolation, deployment, migration, failed activation, rollback, and data restoration;
+8. `npm run security:audit` verifies dependency, package-content, current-tree and reachable-history credential patterns, governance, least-privilege, immutable-action, OIDC, and evidence requirements; and
 9. deterministic chaos tests prove worker reclaim/fencing, corrupt-backup fail-closed behavior, and ingress recovery.
+
+Clank deliberately does not install a TypeScript package. Its built-in compiler validates syntax lowering, while the checked-in declarations define the consumer contract. Run `tsc --noEmit` as an additional semantic type check when a separately provisioned, trusted TypeScript compiler is available; do not describe that optional external tool as part of the zero-dependency gate.
 
 See `docs/security.md` and `docs/platform-security.md` for the separate security checklists.

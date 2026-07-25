@@ -1,3 +1,5 @@
+import { setTrustedClientAddress } from "./security.ts";
+
 export interface FetchApplication {
   handle(request: Request): Response | Promise<Response>;
 }
@@ -44,6 +46,7 @@ interface OutgoingResponse {
   write(chunk: Uint8Array): boolean;
   end(chunk?: string | Uint8Array): void;
   once(event: "close" | "drain", listener: () => void): void;
+  removeListener(event: "close", listener: () => void): void;
 }
 
 interface NativeServer {
@@ -231,6 +234,7 @@ async function dispatch(
   const request = new Request(`${protocol}://${parsedHost.host}${incoming.url ?? "/"}`, {
     ...init,
   });
+  setTrustedClientAddress(request, forwardedFor || incoming.socket.remoteAddress || "unknown");
   const response = await handler(request);
   // If an application translated the stream error into its own response, the
   // transport limit still wins. Otherwise a chunked upload could turn a 413
@@ -252,6 +256,8 @@ async function dispatch(
     return;
   }
   const reader = response.body.getReader();
+  const cancelResponse = () => { void reader.cancel("client disconnected").catch(() => undefined); };
+  outgoing.once("close", cancelResponse);
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -260,6 +266,7 @@ async function dispatch(
     }
     outgoing.end();
   } finally {
+    outgoing.removeListener("close", cancelResponse);
     reader.releaseLock();
   }
 }

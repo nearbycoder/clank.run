@@ -23,13 +23,15 @@ Limits are operator configuration, not cosmetic dashboard values:
 
 | Environment variable | Default | Enforcement boundary |
 | --- | ---: | --- |
+| `CLANK_MAX_ORGANIZATIONS_PER_ACCOUNT` | `5` | Account-owned organization count and insert in one SQLite transaction |
+| `CLANK_MAX_PROJECTS_PER_ACCOUNT` | `10` | Account-owned site count and insert in one SQLite transaction |
 | `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Site count and insert in one SQLite transaction |
 | `CLANK_MAX_DOMAINS_PER_PROJECT` | `5` | Domain assignment and count in one SQLite transaction |
 | `CLANK_METRICS_RETENTION_DAYS` | `30` | Minute ingress-metric retention |
 
-The API returns `PROJECT_LIMIT_REACHED` or `DOMAIN_LIMIT_REACHED` with HTTP `409` when capacity is exhausted. A pending or verified hostname belongs to exactly one project; another project cannot replace its challenge. The console hostname, custom-domain target, base domain, and the base-domain application namespace are reserved.
+The API returns `ORGANIZATION_LIMIT_REACHED`, `ACCOUNT_PROJECT_LIMIT_REACHED`, `PROJECT_LIMIT_REACHED`, or `DOMAIN_LIMIT_REACHED` with HTTP `409` when capacity is exhausted. Account limits count organizations created by the account and projects owned by the account; joining someone else's organization does not consume the invitee's creator quota. A pending or verified hostname belongs to exactly one project; another project cannot replace its challenge. The console hostname, custom-domain target, base domain, and the base-domain application namespace are reserved.
 
-These are fixed installation-wide ceilings today. The site ceiling applies to each organization/workspace, so a hosted service must also govern workspace creation and membership as part of its account or billing policy. It can later resolve plan-specific limits before entering the same transactions; billing state must never be the only enforcement layer.
+These are fixed installation-wide ceilings today. Both account and organization limits are checked in the same SQLite write transactions as their inserts, so concurrent requests and extra workspaces cannot bypass capacity. A hosted service can later resolve plan-specific limits before entering those transactions; billing state must never be the only enforcement layer.
 
 ## Ingress metrics
 

@@ -35,6 +35,8 @@ Clank Deploy is one Node control-plane process plus one supervised process or co
 | `CLANK_CUSTOM_DOMAIN_ADDRESSES` | none | Comma-separated edge A/AAAA values accepted for apex routing |
 | `CLANK_TLS_ASK_TOKEN` | none | Secret for the private Caddy certificate permission check |
 | `CLANK_INGRESS_MAX_BODY_BYTES` | `26214400` | Per-request managed-ingress body limit |
+| `CLANK_MAX_ORGANIZATIONS_PER_ACCOUNT` | `5` | Transactionally enforced account organization limit |
+| `CLANK_MAX_PROJECTS_PER_ACCOUNT` | `10` | Transactionally enforced account-wide site limit |
 | `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Transactionally enforced site limit |
 | `CLANK_MAX_DOMAINS_PER_PROJECT` | `5` | Transactionally enforced custom-domain limit |
 | `CLANK_METRICS_RETENTION_DAYS` | `30` | Ingress metric retention, 1–365 days |
@@ -65,6 +67,8 @@ clank-platform
 ```
 
 Proxy the console and application hosts to port 4200. Clank performs exact-host project routing; the edge performs public DNS, TLS, WAF/rate limiting, and DDoS controls. The recommended Caddy On-Demand TLS configuration and DNS records are in [Deployment dashboard, quotas, and domains](platform-dashboard.md).
+
+Use `/livez` only to determine whether the process can answer HTTP. Use `/healthz` or `/readyz` for load-balancer readiness; those endpoints execute a control-database probe and return `503` when the platform cannot safely accept work. `SIGINT` and `SIGTERM` stop new HTTP work, close supervised applications and platform storage, and fail the process if shutdown cannot finish within 30 seconds.
 
 ## Tailscale
 
@@ -102,4 +106,4 @@ Back up the control database, project data, recoverable artifacts/source, and ma
 4. Start the selected active supervisor/worker topology.
 5. Verify browser login, CLI login, organization and scoped-token access, project status, ingress/domain state, app health, test deploy, backup verification, and rollback.
 
-Durable distributed locks, authenticated nodes, desired generations, operations/fencing, wildcard base-domain routing, ownership and routing verification, Caddy certificate eligibility, ingress metrics, enforced site/domain limits, organization RBAC, and external database drivers are implemented. The included child-process supervisor remains single-leader and artifacts/backups are local by default; a hosted multi-region service still needs leader/remote-runner integration, external object storage, globally transactional control storage, shared metric storage, and a multi-region edge service.
+Durable distributed locks, authenticated nodes, desired generations, operations/fencing, wildcard base-domain routing, ownership and routing verification, Caddy certificate eligibility, ingress metrics, enforced account/organization/site/domain limits, organization RBAC, and external database drivers are implemented. The included child-process supervisor remains single-leader and artifacts/backups are local by default; a hosted multi-region service still needs leader/remote-runner integration, external object storage, globally transactional control storage, shared metric storage, and a multi-region edge service.

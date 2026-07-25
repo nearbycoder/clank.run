@@ -72,6 +72,7 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
       response.end(request.url === "/healthz" ? "ok" : ${JSON.stringify(label)});
       if (request.url === "/crash") setImmediate(() => process.exit(17));
     });
+    if (process.env.AUDIT_SHORT_SECRET) console.log("secret=" + process.env.AUDIT_SHORT_SECRET);
     server.listen(Number(process.env.PORT), process.env.HOST);
     process.on("SIGTERM", () => server.close(() => process.exit(0)));
   `);
@@ -118,7 +119,14 @@ test("browser project management enforces organization and custom-domain quotas 
     appPortStart: 4590,
     appPortEnd: 4595,
     signup: true,
-    limits: { projectsPerOrganization: 1, domainsPerProject: 1, metricRetentionDays: 7 },
+    maxArtifactBytes: 64,
+    limits: {
+      organizationsPerAccount: 2,
+      projectsPerAccount: 2,
+      projectsPerOrganization: 1,
+      domainsPerProject: 1,
+      metricRetentionDays: 7,
+    },
     ingress: {
       enabled: true,
       customDomainTarget: "edge.example.test",
@@ -132,6 +140,9 @@ test("browser project management enforces organization and custom-domain quotas 
   try {
     const owner = await authorizeCli(platform, "quota@example.com");
     const dashboard = await payload(platform, jsonRequest("/api/dashboard", { cookie: owner.cookie }));
+    assert.equal(dashboard.limits.organizationsPerAccount, 2);
+    assert.equal(dashboard.limits.projectsPerAccount, 2);
+    assert.deepEqual(dashboard.account.usage, { organizations: 1, projects: 0 });
     const organizationId = dashboard.organizations[0].id;
     const refreshedPage = await platform.handle(new Request("http://127.0.0.1:4200/", {
       headers: { cookie: owner.cookie },
@@ -160,6 +171,28 @@ test("browser project management enforces organization and custom-domain quotas 
     }));
     assert.equal(overLimit.status, 409);
     assert.equal((await overLimit.json()).error.code, "PROJECT_LIMIT_REACHED");
+
+    let artifactCancelled = false;
+    const oversizedArtifact = await platform.handle(new Request(
+      `http://127.0.0.1:4200/api/projects/${created.project.id}/releases`,
+      {
+        method: "POST",
+        duplex: "half",
+        headers: {
+          authorization: `Bearer ${owner.accessToken}`,
+          "content-type": "application/vnd.clank.deploy+gzip",
+          "x-clank-content-sha256": "0".repeat(64),
+          "x-clank-idempotency-key": "bounded-artifact-test",
+        },
+        body: new ReadableStream({
+          pull(controller) { controller.enqueue(new Uint8Array(40)); },
+          cancel() { artifactCancelled = true; },
+        }),
+      },
+    ));
+    assert.equal(oversizedArtifact.status, 413);
+    assert.equal((await oversizedArtifact.json()).error.code, "ARTIFACT_TOO_LARGE");
+    assert.equal(artifactCancelled, true);
 
     const reservedDomain = await platform.handle(jsonRequest(`/api/projects/${created.project.id}/domains`, {
       method: "POST",
@@ -193,6 +226,134 @@ test("browser project management enforces organization and custom-domain quotas 
     }));
     assert.equal(domainOverLimit.status, 409);
     assert.equal((await domainOverLimit.json()).error.code, "DOMAIN_LIMIT_REACHED");
+    const domains = await payload(platform, jsonRequest(`/api/projects/${created.project.id}/domains`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(domains.domains.length, 1, "a rejected domain must never survive rollback");
+    const control = new DatabaseSync(join(root, "platform", "control.sqlite"), { readOnly: true });
+    assert.equal(control.prepare(
+      "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
+    ).get(created.project.id).count, 1);
+    control.close();
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("account quotas prevent multiplying organizations to bypass hosted site limits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-account-quota-"));
+  const platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4570,
+    appPortEnd: 4575,
+    signup: true,
+    limits: {
+      organizationsPerAccount: 2,
+      projectsPerAccount: 1,
+      projectsPerOrganization: 1,
+      domainsPerProject: 1,
+    },
+  });
+  try {
+    const owner = await authorizeCli(platform, "account-quota@example.com");
+    const firstOrganization = await payload(platform, jsonRequest("/api/organizations", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "First workspace", slug: "first-workspace" },
+    }), 201);
+    const firstProject = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "First site", slug: "first-account-site", organizationId: firstOrganization.organization.id },
+    }), 201);
+    assert.ok(firstProject.project.id);
+    const secondOrganization = await payload(platform, jsonRequest("/api/organizations", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Second workspace", slug: "second-workspace" },
+    }), 201);
+    const secondProject = await platform.handle(jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Bypass site", slug: "bypass-site", organizationId: secondOrganization.organization.id },
+    }));
+    assert.equal(secondProject.status, 409);
+    assert.equal((await secondProject.json()).error.code, "ACCOUNT_PROJECT_LIMIT_REACHED");
+    const thirdOrganization = await platform.handle(jsonRequest("/api/organizations", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Third workspace", slug: "third-workspace" },
+    }));
+    assert.equal(thirdOrganization.status, 409);
+    assert.equal((await thirdOrganization.json()).error.code, "ORGANIZATION_LIMIT_REACHED");
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Docker runner passes secret names in arguments and secret values only through its environment", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-docker-argv-"));
+  const source = join(root, "source");
+  const runnerPath = join(root, "fake-docker.mjs");
+  const invocationPath = join(root, "docker-invocation.json");
+  await writeFile(runnerPath, `#!/usr/bin/env node
+    import { spawn } from "node:child_process";
+    import { writeFile } from "node:fs/promises";
+    import { join } from "node:path";
+    const arguments_ = process.argv.slice(2);
+    await writeFile(${JSON.stringify(invocationPath)}, JSON.stringify({
+      arguments_,
+      secretPresent: process.env.DOCKER_TEST_SECRET === "abc",
+    }));
+    const mount = arguments_.find((value) => value.endsWith(":/app:ro"));
+    if (!mount) throw new Error("Missing application mount.");
+    const applicationRoot = mount.slice(0, -":/app:ro".length);
+    const child = spawn(process.execPath, [join(applicationRoot, arguments_.at(-1))], {
+      env: { ...process.env, HOST: "127.0.0.1" },
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+    process.once("SIGTERM", () => child.kill("SIGTERM"));
+    process.once("SIGINT", () => child.kill("SIGINT"));
+    child.once("exit", (code) => process.exit(code ?? 1));
+  `, { mode: 0o700 });
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4580,
+    appPortEnd: 4585,
+    signup: true,
+    runner: { kind: "docker", executable: runnerPath, image: "fake-image" },
+  });
+  try {
+    const owner = await authorizeCli(platform, "docker-argv@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Docker arguments", slug: "docker-arguments" },
+    }), 201);
+    await payload(platform, jsonRequest(`/api/projects/${created.project.id}/secrets`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { values: { DOCKER_TEST_SECRET: "abc" } },
+    }));
+    const artifact = await appArtifact(source, "docker-release", [
+      ["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"],
+    ]);
+    const deployed = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      artifact,
+      "docker-argument-release-key",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    const invocation = JSON.parse(await readFile(invocationPath, "utf8"));
+    assert.equal(invocation.secretPresent, true);
+    assert.equal(invocation.arguments_.includes("DOCKER_TEST_SECRET"), true);
+    assert.equal(invocation.arguments_.some((argument) => argument.includes("abc")), false);
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
@@ -245,12 +406,12 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     await payload(platform, jsonRequest(`/api/projects/${projectId}/secrets`, {
       method: "PUT",
       token: owner.accessToken,
-      body: { values: { API_SECRET: secretValue } },
+      body: { values: { API_SECRET: secretValue, AUDIT_SHORT_SECRET: "abc" } },
     }));
     const listed = await payload(platform, jsonRequest(`/api/projects/${projectId}/secrets`, {
       token: owner.accessToken,
     }));
-    assert.deepEqual(listed.secrets.map((secret) => secret.name), ["API_SECRET"]);
+    assert.deepEqual(listed.secrets.map((secret) => secret.name), ["API_SECRET", "AUDIT_SHORT_SECRET"]);
     assert.doesNotMatch(JSON.stringify(listed), new RegExp(secretValue));
     const controlBytes = await readFile(join(root, "platform", "control.sqlite"));
     assert.equal(controlBytes.includes(Buffer.from(secretValue)), false);
@@ -270,6 +431,12 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     const first = await deploy(platform, projectId, owner.accessToken, firstArtifact, "first-release-key-0001");
     assert.equal(first.response.status, 201, JSON.stringify(first.body));
     assert.equal(await fetch(first.body.release.directUrl).then((response) => response.text()), "release-one");
+    await waitFor(async () => {
+      const logs = await payload(platform, jsonRequest(`/api/projects/${projectId}/logs`, { token: owner.accessToken }));
+      return logs.logs.some((entry) => entry.message.includes("secret=[REDACTED]"));
+    });
+    const redactedLogs = await payload(platform, jsonRequest(`/api/projects/${projectId}/logs`, { token: owner.accessToken }));
+    assert.equal(redactedLogs.logs.some((entry) => entry.message.includes("abc")), false);
     const managed = await platform.handle(new Request("https://atomic-todo.apps.example.test/"));
     assert.equal(managed.status, 200);
     assert.equal(await managed.text(), "release-one");
@@ -530,6 +697,22 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     appPortEnd: 4531,
   });
   try {
+    assert.deepEqual(await payload(platform, jsonRequest("/livez")), {
+      ok: true,
+      status: "alive",
+    });
+    const favicon = await platform.handle(jsonRequest("/favicon.ico"));
+    assert.equal(favicon.status, 204);
+    assert.equal(await favicon.text(), "");
+    const ready = await payload(platform, jsonRequest("/healthz"));
+    assert.deepEqual(ready, {
+      ok: true,
+      status: "ready",
+      checks: {
+        database: "ok",
+      },
+    });
+    assert.deepEqual(await payload(platform, jsonRequest("/readyz")), ready);
     const first = await platform.handle(jsonRequest("/__clank/auth/register", {
       method: "POST",
       body: {
@@ -557,6 +740,10 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     }));
     assert.equal(second.status, 403);
     assert.equal((await second.json()).error.code, "SIGNUP_DISABLED");
+    await platform.close();
+    const closed = await platform.handle(jsonRequest("/healthz"));
+    assert.equal(closed.status, 503);
+    assert.equal((await closed.json()).error.code, "PLATFORM_CLOSED");
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });

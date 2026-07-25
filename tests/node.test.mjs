@@ -132,3 +132,34 @@ test("Node adapter enforces Host/body limits and static files contain symlinks a
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Node adapter cancels a streamed Fetch response when the client disconnects", async () => {
+  let cancelled = false;
+  const server = await serve(() => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode("first chunk")); },
+    cancel() { cancelled = true; },
+  })), { port: 0 });
+  try {
+    await new Promise((resolve, reject) => {
+      const url = new URL(server.url);
+      const outgoing = httpRequest({
+        hostname: url.hostname,
+        port: Number(url.port),
+        path: "/stream",
+      }, (response) => {
+        response.once("data", () => outgoing.destroy());
+        response.once("close", resolve);
+      });
+      outgoing.once("error", (error) => {
+        if (error.code === "ECONNRESET") resolve();
+        else reject(error);
+      });
+      outgoing.end();
+    });
+    const deadline = Date.now() + 1_000;
+    while (!cancelled && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(cancelled, true);
+  } finally {
+    await server.close();
+  }
+});

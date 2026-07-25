@@ -29,7 +29,7 @@ Run:
 npm run check
 ```
 
-That command builds the framework, enforces the zero-dependency contract, runs unit/integration tests, then installs and exercises the packed release through the complete conformance journey.
+That command builds the framework, enforces the zero-dependency and coverage contracts, audits documentation/declaration/package-export integrity, runs unit/integration tests, installs and exercises the packed release through the complete conformance journey, and finishes with package/tree/history security checks.
 
 ## Pull requests
 
@@ -45,3 +45,5 @@ Large modules may be split when the split improves a concrete change. Moving cod
 ## Commit and release policy
 
 Maintainers use reviewed pull requests for `main`. Releases follow [the release process](docs/releases.md). By contributing, you agree that your contribution is licensed under the repository's MIT license.
+
+Git commit author and committer addresses are public repository metadata. Contributors who want email privacy should configure GitHub's account-specific `ID+username@users.noreply.github.com` address locally and enable GitHub's command-line push protection for personal email addresses before committing. Never rewrite published shared history only to change an address; coordinate any history rewrite as a separate incident response when actual credentials or regulated data were committed.

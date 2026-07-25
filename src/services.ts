@@ -1,4 +1,5 @@
 import type { DatabaseSchema, SQLiteDatabase } from "./backend.ts";
+import { readRequestBytes, RequestInputError } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
 
 export type ServiceKind =
@@ -396,12 +397,7 @@ export async function openLocalFileStore(options: {
         }
         if (request.method === "PUT") {
           const capability = await store.verify(token, "write");
-          const declared = Number(request.headers.get("content-length"));
-          if (Number.isFinite(declared) && declared > maxFileBytes) {
-            return fileProblem(413, "FILE_TOO_LARGE", `File exceeds ${maxFileBytes} bytes.`);
-          }
-          const bytes = new Uint8Array(await request.arrayBuffer());
-          if (bytes.byteLength > maxFileBytes) return fileProblem(413, "FILE_TOO_LARGE", `File exceeds ${maxFileBytes} bytes.`);
+          const bytes = await readRequestBytes(request, maxFileBytes);
           const record = await store.put(capability.key, bytes, {
             contentType: request.headers.get("content-type") ?? undefined,
           });
@@ -411,7 +407,10 @@ export async function openLocalFileStore(options: {
           });
         }
         return fileProblem(405, "METHOD_NOT_ALLOWED", "Method not allowed.", { allow: "GET, HEAD, PUT" });
-      } catch {
+      } catch (error) {
+        if (error instanceof RequestInputError && error.status === 413) {
+          return fileProblem(413, "FILE_TOO_LARGE", `File exceeds ${maxFileBytes} bytes.`);
+        }
         return fileProblem(403, "INVALID_CAPABILITY", "File capability is invalid or expired.");
       }
     },

@@ -48,7 +48,7 @@ export interface PublicKeyCredentialCreationOptionsJSON {
     timeout: number;
     attestation: "none";
     authenticatorSelection: {
-        residentKey: "preferred";
+        residentKey: "required";
         userVerification: "preferred" | "required";
     };
     excludeCredentials: readonly PublicKeyCredentialDescriptorJSON[];

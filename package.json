@@ -72,6 +72,7 @@
   "scripts": {
     "build": "node --disable-warning=ExperimentalWarning scripts/build.mjs",
     "conformance": "node --disable-warning=ExperimentalWarning scripts/conformance.mjs",
+    "docs:audit": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/docs-audit.mjs",
     "dev": "node --disable-warning=ExperimentalWarning scripts/dev.mjs",
     "dev:fullstack": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/fullstack/server.js",
     "dev:auth": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/auth-todo/server.js",

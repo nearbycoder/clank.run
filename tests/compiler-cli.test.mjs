@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,13 +26,13 @@ function runCli(args, cwd = repository) {
   });
 }
 
-function runCliOutput(args, cwd = repository) {
+function runCliResult(args, cwd = repository, env = process.env) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [
       "--disable-warning=ExperimentalWarning",
       fileURLToPath(new URL("scripts/clank.mjs", repository)),
       ...args,
-    ], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    ], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -39,10 +40,14 @@ function runCliOutput(args, cwd = repository) {
     child.stdout.on("data", (chunk) => stdout += chunk);
     child.stderr.on("data", (chunk) => stderr += chunk);
     child.once("error", reject);
-    child.once("exit", (code) => code === 0
-      ? resolve({ stdout, stderr })
-      : reject(new Error(`CLI exited with ${code}: ${stderr}`)));
+    child.once("exit", (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+async function runCliOutput(args, cwd = repository, env = process.env) {
+  const result = await runCliResult(args, cwd, env);
+  if (result.code !== 0) throw new Error(`CLI exited with ${result.code}: ${result.stderr}`);
+  return result;
 }
 
 function runFrameworkBuild() {
@@ -94,6 +99,67 @@ test("Clank CLI exposes its renamed version command", async () => {
     const result = await runCliOutput([command]);
     assert.equal(result.stdout.trim(), frameworkVersion);
     assert.equal(result.stderr, "");
+  }
+});
+
+test("deployment CLI rejects malformed credential state without exposing it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-config-"));
+  const canary = "credential-canary-must-stay-private";
+  try {
+    await writeFile(join(root, "config.json"), JSON.stringify({
+      version: 1,
+      current: "https://platform.example",
+      profiles: [{ token: canary, expiresAt: Date.now() + 60_000 }],
+    }));
+    const result = await runCliResult(["whoami"], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Invalid CLI configuration/);
+    assert.doesNotMatch(result.stderr, new RegExp(canary));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("deployment CLI bounds platform JSON responses before buffering them", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-response-"));
+  const server = createHttpServer((_request, response) => {
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "content-length": String(8 * 1024 * 1024),
+    });
+    response.end("{}");
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}`;
+  try {
+    await writeFile(join(root, "config.json"), JSON.stringify({
+      version: 1,
+      current: `${platform}/`,
+      profiles: {
+        [`${platform}/`]: {
+          token: "clnk_test_token_for_cli_response_bounds",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    const result = await runCliResult(["whoami"], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Platform response exceeds 4194304 bytes/);
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
   }
 });
 

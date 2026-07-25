@@ -6,6 +6,7 @@ import {
   sign,
 } from "node:crypto";
 import {
+  passkeyRegistrationOptions,
   verifyPasskeyAuthentication,
   verifyPasskeyRegistration,
 } from "../dist/webauthn.js";
@@ -13,6 +14,18 @@ import {
 const base64url = (value) => Buffer.from(value).toString("base64url");
 const decode = (value) => new Uint8Array(Buffer.from(value, "base64url"));
 const sha256 = (value) => new Uint8Array(createHash("sha256").update(value).digest());
+
+test("passkey registration requires discoverable credentials", () => {
+  const options = passkeyRegistrationOptions({
+    challenge: base64url(Buffer.from("challenge with enough entropy for registration")),
+    rpId: "todo.test",
+    rpName: "Todo",
+    userId: "user_123",
+    userName: "person@example.com",
+    userDisplayName: "Person",
+  });
+  assert.equal(options.authenticatorSelection.residentKey, "required");
+});
 
 function concatenate(...values) {
   const bytes = values.map((value) => value instanceof Uint8Array ? value : new Uint8Array(value));

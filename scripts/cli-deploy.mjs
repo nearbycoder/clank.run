@@ -16,9 +16,14 @@ import {
   parseAppBlueprint,
 } from "../dist/blueprint.js";
 import { applyMigrations, loadMigrations, planMigrations } from "../dist/migrations.js";
+import { readResponseBytes, ResponseBodyLimitError } from "../dist/security.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+const MAX_LOCAL_CONFIG_BYTES = 1024 * 1024;
+const MAX_PLATFORM_RESPONSE_BYTES = 4 * 1024 * 1024;
+const PLATFORM_REQUEST_TIMEOUT_MS = 30_000;
+const PLATFORM_DEPLOY_TIMEOUT_MS = 5 * 60_000;
 
 export async function run(command, args) {
   try {
@@ -520,7 +525,9 @@ async function deploy(args) {
   if (link.server !== profile.server) {
     throw new CliError(`This directory is linked to ${link.server}; log in there or relink it.`);
   }
-  const response = await fetch(`${profile.server}/api/projects/${encodeURIComponent(link.projectId)}/releases`, {
+  const { response, payload } = await fetchPlatformJson(
+    `${profile.server}/api/projects/${encodeURIComponent(link.projectId)}/releases`,
+    {
     method: "POST",
     headers: {
       authorization: `Bearer ${profile.token}`,
@@ -530,8 +537,9 @@ async function deploy(args) {
       "x-clank-idempotency-key": randomToken(),
     },
     body: artifact,
-  });
-  const payload = await response.json();
+    },
+    PLATFORM_DEPLOY_TIMEOUT_MS,
+  );
   if (!response.ok) throw ApiError.from(payload, response.status);
   console.log(`Deployed release ${payload.release.id}`);
   console.log(`Digest: ${payload.release.digest}`);
@@ -727,16 +735,55 @@ async function platformRequest(server, path, options = {}) {
   const headers = new Headers(options.headers);
   if (options.body !== undefined) headers.set("content-type", "application/json");
   if (options.token) headers.set("authorization", `Bearer ${options.token}`);
-  const response = await fetch(`${server}${path}`, {
+  const { response, payload } = await fetchPlatformJson(`${server}${path}`, {
     method: options.method ?? "GET",
     headers,
     ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-  });
-  let payload;
-  try { payload = await response.json(); }
-  catch { throw new CliError(`Platform returned a non-JSON response (${response.status}).`); }
+  }, PLATFORM_REQUEST_TIMEOUT_MS);
   if (!response.ok) throw ApiError.from(payload, response.status);
   return payload;
+}
+
+async function fetchPlatformJson(url, init, timeoutMs) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  let response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted || error?.name === "TimeoutError" || error?.name === "AbortError") {
+      throw new CliError(`Platform request timed out after ${Math.ceil(timeoutMs / 1_000)} seconds.`);
+    }
+    throw new CliError(`Could not reach the platform: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  let bytes;
+  try {
+    bytes = await readResponseBytes(response, MAX_PLATFORM_RESPONSE_BYTES);
+  } catch (error) {
+    if (error instanceof ResponseBodyLimitError) {
+      throw new CliError(`Platform response exceeds ${MAX_PLATFORM_RESPONSE_BYTES} bytes.`);
+    }
+    if (signal.aborted || error?.name === "TimeoutError" || error?.name === "AbortError") {
+      throw new CliError(`Platform response timed out after ${Math.ceil(timeoutMs / 1_000)} seconds.`);
+    }
+    throw error;
+  }
+
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new CliError(`Platform returned invalid UTF-8 (${response.status}).`);
+  }
+
+  try {
+    return { response, payload: JSON.parse(text) };
+  } catch {
+    throw new CliError(`Platform returned a non-JSON response (${response.status}).`);
+  }
 }
 
 async function linkedContext(root) {
@@ -789,18 +836,37 @@ async function readCliConfig() {
 }
 
 async function parseCliConfig(path) {
-  const parsed = JSON.parse(await readFile(path, "utf8"));
-  if (parsed.version !== 1 || typeof parsed.profiles !== "object") throw new Error("invalid");
-  return parsed;
+  const parsed = await readLocalJson(path);
+  if (!plainRecord(parsed) || parsed.version !== 1 || !plainRecord(parsed.profiles)) {
+    throw new Error("invalid");
+  }
+  const entries = Object.entries(parsed.profiles);
+  if (entries.length > 100) throw new Error("invalid");
+  const profiles = Object.create(null);
+  for (const [rawServer, rawProfile] of entries) {
+    if (!plainRecord(rawProfile)
+      || typeof rawProfile.token !== "string"
+      || !/^[\x21-\x7e]{1,16384}$/u.test(rawProfile.token)
+      || !Number.isSafeInteger(rawProfile.expiresAt)
+      || rawProfile.expiresAt <= 0) {
+      throw new Error("invalid");
+    }
+    const server = normalizeServer(rawServer);
+    if (profiles[server]) throw new Error("invalid");
+    profiles[server] = { token: rawProfile.token, expiresAt: rawProfile.expiresAt };
+  }
+  const current = parsed.current === null
+    ? null
+    : typeof parsed.current === "string"
+      ? normalizeServer(parsed.current)
+      : undefined;
+  if (current === undefined || (current !== null && !profiles[current])) throw new Error("invalid");
+  return { version: 1, current, profiles };
 }
 
 async function writeCliConfig(config) {
   const path = cliConfigPath();
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  await chmod(temporary, 0o600);
-  await rename(temporary, path);
+  await writePrivateJson(path, config);
 }
 
 function cliConfigPath() {
@@ -814,15 +880,12 @@ function legacyCliConfigPath() {
 async function readLink(root) {
   const path = join(root, ".clank", "project.json");
   try {
-    const value = JSON.parse(await readFile(path, "utf8"));
-    if (value.version !== 1 || typeof value.server !== "string" || typeof value.projectId !== "string") throw new Error("invalid");
-    return value;
+    return parseProjectLink(await readLocalJson(path));
   } catch (error) {
     if (error.code === "ENOENT") {
       const legacyPath = join(root, ".proact", "project.json");
       try {
-        const value = JSON.parse(await readFile(legacyPath, "utf8"));
-        if (value.version !== 1 || typeof value.server !== "string" || typeof value.projectId !== "string") throw new Error("invalid");
+        const value = parseProjectLink(await readLocalJson(legacyPath));
         await saveLink(root, value.server, value.projectId);
         return value;
       } catch (legacyError) {
@@ -836,8 +899,11 @@ async function readLink(root) {
 
 async function saveLink(root, server, projectId) {
   const directory = join(root, ".clank");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  await writeFile(join(directory, "project.json"), `${JSON.stringify({ version: 1, server, projectId }, null, 2)}\n`, { mode: 0o600 });
+  await writePrivateJson(join(directory, "project.json"), parseProjectLink({
+    version: 1,
+    server,
+    projectId,
+  }));
 }
 
 function normalizeServer(value) {
@@ -848,6 +914,45 @@ function normalizeServer(value) {
   }
   url.pathname = trimTrailingSlashes(url.pathname);
   return trimTrailingSlashes(url.href);
+}
+
+function parseProjectLink(value) {
+  if (!plainRecord(value)
+    || value.version !== 1
+    || typeof value.server !== "string"
+    || typeof value.projectId !== "string"
+    || !/^[A-Za-z0-9_-]{8,128}$/u.test(value.projectId)) {
+    throw new Error("invalid");
+  }
+  return {
+    version: 1,
+    server: normalizeServer(value.server),
+    projectId: value.projectId,
+  };
+}
+
+async function readLocalJson(path) {
+  const metadata = await stat(path);
+  if (!metadata.isFile() || metadata.size > MAX_LOCAL_CONFIG_BYTES) throw new Error("invalid");
+  return JSON.parse(await readFile(path, "utf8"));
+}
+
+async function writePrivateJson(path, value) {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    await chmod(temporary, 0o600);
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+function plainRecord(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function option(args, name) {

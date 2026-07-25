@@ -203,7 +203,7 @@ const auth = defineAuth({
 
 Defaults use scrypt with `N=2^17`, `r=8`, and `p=1`, a random 128-bit salt, a 64-byte derived key, constant-time comparison, and bounded concurrent hashing. A pepper is optional and must remain server-only. Changing or losing it invalidates existing password hashes unless the application implements an explicit migration.
 
-Authentication attempts are rate-limited in process memory by normalized email and the trusted client IP supplied by Clank's Node adapter. A multi-instance deployment needs a shared upstream rate limiter as well.
+Authentication attempts are rate-limited in process memory by normalized email and the trusted client identity supplied out of band by Clank's Node adapter. Caller headers cannot select this identity. A custom adapter may provide `rateLimit.clientKey(request)` from adapter-authenticated metadata; a multi-instance deployment also needs a shared `rateLimit.store`.
 
 ## HTTP endpoints
 
@@ -222,7 +222,7 @@ With the default backend prefix:
 | `/__clank/auth/passkeys` | `GET` | List the current verified user's passkeys |
 | `/__clank/auth/passkeys/register/start` | `POST` | Start passkey registration |
 | `/__clank/auth/passkeys/register/finish` | `POST` | Verify and store a passkey |
-| `/__clank/auth/passkeys/authenticate/start` | `POST` | Start passkey authentication |
+| `/__clank/auth/passkeys/authenticate/start` | `POST` | Start discoverable passkey authentication without account lookup |
 | `/__clank/auth/passkeys/authenticate/finish` | `POST` | Verify an assertion and create a session |
 | `/__clank/auth/passkeys/delete` | `POST` | Remove one owned passkey |
 | `/__clank/auth/logout` | `POST` | Revoke the current session |

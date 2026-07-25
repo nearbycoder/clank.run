@@ -13,9 +13,28 @@ for (const field of ["dependencies", "devDependencies", "peerDependencies", "opt
 }
 
 await new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", "--test"], { stdio: "inherit" });
+  const child = spawn(process.execPath, [
+    "--disable-warning=ExperimentalWarning",
+    "--test",
+    "--experimental-test-coverage",
+    "--test-coverage-include=dist/**/*.js",
+    "--test-coverage-lines=80",
+    "--test-coverage-branches=65",
+    "--test-coverage-functions=80",
+  ], { stdio: "inherit" });
   child.once("error", reject);
   child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`Tests exited with ${code}.`)));
+});
+
+await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [
+    "--disable-warning=ExperimentalWarning",
+    fileURLToPath(new URL("./docs-audit.mjs", import.meta.url)),
+  ], { stdio: "inherit" });
+  child.once("error", reject);
+  child.once("exit", (code) => code === 0
+    ? resolve()
+    : reject(new Error(`Documentation audit exited with ${code}.`)));
 });
 
 await new Promise((resolve, reject) => {
@@ -40,4 +59,4 @@ await new Promise((resolve, reject) => {
     : reject(new Error(`Security audit exited with ${code}.`)));
 });
 
-console.log("Check complete: build, dependency contract, tests, packaged-release conformance, and security audit passed.");
+console.log("Check complete: build, dependency contract, coverage, documentation, packaged-release conformance, and security audit passed.");

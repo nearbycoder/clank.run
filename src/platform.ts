@@ -25,7 +25,13 @@ import {
   type IngressRequestMetric,
 } from "./data-plane.ts";
 import { platformConsolePage } from "./platform-console.ts";
-import { requestOriginAllowed, RequestInputError, readJsonRequest } from "./security.ts";
+import {
+  readRequestBytes,
+  requestOriginAllowed,
+  RequestInputError,
+  readJsonRequest,
+  trustedClientAddress,
+} from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
 
 export interface ProcessRunnerOptions {
@@ -44,6 +50,10 @@ export interface DockerRunnerOptions {
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
 
 export interface PlatformLimits {
+  /** Maximum organizations created by one account. Defaults to 5. */
+  organizationsPerAccount?: number;
+  /** Maximum sites created by one account across all organizations. Defaults to 10. */
+  projectsPerAccount?: number;
   /** Maximum sites in one organization. Defaults to 10. */
   projectsPerOrganization?: number;
   /** Maximum custom domains attached to one site. Defaults to 5. */
@@ -200,6 +210,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     : baseDomain;
   const customDomainAddresses = Object.freeze(normalizeEdgeAddresses(options.ingress?.customDomainAddresses ?? []));
   const limits = Object.freeze({
+    organizationsPerAccount: integerInRange(
+      options.limits?.organizationsPerAccount ?? 5,
+      "limits.organizationsPerAccount",
+      1,
+      10_000,
+    ),
+    projectsPerAccount: integerInRange(
+      options.limits?.projectsPerAccount ?? 10,
+      "limits.projectsPerAccount",
+      1,
+      100_000,
+    ),
     projectsPerOrganization: integerInRange(
       options.limits?.projectsPerOrganization ?? 10,
       "limits.projectsPerOrganization",
@@ -249,7 +271,23 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
 
   const domainStore: DomainChallengeStore = {
     save(challenge) {
-      const result = storage.internal.prepare(`INSERT INTO clank_platform_domains
+      storage.internal.transaction(() => {
+        const existing = storage.internal.prepare(
+          "SELECT id, project_id FROM clank_platform_domains WHERE hostname = ?",
+        ).get(challenge.hostname);
+        if (!existing) {
+          const count = Number(storage.internal.prepare(
+            "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
+          ).get(challenge.projectId)?.count ?? 0);
+          if (count >= limits.domainsPerProject) {
+            throw new PlatformError(
+              409,
+              "DOMAIN_LIMIT_REACHED",
+              `This site has reached its ${limits.domainsPerProject}-domain limit.`,
+            );
+          }
+        }
+        const result = storage.internal.prepare(`INSERT INTO clank_platform_domains
         (id, project_id, hostname, record_name, record_value, status, expires_at, verified_at, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(hostname) DO UPDATE SET id = excluded.id,
@@ -276,10 +314,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           challenge.expiresAt,
           challenge.verifiedAt ?? null,
           Date.now(),
-        );
-      if (Number(result.changes) !== 1) {
-        throw new PlatformError(409, "DOMAIN_UNAVAILABLE", "That hostname is already assigned to another site.");
-      }
+          );
+        if (Number(result.changes) !== 1) {
+          throw new PlatformError(409, "DOMAIN_UNAVAILABLE", "That hostname is already assigned to another site.");
+        }
+      });
     },
     get(id) {
       const row = storage.internal.prepare("SELECT * FROM clank_platform_domains WHERE id = ?").get(id);
@@ -719,8 +758,39 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (ingress && normalizeHostname(url.hostname) !== publicHostname) {
         return await ingress.handle(request);
       }
-      if (url.pathname === "/healthz" && request.method === "GET") {
-        return api({ ok: true, status: "ready" });
+      if (url.pathname === "/livez" && request.method === "GET") {
+        return api({ ok: true, status: "alive" });
+      }
+      if (url.pathname === "/favicon.ico" && request.method === "GET") {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            "cache-control": "public, max-age=86400",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      }
+      if ((url.pathname === "/healthz" || url.pathname === "/readyz") && request.method === "GET") {
+        try {
+          const result = storage.internal.prepare("SELECT 1 AS ready").get();
+          if (Number(result?.ready) !== 1) throw new Error("Control database readiness probe failed.");
+          return api({
+            ok: true,
+            status: "ready",
+            checks: {
+              database: "ok",
+            },
+          });
+        } catch (error) {
+          options.onError?.(error);
+          return api({
+            ok: false,
+            status: "not_ready",
+            checks: {
+              database: "failed",
+            },
+          }, 503);
+        }
       }
       const authPrefix = url.pathname === "/__proact/auth" || url.pathname.startsWith("/__proact/auth/")
         ? "/__proact/auth"
@@ -843,7 +913,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (principal.projectId && !principal.permissions.includes("read")) {
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metrics.");
         }
-        if (!principal.projectId) await ensurePersonalOrganization(storage.internal, principal);
+        if (!principal.projectId) await ensurePersonalOrganization(storage.internal, principal, limits.organizationsPerAccount);
         return api(dashboardPayload(
           storage.internal,
           principal,
@@ -936,7 +1006,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         exact(input, ["name", "slug"]);
         const name = boundedString(input.name, "name", 1, 100);
         const slug = normalizeSlug(input.slug === undefined ? name : boundedString(input.slug, "slug", 1, 50));
-        const organization = await createOrganization(storage.internal, principal.userId, name, slug);
+        const organization = await createOrganization(
+          storage.internal,
+          principal.userId,
+          name,
+          slug,
+          limits.organizationsPerAccount,
+        );
         audit(storage.internal, principal.userId, principal.tokenId, null, "organization.create", {
           organizationId: organization.id,
           name,
@@ -1105,7 +1181,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const name = boundedString(input.name, "name", 1, 100);
         const slug = normalizeSlug(input.slug === undefined ? name : boundedString(input.slug, "slug", 1, 50));
         const organizationId = input.organizationId === undefined
-          ? await ensurePersonalOrganization(storage.internal, principal)
+          ? await ensurePersonalOrganization(storage.internal, principal, limits.organizationsPerAccount)
           : boundedString(input.organizationId, "organizationId", 8, 128);
         const membership = organizationMembership(storage.internal, organizationId, principal.userId);
         requireOrganizationAdministration(membership.role);
@@ -1114,6 +1190,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const now = Date.now();
         try {
           storage.internal.transaction((changes) => {
+            const accountCount = Number(storage.internal.prepare(
+              "SELECT count(*) AS count FROM clank_platform_projects WHERE owner_id = ?",
+            ).get(principal.userId)?.count ?? 0);
+            if (accountCount >= limits.projectsPerAccount) {
+              throw new PlatformError(
+                409,
+                "ACCOUNT_PROJECT_LIMIT_REACHED",
+                `This account has reached its ${limits.projectsPerAccount}-site limit.`,
+              );
+            }
             const count = Number(storage.internal.prepare(
               "SELECT count(*) AS count FROM clank_platform_projects WHERE organization_id = ?",
             ).get(organizationId)?.count ?? 0);
@@ -1206,11 +1292,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ?? request.headers.get("x-proact-idempotency-key")
           ?? "";
         if (!/^[A-Za-z0-9_-]{16,128}$/.test(idempotencyKey)) throw new PlatformError(400, "IDEMPOTENCY_REQUIRED", "A valid idempotency key is required.");
-        const declared = Number(request.headers.get("content-length"));
         const max = options.maxArtifactBytes ?? 100 * 1024 * 1024;
-        if (Number.isFinite(declared) && declared > max) throw new PlatformError(413, "ARTIFACT_TOO_LARGE", `Artifact exceeds ${max} bytes.`);
-        const bytes = new Uint8Array(await request.arrayBuffer());
-        if (bytes.byteLength > max) throw new PlatformError(413, "ARTIFACT_TOO_LARGE", `Artifact exceeds ${max} bytes.`);
+        let bytes: Uint8Array;
+        try { bytes = await readRequestBytes(request, max); }
+        catch (error) {
+          if (error instanceof RequestInputError && error.status === 413) {
+            throw new PlatformError(413, "ARTIFACT_TOO_LARGE", `Artifact exceeds ${max} bytes.`);
+          }
+          throw error;
+        }
         return api({ ok: true, release: await deploy(principal, project, bytes, claimedDigest, idempotencyKey) }, 201);
       }
       if (operation === "rollback" && request.method === "POST") {
@@ -1385,20 +1475,6 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         const challenge = await domains.begin(project.id, hostname);
         try {
-          storage.internal.transaction(() => {
-            const count = Number(storage.internal.prepare(
-              "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
-            ).get(project.id)?.count ?? 0);
-            if (count > limits.domainsPerProject) {
-              storage.internal.prepare("DELETE FROM clank_platform_domains WHERE id = ? AND project_id = ?")
-                .run(challenge.id, project.id);
-              throw new PlatformError(
-                409,
-                "DOMAIN_LIMIT_REACHED",
-                `This site has reached its ${limits.domainsPerProject}-domain limit.`,
-              );
-            }
-          });
           const report = await inspectDomainRouting(challenge.hostname, {
             ...(customDomainTarget ? { cname: customDomainTarget } : {}),
             addresses: customDomainAddresses,
@@ -2254,6 +2330,8 @@ function publicDomain(
 
 function publicLimits(limits: Required<PlatformLimits>, maxArtifactBytes?: number): Record<string, number> {
   return {
+    organizationsPerAccount: limits.organizationsPerAccount,
+    projectsPerAccount: limits.projectsPerAccount,
     projectsPerOrganization: limits.projectsPerOrganization,
     domainsPerProject: limits.domainsPerProject,
     metricRetentionDays: limits.metricRetentionDays,
@@ -2324,9 +2402,20 @@ function dashboardPayload(
     total.bandwidthBytes += metrics.bandwidthBytes ?? 0;
     return total;
   }, { requests: 0, errors: 0, bandwidthBytes: 0 });
+  const ownedUsage = internal.prepare(`SELECT
+      (SELECT count(*) FROM clank_platform_organizations WHERE created_by = ?) AS organizations,
+      (SELECT count(*) FROM clank_platform_projects WHERE owner_id = ?) AS projects`)
+    .get(principal.userId, principal.userId);
   return {
     ok: true,
-    account: { id: principal.userId, email: principal.email },
+    account: {
+      id: principal.userId,
+      email: principal.email,
+      usage: {
+        organizations: Number(ownedUsage?.organizations ?? 0),
+        projects: Number(ownedUsage?.projects ?? 0),
+      },
+    },
     limits: publicLimits(limits, maxArtifactBytes),
     organizations,
     projects,
@@ -2554,11 +2643,18 @@ async function spawnRelease(
       "-v", `${path.resolve(release.directory)}:/app:ro`,
       "-v", `${path.resolve(dataRoot)}:/data:rw`,
       "-w", "/app",
-      ...Object.entries(dockerEnvironment).flatMap(([name, value]) => ["-e", `${name}=${value}`]),
+      ...Object.keys(dockerEnvironment).flatMap((name) => ["-e", name]),
       runner.image ?? "node:22-bookworm-slim",
       "node", "--disable-warning=ExperimentalWarning", release.config.entry,
     ];
-    return spawn(runner.executable ?? "docker", args, { stdio: ["ignore", "pipe", "pipe"] });
+    return spawn(runner.executable ?? "docker", args, {
+      env: {
+        ...(globalThis as any).process.env,
+        ...dockerEnvironment,
+        PATH: (globalThis as any).process.env.PATH ?? "",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   }
   const launcher = await writeReleaseLauncher(release.directory, release.config.entry);
   return spawn(
@@ -2675,7 +2771,7 @@ function captureOutput(stream: ActiveProcess["child"]["stdout"], write: (line: s
 
 function redact(line: string, secrets: Record<string, string>): string {
   let output = line;
-  for (const value of Object.values(secrets).filter((entry) => entry.length >= 4)) {
+  for (const value of Object.values(secrets).filter(Boolean).sort((left, right) => right.length - left.length)) {
     output = output.split(value).join("[REDACTED]");
   }
   return output;
@@ -3005,11 +3101,22 @@ async function createOrganization(
   userId: string,
   name: string,
   slug: string,
+  organizationsPerAccount: number,
 ): Promise<Record<string, unknown>> {
   const id = await randomId(18);
   const now = Date.now();
   try {
     internal.transaction((changes) => {
+      const count = Number(internal.prepare(
+        "SELECT count(*) AS count FROM clank_platform_organizations WHERE created_by = ?",
+      ).get(userId)?.count ?? 0);
+      if (count >= organizationsPerAccount) {
+        throw new PlatformError(
+          409,
+          "ORGANIZATION_LIMIT_REACHED",
+          `This account has reached its ${organizationsPerAccount}-organization limit.`,
+        );
+      }
       internal.prepare(`INSERT INTO clank_platform_organizations
         (id, name, slug, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
         .run(id, name, slug, userId, now, now);
@@ -3030,6 +3137,7 @@ async function createOrganization(
 async function ensurePersonalOrganization(
   internal: SQLiteInternal,
   principal: TokenPrincipal,
+  organizationsPerAccount: number,
 ): Promise<string> {
   const existing = internal.prepare(`SELECT o.id
     FROM clank_platform_organizations o
@@ -3040,7 +3148,7 @@ async function ensurePersonalOrganization(
   const id = await randomId(18);
   const baseName = principal.email.split("@")[0]?.replace(/[^A-Za-z0-9 ]+/g, " ").trim() || "Personal";
   const slug = normalizeSlug(`personal-${id.slice(0, 10)}`);
-  await createOrganization(internal, principal.userId, `${baseName}'s workspace`, slug);
+  await createOrganization(internal, principal.userId, `${baseName}'s workspace`, slug, organizationsPerAccount);
   const created = internal.prepare("SELECT id FROM clank_platform_organizations WHERE slug = ?").get(slug);
   return String(created!.id);
 }
@@ -3109,9 +3217,7 @@ function enforceDeviceRateLimit(
   request: Request,
 ): void {
   const now = Date.now();
-  const key = request.headers.get("x-clank-client-ip")
-    ?? request.headers.get("x-proact-client-ip")
-    ?? "unknown";
+  const key = trustedClientAddress(request) ?? "unknown";
   const current = limiter.get(key);
   if (!current || current.resetAt <= now) {
     limiter.set(key, { count: 1, resetAt: now + 60_000 });

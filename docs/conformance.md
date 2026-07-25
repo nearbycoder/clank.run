@@ -19,4 +19,4 @@ The runner does not import framework source from the repository. It:
 
 The test uses loopback HTTP, temporary owner-only directories, isolated CLI credentials, a one-port application range, and no registry downloads beyond the local tarball.
 
-`npm run check` runs this suite after the build, zero-dependency check, and unit/integration tests. A release is not acceptable if conformance fails.
+`npm run check` runs this suite after the build, zero-dependency check, coverage-enforced unit/integration tests, and documentation/declaration audit, then finishes with the security audit. A release is not acceptable if any stage fails.

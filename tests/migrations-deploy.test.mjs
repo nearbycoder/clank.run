@@ -79,6 +79,10 @@ test("deployment bundles are deterministic, checksummed, bounded, and traversal-
       include: ["dist"],
       database: { path: "app.sqlite", migrations: "migrations" },
     }), /database\.migrations must be contained/);
+    assert.throws(() => parseDeploymentConfig({
+      ...config,
+      env: { PATH: "/untrusted/bin" },
+    }), /Environment name PATH is reserved/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

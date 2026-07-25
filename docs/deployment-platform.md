@@ -157,6 +157,8 @@ clank secrets delete API_KEY
 
 Secret names and timestamps are visible; values are never returned. Values use AES-256-GCM under the platform master key and are decrypted only for runtime injection.
 
+Docker launches use name-only environment arguments (`-e NAME`); values are inherited by the Docker client rather than placed in process arguments. Privileged host/container administrators can still inspect runtime environment state. Platform-controlled names such as `PATH`, `HOME`, `HOST`, `PORT`, `NODE_ENV`, and `TRUST_PROXY` are reserved.
+
 Secret changes take effect on the next release or supervised restart.
 
 The local default creates a `0600` master-key file. Production should provide `CLANK_PLATFORM_MASTER_KEY` through separate secret management and back it up independently.
@@ -173,7 +175,7 @@ CLANK_DOCKER_IMAGE=node:22-bookworm-slim \
 clank-platform
 ```
 
-Containers improve isolation but are not perfect hostile-code sandboxes. High-risk public multi-tenancy should use microVMs or dedicated nodes, strict egress policy, image digests, and external secret injection.
+Containers improve isolation but are not perfect hostile-code sandboxes. High-risk public multi-tenancy should use microVMs or dedicated nodes, strict egress policy, image digests, and secret mounts or an external secret broker.
 
 ## API outline
 
@@ -181,7 +183,8 @@ Device/public:
 
 - `POST /api/device/start`
 - `POST /api/device/token`
-- `GET /healthz`
+- `GET /livez` — process liveness
+- `GET /healthz` or `GET /readyz` — storage-backed control-plane readiness
 
 Browser session:
 

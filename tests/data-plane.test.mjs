@@ -128,6 +128,32 @@ test("managed ingress routes by verified host, strips hop headers, bounds bodies
   assert.equal(recovered.status, 200);
   assert.equal(await recovered.text(), "recovered");
   assert.equal(attempts, 2);
+
+  let upstreamSignal;
+  const disconnecting = createManagedIngress({
+    routes: () => [{
+      id: "route_disconnect",
+      projectId: "project_disconnect",
+      hosts: ["disconnect.example.com"],
+      upstream: "http://127.0.0.1:4503",
+      active: true,
+    }],
+    retries: 2,
+    fetch: async (_url, init) => {
+      upstreamSignal = init.signal;
+      return await new Promise((_, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      });
+    },
+  });
+  const client = new AbortController();
+  const disconnected = disconnecting.handle(new Request("https://disconnect.example.com/", {
+    signal: client.signal,
+  }));
+  while (!upstreamSignal) await new Promise((resolve) => setTimeout(resolve, 0));
+  client.abort(new Error("client disconnected"));
+  assert.equal((await disconnected).status, 502);
+  assert.equal(upstreamSignal.aborted, true);
 });
 
 test("custom-domain routing accepts the configured CNAME or edge addresses and reports mismatches", async () => {
@@ -223,6 +249,24 @@ test("HTTP Postgres driver applies immutable migrations in one remote transactio
     /immutable migration history/,
   );
   assert.equal(await driver.health(), true);
+});
+
+test("HTTP Postgres responses stop streaming at the configured byte limit", async () => {
+  let cancelled = false;
+  const driver = createHttpPostgresDriver({
+    url: "https://sql.example.test/query",
+    token: "database-access-token",
+    maxResponseBytes: 1_024,
+    fetch: async () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array(700)); },
+      cancel() { cancelled = true; },
+    }), { status: 200 }),
+  });
+  await assert.rejects(
+    driver.query({ text: "SELECT 1", parameters: [] }),
+    /Postgres response is too large/,
+  );
+  assert.equal(cancelled, true);
 });
 
 test("external database provisioner is idempotency-oriented and destruction is confirmed", async () => {

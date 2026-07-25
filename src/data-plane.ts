@@ -1,4 +1,5 @@
 import type { Migration, MigrationPlan, MigrationRecord } from "./migrations.ts";
+import { readResponseBytes, ResponseBodyLimitError } from "./security.ts";
 
 export interface IngressRoute {
   id: string;
@@ -141,7 +142,7 @@ export function createManagedIngress(options: {
             method: request.method,
             headers,
             body,
-            signal: controller.signal,
+            signal: AbortSignal.any([controller.signal, request.signal]),
             redirect: "manual",
           });
           if (response.status >= 500) {
@@ -164,6 +165,7 @@ export function createManagedIngress(options: {
           }));
         } catch (error) {
           lastError = error;
+          if (request.signal.aborted) break;
           const current = circuits.get(route.id) ?? { failures: 0, openedAt: 0 };
           current.failures++;
           if (current.failures >= circuitFailures) current.openedAt = Date.now();
@@ -447,10 +449,12 @@ export function createHttpPostgresDriver(options: {
         body: JSON.stringify({ dialect: "postgres", transaction, statements: normalized }),
       });
       if (!response.ok) throw new Error(`Postgres service returned ${response.status}.`);
-      const declared = Number(response.headers.get("content-length"));
-      if (Number.isFinite(declared) && declared > maxResponseBytes) throw new Error("Postgres response is too large.");
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength > maxResponseBytes) throw new Error("Postgres response is too large.");
+      let bytes: Uint8Array;
+      try { bytes = await readResponseBytes(response, maxResponseBytes); }
+      catch (error) {
+        if (error instanceof ResponseBodyLimitError) throw new Error("Postgres response is too large.");
+        throw error;
+      }
       let payload: unknown;
       try { payload = JSON.parse(new TextDecoder().decode(bytes)); }
       catch { throw new Error("Postgres service returned invalid JSON."); }

@@ -154,8 +154,7 @@ export function parseDeploymentConfig(value: unknown): DeploymentConfig {
     if (!SAFE_ENV_NAME.test(name)
       || name.startsWith("CLANK_")
       || name.startsWith("PROACT_")
-      || name === "PORT"
-      || name === "NODE_OPTIONS") {
+      || ["PORT", "NODE_OPTIONS", "PATH", "HOME", "HOST", "TRUST_PROXY", "NODE_ENV", "ALLOWED_HOSTS"].includes(name)) {
       throw new Error(`Environment name ${name} is reserved or invalid.`);
     }
     const value = string(raw, `env.${name}`);

@@ -55,6 +55,8 @@ export interface AuthRateLimitOptions {
     attempts?: number;
     windowMs?: number;
     store?: AuthRateLimitStore;
+    /** Trusted adapter-specific client identity. Never use an unverified caller header. */
+    clientKey?: (request: Request) => string;
 }
 export interface AuthRateLimitStore {
     consume(key: string, limit: number, windowMs: number): number | undefined | Promise<number | undefined>;
@@ -127,8 +129,9 @@ export interface AuthDefinition<Profile extends object = DefaultAuthProfile> {
     readonly password: Required<Omit<PasswordOptions, "pepper">> & {
         pepper?: string;
     };
-    readonly rateLimit: Required<Omit<AuthRateLimitOptions, "store">> & {
+    readonly rateLimit: Required<Omit<AuthRateLimitOptions, "store" | "clientKey">> & {
         store?: AuthRateLimitStore;
+        clientKey?: AuthRateLimitOptions["clientKey"];
     };
     readonly emailVerification: Required<Omit<AuthEmailVerificationOptions, "send">> & {
         send?: AuthEmailVerificationOptions["send"];
@@ -225,7 +228,7 @@ export interface AuthClient<Profile extends object = DefaultAuthProfile> {
     resetPassword(token: string, password: string): Promise<AuthUser<Profile> | null>;
     listPasskeys(): Promise<readonly AuthPasskeyRecord[]>;
     registerPasskey(name?: string): Promise<AuthPasskeyRecord>;
-    loginWithPasskey(email: string): Promise<AuthUser<Profile> | null>;
+    loginWithPasskey(email?: string): Promise<AuthUser<Profile> | null>;
     deletePasskey(id: string): Promise<void>;
     logout(): Promise<void>;
     logoutAll(): Promise<void>;

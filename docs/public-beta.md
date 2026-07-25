@@ -35,7 +35,7 @@ These are targets to validate in the chosen topology, not guarantees from the pa
 - recovery point objective: no more than the configured backup interval;
 - recovery time objective: demonstrated by a clean restore drill;
 - deploy rollback: prior healthy release restored automatically after candidate failure;
-- control-plane availability: measured at `/healthz`;
+- control-plane availability: measured at storage-backed `/healthz` or `/readyz`; use `/livez` only for process liveness;
 - app availability: measured through the public host and representative authenticated transaction;
 - security response: acknowledge complete private reports within three business days.
 

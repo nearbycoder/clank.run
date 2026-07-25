@@ -16,9 +16,15 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Email verification, password recovery, email-code MFA, WebAuthn passkeys, organizations, RBAC, invitations, and project-scoped CLI tokens.
 - Typed file, email, job, webhook, observability, encrypted backup, orchestration, ingress, custom-domain, external PostgreSQL, and database-provisioning drivers.
 - ASVS-oriented evidence, threat modeling, chaos tests, CodeQL, immutable GitHub Actions, package/credential auditing, and a public-beta gate.
+- Enforced line, branch, and function coverage floors plus a documentation audit that verifies local links, guide indexing, declaration synchronization, and package export targets.
+- Storage-backed `/healthz` and `/readyz` probes alongside the process-only `/livez` endpoint.
 
 ### Fixed
 
+- CLI profile and project-link state is now bounded, structurally validated, URL-canonicalized, privately and atomically replaced, and never reflected in parse errors.
+- CLI control-plane responses are streaming-bounded, decoded as strict UTF-8/JSON, and protected by finite request and deployment timeouts.
+- Platform signal handling now closes both the HTTP listener and control-plane state, reports shutdown failures, and enforces a 30-second termination deadline.
+- Project navigation now resets scroll position and closes the mobile drawer; the detail tab row stays within narrow viewports without a page-level horizontal scrollbar or clipped breadcrumb, and the console explicitly serves no favicon asset.
 - Managed ingress now fixes the upstream origin before applying a request path and streaming-bounds bodies without `Content-Length`, closing scheme-relative SSRF and unbounded-buffer paths.
 - Pending custom-domain assignments can no longer be moved between projects; platform-owned DNS namespaces are reserved.
 - Refreshed dashboard sessions now render one consistent authentication state and return to sign-in when a session expires.

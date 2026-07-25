@@ -60,7 +60,7 @@ export function passkeyRegistrationOptions(input: {
     timeout: input.timeoutMs ?? 5 * 60 * 1_000,
     attestation: "none",
     authenticatorSelection: {
-      residentKey: "preferred",
+      residentKey: "required",
       userVerification: input.requireUserVerification ? "required" : "preferred",
     },
     excludeCredentials: (input.excludeCredentialIds ?? []).map((id) => ({
@@ -230,7 +230,7 @@ export interface PublicKeyCredentialCreationOptionsJSON {
   timeout: number;
   attestation: "none";
   authenticatorSelection: {
-    residentKey: "preferred";
+    residentKey: "required";
     userVerification: "preferred" | "required";
   };
   excludeCredentials: readonly PublicKeyCredentialDescriptorJSON[];

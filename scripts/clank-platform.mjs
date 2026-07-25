@@ -56,6 +56,8 @@ const platform = await openPlatform({
   maxArtifactBytes: number(environment("CLANK_MAX_ARTIFACT_BYTES", "PROACT_MAX_ARTIFACT_BYTES"), 100 * 1024 * 1024),
   allowUnsafeMigrations: environment("CLANK_ALLOW_UNSAFE_MIGRATIONS", "PROACT_ALLOW_UNSAFE_MIGRATIONS") === "1",
   limits: {
+    organizationsPerAccount: number(process.env.CLANK_MAX_ORGANIZATIONS_PER_ACCOUNT, 5),
+    projectsPerAccount: number(process.env.CLANK_MAX_PROJECTS_PER_ACCOUNT, 10),
     projectsPerOrganization: number(process.env.CLANK_MAX_PROJECTS_PER_ORGANIZATION, 10),
     domainsPerProject: number(process.env.CLANK_MAX_DOMAINS_PER_PROJECT, 5),
     metricRetentionDays: number(process.env.CLANK_METRICS_RETENTION_DAYS, 30),
@@ -82,15 +84,43 @@ console.log(`Platform data: ${platform.dataDirectory}`);
 console.log(`Runner: ${runner.kind}`);
 console.log(`Managed ingress: ${ingressEnabled ? "enabled" : "disabled"}`);
 
-let closing = false;
+let closing;
 const close = async () => {
-  if (closing) return;
-  closing = true;
-  await server.close();
-  await platform.close();
+  if (closing) return closing;
+  closing = (async () => {
+    let serverError;
+    try {
+      await server.close();
+    } catch (error) {
+      serverError = error;
+    }
+    try {
+      await platform.close();
+    } catch (error) {
+      if (serverError) throw new AggregateError([serverError, error], "HTTP and platform shutdown both failed.");
+      throw error;
+    }
+    if (serverError) throw serverError;
+  })();
+  return closing;
 };
-process.once("SIGINT", () => void close().then(() => process.exit(0)));
-process.once("SIGTERM", () => void close().then(() => process.exit(0)));
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+
+function shutdown(signal) {
+  console.log(`Received ${signal}; shutting down.`);
+  const deadline = setTimeout(() => {
+    console.error("Platform shutdown exceeded 30 seconds.");
+    process.exit(1);
+  }, 30_000);
+  void close().then(
+    () => process.exit(0),
+    (error) => {
+      console.error("[shutdown]", error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  ).finally(() => clearTimeout(deadline));
+}
 
 function environment(primary, legacy) {
   return process.env[primary] ?? process.env[legacy];

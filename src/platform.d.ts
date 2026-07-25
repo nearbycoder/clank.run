@@ -11,6 +11,10 @@ export interface DockerRunnerOptions {
 }
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
 export interface PlatformLimits {
+    /** Maximum organizations created by one account. Defaults to 5. */
+    organizationsPerAccount?: number;
+    /** Maximum sites created by one account across all organizations. Defaults to 10. */
+    projectsPerAccount?: number;
     /** Maximum sites in one organization. Defaults to 10. */
     projectsPerOrganization?: number;
     /** Maximum custom domains attached to one site. Defaults to 5. */
