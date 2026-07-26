@@ -1317,6 +1317,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           },
         });
       }
+      if (request.method === "GET" && !consolePath && isPlatformConsoleNamespacePath(url.pathname)) {
+        return problem(404, "NOT_FOUND", "Control-plane page not found.");
+      }
       const authPrefix = url.pathname === "/__proact/auth" || url.pathname.startsWith("/__proact/auth/")
         ? "/__proact/auth"
         : "/__clank/auth";
@@ -4397,6 +4400,17 @@ function canonicalPlatformConsolePath(pathname: string): string | null {
   }
   if (segments.length === 2) return canonical;
   return PLATFORM_PROJECT_SECTIONS.has(segments[2]!) ? canonical : null;
+}
+
+function isPlatformConsoleNamespacePath(pathname: string): boolean {
+  const firstSegment = pathname.split("/", 3)[1] ?? "";
+  return firstSegment === "login"
+    || firstSegment === "signup"
+    || firstSegment === "invite"
+    || firstSegment === "overview"
+    || firstSegment === "projects"
+    || firstSegment === "workspaces"
+    || firstSegment === "activity";
 }
 
 function domainResolver(options: ClankPlatformOptions["ingress"]): DomainDnsResolver | undefined {
