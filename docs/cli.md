@@ -35,9 +35,14 @@ clank project create my-app
 clank project create "Customer workspace" --slug=customer-workspace
 clank project list
 clank project link <project-id>
+clank project delete [project-id] \
+  --confirm="delete-site <project-slug>" \
+  --acknowledge-data-loss
 ```
 
 Links are written to `.clank/project.json` and should normally remain uncommitted.
+
+Deletion is permanent and requires an account-wide token plus an owner/admin organization role. Project-scoped tokens are rejected even if they have `tokens` permission. A successful deletion removes the matching local project link, but leaves other directories and off-platform copies untouched. See [Site deletion](deployment-platform.md#site-deletion).
 
 ## Deploy and inspect
 

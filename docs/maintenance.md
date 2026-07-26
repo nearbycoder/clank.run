@@ -48,3 +48,8 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Re-certified all 136 tests, coverage floors, 45-file documentation/declaration audit, packed conformance, and repository/history security scan.
 - [x] Browser-verified cleanup, persistent authenticated refresh, console health, accessibility semantics, and desktop/mobile layout.
 - [x] Recorded the final full-suite, security, conformance, and browser evidence in [PR #9](https://github.com/nearbycoder/clank.run/pull/9); Node 22.16, Node 24, packaged conformance, JavaScript/TypeScript analysis, and CodeQL passed.
+- [x] Added owner/admin-only permanent site deletion across the API, deployment console, and CLI.
+- [x] Made site deletion reclaim quota, slug, port, and domain assignments while revoking scoped tokens and preserving its audit event.
+- [x] Added exact confirmation, explicit data-loss acknowledgement, CSRF/scope/RBAC checks, durable locking, and symlink-safe project-root removal.
+- [x] Re-certified all 138 tests at 82.22% line, 69.13% branch, and 82.21% function coverage, plus packed conformance and repository/history security scans.
+- [x] Browser-verified exact-confirmation deletion, quota refresh, persistent authentication, console health, and desktop/mobile layout without overflow.

@@ -111,12 +111,14 @@ Use a local filesystem with correct SQLite locking/rename semantics. The platfor
 
 Clank automatically creates authenticated, AES-256-GCM encrypted recovery points under `recovery/`. Durable control-database claims prevent duplicate scheduled work when multiple control-plane processes share the store. Release count and byte ceilings separately bound retained extracted runtime files and pre-deploy rollback snapshots. Back up the control database, completed recovery directories, recoverable artifacts/source, and master key through separate paths. Pre-release snapshots remain rollback material, not part of the recovery retention policy. See [Backup and disaster recovery](recovery.md).
 
+Permanent site deletion removes the complete matching `projects/<id>/` tree after symlink-safe validation, then removes its control rows and revokes project tokens. It does not reach copied/off-host backups, external databases, artifact mirrors, or Caddy certificate storage. Include those systems in tenant-retention and erasure runbooks, and preserve the control database if deletion audit history must remain available.
+
 ## Upgrades
 
 1. Back up data and key.
 2. Stop new deploys and the platform.
 3. Install and verify the new Clank build.
 4. Start the selected active supervisor/worker topology.
-5. Verify browser login, CLI login, organization and scoped-token access, project status, ingress/domain state, app health, test deploy, backup verification, and rollback.
+5. Verify browser login, CLI login, organization and scoped-token access, project status, ingress/domain state, app health, test deploy, backup verification, rollback, and a disposable-site deletion.
 
 Durable distributed locks, authenticated nodes, desired generations, operations/fencing, wildcard base-domain routing, ownership and routing verification, Caddy certificate eligibility, ingress metrics, enforced account/organization/site/domain limits, organization RBAC, scheduled encrypted backups, and external database drivers are implemented. The included child-process supervisor remains single-leader and artifacts/backups are local by default; a hosted multi-region service still needs leader/remote-runner integration, external object storage, globally transactional control storage, shared metric storage, and a multi-region edge service.

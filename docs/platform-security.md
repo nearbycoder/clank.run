@@ -54,10 +54,12 @@ The generated local key is onboarding convenience, not protection from a comprom
 - Scheduled backup work uses expiring durable claims across control planes, and public metadata omits the host database path.
 - Per-project release count and byte quotas include extracted runtime files and pre-deploy snapshots; cleanup is contained to derived project/release paths.
 - Active artifacts cannot be removed; cleanup requires rollback scope, and deleting the immediate rollback target requires a separate rollback-loss decision that also prunes its now-unusable matching data snapshot.
+- Permanent site deletion requires an owner/admin account principal, exact slug-bound confirmation, a separate data-loss acknowledgement, and the durable project lock. Project-scoped tokens cannot invoke it.
+- Site storage removal derives the directory from the validated project ID, rejects symbolic-link parents/roots, and occurs before metadata removal. Active project tokens and distributed orchestration rows are cleared, while the deletion audit event survives the project cascade.
 - Failure restores prior data/code.
 - Data rollback is narrow and explicitly confirmed.
 
-Export completed encrypted backup directories off-host and keep the master key in a separate failure domain.
+Export completed encrypted backup directories off-host and keep the master key in a separate failure domain. Site deletion removes the platform-managed local recovery directory but cannot erase already replicated backups, external databases, copied artifacts, or edge certificate storage; operators must apply the same retention/deletion request to those systems.
 
 ## Runner hardening
 
@@ -91,6 +93,7 @@ The Caddy TLS permission route uses a high-entropy shared token and an indexed l
 - Explicit TLS, hosts, proxy trust, resource quotas, and image digests.
 - Private token-protected TLS permission route, persistent certificate storage, and strict SNI/Host matching.
 - Scheduled token/audit review.
+- Destructive site-deletion drill, including off-host retention cleanup and audit review.
 - Failed deploy leaves prior app healthy.
 - Migration and data rollback rehearsed.
 - Full browser-login, CLI-login, deploy, app, and rollback smoke test after upgrades.

@@ -235,6 +235,93 @@ test("release cleanup CLI sends explicit confirmation and rollback-loss intent",
   }
 });
 
+test("project deletion CLI requires explicit data-loss intent and removes a matching local link", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-project-delete-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  let observed;
+  const server = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    observed = {
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+      body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+    };
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      ok: true,
+      project: { id: "project_delete_test", slug: "tasks" },
+    }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}/`;
+  try {
+    await mkdir(join(project, ".clank"), { recursive: true });
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_project_delete_test_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    const linkPath = join(project, ".clank", "project.json");
+    await writeFile(linkPath, JSON.stringify({
+      version: 1,
+      server: platform,
+      projectId: "project_delete_test",
+    }));
+    const missingAcknowledgement = await runCliResult([
+      "project",
+      "delete",
+      "--confirm=delete-site tasks",
+    ], project, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(missingAcknowledgement.code, 1);
+    assert.match(missingAcknowledgement.stderr, /acknowledge-data-loss/);
+    assert.equal(observed, undefined);
+    assert.equal(JSON.parse(await readFile(linkPath, "utf8")).projectId, "project_delete_test");
+
+    const result = await runCliResult([
+      "project",
+      "delete",
+      "--confirm=delete-site tasks",
+      "--acknowledge-data-loss",
+    ], project, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Deleted tasks .* application data/);
+    assert.deepEqual(observed, {
+      method: "DELETE",
+      url: "/api/projects/project_delete_test",
+      authorization: "Bearer clnk_project_delete_test_token",
+      body: {
+        confirmation: "delete-site tasks",
+        acknowledgeDataLoss: true,
+      },
+    });
+    await assert.rejects(access(linkPath), (error) => error.code === "ENOENT");
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("create scaffolds a named, buildable authenticated application", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-create-"));
   const target = join(root, "team-tasks");

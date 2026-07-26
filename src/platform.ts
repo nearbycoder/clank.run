@@ -1108,6 +1108,99 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     };
   });
 
+  const deleteProject = async (
+    principal: TokenPrincipal,
+    projectId: string,
+    confirmation: string,
+    acknowledgeDataLoss: boolean,
+  ): Promise<Record<string, unknown>> => withProjectLock(projectId, async () => {
+    const access = accessibleProject(storage.internal, projectId, principal, "tokens");
+    if (principal.projectId) {
+      throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project-scoped tokens cannot delete a site.");
+    }
+    requireOrganizationAdministration(access.role);
+    const project = access.project;
+    const expected = `delete-site ${project.slug}`;
+    if (confirmation !== expected) {
+      throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
+    }
+    if (!acknowledgeDataLoss) {
+      throw new PlatformError(
+        400,
+        "DATA_LOSS_ACKNOWLEDGEMENT_REQUIRED",
+        "Explicitly acknowledge permanent application data loss.",
+      );
+    }
+    const activeRelease = project.activeReleaseId
+      ? releaseById(storage.internal, project.activeReleaseId)
+      : null;
+    const summary = projectDeletionSummary(storage.internal, project.id);
+    cancelRestart(project.id);
+    await stopProject(project.id);
+    try {
+      await deleteProjectStorage(paths.projects, project.id);
+    } catch (error) {
+      try { options.onError?.(error); } catch { /* Operator reporting must not alter recovery. */ }
+      if (activeRelease) {
+        try {
+          await startRelease(project, activeRelease, decryptProjectSecrets(storage.internal, project.id, masterKey));
+        } catch (restartError) {
+          try { options.onError?.(restartError); } catch { /* Operator reporting must not alter recovery. */ }
+          throw new PlatformError(
+            500,
+            "PROJECT_DELETE_RECOVERY_FAILED",
+            "Site storage could not be safely removed and the prior runtime could not be restarted.",
+          );
+        }
+      }
+      throw new PlatformError(
+        409,
+        "PROJECT_STORAGE_UNSAFE",
+        "Site storage could not be safely removed. Site metadata was preserved.",
+      );
+    }
+    const deletedAt = Date.now();
+    let revokedTokens = 0;
+    try {
+      storage.internal.transaction((changes) => {
+        revokedTokens = Number(storage.internal.prepare(`UPDATE clank_platform_tokens
+          SET revoked_at = ?
+          WHERE project_id = ? AND revoked_at IS NULL`).run(deletedAt, project.id).changes);
+        storage.internal.prepare("DELETE FROM clank_deployment_operations WHERE project_id = ?").run(project.id);
+        storage.internal.prepare("DELETE FROM clank_deployment_placements WHERE project_id = ?").run(project.id);
+        const result = storage.internal.prepare("DELETE FROM clank_platform_projects WHERE id = ?").run(project.id);
+        if (Number(result.changes) !== 1) {
+          throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
+        }
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "project.delete", {
+          projectId: project.id,
+          organizationId: project.organizationId,
+          name: project.name,
+          slug: project.slug,
+          revokedTokens,
+          ...summary,
+        });
+        changes.record("__platform", project.organizationId ?? project.id);
+      });
+    } catch (error) {
+      try { options.onError?.(error); } catch { /* Operator reporting must not alter the API result. */ }
+      throw new PlatformError(
+        500,
+        "PROJECT_DELETE_FINALIZATION_FAILED",
+        "Site files were removed, but control metadata cleanup failed. Retry the deletion.",
+      );
+    }
+    return {
+      id: project.id,
+      organizationId: project.organizationId,
+      name: project.name,
+      slug: project.slug,
+      deletedAt,
+      revokedTokens,
+      ...summary,
+    };
+  });
+
   const handle = async (request: Request): Promise<Response> => {
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
@@ -1626,7 +1719,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const matched = /^\/api\/projects\/([A-Za-z0-9_-]{8,128})(?:\/(.*))?$/.exec(url.pathname);
       if (!matched) throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
       const operation = matched[2] ?? "";
-      const requiredPermission: ProjectPermission = operation.startsWith("releases/")
+      const requiredPermission: ProjectPermission = !operation && request.method === "DELETE"
+        ? "tokens"
+        : operation.startsWith("releases/")
         && request.method === "DELETE"
         ? "rollback"
         : operation === "releases" && request.method === "POST"
@@ -1646,6 +1741,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 : "read";
       const access = accessibleProject(storage.internal, matched[1]!, principal, requiredPermission);
       const project = access.project;
+      if (!operation && request.method === "DELETE") {
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["confirmation", "acknowledgeDataLoss"]);
+        const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
+        return api({
+          ok: true,
+          project: await deleteProject(
+            principal,
+            project.id,
+            confirmation,
+            input.acknowledgeDataLoss === true,
+          ),
+        });
+      }
       if (!operation && request.method === "GET") {
         const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
         const domainCount = Number(storage.internal.prepare(
@@ -1661,6 +1770,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             runtimeStatus: active.has(project.id) ? "online" : release ? "degraded" : "not_deployed",
           },
           activeRelease: release ? publicRelease(release) : null,
+          access: {
+            role: access.role,
+            canDelete: principal.projectId === null && (access.role === "owner" || access.role === "admin"),
+          },
           limits: publicLimits(limits, options.maxArtifactBytes),
           usage: { domains: domainCount, ...releaseUsage },
         });
@@ -3441,6 +3554,35 @@ function releaseStorageUsage(
   };
 }
 
+function projectDeletionSummary(
+  internal: SQLiteInternal,
+  projectId: string,
+): {
+  domains: number;
+  releases: number;
+  secrets: number;
+  logs: number;
+  metrics: number;
+  backupSchedules: number;
+} {
+  const row = internal.prepare(`SELECT
+      (SELECT count(*) FROM clank_platform_domains WHERE project_id = ?) AS domains,
+      (SELECT count(*) FROM clank_platform_releases WHERE project_id = ?) AS releases,
+      (SELECT count(*) FROM clank_platform_secrets WHERE project_id = ?) AS secrets,
+      (SELECT count(*) FROM clank_platform_logs WHERE project_id = ?) AS logs,
+      (SELECT count(*) FROM clank_platform_metrics WHERE project_id = ?) AS metrics,
+      (SELECT count(*) FROM clank_platform_backup_schedules WHERE project_id = ?) AS backup_schedules`)
+    .get(projectId, projectId, projectId, projectId, projectId, projectId);
+  return {
+    domains: Number(row?.domains ?? 0),
+    releases: Number(row?.releases ?? 0),
+    secrets: Number(row?.secrets ?? 0),
+    logs: Number(row?.logs ?? 0),
+    metrics: Number(row?.metrics ?? 0),
+    backupSchedules: Number(row?.backup_schedules ?? 0),
+  };
+}
+
 function assertReleaseCapacity(
   internal: SQLiteInternal,
   projectId: string,
@@ -3564,6 +3706,23 @@ async function deleteReleaseStorage(
     await fs.rm(releaseDirectory, { recursive: true, force: true });
   }
   if (parents.backups) await deleteReleaseSnapshotFiles(projectsRoot, projectId, releaseId);
+}
+
+async function deleteProjectStorage(
+  projectsRoot: string,
+  projectId: string,
+): Promise<void> {
+  if (!/^[A-Za-z0-9_-]{8,128}$/u.test(projectId)) {
+    throw new Error("Project storage identifier is invalid.");
+  }
+  const fsName = "node:fs/promises";
+  const fs = await import(fsName) as unknown as {
+    rm(path: string, options: { recursive: true; force: true }): Promise<void>;
+  };
+  await requireRealDirectory(projectsRoot);
+  const projectRoot = await safeChildPath(projectsRoot, projectId);
+  if (!await requireRealDirectory(projectRoot, true)) return;
+  await fs.rm(projectRoot, { recursive: true, force: true });
 }
 
 async function deleteReleaseSnapshot(

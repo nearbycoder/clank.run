@@ -6,8 +6,8 @@ Roles are intentionally small:
 
 | Role | Access |
 | --- | --- |
-| `owner` | Full organization and project administration |
-| `admin` | Project administration and membership administration, except changing owners |
+| `owner` | Full organization and project administration, including permanent site deletion |
+| `admin` | Project administration, permanent site deletion, and membership administration, except changing owners |
 | `developer` | Read, deploy, rollback, and audit access |
 | `viewer` | Read-only project metadata, releases, and logs |
 
@@ -24,6 +24,7 @@ clank org members <org-id>
 clank org remove <org-id> <user-id>
 
 clank project create "Todo" --org <org-id>
+clank project delete <project-id> --confirm="delete-site todo" --acknowledge-data-loss
 clank token create --name github-actions --permissions read,deploy
 clank token list
 clank token revoke <token-id>
@@ -43,5 +44,4 @@ Project tokens contain an organization ID, project ID, explicit permission set, 
 
 Available permissions are `read`, `deploy`, `rollback`, `secrets`, `tokens`, and `audit`. The default CI scope is `read,deploy`.
 
-A stolen project token cannot list organizations, create projects, administer membership, read another project, or expand its own scope. Account-wide device tokens remain appropriate for the interactive CLI, but should not be copied into CI.
-
+A stolen project token cannot list organizations, create or permanently delete projects, administer membership, read another project, or expand its own scope. Permanent deletion requires an account-wide token and a current owner/admin role even when a project token contains `tokens`. Account-wide device tokens remain appropriate for the interactive CLI, but should not be copied into CI.
