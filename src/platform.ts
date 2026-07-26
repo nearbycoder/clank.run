@@ -250,6 +250,17 @@ const SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const PROJECT_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
 const METRIC_BUCKET_MS = 60_000;
 const LATENCY_BOUNDS_MS = [50, 100, 250, 500, 1_000, 2_500, 5_000] as const;
+const METRIC_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"] as const;
+const METRIC_METHOD_COLUMNS = [
+  "method_get",
+  "method_head",
+  "method_post",
+  "method_put",
+  "method_patch",
+  "method_delete",
+  "method_options",
+  "method_other",
+] as const;
 const DEFAULT_DOMAIN_RECHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_DOMAIN_RECHECK_BATCH_SIZE = 25;
 const DEFAULT_DOMAIN_RECHECK_TIMEOUT_MS = 10_000;
@@ -2855,8 +2866,22 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     latency_inf INTEGER NOT NULL DEFAULT 0,
     request_bytes INTEGER NOT NULL DEFAULT 0,
     response_bytes INTEGER NOT NULL DEFAULT 0,
+    method_get INTEGER NOT NULL DEFAULT 0,
+    method_head INTEGER NOT NULL DEFAULT 0,
+    method_post INTEGER NOT NULL DEFAULT 0,
+    method_put INTEGER NOT NULL DEFAULT 0,
+    method_patch INTEGER NOT NULL DEFAULT 0,
+    method_delete INTEGER NOT NULL DEFAULT 0,
+    method_options INTEGER NOT NULL DEFAULT 0,
+    method_other INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (project_id, bucket_started_at)
   )`);
+  const metricColumns = internal.prepare("PRAGMA table_info(clank_platform_metrics)").all();
+  for (const column of METRIC_METHOD_COLUMNS) {
+    if (!metricColumns.some((existing) => existing.name === column)) {
+      internal.exec(`ALTER TABLE clank_platform_metrics ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+    }
+  }
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_metrics_time ON clank_platform_metrics (bucket_started_at)");
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_releases (
     id TEXT PRIMARY KEY,
@@ -3341,14 +3366,19 @@ function recordMetric(internal: SQLiteInternal, metric: IngressRequestMetric): v
   const responseBytes = boundedMetricBytes(metric.responseBytes);
   const status = Number.isSafeInteger(metric.statusCode) ? metric.statusCode : 500;
   const latency = LATENCY_BOUNDS_MS.map((bound) => duration <= bound ? 1 : 0);
+  const methodIndex = METRIC_METHODS.indexOf(metric.method as typeof METRIC_METHODS[number]);
+  const methodValues = METRIC_METHOD_COLUMNS.map((_, index) =>
+    index === (methodIndex === -1 ? METRIC_METHOD_COLUMNS.length - 1 : methodIndex) ? 1 : 0);
   internal.prepare(`INSERT INTO clank_platform_metrics (
       project_id, bucket_started_at, request_count, error_count,
       status_2xx, status_3xx, status_4xx, status_5xx,
       duration_sum_ms, duration_max_ms,
       latency_le_50, latency_le_100, latency_le_250, latency_le_500,
       latency_le_1000, latency_le_2500, latency_le_5000, latency_inf,
-      request_bytes, response_bytes
-    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      request_bytes, response_bytes,
+      method_get, method_head, method_post, method_put,
+      method_patch, method_delete, method_options, method_other
+    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(project_id, bucket_started_at) DO UPDATE SET
       request_count = request_count + 1,
       error_count = error_count + excluded.error_count,
@@ -3367,7 +3397,15 @@ function recordMetric(internal: SQLiteInternal, metric: IngressRequestMetric): v
       latency_le_5000 = latency_le_5000 + excluded.latency_le_5000,
       latency_inf = latency_inf + 1,
       request_bytes = request_bytes + excluded.request_bytes,
-      response_bytes = response_bytes + excluded.response_bytes`)
+      response_bytes = response_bytes + excluded.response_bytes,
+      method_get = method_get + excluded.method_get,
+      method_head = method_head + excluded.method_head,
+      method_post = method_post + excluded.method_post,
+      method_put = method_put + excluded.method_put,
+      method_patch = method_patch + excluded.method_patch,
+      method_delete = method_delete + excluded.method_delete,
+      method_options = method_options + excluded.method_options,
+      method_other = method_other + excluded.method_other`)
     .run(
       metric.projectId,
       bucket,
@@ -3381,6 +3419,7 @@ function recordMetric(internal: SQLiteInternal, metric: IngressRequestMetric): v
       ...latency,
       requestBytes,
       responseBytes,
+      ...methodValues,
     );
 }
 
@@ -3390,12 +3429,13 @@ function boundedMetricBytes(value: number): number {
 }
 
 interface MetricRange {
-  name: "1h" | "24h" | "7d" | "30d";
+  name: "15m" | "1h" | "24h" | "7d" | "30d";
   durationMs: number;
   intervalMs: number;
 }
 
 function metricRange(input: string): MetricRange {
+  if (input === "15m") return { name: "15m", durationMs: 15 * 60_000, intervalMs: 60_000 };
   if (input === "1h") return { name: "1h", durationMs: 60 * 60_000, intervalMs: 60_000 };
   if (input === "7d") return { name: "7d", durationMs: 7 * 24 * 60 * 60_000, intervalMs: 60 * 60_000 };
   if (input === "30d") return { name: "30d", durationMs: 30 * 24 * 60 * 60_000, intervalMs: 6 * 60 * 60_000 };
@@ -3406,7 +3446,42 @@ function metricSeries(internal: SQLiteInternal, projectId: string, requestedRang
   const range = metricRange(requestedRange);
   const now = Date.now();
   const start = now - range.durationMs;
-  const rows = internal.prepare(`SELECT
+  const previousStart = start - range.durationMs;
+  const rows = projectMetricRows(internal, projectId, range.intervalMs, start, now + 1);
+  const previousRows = projectMetricRows(internal, projectId, range.intervalMs, previousStart, start);
+  const points = fillMetricPoints(rows, start, now, range.intervalMs);
+  const summary = {
+    ...summarizeMetricRows(rows, range.durationMs),
+    ...projectMetricExtremes(internal, projectId, start, now + 1),
+  };
+  const previous = {
+    ...summarizeMetricRows(previousRows, range.durationMs),
+    ...projectMetricExtremes(internal, projectId, previousStart, start),
+  };
+  return {
+    range: range.name,
+    start,
+    end: now,
+    intervalMs: range.intervalMs,
+    summary,
+    comparison: {
+      start: previousStart,
+      end: start,
+      previous,
+      change: metricSummaryChange(summary, previous),
+    },
+    points,
+  };
+}
+
+function projectMetricRows(
+  internal: SQLiteInternal,
+  projectId: string,
+  intervalMs: number,
+  start: number,
+  end: number,
+): Record<string, unknown>[] {
+  return internal.prepare(`SELECT
       bucket_started_at - (bucket_started_at % ?) AS point_at,
       sum(request_count) AS request_count,
       sum(error_count) AS error_count,
@@ -3425,19 +3500,70 @@ function metricSeries(internal: SQLiteInternal, projectId: string, requestedRang
       sum(latency_le_5000) AS latency_le_5000,
       sum(latency_inf) AS latency_inf,
       sum(request_bytes) AS request_bytes,
-      sum(response_bytes) AS response_bytes
+      sum(response_bytes) AS response_bytes,
+      sum(method_get) AS method_get,
+      sum(method_head) AS method_head,
+      sum(method_post) AS method_post,
+      sum(method_put) AS method_put,
+      sum(method_patch) AS method_patch,
+      sum(method_delete) AS method_delete,
+      sum(method_options) AS method_options,
+      sum(method_other) AS method_other
     FROM clank_platform_metrics
-    WHERE project_id = ? AND bucket_started_at >= ?
-    GROUP BY point_at ORDER BY point_at`).all(range.intervalMs, projectId, start);
-  const points = rows.map(publicMetricPoint);
+    WHERE project_id = ? AND bucket_started_at >= ? AND bucket_started_at < ?
+    GROUP BY point_at ORDER BY point_at`).all(intervalMs, projectId, start, end);
+}
+
+function fillMetricPoints(
+  rows: Record<string, unknown>[],
+  start: number,
+  end: number,
+  intervalMs: number,
+): Record<string, unknown>[] {
+  const byTime = new Map(rows.map((row) => [Number(row.point_at), row]));
+  const points: Record<string, unknown>[] = [];
+  const first = Math.ceil(start / intervalMs) * intervalMs;
+  for (let at = first; at <= end; at += intervalMs) {
+    points.push(publicMetricPoint(byTime.get(at) ?? { point_at: at }));
+  }
+  return points;
+}
+
+function projectMetricExtremes(
+  internal: SQLiteInternal,
+  projectId: string,
+  start: number,
+  end: number,
+): { peakRequestsPerMinute: number; lastRequestAt: number | null } {
+  const row = internal.prepare(`SELECT
+      coalesce(max(request_count), 0) AS peak,
+      max(bucket_started_at) AS last_request_at
+    FROM clank_platform_metrics
+    WHERE project_id = ? AND bucket_started_at >= ? AND bucket_started_at < ?`)
+    .get(projectId, start, end);
   return {
-    range: range.name,
-    start,
-    end: now,
-    intervalMs: range.intervalMs,
-    summary: summarizeMetricRows(rows, range.durationMs),
-    points,
+    peakRequestsPerMinute: Number(row?.peak ?? 0),
+    lastRequestAt: row?.last_request_at === null || row?.last_request_at === undefined
+      ? null
+      : Number(row.last_request_at),
   };
+}
+
+function metricSummaryChange(
+  current: Record<string, unknown>,
+  previous: Record<string, unknown>,
+): Record<string, number | null> {
+  return {
+    requestsPercent: percentChange(Number(current.requests), Number(previous.requests)),
+    errorRatePoints: Number(current.errorRate) - Number(previous.errorRate),
+    p95LatencyPercent: percentChange(Number(current.p95LatencyMs), Number(previous.p95LatencyMs)),
+    bandwidthPercent: percentChange(Number(current.bandwidthBytes), Number(previous.bandwidthBytes)),
+  };
+}
+
+function percentChange(current: number, previous: number): number | null {
+  if (previous === 0) return current === 0 ? 0 : null;
+  return (current - previous) / previous;
 }
 
 function platformAdminUsers(
@@ -3539,7 +3665,15 @@ function platformAdminAnalytics(
       sum(latency_le_5000) AS latency_le_5000,
       sum(latency_inf) AS latency_inf,
       sum(request_bytes) AS request_bytes,
-      sum(response_bytes) AS response_bytes
+      sum(response_bytes) AS response_bytes,
+      sum(method_get) AS method_get,
+      sum(method_head) AS method_head,
+      sum(method_post) AS method_post,
+      sum(method_put) AS method_put,
+      sum(method_patch) AS method_patch,
+      sum(method_delete) AS method_delete,
+      sum(method_options) AS method_options,
+      sum(method_other) AS method_other
     FROM clank_platform_metrics
     WHERE bucket_started_at >= ?
     GROUP BY point_at ORDER BY point_at`).all(range.intervalMs, start);
@@ -3582,7 +3716,15 @@ function platformAdminAnalytics(
       sum(m.latency_le_5000) AS latency_le_5000,
       sum(m.latency_inf) AS latency_inf,
       sum(m.request_bytes) AS request_bytes,
-      sum(m.response_bytes) AS response_bytes
+      sum(m.response_bytes) AS response_bytes,
+      sum(m.method_get) AS method_get,
+      sum(m.method_head) AS method_head,
+      sum(m.method_post) AS method_post,
+      sum(m.method_put) AS method_put,
+      sum(m.method_patch) AS method_patch,
+      sum(m.method_delete) AS method_delete,
+      sum(m.method_options) AS method_options,
+      sum(m.method_other) AS method_other
     FROM clank_platform_metrics m
     JOIN clank_platform_projects p ON p.id = m.project_id
     LEFT JOIN clank_platform_organizations o ON o.id = p.organization_id
@@ -3678,6 +3820,7 @@ function platformAdminAnalytics(
 function publicMetricPoint(row: Record<string, unknown>): Record<string, unknown> {
   const requests = Number(row.request_count ?? 0);
   const durationSum = Number(row.duration_sum_ms ?? 0);
+  const methods = metricMethodBreakdown(row, requests);
   return {
     at: Number(row.point_at),
     requests,
@@ -3693,10 +3836,11 @@ function publicMetricPoint(row: Record<string, unknown>): Record<string, unknown
       clientError: Number(row.status_4xx ?? 0),
       serverError: Number(row.status_5xx ?? 0),
     },
+    methods,
   };
 }
 
-function summarizeMetricRows(rows: Record<string, unknown>[], durationMs: number): Record<string, number> {
+function summarizeMetricRows(rows: Record<string, unknown>[], durationMs: number): Record<string, unknown> {
   const aggregate: Record<string, number> = {
     request_count: 0,
     error_count: 0,
@@ -3716,26 +3860,111 @@ function summarizeMetricRows(rows: Record<string, unknown>[], durationMs: number
     latency_le_2500: 0,
     latency_le_5000: 0,
     latency_inf: 0,
+    method_get: 0,
+    method_head: 0,
+    method_post: 0,
+    method_put: 0,
+    method_patch: 0,
+    method_delete: 0,
+    method_options: 0,
+    method_other: 0,
   };
+  let activeIntervals = 0;
+  let lastRequestAt = 0;
   for (const row of rows) {
+    if (Number(row.request_count ?? 0) > 0) {
+      activeIntervals++;
+      lastRequestAt = Math.max(lastRequestAt, Number(row.point_at ?? 0));
+    }
     for (const key of Object.keys(aggregate)) {
       if (key === "duration_max_ms") aggregate[key] = Math.max(aggregate[key]!, Number(row[key] ?? 0));
       else aggregate[key] = aggregate[key]! + Number(row[key] ?? 0);
     }
   }
   const requests = aggregate.request_count!;
+  const status = {
+    success: aggregate.status_2xx!,
+    redirect: aggregate.status_3xx!,
+    clientError: aggregate.status_4xx!,
+    serverError: aggregate.status_5xx!,
+  };
   return {
     requests,
     errors: aggregate.error_count!,
     errorRate: requests ? aggregate.error_count! / requests : 0,
+    successRate: requests ? status.success / requests : 0,
+    clientErrorRate: requests ? status.clientError / requests : 0,
     requestsPerMinute: requests / Math.max(1, durationMs / 60_000),
     averageLatencyMs: requests ? aggregate.duration_sum_ms! / requests : 0,
+    p50LatencyMs: histogramPercentile(aggregate, requests, 0.5),
+    p90LatencyMs: histogramPercentile(aggregate, requests, 0.9),
     p95LatencyMs: histogramPercentile(aggregate, requests, 0.95),
+    p99LatencyMs: histogramPercentile(aggregate, requests, 0.99),
     maxLatencyMs: aggregate.duration_max_ms!,
     requestBytes: aggregate.request_bytes!,
     responseBytes: aggregate.response_bytes!,
     bandwidthBytes: aggregate.request_bytes! + aggregate.response_bytes!,
+    averageResponseBytes: requests ? aggregate.response_bytes! / requests : 0,
+    activeIntervals,
+    lastRequestAt: lastRequestAt || null,
+    status,
+    statusRates: Object.fromEntries(Object.entries(status).map(([name, count]) => [
+      name,
+      requests ? count / requests : 0,
+    ])),
+    methods: metricMethodBreakdown(aggregate, requests),
+    latencyDistribution: metricLatencyDistribution(aggregate, requests),
   };
+}
+
+function metricMethodBreakdown(row: Record<string, unknown>, requests: number): Record<string, number> {
+  const methods = Object.fromEntries(METRIC_METHODS.map((method, index) => [
+    method,
+    Number(row[METRIC_METHOD_COLUMNS[index]!] ?? 0),
+  ])) as Record<string, number>;
+  const recorded = Object.values(methods).reduce((total, count) => total + count, 0);
+  methods.OTHER = Math.max(0, requests - recorded);
+  return methods;
+}
+
+function metricLatencyDistribution(
+  row: Record<string, unknown>,
+  requests: number,
+): Record<string, number | string | null>[] {
+  const columns = [
+    "latency_le_50",
+    "latency_le_100",
+    "latency_le_250",
+    "latency_le_500",
+    "latency_le_1000",
+    "latency_le_2500",
+    "latency_le_5000",
+  ];
+  const output: Record<string, number | string | null>[] = [];
+  let previous = 0;
+  for (let index = 0; index < columns.length; index++) {
+    const cumulative = Math.max(previous, Math.min(requests, Number(row[columns[index]!] ?? 0)));
+    const count = cumulative - previous;
+    output.push({
+      label: `≤ ${formatMetricLatencyBound(LATENCY_BOUNDS_MS[index]!)}`,
+      upToMs: LATENCY_BOUNDS_MS[index]!,
+      requests: count,
+      rate: requests ? count / requests : 0,
+    });
+    previous = cumulative;
+  }
+  const overflow = Math.max(0, requests - previous);
+  output.push({
+    label: "> 5 s",
+    upToMs: null,
+    requests: overflow,
+    rate: requests ? overflow / requests : 0,
+  });
+  return output;
+}
+
+function formatMetricLatencyBound(value: number): string {
+  return value >= 1_000 ? `${value / 1_000} s` : `${value} ms`;
 }
 
 function histogramPercentile(row: Record<string, unknown>, requests: number, percentile: number): number {

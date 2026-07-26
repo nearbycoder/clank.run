@@ -15,7 +15,7 @@ The console uses normal, refresh-safe URLs rather than keeping navigation only i
 | `/activity` | Authorized workspace audit history |
 | `/admin` | Browser-only global analytics, account directory, and support access for allowlisted operators |
 | `/workspaces/<workspace-slug>/people` | Members, roles, and invitations for one workspace |
-| `/projects/<project-slug>/performance` | Project traffic and latency, with `?range=1h\|24h\|7d\|30d` |
+| `/projects/<project-slug>/performance` | Project traffic and latency, with `?range=15m\|1h\|24h\|7d\|30d` |
 | `/projects/<project-slug>/domains` | Domain ownership, routing, and TLS |
 | `/projects/<project-slug>/deployments` | Immutable releases and storage lifecycle |
 | `/projects/<project-slug>/backups` | Scheduled and manual encrypted backups |
@@ -62,7 +62,7 @@ and stop events remain attributed to the real operator.
 The operator view keeps the latest 25 start/stop records visible with the real operator, target,
 reason, timestamp, and planned expiry; the durable audit table remains the source of truth.
 
-Each project has performance, deployments, domains, logs, backups, and settings views. The project header shows its production URL, runtime state, workspace, and current role. Performance identifies the active production release, presents the exact `clank deploy` next step when no release exists, and supports `1h`, `24h`, `7d`, and `30d` metric windows. Domains walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. Deployments shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. Backups exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. Settings makes operational identity and database provisioning state visible, then gives owners and administrators a confirmation-gated way to permanently delete the project and reclaim its quota. A project without a first deployment reports that its isolated database will be provisioned on first deploy instead of failing the whole screen.
+Each project has performance, deployments, domains, logs, backups, and settings views. The project header shows its production URL, runtime state, workspace, and current role. Performance identifies the active production release, presents the exact `clank deploy` next step when no release exists, and supports `15m`, `1h`, `24h`, `7d`, and `30d` metric windows. It includes the complete time window (including idle buckets), previous-period changes, p50/p90/p95/p99 and maximum latency, peak request rate, status classes, HTTP methods, non-overlapping latency buckets, and request/response byte detail. Domains walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. Deployments shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. Backups exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. Settings makes operational identity and database provisioning state visible, then gives owners and administrators a confirmation-gated way to permanently delete the project and reclaim its quota. A project without a first deployment reports that its isolated database will be provisioned on first deploy instead of failing the whole screen.
 
 The dashboard uses the same organization membership and project-permission checks as the CLI. API values are inserted with DOM `textContent` or attributes rather than HTML parsing. The page has a nonce-bound script, restrictive CSP, no-store responses, framing denial, and no third-party assets.
 
@@ -101,9 +101,12 @@ Metrics are recorded only for requests that pass through managed ingress. Clank 
 - request count and 2xx/3xx/4xx/5xx counts;
 - 5xx error count;
 - latency sum, maximum, and cumulative `50`, `100`, `250`, `500`, `1000`, `2500`, `5000`, and `+Inf` millisecond buckets; and
-- request bytes plus response bytes when the upstream declares `Content-Length`.
+- request bytes plus response bytes when the upstream declares `Content-Length`; and
+- fixed counters for `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, and every other method.
 
-The p95 value is the upper bound of the matching fixed bucket, not a precomputed quantile. That makes buckets safely aggregatable across time, following the [Prometheus histogram model](https://prometheus.io/docs/practices/histograms/). Method names are normalized, and the persisted series has no path, hostname, email, or user labels, avoiding high-cardinality and personal-data growth. The HTTP names and duration/size concepts follow the [OpenTelemetry HTTP metric conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/).
+Reported percentiles are upper bounds of matching fixed buckets, not precomputed quantiles. That makes buckets safely aggregatable across time, following the [Prometheus histogram model](https://prometheus.io/docs/practices/histograms/). Method names are normalized into eight bounded counters. Rows created before method counters were introduced appear as `OTHER`, preserving totals through the automatic schema upgrade. The persisted series has no path, hostname, IP, email, user, query-string, or user-agent labels, avoiding high-cardinality and personal-data growth. The HTTP names and duration/size concepts follow the [OpenTelemetry HTTP metric conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/).
+
+The project API returns a fixed number of chart buckets for the complete selected window, a summary, and the equally sized preceding window. Percentage changes use the previous value as their denominator; a new nonzero series with no preceding value is reported as `null` rather than an infinite percentage. Server-error changes are returned as percentage-point differences. The smallest window is 15 minutes at one-minute resolution; longer windows downsample to keep responses and rendering bounded.
 
 Latency currently measures ingress receipt through upstream response headers. It does not measure completion of a streamed body. Response bytes are zero when their final size is not declared. Application-level business metrics and end-to-end traces remain separate; see [Observability](observability.md).
 
@@ -195,7 +198,7 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `DELETE /api/organizations/:id/members/:userId` — leave or administratively remove membership and revoke workspace-scoped credentials.
 - `GET /api/projects/:id` — project status, usage, current organization role, and whether the principal may delete the project.
 - `DELETE /api/projects/:id` — owner/admin-only permanent deletion with `{ "confirmation": "delete-site <slug>", "acknowledgeDataLoss": true }`.
-- `GET /api/projects/:id/metrics?range=24h` — bounded metric summary and downsampled points.
+- `GET /api/projects/:id/metrics?range=15m|1h|24h|7d|30d` — bounded current/previous summaries, comparisons, and complete downsampled points.
 - `GET /api/projects/:id/domains` — ownership, routing, observed DNS, TLS state, project limit, and reconciliation status.
 - `POST /api/projects/:id/domains` — reserve a hostname and create the ownership challenge.
 - `POST /api/projects/:id/domains/:domainId/verify` — verify TXT ownership and refresh routing.

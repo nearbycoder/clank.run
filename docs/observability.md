@@ -74,7 +74,7 @@ Expose `observability.metrics.response()` only on an operator-protected endpoint
 
 ### Deployment ingress metrics
 
-Clank Deploy separately records per-project traffic that passes through managed ingress. Minute rows contain status classes, 5xx errors, duration sum/max, fixed cumulative latency buckets, and bounded byte counts. The dashboard returns bounded `1h`, `24h`, `7d`, and `30d` series without storing host, path, user, or email labels.
+Clank Deploy separately records per-project traffic that passes through managed ingress. Minute rows contain status classes, 5xx errors, fixed method counters, duration sum/max, cumulative latency buckets, and bounded byte counts. The dashboard returns bounded `15m`, `1h`, `24h`, `7d`, and `30d` current/previous series, rates, percentiles, and distributions without storing host, path, IP, user, email, query-string, or user-agent labels.
 
 Ingress latency ends when upstream response headers arrive; it is not streamed-response completion time. Response size is known only when `Content-Length` is present. See [Deployment dashboard, quotas, and domains](platform-dashboard.md) for exact semantics and retention.
 
