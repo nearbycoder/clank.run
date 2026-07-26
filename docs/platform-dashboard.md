@@ -72,7 +72,11 @@ tasks.customer.example.  CNAME  edge.apps.example.com.
 
 At a zone apex, use provider-supported CNAME flattening/ALIAS/ANAME or the displayed A/AAAA addresses. A conventional CNAME cannot coexist with other data at the same owner name under [RFC 1034](https://www.rfc-editor.org/rfc/rfc1034). If the customer publishes restrictive CAA records, the chosen ACME issuer must also be authorized; see [RFC 8659](https://www.rfc-editor.org/rfc/rfc8659.html).
 
-DNS checks use the host's recursive resolver and may reflect resolver caching. Clank checks routing when a domain is added, when ownership is verified, and when **Check DNS** or its API equivalent is requested. The open-source control plane does not run a background DNS scheduler yet, so hosted operators should periodically call the check endpoint or connect their DNS provider's status webhook; until then, the last observed routing state is authoritative for ingress and certificate eligibility. Ownership remains verified after the TXT record is removed, matching common SaaS onboarding behavior; removing the domain from Clank releases the assignment and stops new routing immediately. An edge may retain already-issued certificate material until its normal cache lifecycle removes it.
+DNS checks use the host's recursive resolver and may reflect resolver caching. Clank checks routing when a domain is added, when ownership is verified, when **Check DNS** or its API equivalent is requested, and through a background reconciler every five minutes by default. The reconciler claims a bounded batch in SQLite, uses expiring lease tokens so multiple control planes do not duplicate the same check, limits concurrent lookups, applies a per-domain deadline, and schedules the next observation only after the current claim settles. The Domains UI and API expose whether automation is enabled, its cadence and bounds, the last completed pass, and the number of successful or failed checks.
+
+Set `CLANK_DOMAIN_RECHECK_INTERVAL_MS=0` to disable automation, or tune the interval, batch size, and timeout with the variables documented in [Self-hosting](self-hosting.md). Manual checks and automatic checks use the same routing state transition. A stale or timed-out leased result cannot overwrite a later manual check.
+
+Ownership verification remains an explicit action because it consumes the one-time TXT challenge and creates a durable trust decision. Once verified, ownership remains verified after the TXT record is removed, matching common SaaS onboarding behavior. Removing the domain from Clank releases the assignment and stops new routing immediately. An edge may retain already-issued certificate material until its normal cache lifecycle removes it.
 
 ## Self-hosted TLS with Caddy
 
@@ -117,7 +121,7 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 
 - `GET /api/dashboard` — account, organizations, enforced limits, sites, 24-hour summaries, and domain-edge configuration.
 - `GET /api/projects/:id/metrics?range=24h` — bounded metric summary and downsampled points.
-- `GET /api/projects/:id/domains` — ownership, routing, observed DNS, TLS state, and site limit.
+- `GET /api/projects/:id/domains` — ownership, routing, observed DNS, TLS state, site limit, and reconciliation status.
 - `POST /api/projects/:id/domains` — reserve a hostname and create the ownership challenge.
 - `POST /api/projects/:id/domains/:domainId/verify` — verify TXT ownership and refresh routing.
 - `POST /api/projects/:id/domains/:domainId/check` — refresh routing without changing ownership.

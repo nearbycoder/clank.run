@@ -241,6 +241,178 @@ test("browser project management enforces organization and custom-domain quotas 
   }
 });
 
+test("custom-domain routing is reconciled automatically with durable bounded claims", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-domain-recheck-"));
+  let routeReady = false;
+  let hangRouting = false;
+  let routingLookups = 0;
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4560,
+    appPortEnd: 4565,
+    signup: true,
+    ingress: {
+      enabled: true,
+      customDomainTarget: "edge.example.test",
+      domainRecheckIntervalMs: 1_000,
+      domainRecheckBatchSize: 1,
+      domainRecheckTimeoutMs: 500,
+      resolveTxt: async () => [],
+      resolveCname: async () => {
+        routingLookups++;
+        if (hangRouting) return new Promise(() => {});
+        return routeReady ? ["edge.example.test"] : ["elsewhere.example.test"];
+      },
+      resolve4: async () => [],
+      resolve6: async () => [],
+    },
+  });
+  try {
+    const owner = await authorizeCli(platform, "domain-recheck@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", { token: owner.accessToken }));
+    assert.equal(dashboard.domains.automation.enabled, true);
+    assert.equal(dashboard.domains.automation.intervalMs, 1_000);
+    assert.equal(dashboard.domains.automation.batchSize, 1);
+    assert.equal(dashboard.domains.automation.timeoutMs, 500);
+    const project = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Automatic DNS",
+        slug: "automatic-dns",
+        organizationId: dashboard.organizations[0].id,
+      },
+    }), 201);
+    const domain = await payload(platform, jsonRequest(`/api/projects/${project.project.id}/domains`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { hostname: "automatic.customer.test" },
+    }), 201);
+    assert.equal(domain.domain.routing.status, "misconfigured");
+    const initialLookups = routingLookups;
+    routeReady = true;
+
+    let reconciled;
+    await waitFor(async () => {
+      const result = await payload(platform, jsonRequest(
+        `/api/projects/${project.project.id}/domains`,
+        { token: owner.accessToken },
+      ));
+      reconciled = result;
+      return result.domains[0].routing.status === "ready";
+    });
+    assert.ok(routingLookups > initialLookups);
+    assert.equal(reconciled.automation.lastChecked, 1);
+    assert.equal(reconciled.automation.lastFailed, 0);
+    assert.equal(reconciled.automation.pending, 0);
+    assert.ok(reconciled.automation.lastCompletedAt >= reconciled.automation.lastStartedAt);
+
+    const control = new DatabaseSync(join(root, "platform", "control.sqlite"), { readOnly: true });
+    const row = control.prepare(`SELECT next_check_at, check_lease_token, check_lease_until
+      FROM clank_platform_domains WHERE id = ?`).get(domain.domain.id);
+    assert.ok(row.next_check_at > reconciled.domains[0].routing.checkedAt);
+    assert.equal(row.check_lease_token, null);
+    assert.equal(row.check_lease_until, null);
+    control.close();
+
+    const writable = new DatabaseSync(join(root, "platform", "control.sqlite"));
+    writable.exec("UPDATE clank_platform_domains SET next_check_at = 0");
+    writable.close();
+    hangRouting = true;
+    await waitFor(async () => {
+      const result = await payload(platform, jsonRequest(
+        `/api/projects/${project.project.id}/domains`,
+        { token: owner.accessToken },
+      ));
+      return result.domains[0].routing.status === "error"
+        && result.automation.lastFailed === 1;
+    }, 4_000);
+    const manualStartedAt = Date.now();
+    const manual = await payload(platform, jsonRequest(
+      `/api/projects/${project.project.id}/domains/${domain.domain.id}/check`,
+      { method: "POST", token: owner.accessToken, body: {} },
+    ));
+    assert.equal(manual.domain.routing.status, "error");
+    assert.ok(Date.now() - manualStartedAt < 1_500, "manual DNS checks must use the same finite deadline");
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("multiple control planes do not reconcile the same domain lease concurrently", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-domain-lease-"));
+  let background = false;
+  let backgroundLookups = 0;
+  let releaseLookup;
+  const lookupGate = new Promise((resolve) => { releaseLookup = resolve; });
+  const ingress = {
+    enabled: true,
+    customDomainTarget: "edge.example.test",
+    domainRecheckIntervalMs: 1_000,
+    domainRecheckBatchSize: 1,
+    domainRecheckTimeoutMs: 5_000,
+    resolveTxt: async () => [],
+    resolveCname: async () => {
+      if (background) {
+        backgroundLookups++;
+        await lookupGate;
+      }
+      return ["edge.example.test"];
+    },
+    resolve4: async () => [],
+    resolve6: async () => [],
+  };
+  const options = {
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4550,
+    appPortEnd: 4555,
+    signup: true,
+    ingress,
+  };
+  const first = await openPlatform(options);
+  const second = await openPlatform(options);
+  try {
+    const owner = await authorizeCli(first, "domain-lease@example.com");
+    const dashboard = await payload(first, jsonRequest("/api/dashboard", { token: owner.accessToken }));
+    const project = await payload(first, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Leased DNS",
+        slug: "leased-dns",
+        organizationId: dashboard.organizations[0].id,
+      },
+    }), 201);
+    await payload(first, jsonRequest(`/api/projects/${project.project.id}/domains`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { hostname: "leased.customer.test" },
+    }), 201);
+    const control = new DatabaseSync(join(root, "platform", "control.sqlite"));
+    control.exec("UPDATE clank_platform_domains SET next_check_at = 0");
+    control.close();
+    background = true;
+
+    await waitFor(() => backgroundLookups === 1, 3_000);
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    assert.equal(backgroundLookups, 1, "a second control plane must respect the durable DNS lease");
+    releaseLookup();
+    await waitFor(() => {
+      const database = new DatabaseSync(join(root, "platform", "control.sqlite"), { readOnly: true });
+      const row = database.prepare("SELECT check_lease_token FROM clank_platform_domains").get();
+      database.close();
+      return row.check_lease_token === null;
+    });
+  } finally {
+    releaseLookup();
+    await Promise.all([first.close(), second.close()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("account quotas prevent multiplying organizations to bypass hosted site limits", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-account-quota-"));
   const platform = await openPlatform({

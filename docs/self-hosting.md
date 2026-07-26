@@ -35,6 +35,9 @@ Clank Deploy is one Node control-plane process plus one supervised process or co
 | `CLANK_CUSTOM_DOMAIN_ADDRESSES` | none | Comma-separated edge A/AAAA values accepted for apex routing |
 | `CLANK_TLS_ASK_TOKEN` | none | Secret for the private Caddy certificate permission check |
 | `CLANK_INGRESS_MAX_BODY_BYTES` | `26214400` | Per-request managed-ingress body limit |
+| `CLANK_DOMAIN_RECHECK_INTERVAL_MS` | `300000` | Background custom-domain routing interval; `0` disables it |
+| `CLANK_DOMAIN_RECHECK_BATCH_SIZE` | `25` | Maximum domains durably claimed by one routing pass |
+| `CLANK_DOMAIN_RECHECK_TIMEOUT_MS` | `10000` | Per-domain DNS lookup deadline |
 | `CLANK_MAX_ORGANIZATIONS_PER_ACCOUNT` | `5` | Transactionally enforced account organization limit |
 | `CLANK_MAX_PROJECTS_PER_ACCOUNT` | `10` | Transactionally enforced account-wide site limit |
 | `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Transactionally enforced site limit |

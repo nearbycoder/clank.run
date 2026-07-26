@@ -34,6 +34,7 @@ const ingressBaseDomain = environment("CLANK_INGRESS_BASE_DOMAIN", "PROACT_INGRE
 const customDomainTarget = environment("CLANK_CUSTOM_DOMAIN_TARGET", "PROACT_CUSTOM_DOMAIN_TARGET");
 const customDomainAddresses = list(environment("CLANK_CUSTOM_DOMAIN_ADDRESSES", "PROACT_CUSTOM_DOMAIN_ADDRESSES"));
 const ingressEnabled = environment("CLANK_INGRESS", "PROACT_INGRESS") === "1" || Boolean(ingressBaseDomain);
+const domainRecheckInterval = process.env.CLANK_DOMAIN_RECHECK_INTERVAL_MS;
 const ingress = ingressEnabled ? {
   enabled: true,
   ...(ingressBaseDomain ? { baseDomain: ingressBaseDomain } : {}),
@@ -41,6 +42,11 @@ const ingress = ingressEnabled ? {
   ...(customDomainAddresses.length ? { customDomainAddresses } : {}),
   ...(process.env.CLANK_TLS_ASK_TOKEN ? { tlsAskToken: process.env.CLANK_TLS_ASK_TOKEN } : {}),
   maxBodyBytes: number(process.env.CLANK_INGRESS_MAX_BODY_BYTES, 25 * 1024 * 1024),
+  domainRecheckIntervalMs: domainRecheckInterval === "0"
+    ? false
+    : number(domainRecheckInterval, 5 * 60_000),
+  domainRecheckBatchSize: number(process.env.CLANK_DOMAIN_RECHECK_BATCH_SIZE, 25),
+  domainRecheckTimeoutMs: number(process.env.CLANK_DOMAIN_RECHECK_TIMEOUT_MS, 10_000),
 } : undefined;
 
 const platform = await openPlatform({

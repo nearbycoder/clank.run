@@ -95,6 +95,12 @@ export interface ClankPlatformOptions {
     resolveCname?: DomainDnsResolver["resolveCname"];
     resolve4?: DomainDnsResolver["resolve4"];
     resolve6?: DomainDnsResolver["resolve6"];
+    /** Refresh custom-domain routing in the background. Defaults to 5 minutes; false disables it. */
+    domainRecheckIntervalMs?: number | false;
+    /** Maximum domains claimed by one reconciliation pass. Defaults to 25. */
+    domainRecheckBatchSize?: number;
+    /** Maximum time spent on one domain before its claim is released. Defaults to 10 seconds. */
+    domainRecheckTimeoutMs?: number;
   };
   /** Receives unexpected failures for private operator logging. */
   onError?: (error: unknown) => void;
@@ -194,6 +200,10 @@ const SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const PROJECT_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
 const METRIC_BUCKET_MS = 60_000;
 const LATENCY_BOUNDS_MS = [50, 100, 250, 500, 1_000, 2_500, 5_000] as const;
+const DEFAULT_DOMAIN_RECHECK_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_DOMAIN_RECHECK_BATCH_SIZE = 25;
+const DEFAULT_DOMAIN_RECHECK_TIMEOUT_MS = 10_000;
+const DOMAIN_RECHECK_CONCURRENCY = 4;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -209,6 +219,26 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     ? normalizeHostname(options.ingress.customDomainTarget)
     : baseDomain;
   const customDomainAddresses = Object.freeze(normalizeEdgeAddresses(options.ingress?.customDomainAddresses ?? []));
+  const domainRecheckIntervalMs = options.ingress?.domainRecheckIntervalMs === false
+    ? false
+    : integerInRange(
+        options.ingress?.domainRecheckIntervalMs ?? DEFAULT_DOMAIN_RECHECK_INTERVAL_MS,
+        "ingress.domainRecheckIntervalMs",
+        1_000,
+        24 * 60 * 60_000,
+      );
+  const domainRecheckBatchSize = integerInRange(
+    options.ingress?.domainRecheckBatchSize ?? DEFAULT_DOMAIN_RECHECK_BATCH_SIZE,
+    "ingress.domainRecheckBatchSize",
+    1,
+    1_000,
+  );
+  const domainRecheckTimeoutMs = integerInRange(
+    options.ingress?.domainRecheckTimeoutMs ?? DEFAULT_DOMAIN_RECHECK_TIMEOUT_MS,
+    "ingress.domainRecheckTimeoutMs",
+    100,
+    60_000,
+  );
   const limits = Object.freeze({
     organizationsPerAccount: integerInRange(
       options.limits?.organizationsPerAccount ?? 5,
@@ -298,7 +328,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           certificate_status = CASE WHEN clank_platform_domains.id = excluded.id THEN certificate_status ELSE 'pending' END,
           resolved_records = CASE WHEN clank_platform_domains.id = excluded.id THEN resolved_records ELSE '{"cnames":[],"addresses":[]}' END,
           last_checked_at = CASE WHEN clank_platform_domains.id = excluded.id THEN last_checked_at ELSE NULL END,
-          last_error = CASE WHEN clank_platform_domains.id = excluded.id THEN last_error ELSE NULL END
+          last_error = CASE WHEN clank_platform_domains.id = excluded.id THEN last_error ELSE NULL END,
+          next_check_at = CASE WHEN clank_platform_domains.id = excluded.id THEN next_check_at ELSE NULL END,
+          check_lease_token = CASE WHEN clank_platform_domains.id = excluded.id THEN check_lease_token ELSE NULL END,
+          check_lease_until = CASE WHEN clank_platform_domains.id = excluded.id THEN check_lease_until ELSE NULL END
         WHERE clank_platform_domains.id = excluded.id OR (
           clank_platform_domains.project_id = excluded.project_id
           AND clank_platform_domains.status = 'pending'
@@ -334,6 +367,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     ...(options.ingress?.resolveTxt ? { resolveTxt: options.ingress.resolveTxt } : {}),
   });
   const domainDnsResolver = domainResolver(options.ingress);
+  const inspectRouting = (hostname: string): Promise<DomainRoutingReport> => withTimeout(
+    inspectDomainRouting(hostname, {
+      ...(customDomainTarget ? { cname: customDomainTarget } : {}),
+      addresses: customDomainAddresses,
+    }, domainDnsResolver),
+    domainRecheckTimeoutMs,
+    "Domain routing lookup timed out.",
+  );
   let lastMetricPrune = 0;
   const recordIngressMetric = (metric: IngressRequestMetric): void => {
     recordMetric(storage.internal, metric);
@@ -352,6 +393,93 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         onRequest: recordIngressMetric,
       })
     : undefined;
+  const domainReconciliation = {
+    enabled: Boolean(ingress && customDomainRoutingConfigured && domainRecheckIntervalMs !== false),
+    intervalMs: domainRecheckIntervalMs === false ? null : domainRecheckIntervalMs,
+    batchSize: domainRecheckBatchSize,
+    timeoutMs: domainRecheckTimeoutMs,
+    lastStartedAt: null as number | null,
+    lastCompletedAt: null as number | null,
+    lastChecked: 0,
+    lastFailed: 0,
+  };
+  let domainRecheckTimer: ReturnType<typeof setTimeout> | undefined;
+  let domainRecheckFlight: Promise<boolean> | undefined;
+  const nextDomainCheckAt = (): number | undefined => domainReconciliation.enabled
+    ? Date.now() + (domainRecheckIntervalMs as number)
+    : undefined;
+  const reconcileDomain = async (
+    claim: { id: string; token: string },
+  ): Promise<"checked" | "failed" | "stale"> => {
+    try {
+      const challenge = await domainStore.get(claim.id);
+      if (!challenge || closed) return "stale";
+      const report = await inspectRouting(challenge.hostname);
+      if (closed) return "stale";
+      const saved = saveDomainRouting(storage.internal, challenge.id, report, {
+        nextCheckAt: nextDomainCheckAt(),
+        leaseToken: claim.token,
+      });
+      return saved ? "checked" : "stale";
+    } catch (error) {
+      if (closed) return "stale";
+      const saved = saveDomainRoutingError(storage.internal, claim.id, {
+        nextCheckAt: nextDomainCheckAt(),
+        leaseToken: claim.token,
+      });
+      try { options.onError?.(error); } catch { /* Operator reporting must not break reconciliation. */ }
+      return saved ? "failed" : "stale";
+    }
+  };
+  const reconcileDomains = async (): Promise<boolean> => {
+    if (!domainReconciliation.enabled || closed || domainRecheckFlight) return false;
+    domainReconciliation.lastStartedAt = Date.now();
+    const claims = claimDomainsForRecheck(
+      storage.internal,
+      domainReconciliation.lastStartedAt,
+      domainRecheckBatchSize,
+      Math.ceil(domainRecheckBatchSize / DOMAIN_RECHECK_CONCURRENCY) * domainRecheckTimeoutMs + 5_000,
+    );
+    const results = await runBounded(claims, DOMAIN_RECHECK_CONCURRENCY, reconcileDomain, () => closed);
+    if (closed) return false;
+    domainReconciliation.lastChecked = results.filter((result) => result !== "stale").length;
+    domainReconciliation.lastFailed = results.filter((result) => result === "failed").length;
+    domainReconciliation.lastCompletedAt = Date.now();
+    const now = Date.now();
+    return Number(storage.internal.prepare(`SELECT count(*) AS count FROM clank_platform_domains
+      WHERE (status = 'verified' OR expires_at > ?)
+        AND coalesce(next_check_at, 0) <= ?
+        AND (check_lease_until IS NULL OR check_lease_until <= ?)`).get(now, now, now)?.count ?? 0) > 0;
+  };
+  const nextDomainReconciliationDelay = (): number => {
+    const intervalMs = domainRecheckIntervalMs as number;
+    const now = Date.now();
+    const row = storage.internal.prepare(`SELECT min(coalesce(next_check_at, 0)) AS next_check_at
+      FROM clank_platform_domains
+      WHERE (status = 'verified' OR expires_at > ?)
+        AND (check_lease_until IS NULL OR check_lease_until <= ?)`).get(now, now);
+    if (row?.next_check_at === null || row?.next_check_at === undefined) return intervalMs;
+    return Math.max(0, Math.min(intervalMs, Number(row.next_check_at) - now));
+  };
+  const scheduleDomainReconciliation = (requestedDelayMs?: number): void => {
+    if (!domainReconciliation.enabled || closed || domainRecheckTimer) return;
+    const delayMs = requestedDelayMs ?? nextDomainReconciliationDelay();
+    domainRecheckTimer = setTimeout(() => {
+      domainRecheckTimer = undefined;
+      const flight = reconcileDomains().catch((error) => {
+        if (!closed) {
+          try { options.onError?.(error); } catch { /* Operator reporting must not break scheduling. */ }
+        }
+        return false;
+      });
+      domainRecheckFlight = flight;
+      void flight.then((backlogMayRemain) => {
+        if (domainRecheckFlight === flight) domainRecheckFlight = undefined;
+        if (!closed) scheduleDomainReconciliation(backlogMayRemain ? 0 : undefined);
+      });
+    }, delayMs);
+    domainRecheckTimer.unref?.();
+  };
 
   const withProjectLock = async <Value>(projectId: string, operation: () => Promise<Value>): Promise<Value> => {
     const previous = locks.get(projectId) ?? Promise.resolve();
@@ -924,6 +1052,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           customDomainTarget,
           customDomainAddresses,
           Boolean(tlsAskToken),
+          domainReconciliation,
         ));
       }
       if (url.pathname === "/api/account" && request.method === "GET") {
@@ -1448,6 +1577,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ok: true,
           domains: rows.map((row) => publicDomain(row, customDomainTarget, customDomainAddresses)),
           limit: limits.domainsPerProject,
+          automation: {
+            ...domainReconciliation,
+            pending: Number(storage.internal.prepare(`SELECT count(*) AS count
+              FROM clank_platform_domains
+              WHERE (status = 'verified' OR expires_at > ?)
+                AND coalesce(next_check_at, 0) <= ?`).get(Date.now(), Date.now())?.count ?? 0),
+          },
         });
       }
       if (operation === "domains" && request.method === "POST") {
@@ -1475,14 +1611,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         const challenge = await domains.begin(project.id, hostname);
         try {
-          const report = await inspectDomainRouting(challenge.hostname, {
-            ...(customDomainTarget ? { cname: customDomainTarget } : {}),
-            addresses: customDomainAddresses,
-          }, domainDnsResolver);
-          saveDomainRouting(storage.internal, challenge.id, report);
+          const report = await inspectRouting(challenge.hostname);
+          saveDomainRouting(storage.internal, challenge.id, report, {
+            nextCheckAt: nextDomainCheckAt(),
+          });
         } catch (error) {
           if (error instanceof PlatformError) throw error;
-          saveDomainRoutingError(storage.internal, challenge.id);
+          saveDomainRoutingError(storage.internal, challenge.id, {
+            nextCheckAt: nextDomainCheckAt(),
+          });
         }
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "domain.begin", {
           domainId: challenge.id,
@@ -1509,15 +1646,23 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             throw error;
           }
         }
-        const report = await inspectDomainRouting(challenge.hostname, {
-          ...(customDomainTarget ? { cname: customDomainTarget } : {}),
-          addresses: customDomainAddresses,
-        }, domainDnsResolver);
-        saveDomainRouting(storage.internal, challenge.id, report);
+        let routingStatus = "error";
+        try {
+          const report = await inspectRouting(challenge.hostname);
+          routingStatus = report.status;
+          saveDomainRouting(storage.internal, challenge.id, report, {
+            nextCheckAt: nextDomainCheckAt(),
+          });
+        } catch (error) {
+          saveDomainRoutingError(storage.internal, challenge.id, {
+            nextCheckAt: nextDomainCheckAt(),
+          });
+          try { options.onError?.(error); } catch { /* Operator reporting must not change the API result. */ }
+        }
         audit(storage.internal, principal.userId, principal.tokenId, project.id, `domain.${domainMatch[2]}`, {
           domainId: challenge.id,
           hostname: challenge.hostname,
-          routingStatus: report.status,
+          routingStatus,
         });
         const row = storage.internal.prepare("SELECT * FROM clank_platform_domains WHERE id = ?").get(challenge.id)!;
         return api({ ok: true, domain: publicDomain(row, customDomainTarget, customDomainAddresses) });
@@ -1625,6 +1770,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         .run(`Startup recovery failed: ${safeError(error)}`, release.id);
     }
   }
+  scheduleDomainReconciliation();
 
   return {
     handle,
@@ -1633,6 +1779,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     async close() {
       if (closed) return;
       closed = true;
+      if (domainRecheckTimer) clearTimeout(domainRecheckTimer);
+      domainRecheckTimer = undefined;
+      await domainRecheckFlight?.catch(() => undefined);
       for (const state of restartState.values()) {
         state.cancelled = true;
         if (state.timer) clearTimeout(state.timer);
@@ -1763,6 +1912,9 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     resolved_records TEXT NOT NULL DEFAULT '{"cnames":[],"addresses":[]}' CHECK (json_valid(resolved_records)),
     last_checked_at INTEGER,
     last_error TEXT,
+    next_check_at INTEGER,
+    check_lease_token TEXT,
+    check_lease_until INTEGER,
     expires_at INTEGER NOT NULL,
     verified_at INTEGER,
     created_at INTEGER NOT NULL
@@ -1786,10 +1938,24 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
   if (!hasDomainColumn("last_error")) {
     internal.exec("ALTER TABLE clank_platform_domains ADD COLUMN last_error TEXT");
   }
+  if (!hasDomainColumn("next_check_at")) {
+    internal.exec("ALTER TABLE clank_platform_domains ADD COLUMN next_check_at INTEGER");
+    internal.prepare(`UPDATE clank_platform_domains
+      SET next_check_at = coalesce(last_checked_at, created_at)
+      WHERE status = 'verified' OR expires_at > ?`).run(Date.now());
+  }
+  if (!hasDomainColumn("check_lease_token")) {
+    internal.exec("ALTER TABLE clank_platform_domains ADD COLUMN check_lease_token TEXT");
+  }
+  if (!hasDomainColumn("check_lease_until")) {
+    internal.exec("ALTER TABLE clank_platform_domains ADD COLUMN check_lease_until INTEGER");
+  }
   if (upgradedRoutingStatus) {
     internal.exec("UPDATE clank_platform_domains SET routing_status = 'ready', certificate_status = 'eligible' WHERE status = 'verified'");
   }
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_domains_project ON clank_platform_domains (project_id, created_at)");
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_domains_recheck
+    ON clank_platform_domains (next_check_at, check_lease_until)`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_metrics (
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
     bucket_started_at INTEGER NOT NULL,
@@ -2251,31 +2417,119 @@ function histogramPercentile(row: Record<string, unknown>, requests: number, per
   return Math.max(5_000, Number(row.duration_max_ms ?? 0));
 }
 
-function saveDomainRouting(internal: SQLiteInternal, id: string, report: DomainRoutingReport): void {
+interface DomainRoutingWriteOptions {
+  nextCheckAt?: number;
+  leaseToken?: string;
+}
+
+function saveDomainRouting(
+  internal: SQLiteInternal,
+  id: string,
+  report: DomainRoutingReport,
+  options: DomainRoutingWriteOptions = {},
+): boolean {
   const error = report.error
     ?? (report.status === "misconfigured" ? "DNS does not point to the configured Clank edge." : null);
-  internal.prepare(`UPDATE clank_platform_domains SET
+  const result = internal.prepare(`UPDATE clank_platform_domains SET
       routing_status = ?, resolved_records = ?, last_checked_at = ?, last_error = ?,
+      next_check_at = ?, check_lease_token = NULL, check_lease_until = NULL,
       certificate_status = CASE
         WHEN status = 'verified' AND ? = 'ready' AND certificate_status = 'active' THEN 'active'
         WHEN status = 'verified' AND ? = 'ready' THEN 'eligible'
         ELSE 'pending'
       END
-    WHERE id = ?`).run(
+    WHERE id = ?${options.leaseToken ? " AND check_lease_token = ?" : ""}`).run(
       report.status,
       JSON.stringify(report.observed),
       report.checkedAt,
       error,
+      options.nextCheckAt ?? null,
       report.status,
       report.status,
       id,
+      ...(options.leaseToken ? [options.leaseToken] : []),
     );
+  return Number(result.changes) === 1;
 }
 
-function saveDomainRoutingError(internal: SQLiteInternal, id: string): void {
-  internal.prepare(`UPDATE clank_platform_domains SET routing_status = 'error', certificate_status = 'pending',
-    last_checked_at = ?, last_error = ? WHERE id = ?`)
-    .run(Date.now(), "DNS lookup is temporarily unavailable.", id);
+function saveDomainRoutingError(
+  internal: SQLiteInternal,
+  id: string,
+  options: DomainRoutingWriteOptions = {},
+): boolean {
+  const result = internal.prepare(`UPDATE clank_platform_domains SET routing_status = 'error', certificate_status = 'pending',
+    last_checked_at = ?, last_error = ?, next_check_at = ?, check_lease_token = NULL, check_lease_until = NULL
+    WHERE id = ?${options.leaseToken ? " AND check_lease_token = ?" : ""}`)
+    .run(
+      Date.now(),
+      "DNS lookup is temporarily unavailable.",
+      options.nextCheckAt ?? null,
+      id,
+      ...(options.leaseToken ? [options.leaseToken] : []),
+    );
+  return Number(result.changes) === 1;
+}
+
+function claimDomainsForRecheck(
+  internal: SQLiteInternal,
+  now: number,
+  batchSize: number,
+  leaseMs: number,
+): Array<{ id: string; token: string }> {
+  return internal.transaction(() => {
+    const candidates = internal.prepare(`SELECT id FROM clank_platform_domains
+      WHERE (status = 'verified' OR expires_at > ?)
+        AND coalesce(next_check_at, 0) <= ?
+        AND (check_lease_until IS NULL OR check_lease_until <= ?)
+      ORDER BY coalesce(next_check_at, 0), created_at
+      LIMIT ?`).all(now, now, now, batchSize);
+    const claimed: Array<{ id: string; token: string }> = [];
+    for (const candidate of candidates) {
+      const id = String(candidate.id);
+      const token = `dns_${crypto.randomUUID()}`;
+      const result = internal.prepare(`UPDATE clank_platform_domains
+        SET check_lease_token = ?, check_lease_until = ?
+        WHERE id = ? AND (check_lease_until IS NULL OR check_lease_until <= ?)`)
+        .run(token, now + leaseMs, id, now);
+      if (Number(result.changes) === 1) claimed.push({ id, token });
+    }
+    return claimed;
+  });
+}
+
+async function runBounded<Input, Output>(
+  inputs: readonly Input[],
+  concurrency: number,
+  worker: (input: Input) => Promise<Output>,
+  stopped: () => boolean,
+): Promise<Output[]> {
+  const output: Output[] = [];
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(concurrency, inputs.length) }, async () => {
+    while (!stopped()) {
+      const index = cursor++;
+      if (index >= inputs.length) return;
+      output.push(await worker(inputs[index]!));
+    }
+  });
+  await Promise.all(runners);
+  return output;
+}
+
+async function withTimeout<Value>(operation: Promise<Value>, timeoutMs: number, message: string): Promise<Value> {
+  return new Promise<Value>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    void operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function publicDomain(
@@ -2349,6 +2603,16 @@ function dashboardPayload(
   customDomainTarget: string | undefined,
   customDomainAddresses: readonly string[],
   automaticTls: boolean,
+  domainAutomation: Readonly<{
+    enabled: boolean;
+    intervalMs: number | null;
+    batchSize: number;
+    timeoutMs: number;
+    lastStartedAt: number | null;
+    lastCompletedAt: number | null;
+    lastChecked: number;
+    lastFailed: number;
+  }>,
 ): Record<string, unknown> {
   const organizationRows = principal.organizationId
     ? internal.prepare(`SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, m.role,
@@ -2431,6 +2695,7 @@ function dashboardPayload(
       cnameTarget: customDomainTarget ?? null,
       addresses: customDomainAddresses,
       automaticTls,
+      automation: { ...domainAutomation },
     },
   };
 }

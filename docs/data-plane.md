@@ -47,6 +47,8 @@ Custom hosts do not enter the ingress route set until the exact `_clank.<hostnam
 
 Ownership, routing, and certificate status are separate. Clank provides a constant-time, token-protected permission endpoint for Caddy On-Demand TLS; Caddy or another edge remains responsible for ACME, certificate/key storage, and renewal. See [Deployment dashboard, quotas, and domains](platform-dashboard.md) for the DNS lifecycle and production Caddy configuration.
 
+The deployment platform refreshes routing in bounded background batches. Expiring SQLite claims prevent duplicate work across control-plane processes, per-domain deadlines prevent a slow resolver from stopping the pass, and manual checks fence out stale automatic results. Ownership verification stays explicit.
+
 ## External PostgreSQL over HTTPS
 
 `createHttpPostgresDriver` is the zero-package external SQL boundary:
