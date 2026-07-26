@@ -161,3 +161,27 @@ test("documentation manifest covers every canonical guide exactly once", async (
     && doc.words > 0
     && doc.readingMinutes > 0));
 });
+
+test("documentation Markdown allows only explicit safe link protocols", async () => {
+  const { renderMarkdown } = await import("../docs-site/dist/markdown.js");
+  const rendered = renderMarkdown([
+    "## <script>unsafe heading</script>",
+    "",
+    "[JavaScript](javascript:alert(1))",
+    "[VBScript](vbscript:msgbox(1))",
+    "[Data](data:text/html,unsafe)",
+    "[Protocol relative](//attacker.example/path)",
+    "[HTTPS](https://clank.run/docs)",
+    "[Email](mailto:hello@clank.run)",
+    "[Internal](/docs/security)",
+  ].join("\n"));
+
+  assert.doesNotMatch(rendered.html, /<script/iu);
+  assert.doesNotMatch(rendered.html, /href="(?:java|vb)script:/iu);
+  assert.doesNotMatch(rendered.html, /href="data:/iu);
+  assert.doesNotMatch(rendered.html, /href="\/\/attacker/iu);
+  assert.match(rendered.html, /href="https:\/\/clank\.run\/docs"/u);
+  assert.match(rendered.html, /href="mailto:hello@clank\.run"/u);
+  assert.match(rendered.html, /href="\/docs\/security"/u);
+  assert.equal(rendered.toc[0].id, "scriptunsafe-headingscript");
+});

@@ -24,7 +24,6 @@ export function escapeHtml(value: string): string {
 function slugPart(value: string): string {
   return value
     .toLowerCase()
-    .replace(/<[^>]*>/gu, "")
     .replace(/[^a-z0-9\s-]/gu, "")
     .trim()
     .replace(/\s+/gu, "-")
@@ -33,10 +32,21 @@ function slugPart(value: string): string {
 
 function safeHref(raw: string): { href: string; external: boolean } | null {
   const value = raw.trim();
-  if (!value || value.startsWith("javascript:") || value.startsWith("data:") || value.startsWith("//")) return null;
+  if (!value || value.startsWith("//")) return null;
   if (value.startsWith("#") || value.startsWith("/")) return { href: value, external: false };
-  if (/^https?:\/\//u.test(value)) return { href: value, external: true };
-  if (/^mailto:[^\s@]+@[^\s@]+$/u.test(value)) return { href: value, external: true };
+  const scheme = value.match(/^([a-z][a-z0-9+.-]*):/iu)?.[1]?.toLowerCase();
+  if (scheme === "http" || scheme === "https") {
+    try {
+      const url = new URL(value);
+      return { href: url.href, external: true };
+    } catch {
+      return null;
+    }
+  }
+  if (scheme === "mailto") {
+    return /^mailto:[^\s@]+@[^\s@]+$/iu.test(value) ? { href: value, external: true } : null;
+  }
+  if (scheme) return null;
   const [path, fragment = ""] = value.split("#", 2);
   if (path.endsWith(".md") && !path.startsWith("../")) {
     const slug = path.split("/").at(-1)!.replace(/\.md$/u, "");
