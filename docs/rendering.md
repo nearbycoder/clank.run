@@ -195,6 +195,8 @@ Ordinary URL attributes reject executable schemes and unsafe data URLs. Inline `
 
 If the client tree differs structurally from the server tree, hydration warns, disposes the partial ownership scope, and remounts the root with `data-clank-hydration="remounted"`. Treat that fallback as a development signal: render deterministic initial data and seed live clients from `readState()` before hydration.
 
+Only structural `HydrationMismatch` failures trigger that fallback. Errors from components, directives, event bindings, or lifecycle callbacks are cleaned up and rethrown so application bugs remain visible instead of running the tree a second time. Clank also removes listeners, effects, and directive cleanups from any partially attached subtree before it remounts.
+
 Event handlers and `onMount` callbacks do not run during SSR. They attach or run during hydration. Use `serializeState()`/`renderDocument({ state })` rather than interpolating JSON into scripts; it escapes HTML- and script-significant characters.
 
 For a strict Content Security Policy, generate a fresh nonce per response and pass it to both the policy and document renderer:

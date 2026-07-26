@@ -44,15 +44,16 @@ class FakeComment extends FakeNode {
 }
 
 class FakeElement extends FakeNode {
-  constructor(tagName) {
+  constructor(tagName, namespaceURI = "http://www.w3.org/1999/xhtml") {
     super();
-    this.tagName = tagName.toUpperCase();
+    this.namespaceURI = namespaceURI;
+    this.localName = namespaceURI === "http://www.w3.org/2000/svg" ? tagName : tagName.toLowerCase();
+    this.tagName = namespaceURI === "http://www.w3.org/2000/svg" ? tagName : tagName.toUpperCase();
     this.attributes = new Map();
     this.listeners = new Map();
     this.style = { setProperty() {} };
     this.classList = { add() {}, remove() {}, toggle() {} };
   }
-  get localName() { return this.tagName.toLowerCase(); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   hasAttribute(name) { return this.attributes.has(name); }
@@ -68,12 +69,12 @@ globalThis.Comment = FakeComment;
 globalThis.Element = FakeElement;
 globalThis.document = {
   createElement: (tag) => new FakeElement(tag),
-  createElementNS: (_namespace, tag) => new FakeElement(tag),
+  createElementNS: (namespace, tag) => new FakeElement(tag, namespace),
   createTextNode: (value) => new FakeText(String(value)),
   createComment: (value) => new FakeComment(value),
 };
 
-const { For, expression, h, hydrate, render } = await import("../dist/dom.js");
+const { For, expression, h, hydrate, onMount, render } = await import("../dist/dom.js");
 const { signal } = await import("../dist/core.js");
 
 function elementById(root, id) {
@@ -152,6 +153,112 @@ test("hydrate splits adjacent static text merged by an HTML parser", () => {
   assert.equal(root.children[0], paragraph);
   assert.equal(paragraph.childNodes[0], merged);
   assert.deepEqual(paragraph.childNodes.map((node) => node.data), ["hello", "world"]);
+  assert.equal(root.getAttribute("data-clank-hydration"), "attached");
+});
+
+test("hydrate cleans partial listeners and actions before remounting a structural mismatch", () => {
+  const root = new FakeElement("main");
+  const section = new FakeElement("section");
+  const oldButton = new FakeElement("button");
+  section.insertBefore(oldButton, null);
+  section.insertBefore(new FakeElement("span"), null);
+  root.insertBefore(section, null);
+
+  let attached = 0;
+  let cleaned = 0;
+  const action = () => {
+    attached++;
+    return () => cleaned++;
+  };
+  const view = h("section", {}, h("button", { use: action, onClick: () => {} }));
+  const previousWarn = console.warn;
+  console.warn = () => {};
+  let dispose;
+  try {
+    dispose = hydrate(root, view);
+  } finally {
+    console.warn = previousWarn;
+  }
+
+  assert.equal(root.getAttribute("data-clank-hydration"), "remounted");
+  assert.notEqual(root.children[0], section);
+  assert.equal(oldButton.listeners.size, 0);
+  assert.equal(attached, 2, "the action attaches once during hydration and once on the fallback mount");
+  assert.equal(cleaned, 1, "the abandoned hydration attachment is cleaned before remounting");
+
+  dispose();
+  assert.equal(cleaned, 2);
+});
+
+test("hydrate propagates application binding errors without disguising them as mismatches", () => {
+  const root = new FakeElement("main");
+  const button = new FakeElement("button");
+  root.insertBefore(button, null);
+  let attached = 0;
+  let cleaned = 0;
+  let warned = false;
+  const previousWarn = console.warn;
+  console.warn = () => { warned = true; };
+  try {
+    assert.throws(
+      () => hydrate(root, h("button", {
+        use: () => {
+          attached++;
+          return () => cleaned++;
+        },
+        onClick: "not a listener",
+      })),
+      /expects an event listener function/,
+    );
+  } finally {
+    console.warn = previousWarn;
+  }
+
+  assert.equal(root.children[0], button);
+  assert.equal(root.getAttribute("data-clank-hydration"), null);
+  assert.equal(attached, 1);
+  assert.equal(cleaned, 1);
+  assert.equal(warned, false);
+});
+
+test("hydrate disposes attached component output when onMount throws", () => {
+  const root = new FakeElement("main");
+  const button = new FakeElement("button");
+  root.insertBefore(button, null);
+  let cleaned = 0;
+  function BrokenComponent() {
+    onMount(() => {
+      throw new Error("mount failed");
+    });
+    return h("button", { use: () => () => cleaned++ });
+  }
+
+  assert.throws(() => hydrate(root, h(BrokenComponent)), /mount failed/);
+  assert.equal(root.children[0], button);
+  assert.equal(cleaned, 1);
+  assert.equal(root.getAttribute("data-clank-hydration"), null);
+});
+
+test("hydrate preserves case-sensitive SVG elements and HTML children of foreignObject", () => {
+  const root = new FakeElement("main");
+  const view = h("svg", {},
+    h("linearGradient", { id: "fade" }),
+    h("foreignObject", {}, h("div", {}, "HTML")),
+  );
+  render(root, view);
+  const svg = root.children[0];
+  const gradient = svg.children[0];
+  const foreignObject = svg.children[1];
+  const htmlChild = foreignObject.children[0];
+
+  hydrate(root, view);
+
+  assert.equal(root.children[0], svg);
+  assert.equal(svg.children[0], gradient);
+  assert.equal(svg.children[1], foreignObject);
+  assert.equal(foreignObject.children[0], htmlChild);
+  assert.equal(gradient.localName, "linearGradient");
+  assert.equal(htmlChild.namespaceURI, "http://www.w3.org/1999/xhtml");
   assert.equal(root.getAttribute("data-clank-hydration"), "attached");
 });
 

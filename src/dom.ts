@@ -132,11 +132,12 @@ export function hydrate(root: Element, view: Renderable): Cleanup {
       disposeRoot = dispose;
       const cursor: HydrationCursor = { node: root.firstChild };
       const mounted = hydrateValue(root, view, cursor, { contexts: new Map() });
-      if (cursor.node !== null) throw new HydrationMismatch("Unexpected trailing server-rendered nodes.");
       onCleanup(() => mounted.dispose());
+      if (cursor.node !== null) throw new HydrationMismatch("Unexpected trailing server-rendered nodes.");
     });
   } catch (error) {
     disposeRoot();
+    if (!(error instanceof HydrationMismatch)) throw error;
     root.setAttribute("data-clank-hydration", "remounted");
     console.warn("Clank hydration mismatch; remounting the root.", error);
     return render(root, view);
@@ -193,7 +194,12 @@ function hydrateValue(parent: Node, input: Renderable, cursor: HydrationCursor, 
 }
 
 function hydrateFragment(parent: Node, values: Renderable[], cursor: HydrationCursor, context: MountContext): Mounted {
-  const mounted = values.map((value) => hydrateValue(parent, value, cursor, context));
+  const mounted: Mounted[] = [];
+  try {
+    for (const value of values) mounted.push(hydrateValue(parent, value, cursor, context));
+  } catch (error) {
+    cleanupAfterError(error, mounted.reverse().map((entry) => () => entry.dispose(false)));
+  }
   return {
     get nodes() { return mounted.flatMap((entry) => entry.nodes); },
     dispose(remove = true) {
@@ -205,43 +211,54 @@ function hydrateFragment(parent: Node, values: Renderable[], cursor: HydrationCu
 function hydrateDynamic(parent: Node, read: () => Renderable, cursor: HydrationCursor, context: MountContext): Mounted {
   const start = expectComment(cursor, "clank:start");
   const initial = unwrapReactive(read());
-  let current: Mounted;
-  if (isTextValue(initial) && String(initial) === "" && cursor.node instanceof Comment && cursor.node.data === "clank:end") {
-    const text = document.createTextNode("");
-    parent.insertBefore(text, cursor.node);
-    current = simpleMount([text]);
-  } else {
-    current = hydrateValue(parent, initial, cursor, context);
+  let current: Mounted | undefined;
+  let end: Comment;
+  try {
+    if (isTextValue(initial) && String(initial) === "" && cursor.node instanceof Comment && cursor.node.data === "clank:end") {
+      const text = document.createTextNode("");
+      parent.insertBefore(text, cursor.node);
+      current = simpleMount([text]);
+    } else {
+      current = hydrateValue(parent, initial, cursor, context);
+    }
+    end = expectComment(cursor, "clank:end");
+  } catch (error) {
+    cleanupAfterError(error, current ? [() => current?.dispose(false)] : []);
   }
-  const end = expectComment(cursor, "clank:end");
+  const hydrated = current;
   let currentValue: Renderable = initial;
   let first = true;
-  const stop = effect(() => {
-    const next = unwrapReactive(read());
-    if (first) {
-      first = false;
+  let stop: Cleanup;
+  try {
+    stop = effect(() => {
+      const next = unwrapReactive(read());
+      if (first) {
+        first = false;
+        currentValue = next;
+        return;
+      }
+      if (Object.is(next, currentValue)) return;
+      if (isTextValue(next) && current!.nodes.length === 1 && current!.nodes[0] instanceof Text) {
+        const text = String(next);
+        if (current!.nodes[0].data !== text) current!.nodes[0].data = text;
+        currentValue = next;
+        return;
+      }
+      current!.dispose();
+      current = mountValue(parent, next, end, context);
       currentValue = next;
-      return;
-    }
-    if (Object.is(next, currentValue)) return;
-    if (isTextValue(next) && current.nodes.length === 1 && current.nodes[0] instanceof Text) {
-      const text = String(next);
-      if (current.nodes[0].data !== text) current.nodes[0].data = text;
-      currentValue = next;
-      return;
-    }
-    current.dispose();
-    current = mountValue(parent, next, end, context);
-    currentValue = next;
-  });
+    });
+  } catch (error) {
+    cleanupAfterError(error, [() => hydrated?.dispose(false)]);
+  }
   let active = true;
   return {
-    get nodes() { return [start, ...current.nodes, end]; },
+    get nodes() { return [start, ...current!.nodes, end]; },
     dispose(remove = true) {
       if (!active) return;
       active = false;
       stop();
-      current.dispose(remove);
+      current!.dispose(remove);
       if (remove) {
         start.parentNode?.removeChild(start);
         end.parentNode?.removeChild(end);
@@ -259,16 +276,17 @@ function hydrateVNode(parent: Node, vnode: VNode, cursor: HydrationCursor, conte
 function hydrateComponent(parent: Node, vnode: VNode, cursor: HydrationCursor, parentContext: MountContext): Mounted {
   let mounted!: Mounted;
   let disposeScope: Cleanup = () => {};
+  let removeOnDispose = false;
   try {
     createRoot((dispose) => {
       disposeScope = dispose;
       const evaluation = evaluateComponent(vnode, parentContext.contexts);
       mounted = hydrateValue(parent, evaluation.output, cursor, { ...parentContext, contexts: evaluation.contexts });
+      onCleanup(() => mounted.dispose(removeOnDispose));
       for (const callback of evaluation.mounts) {
         const cleanup = callback();
         if (typeof cleanup === "function") onCleanup(cleanup);
       }
-      onCleanup(() => mounted.dispose());
     });
   } catch (error) {
     disposeScope();
@@ -280,7 +298,7 @@ function hydrateComponent(parent: Node, vnode: VNode, cursor: HydrationCursor, p
     dispose(remove = true) {
       if (!active) return;
       active = false;
-      if (!remove) mounted.dispose(false);
+      removeOnDispose = remove;
       disposeScope();
     },
   };
@@ -289,27 +307,41 @@ function hydrateComponent(parent: Node, vnode: VNode, cursor: HydrationCursor, p
 function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, context: MountContext): Mounted {
   const node = cursor.node;
   const tag = vnode.type as string;
-  if (!(node instanceof Element) || node.localName !== tag.toLowerCase()) {
+  const namespace = context.namespace === "svg" || tag === "svg" ? "svg" : undefined;
+  const expectedTag = namespace === "svg" ? tag : tag.toLowerCase();
+  if (!(node instanceof Element) || node.localName !== expectedTag) {
     throw new HydrationMismatch(`Expected server-rendered <${tag}>.`);
   }
   cursor.node = node.nextSibling;
-  const namespace = context.namespace === "svg" || tag === "svg" ? "svg" : undefined;
+  const childNamespace = namespace === "svg" && tag === "foreignObject" ? undefined : namespace;
   const cleanups: Cleanup[] = [];
-  for (const [name, value] of Object.entries(vnode.props)) {
-    if (name === "children" || name === "key") continue;
-    const cleanup = bindProperty(node, name, value);
-    if (cleanup) cleanups.push(cleanup);
-  }
-  const rawHTML = vnode.props.dangerouslySetInnerHTML;
   let children: Mounted | undefined;
-  if (rawHTML === undefined) {
-    const childCursor: HydrationCursor = { node: node.firstChild };
-    children = hydrateFragment(node, vnode.props.children as Renderable[], childCursor, { ...context, namespace });
-    if (childCursor.node !== null) throw new HydrationMismatch(`Unexpected children in server-rendered <${tag}>.`);
-  }
   const ref = vnode.props.ref;
-  if (typeof ref === "function") (ref as (element: Element) => void)(node);
-  else if (isSignal(ref)) (ref as ReactiveSignal<Element | null>).value = node;
+  try {
+    for (const [name, value] of Object.entries(vnode.props)) {
+      if (name === "children" || name === "key") continue;
+      const cleanup = bindProperty(node, name, value);
+      if (cleanup) cleanups.push(cleanup);
+    }
+    const rawHTML = vnode.props.dangerouslySetInnerHTML;
+    if (rawHTML === undefined) {
+      const childCursor: HydrationCursor = { node: node.firstChild };
+      children = hydrateFragment(node, vnode.props.children as Renderable[], childCursor, { ...context, namespace: childNamespace });
+      if (childCursor.node !== null) throw new HydrationMismatch(`Unexpected children in server-rendered <${tag}>.`);
+    }
+    if (typeof ref === "function") (ref as (element: Element) => void)(node);
+    else if (isSignal(ref)) (ref as ReactiveSignal<Element | null>).value = node;
+  } catch (error) {
+    cleanupAfterError(error, [
+      () => children?.dispose(false),
+      ...cleanups.reverse(),
+      () => {
+        if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === node) {
+          (ref as ReactiveSignal<Element | null>).value = null;
+        }
+      },
+    ]);
+  }
   return simpleMount([node], () => {
     children?.dispose(false);
     for (const cleanup of cleanups.reverse()) cleanup();
@@ -359,6 +391,21 @@ function simpleMount(nodes: Node[], cleanup?: Cleanup): Mounted {
       if (remove) for (const node of nodes) node.parentNode?.removeChild(node);
     },
   };
+}
+
+function cleanupAfterError(error: unknown, cleanups: Cleanup[]): never {
+  const errors = [error];
+  for (const cleanup of cleanups) {
+    try {
+      cleanup();
+    } catch (cleanupError) {
+      errors.push(cleanupError);
+    }
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Clank attachment failed and one or more partial bindings could not be cleaned up.");
+  }
+  throw error;
 }
 
 function mountFragment(parent: Node, values: Renderable[], before: Node | null, context: MountContext): Mounted {
@@ -544,82 +591,98 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
   let entries = new Map<unknown, KeyedEntry<T>>();
   let ordered: KeyedEntry<T>[] = [];
   let fallback: Mounted | undefined;
-  if (initial.length === 0) {
-    fallback = hydrateValue(parent, unwrapReactive(block.fallback ?? null), cursor, context);
-  } else {
-    initial.forEach((item, index) => {
-      const key = keyOf(item, index);
-      const indexState = signal(index);
-      const reactiveItem = createReactiveItem(item);
-      const entry: KeyedEntry<T> = {
-        key,
-        updateItem: reactiveItem.update,
-        index: indexState,
-        mounted: hydrateValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), cursor, context),
-      };
-      entries.set(key, entry);
-      ordered.push(entry);
-    });
-  }
-  const end = expectComment(cursor, "clank:/for");
-
-  let first = true;
-  const stop = effect(() => {
-    const values = unwrapReactive(block.each as Renderable) as T[];
-    if (!Array.isArray(values)) throw new TypeError("For expects an array, signal, computed value, or array accessor.");
-    if (first) {
-      first = false;
-      return;
-    }
-    const keyedValues = values.map((item, index) => ({ item, index, key: keyOf(item, index) }));
-    const uniqueKeys = new Set<unknown>();
-    for (const { key } of keyedValues) {
-      if (uniqueKeys.has(key)) throw new Error(`Duplicate key in For: ${String(key)}`);
-      uniqueKeys.add(key);
-    }
-    const next = new Map<unknown, KeyedEntry<T>>();
-    const nextOrdered: KeyedEntry<T>[] = [];
-    keyedValues.forEach(({ item, index, key }) => {
-      let entry = entries.get(key);
-      if (entry) {
-        entry.updateItem(item);
-        entry.index.value = index;
-      } else {
+  let end: Comment;
+  try {
+    if (initial.length === 0) {
+      fallback = hydrateValue(parent, unwrapReactive(block.fallback ?? null), cursor, context);
+    } else {
+      initial.forEach((item, index) => {
+        const key = keyOf(item, index);
         const indexState = signal(index);
         const reactiveItem = createReactiveItem(item);
-        entry = {
+        const entry: KeyedEntry<T> = {
           key,
           updateItem: reactiveItem.update,
           index: indexState,
-          mounted: mountValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), end, context),
+          mounted: hydrateValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), cursor, context),
         };
-      }
-      next.set(key, entry);
-      nextOrdered.push(entry);
-    });
-
-    for (const [key, entry] of entries) if (!next.has(key)) entry.mounted.dispose();
-    entries = next;
-    ordered = nextOrdered;
-    if (ordered.length === 0) {
-      fallback ??= mountValue(parent, block.fallback ?? null, end, context);
-    } else {
-      fallback?.dispose();
-      fallback = undefined;
-      let position: Node = end;
-      for (let index = ordered.length - 1; index >= 0; index--) {
-        const nodes = ordered[index].mounted.nodes;
-        if (nodes.length > 0 && nodes[nodes.length - 1].nextSibling === position) {
-          position = nodes[0];
-          continue;
-        }
-        for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
-          parent.insertBefore(nodes[nodeIndex], position);
-          position = nodes[nodeIndex];
-        }
-      }
+        entries.set(key, entry);
+        ordered.push(entry);
+      });
     }
-  });
+    end = expectComment(cursor, "clank:/for");
+  } catch (error) {
+    cleanupAfterError(error, [
+      () => fallback?.dispose(false),
+      ...ordered.reverse().map((entry) => () => entry.mounted.dispose(false)),
+    ]);
+  }
+
+  let first = true;
+  let stop: Cleanup;
+  try {
+    stop = effect(() => {
+      const values = unwrapReactive(block.each as Renderable) as T[];
+      if (!Array.isArray(values)) throw new TypeError("For expects an array, signal, computed value, or array accessor.");
+      if (first) {
+        first = false;
+        return;
+      }
+      const keyedValues = values.map((item, index) => ({ item, index, key: keyOf(item, index) }));
+      const uniqueKeys = new Set<unknown>();
+      for (const { key } of keyedValues) {
+        if (uniqueKeys.has(key)) throw new Error(`Duplicate key in For: ${String(key)}`);
+        uniqueKeys.add(key);
+      }
+      const next = new Map<unknown, KeyedEntry<T>>();
+      const nextOrdered: KeyedEntry<T>[] = [];
+      keyedValues.forEach(({ item, index, key }) => {
+        let entry = entries.get(key);
+        if (entry) {
+          entry.updateItem(item);
+          entry.index.value = index;
+        } else {
+          const indexState = signal(index);
+          const reactiveItem = createReactiveItem(item);
+          entry = {
+            key,
+            updateItem: reactiveItem.update,
+            index: indexState,
+            mounted: mountValue(parent, block.renderItem(reactiveItem.value, () => indexState.value), end, context),
+          };
+        }
+        next.set(key, entry);
+        nextOrdered.push(entry);
+      });
+
+      for (const [key, entry] of entries) if (!next.has(key)) entry.mounted.dispose();
+      entries = next;
+      ordered = nextOrdered;
+      if (ordered.length === 0) {
+        fallback ??= mountValue(parent, block.fallback ?? null, end, context);
+      } else {
+        fallback?.dispose();
+        fallback = undefined;
+        let position: Node = end;
+        for (let index = ordered.length - 1; index >= 0; index--) {
+          const nodes = ordered[index].mounted.nodes;
+          if (nodes.length > 0 && nodes[nodes.length - 1].nextSibling === position) {
+            position = nodes[0];
+            continue;
+          }
+          for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
+            parent.insertBefore(nodes[nodeIndex], position);
+            position = nodes[nodeIndex];
+          }
+        }
+      }
+    });
+  } catch (error) {
+    cleanupAfterError(error, [
+      () => fallback?.dispose(false),
+      ...ordered.reverse().map((entry) => () => entry.mounted.dispose(false)),
+    ]);
+  }
 
   let active = true;
   return {
@@ -738,11 +801,11 @@ function mountComponent(parent: Node, vnode: VNode, before: Node | null, parentC
       disposeScope = dispose;
       const evaluation = evaluateComponent(vnode, parentContext.contexts);
       mounted = mountValue(parent, evaluation.output, before, { ...parentContext, contexts: evaluation.contexts });
+      onCleanup(() => mounted.dispose());
       for (const callback of evaluation.mounts) {
         const cleanup = callback();
         if (typeof cleanup === "function") onCleanup(cleanup);
       }
-      onCleanup(() => mounted.dispose());
     });
   } catch (error) {
     disposeScope();
@@ -792,6 +855,7 @@ function componentProps(props: Record<string, unknown>): Record<string, unknown>
 function mountElement(parent: Node, vnode: VNode, before: Node | null, context: MountContext): Mounted {
   const tag = vnode.type as string;
   const namespace = context.namespace === "svg" || tag === "svg" ? "svg" : undefined;
+  const childNamespace = namespace === "svg" && tag === "foreignObject" ? undefined : namespace;
   const element = namespace
     ? document.createElementNS("http://www.w3.org/2000/svg", tag)
     : document.createElement(tag);
@@ -803,7 +867,7 @@ function mountElement(parent: Node, vnode: VNode, before: Node | null, context: 
   }
   const rawHTML = vnode.props.dangerouslySetInnerHTML;
   const children = rawHTML === undefined
-    ? mountFragment(element, vnode.props.children as Renderable[], null, { ...context, namespace })
+    ? mountFragment(element, vnode.props.children as Renderable[], null, { ...context, namespace: childNamespace })
     : undefined;
   parent.insertBefore(element, before);
   const ref = vnode.props.ref;
