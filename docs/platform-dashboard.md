@@ -37,8 +37,13 @@ The overview shows:
 - a searchable project list with request and p95-latency summaries.
 
 Selecting a project switches the desktop sidebar to contextual project navigation with an explicit
-return to **All projects**. Narrow screens use the same links in a horizontally scrollable tab bar
-and keep the off-canvas sidebar out of the keyboard and accessibility trees while it is closed.
+return to **All projects**. Phone and tablet layouts switch to an off-canvas sidebar with a
+click-away backdrop; the closed drawer stays out of both the keyboard and accessibility trees.
+Project sections become a complete two- or three-column tab grid, so every destination remains
+visible without horizontal scrolling. Dense deployment, backup, and operator tables become
+labelled record cards, domain instructions and runtime logs wrap safely, and interactive controls
+use at least 44-pixel touch targets. Summary cards stay in two columns on ordinary phones and
+collapse to one column on extra-narrow screens.
 Each project URL loads shared project metadata plus only the selected view's bounded dataset. For
 example, opening Performance requests metrics but does not also download domains, releases,
 backups, and logs.

@@ -2695,6 +2695,12 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /aria-label="Project navigation"/);
     assert.match(signedInHtml, /data-project-tab="deployments"/);
     assert.match(signedInHtml, /aria-controls="sidebar"/);
+    assert.match(signedInHtml, /id="sidebar-scrim"[^>]+aria-label="Close navigation"/);
+    assert.match(signedInHtml, /class="table mobile-card-table release-table"/);
+    assert.match(signedInHtml, /class="table mobile-card-table backup-table"/);
+    assert.match(signedInHtml, /class="table admin-user-table mobile-card-table"/);
+    assert.match(signedInHtml, /@media\(max-width:900px\)/);
+    assert.match(signedInHtml, /\.button,\.input,\.nav-button\{min-height:44px\}/);
     assert.match(signedInHtml, /aria-labelledby="site-dialog-title"/);
     for (const path of [
       "/login",
