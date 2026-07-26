@@ -80,7 +80,12 @@ clank-platform
 
 Proxy the console and application hosts to port 4200. Clank performs exact-host project routing; the edge performs public DNS, TLS, WAF/rate limiting, and DDoS controls. The recommended Caddy On-Demand TLS configuration and DNS records are in [Deployment dashboard, quotas, and domains](platform-dashboard.md).
 
-Use `/livez` only to determine whether the process can answer HTTP. Use `/healthz` or `/readyz` for load-balancer readiness; those endpoints execute a control-database probe and return `503` when the platform cannot safely accept work. `SIGINT` and `SIGTERM` stop new HTTP work, drain an active scheduled backup, close supervised applications and platform storage, and fail the process if shutdown cannot finish within 30 seconds.
+Use `/livez` only to determine whether the process can answer HTTP. Use `/healthz` or `/readyz` for
+control-host readiness. Hosted load balancers that send a different `Host` header should use
+`/_clank/readyz`, which is evaluated before application-host ingress. These readiness endpoints
+execute a control-database probe and return `503` when the platform cannot safely accept work.
+`SIGINT` and `SIGTERM` stop new HTTP work, drain an active scheduled backup, close supervised
+applications and platform storage, and fail the process if shutdown cannot finish within 30 seconds.
 
 ## Tailscale
 
@@ -94,6 +99,11 @@ tailscale serve --https=8447 http://127.0.0.1:4200
 ```
 
 Expose app ports separately or place a wildcard-capable proxy in front.
+
+## Railway
+
+The checked-in production image, health/restart policy, persistent-volume topology, DNS setup, and
+operator runbook are in [Railway production deployment](railway.md).
 
 ## Storage
 
