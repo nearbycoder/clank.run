@@ -13,7 +13,7 @@ The overview shows:
 - enforced site capacity across the account's organizations; and
 - a site picker with request and p95-latency summaries.
 
-Each site has performance, domains, deployments, backups, and logs views. The performance chart supports `1h`, `24h`, `7d`, and `30d` windows. The domains view walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. The backups view exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. A project without a first deployment reports that its isolated database is not available instead of failing the whole project screen.
+Each site has performance, domains, deployments, backups, and logs views. The performance chart supports `1h`, `24h`, `7d`, and `30d` windows. The domains view walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. The deployments view shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. The backups view exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. A project without a first deployment reports that its isolated database is not available instead of failing the whole project screen.
 
 The dashboard uses the same organization membership and project-permission checks as the CLI. API values are inserted with DOM `textContent` or attributes rather than HTML parsing. The page has a nonce-bound script, restrictive CSP, no-store responses, framing denial, and no third-party assets.
 
@@ -28,10 +28,20 @@ Limits are operator configuration, not cosmetic dashboard values:
 | `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Site count and insert in one SQLite transaction |
 | `CLANK_MAX_DOMAINS_PER_PROJECT` | `5` | Domain assignment and count in one SQLite transaction |
 | `CLANK_METRICS_RETENTION_DAYS` | `30` | Minute ingress-metric retention |
+| `CLANK_MAX_RELEASES_PER_PROJECT` | `50` | Available release-artifact count (valid range 2–100) checked under the distributed project lock |
+| `CLANK_MAX_RELEASE_STORAGE_BYTES_PER_PROJECT` | `21474836480` | Uncompressed release files and pre-deploy snapshots checked under the same lock |
 
 The API returns `ORGANIZATION_LIMIT_REACHED`, `ACCOUNT_PROJECT_LIMIT_REACHED`, `PROJECT_LIMIT_REACHED`, or `DOMAIN_LIMIT_REACHED` with HTTP `409` when capacity is exhausted. Account limits count organizations created by the account and projects owned by the account; joining someone else's organization does not consume the invitee's creator quota. A pending or verified hostname belongs to exactly one project; another project cannot replace its challenge. The console hostname, custom-domain target, base domain, and the base-domain application namespace are reserved.
 
-These are fixed installation-wide ceilings today. Both account and organization limits are checked in the same SQLite write transactions as their inserts, so concurrent requests and extra workspaces cannot bypass capacity. A hosted service can later resolve plan-specific limits before entering those transactions; billing state must never be the only enforcement layer.
+These are fixed installation-wide ceilings today. Account and organization limits are checked in the same SQLite write transactions as their inserts. Release limits are rechecked while holding the project's durable cross-control-plane lease, so concurrent deploys cannot bypass capacity. A hosted service can later resolve plan-specific limits before entering those transactions; billing state must never be the only enforcement layer.
+
+## Release storage lifecycle
+
+Each available release counts its extracted file sizes plus its pre-deploy SQLite rollback snapshot. The compressed upload size remains visible separately for protocol accounting. A deployment is rejected with `RELEASE_LIMIT_REACHED` or `RELEASE_STORAGE_LIMIT_REACHED` before activation when it would exceed either ceiling.
+
+The active release cannot be cleaned. Removing the active release's immediate predecessor removes the one-click code target and the active release's matching pre-deploy data snapshot, so the API requires both the exact confirmation text and an explicit rollback-loss flag. Other inactive, failed, or crashed artifacts need the same exact confirmation but no rollback-loss override. Cleanup requires `rollback` permission and removes only runtime files and release-local rollback material; immutable release metadata, logs, and audit evidence remain.
+
+On upgrade, pre-existing releases initialize storage accounting from their recorded upload bytes because older rows did not retain extracted-size totals. New deployments record the exact extracted file total and actual snapshot size. Operators that need exact accounting for old releases can clean obsolete artifacts or redeploy them.
 
 ## Ingress metrics
 
@@ -130,6 +140,8 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `POST /api/projects/:id/backups` — create and verify an encrypted restore point.
 - `POST /api/projects/:id/backups/:backupId/verify` — decrypt, authenticate, checksum, and integrity-check a restore point.
 - `POST /api/projects/:id/backups/:backupId/restore` — confirmation-gated restore with an automatic safety copy.
+- `GET /api/projects/:id/releases` — release history, artifact availability, cleanup protection, and count/byte usage.
+- `DELETE /api/projects/:id/releases/:releaseId` — confirmation-gated inactive artifact and rollback-snapshot cleanup.
 - `GET /_clank/tls/ask?token=…&domain=…` — private Caddy permission lookup; not a customer API.
 
 Browser mutations require same-origin session authentication and CSRF. CLI calls use bearer tokens, whose organization role and project scope are re-evaluated on every request.

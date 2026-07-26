@@ -48,6 +48,8 @@ Clank Deploy is one Node control-plane process plus one supervised process or co
 | `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Transactionally enforced site limit |
 | `CLANK_MAX_DOMAINS_PER_PROJECT` | `5` | Transactionally enforced custom-domain limit |
 | `CLANK_METRICS_RETENTION_DAYS` | `30` | Ingress metric retention, 1–365 days |
+| `CLANK_MAX_RELEASES_PER_PROJECT` | `50` | Retained runtime-artifact count per site |
+| `CLANK_MAX_RELEASE_STORAGE_BYTES_PER_PROJECT` | `21474836480` | Uncompressed release files plus pre-deploy snapshots retained per site |
 | `CLANK_ALLOW_UNSAFE_MIGRATIONS` | `0` | Operator approval for unrestricted SQL |
 | `ALLOWED_HOSTS` | loopback | Exact host allowlist |
 | `TRUST_PROXY` | `0` | Trust forwarded client/protocol |
@@ -107,7 +109,7 @@ projects/<id>/
 
 Use a local filesystem with correct SQLite locking/rename semantics. The platform sets umask `0077`.
 
-Clank automatically creates authenticated, AES-256-GCM encrypted recovery points under `recovery/`. Durable control-database claims prevent duplicate scheduled work when multiple control-plane processes share the store. Back up the control database, completed recovery directories, recoverable artifacts/source, and master key through separate paths. Pre-release snapshots remain rollback material, not part of the recovery retention policy. See [Backup and disaster recovery](recovery.md).
+Clank automatically creates authenticated, AES-256-GCM encrypted recovery points under `recovery/`. Durable control-database claims prevent duplicate scheduled work when multiple control-plane processes share the store. Release count and byte ceilings separately bound retained extracted runtime files and pre-deploy rollback snapshots. Back up the control database, completed recovery directories, recoverable artifacts/source, and master key through separate paths. Pre-release snapshots remain rollback material, not part of the recovery retention policy. See [Backup and disaster recovery](recovery.md).
 
 ## Upgrades
 

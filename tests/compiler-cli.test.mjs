@@ -163,6 +163,78 @@ test("deployment CLI bounds platform JSON responses before buffering them", asyn
   }
 });
 
+test("release cleanup CLI sends explicit confirmation and rollback-loss intent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-release-cleanup-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  let observed;
+  const server = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    observed = {
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+      body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+    };
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"ok":true}');
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}/`;
+  try {
+    await mkdir(join(project, ".clank"), { recursive: true });
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_release_cleanup_test_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    await writeFile(join(project, ".clank", "project.json"), JSON.stringify({
+      version: 1,
+      server: platform,
+      projectId: "project_release_cleanup",
+    }));
+    const releaseId = "release_cleanup_123";
+    const confirmation = `delete-release tasks ${releaseId}`;
+    const result = await runCliResult([
+      "releases",
+      "delete",
+      releaseId,
+      `--confirm=${confirmation}`,
+      "--allow-rollback-loss",
+    ], project, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Removed release storage/);
+    assert.deepEqual(observed, {
+      method: "DELETE",
+      url: `/api/projects/project_release_cleanup/releases/${releaseId}`,
+      authorization: "Bearer clnk_release_cleanup_test_token",
+      body: {
+        confirmation,
+        allowRollbackLoss: true,
+      },
+    });
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("create scaffolds a named, buildable authenticated application", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-create-"));
   const target = join(root, "team-tasks");

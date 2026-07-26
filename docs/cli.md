@@ -56,10 +56,14 @@ Deployment validates config, runs the local build without a shell, packages incl
 ```sh
 clank status
 clank releases
+clank releases delete <inactive-release-id> \
+  --confirm="delete-release <project-slug> <inactive-release-id>"
 clank logs --limit=500
 clank rollback <release-id>
 clank rollback <release-id> --restore-data --confirm="restore <slug>"
 ```
+
+`clank releases` reports the retained artifact count and uncompressed runtime/snapshot bytes. Cleanup requires the token's `rollback` permission, never removes the active artifact, and preserves release metadata, logs, and audit evidence. Removing the active release's immediate predecessor also destroys code rollback and its matching data snapshot, so it additionally requires `--allow-rollback-loss`.
 
 Logs are bounded. Every non-empty known secret value is redacted, including short values, with longer overlapping values replaced first. Apps must still avoid logging credentials because transformed, encoded, split, or externally emitted values cannot be recognized reliably.
 

@@ -21,6 +21,10 @@ export interface PlatformLimits {
     domainsPerProject?: number;
     /** Retention for minute-level ingress metrics. Defaults to 30 days. */
     metricRetentionDays?: number;
+    /** Maximum retained release artifacts per project. Defaults to 50. */
+    releasesPerProject?: number;
+    /** Maximum retained release and pre-deploy snapshot bytes per project. Defaults to 20 GiB. */
+    releaseStorageBytesPerProject?: number;
 }
 export interface PlatformBackupOptions {
     /** Encrypted backup cadence. Defaults to 24 hours; false disables automatic backups. */

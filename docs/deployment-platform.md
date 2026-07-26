@@ -126,6 +126,16 @@ If backup, migration, startup, or health fails, Clank stops the candidate, resto
 
 This creates a short SQLite write outage. Continuously writable multi-instance systems need an external database and another deployment driver.
 
+Before creating a release directory, Clank checks the site's retained-artifact count and the uncompressed bundle plus current SQLite/WAL footprint under the durable project lock. After taking a pre-deploy snapshot, it records the exact snapshot size. This bounds cumulative deployment storage rather than only bounding each upload.
+
+```sh
+clank releases
+clank releases delete <inactive-release-id> \
+  --confirm="delete-release <project-slug> <inactive-release-id>"
+```
+
+Cleanup requires `rollback` permission. The active artifact is never removable. Add `--allow-rollback-loss` only when intentionally removing the active release's immediate predecessor; that removes the predecessor's runtime files and the active release's matching data-restore snapshot. Cleanup preserves release metadata and audit history.
+
 ## Rollback
 
 Code-only rollback is the default:
@@ -201,6 +211,7 @@ Bearer:
 - account and token listing/revocation;
 - project creation/listing/status;
 - release upload/history/rollback;
+- release storage usage and confirmation-gated inactive artifact cleanup;
 - logs, encrypted secrets, scheduled/manual backup operations, and audit events.
 
 Managed edge:

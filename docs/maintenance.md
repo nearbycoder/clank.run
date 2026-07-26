@@ -42,4 +42,9 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Added durable scheduled encrypted backups with cross-control-plane claims, retention, private failure reporting, and graceful draining.
 - [x] Added backup cadence/status, manual creation, and verification to the deployment console without exposing host paths.
 - [x] Added automatic-backup encryption, failure, retention, multi-control-plane, and shutdown regression coverage.
+- [x] Bounded cumulative release files and pre-deploy snapshots with durable per-project count/byte quotas.
+- [x] Added confirmation-gated artifact cleanup with active-release and immediate-rollback protections.
+- [x] Exposed release storage usage and cleanup in both the deployment console and CLI.
+- [x] Re-certified all 136 tests, coverage floors, 45-file documentation/declaration audit, packed conformance, and repository/history security scan.
+- [x] Browser-verified cleanup, persistent authenticated refresh, console health, accessibility semantics, and desktop/mobile layout.
 - [ ] Record the final full-suite, security, conformance, browser, and GitHub CI results in the follow-up pull request.

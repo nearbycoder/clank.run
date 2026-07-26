@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -854,6 +854,445 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
       token: admin.accessToken,
     }));
     assert.equal(adminAccountStillWorks.status, 200);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("release storage quotas are enforced and cleanup preserves authorization and rollback safety", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-release-storage-"));
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4570,
+    appPortEnd: 4575,
+    signup: true,
+    backups: { intervalMs: false },
+    limits: {
+      releasesPerProject: 3,
+      releaseStorageBytesPerProject: 1024 * 1024 * 1024,
+    },
+  });
+  try {
+    const owner = await authorizeCli(platform, "release-storage@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    assert.equal(dashboard.limits.releasesPerProject, 3);
+    assert.equal(dashboard.limits.releaseStorageBytesPerProject, 1024 * 1024 * 1024);
+    const project = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Bounded Releases",
+        slug: "bounded-releases",
+        organizationId: dashboard.organizations[0].id,
+      },
+    }), 201);
+    const projectId = project.project.id;
+    const source = join(root, "source");
+    const artifacts = [];
+    for (const label of ["one", "two", "three", "four"]) {
+      artifacts.push(await appArtifact(source, `release-${label}`, [
+        ["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"],
+      ]));
+    }
+    const first = await deploy(platform, projectId, owner.accessToken, artifacts[0], "storage-release-key-0001");
+    assert.equal(first.response.status, 201, JSON.stringify(first.body));
+    const second = await deploy(platform, projectId, owner.accessToken, artifacts[1], "storage-release-key-0002");
+    assert.equal(second.response.status, 201, JSON.stringify(second.body));
+    const third = await deploy(platform, projectId, owner.accessToken, artifacts[2], "storage-release-key-0003");
+    assert.equal(third.response.status, 201, JSON.stringify(third.body));
+
+    let releases = await payload(platform, jsonRequest(`/api/projects/${projectId}/releases`, {
+      token: owner.accessToken,
+    }));
+    assert.deepEqual(releases.usage, {
+      releases: 3,
+      storageBytes: releases.releases.reduce((total, release) => total + release.storageBytes, 0),
+    });
+    assert.deepEqual(releases.limits, {
+      releases: 3,
+      storageBytes: 1024 * 1024 * 1024,
+    });
+    const storedSecond = releases.releases.find((release) => release.id === second.body.release.id);
+    assert.ok(
+      storedSecond.storageBytes > storedSecond.artifactBytes,
+      "release storage must include the pre-deploy SQLite snapshot, not only the upload",
+    );
+    assert.equal(releases.releases.find((release) => release.id === third.body.release.id).cleanup.allowed, false);
+    assert.equal(storedSecond.cleanup.rollbackProtected, true);
+
+    const overCount = await deploy(platform, projectId, owner.accessToken, artifacts[3], "storage-release-key-0004");
+    assert.equal(overCount.response.status, 409);
+    assert.equal(overCount.body.error.code, "RELEASE_LIMIT_REACHED");
+
+    const deployToken = await payload(platform, jsonRequest(`/api/projects/${projectId}/tokens`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Deploy-only automation",
+        permissions: ["read", "deploy"],
+        expiresIn: 3600,
+      },
+    }), 201);
+    const deniedCleanup = await platform.handle(jsonRequest(
+      `/api/projects/${projectId}/releases/${first.body.release.id}`,
+      {
+        method: "DELETE",
+        token: deployToken.token.accessToken,
+        body: {
+          confirmation: `delete-release bounded-releases ${first.body.release.id}`,
+          allowRollbackLoss: false,
+        },
+      },
+    ));
+    assert.equal(deniedCleanup.status, 403);
+    assert.equal((await deniedCleanup.json()).error.code, "TOKEN_SCOPE_DENIED");
+
+    const wrongConfirmation = await platform.handle(jsonRequest(
+      `/api/projects/${projectId}/releases/${first.body.release.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: { confirmation: "delete it", allowRollbackLoss: false },
+      },
+    ));
+    assert.equal(wrongConfirmation.status, 400);
+
+    const sentinelDirectory = join(root, "outside-release-storage");
+    const sentinelFile = join(sentinelDirectory, "keep.txt");
+    await mkdir(sentinelDirectory);
+    await writeFile(sentinelFile, "do not remove");
+    const control = new DatabaseSync(join(root, "platform", "control.sqlite"));
+    control.prepare(`UPDATE clank_platform_releases
+      SET directory = ?, backup_path = ? WHERE id = ?`)
+      .run(sentinelDirectory, sentinelFile, first.body.release.id);
+    control.close();
+
+    const backupDirectory = join(root, "platform", "projects", projectId, "backups");
+    const realBackupDirectory = `${backupDirectory}-real`;
+    await rename(backupDirectory, realBackupDirectory);
+    await symlink(sentinelDirectory, backupDirectory, "dir");
+    const symlinkedParentCleanup = await platform.handle(jsonRequest(
+      `/api/projects/${projectId}/releases/${first.body.release.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: `delete-release bounded-releases ${first.body.release.id}`,
+          allowRollbackLoss: false,
+        },
+      },
+    ));
+    assert.equal(symlinkedParentCleanup.status, 500);
+    assert.equal((await symlinkedParentCleanup.json()).error.code, "PLATFORM_ERROR");
+    assert.equal(await readFile(sentinelFile, "utf8"), "do not remove");
+    assert.ok((await stat(
+      join(root, "platform", "projects", projectId, "releases", first.body.release.id),
+    )).isDirectory());
+    await unlink(backupDirectory);
+    await rename(realBackupDirectory, backupDirectory);
+
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/releases/${first.body.release.id}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: `delete-release bounded-releases ${first.body.release.id}`,
+        allowRollbackLoss: false,
+      },
+    }));
+    await assert.rejects(
+      stat(join(root, "platform", "projects", projectId, "releases", first.body.release.id)),
+      (error) => error.code === "ENOENT",
+    );
+    assert.equal(
+      await readFile(sentinelFile, "utf8"),
+      "do not remove",
+      "cleanup must derive paths instead of trusting mutable database path columns",
+    );
+    const repeatedCleanup = await payload(
+      platform,
+      jsonRequest(`/api/projects/${projectId}/releases/${first.body.release.id}`, {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: `delete-release bounded-releases ${first.body.release.id}`,
+          allowRollbackLoss: false,
+        },
+      }),
+    );
+    assert.equal(repeatedCleanup.release.artifactAvailable, false);
+
+    const fourth = await deploy(platform, projectId, owner.accessToken, artifacts[3], "storage-release-key-0004");
+    assert.equal(fourth.response.status, 201, JSON.stringify(fourth.body));
+    const activeCleanup = await platform.handle(jsonRequest(
+      `/api/projects/${projectId}/releases/${fourth.body.release.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: `delete-release bounded-releases ${fourth.body.release.id}`,
+          allowRollbackLoss: true,
+        },
+      },
+    ));
+    assert.equal(activeCleanup.status, 409);
+    assert.equal((await activeCleanup.json()).error.code, "ACTIVE_RELEASE_PROTECTED");
+
+    const secondBackup = join(
+      root,
+      "platform",
+      "projects",
+      projectId,
+      "backups",
+      `${second.body.release.id}.sqlite`,
+    );
+    assert.ok((await stat(secondBackup)).size > 0);
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/releases/${second.body.release.id}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: `delete-release bounded-releases ${second.body.release.id}`,
+        allowRollbackLoss: false,
+      },
+    }));
+    await assert.rejects(stat(secondBackup), (error) => error.code === "ENOENT");
+
+    const protectedCleanup = await platform.handle(jsonRequest(
+      `/api/projects/${projectId}/releases/${third.body.release.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: `delete-release bounded-releases ${third.body.release.id}`,
+          allowRollbackLoss: false,
+        },
+      },
+    ));
+    assert.equal(protectedCleanup.status, 409);
+    assert.equal((await protectedCleanup.json()).error.code, "RELEASE_ROLLBACK_PROTECTED");
+    const fourthBackup = join(
+      root,
+      "platform",
+      "projects",
+      projectId,
+      "backups",
+      `${fourth.body.release.id}.sqlite`,
+    );
+    assert.ok((await stat(fourthBackup)).size > 0);
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/releases/${third.body.release.id}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: `delete-release bounded-releases ${third.body.release.id}`,
+        allowRollbackLoss: true,
+      },
+    }));
+    await assert.rejects(
+      stat(fourthBackup),
+      (error) => error.code === "ENOENT",
+      "accepting rollback loss must remove the active release's now-unusable matching snapshot",
+    );
+    const removedRollback = await platform.handle(jsonRequest(`/api/projects/${projectId}/rollback`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { releaseId: third.body.release.id, restoreData: false },
+    }));
+    assert.equal(removedRollback.status, 409);
+    assert.equal((await removedRollback.json()).error.code, "RELEASE_ARTIFACT_UNAVAILABLE");
+
+    releases = await payload(platform, jsonRequest(`/api/projects/${projectId}/releases`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(releases.releases.length, 4, "cleanup must preserve release history");
+    assert.equal(releases.usage.releases, 1);
+    assert.equal(releases.releases.find((release) => release.id === second.body.release.id).artifactAvailable, false);
+    assert.equal(releases.releases.find((release) => release.id === second.body.release.id).storageBytes, 0);
+    const detail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(detail.usage.releases, 1);
+    assert.equal(detail.usage.storageBytes, releases.usage.storageBytes);
+    const finalControl = new DatabaseSync(join(root, "platform", "control.sqlite"), { readOnly: true });
+    const activeStorage = finalControl.prepare(`SELECT runtime_bytes, snapshot_bytes, storage_bytes, backup_path
+      FROM clank_platform_releases WHERE id = ?`).get(fourth.body.release.id);
+    finalControl.close();
+    assert.equal(activeStorage.snapshot_bytes, 0);
+    assert.equal(activeStorage.storage_bytes, activeStorage.runtime_bytes);
+    assert.equal(activeStorage.backup_path, null);
+    const audit = await payload(platform, jsonRequest(`/api/projects/${projectId}/audit`, {
+      token: owner.accessToken,
+    }));
+    const cleanupEvents = audit.events.filter((event) => event.action === "release.cleanup");
+    assert.equal(cleanupEvents.length, 3);
+    assert.ok(cleanupEvents.some((event) => (
+      event.metadata.releaseId === third.body.release.id
+      && event.metadata.rollbackProtected === true
+      && event.metadata.activeSnapshotBytes > 0
+    )));
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("release byte quotas reject storage before creating a release directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-release-byte-limit-"));
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4580,
+    appPortEnd: 4582,
+    signup: true,
+    backups: { intervalMs: false },
+    limits: {
+      releasesPerProject: 3,
+      releaseStorageBytesPerProject: 1,
+    },
+  });
+  try {
+    const owner = await authorizeCli(platform, "release-byte-limit@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const project = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Tiny Release Storage",
+        slug: "tiny-release-storage",
+        organizationId: dashboard.organizations[0].id,
+      },
+    }), 201);
+    const artifact = await appArtifact(join(root, "source"), "too-large", [
+      ["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"],
+    ]);
+    const rejected = await deploy(
+      platform,
+      project.project.id,
+      owner.accessToken,
+      artifact,
+      "release-byte-limit-key",
+    );
+    assert.equal(rejected.response.status, 409);
+    assert.equal(rejected.body.error.code, "RELEASE_STORAGE_LIMIT_REACHED");
+    const releases = await payload(platform, jsonRequest(
+      `/api/projects/${project.project.id}/releases`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(releases.usage, { releases: 0, storageBytes: 0 });
+    await assert.rejects(
+      stat(join(root, "platform", "projects", project.project.id, "releases")),
+      (error) => error.code === "ENOENT",
+    );
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy release rows upgrade to conservative storage accounting in place", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-release-upgrade-"));
+  const dataDirectory = join(root, "platform");
+  let platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4583,
+    appPortEnd: 4584,
+    signup: true,
+    backups: { intervalMs: false },
+  });
+  try {
+    const owner = await authorizeCli(platform, "release-upgrade@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const project = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Legacy Releases",
+        slug: "legacy-releases",
+        organizationId: dashboard.organizations[0].id,
+      },
+    }), 201);
+    await platform.close();
+
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    control.exec("DROP TABLE clank_platform_releases");
+    control.exec(`CREATE TABLE clank_platform_releases (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+      previous_release_id TEXT,
+      status TEXT NOT NULL,
+      digest TEXT NOT NULL,
+      artifact_bytes INTEGER NOT NULL,
+      framework_version TEXT NOT NULL,
+      node_version TEXT NOT NULL,
+      config TEXT NOT NULL CHECK (json_valid(config)),
+      directory TEXT NOT NULL,
+      backup_path TEXT,
+      idempotency_key TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      activated_at INTEGER,
+      failure TEXT,
+      UNIQUE(project_id, idempotency_key)
+    )`);
+    const legacyReleaseId = "legacy_release_001";
+    control.prepare(`INSERT INTO clank_platform_releases
+      (id, project_id, previous_release_id, status, digest, artifact_bytes,
+       framework_version, node_version, config, directory, backup_path,
+       idempotency_key, created_at)
+      VALUES (?, ?, NULL, 'inactive', ?, 321, '0.6.0', ?, ?, ?, NULL, ?, ?)`)
+      .run(
+        legacyReleaseId,
+        project.project.id,
+        "b".repeat(64),
+        process.version,
+        JSON.stringify({
+          version: 1,
+          entry: "server.js",
+          include: ["server.js"],
+          database: { path: "app.sqlite", migrations: "migrations", allowUnsafeMigrations: false },
+          health: { path: "/healthz", timeoutMs: 5000 },
+          env: {},
+        }),
+        join(dataDirectory, "projects", project.project.id, "releases", legacyReleaseId),
+        "legacy-release-key-001",
+        Date.now(),
+      );
+    control.close();
+
+    platform = await openPlatform({
+      dataDirectory,
+      publicUrl: "http://127.0.0.1:4200",
+      appPortStart: 4583,
+      appPortEnd: 4584,
+      signup: true,
+      backups: { intervalMs: false },
+    });
+    const releases = await payload(platform, jsonRequest(
+      `/api/projects/${project.project.id}/releases`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(releases.usage, { releases: 1, storageBytes: 321 });
+    assert.equal(releases.releases[0].id, legacyReleaseId);
+    assert.equal(releases.releases[0].artifactAvailable, true);
+    assert.equal(releases.releases[0].artifactBytes, 321);
+    assert.equal(releases.releases[0].storageBytes, 321);
+
+    const upgraded = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
+    const row = upgraded.prepare(`SELECT runtime_bytes, snapshot_bytes, storage_bytes, artifact_available
+      FROM clank_platform_releases WHERE id = ?`).get(legacyReleaseId);
+    upgraded.close();
+    assert.deepEqual({ ...row }, {
+      runtime_bytes: 321,
+      snapshot_bytes: 0,
+      storage_bytes: 321,
+      artifact_available: 1,
+    });
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
