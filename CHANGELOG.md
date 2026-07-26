@@ -12,6 +12,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 ### Fixed
 
 - Deployment artifact collection now ignores the compiler's atomic temporary files, preventing a concurrent framework build from producing a transient file or `ENOENT` failure in an otherwise deterministic bundle.
+- Deployment packaging now retries a complete, metadata-verified source snapshot when files or directory entries change during collection, preventing concurrent cleanup or replacement from producing partial artifacts.
 
 ## 0.8.0 - 2026-07-26
 
