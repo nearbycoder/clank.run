@@ -73,10 +73,7 @@ Open `http://127.0.0.1:4181`, create an account, and sign into that account from
 Create and deploy a new authenticated app:
 
 ```sh
-npm run dev:platform
-# Create an account at http://127.0.0.1:4200
-
-clank login --server=http://127.0.0.1:4200
+clank login
 clank create my-app
 cd my-app
 npm install
@@ -84,7 +81,9 @@ clank doctor
 clank deploy
 ```
 
-The generated app installs only Clank, which has no transitive dependencies, and includes `README.md` plus an agent-ready `AGENTS.md`. Before publishing Clank to npm, use `--framework=local` to install from the current checkout. The first deploy creates and links the site automatically. The CLI builds locally without a shell, vendors the exact Clank runtime, verifies every path and SHA-256 digest, applies ordered SQLite migrations behind a backup, health-checks the candidate, and restores the previous release automatically on failure. `clank deploy --dry-run` performs the complete local artifact check without login or network access.
+`clank login` uses `https://clank.run` by default. Run bare `clank` for the interactive template launcher, or use `clank create my-site --template=minimal` for the smaller starter. The generated app installs only Clank, which has no transitive dependencies, and includes `README.md` plus an agent-ready `AGENTS.md`. The first deploy creates and links the site automatically. The CLI builds locally without a shell, vendors the exact Clank runtime, verifies every path and SHA-256 digest, applies ordered SQLite migrations behind a backup, health-checks the candidate, and restores the previous release automatically on failure. `clank deploy --dry-run` performs the complete local artifact check without login or network access.
+
+To develop the open-source control plane itself, run `npm run dev:platform` and use `clank login --server=http://127.0.0.1:4200`. The explicit loopback override is for local platform development, not the normal hosted workflow.
 
 The smallest application is:
 

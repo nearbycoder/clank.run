@@ -24,10 +24,23 @@ const MAX_LOCAL_CONFIG_BYTES = 1024 * 1024;
 const MAX_PLATFORM_RESPONSE_BYTES = 4 * 1024 * 1024;
 const PLATFORM_REQUEST_TIMEOUT_MS = 30_000;
 const PLATFORM_DEPLOY_TIMEOUT_MS = 5 * 60_000;
+export const DEFAULT_PLATFORM_SERVER = "https://clank.run";
+const PROJECT_TEMPLATES = Object.freeze([
+  Object.freeze({
+    id: "auth-todo",
+    title: "Authenticated Todo",
+    summary: "Auth, private SQLite data, SSR, hydration, Tailwind, and live sync.",
+  }),
+  Object.freeze({
+    id: "minimal",
+    title: "Minimal full-stack",
+    summary: "A small SSR and hydrated TypeScript app with Tailwind and deployment.",
+  }),
+]);
 const COMMANDS = Object.freeze({
   create: {
-    usage: "clank create <directory> [--name <name>] [--framework <version|local|spec>]",
-    summary: "Create a deploy-ready authenticated app.",
+    usage: "clank create <directory> [--template <auth-todo|minimal>] [--name <name>] [--framework <version|local|spec>]",
+    summary: "Create a deploy-ready full-stack app from a built-in template.",
   },
   plan: {
     usage: "clank plan [clank.app.ts] [--output <file>] [--framework <version|local|spec>]",
@@ -54,8 +67,8 @@ const COMMANDS = Object.freeze({
     summary: "Check whether an app is ready to build and deploy.",
   },
   login: {
-    usage: "clank login --server <https-url>",
-    summary: "Authorize the CLI in a browser without handling a password.",
+    usage: "clank login [--server <https-url>]",
+    summary: "Authorize the CLI in a browser; defaults to https://clank.run.",
   },
   logout: {
     usage: "clank logout [--server <url>] [--local]",
@@ -131,7 +144,7 @@ const COMMAND_ALIASES = Object.freeze({
   audit: "activity",
 });
 const VALUE_OPTIONS = Object.freeze({
-  create: ["name", "framework"],
+  create: ["name", "framework", "template"],
   plan: ["blueprint", "output", "framework"],
   explain: ["blueprint"],
   generate: ["blueprint", "framework"],
@@ -219,6 +232,78 @@ export async function run(command, args) {
   }
 }
 
+export async function runInteractive(options = {}) {
+  const output = options.write ?? ((value) => process.stdout.write(value));
+  const execute = options.execute ?? run;
+  let terminal;
+  let ask = options.ask;
+  if (!ask) {
+    const { createInterface } = await import("node:readline/promises");
+    terminal = createInterface({ input: process.stdin, output: process.stdout });
+    ask = (question) => terminal.question(question);
+  }
+
+  const choose = async (prompt, entries, fallback = 0) => {
+    while (true) {
+      const raw = (await ask(prompt)).trim().toLowerCase();
+      if (!raw) return entries[fallback];
+      const numeric = Number(raw);
+      if (Number.isInteger(numeric) && numeric >= 1 && numeric <= entries.length) {
+        return entries[numeric - 1];
+      }
+      const match = entries.find((entry) =>
+        entry.id === raw || entry.title.toLowerCase() === raw);
+      if (match) return match;
+      output(`Choose a number from 1 to ${entries.length}.\n`);
+    }
+  };
+
+  try {
+    output(`\nClank ${packageJson.version}\n`);
+    output("Build and deploy a TypeScript app with one package.\n\n");
+    const actions = [
+      { id: "create", title: "Create a new app", summary: "Choose a starter and scaffold a deploy-ready project." },
+      { id: "doctor", title: "Check this app", summary: "Validate the current project before deploying." },
+      { id: "login", title: "Log in", summary: `Authorize this CLI with ${DEFAULT_PLATFORM_SERVER}.` },
+      { id: "deploy", title: "Deploy this app", summary: "Build, migrate, health-check, and activate this project." },
+      { id: "help", title: "View every command", summary: "Print the complete CLI reference." },
+    ];
+    output("What would you like to do?\n");
+    actions.forEach((entry, index) => output(`  ${index + 1}) ${entry.title}\n     ${entry.summary}\n`));
+    const action = await choose("\nSelect [1]: ", actions);
+
+    if (action.id === "create") {
+      output("\nChoose a template:\n");
+      PROJECT_TEMPLATES.forEach((entry, index) =>
+        output(`  ${index + 1}) ${entry.title}${index === 0 ? " (recommended)" : ""}\n     ${entry.summary}\n`));
+      const template = await choose("\nTemplate [1]: ", PROJECT_TEMPLATES);
+      let target;
+      while (!target) {
+        const candidate = (await ask("Project directory [my-clank-app]: ")).trim() || "my-clank-app";
+        if (!candidate.startsWith("-") && !candidate.includes("\0")) {
+          target = candidate;
+        } else {
+          output("Enter a normal filesystem path that does not start with a dash.\n");
+        }
+      }
+      output("\n");
+      return await execute("create", [target, `--template=${template.id}`]);
+    }
+
+    if (action.id === "deploy") {
+      const confirmation = (await ask("Deploy the current directory to Clank? [y/N]: ")).trim().toLowerCase();
+      if (confirmation !== "y" && confirmation !== "yes") {
+        output("Deployment cancelled.\n");
+        return;
+      }
+      output("\n");
+    }
+    return await execute(action.id, []);
+  } finally {
+    terminal?.close();
+  }
+}
+
 function version() {
   console.log(packageJson.version);
 }
@@ -264,7 +349,7 @@ Run clank help for the complete command list.`);
   console.log(`Clank ${packageJson.version}
 
 Start:
-  clank create <directory>             Create a deploy-ready authenticated app
+  clank create <directory>             Create a deploy-ready full-stack app
   clank doctor [directory]             Check build and deployment readiness
   clank deploy [directory]             Create, link, and deploy a project
 
@@ -276,7 +361,8 @@ Build and agents:
   clank watch [src] [dist]             Rebuild when source files change
 
 Platform:
-  clank login --server <url>           Authorize this CLI in your browser
+  clank login                          Authorize with https://clank.run
+  clank login --server <url>           Use a self-hosted Clank platform
   clank logout [--server <url>]        Revoke and remove the CLI token
   clank whoami                          Show the active platform account
   clank org list                        List organizations and roles
@@ -410,10 +496,17 @@ async function createProject(args) {
   const positional = positionals(args);
   const target = resolve(positional[0] ?? ".");
   const name = option(args, "name") ?? basename(target);
+  const template = option(args, "template") ?? "auth-todo";
+  if (!PROJECT_TEMPLATES.some((entry) => entry.id === template)) {
+    throw new CliError(
+      `Unknown template: ${template}. Choose ${PROJECT_TEMPLATES.map((entry) => entry.id).join(" or ")}.`,
+      "UNKNOWN_TEMPLATE",
+    );
+  }
   await mkdir(target, { recursive: true });
   const entries = await import("node:fs/promises").then(({ readdir }) => readdir(target));
   if (entries.length) throw new CliError(`Target directory is not empty: ${target}`);
-  await cp(join(packageRoot, "templates", "auth-todo"), target, { recursive: true });
+  await cp(join(packageRoot, "templates", template), target, { recursive: true });
   await rename(join(target, "gitignore.txt"), join(target, ".gitignore"));
   await replaceInFile(join(target, "package.json"), "__PROJECT_NAME__", packageName(name));
   await replaceInFile(
@@ -427,7 +520,7 @@ async function createProject(args) {
   console.log(`Created ${displayName(name)} in ${target}`);
   console.log(`Next: cd ${positional[0] ?? "."} && npm install && npm run dev`);
   console.log("Check: npm run doctor");
-  console.log("Deploy: clank login --server <platform-url> && clank deploy");
+  console.log("Deploy: clank login && clank deploy");
 }
 
 async function doctor(args) {
@@ -517,7 +610,7 @@ async function doctor(args) {
   try {
     profile = await activeProfile();
     if (!profile) {
-      check("login", "warn", "The CLI is not logged in.", "Run clank login --server <platform-url>.");
+      check("login", "warn", "The CLI is not logged in.", "Run clank login.");
     } else if (profile.expiresAt <= Date.now()) {
       check("login", "warn", `The CLI token for ${profile.server} has expired.`, "Run clank login again.");
     } else {
@@ -572,8 +665,9 @@ async function doctor(args) {
 }
 
 async function login(args) {
-  const server = normalizeServer(option(args, "server") ?? (await activeProfile())?.server);
-  if (!server) throw new CliError("Pass --server <url> the first time you log in.");
+  const server = normalizeServer(
+    option(args, "server") ?? (await activeProfile())?.server ?? DEFAULT_PLATFORM_SERVER,
+  );
   const started = await platformRequest(server, "/api/device/start", {
     method: "POST",
     body: { clientName: `${hostname()} · ${operatingSystem()} CLI` },
@@ -1347,7 +1441,7 @@ async function linkedContext(root) {
 
 async function requireProfile() {
   const profile = await activeProfile();
-  if (!profile?.token) throw new CliError("Not authenticated. Run clank login --server <url>.");
+  if (!profile?.token) throw new CliError("Not authenticated. Run clank login.");
   if (profile.expiresAt <= Date.now()) throw new CliError("CLI token expired. Run clank login again.");
   return profile;
 }

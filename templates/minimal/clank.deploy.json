@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "entry": "dist/server.js",
+  "include": [
+    "dist",
+    "migrations"
+  ],
+  "build": {
+    "command": [
+      "clank",
+      "build",
+      "src",
+      "dist"
+    ]
+  },
+  "database": {
+    "path": "app.sqlite",
+    "migrations": "migrations",
+    "allowUnsafeMigrations": false
+  },
+  "health": {
+    "path": "/healthz",
+    "timeoutMs": 15000
+  },
+  "env": {}
+}

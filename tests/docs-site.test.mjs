@@ -100,6 +100,10 @@ test("documentation site serves every human and agent contract securely", async 
 
   const cli = await (await fetch(`${origin}/docs/cli`)).text();
   assert.match(cli, /Deployment CLI/u);
+  assert.match(cli, /Interactive launcher/u);
+  assert.match(cli, /clank create my-app --template=minimal/u);
+  assert.match(cli, /clank login/u);
+  assert.match(cli, /defaults to <code>https:\/\/clank\.run<\/code>/u);
   assert.match(cli, /Raw Markdown/u);
   assert.match(cli, /On this page/u);
 

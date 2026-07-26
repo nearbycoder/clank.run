@@ -24,7 +24,7 @@ npm run deploy:check
 ## Deploy
 
 ```sh
-node ../scripts/clank.mjs login --server=https://clank.run
+node ../scripts/clank.mjs login
 npm run deploy
 node ../scripts/clank.mjs domain add docs.clank.run
 ```

@@ -102,6 +102,62 @@ test("Clank CLI exposes its renamed version command", async () => {
   }
 });
 
+test("bare Clank is helpful without a TTY and the interactive launcher routes guided choices", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-bare-"));
+  try {
+    const bare = await runCliOutput([], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    });
+    assert.match(bare.stdout, new RegExp(`Clank ${frameworkVersion.replaceAll(".", "\\.")}`, "u"));
+    assert.match(bare.stdout, /clank create <directory>/u);
+    assert.match(bare.stdout, /clank login\s+Authorize with https:\/\/clank\.run/u);
+    assert.equal(bare.stderr, "");
+
+    const {
+      DEFAULT_PLATFORM_SERVER,
+      runInteractive,
+    } = await import("../scripts/cli-deploy.mjs");
+    assert.equal(DEFAULT_PLATFORM_SERVER, "https://clank.run");
+
+    const answers = ["1", "2", "guided-app"];
+    const prompts = [];
+    const invocations = [];
+    let output = "";
+    await runInteractive({
+      ask: async (prompt) => {
+        prompts.push(prompt);
+        return answers.shift() ?? "";
+      },
+      write: (value) => { output += value; },
+      execute: async (command, args) => { invocations.push({ command, args }); },
+    });
+    assert.match(output, /What would you like to do/u);
+    assert.match(output, /Choose a template/u);
+    assert.match(output, /Authenticated Todo/u);
+    assert.match(output, /Minimal full-stack/u);
+    assert.deepEqual(invocations, [{
+      command: "create",
+      args: ["guided-app", "--template=minimal"],
+    }]);
+    assert.deepEqual(prompts, [
+      "\nSelect [1]: ",
+      "\nTemplate [1]: ",
+      "Project directory [my-clank-app]: ",
+    ]);
+
+    const loginInvocations = [];
+    await runInteractive({
+      ask: async () => "3",
+      write: () => {},
+      execute: async (command, args) => { loginInvocations.push({ command, args }); },
+    });
+    assert.deepEqual(loginInvocations, [{ command: "login", args: [] }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("CLI help is command-aware, agent-readable, and never executes the target command", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-help-"));
   try {
@@ -580,6 +636,47 @@ test("create scaffolds a named, buildable authenticated application", async () =
     await runCli(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "server.js"), "utf8"), /Team Tasks/);
     assert.match(await readFile(join(target, "dist", "view.js"), "utf8"), /Team Tasks/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("create supports the minimal full-stack template and rejects unknown templates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-create-minimal-"));
+  const target = join(root, "small-start");
+  try {
+    const created = await runCliResult([
+      "create",
+      target,
+      "--template=minimal",
+      "--name=Small Start",
+    ]);
+    assert.equal(created.code, 0, created.stderr);
+    assert.match(created.stdout, /Deploy: clank login && clank deploy/u);
+
+    const packageJson = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
+    const server = await readFile(join(target, "src", "server.tsx"), "utf8");
+    const view = await readFile(join(target, "src", "view.tsx"), "utf8");
+    const readme = await readFile(join(target, "README.md"), "utf8");
+    assert.equal(packageJson.name, "small-start");
+    assert.equal(packageJson.dependencies["@clank.run/framework"], `^${frameworkVersion}`);
+    assert.match(server, /title: "Small Start"/u);
+    assert.match(view, />Small Start</u);
+    assert.match(view, /agentId="starter-counter"/u);
+    assert.match(readme, /clank login\nnpm run deploy/u);
+
+    await runCli(["build", "src", "dist"], target);
+    assert.match(await readFile(join(target, "dist", "server.js"), "utf8"), /Small Start/u);
+    assert.match(await readFile(join(target, "dist", "view.js"), "utf8"), /starter-counter/u);
+
+    const invalid = await runCliResult([
+      "create",
+      join(root, "invalid"),
+      "--template=unknown",
+    ]);
+    assert.equal(invalid.code, 1);
+    assert.match(invalid.stderr, /Unknown template: unknown/u);
+    assert.match(invalid.stderr, /auth-todo or minimal/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -2678,7 +2678,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       method: "POST",
       body: {
         email: "first@example.com",
-        password: "correct horse battery staple",
+        password: "Clank8!x",
         profile: { name: "first" },
       },
     }));
@@ -2690,6 +2690,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.equal(signedInConsole.status, 200);
     const signedInHtml = await signedInConsole.text();
     assert.match(signedInHtml, /"authenticated":true/);
+    assert.match(signedInHtml, /id="password"[^>]+minlength="8"/);
     assert.match(signedInHtml, /<section class="app-shell" id="app-view" hidden>/);
     assert.match(signedInHtml, /Build it\./);
     assert.match(signedInHtml, /aria-label="Project navigation"/);
@@ -2699,6 +2700,11 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /class="table mobile-card-table release-table"/);
     assert.match(signedInHtml, /class="table mobile-card-table backup-table"/);
     assert.match(signedInHtml, /class="table admin-user-table mobile-card-table"/);
+    assert.match(signedInHtml, /class="button-label">Refresh<\/span><span class="button-icon" aria-hidden="true">↻<\/span>/);
+    assert.match(signedInHtml, /\.topbar \.button\{min-width:44px;height:44px;padding:0 12px;line-height:1\}/);
+    assert.match(signedInHtml, /\.quota-number\{display:flex;align-items:baseline;gap:9px;/);
+    assert.match(signedInHtml, /class="quota-used">—<\/strong><span class="quota-total">projects<\/span>/);
+    assert.match(signedInHtml, /q\("#quota-number \.quota-total"\)\.textContent=total\+" projects"/);
     assert.match(signedInHtml, /@media\(max-width:900px\)/);
     assert.match(signedInHtml, /\.button,\.input,\.nav-button\{min-height:44px\}/);
     assert.match(signedInHtml, /\.breadcrumbs\{flex:1;min-width:0;overflow:hidden;white-space:nowrap\}/);

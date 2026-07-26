@@ -17,10 +17,10 @@ Open http://127.0.0.1:3000. Register the first account, then open a second brows
 npm run build
 npm run doctor
 npm run deploy:check
-clank login --server https://your-clank-platform.example
+clank login
 npm run deploy
 ```
 
-The first deployment creates and links the project automatically. No remote package install or build hook runs: the CLI sends a deterministic artifact containing the exact Clank runtime.
+Login defaults to https://clank.run. Pass `--server` only for a self-hosted Clank platform. The first deployment creates and links the project automatically. No remote package install or build hook runs: the CLI sends a deterministic artifact containing the exact Clank runtime.
 
 See `AGENTS.md` for the app map and safety invariants.

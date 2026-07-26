@@ -1,0 +1,16 @@
+{
+  "name": "__PROJECT_NAME__",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "clank build src dist",
+    "dev": "clank build src dist && node --disable-warning=ExperimentalWarning dist/server.js",
+    "start": "node --disable-warning=ExperimentalWarning dist/server.js",
+    "doctor": "clank doctor",
+    "deploy:check": "clank deploy --dry-run",
+    "deploy": "clank deploy"
+  },
+  "dependencies": {
+    "@clank.run/framework": "__CLANK_DEPENDENCY__"
+  }
+}

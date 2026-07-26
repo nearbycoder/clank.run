@@ -15,18 +15,10 @@ The platform is intentionally inspectable:
 
 The browser console is also an operating surface, not only a login page. It shows site health, 1-hour through 30-day ingress performance, enforced capacity, releases, scheduled encrypted backups, logs, and the full custom-domain lifecycle. See [Deployment dashboard, quotas, and domains](platform-dashboard.md).
 
-## Five-minute path
+## Five-minute managed path
 
 ```sh
-CLANK_PLATFORM_DATA=.clank-platform \
-CLANK_PLATFORM_URL=http://127.0.0.1:4200 \
-npm run dev:platform
-```
-
-Create the bootstrap account at `http://127.0.0.1:4200`, then:
-
-```sh
-clank login --server http://127.0.0.1:4200
+clank login
 clank create my-todo
 cd my-todo
 npm install
@@ -34,7 +26,21 @@ clank doctor
 clank deploy
 ```
 
-The first deploy creates and links a project automatically. Pass `--name`, `--slug`, or `--org` on that command when the directory name is not the intended platform identity. Remote platform URLs must use HTTPS; loopback HTTP is accepted only for development.
+`clank login` connects to `https://clank.run` by default. The first deploy creates and links an isolated project automatically. Pass `--name`, `--slug`, or `--org` on that command when the directory name is not the intended platform identity.
+
+## Local control-plane development
+
+Run the open-source platform locally only when developing or self-hosting the control plane:
+
+```sh
+CLANK_PLATFORM_DATA=.clank-platform \
+CLANK_PLATFORM_URL=http://127.0.0.1:4200 \
+npm run dev:platform
+
+clank login --server=http://127.0.0.1:4200
+```
+
+Create the bootstrap account at `http://127.0.0.1:4200` before approving the local device login. Remote platform URLs must use HTTPS; loopback HTTP is accepted only for development.
 
 ## Device login
 

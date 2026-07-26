@@ -93,12 +93,12 @@ Clank will route the host only after both ownership and routing checks succeed.
 
 ## First account and CLI
 
-1. Open `https://clank.run` and create the bootstrap owner with a unique password of at least 12
+1. Open `https://clank.run` and create the bootstrap owner with a unique password of at least 8
    characters.
 2. In a local checkout, start browser-assisted device authorization:
 
    ```sh
-   clank login --server https://clank.run
+   clank login
    ```
 
 3. Create or scaffold an application and deploy it:

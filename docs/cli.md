@@ -2,10 +2,30 @@
 
 The `clank` executable contains both the compiler and deployment client. It does not install application dependencies or execute remote build hooks.
 
+## Interactive launcher
+
+Run the command without arguments in a terminal:
+
+```sh
+clank
+```
+
+Clank opens a dependency-free guided launcher for creating an app, checking the current project, logging in, deploying, or viewing every command. Creating an app presents the built-in templates and asks for the target directory.
+
+The templates are:
+
+| Template | Direct command | Includes |
+| --- | --- | --- |
+| Authenticated Todo | `clank create my-app --template=auth-todo` | Auth, private SQLite data, SSR, hydration, Tailwind, migrations, and live sync |
+| Minimal full-stack | `clank create my-app --template=minimal` | SSR, hydration, reactive TypeScript, Tailwind, health checks, and deployment |
+
+`auth-todo` remains the default when `--template` is omitted. In a non-interactive terminal, bare `clank` prints the complete help instead of waiting for input. Agents and scripts should continue to use explicit commands and `--json` surfaces.
+
 ## Create
 
 ```sh
 clank create my-app
+clank create my-site --template=minimal
 clank create my-app --name="Customer workspace"
 cd my-app
 npm install
@@ -41,10 +61,12 @@ Every command supports focused `--help` without authenticating or executing the 
 ## Authenticate
 
 ```sh
-clank login --server=https://deploy.example.com
+clank login
 clank whoami
 clank logout
 ```
+
+`clank login` securely defaults to `https://clank.run`. The CLI prints the exact verification URL and a short code, then waits for browser approval. Use `clank login --server=https://deploy.example.com` only for an explicitly self-hosted control plane.
 
 Passwords never pass through the CLI. Profiles are stored under `${CLANK_HOME:-~/.clank}/config.json`. Set `CLANK_HOME` to isolate CI or test credentials.
 

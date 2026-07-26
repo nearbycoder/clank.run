@@ -4,10 +4,17 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { compile } from "./compiler.mjs";
 
 const args = process.argv.slice(2);
-const command = args.shift() ?? "build";
+const command = args.shift();
 let temporaryFile = 0;
 
-if (command === "--help" || command === "help") {
+if (!command) {
+  const { run, runInteractive } = await import("./cli-deploy.mjs");
+  if (process.stdin.isTTY && process.stdout.isTTY) await runInteractive();
+  else await run("help", []);
+  process.exit(process.exitCode ?? 0);
+}
+
+if (command === "--help" || command === "-h" || command === "help") {
   const { run } = await import("./cli-deploy.mjs");
   await run("help", args);
   process.exit(process.exitCode ?? 0);
