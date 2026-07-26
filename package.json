@@ -71,13 +71,14 @@
   ],
   "scripts": {
     "build": "node --disable-warning=ExperimentalWarning scripts/build.mjs",
+    "build:docs": "node --disable-warning=ExperimentalWarning docs-site/build.mjs",
     "conformance": "node --disable-warning=ExperimentalWarning scripts/conformance.mjs",
-    "docs:audit": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/docs-audit.mjs",
+    "docs:audit": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning docs-site/build.mjs && node --disable-warning=ExperimentalWarning scripts/docs-audit.mjs",
     "dev": "node --disable-warning=ExperimentalWarning scripts/dev.mjs",
     "dev:fullstack": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/fullstack/server.js",
     "dev:auth": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/auth-todo/server.js",
     "dev:platform": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/clank-platform.mjs",
-    "test": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning --test",
+    "test": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning docs-site/build.mjs && node --disable-warning=ExperimentalWarning --test",
     "security:audit": "node --disable-warning=ExperimentalWarning scripts/security-audit.mjs",
     "check": "node --disable-warning=ExperimentalWarning scripts/check.mjs"
   },

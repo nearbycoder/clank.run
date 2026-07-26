@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "entry": "dist/server.js",
+  "include": [
+    "dist",
+    "vendor",
+    "content",
+    "migrations"
+  ],
+  "build": {
+    "command": [
+      "node",
+      "build.mjs"
+    ]
+  },
+  "database": {
+    "path": "docs.sqlite",
+    "migrations": "migrations",
+    "allowUnsafeMigrations": false
+  },
+  "health": {
+    "path": "/healthz",
+    "timeoutMs": 15000
+  },
+  "env": {
+    "DOCS_ORIGIN": "https://docs.clank.run"
+  }
+}

@@ -101,6 +101,8 @@ render(document.querySelector("#app")!, <App />);
 
 ## Documentation
 
+- [Documentation website](https://docs.clank.run) — searchable, responsive, and available as Markdown, JSON, `llms.txt`, and a complete agent corpus
+- [Documentation site source](docs-site/README.md)
 - [Getting started](docs/getting-started.md)
 - [Reactivity](docs/reactivity.md)
 - [Rendering and components](docs/rendering.md)
