@@ -2181,6 +2181,29 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
   }
 });
 
+test("HTTPS control plane emits HSTS only on its configured hostname", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-hsts-"));
+  const platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "https://deploy.example.test",
+    appPortStart: 4540,
+    appPortEnd: 4541,
+    backups: { intervalMs: false },
+  });
+  try {
+    const controlPlane = await platform.handle(new Request("https://deploy.example.test/healthz"));
+    assert.equal(controlPlane.status, 200);
+    assert.equal(controlPlane.headers.get("strict-transport-security"), "max-age=31536000");
+
+    const unrelatedHost = await platform.handle(new Request("https://other.example.test/healthz"));
+    assert.equal(unrelatedHost.status, 200);
+    assert.equal(unrelatedHost.headers.get("strict-transport-security"), null);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("closed platform signup still permits an unexpired invitation to create its bound account", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-invited-signup-"));
   let platform = await openPlatform({
