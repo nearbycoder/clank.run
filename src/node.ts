@@ -209,7 +209,10 @@ async function dispatch(
   const forwarded = options.trustProxy ? headers.get("x-forwarded-proto")?.split(",")[0]?.trim() : undefined;
   if (forwarded && forwarded !== "http" && forwarded !== "https") throw new NodeRequestError(400, "Invalid forwarded protocol.");
   const protocol = forwarded ?? (incoming.socket.encrypted ? "https" : "http");
-  const host = headers.get("host") ?? "localhost";
+  const forwardedHost = options.trustProxy
+    ? headers.get("x-forwarded-host")?.split(",")[0]?.trim()
+    : undefined;
+  const host = forwardedHost ?? headers.get("host") ?? "localhost";
   const parsedHost = safeHost(host);
   if (options.allowedHosts?.length) {
     const allowed = new Set(options.allowedHosts.map((entry) => entry.toLowerCase()));

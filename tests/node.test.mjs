@@ -15,6 +15,7 @@ import {
   serve,
   staticFiles,
 } from "../dist/index.js";
+import { requestOriginAllowed } from "../dist/security.js";
 
 test("Node adapter serves Fetch apps and streams live SQLite updates over HTTP", async () => {
   const schema = defineDatabase({ counters: defineTable({ value: s.number({ integer: true }) }) });
@@ -63,6 +64,51 @@ test("Node adapter serves Fetch apps and streams live SQLite updates over HTTP",
   await reader.cancel();
   backend.close();
   await server.close();
+});
+
+test("Node adapter reconstructs only explicitly trusted forwarded origins", async () => {
+  const handler = (request) => json({
+    url: request.url,
+    originAllowed: requestOriginAllowed(request),
+  });
+  const trusted = await serve(handler, {
+    port: 0,
+    trustProxy: true,
+    allowedHosts: ["todo.apps.example.test"],
+  });
+  try {
+    const response = await fetch(`${trusted.url}/__clank/auth/register`, {
+      headers: {
+        origin: "https://todo.apps.example.test",
+        "x-forwarded-host": "todo.apps.example.test",
+        "x-forwarded-proto": "https",
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      url: "https://todo.apps.example.test/__clank/auth/register",
+      originAllowed: true,
+    });
+  } finally {
+    await trusted.close();
+  }
+
+  const untrusted = await serve(handler, { port: 0 });
+  try {
+    const response = await fetch(`${untrusted.url}/__clank/auth/register`, {
+      headers: {
+        origin: "https://attacker.example",
+        "x-forwarded-host": "attacker.example",
+        "x-forwarded-proto": "https",
+      },
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(new URL(body.url).origin, untrusted.url);
+    assert.equal(body.originAllowed, false);
+  } finally {
+    await untrusted.close();
+  }
 });
 
 test("Node adapter enforces Host/body limits and static files contain symlinks and dotfiles", async () => {

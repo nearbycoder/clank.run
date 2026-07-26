@@ -68,6 +68,14 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
   await writeFile(join(root, "dist", "server.js"), `
     import { createServer } from "node:http";
     const server = createServer((request, response) => {
+      if (request.url === "/_runtime-environment") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          trustProxy: process.env.TRUST_PROXY,
+          allowedHosts: process.env.ALLOWED_HOSTS,
+        }));
+        return;
+      }
       response.writeHead(200, { "content-type": "text/plain" });
       response.end(request.url === "/healthz" ? "ok" : ${JSON.stringify(label)});
       if (request.url === "/crash") setImmediate(() => process.exit(17));
@@ -633,6 +641,12 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     const managed = await platform.handle(new Request("https://atomic-todo.apps.example.test/"));
     assert.equal(managed.status, 200);
     assert.equal(await managed.text(), "release-one");
+    assert.deepEqual(await platform.handle(new Request(
+      "https://atomic-todo.apps.example.test/_runtime-environment",
+    )).then((response) => response.json()), {
+      trustProxy: "1",
+      allowedHosts: "",
+    });
     assert.equal((await platform.handle(new Request(
       "http://127.0.0.1:4200/_clank/tls/ask?token=test-only-tls-ask-token&domain=atomic-todo.apps.example.test",
     ))).status, 200, "deployed built-in site hostnames are eligible for edge certificates");
