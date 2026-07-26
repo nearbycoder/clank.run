@@ -2027,6 +2027,8 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /Build it\./);
     assert.match(signedInHtml, /aria-label="Project navigation"/);
     assert.match(signedInHtml, /data-project-tab="deployments"/);
+    assert.match(signedInHtml, /aria-controls="sidebar"/);
+    assert.match(signedInHtml, /aria-labelledby="site-dialog-title"/);
     for (const path of [
       "/login",
       "/overview",
