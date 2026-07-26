@@ -721,6 +721,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       ALLOWED_HOSTS: ingressEnabled
         ? ""
         : `localhost,127.0.0.1,${options.appHostname ?? "127.0.0.1"}`,
+      CLANK_MANAGED_INGRESS: ingressEnabled ? "1" : "0",
       TRUST_PROXY: ingressEnabled ? "1" : "0",
     };
     await assertPortAvailable(project.port);

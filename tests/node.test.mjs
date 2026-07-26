@@ -111,6 +111,37 @@ test("Node adapter reconstructs only explicitly trusted forwarded origins", asyn
   }
 });
 
+test("Node adapter recognizes the platform-controlled managed ingress boundary", async () => {
+  const previous = process.env.CLANK_MANAGED_INGRESS;
+  process.env.CLANK_MANAGED_INGRESS = "1";
+  const handler = (request) => json({
+    url: request.url,
+    originAllowed: requestOriginAllowed(request),
+  });
+  const server = await serve(handler, {
+    port: 0,
+    trustProxy: true,
+  });
+  try {
+    const response = await fetch(`${server.url}/__clank/auth/register`, {
+      headers: {
+        origin: "https://todo.apps.example.test",
+        "x-forwarded-host": "todo.apps.example.test",
+        "x-forwarded-proto": "https",
+      },
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      url: "https://todo.apps.example.test/__clank/auth/register",
+      originAllowed: true,
+    });
+  } finally {
+    await server.close();
+    if (previous === undefined) delete process.env.CLANK_MANAGED_INGRESS;
+    else process.env.CLANK_MANAGED_INGRESS = previous;
+  }
+});
+
 test("Node adapter enforces Host/body limits and static files contain symlinks and dotfiles", async () => {
   const server = await serve(async (request) => new Response(await request.text()), {
     port: 0,

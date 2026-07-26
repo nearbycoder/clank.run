@@ -345,6 +345,11 @@ export interface AuthRuntime<Profile extends object = DefaultAuthProfile> {
 
 export interface OpenAuthOptions {
   onError?: (error: unknown) => void;
+  /**
+   * Exact, trusted same-site browser origins that may call auth endpoints.
+   * Cross-site Fetch Metadata is still rejected even when an origin is listed.
+   */
+  allowedOrigins?: readonly string[];
 }
 
 export async function openAuth<Profile extends object, DB extends DatabaseSchema<any>>(
@@ -662,7 +667,9 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           });
         }
         if (request.method !== "POST") return authProblem(405, "METHOD_NOT_ALLOWED", "Method not allowed.", undefined, { allow: "GET, POST" });
-        if (!requestOriginAllowed(request)) throw new AuthError("ORIGIN_MISMATCH", "Cross-origin auth request rejected.", 403);
+        if (!requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins })) {
+          throw new AuthError("ORIGIN_MISMATCH", "Cross-origin auth request rejected.", 403);
+        }
         if (operation === "register") {
           const result = await register(await readJsonRequest(request, 16 * 1024), request);
           return sessionResponse(definition, request, result.rawToken, result.auth, 201);
@@ -1129,7 +1136,9 @@ export function createAuthClient<Profile extends object = DefaultAuthProfile>(
     try {
       const response = await fetcher(`${base}${prefix}/${operation}`, {
         method: input === undefined ? "GET" : "POST",
-        credentials: "same-origin",
+        // Supplying a remote base URL is an explicit opt-in to credentialed
+        // same-site CORS. The server must still allowlist the exact origin.
+        credentials: base ? "include" : "same-origin",
         headers: input === undefined ? undefined : {
           "content-type": "application/json",
           ...(csrf && csrfToken ? { "x-clank-csrf": csrfToken } : {}),

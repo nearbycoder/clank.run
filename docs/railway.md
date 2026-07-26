@@ -116,6 +116,12 @@ Each project receives a separate directory and SQLite database under `/data/proj
 Database migrations are planned and applied by Clank during deployment; a failed health check or
 migration leaves the active release unchanged.
 
+Managed application processes receive reserved runtime values, including
+`TRUST_PROXY=1`, an empty `ALLOWED_HOSTS`, and `CLANK_MANAGED_INGRESS=1`.
+Together they let the Node adapter reconstruct each canonical or verified
+custom-domain origin while the loopback-only ingress remains responsible for
+exact host admission. Application manifests cannot override these values.
+
 ## Operations
 
 Before each framework upgrade, download or snapshot the Railway volume and preserve the external

@@ -1228,7 +1228,10 @@ export async function openBackend<
   let authRuntime: AuthRuntime<AuthProfileOf<Auth>> | undefined;
   try {
     authRuntime = definition.auth
-      ? await openAuth(definition.auth, database, { onError: options.onError }) as AuthRuntime<AuthProfileOf<Auth>>
+      ? await openAuth(definition.auth, database, {
+          onError: options.onError,
+          allowedOrigins: options.allowedOrigins,
+        }) as AuthRuntime<AuthProfileOf<Auth>>
       : undefined;
   } catch (error) {
     if (!options.database) database.close();

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import {
   createDeploymentBundle,
@@ -75,6 +76,7 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
         response.end(JSON.stringify({
           trustProxy: process.env.TRUST_PROXY,
           allowedHosts: process.env.ALLOWED_HOSTS,
+          managedIngress: process.env.CLANK_MANAGED_INGRESS,
         }));
         return;
       }
@@ -101,6 +103,77 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
   });
 }
 
+async function authenticatedAppArtifact(root) {
+  await rm(root, { recursive: true, force: true });
+  await mkdir(join(root, "dist"), { recursive: true });
+  await mkdir(join(root, "migrations"), { recursive: true });
+  await writeFile(join(root, "dist", "server.js"), `
+    import {
+      createApp,
+      defineAuth,
+      defineBackend,
+      defineDatabase,
+      openBackend,
+      serve,
+    } from "clank.run";
+
+    const backend = defineBackend({
+      schema: defineDatabase({}),
+      auth: defineAuth({
+        password: {
+          minLength: 8,
+          cost: 1024,
+          maxMemory: 4 * 1024 * 1024,
+        },
+      }),
+    }).functions(() => ({}));
+    const runtime = await openBackend(backend, {
+      path: process.env.CLANK_DATABASE_PATH,
+      wal: false,
+    });
+    const app = createApp()
+      .get("/healthz", () => new Response("ok"))
+      .route("*", "*", ({ request }) => runtime.handle(request));
+    const allowedHosts = process.env.ALLOWED_HOSTS
+      ?.split(",")
+      .map((host) => host.trim())
+      .filter(Boolean);
+    const server = await serve(app, {
+      hostname: "127.0.0.1",
+      port: Number(process.env.PORT),
+      trustProxy: process.env.TRUST_PROXY === "1",
+      ...(allowedHosts?.length ? { allowedHosts } : {}),
+    });
+    process.on("SIGTERM", () => {
+      void server.close().then(() => {
+        runtime.close();
+        process.exit(0);
+      });
+    });
+  `);
+  await writeFile(
+    join(root, "migrations", "0001_app_metadata.sql"),
+    "CREATE TABLE app_metadata (id TEXT PRIMARY KEY, value TEXT NOT NULL);\n",
+  );
+  const config = parseDeploymentConfig({
+    version: 1,
+    entry: "dist/server.js",
+    include: ["dist", "migrations"],
+    database: {
+      path: "app.sqlite",
+      migrations: "migrations",
+      allowUnsafeMigrations: false,
+    },
+    health: { path: "/healthz", timeoutMs: 5_000 },
+    env: {},
+  });
+  return createDeploymentBundle(root, config, {
+    frameworkRoot: fileURLToPath(new URL("..", import.meta.url)),
+    frameworkVersion: "0.7.0",
+    nodeVersion: process.version,
+  });
+}
+
 async function deploy(platform, projectId, token, artifact, key) {
   const digest = await deploymentDigest(artifact);
   const response = await platform.handle(new Request(
@@ -119,6 +192,82 @@ async function deploy(platform, projectId, token, artifact, key) {
   ));
   return { response, body: await response.json() };
 }
+
+test("deployed framework auth receives its exact managed public origin", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-managed-auth-"));
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4600,
+    appPortEnd: 4601,
+    ingress: {
+      enabled: true,
+      baseDomain: "apps.example.test",
+      domainRecheckIntervalMs: false,
+    },
+    backups: { intervalMs: false },
+  });
+  try {
+    const owner = await authorizeCli(platform, "managed-auth@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Managed auth",
+        slug: "managed-auth",
+        organizationId: dashboard.organizations[0].id,
+      },
+    }), 201);
+    const artifact = await authenticatedAppArtifact(join(root, "app"));
+    const deployed = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      artifact,
+      "managed-auth-release-0001",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+
+    const origin = "https://managed-auth.apps.example.test";
+    const registration = await platform.handle(new Request(`${origin}/__clank/auth/register`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin,
+        "sec-fetch-site": "same-origin",
+      },
+      body: JSON.stringify({
+        email: "app-user@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "App user" },
+      }),
+    }));
+    assert.equal(registration.status, 201, await registration.clone().text());
+    assert.match(registration.headers.get("set-cookie"), /^__Host-clank-id=/);
+
+    const rejected = await platform.handle(new Request(`${origin}/__clank/auth/login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://attacker.example",
+        "sec-fetch-site": "cross-site",
+      },
+      body: JSON.stringify({
+        email: "app-user@example.com",
+        password: "correct horse battery staple",
+      }),
+    }));
+    assert.equal(rejected.status, 403);
+    assert.equal((await rejected.json()).error.code, "ORIGIN_MISMATCH");
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("operator allowlist grants browser-only global administration and revokes it on removal", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-admin-"));
@@ -1047,6 +1196,7 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     )).then((response) => response.json()), {
       trustProxy: "1",
       allowedHosts: "",
+      managedIngress: "1",
     });
     assert.equal((await platform.handle(new Request(
       "http://127.0.0.1:4200/_clank/tls/ask?token=test-only-tls-ask-token&domain=atomic-todo.apps.example.test",
