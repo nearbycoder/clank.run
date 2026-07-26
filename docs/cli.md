@@ -26,6 +26,8 @@ Passwords never pass through the CLI. Profiles are stored under `${CLANK_HOME:-~
 
 Existing Proact profiles and project links are imported automatically on first use. See [Renaming from Proact](renaming-from-proact.md).
 
+Credential profiles and project links are size-bounded, structurally validated, canonicalized to one server URL, written with owner-only permissions, and replaced atomically. Invalid local state fails closed without echoing token contents. Ordinary platform requests time out after 30 seconds; deployment uploads and health-gated activation time out after five minutes. JSON responses are UTF-8 validated and capped at 4 MiB before parsing.
+
 ## Projects
 
 ```sh
@@ -59,7 +61,7 @@ clank rollback <release-id>
 clank rollback <release-id> --restore-data --confirm="restore <slug>"
 ```
 
-Logs are bounded. Known secret values of at least four characters are redacted, but apps must still avoid logging credentials.
+Logs are bounded. Every non-empty known secret value is redacted, including short values, with longer overlapping values replaced first. Apps must still avoid logging credentials because transformed, encoded, split, or externally emitted values cannot be recognized reliably.
 
 ## Secrets
 

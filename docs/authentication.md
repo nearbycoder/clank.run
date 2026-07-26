@@ -40,18 +40,18 @@ export const auth = defineAuth({
 });
 ```
 
-Email verification and password-recovery links are expiring and single use. Password reset revokes every existing browser session before issuing the replacement session. Recovery requests return the same response whether or not an account exists.
+Email verification and password-recovery links are expiring and single use. Password reset revokes every existing browser session before issuing the replacement session. Recovery requests perform a fixed minimum amount of work and return the same response whether or not an account exists. Recovery delivery is dispatched after the response path so provider latency does not reveal account existence; production delivery hooks should enqueue durably before returning from their own worker boundary.
 
 Required email verification is enforced by backend authorization, not only by UI. `auth.requireVerified()` is also available in custom handlers.
 
-MFA login returns a short-lived challenge only after the password is verified. Codes are hashed, attempt-limited, expiring, and single use. Passkeys use WebAuthn `none` attestation, exact challenge and origin binding, RP ID hashes, user-presence and optional user-verification flags, ES256 or RS256 signature verification, and monotonic authenticator counters.
+MFA login returns a short-lived challenge only after the password is verified. Codes are hashed, attempt-limited, expiring, and single use. Passkeys use required discoverable credentials, WebAuthn `none` attestation, exact challenge and origin binding, RP ID hashes, user-presence and optional user-verification flags, ES256 or RS256 signature verification, and monotonic authenticator counters. Authentication starts without an account-specific credential list, preventing the start response from becoming an account-enumeration oracle.
 
 The browser client includes:
 
 - `requestEmailVerification()` and `verifyEmail(token)`
 - `requestPasswordReset(email)` and `resetPassword(token, password)`
 - `verifyMfa(code)`
-- `listPasskeys()`, `registerPasskey(name)`, `loginWithPasskey(email)`, and `deletePasskey(id)`
+- `listPasskeys()`, `registerPasskey(name)`, `loginWithPasskey()`, and `deletePasskey(id)`
 
 The default `AuthForm` automatically presents the MFA code step. Product-specific verification, recovery, and passkey-management screens can use the same client methods.
 
@@ -70,6 +70,10 @@ interface AuthRateLimitStore {
 
 `consume` returns the retry delay in seconds when the limit is exceeded. The built-in store is safe for a single process; horizontally scaled deployments should provide a shared implementation.
 
+Clank's Node adapter attaches the socket or trusted-proxy address out of band. Authentication never trusts caller-supplied `x-clank-client-ip` or `x-forwarded-for` headers. A non-Node adapter can provide `rateLimit.clientKey(request)`, but that callback must return identity authenticated by the adapter or edge rather than copying an unverified request header.
+
+Passkeys registered by releases before 0.7 used `residentKey: "preferred"`. Most platform authenticators made those credentials discoverable, but an authenticator was allowed not to. A user with a non-discoverable legacy credential must sign in through another configured method and register a new passkey before relying on account-free passkey sign-in.
+
 ## Operational rules
 
 - Configure an HTTPS origin and an explicit RP ID before enabling production passkeys.
@@ -77,4 +81,3 @@ interface AuthRateLimitStore {
 - Keep password peppers and delivery credentials in platform secrets.
 - Treat account-wide CLI credentials as interactive developer credentials. Use project-scoped tokens for CI.
 - Revoke sessions after material identity or authorization changes.
-

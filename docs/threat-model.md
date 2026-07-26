@@ -46,19 +46,20 @@ This model covers the Clank framework, generated authenticated applications, CLI
 | Artifact compromise | Traversal, symlink, decompression bomb, digest swap, malicious install hook | Bounded deterministic bundle, path/type/mode validation, SHA-256 verification, no remote install/build hooks | Review trusted source and isolate runtime execution |
 | Migration/data loss | Edited history, unsafe SQL, failed migration, destructive rollback | Immutable ledger, restricted SQL, quiesced backup, transactional apply, safety restore, confirmation | Schema review, off-host backups, restore drills |
 | Secret disclosure | API response/log leak, filesystem exposure, package publication | AES-GCM, no secret reads, recursive log redaction, private umask, npm package audit | KMS, rotation, OS/operator access, provider logging |
-| SSRF/proxy confusion | Attacker-chosen upstream, duplicate host, hop-header smuggling | Loopback/allowlist upstreams, exact unique hosts, `Connection`-nominated header stripping, manual redirects | Network egress policy and trusted DNS/TLS edge |
+| SSRF/proxy confusion | Attacker-chosen upstream, scheme-relative path, duplicate host, hop-header smuggling | Loopback/allowlist upstreams, target origin assigned before path, exact unique hosts, `Connection`-nominated header stripping, manual redirects | Network egress policy and trusted DNS/TLS edge |
+| Domain/certificate takeover | Reassign pending hostname, spoof TXT, route elsewhere, trigger certificates for arbitrary SNI | Exact random TXT proof, immutable cross-project assignment, separate routing state, reserved namespaces, indexed TLS allow check restricted to deployed sites | Private edge link, CAA/ACME policy, certificate storage and CA monitoring |
 | Worker split brain | Expired worker completes after reassignment | Authenticated leases, monotonic fences, idempotent durable operations | Highly available backing store and supervisor integration |
 | Backup tampering | Ciphertext/manifest alteration, restore wrong copy | AES-GCM envelope, manifest HMAC/AAD, digest/integrity checks, explicit confirmation | Separate key custody, off-host replication, retention |
 | Supply-chain compromise | Mutable CI action, leaked npm token, package includes local state | Commit-pinned actions, least privilege, OIDC trusted publishing, attestation, package allowlist, zero dependencies | GitHub/npm account security and protected release environment |
 | Compiler boundary confusion | Treat attacker-controlled data as TSX source or assume generated code is sandboxed | Compiler accepts project source only, performs no build-time evaluation, and emits reviewable modules | Never compile request/database values; isolate mutually untrusted app execution |
-| Denial of service | Oversized request/CBOR/artifact, scrypt exhaustion, failing upstream | Byte/count/time bounds, CBOR depth/collection limits, password queue, circuits, leases/retries | Edge rate limits, quotas, autoscaling, capacity planning |
+| Denial of service | Chunked oversized request, CBOR/artifact bomb, scrypt exhaustion, failing upstream, unbounded metric labels, site/domain exhaustion | Streaming byte/count/time bounds, CBOR depth/collection limits, password queue, circuits, transactional quotas, fixed-cardinality metrics, leases/retries | Edge rate limits, storage/compute quotas, autoscaling, capacity planning |
 
 ## Explicit assumptions
 
 - The operating-system administrator and master-key holder are trusted.
 - The process runner executes trusted applications. Use Docker or stronger isolation for mutually untrusted deployers.
 - TypeScript and TSX files are trusted executable application source. The compiler is not a sanitizer for attacker-controlled data.
-- TLS termination, certificate issuance, DDoS protection, WAF rules, and public network policy are external to the core package.
+- TLS termination, certificate/key custody, ACME issuer policy, DDoS protection, WAF rules, and public network policy are external to the core package. Clank only decides hostname eligibility.
 - An application process can read its own decrypted environment and database.
 - SQLite is a strong single-node transactional default, not a globally replicated database.
 - External drivers are trusted only to the authority represented by their narrowly scoped token and endpoint.

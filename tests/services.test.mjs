@@ -77,6 +77,20 @@ test("local files use integrity metadata and operation-scoped expiring capabilit
     assert.equal(record.key, "users/alice/avatar.txt");
     assert.equal(record.size, 6);
 
+    let cancelled = false;
+    const oversized = await files.handle(new Request(`https://todo.test/__clank/files/${writeToken}`, {
+      method: "PUT",
+      duplex: "half",
+      headers: { "content-length": "100" },
+      body: new ReadableStream({
+        pull(controller) { controller.enqueue(new Uint8Array(40)); },
+        cancel() { cancelled = true; },
+      }),
+    }));
+    assert.equal(oversized.status, 413);
+    assert.equal((await oversized.json()).error.code, "FILE_TOO_LARGE");
+    assert.equal(cancelled, true);
+
     const readToken = await files.sign({
       key: "users/alice/avatar.txt",
       operation: "read",

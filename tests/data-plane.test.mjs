@@ -7,11 +7,13 @@ import {
   createHttpPostgresDriver,
   createManagedIngress,
   createMemoryDomainStore,
+  inspectDomainRouting,
   planExternalMigrations,
 } from "../dist/index.js";
 
 test("managed ingress routes by verified host, strips hop headers, bounds bodies, and opens circuits", async () => {
   const calls = [];
+  const metrics = [];
   const ingress = createManagedIngress({
     routes: () => [{
       id: "route_0001",
@@ -23,6 +25,7 @@ test("managed ingress routes by verified host, strips hop headers, bounds bodies
     maxBodyBytes: 8,
     circuitFailures: 2,
     circuitResetMs: 10_000,
+    onRequest: (metric) => metrics.push(metric),
     fetch: async (url, init) => {
       calls.push({ url: String(url), init });
       return new Response("proxied", {
@@ -54,12 +57,34 @@ test("managed ingress routes by verified host, strips hop headers, bounds bodies
   assert.equal(calls[0].init.headers.get("x-private-hop"), null);
   assert.equal(calls[0].init.headers.get("x-forwarded-host"), "todo.example.com");
   assert.equal(calls[0].init.headers.get("x-clank-project-id"), "project_0001");
+  assert.equal(metrics[0].projectId, "project_0001");
+  assert.equal(metrics[0].statusCode, 200);
+  assert.equal(metrics[0].requestBytes, 8);
+  assert.ok(metrics[0].durationMs >= 0);
+
+  const originLocked = await ingress.handle(new Request(
+    "https://todo.example.com//attacker.example/collect?source=path",
+  ));
+  assert.equal(originLocked.status, 200);
+  assert.equal(
+    calls.at(-1).url,
+    "http://127.0.0.1:4500//attacker.example/collect?source=path",
+    "request paths cannot replace the configured upstream origin",
+  );
 
   const tooLarge = await ingress.handle(new Request("https://todo.example.com/upload", {
     method: "POST",
-    body: "more than eight bytes",
+    duplex: "half",
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("more than"));
+        controller.enqueue(new TextEncoder().encode(" eight bytes"));
+        controller.close();
+      },
+    }),
   }));
   assert.equal(tooLarge.status, 413);
+  assert.equal(metrics.at(-1).statusCode, 413);
   const unknown = await ingress.handle(new Request("https://other.example.com/"));
   assert.equal(unknown.status, 404);
 
@@ -103,6 +128,62 @@ test("managed ingress routes by verified host, strips hop headers, bounds bodies
   assert.equal(recovered.status, 200);
   assert.equal(await recovered.text(), "recovered");
   assert.equal(attempts, 2);
+
+  let upstreamSignal;
+  const disconnecting = createManagedIngress({
+    routes: () => [{
+      id: "route_disconnect",
+      projectId: "project_disconnect",
+      hosts: ["disconnect.example.com"],
+      upstream: "http://127.0.0.1:4503",
+      active: true,
+    }],
+    retries: 2,
+    fetch: async (_url, init) => {
+      upstreamSignal = init.signal;
+      return await new Promise((_, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      });
+    },
+  });
+  const client = new AbortController();
+  const disconnected = disconnecting.handle(new Request("https://disconnect.example.com/", {
+    signal: client.signal,
+  }));
+  while (!upstreamSignal) await new Promise((resolve) => setTimeout(resolve, 0));
+  client.abort(new Error("client disconnected"));
+  assert.equal((await disconnected).status, 502);
+  assert.equal(upstreamSignal.aborted, true);
+});
+
+test("custom-domain routing accepts the configured CNAME or edge addresses and reports mismatches", async () => {
+  const records = new Map([
+    ["tasks.customer.test:CNAME", ["edge.clank.test."]],
+    ["edge.clank.test:A", ["192.0.2.44"]],
+  ]);
+  const resolver = {
+    resolveCname: async (hostname) => records.get(`${hostname}:CNAME`) ?? [],
+    resolve4: async (hostname) => records.get(`${hostname}:A`) ?? [],
+    resolve6: async () => [],
+  };
+  const ready = await inspectDomainRouting("Tasks.Customer.Test.", {
+    cname: "edge.clank.test",
+  }, resolver);
+  assert.equal(ready.status, "ready");
+  assert.deepEqual(ready.observed.cnames, ["edge.clank.test"]);
+
+  records.set("tasks.customer.test:CNAME", ["other.example.test"]);
+  const mismatched = await inspectDomainRouting("tasks.customer.test", {
+    cname: "edge.clank.test",
+  }, resolver);
+  assert.equal(mismatched.status, "misconfigured");
+
+  records.delete("tasks.customer.test:CNAME");
+  records.set("tasks.customer.test:A", ["192.0.2.44"]);
+  const flattened = await inspectDomainRouting("tasks.customer.test", {
+    cname: "edge.clank.test",
+  }, resolver);
+  assert.equal(flattened.status, "ready");
 });
 
 test("custom domains require exact DNS TXT ownership before activation", async () => {
@@ -115,6 +196,10 @@ test("custom domains require exact DNS TXT ownership before activation", async (
   const challenge = await manager.begin("project_0001", "Tasks.Example.COM.");
   assert.equal(challenge.hostname, "tasks.example.com");
   assert.equal(challenge.recordName, "_clank.tasks.example.com");
+  await assert.rejects(
+    manager.begin("project_0002", "tasks.example.com"),
+    /already assigned/,
+  );
   await assert.rejects(manager.verify(challenge.id), /DNS TXT verification failed/);
   published = [[challenge.recordValue]];
   const verified = await manager.verify(challenge.id);
@@ -122,10 +207,7 @@ test("custom domains require exact DNS TXT ownership before activation", async (
   assert.ok(verified.verifiedAt);
   const repeated = await manager.verify(challenge.id);
   assert.equal(repeated.verifiedAt, verified.verifiedAt);
-  await assert.rejects(
-    manager.begin("project_0002", "tasks.example.com"),
-    /already assigned/,
-  );
+  await assert.rejects(manager.begin("project_0002", "tasks.example.com"), /already assigned/);
 });
 
 test("HTTP Postgres driver applies immutable migrations in one remote transaction", async () => {
@@ -167,6 +249,24 @@ test("HTTP Postgres driver applies immutable migrations in one remote transactio
     /immutable migration history/,
   );
   assert.equal(await driver.health(), true);
+});
+
+test("HTTP Postgres responses stop streaming at the configured byte limit", async () => {
+  let cancelled = false;
+  const driver = createHttpPostgresDriver({
+    url: "https://sql.example.test/query",
+    token: "database-access-token",
+    maxResponseBytes: 1_024,
+    fetch: async () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array(700)); },
+      cancel() { cancelled = true; },
+    }), { status: 200 }),
+  });
+  await assert.rejects(
+    driver.query({ text: "SELECT 1", parameters: [] }),
+    /Postgres response is too large/,
+  );
+  assert.equal(cancelled, true);
 });
 
 test("external database provisioner is idempotency-oriented and destruction is confirmed", async () => {

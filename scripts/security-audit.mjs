@@ -102,8 +102,13 @@ const secretPatterns = [
   ["npm token", new RegExp(`${"npm"}_[A-Za-z0-9]{36,}`, "u")],
   ["AWS access key", new RegExp(`AKIA[0-9A-Z]{16}`, "u")],
   ["Slack token", new RegExp(`xox[baprs]-[A-Za-z0-9-]{20,}`, "u")],
+  ["Google API key", new RegExp(`AI${"za"}[0-9A-Za-z_-]{35}`, "u")],
+  ["Stripe live secret", new RegExp(`sk_${"live"}_[0-9A-Za-z]{20,}`, "u")],
+  ["SendGrid API key", new RegExp(`S${"G"}\\.[A-Za-z0-9_-]{16,}\\.[A-Za-z0-9_-]{16,}`, "u")],
+  ["GitLab access token", new RegExp(`gl${"pat"}-[A-Za-z0-9_-]{20,}`, "u")],
+  ["OpenAI project key", new RegExp(`sk-${"proj"}-[A-Za-z0-9_-]{20,}`, "u")],
 ];
-const textFile = /\.(?:c?js|mjs|ts|tsx|json|md|html|css|sql|txt|d\.mts)$/iu;
+const textFile = /(?:^|\/)(?:Dockerfile|Caddyfile|Makefile)$|\.(?:c?js|mjs|ts|tsx|json|jsonc|md|html|css|sql|txt|d\.mts|ya?ml|toml|ini|conf|sh|ps1|xml)$/iu;
 for (const file of files) {
   if (!textFile.test(file.path)) continue;
   const source = await read(file.path);
@@ -112,6 +117,25 @@ for (const file of files) {
   }
 }
 pass("published text files contain no high-confidence credential material");
+
+const repositoryListing = await command("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]);
+const repositoryFiles = repositoryListing.stdout.split("\0").filter(Boolean);
+for (const relative of repositoryFiles) {
+  if (!textFile.test(relative)) continue;
+  let source;
+  try { source = await read(relative); }
+  catch { continue; }
+  for (const [label, pattern] of secretPatterns) {
+    if (pattern.test(source)) fail(`Repository file ${relative} contains a high-confidence ${label} pattern.`);
+  }
+}
+pass(`current repository files contain no high-confidence credential material`);
+
+const history = await command("git", ["log", "--all", "--format=fuller", "-p", "--no-ext-diff", "--text"]);
+for (const [label, pattern] of secretPatterns) {
+  if (pattern.test(history.stdout)) fail(`Git history contains a high-confidence ${label} pattern.`);
+}
+pass("complete reachable Git history contains no high-confidence credential material");
 
 if (failures.length > 0) {
   for (const failure of failures) console.error(`security audit failed: ${failure}`);

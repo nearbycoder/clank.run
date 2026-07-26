@@ -12,6 +12,7 @@ import {
   RequestInputError,
   readJsonRequest,
   requestOriginAllowed,
+  trustedClientAddress,
 } from "./security.ts";
 import {
   SQLITE_INTERNAL,
@@ -92,6 +93,8 @@ export interface AuthRateLimitOptions {
   attempts?: number;
   windowMs?: number;
   store?: AuthRateLimitStore;
+  /** Trusted adapter-specific client identity. Never use an unverified caller header. */
+  clientKey?: (request: Request) => string;
 }
 
 export interface AuthRateLimitStore {
@@ -167,7 +170,10 @@ export interface AuthDefinition<Profile extends object = DefaultAuthProfile> {
   readonly touchIntervalMs: number;
   readonly cookie: Required<Omit<AuthCookieOptions, "name">> & { name?: string };
   readonly password: Required<Omit<PasswordOptions, "pepper">> & { pepper?: string };
-  readonly rateLimit: Required<Omit<AuthRateLimitOptions, "store">> & { store?: AuthRateLimitStore };
+  readonly rateLimit: Required<Omit<AuthRateLimitOptions, "store" | "clientKey">> & {
+    store?: AuthRateLimitStore;
+    clientKey?: AuthRateLimitOptions["clientKey"];
+  };
   readonly emailVerification: Required<Omit<AuthEmailVerificationOptions, "send">> & {
     send?: AuthEmailVerificationOptions["send"];
   };
@@ -221,6 +227,7 @@ export function defineAuth<const ProfileShape extends SchemaShape>(
       attempts: positiveInteger(options.rateLimit?.attempts ?? 10, "rateLimit.attempts"),
       windowMs: positiveDuration(options.rateLimit?.windowMs ?? 10 * 60 * 1_000, "rateLimit.windowMs"),
       ...(options.rateLimit?.store ? { store: options.rateLimit.store } : {}),
+      ...(options.rateLimit?.clientKey ? { clientKey: options.rateLimit.clientKey } : {}),
     },
     emailVerification: {
       required: options.emailVerification?.required ?? false,
@@ -707,20 +714,27 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           return authJson({ ok: true, verified: true });
         }
         if (operation === "password/recover") {
+          const startedAt = Date.now();
           const input = objectInput(await readJsonRequest(request, 8 * 1024), "Invalid recovery input.");
           await verifyBot(request, "recover", input);
           const email = normalizeEmail(input.email);
           await enforceRateLimit(limiter, definition.rateLimit, request, email, "recover");
           const row = internal.prepare("SELECT id, email, disabled FROM clank_auth_users WHERE email = ?").get(email);
+          let delivery: AuthDelivery | undefined;
           if (row && Number(row.disabled) === 0 && definition.passwordRecovery.send) {
             const userId = String(row.id) as AuthUserId;
             const issued = await issueToken(userId, "password_recovery", definition.passwordRecovery.tokenLifetimeMs);
-            await definition.passwordRecovery.send({
+            delivery = {
               userId,
               email: String(row.email),
               token: issued.token,
               expiresAt: issued.expiresAt,
-            });
+            };
+          }
+          await recoveryResponseDelay(startedAt);
+          if (delivery && definition.passwordRecovery.send) {
+            const send = definition.passwordRecovery.send;
+            setTimeout(() => { void Promise.resolve().then(() => send(delivery!)).catch(reportError); }, 0);
           }
           return authJson({ ok: true, accepted: true }, { status: 202 });
         }
@@ -741,21 +755,13 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
         if (operation === "passkeys/authenticate/start") {
           if (!definition.passkeys.enabled) throw new AuthError("PASSKEYS_DISABLED", "Passkeys are disabled.", 404);
           const input = objectInput(await readJsonRequest(request, 8 * 1024), "Invalid passkey input.");
-          const email = normalizeEmail(input.email);
-          await enforceRateLimit(limiter, definition.rateLimit, request, email, "passkey");
-          const userRow = internal.prepare("SELECT id FROM clank_auth_users WHERE email = ? AND disabled = 0").get(email);
-          const userId = userRow ? String(userRow.id) as AuthUserId : undefined;
-          const challenge = await createPasskeyChallenge("authentication", request, userId);
-          const credentials = userId
-            ? internal.prepare("SELECT credential_id, transports FROM clank_auth_passkeys WHERE user_id = ?").all(userId)
-            : [];
+          if (input.email !== undefined) normalizeEmail(input.email);
+          await enforceRateLimit(limiter, definition.rateLimit, request, "discoverable", "passkey");
+          const challenge = await createPasskeyChallenge("authentication", request);
           const options = passkeyAuthenticationOptions({
             challenge: challenge.challenge,
             rpId: challenge.rpId,
-            credentialIds: credentials.map((row) => ({
-              id: String(row.credential_id),
-              transports: parseStringArray(row.transports),
-            })),
+            credentialIds: [],
             timeoutMs: definition.passkeys.challengeLifetimeMs,
             requireUserVerification: definition.passkeys.requireUserVerification,
           });
@@ -766,13 +772,15 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           const input = objectInput(await readJsonRequest(request, 96 * 1024), "Invalid passkey input.");
           const credential = input.credential as PasskeyAuthenticationCredential;
           const challengeRow = await consumePasskeyChallenge(input.challengeId, input.challenge, "authentication");
-          if (!challengeRow.user_id || !credential || typeof credential.rawId !== "string") {
+          if (!credential || typeof credential.rawId !== "string") {
             throw new AuthError("INVALID_PASSKEY", "Passkey authentication failed.", 401);
           }
           const passkey = internal.prepare(`SELECT credential_id, user_id, public_key, algorithm, counter, transports
-            FROM clank_auth_passkeys WHERE credential_id = ? AND user_id = ?`)
-            .get(credential.rawId, challengeRow.user_id);
-          if (!passkey) throw new AuthError("INVALID_PASSKEY", "Passkey authentication failed.", 401);
+            FROM clank_auth_passkeys WHERE credential_id = ?`)
+            .get(credential.rawId);
+          if (!passkey || (challengeRow.user_id && String(challengeRow.user_id) !== String(passkey.user_id))) {
+            throw new AuthError("INVALID_PASSKEY", "Passkey authentication failed.", 401);
+          }
           let verified;
           try {
             verified = await verifyPasskeyAuthentication({
@@ -1067,7 +1075,7 @@ export interface AuthClient<Profile extends object = DefaultAuthProfile> {
   resetPassword(token: string, password: string): Promise<AuthUser<Profile> | null>;
   listPasskeys(): Promise<readonly AuthPasskeyRecord[]>;
   registerPasskey(name?: string): Promise<AuthPasskeyRecord>;
-  loginWithPasskey(email: string): Promise<AuthUser<Profile> | null>;
+  loginWithPasskey(email?: string): Promise<AuthUser<Profile> | null>;
   deletePasskey(id: string): Promise<void>;
   logout(): Promise<void>;
   logoutAll(): Promise<void>;
@@ -1212,7 +1220,7 @@ export function createAuthClient<Profile extends object = DefaultAuthProfile>(
       return finish.passkey as AuthPasskeyRecord;
     },
     async loginWithPasskey(email) {
-      const start = await requestPayload("passkeys/authenticate/start", { email });
+      const start = await requestPayload("passkeys/authenticate/start", email === undefined ? {} : { email });
       const options = start.options as PublicKeyCredentialRequestOptionsJSON;
       const credential = await browserCredentials().get({
         publicKey: authenticationOptionsForBrowser(options),
@@ -1799,16 +1807,29 @@ async function enforceRateLimit(
   email: string,
   action: string,
 ): Promise<void> {
-  const key = rateLimitKey(request, email, action);
+  const key = rateLimitKey(options, request, email, action);
   const retry = await limiter.consume(key, options.attempts, options.windowMs);
   if (retry !== undefined) throw new AuthError("RATE_LIMITED", "Too many authentication attempts. Try again later.", 429, retry);
 }
 
-function rateLimitKey(request: Request, email: string, action: string): string {
-  const ip = request.headers.get("x-clank-client-ip")
-    ?? request.headers.get("x-proact-client-ip")
-    ?? "unknown";
-  return `${action}\n${ip}\n${email}`;
+function rateLimitKey(
+  options: AuthDefinition["rateLimit"],
+  request: Request,
+  email: string,
+  action: string,
+): string {
+  const supplied = options.clientKey?.(request) ?? trustedClientAddress(request) ?? "unknown";
+  const client = supplied.trim();
+  if (!client || client.length > 512 || /[\u0000-\u001f\u007f]/u.test(client)) {
+    throw new TypeError("rateLimit.clientKey must return a non-empty, bounded value without control characters.");
+  }
+  return `${action}\n${client}\n${email}`;
+}
+
+async function recoveryResponseDelay(startedAt: number): Promise<void> {
+  await crypto.subtle.digest("SHA-256", crypto.getRandomValues(new Uint8Array(32)));
+  const remaining = 50 - (Date.now() - startedAt);
+  if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
 }
 
 function sessionResponse<Profile extends object>(

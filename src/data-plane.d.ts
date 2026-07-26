@@ -17,6 +17,16 @@ export interface ManagedIngress {
         error?: string;
     }>>;
 }
+export interface IngressRequestMetric {
+    projectId: string;
+    routeId: string;
+    method: string;
+    statusCode: number;
+    durationMs: number;
+    requestBytes: number;
+    responseBytes: number;
+    recordedAt: number;
+}
 export declare function createManagedIngress(options: {
     routes: IngressRouteStore | (() => readonly IngressRoute[] | Promise<readonly IngressRoute[]>);
     fetch?: typeof fetch;
@@ -27,6 +37,7 @@ export declare function createManagedIngress(options: {
     allowedUpstreamHosts?: readonly string[];
     circuitFailures?: number;
     circuitResetMs?: number;
+    onRequest?: (metric: IngressRequestMetric) => void | Promise<void>;
 }): ManagedIngress;
 export interface DomainChallenge {
     id: string;
@@ -48,6 +59,35 @@ export interface DomainManager {
     begin(projectId: string, hostname: string): Promise<DomainChallenge>;
     verify(id: string): Promise<DomainChallenge>;
 }
+export declare class DomainVerificationError extends Error {
+    readonly code: "INVALID_CHALLENGE" | "DNS_TXT_MISSING";
+    constructor(code: "INVALID_CHALLENGE" | "DNS_TXT_MISSING", message: string);
+}
+export interface DomainDnsResolver {
+    resolveCname(hostname: string): Promise<readonly string[]>;
+    resolve4(hostname: string): Promise<readonly string[]>;
+    resolve6(hostname: string): Promise<readonly string[]>;
+}
+export interface DomainRoutingTarget {
+    cname?: string;
+    addresses?: readonly string[];
+}
+export interface DomainRoutingReport {
+    hostname: string;
+    status: "pending" | "ready" | "misconfigured" | "error";
+    target: {
+        cname: string | null;
+        addresses: readonly string[];
+    };
+    observed: {
+        cnames: readonly string[];
+        addresses: readonly string[];
+    };
+    checkedAt: number;
+    error?: string;
+}
+/** Resolves a customer hostname and proves that it points at the configured Clank edge. */
+export declare function inspectDomainRouting(hostnameInput: string, targetInput: DomainRoutingTarget, resolver?: DomainDnsResolver): Promise<DomainRoutingReport>;
 export declare function createMemoryDomainStore(): DomainChallengeStore & {
     values(): DomainChallenge[];
 };

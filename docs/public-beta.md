@@ -21,7 +21,7 @@ Any known cross-tenant access, authentication bypass, remote code execution acro
 - Distributed leases, desired state, worker authentication, durable operations, and fencing are implemented, but the built-in process supervisor is not a turnkey multi-region HA control plane. Operate one active supervisor per project/data directory until leader election and remote runner integration are deployed.
 - The control-plane catalog uses SQLite. It supports durable coordination on one shared transactional store, not globally distributed consensus.
 - Built-in application data and live queries are SQLite-first. The external PostgreSQL driver/provisioner is available, but generated backend tables do not transparently switch engines.
-- Managed ingress performs exact-host HTTP proxying but does not issue TLS certificates, configure DNS, provide a WAF/DDoS edge, or proxy WebSocket upgrades. Put it behind a production edge.
+- Managed ingress performs exact-host HTTP proxying, verifies customer DNS routing, and supplies a restricted Caddy certificate-permission lookup. It does not itself issue or store certificates, change customer DNS, provide a WAF/DDoS edge, or proxy WebSocket upgrades. Put it behind the documented production edge.
 - Local file and email drivers are development/reference implementations. Configure durable object storage and a production email provider for hosted workloads.
 - Backup repositories are local unless the operator replicates them. The encryption key must be backed up separately.
 - Tailwind's browser build is for development; production apps should compile and serve CSS.
@@ -35,7 +35,7 @@ These are targets to validate in the chosen topology, not guarantees from the pa
 - recovery point objective: no more than the configured backup interval;
 - recovery time objective: demonstrated by a clean restore drill;
 - deploy rollback: prior healthy release restored automatically after candidate failure;
-- control-plane availability: measured at `/healthz`;
+- control-plane availability: measured at storage-backed `/healthz` or `/readyz`; use `/livez` only for process liveness;
 - app availability: measured through the public host and representative authenticated transaction;
 - security response: acknowledge complete private reports within three business days.
 

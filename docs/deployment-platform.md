@@ -13,6 +13,8 @@ The platform is intentionally inspectable:
 - secret values are encrypted and never returned by the API;
 - failed migrations or health checks restore the prior database and process.
 
+The browser console is also an operating surface, not only a login page. It shows site health, 1-hour through 30-day ingress performance, enforced capacity, releases, logs, and the full custom-domain lifecycle. See [Deployment dashboard, quotas, and domains](platform-dashboard.md).
+
 ## Five-minute path
 
 ```sh
@@ -155,6 +157,8 @@ clank secrets delete API_KEY
 
 Secret names and timestamps are visible; values are never returned. Values use AES-256-GCM under the platform master key and are decrypted only for runtime injection.
 
+Docker launches use name-only environment arguments (`-e NAME`); values are inherited by the Docker client rather than placed in process arguments. Privileged host/container administrators can still inspect runtime environment state. Platform-controlled names such as `PATH`, `HOME`, `HOST`, `PORT`, `NODE_ENV`, and `TRUST_PROXY` are reserved.
+
 Secret changes take effect on the next release or supervised restart.
 
 The local default creates a `0600` master-key file. Production should provide `CLANK_PLATFORM_MASTER_KEY` through separate secret management and back it up independently.
@@ -171,7 +175,7 @@ CLANK_DOCKER_IMAGE=node:22-bookworm-slim \
 clank-platform
 ```
 
-Containers improve isolation but are not perfect hostile-code sandboxes. High-risk public multi-tenancy should use microVMs or dedicated nodes, strict egress policy, image digests, and external secret injection.
+Containers improve isolation but are not perfect hostile-code sandboxes. High-risk public multi-tenancy should use microVMs or dedicated nodes, strict egress policy, image digests, and secret mounts or an external secret broker.
 
 ## API outline
 
@@ -179,10 +183,14 @@ Device/public:
 
 - `POST /api/device/start`
 - `POST /api/device/token`
-- `GET /healthz`
+- `GET /livez` — process liveness
+- `GET /healthz` or `GET /readyz` — storage-backed control-plane readiness
 
 Browser session:
 
+- `GET /api/dashboard`
+- project status, metrics, releases, logs, and domains;
+- project and domain creation/removal with CSRF;
 - `GET /api/device/info`
 - `POST /api/device/approve`
 - `POST /api/device/deny`
@@ -195,4 +203,8 @@ Bearer:
 - release upload/history/rollback;
 - logs, encrypted secrets, and audit events.
 
-See [CLI](cli.md), [Migrations](migrations.md), [Platform security](platform-security.md), and [Self-hosting](self-hosting.md).
+Managed edge:
+
+- `GET /_clank/tls/ask` — token-protected, constant-time Caddy certificate permission lookup.
+
+See [CLI](cli.md), [Migrations](migrations.md), [Dashboard and domains](platform-dashboard.md), [Platform security](platform-security.md), and [Self-hosting](self-hosting.md).

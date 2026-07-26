@@ -13,3 +13,11 @@ examples/auth-todo/*.sqlite-wal
 .proact-platform/
 .proact/
 *.proact.gz
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.p12
+*.pfx
+*.key

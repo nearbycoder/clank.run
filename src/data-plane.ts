@@ -1,4 +1,5 @@
 import type { Migration, MigrationPlan, MigrationRecord } from "./migrations.ts";
+import { readResponseBytes, ResponseBodyLimitError } from "./security.ts";
 
 export interface IngressRoute {
   id: string;
@@ -17,6 +18,17 @@ export interface ManagedIngress {
   health(): Promise<Record<string, { ok: boolean; status?: number; error?: string }>>;
 }
 
+export interface IngressRequestMetric {
+  projectId: string;
+  routeId: string;
+  method: string;
+  statusCode: number;
+  durationMs: number;
+  requestBytes: number;
+  responseBytes: number;
+  recordedAt: number;
+}
+
 export function createManagedIngress(options: {
   routes: IngressRouteStore | (() => readonly IngressRoute[] | Promise<readonly IngressRoute[]>);
   fetch?: typeof fetch;
@@ -27,6 +39,7 @@ export function createManagedIngress(options: {
   allowedUpstreamHosts?: readonly string[];
   circuitFailures?: number;
   circuitResetMs?: number;
+  onRequest?: (metric: IngressRequestMetric) => void | Promise<void>;
 }): ManagedIngress {
   const fetcher = options.fetch ?? globalThis.fetch;
   if (!fetcher) throw new Error("fetch is not available.");
@@ -65,24 +78,58 @@ export function createManagedIngress(options: {
       const host = domainName(url.hostname);
       const route = (await loadRoutes()).find((entry) => entry.active && entry.hosts.includes(host));
       if (!route) return ingressProblem(404, "ROUTE_NOT_FOUND", "No application is assigned to this host.");
+      const startedAt = performance.now();
+      let requestBytes = 0;
+      const observed = (response: Response): Response => {
+        const declaredResponseBytes = Number(response.headers.get("content-length"));
+        const metric: IngressRequestMetric = {
+          projectId: route.projectId,
+          routeId: route.id,
+          method: knownHttpMethod(request.method),
+          statusCode: response.status,
+          durationMs: Math.max(0, performance.now() - startedAt),
+          requestBytes,
+          responseBytes: Number.isSafeInteger(declaredResponseBytes) && declaredResponseBytes >= 0
+            ? declaredResponseBytes
+            : 0,
+          recordedAt: Date.now(),
+        };
+        try {
+          const pending = options.onRequest?.(Object.freeze(metric));
+          if (pending && typeof (pending as Promise<void>).catch === "function") {
+            void (pending as Promise<void>).catch(() => undefined);
+          }
+        } catch {
+          // Observability must never affect application traffic.
+        }
+        return response;
+      };
       const circuit = circuits.get(route.id);
       if (circuit && circuit.failures >= circuitFailures && Date.now() - circuit.openedAt < circuitResetMs) {
-        return ingressProblem(503, "UPSTREAM_UNAVAILABLE", "Application is temporarily unavailable.", {
+        return observed(ingressProblem(503, "UPSTREAM_UNAVAILABLE", "Application is temporarily unavailable.", {
           "retry-after": String(Math.max(1, Math.ceil((circuitResetMs - (Date.now() - circuit.openedAt)) / 1_000))),
-        });
+        }));
       }
       const declared = Number(request.headers.get("content-length"));
       if (Number.isFinite(declared) && declared > maxBodyBytes) {
-        return ingressProblem(413, "REQUEST_TOO_LARGE", `Request exceeds ${maxBodyBytes} bytes.`);
+        requestBytes = Math.max(0, declared);
+        return observed(ingressProblem(413, "REQUEST_TOO_LARGE", `Request exceeds ${maxBodyBytes} bytes.`));
       }
       let body: Uint8Array | undefined;
       if (request.body && !["GET", "HEAD"].includes(request.method)) {
-        body = new Uint8Array(await request.arrayBuffer());
-        if (body.byteLength > maxBodyBytes) {
-          return ingressProblem(413, "REQUEST_TOO_LARGE", `Request exceeds ${maxBodyBytes} bytes.`);
+        const read = await readBoundedBody(request.body, maxBodyBytes);
+        requestBytes = read.size;
+        if (read.tooLarge) {
+          return observed(ingressProblem(413, "REQUEST_TOO_LARGE", `Request exceeds ${maxBodyBytes} bytes.`));
         }
+        body = read.body;
       }
-      const target = new URL(`${url.pathname}${url.search}`, `${route.upstream}/`);
+      // Assign the path after parsing the trusted origin. Passing a path such
+      // as //attacker.example directly to new URL(path, base) would otherwise
+      // turn it into a scheme-relative URL and let request input select a host.
+      const target = new URL(route.upstream);
+      target.pathname = url.pathname;
+      target.search = url.search;
       const headers = proxyRequestHeaders(request, host, options.trustProxy === true);
       headers.set("x-clank-project-id", route.projectId);
       const attempts = ["GET", "HEAD"].includes(request.method) ? retries + 1 : 1;
@@ -95,7 +142,7 @@ export function createManagedIngress(options: {
             method: request.method,
             headers,
             body,
-            signal: controller.signal,
+            signal: AbortSignal.any([controller.signal, request.signal]),
             redirect: "manual",
           });
           if (response.status >= 500) {
@@ -111,13 +158,14 @@ export function createManagedIngress(options: {
           } else {
             circuits.delete(route.id);
           }
-          return new Response(response.body, {
+          return observed(new Response(response.body, {
             status: response.status,
             statusText: response.statusText,
             headers: proxyResponseHeaders(response.headers, route.id),
-          });
+          }));
         } catch (error) {
           lastError = error;
+          if (request.signal.aborted) break;
           const current = circuits.get(route.id) ?? { failures: 0, openedAt: 0 };
           current.failures++;
           if (current.failures >= circuitFailures) current.openedAt = Date.now();
@@ -128,7 +176,7 @@ export function createManagedIngress(options: {
         }
       }
       void lastError;
-      return ingressProblem(502, "UPSTREAM_FAILED", "Application upstream could not be reached.");
+      return observed(ingressProblem(502, "UPSTREAM_FAILED", "Application upstream could not be reached."));
     },
     async health() {
       const output: Record<string, { ok: boolean; status?: number; error?: string }> = {};
@@ -177,10 +225,102 @@ export interface DomainManager {
   verify(id: string): Promise<DomainChallenge>;
 }
 
+export class DomainVerificationError extends Error {
+  constructor(readonly code: "INVALID_CHALLENGE" | "DNS_TXT_MISSING", message: string) {
+    super(message);
+    this.name = "DomainVerificationError";
+  }
+}
+
+export interface DomainDnsResolver {
+  resolveCname(hostname: string): Promise<readonly string[]>;
+  resolve4(hostname: string): Promise<readonly string[]>;
+  resolve6(hostname: string): Promise<readonly string[]>;
+}
+
+export interface DomainRoutingTarget {
+  cname?: string;
+  addresses?: readonly string[];
+}
+
+export interface DomainRoutingReport {
+  hostname: string;
+  status: "pending" | "ready" | "misconfigured" | "error";
+  target: {
+    cname: string | null;
+    addresses: readonly string[];
+  };
+  observed: {
+    cnames: readonly string[];
+    addresses: readonly string[];
+  };
+  checkedAt: number;
+  error?: string;
+}
+
+/** Resolves a customer hostname and proves that it points at the configured Clank edge. */
+export async function inspectDomainRouting(
+  hostnameInput: string,
+  targetInput: DomainRoutingTarget,
+  resolver: DomainDnsResolver = defaultDomainDnsResolver(),
+): Promise<DomainRoutingReport> {
+  const hostname = domainName(hostnameInput);
+  const cname = targetInput.cname === undefined ? null : domainName(targetInput.cname);
+  if (cname === hostname) throw new TypeError("Custom-domain CNAME target must differ from the customer hostname.");
+  const configuredAddresses = Object.freeze(uniqueDnsValues(targetInput.addresses ?? []));
+  if (!cname && configuredAddresses.length === 0) {
+    throw new TypeError("Domain routing requires a CNAME target or at least one edge address.");
+  }
+  const [cnameLookup, ipv4Lookup, ipv6Lookup, target4Lookup, target6Lookup] = await Promise.all([
+    dnsLookup(() => resolver.resolveCname(hostname), true),
+    dnsLookup(() => resolver.resolve4(hostname)),
+    dnsLookup(() => resolver.resolve6(hostname)),
+    cname ? dnsLookup(() => resolver.resolve4(cname)) : Promise.resolve({ values: [] as string[] }),
+    cname ? dnsLookup(() => resolver.resolve6(cname)) : Promise.resolve({ values: [] as string[] }),
+  ]);
+  const cnames = uniqueDnsValues(cnameLookup.values.map(normalizeDnsName));
+  const addresses = uniqueDnsValues([...ipv4Lookup.values, ...ipv6Lookup.values]);
+  const targetAddresses = new Set(uniqueDnsValues([
+    ...configuredAddresses,
+    ...target4Lookup.values,
+    ...target6Lookup.values,
+  ]));
+  const cnameMatches = cname !== null && cnames.includes(cname);
+  const addressMatches = addresses.some((address) => targetAddresses.has(address));
+  const errors = [
+    cnameLookup.error,
+    ipv4Lookup.error,
+    ipv6Lookup.error,
+    target4Lookup.error,
+    target6Lookup.error,
+  ].filter((value): value is string => Boolean(value));
+  const hasRecords = cnames.length > 0 || addresses.length > 0;
+  const status: DomainRoutingReport["status"] = cnameMatches || addressMatches
+    ? "ready"
+    : errors.length > 0 && !hasRecords
+      ? "error"
+      : hasRecords
+        ? "misconfigured"
+        : "pending";
+  return Object.freeze({
+    hostname,
+    status,
+    target: Object.freeze({ cname, addresses: configuredAddresses }),
+    observed: Object.freeze({ cnames: Object.freeze(cnames), addresses: Object.freeze(addresses) }),
+    checkedAt: Date.now(),
+    ...(errors.length > 0 ? { error: errors[0] } : {}),
+  });
+}
+
 export function createMemoryDomainStore(): DomainChallengeStore & { values(): DomainChallenge[] } {
   const values = new Map<string, DomainChallenge>();
   return {
-    save(challenge) { values.set(challenge.id, structuredClone(challenge)); },
+    save(challenge) {
+      for (const [id, existing] of values) {
+        if (id !== challenge.id && existing.hostname === challenge.hostname) values.delete(id);
+      }
+      values.set(challenge.id, structuredClone(challenge));
+    },
     get(id) {
       const value = values.get(id);
       return value ? structuredClone(value) : undefined;
@@ -210,8 +350,11 @@ export function createDomainManager(options: {
       const projectId = opaque(projectIdInput, "project ID");
       const hostname = domainName(hostnameInput);
       const existing = await options.store.byHostname(hostname);
-      if (existing?.status === "verified" && existing.projectId !== projectId) {
+      if (existing && existing.projectId !== projectId) {
         throw new Error("Domain is already assigned to another project.");
+      }
+      if (existing?.status === "verified" || (existing && existing.expiresAt > Date.now())) {
+        return structuredClone(existing);
       }
       const challenge: DomainChallenge = {
         id: `dom_${randomToken(18)}`,
@@ -229,12 +372,14 @@ export function createDomainManager(options: {
     async verify(idInput) {
       const id = opaque(idInput, "domain challenge ID");
       const challenge = await options.store.get(id);
-      if (!challenge || challenge.expiresAt <= Date.now()) throw new Error("Domain challenge is invalid or expired.");
+      if (!challenge || challenge.expiresAt <= Date.now()) {
+        throw new DomainVerificationError("INVALID_CHALLENGE", "Domain challenge is invalid or expired.");
+      }
       if (challenge.status === "verified") return challenge;
       const records = await resolver(challenge.recordName);
       const values = records.map((record) => record.join(""));
       if (!values.includes(challenge.recordValue)) {
-        throw new Error(`DNS TXT verification failed for ${challenge.recordName}.`);
+        throw new DomainVerificationError("DNS_TXT_MISSING", `DNS TXT verification failed for ${challenge.recordName}.`);
       }
       const verified: DomainChallenge = {
         ...challenge,
@@ -304,10 +449,12 @@ export function createHttpPostgresDriver(options: {
         body: JSON.stringify({ dialect: "postgres", transaction, statements: normalized }),
       });
       if (!response.ok) throw new Error(`Postgres service returned ${response.status}.`);
-      const declared = Number(response.headers.get("content-length"));
-      if (Number.isFinite(declared) && declared > maxResponseBytes) throw new Error("Postgres response is too large.");
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.byteLength > maxResponseBytes) throw new Error("Postgres response is too large.");
+      let bytes: Uint8Array;
+      try { bytes = await readResponseBytes(response, maxResponseBytes); }
+      catch (error) {
+        if (error instanceof ResponseBodyLimitError) throw new Error("Postgres response is too large.");
+        throw error;
+      }
       let payload: unknown;
       try { payload = JSON.parse(new TextDecoder().decode(bytes)); }
       catch { throw new Error("Postgres service returned invalid JSON."); }
@@ -514,6 +661,40 @@ function ingressProblem(status: number, code: string, message: string, headers?:
   });
 }
 
+async function readBoundedBody(
+  stream: ReadableStream<Uint8Array>,
+  maximum: number,
+): Promise<{ body?: Uint8Array; size: number; tooLarge: boolean }> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      const chunk = result.value instanceof Uint8Array
+        ? result.value
+        : new Uint8Array(result.value as ArrayBuffer);
+      size += chunk.byteLength;
+      if (size > maximum) {
+        await reader.cancel("request body limit exceeded").catch(() => undefined);
+        return { size, tooLarge: true };
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (size === 0) return { body: new Uint8Array(), size, tooLarge: false };
+  const body = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { body, size, tooLarge: false };
+}
+
 function normalizeStatement(statement: SqlStatement): SqlStatement {
   if (!statement || typeof statement !== "object") throw new TypeError("SQL statement is required.");
   const text = bounded(statement.text, "SQL text", 1, 10 * 1024 * 1024);
@@ -539,6 +720,63 @@ function parseSqlResults(value: unknown, expected: number): SqlResult[] {
     }
     return { rows: source.rows as Record<string, unknown>[], rowCount: Number(source.rowCount) };
   });
+}
+
+const KNOWN_HTTP_METHODS = new Set(["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "QUERY", "TRACE"]);
+
+function knownHttpMethod(method: string): string {
+  return KNOWN_HTTP_METHODS.has(method) ? method : "_OTHER";
+}
+
+let nativeDnsResolver: DomainDnsResolver | undefined;
+
+function defaultDomainDnsResolver(): DomainDnsResolver {
+  if (nativeDnsResolver) return nativeDnsResolver;
+  const moduleName = "node:dns/promises";
+  const load = async () => await import(moduleName) as unknown as {
+    resolveCname(hostname: string): Promise<string[]>;
+    resolve4(hostname: string): Promise<string[]>;
+    resolve6(hostname: string): Promise<string[]>;
+  };
+  nativeDnsResolver = {
+    async resolveCname(hostname) { return (await load()).resolveCname(hostname); },
+    async resolve4(hostname) { return (await load()).resolve4(hostname); },
+    async resolve6(hostname) { return (await load()).resolve6(hostname); },
+  };
+  return nativeDnsResolver;
+}
+
+async function dnsLookup(
+  lookup: () => Promise<readonly string[]>,
+  names = false,
+): Promise<{ values: string[]; error?: string }> {
+  try {
+    const values = await lookup();
+    return { values: uniqueDnsValues(values.map((value) => names ? normalizeDnsName(value) : String(value))) };
+  } catch (error) {
+    const code = String((error as { code?: unknown })?.code ?? "");
+    if (["ENODATA", "ENOTFOUND", "ENOENT", "NXDOMAIN", "NODATA"].includes(code)) return { values: [] };
+    return { values: [], error: "DNS lookup is temporarily unavailable." };
+  }
+}
+
+function uniqueDnsValues(values: readonly string[]): string[] {
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const input of values) {
+    const value = String(input).trim().toLowerCase();
+    if (!value || value.length > 253 || seen.has(value)) continue;
+    seen.add(value);
+    output.push(value);
+    if (output.length >= 32) break;
+  }
+  return output;
+}
+
+function normalizeDnsName(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 46) end--;
+  return value.slice(0, end).toLowerCase();
 }
 
 function domainName(input: string): string {
