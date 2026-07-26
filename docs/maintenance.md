@@ -47,4 +47,4 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Exposed release storage usage and cleanup in both the deployment console and CLI.
 - [x] Re-certified all 136 tests, coverage floors, 45-file documentation/declaration audit, packed conformance, and repository/history security scan.
 - [x] Browser-verified cleanup, persistent authenticated refresh, console health, accessibility semantics, and desktop/mobile layout.
-- [ ] Record the final full-suite, security, conformance, browser, and GitHub CI results in the follow-up pull request.
+- [x] Recorded the final full-suite, security, conformance, and browser evidence in [PR #9](https://github.com/nearbycoder/clank.run/pull/9); Node 22.16, Node 24, packaged conformance, JavaScript/TypeScript analysis, and CodeQL passed.
