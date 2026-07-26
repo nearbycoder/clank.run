@@ -50,7 +50,7 @@ export default {
     scale: "single",
     isolation: "container",
   },
-} satisfies import("clank.run/blueprint").AppBlueprintInput;
+} satisfies import("@clank.run/framework/blueprint").AppBlueprintInput;
 ```
 
 ## Commands

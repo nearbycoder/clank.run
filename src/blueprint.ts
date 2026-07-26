@@ -216,7 +216,7 @@ export function generateAppFiles(
           "deploy:check": "clank deploy --dry-run",
           deploy: "clank deploy",
         },
-        dependencies: { "clank.run": frameworkDependency },
+        dependencies: { "@clank.run/framework": frameworkDependency },
       }),
     },
     {
@@ -240,7 +240,7 @@ export function generateAppFiles(
     },
     {
       path: "clank.app.ts",
-      contents: `export default ${JSON.stringify(app, null, 2)} satisfies import("clank.run/blueprint").AppBlueprintInput;\n`,
+      contents: `export default ${JSON.stringify(app, null, 2)} satisfies import("@clank.run/framework/blueprint").AppBlueprintInput;\n`,
     },
     {
       path: "clank.deploy.json",
@@ -299,7 +299,7 @@ function serviceRequirementsSource(app: AppBlueprint): string {
     capabilities: service.capabilities ?? [],
     required: service.required ?? false,
   }));
-  return `import type { ServiceRegistry, ServiceRequirement } from "clank.run/services";
+  return `import type { ServiceRegistry, ServiceRequirement } from "@clank.run/framework/services";
 
 export const serviceRequirements = ${JSON.stringify(requirements, null, 2)} as const satisfies readonly ServiceRequirement[];
 
@@ -715,7 +715,7 @@ function backendSource(app: AppBlueprint): string {
   defineTable,
   s,
   type DocumentFor,
-} from "clank.run";
+} from "@clank.run/framework";
 
 ${auth}export const schema = defineDatabase({
 ${tables}
@@ -796,8 +796,8 @@ function viewSource(
     .filter(([name]) => name !== displayField)
     .map(([name, field]) => `${property(name)}: ${JSON.stringify(defaultFor(field, name))}`)
     .join(", ");
-  return `/* @clankImportSource clank.run */
-import { For, signal${app.auth.required ? ", type AuthUser, type DefaultAuthProfile" : ""} } from "clank.run";
+  return `/* @clankImportSource @clank.run/framework */
+import { For, signal${app.auth.required ? ", type AuthUser, type DefaultAuthProfile" : ""} } from "@clank.run/framework";
 import type { ${type} } from "./backend.ts";
 
 export interface AppViewProps {
@@ -876,7 +876,7 @@ export function AppView(props: AppViewProps) {
 }
 
 function browserSource(entityName: string, completionField?: string): string {
-  return `/* @clankImportSource clank.run */
+  return `/* @clankImportSource @clank.run/framework */
 import {
   ${"AuthGate,"}
   createClient,
@@ -885,7 +885,7 @@ import {
   readState,
   type AuthState,
   type DefaultAuthProfile,
-} from "clank.run";
+} from "@clank.run/framework";
 import type { backend, ${typeName(entityName)} } from "./backend.ts";
 import { AppView } from "./view.tsx";
 
@@ -923,7 +923,7 @@ hydrate(document.getElementById("app")!, (
 }
 
 function serverSource(app: AppBlueprint, entityName: string, completionField?: string): string {
-  return `/* @clankImportSource clank.run */
+  return `/* @clankImportSource @clank.run/framework */
 import {
   AuthGate,
   authState,
@@ -937,13 +937,13 @@ import {
   securityHeaders,
   serve,
   staticFiles,
-} from "clank.run";
+} from "@clank.run/framework";
 import { backend } from "./backend.ts";
 import { AppView } from "./view.tsx";
 
 const environment = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env;
 const root = decodeURIComponent(new URL("./", import.meta.url).pathname);
-const frameworkRoot = decodeURIComponent(new URL("../node_modules/clank.run/dist/", import.meta.url).pathname);
+const frameworkRoot = decodeURIComponent(new URL("../node_modules/@clank.run/framework/dist/", import.meta.url).pathname);
 const databasePath = environment?.CLANK_DATABASE_PATH ?? environment?.CLANK_DATABASE ?? "app.sqlite";
 const runtime = await openBackend(backend, { path: databasePath });
 const observability = createObservability({
@@ -988,7 +988,7 @@ const app = createApp()
         nonce,
         head: (
           <>
-            <script type="importmap" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify({ imports: { "clank.run": "/_clank/index.js" } }) }} />
+            <script type="importmap" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify({ imports: { "@clank.run/framework": "/_clank/index.js" } }) }} />
             <script nonce={nonce} src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" />
           </>
         ),

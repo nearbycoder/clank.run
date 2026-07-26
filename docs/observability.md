@@ -6,7 +6,7 @@ One `createObservability` instance provides structured logs, W3C trace propagati
 import {
   createObservability,
   createOtlpHttpSpanExporter,
-} from "clank.run/observability";
+} from "@clank.run/framework/observability";
 
 const observability = createObservability({
   serviceName: "orbit-tasks",

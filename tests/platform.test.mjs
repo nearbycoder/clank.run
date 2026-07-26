@@ -115,7 +115,7 @@ async function authenticatedAppArtifact(root) {
       defineDatabase,
       openBackend,
       serve,
-    } from "clank.run";
+    } from "@clank.run/framework";
 
     const backend = defineBackend({
       schema: defineDatabase({}),

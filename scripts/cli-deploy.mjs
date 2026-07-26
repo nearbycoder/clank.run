@@ -42,11 +42,11 @@ const COMMANDS = Object.freeze({
     summary: "Generate an app from a data-only blueprint.",
   },
   build: {
-    usage: "clank build [input=src] [output=dist] [--jsx-import-source=clank.run]",
+    usage: "clank build [input=src] [output=dist] [--jsx-import-source=@clank.run/framework]",
     summary: "Compile TypeScript and TSX and copy static files.",
   },
   watch: {
-    usage: "clank watch [input=src] [output=dist] [--jsx-import-source=clank.run]",
+    usage: "clank watch [input=src] [output=dist] [--jsx-import-source=@clank.run/framework]",
     summary: "Rebuild when source files change.",
   },
   doctor: {

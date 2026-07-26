@@ -15,10 +15,27 @@ for (const field of ["dependencies", "devDependencies", "peerDependencies", "opt
     fail(`package.json contains ${field}; Clank's runtime and release gate must remain dependency-free.`);
   }
 }
-if (packageJson.name !== "clank.run") fail("The official published package name must be clank.run.");
+if (packageJson.name !== "@clank.run/framework") {
+  fail("The official published package name must be @clank.run/framework.");
+}
+if (packageJson.homepage !== "https://docs.clank.run") fail("The npm homepage must point to the documentation site.");
+if (packageJson.repository?.url !== "git+https://github.com/nearbycoder/clank.run.git") {
+  fail("The npm repository must match the public GitHub source exactly.");
+}
+if (packageJson.license !== "MIT") fail("The npm package must declare its MIT license.");
 if (packageJson.publishConfig?.access !== "public") fail("npm publishing must be explicitly public.");
-if (packageJson.bin?.clank !== "./scripts/clank.mjs") fail("The clank CLI entry point is missing or unexpected.");
+if (packageJson.publishConfig?.registry !== "https://registry.npmjs.org/") {
+  fail("npm publishing must be pinned to the public npm registry.");
+}
+if (packageJson.publishConfig?.provenance !== true) {
+  fail("npm publishing must request provenance.");
+}
+if (packageJson.bin?.clank !== "scripts/clank.mjs") fail("The clank CLI entry point is missing or unexpected.");
+if (packageJson.bin?.["clank-platform"] !== "scripts/clank-platform.mjs") {
+  fail("The clank-platform CLI entry point is missing or unexpected.");
+}
 if (packageJson.engines?.node !== ">=22.16") fail("The minimum supported Node release must remain exactly >=22.16.");
+if (packageJson.packageManager !== "npm@11.18.0") fail("The release npm version must remain pinned to 11.18.0.");
 pass("zero-dependency package metadata is constrained");
 
 const required = [
@@ -62,8 +79,8 @@ const codeql = workflows.find(([relative]) => relative.endsWith("/codeql.yml"))?
 const release = workflows.find(([relative]) => relative.endsWith("/release.yml"))?.[1] ?? "";
 if (!/permissions:\s*\n\s*contents:\s*read/u.test(ci)) fail("CI must use read-only repository contents permission.");
 if (!/security-events:\s*write/u.test(codeql)) fail("CodeQL must be able to upload security results.");
-if (!/id-token:\s*write/u.test(release) || !/npm publish/u.test(release)) {
-  fail("The release workflow must use npm trusted publishing through GitHub OIDC.");
+if (!/id-token:\s*write/u.test(release) || !/npm stage publish --access public/u.test(release)) {
+  fail("The release workflow must use public npm staged publishing through GitHub OIDC.");
 }
 if (/NODE_AUTH_TOKEN|NPM_TOKEN/u.test(release)) {
   fail("The release workflow must not depend on a long-lived npm token.");
@@ -85,6 +102,8 @@ try {
   fail(`npm pack did not return valid JSON: ${packed.stderr || packed.stdout}`);
 }
 const files = packResult?.files ?? [];
+if (packResult?.name !== packageJson.name) fail("npm pack changed the scoped package identity.");
+if (packResult?.version !== packageJson.version) fail("npm pack changed the package version.");
 const forbiddenPackagePath = /(?:^|\/)(?:node_modules|\.clank|\.clank-platform|\.proact|\.proact-platform)(?:\/|$)|(?:^|\/)\.env(?:\.|$)|\.(?:sqlite(?:-(?:shm|wal))?|db|pem|p12|pfx|key)$/iu;
 for (const file of files) {
   if (forbiddenPackagePath.test(file.path)) fail(`Sensitive or stateful file would be published: ${file.path}`);

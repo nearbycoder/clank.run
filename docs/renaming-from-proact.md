@@ -6,7 +6,7 @@ Proact was renamed to Clank in version 0.7.0. The framework, deployment platform
 
 | Before | Now |
 | --- | --- |
-| `proact` package | `clank.run` |
+| `proact` package | `@clank.run/framework` |
 | `proact` command | `clank` |
 | `proact-platform` | `clank-platform` |
 | `proact.deploy.json` | `clank.deploy.json` |
@@ -37,8 +37,8 @@ If both an old and a new database table exist, startup stops instead of guessing
 Application source must update package imports and public Clank-specific names. For example:
 
 ```ts
-import { signal } from "clank.run";
-import { createAuth } from "clank.run/auth";
+import { signal } from "@clank.run/framework";
+import { createAuth } from "@clank.run/framework/auth";
 ```
 
 Rename custom integrations that reference `ClankContext`, `ClankClientOptions`, `ClankPlatformOptions`, `data-clank-*`, or `clank-*` SSR markers. These TypeScript and DOM names are not dual-exported because doing so would permanently expand the public API.

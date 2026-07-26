@@ -4,7 +4,7 @@ import {
   defineTable,
   s,
   type DocumentFor,
-} from "clank.run";
+} from "@clank.run/framework";
 
 export const databaseSchema = defineDatabase({
   todos: defineTable({

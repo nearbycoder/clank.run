@@ -96,4 +96,4 @@ export default {
     healthPath: "/healthz",
     customDomains: true,
   },
-} satisfies import("clank.run/blueprint").AppBlueprintInput;
+} satisfies import("@clank.run/framework/blueprint").AppBlueprintInput;

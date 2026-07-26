@@ -119,7 +119,7 @@ test("app blueprints normalize, validate references, remain immutable, and expla
 
 test("TypeScript blueprint modules are statically parsed without executing code", () => {
   const source = `
-    import type { AppBlueprintInput } from "clank.run/blueprint";
+    import type { AppBlueprintInput } from "@clank.run/framework/blueprint";
     // The CLI reads only this literal.
     export default ${JSON.stringify(todoist, null, 2)} satisfies AppBlueprintInput;
   `;
@@ -162,7 +162,10 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.deepEqual(files.map((file) => file.path), [...files.map((file) => file.path)].sort());
   assert.match(files.find((file) => file.path === "src/backend.ts").contents, /by_priority/);
   assert.match(files.find((file) => file.path === "src/view.tsx").contents, /Complete/);
-  assert.match(files.find((file) => file.path === "src/server.tsx").contents, /imports: \{ "clank\.run": "\/_clank\/index\.js" \}/);
+  assert.match(
+    files.find((file) => file.path === "src/server.tsx").contents,
+    /imports: \{ "@clank\.run\/framework": "\/_clank\/index\.js" \}/,
+  );
   assert.match(files.find((file) => file.path === "AGENTS.md").contents, /npm run deploy:check/);
   assert.match(files.find((file) => file.path === "README.md").contents, /Focused Tasks/);
 });
@@ -171,7 +174,7 @@ test("plan, explain, and generate CLI commands create a buildable app without bl
   const root = await mkdtemp(join(tmpdir(), "clank-blueprint-cli-"));
   const source = join(root, "clank.app.ts");
   const target = join(root, "generated");
-  await writeFile(source, `export default ${JSON.stringify(todoist, null, 2)} satisfies import("clank.run/blueprint").AppBlueprintInput;\n`);
+  await writeFile(source, `export default ${JSON.stringify(todoist, null, 2)} satisfies import("@clank.run/framework/blueprint").AppBlueprintInput;\n`);
   try {
     const plan = await run(["plan", source]);
     const parsedPlan = JSON.parse(plan.stdout);
@@ -184,7 +187,7 @@ test("plan, explain, and generate CLI commands create a buildable app without bl
 
     await run(["generate", target, `--blueprint=${source}`]);
     const packageJson = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
-    assert.equal(packageJson.dependencies["clank.run"], `^${version}`);
+    assert.equal(packageJson.dependencies["@clank.run/framework"], `^${version}`);
     assert.equal(packageJson.scripts.doctor, "clank doctor");
     assert.match(await readFile(join(target, "src", "server.tsx"), "utf8"), /Focused Tasks/);
     const savedPlan = JSON.parse(await readFile(join(target, ".clank", "plan.json"), "utf8"));

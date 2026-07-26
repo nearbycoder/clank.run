@@ -1,4 +1,4 @@
-/* @clankImportSource clank.run */
+/* @clankImportSource @clank.run/framework */
 import {
   createApi,
   createApp,
@@ -7,7 +7,7 @@ import {
   renderDocument,
   serve,
   staticFiles,
-} from "clank.run";
+} from "@clank.run/framework";
 import { backend } from "./backend.ts";
 import { TodoApp } from "./view.tsx";
 
@@ -47,7 +47,7 @@ const app = createApp()
         bodyClass: "m-0 bg-slate-50 antialiased",
         head: (
           <>
-            <script type="importmap" dangerouslySetInnerHTML={{ __html: JSON.stringify({ imports: { "clank.run": "/dist/index.js" } }) }} />
+            <script type="importmap" dangerouslySetInnerHTML={{ __html: JSON.stringify({ imports: { "@clank.run/framework": "/dist/index.js" } }) }} />
             <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
             <style type="text/tailwindcss" dangerouslySetInnerHTML={{ __html: "button,input{outline:none}" }} />
           </>

@@ -1,5 +1,5 @@
-/* @clankImportSource clank.run */
-import { For, signal, type AuthUser, type DefaultAuthProfile } from "clank.run";
+/* @clankImportSource @clank.run/framework */
+import { For, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
 import type { Todo } from "./backend.ts";
 
 export interface TodoViewProps {

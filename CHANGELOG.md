@@ -6,6 +6,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- The framework now publishes from the `@clank.run` npm organization as `@clank.run/framework`, with explicit public-registry, provenance, repository, documentation, and package-export metadata.
 - A fully authenticated deployment dashboard with site status, 1-hour through 30-day ingress charts, releases, logs, and guided custom-domain setup.
 - Transactionally enforced per-organization site and per-project custom-domain limits, with operator-configurable metric retention.
 - Minute-level fixed-histogram ingress metrics plus DNS routing inspection and a Caddy On-Demand TLS permission endpoint for deployed built-in and verified custom hosts.
@@ -56,9 +57,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Every HTTP/runtime adapter now keeps unexpected exception text private, and adversarial prefix, identifier, URL, and numeric-literal parsing is linear.
 - CLI device login prints its browser approval URL without launching an operating-system command.
 - The minimum runtime is Node 22.16, the first Node 22 release with the built-in SQLite backup API used by migrations and recovery.
-- The official package name is `clank.run`, avoiding collision with the unrelated npm package named `clank`; binaries remain `clank` and `clank-platform`.
+- The official package name is `@clank.run/framework`, avoiding collision with unrelated unscoped packages while leaving the binaries as `clank` and `clank-platform`.
 - Command-specific `--help` no longer authenticates or executes the command, dry-run deploys no longer require login, asynchronous CLI failures now reliably exit non-zero without stack traces, and unknown long options fail with spelling guidance instead of being ignored.
-- Generated authenticated apps and bundled SSR examples now map the browser's actual `clank.run` module specifier, allowing their server-rendered screens to hydrate and become interactive.
+- Generated authenticated apps and bundled SSR examples now map the browser's actual `@clank.run/framework` module specifier, allowing their server-rendered screens to hydrate and become interactive.
 - Hydration now cleans partially attached listeners, directives, keyed rows, and component ownership before fallback; only structural mismatches remount, lifecycle/application errors remain visible, and case-sensitive SVG plus `foreignObject` namespaces preserve their server nodes.
 - Local deployment artifacts are now written through a private atomic replacement, preventing a pre-existing output symlink from redirecting CLI writes.
 

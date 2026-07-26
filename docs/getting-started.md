@@ -5,6 +5,13 @@
 - Node.js 22.16 or newer for the zero-package TypeScript build and built-in SQLite backup support.
 - A modern browser with ES modules, Proxy, AbortController, and the DOM APIs.
 
+For the published CLI and framework:
+
+```sh
+npm install --global @clank.run/framework
+clank --version
+```
+
 There is no install step in this repository. The `package.json` contains no dependency fields. Run:
 
 ```sh
@@ -101,7 +108,7 @@ clank build src dist
 clank watch src dist
 ```
 
-The default generated TSX import is `clank.run`, the official npm package. For direct browser modules without an import map, point it at the served framework module:
+The default generated TSX import is `@clank.run/framework`, the official npm package. For direct browser modules without an import map, point it at the served framework module:
 
 ```sh
 clank build src dist --jsx-import-source=/vendor/clank/index.js
@@ -125,18 +132,18 @@ npm run dev     # rebuild on changes and serve the example
 The root module exports everything. Smaller public paths are also available:
 
 ```ts
-import { signal } from "clank.run/core";
-import { h, render } from "clank.run/dom";
-import { createRouter } from "clank.run/router";
-import { defineAction, s } from "clank.run/ai";
-import { createForm } from "clank.run/forms";
-import { createDialog, createTabs } from "clank.run/ui";
-import { createApp, json } from "clank.run/server";
-import { defineAuth, createAuthClient } from "clank.run/auth";
-import { defineBackend, defineDatabase, defineTable } from "clank.run/backend";
-import { renderDocument } from "clank.run/ssr";
-import { serve, staticFiles } from "clank.run/node";
-import { compile, transformTSX } from "clank.run/compiler";
+import { signal } from "@clank.run/framework/core";
+import { h, render } from "@clank.run/framework/dom";
+import { createRouter } from "@clank.run/framework/router";
+import { defineAction, s } from "@clank.run/framework/ai";
+import { createForm } from "@clank.run/framework/forms";
+import { createDialog, createTabs } from "@clank.run/framework/ui";
+import { createApp, json } from "@clank.run/framework/server";
+import { defineAuth, createAuthClient } from "@clank.run/framework/auth";
+import { defineBackend, defineDatabase, defineTable } from "@clank.run/framework/backend";
+import { renderDocument } from "@clank.run/framework/ssr";
+import { serve, staticFiles } from "@clank.run/framework/node";
+import { compile, transformTSX } from "@clank.run/framework/compiler";
 ```
 
 No API mutates global state merely by being imported.

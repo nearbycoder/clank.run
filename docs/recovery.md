@@ -8,7 +8,7 @@ Clank distinguishes deployment rollback from database recovery:
 ## Application API
 
 ```ts
-import { openBackupManager } from "clank.run/recovery";
+import { openBackupManager } from "@clank.run/framework/recovery";
 
 const backups = await openBackupManager({
   databasePath: "app.sqlite",

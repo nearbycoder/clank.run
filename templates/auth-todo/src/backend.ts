@@ -5,7 +5,7 @@ import {
   defineTable,
   s,
   type DocumentFor,
-} from "clank.run";
+} from "@clank.run/framework";
 
 const environment = (globalThis as unknown as {
   process?: { env?: Record<string, string | undefined> };

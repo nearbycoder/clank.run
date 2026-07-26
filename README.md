@@ -27,6 +27,17 @@ The framework itself has no dependencies, dev dependencies, peer dependencies, v
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, Tailwind Play CDN and compiled Tailwind CSS compatibility |
 | Deploy | Full browser console, workspace people/role/invitation administration, activity feed, ingress performance metrics, enforced account/organization/site/domain/release-storage quotas, custom DNS/TLS onboarding, browser-approved CLI auth, deterministic artifacts, encrypted secrets, immutable migrations, SQLite backups, storage-backed readiness, health-gated releases, confirmation-gated release and site deletion, logs, audit, rollback |
 
+## Install
+
+Install the framework and its `clank` and `clank-platform` commands from the organization scope:
+
+```sh
+npm install --global @clank.run/framework
+clank --version
+```
+
+Generated applications declare `@clank.run/framework` as their only dependency. The framework has no transitive packages.
+
 ## Run it
 
 ```sh
@@ -157,4 +168,4 @@ render(document.querySelector("#app")!, <App />);
 
 Clank is MIT licensed.
 
-The official npm package is `clank.run`; the installed executables are `clank` and `clank-platform`. The unrelated unscoped `clank` package on npm is not this framework.
+The official npm package is `@clank.run/framework`; the installed executables are `clank` and `clank-platform`. The npm organization provides a verified namespace for future Clank packages, while the unrelated unscoped `clank` package remains a different project.
