@@ -118,6 +118,123 @@ async function deploy(platform, projectId, token, artifact, key) {
   return { response, body: await response.json() };
 }
 
+test("operator allowlist grants browser-only global administration and revokes it on removal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-admin-"));
+  const dataDirectory = join(root, "platform");
+  let platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    platformAdminEmails: ["ADMIN@example.com"],
+    backups: { intervalMs: false },
+  });
+  try {
+    const admin = await authorizeCli(platform, "admin@example.com");
+    const user = await authorizeCli(platform, "user@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      cookie: admin.cookie,
+    }));
+    const project = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      cookie: admin.cookie,
+      csrf: admin.csrfToken,
+      body: {
+        name: "Admin analytics",
+        slug: "admin-analytics",
+        organizationId: dashboard.organizations[0].id,
+      },
+    }), 201);
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    control.prepare(`INSERT INTO clank_platform_metrics
+      (project_id, bucket_started_at, request_count, error_count, status_2xx, status_5xx,
+       duration_sum_ms, duration_max_ms, latency_le_50, latency_le_100, latency_le_250,
+       latency_le_500, latency_le_1000, latency_le_2500, latency_le_5000, latency_inf,
+       request_bytes, response_bytes)
+      VALUES (?, ?, 3, 1, 2, 1, 375, 250, 1, 2, 3, 3, 3, 3, 3, 3, 120, 480)`)
+      .run(project.project.id, Date.now() - 60_000);
+    control.close();
+
+    const directory = await payload(platform, jsonRequest("/api/admin/users?limit=1", {
+      cookie: admin.cookie,
+    }));
+    assert.equal(directory.users.length, 1);
+    assert.ok(directory.nextBefore);
+    const remaining = await payload(platform, jsonRequest(
+      `/api/admin/users?before=${directory.nextBefore}&query=admin`,
+      { cookie: admin.cookie },
+    ));
+    const users = [...directory.users, ...remaining.users];
+    assert.equal(users.some((entry) => entry.email === "admin@example.com"), true);
+    const listedAdmin = users.find((entry) => entry.email === "admin@example.com");
+    assert.equal(listedAdmin.platformRole, "platform_admin");
+    assert.deepEqual(
+      Object.keys(listedAdmin).sort(),
+      [
+        "accessibleStorageBytes",
+        "activeSessions",
+        "activeTokens",
+        "createdAt",
+        "disabled",
+        "email",
+        "emailVerified",
+        "id",
+        "lastSeenAt",
+        "name",
+        "organizations",
+        "platformRole",
+        "projects",
+        "updatedAt",
+      ],
+    );
+
+    const analytics = await payload(platform, jsonRequest("/api/admin/analytics?range=7d", {
+      cookie: admin.cookie,
+    }));
+    assert.equal(analytics.range, "7d");
+    assert.equal(analytics.totals.users, 2);
+    assert.equal(analytics.totals.enabledUsers, 2);
+    assert.equal(analytics.totals.platformAdmins, 1);
+    assert.equal(analytics.totals.projects, 1);
+    assert.equal(analytics.traffic.summary.requests, 3);
+    assert.equal(analytics.traffic.summary.errors, 1);
+    assert.equal(analytics.traffic.points.length, 1);
+    assert.equal(analytics.topProjects[0].id, project.project.id);
+    assert.equal(analytics.topProjects[0].requests, 3);
+
+    const ordinaryDenied = await platform.handle(jsonRequest("/api/admin/users", {
+      cookie: user.cookie,
+    }));
+    assert.equal(ordinaryDenied.status, 403);
+    assert.equal((await ordinaryDenied.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
+
+    const tokenDenied = await platform.handle(jsonRequest("/api/admin/analytics", {
+      token: admin.accessToken,
+    }));
+    assert.equal(tokenDenied.status, 403);
+    assert.equal((await tokenDenied.json()).error.code, "BROWSER_ADMIN_REQUIRED");
+
+    const account = await payload(platform, jsonRequest("/api/account", { cookie: admin.cookie }));
+    assert.equal(account.account.platformRole, "platform_admin");
+
+    await platform.close();
+    platform = await openPlatform({
+      dataDirectory,
+      publicUrl: "http://127.0.0.1:4200",
+      signup: true,
+      platformAdminEmails: [],
+      backups: { intervalMs: false },
+    });
+    const revoked = await platform.handle(jsonRequest("/api/admin/users", { cookie: admin.cookie }));
+    assert.equal(revoked.status, 403);
+    assert.equal((await revoked.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
+    const demoted = await payload(platform, jsonRequest("/api/account", { cookie: admin.cookie }));
+    assert.equal(demoted.account.platformRole, "user");
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("browser project management enforces organization and custom-domain quotas transactionally", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-quota-"));
   const dns = new Map();

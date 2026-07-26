@@ -95,6 +95,8 @@ export interface PlatformBackupOptions {
 export interface ClankPlatformOptions {
   dataDirectory: string;
   publicUrl: string;
+  /** Exact control-plane account emails granted operator-level administration. */
+  platformAdminEmails?: readonly string[];
   appHostname?: string;
   /** Public application URL pattern. Supports {slug} and {port}. */
   appUrlTemplate?: string;
@@ -252,6 +254,7 @@ const MAX_PENDING_INVITATIONS_PER_ORGANIZATION = 100;
 const BOOTSTRAP_CLAIM_MS = 5 * 60_000;
 const MAX_PLATFORM_RATE_LIMIT_KEYS = 20_000;
 const PLATFORM_RATE_LIMIT_PRUNE_TARGET = 18_000;
+const PLATFORM_ADMIN_ROLE = "platform_admin";
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -262,6 +265,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const publicUrlObject = new URL(publicUrl);
   const publicHostname = normalizeHostname(publicUrlObject.hostname);
   const securePublicUrl = publicUrlObject.protocol === "https:";
+  const platformAdminEmails = new Set(
+    (options.platformAdminEmails ?? []).map(normalizePlatformAdminEmail),
+  );
   const baseDomain = options.ingress?.baseDomain
     ? normalizeHostname(options.ingress.baseDomain)
     : undefined;
@@ -384,6 +390,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
+  reconcilePlatformAdminRoles(storage, platformAdminEmails);
+  const finalizePlatformRegistration = (response: Response): Response => {
+    if (response.status === 201) reconcilePlatformAdminRoles(storage, platformAdminEmails);
+    return response;
+  };
   const orchestrator = openDeploymentOrchestrator(storage.database);
   const leaseOwner = `control-${(globalThis as any).process?.pid ?? 0}-${crypto.randomUUID()}`;
   const active = new Map<string, ActiveProcess>();
@@ -1330,7 +1341,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const registering = request.method === "POST" && authOperation === "register";
         const invitationRegistering = request.method === "POST" && authOperation === "invited-register";
         if (invitationRegistering) {
-          return await registerWithInvitation(storage, request, authPrefix);
+          return finalizePlatformRegistration(await registerWithInvitation(storage, request, authPrefix));
         }
         if (registering && signupMode === false) {
           return problem(403, "SIGNUP_DISABLED", "Platform registration is closed.");
@@ -1348,9 +1359,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           bootstrapRegistrationActive = true;
           try {
             const response = await storage.auth.handle(request, authPrefix);
-            return response.status === 201
+            return finalizePlatformRegistration(response.status === 201
               ? retainBootstrapWinner(storage, response)
-              : response;
+              : response);
           } finally {
             bootstrapRegistrationActive = false;
             storage.internal.prepare(
@@ -1358,7 +1369,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             ).run(claimId);
           }
         }
-        return storage.auth.handle(request, authPrefix);
+        return finalizePlatformRegistration(await storage.auth.handle(request, authPrefix));
       }
       if (consolePath) {
         const auth = await storage.auth.resolve(request);
@@ -1458,6 +1469,34 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         audit(storage.internal, auth.user!.id, null, null, `device.${status}`, { code });
         return api({ ok: true, status });
       }
+      if (url.pathname === "/api/admin/users" && request.method === "GET") {
+        await requirePlatformAdmin(storage, request);
+        const limit = queryInteger(url.searchParams.get("limit"), "limit", 50, 1, 200);
+        const before = queryInteger(
+          url.searchParams.get("before"),
+          "before",
+          Number.MAX_SAFE_INTEGER,
+          1,
+          Number.MAX_SAFE_INTEGER,
+        );
+        const search = url.searchParams.get("query")?.trim() ?? "";
+        if (search.length > 120) throw new PlatformError(422, "INVALID_INPUT", "query is too long.");
+        return api({
+          ok: true,
+          ...platformAdminUsers(storage.internal, limit, before, search),
+        });
+      }
+      if (url.pathname === "/api/admin/analytics" && request.method === "GET") {
+        await requirePlatformAdmin(storage, request);
+        return api({
+          ok: true,
+          ...platformAdminAnalytics(
+            storage.internal,
+            active,
+            url.searchParams.get("range") ?? "24h",
+          ),
+        });
+      }
 
       const principal = await requirePlatformPrincipal(storage, request);
       if (url.pathname === "/api/audit" && request.method === "GET") {
@@ -1504,9 +1543,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         ));
       }
       if (url.pathname === "/api/account" && request.method === "GET") {
+        const account = storage.internal.prepare(
+          "SELECT role FROM clank_auth_users WHERE id = ?",
+        ).get(principal.userId);
         return api({
           ok: true,
-          account: { id: principal.userId, email: principal.email },
+          account: {
+            id: principal.userId,
+            email: principal.email,
+            platformRole: String(account?.role ?? "user"),
+          },
           token: principal.tokenId === null ? null : {
             id: principal.tokenId,
             organizationId: principal.organizationId,
@@ -2776,6 +2822,45 @@ async function requireBrowserAuth(
   return auth;
 }
 
+async function requirePlatformAdmin(
+  storage: PlatformDatabase,
+  request: Request,
+  verifyCsrf = false,
+): Promise<AuthRequest<DefaultAuthProfile>> {
+  if (request.headers.has("authorization")) {
+    throw new PlatformError(
+      403,
+      "BROWSER_ADMIN_REQUIRED",
+      "Platform administration requires an interactive browser session.",
+    );
+  }
+  const auth = await requireBrowserAuth(storage.auth, request);
+  if (auth.user!.role !== PLATFORM_ADMIN_ROLE) {
+    throw new PlatformError(403, "PLATFORM_ADMIN_REQUIRED", "Platform administrator access is required.");
+  }
+  if (verifyCsrf) await storage.auth.verifyCsrf(request, auth);
+  return auth;
+}
+
+function reconcilePlatformAdminRoles(
+  storage: PlatformDatabase,
+  platformAdminEmails: ReadonlySet<string>,
+): void {
+  const users = storage.internal.prepare(
+    "SELECT id, email, role FROM clank_auth_users ORDER BY id",
+  ).all();
+  for (const user of users) {
+    const currentRole = String(user.role);
+    const configured = platformAdminEmails.has(String(user.email).trim().toLowerCase());
+    const nextRole = configured
+      ? PLATFORM_ADMIN_ROLE
+      : currentRole === PLATFORM_ADMIN_ROLE
+        ? "user"
+        : currentRole;
+    if (nextRole !== currentRole) storage.auth.setRole(String(user.id) as AuthUserId, nextRole);
+  }
+}
+
 async function requireToken(internal: SQLiteInternal, request: Request): Promise<TokenPrincipal> {
   const authorization = request.headers.get("authorization") ?? "";
   const matched = /^Bearer ((?:clnk|prct)_[A-Za-z0-9_-]{40,200})$/.exec(authorization);
@@ -3046,6 +3131,210 @@ function metricSeries(internal: SQLiteInternal, projectId: string, requestedRang
     intervalMs: range.intervalMs,
     summary: summarizeMetricRows(rows, range.durationMs),
     points,
+  };
+}
+
+function platformAdminUsers(
+  internal: SQLiteInternal,
+  limit: number,
+  before: number,
+  search: string,
+): { users: Record<string, unknown>[]; nextBefore: number | null } {
+  const rows = internal.prepare(`SELECT
+      u.rowid AS cursor,
+      u.id,
+      u.email,
+      u.email_verified_at,
+      u.role,
+      json_extract(u.profile, '$.name') AS profile_name,
+      u.disabled,
+      u.created_at,
+      u.updated_at,
+      (SELECT max(s.last_seen_at) FROM clank_auth_sessions s WHERE s.user_id = u.id) AS last_seen_at,
+      (SELECT count(*) FROM clank_auth_sessions s
+        WHERE s.user_id = u.id AND s.expires_at > ? AND s.idle_expires_at > ?) AS active_sessions,
+      (SELECT count(*) FROM clank_platform_tokens t
+        WHERE t.user_id = u.id AND t.revoked_at IS NULL AND t.expires_at > ?) AS active_tokens,
+      (SELECT count(*) FROM clank_platform_memberships m WHERE m.user_id = u.id) AS organizations,
+      (SELECT count(*) FROM clank_platform_projects p
+        WHERE p.owner_id = u.id OR EXISTS (
+          SELECT 1 FROM clank_platform_memberships m
+          WHERE m.user_id = u.id AND m.organization_id = p.organization_id
+        )) AS projects,
+      (SELECT coalesce(sum(r.storage_bytes), 0)
+        FROM clank_platform_releases r
+        JOIN clank_platform_projects p ON p.id = r.project_id
+        WHERE p.owner_id = u.id OR EXISTS (
+          SELECT 1 FROM clank_platform_memberships m
+          WHERE m.user_id = u.id AND m.organization_id = p.organization_id
+        )) AS accessible_storage_bytes
+    FROM clank_auth_users u
+    WHERE u.rowid < ?
+      AND (? = '' OR instr(lower(u.email), lower(?)) > 0
+        OR instr(lower(coalesce(json_extract(u.profile, '$.name'), '')), lower(?)) > 0)
+    ORDER BY u.rowid DESC
+    LIMIT ?`).all(
+      Date.now(),
+      Date.now(),
+      Date.now(),
+      before,
+      search,
+      search,
+      search,
+      limit,
+    );
+  return {
+    users: rows.map((row) => ({
+      id: String(row.id),
+      email: String(row.email),
+      name: row.profile_name === null || row.profile_name === undefined
+        ? null
+        : String(row.profile_name),
+      platformRole: String(row.role),
+      disabled: Number(row.disabled) !== 0,
+      emailVerified: row.email_verified_at !== null,
+      activeSessions: Number(row.active_sessions ?? 0),
+      activeTokens: Number(row.active_tokens ?? 0),
+      organizations: Number(row.organizations ?? 0),
+      projects: Number(row.projects ?? 0),
+      accessibleStorageBytes: Number(row.accessible_storage_bytes ?? 0),
+      lastSeenAt: row.last_seen_at === null ? null : Number(row.last_seen_at),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    })),
+    nextBefore: rows.length === limit ? Number(rows.at(-1)!.cursor) : null,
+  };
+}
+
+function platformAdminAnalytics(
+  internal: SQLiteInternal,
+  active: ReadonlyMap<string, ActiveProcess>,
+  requestedRange: string,
+): Record<string, unknown> {
+  const range = metricRange(requestedRange);
+  const now = Date.now();
+  const start = now - range.durationMs;
+  const rows = internal.prepare(`SELECT
+      bucket_started_at - (bucket_started_at % ?) AS point_at,
+      sum(request_count) AS request_count,
+      sum(error_count) AS error_count,
+      sum(status_2xx) AS status_2xx,
+      sum(status_3xx) AS status_3xx,
+      sum(status_4xx) AS status_4xx,
+      sum(status_5xx) AS status_5xx,
+      sum(duration_sum_ms) AS duration_sum_ms,
+      max(duration_max_ms) AS duration_max_ms,
+      sum(latency_le_50) AS latency_le_50,
+      sum(latency_le_100) AS latency_le_100,
+      sum(latency_le_250) AS latency_le_250,
+      sum(latency_le_500) AS latency_le_500,
+      sum(latency_le_1000) AS latency_le_1000,
+      sum(latency_le_2500) AS latency_le_2500,
+      sum(latency_le_5000) AS latency_le_5000,
+      sum(latency_inf) AS latency_inf,
+      sum(request_bytes) AS request_bytes,
+      sum(response_bytes) AS response_bytes
+    FROM clank_platform_metrics
+    WHERE bucket_started_at >= ?
+    GROUP BY point_at ORDER BY point_at`).all(range.intervalMs, start);
+  const totals = internal.prepare(`SELECT
+      (SELECT count(*) FROM clank_auth_users) AS users,
+      (SELECT count(*) FROM clank_auth_users WHERE disabled = 0) AS enabled_users,
+      (SELECT count(*) FROM clank_auth_users WHERE role = ?) AS platform_admins,
+      (SELECT count(*) FROM clank_platform_organizations) AS organizations,
+      (SELECT count(*) FROM clank_platform_memberships) AS memberships,
+      (SELECT count(*) FROM clank_platform_projects) AS projects,
+      (SELECT count(*) FROM clank_platform_projects WHERE active_release_id IS NOT NULL) AS deployed_projects,
+      (SELECT count(*) FROM clank_platform_releases) AS releases,
+      (SELECT count(*) FROM clank_platform_domains) AS domains,
+      (SELECT count(*) FROM clank_platform_domains
+        WHERE status = 'verified' AND routing_status = 'ready') AS ready_domains,
+      (SELECT count(*) FROM clank_platform_tokens
+        WHERE revoked_at IS NULL AND expires_at > ?) AS active_tokens,
+      (SELECT coalesce(sum(storage_bytes), 0) FROM clank_platform_releases) AS retained_storage_bytes,
+      (SELECT count(*) FROM clank_platform_audit WHERE created_at >= ?) AS audit_events
+    `).get(PLATFORM_ADMIN_ROLE, now, start)!;
+  const topRows = internal.prepare(`SELECT
+      p.id,
+      p.name,
+      p.slug,
+      o.name AS organization_name,
+      sum(m.request_count) AS request_count,
+      sum(m.error_count) AS error_count,
+      sum(m.status_2xx) AS status_2xx,
+      sum(m.status_3xx) AS status_3xx,
+      sum(m.status_4xx) AS status_4xx,
+      sum(m.status_5xx) AS status_5xx,
+      sum(m.duration_sum_ms) AS duration_sum_ms,
+      max(m.duration_max_ms) AS duration_max_ms,
+      sum(m.latency_le_50) AS latency_le_50,
+      sum(m.latency_le_100) AS latency_le_100,
+      sum(m.latency_le_250) AS latency_le_250,
+      sum(m.latency_le_500) AS latency_le_500,
+      sum(m.latency_le_1000) AS latency_le_1000,
+      sum(m.latency_le_2500) AS latency_le_2500,
+      sum(m.latency_le_5000) AS latency_le_5000,
+      sum(m.latency_inf) AS latency_inf,
+      sum(m.request_bytes) AS request_bytes,
+      sum(m.response_bytes) AS response_bytes
+    FROM clank_platform_metrics m
+    JOIN clank_platform_projects p ON p.id = m.project_id
+    LEFT JOIN clank_platform_organizations o ON o.id = p.organization_id
+    WHERE m.bucket_started_at >= ?
+    GROUP BY p.id
+    ORDER BY request_count DESC, p.id
+    LIMIT 10`).all(start);
+  const growthInterval = Math.max(range.intervalMs, 24 * 60 * 60_000);
+  const growthRows = internal.prepare(`SELECT
+      created_at - (created_at % ?) AS point_at,
+      count(*) AS new_users
+    FROM clank_auth_users
+    WHERE created_at >= ?
+    GROUP BY point_at ORDER BY point_at`).all(growthInterval, start);
+  let cumulativeUsers = Number(internal.prepare(
+    "SELECT count(*) AS count FROM clank_auth_users WHERE created_at < ?",
+  ).get(start)?.count ?? 0);
+  return {
+    range: range.name,
+    start,
+    end: now,
+    intervalMs: range.intervalMs,
+    totals: {
+      users: Number(totals.users),
+      enabledUsers: Number(totals.enabled_users),
+      platformAdmins: Number(totals.platform_admins),
+      organizations: Number(totals.organizations),
+      memberships: Number(totals.memberships),
+      projects: Number(totals.projects),
+      deployedProjects: Number(totals.deployed_projects),
+      onlineProjects: active.size,
+      releases: Number(totals.releases),
+      domains: Number(totals.domains),
+      readyDomains: Number(totals.ready_domains),
+      activeTokens: Number(totals.active_tokens),
+      retainedStorageBytes: Number(totals.retained_storage_bytes),
+      auditEvents: Number(totals.audit_events),
+    },
+    traffic: {
+      summary: summarizeMetricRows(rows, range.durationMs),
+      points: rows.map(publicMetricPoint),
+    },
+    userGrowth: growthRows.map((row) => {
+      const newUsers = Number(row.new_users);
+      cumulativeUsers += newUsers;
+      return {
+        at: Number(row.point_at),
+        newUsers,
+        totalUsers: cumulativeUsers,
+      };
+    }),
+    topProjects: topRows.map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      slug: String(row.slug),
+      organization: row.organization_name === null ? null : String(row.organization_name),
+      ...summarizeMetricRows([row], range.durationMs),
+    })),
   };
 }
 
@@ -4693,6 +4982,18 @@ function normalizeEmail(value: unknown): string {
   const email = boundedString(value, "email", 3, 254).trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
     throw new PlatformError(422, "INVALID_INPUT", "email must be a valid email address.");
+  }
+  return email;
+}
+
+function normalizePlatformAdminEmail(value: string): string {
+  const email = value.trim().toLowerCase();
+  if (
+    email.length < 3
+    || email.length > 254
+    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)
+  ) {
+    throw new TypeError("platformAdminEmails entries must be valid email addresses.");
   }
   return email;
 }

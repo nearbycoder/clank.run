@@ -20,6 +20,15 @@ Password registration/login and CLI device-start throttles use atomic sliding wi
 
 Registration defaults to a race-guarded first-account bootstrap. The platform applies its policy to the same normalized auth operation as the low-level router, including repeated-slash compatibility paths. An expiring singleton claim in the control database serializes bootstrap across control-plane runtimes; a stable insertion-order check removes any losing account before its session is returned. Public signup must be enabled explicitly. Organizations include owner/admin/developer/viewer roles, invitations, last-owner protection, and project-scoped CLI tokens whose permissions are intersected with current membership on every request.
 
+Platform administration is a separate operator authority, never an alias for a workspace
+administrator. Exact normalized emails are supplied through `platformAdminEmails` or
+`CLANK_PLATFORM_ADMIN_EMAILS`; the allowlist is reconciled at startup and after registration, and
+removing an address demotes the account. Global user and analytics APIs require a same-origin
+interactive browser session. Account-wide and project-scoped CLI bearer tokens are deliberately
+denied even when they belong to an operator. The user directory returns identity, status, activity,
+membership, project, and aggregate storage metadata but never password hashes, session/CSRF
+secrets, token hashes, raw tokens, recovery material, passkeys, or application-database users.
+
 Sign-out and an authenticated API `401` reload the console from the server instead of reusing an in-memory dashboard. This clears prior-account DOM and recomputes both session state and bootstrap availability before another identity can use the page.
 
 Invitation tokens are email-bound, single-use, expiring, hashed at rest, and returned only by the create response. A valid token is a narrowly scoped account-creation capability even when ordinary registration is closed. The assisted route enforces the configured origin policy before token lookup, uses the normal bounded registration, rate-limit, password-validation, and scrypt path, then transactionally rechecks and consumes the invitation with membership creation. A race or membership failure deletes the new account and its cascaded session before responding; invalid, expired, revoked, mismatched, and replayed tokens receive a generic invitation error.

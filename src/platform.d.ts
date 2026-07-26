@@ -41,6 +41,8 @@ export interface PlatformBackupOptions {
 export interface ClankPlatformOptions {
     dataDirectory: string;
     publicUrl: string;
+    /** Exact control-plane account emails granted operator-level administration. */
+    platformAdminEmails?: readonly string[];
     appHostname?: string;
     /** Public application URL pattern. Supports {slug} and {port}. */
     appUrlTemplate?: string;

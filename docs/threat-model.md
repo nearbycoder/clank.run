@@ -15,6 +15,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 - anonymous browser or agent;
 - authenticated application user;
 - organization owner, admin, developer, or viewer;
+- allowlisted control-plane platform administrator;
 - browser account approving a CLI device;
 - account-wide or project-scoped CLI token;
 - deployment control-plane process;
@@ -43,6 +44,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 | Cross-site action | CSRF, forged Origin, cross-site device approval | Strict cookies, CSRF token, Fetch Metadata/origin checks | Correct proxy scheme/host configuration and CSP |
 | Tenant escape | Guess project/user IDs, reuse scoped token, stale membership | Owned SQL, membership/role checks, project/scope checks on every request, revocation | Domain-specific row/resource authorization |
 | Privilege escalation | Admin grants excess scopes, removes last owner, uses viewer token to deploy | Role matrix, scope intersection, last-owner protection, audit | Periodic access review and separation of duties |
+| Platform-admin abuse | Workspace admin assumes global authority, stolen CLI token lists tenants, stale allowlist retains access | Separate operator role, exact startup reconciliation, browser-only global APIs, same-origin sessions, bounded redacted directory | Protect operator email accounts, require strong authenticators, review the allowlist and global audit trail |
 | Invitation replay or disclosure | Reuse a superseded token, create an uninvited account while signup is closed, scrape pending addresses or audit metadata, flood active invitations | Hashed email-bound single-use account-creation capability, pre-hash origin check, transactional consume/membership, failed-account cleanup, atomic replacement/revocation, administrator-only pending metadata, developer audit redaction, 100-active cap, audit | Deliver tokens through a trusted channel and protect invited mailboxes |
 | Artifact compromise | Traversal, symlink, decompression bomb, digest swap, malicious install hook | Bounded deterministic bundle, path/type/mode validation, SHA-256 verification, no remote install/build hooks | Review trusted source and isolate runtime execution |
 | Migration/data loss | Edited history, unsafe SQL, failed migration, destructive rollback | Immutable ledger, restricted SQL, quiesced backup, transactional apply, safety restore, confirmation | Schema review, off-host backups, restore drills |
