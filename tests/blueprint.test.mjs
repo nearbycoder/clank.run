@@ -162,6 +162,9 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.deepEqual(files.map((file) => file.path), [...files.map((file) => file.path)].sort());
   assert.match(files.find((file) => file.path === "src/backend.ts").contents, /by_priority/);
   assert.match(files.find((file) => file.path === "src/view.tsx").contents, /Complete/);
+  assert.match(files.find((file) => file.path === "src/server.tsx").contents, /imports: \{ "clank\.run": "\/_clank\/index\.js" \}/);
+  assert.match(files.find((file) => file.path === "AGENTS.md").contents, /npm run deploy:check/);
+  assert.match(files.find((file) => file.path === "README.md").contents, /Focused Tasks/);
 });
 
 test("plan, explain, and generate CLI commands create a buildable app without blueprint execution", async () => {
@@ -182,12 +185,13 @@ test("plan, explain, and generate CLI commands create a buildable app without bl
     await run(["generate", target, `--blueprint=${source}`]);
     const packageJson = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
     assert.equal(packageJson.dependencies["clank.run"], `^${version}`);
+    assert.equal(packageJson.scripts.doctor, "clank doctor");
     assert.match(await readFile(join(target, "src", "server.tsx"), "utf8"), /Focused Tasks/);
     const savedPlan = JSON.parse(await readFile(join(target, ".clank", "plan.json"), "utf8"));
     assert.equal(savedPlan.digest, parsedPlan.digest);
 
     const repeated = await run(["generate", target, `--blueprint=${source}`]);
-    assert.match(repeated.stdout, /0 files written, 11 unchanged/);
+    assert.match(repeated.stdout, /0 files written, 13 unchanged/);
     await run(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "backend.js"), "utf8"), /by_priority/);
   } finally {

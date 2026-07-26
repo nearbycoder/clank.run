@@ -10,22 +10,26 @@ let temporaryFile = 0;
 if (command === "--help" || command === "help") {
   const { run } = await import("./cli-deploy.mjs");
   await run("help", args);
-  process.exit(0);
+  process.exit(process.exitCode ?? 0);
 }
 
 if (command === "--version" || command === "-v" || command === "version") {
   const { run } = await import("./cli-deploy.mjs");
   await run("version", args);
-  process.exit(0);
+  process.exit(process.exitCode ?? 0);
 }
 
 if (command !== "build" && command !== "watch") {
   const { run } = await import("./cli-deploy.mjs");
+  if (args.includes("--help") || args.includes("-h")) {
+    await run("help", [command, ...(args.includes("--json") ? ["--json"] : [])]);
+    process.exit(process.exitCode ?? 0);
+  }
   await run(command, args);
-  process.exit(0);
+  process.exit(process.exitCode ?? 0);
 }
 
-if (args.includes("--help")) {
+if (args.includes("--help") || args.includes("-h")) {
   console.log(`Clank compiler
 
 Usage:
@@ -33,10 +37,24 @@ Usage:
   clank watch [input=src] [output=dist] [--jsx-import-source=clank.run]
 
 Compiles .ts and .tsx modules, copies static files, and installs no packages.`);
-  process.exit(0);
+  process.exit(process.exitCode ?? 0);
 }
 
+for (const argument of args) {
+  if (argument.startsWith("--") && !argument.startsWith("--jsx-import-source=")) {
+    console.error(`clank: Unknown option ${argument} for clank ${command}.`);
+    process.exit(1);
+  }
+  if (argument === "--jsx-import-source=") {
+    console.error("clank: --jsx-import-source requires a value.");
+    process.exit(1);
+  }
+}
 const positionals = args.filter((argument) => !argument.startsWith("--"));
+if (positionals.length > 2) {
+  console.error(`clank: Too many arguments for clank ${command}. Run clank ${command} --help.`);
+  process.exit(1);
+}
 const option = (name, fallback) => args.find((argument) => argument.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const input = resolve(positionals[0] ?? "src");
 const output = resolve(positionals[1] ?? "dist");
@@ -103,7 +121,12 @@ async function build() {
   console.log(`Compiled ${files.length} files in ${(performance.now() - started).toFixed(1)}ms.`);
 }
 
-await build();
+try {
+  await build();
+} catch (error) {
+  console.error(`clank: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+}
 
 if (command === "watch") {
   console.log(`Watching ${input}`);
@@ -111,6 +134,8 @@ if (command === "watch") {
   for await (const event of watch(input, { recursive: true })) {
     if (event.filename && !/\.(?:tsx?|html|css|json|svg)$/.test(event.filename)) continue;
     clearTimeout(queued);
-    queued = setTimeout(() => void build().catch(console.error), 40);
+    queued = setTimeout(() => void build().catch((error) => {
+      console.error(`clank: ${error instanceof Error ? error.message : String(error)}`);
+    }), 40);
   }
 }

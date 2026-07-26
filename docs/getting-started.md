@@ -34,6 +34,26 @@ tests/                  Node test-runner suites
 docs/                   framework guides
 ```
 
+## Create an agent-ready application
+
+The default scaffold is a complete authenticated, live, deployable app rather than an empty component:
+
+```sh
+clank create my-app
+cd my-app
+npm install
+npm run doctor
+npm run dev
+```
+
+It includes `README.md` for a person and `AGENTS.md` with commands, file ownership, security invariants, migration rules, and a definition of done for a coding agent. Before a registry release exists, contributors can use the current checkout directly:
+
+```sh
+node /path/to/clank/scripts/clank.mjs create my-app --framework=local
+```
+
+Run `clank help --json` for the machine-readable CLI contract and `clank doctor --json` for readiness diagnostics.
+
 ## HTML entry point
 
 ```html

@@ -177,10 +177,12 @@ export function parseAppBlueprint(source: string, filename = "clank.app.ts"): Ap
 
 export function generateAppFiles(
   input: AppBlueprintInput | AppBlueprint,
-  options: { frameworkVersion?: string } = {},
+  options: { frameworkVersion?: string; frameworkDependency?: string } = {},
 ): GeneratedAppFile[] {
   const app = normalizeApp(input);
   const frameworkVersion = options.frameworkVersion ?? "latest";
+  const frameworkDependency = options.frameworkDependency
+    ?? (frameworkVersion === "latest" ? "latest" : `^${frameworkVersion}`);
   const primaryName = primaryEntity(app);
   const primary = app.entities[primaryName];
   const display = primary.displayField;
@@ -189,6 +191,14 @@ export function generateAppFiles(
     {
       path: ".gitignore",
       contents: "dist/\n.clank/\n*.sqlite\n*.sqlite-shm\n*.sqlite-wal\n.env\n.env.*\n",
+    },
+    {
+      path: "AGENTS.md",
+      contents: agentGuide(app),
+    },
+    {
+      path: "README.md",
+      contents: projectReadme(app),
     },
     {
       path: "package.json",
@@ -202,9 +212,11 @@ export function generateAppFiles(
           start: "node --disable-warning=ExperimentalWarning dist/server.js",
           plan: "clank plan",
           generate: "clank generate .",
+          doctor: "clank doctor",
+          "deploy:check": "clank deploy --dry-run",
           deploy: "clank deploy",
         },
-        dependencies: { "clank.run": frameworkVersion === "latest" ? "latest" : `^${frameworkVersion}` },
+        dependencies: { "clank.run": frameworkDependency },
       }),
     },
     {
@@ -277,7 +289,7 @@ export function generateAppFiles(
       contents: `${migration.sql.trim()}\n`,
     });
   }
-  return files.sort((left, right) => left.path.localeCompare(right.path));
+  return files.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 }
 
 function serviceRequirementsSource(app: AppBlueprint): string {
@@ -299,7 +311,7 @@ export function assertServices(services: ServiceRegistry): void {
 
 export async function createAppPlan(
   input: AppBlueprintInput | AppBlueprint,
-  options: { frameworkVersion?: string } = {},
+  options: { frameworkVersion?: string; frameworkDependency?: string } = {},
 ): Promise<AppPlan> {
   const blueprint = normalizeApp(input);
   const files = generateAppFiles(blueprint, options);
@@ -327,6 +339,77 @@ export async function createAppPlan(
     files: plannedFiles,
   };
   return deepFreeze({ ...unsigned, digest: await sha256(canonical(unsigned)) });
+}
+
+function projectReadme(app: AppBlueprint): string {
+  return `# ${app.name}
+
+${app.description}
+
+This is a full-stack Clank application with built-in authentication, SQLite migrations, server rendering, hydration, and live synchronization.
+
+## Start
+
+\`\`\`sh
+npm install
+npm run dev
+\`\`\`
+
+Open http://127.0.0.1:3000. The first person can register, then each signed-in user receives isolated application data.
+
+## Check and deploy
+
+\`\`\`sh
+npm run build
+npm run doctor
+npm run deploy:check
+clank login --server https://your-clank-platform.example
+npm run deploy
+\`\`\`
+
+The first deployment creates and links the remote project automatically. See \`AGENTS.md\` for the file map and invariants an agent should preserve.
+`;
+}
+
+function agentGuide(app: AppBlueprint): string {
+  return `# Agent guide
+
+This repository is a Clank application generated from \`clank.app.ts\`. Prefer small, reviewable changes and keep the app deployable after every task.
+
+## Working commands
+
+- \`npm run dev\` builds and starts the app at http://127.0.0.1:3000.
+- \`npm run build\` compiles \`src/\` into \`dist/\`.
+- \`npm run doctor\` performs local readiness diagnostics.
+- \`npm run deploy:check\` builds and verifies a deterministic artifact without login or upload.
+- \`npm run deploy\` builds, creates/links the project when needed, runs migrations, health-checks, and activates it.
+- \`clank help --json\` exposes the CLI contract for automation.
+
+## File map
+
+- \`clank.app.ts\`: reviewable app blueprint; change it before regenerating architecture.
+- \`src/backend.ts\`: schemas, owned data, queries, mutations, and authorization.
+- \`src/view.tsx\`: accessible server/client UI and agent-addressable controls.
+- \`src/app.tsx\`: hydration, auth client, live queries, and browser interactions.
+- \`src/server.tsx\`: routes, SSR, CSP, static files, and API wiring.
+- \`migrations/\`: immutable, ordered SQL history.
+- \`clank.deploy.json\`: build, artifact, database, health, and public environment contract.
+- \`.clank/\`: local plans, artifacts, and project link; never commit it.
+
+## Invariants
+
+- Preserve ownership and authorization on every private ${Object.keys(app.entities).join(", ")} operation.
+- Treat all browser, agent, webhook, and model input as untrusted and validate it at the boundary.
+- Never edit, rename, or remove an applied migration; add the next numbered migration.
+- Keep secrets out of source, \`clank.deploy.json\`, labels, logs, plans, and agent metadata. Use \`clank secrets set\`.
+- Add stable \`agentId\` and useful \`agentLabel\` values to important controls without exposing secret values.
+- Keep the health route cheap and independent of optional external services.
+- Do not hand-edit \`dist/\`; it is generated by \`npm run build\`.
+
+## Definition of done
+
+Run \`npm run build\`, \`npm run doctor\`, and \`npm run deploy:check\`. For UI changes, verify registration/login and the main interaction in a browser. For data changes, verify a fresh database and an existing migrated database.
+`;
 }
 
 export function explainApp(input: AppBlueprintInput | AppBlueprint): string {
@@ -905,7 +988,7 @@ const app = createApp()
         nonce,
         head: (
           <>
-            <script type="importmap" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify({ imports: { clank: "/_clank/index.js" } }) }} />
+            <script type="importmap" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify({ imports: { "clank.run": "/_clank/index.js" } }) }} />
             <script nonce={nonce} src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" />
           </>
         ),

@@ -136,8 +136,10 @@ export declare function defineApp(input: AppBlueprintInput): AppBlueprint;
 export declare function parseAppBlueprint(source: string, filename?: string): AppBlueprint;
 export declare function generateAppFiles(input: AppBlueprintInput | AppBlueprint, options?: {
     frameworkVersion?: string;
+    frameworkDependency?: string;
 }): GeneratedAppFile[];
 export declare function createAppPlan(input: AppBlueprintInput | AppBlueprint, options?: {
     frameworkVersion?: string;
+    frameworkDependency?: string;
 }): Promise<AppPlan>;
 export declare function explainApp(input: AppBlueprintInput | AppBlueprint): string;

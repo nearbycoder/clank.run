@@ -30,10 +30,11 @@ clank login --server http://127.0.0.1:4200
 clank create my-todo
 cd my-todo
 npm install
+clank doctor
 clank deploy
 ```
 
-The first deploy creates and links a project automatically. Remote platform URLs must use HTTPS; loopback HTTP is accepted only for development.
+The first deploy creates and links a project automatically. Pass `--name`, `--slug`, or `--org` on that command when the directory name is not the intended platform identity. Remote platform URLs must use HTTPS; loopback HTTP is accepted only for development.
 
 ## Device login
 
@@ -104,6 +105,8 @@ The gzip timestamp is fixed, so identical inputs on the same Clank and Node vers
 clank deploy --dry-run
 clank inspect .clank/artifacts/<digest>.clank.gz
 ```
+
+Dry-run artifact creation is offline and does not require platform credentials. Ambiguous upload failures retain a private local attempt record for 24 hours, allowing the next identical command to reuse its idempotency key instead of accidentally creating a second release after a lost response.
 
 The metadata supports the traceability goals of [SLSA provenance](https://slsa.dev/spec/v1.2/provenance), but `clank-deploy/1` is not a signed SLSA attestation. Signing and transparency-log integration are future extensions.
 

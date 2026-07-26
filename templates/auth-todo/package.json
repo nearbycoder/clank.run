@@ -6,9 +6,11 @@
     "build": "clank build src dist",
     "dev": "clank build src dist && node --disable-warning=ExperimentalWarning dist/server.js",
     "start": "node --disable-warning=ExperimentalWarning dist/server.js",
+    "doctor": "clank doctor",
+    "deploy:check": "clank deploy --dry-run",
     "deploy": "clank deploy"
   },
   "dependencies": {
-    "clank.run": "^__CLANK_VERSION__"
+    "clank.run": "__CLANK_DEPENDENCY__"
   }
 }

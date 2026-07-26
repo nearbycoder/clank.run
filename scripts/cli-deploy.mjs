@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmod, cp, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname, platform as operatingSystem } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,39 +24,197 @@ const MAX_LOCAL_CONFIG_BYTES = 1024 * 1024;
 const MAX_PLATFORM_RESPONSE_BYTES = 4 * 1024 * 1024;
 const PLATFORM_REQUEST_TIMEOUT_MS = 30_000;
 const PLATFORM_DEPLOY_TIMEOUT_MS = 5 * 60_000;
+const COMMANDS = Object.freeze({
+  create: {
+    usage: "clank create <directory> [--name <name>] [--framework <version|local|spec>]",
+    summary: "Create a deploy-ready authenticated app.",
+  },
+  plan: {
+    usage: "clank plan [clank.app.ts] [--output <file>] [--framework <version|local|spec>]",
+    summary: "Print a deterministic generated-file plan.",
+  },
+  explain: {
+    usage: "clank explain [clank.app.ts]",
+    summary: "Explain an app blueprint in plain language.",
+  },
+  generate: {
+    usage: "clank generate [directory] [--blueprint <file>] [--framework <version|local|spec>] [--force]",
+    summary: "Generate an app from a data-only blueprint.",
+  },
+  build: {
+    usage: "clank build [input=src] [output=dist] [--jsx-import-source=clank.run]",
+    summary: "Compile TypeScript and TSX and copy static files.",
+  },
+  watch: {
+    usage: "clank watch [input=src] [output=dist] [--jsx-import-source=clank.run]",
+    summary: "Rebuild when source files change.",
+  },
+  doctor: {
+    usage: "clank doctor [directory] [--json]",
+    summary: "Check whether an app is ready to build and deploy.",
+  },
+  login: {
+    usage: "clank login --server <https-url>",
+    summary: "Authorize the CLI in a browser without handling a password.",
+  },
+  logout: {
+    usage: "clank logout [--server <url>] [--local]",
+    summary: "Revoke and remove the active CLI token.",
+  },
+  whoami: {
+    usage: "clank whoami",
+    summary: "Show the active platform account.",
+  },
+  org: {
+    usage: "clank org <list|create|invite|accept|members|invitations|role|remove|revoke-invite>",
+    summary: "Manage workspaces, invitations, members, and roles.",
+  },
+  project: {
+    usage: "clank project <create|list|link|delete>",
+    summary: "Manage and link deployment projects.",
+  },
+  activity: {
+    usage: "clank activity [--org <id>] [--limit <count>] [--before <cursor>] [--json]",
+    summary: "Read the workspace audit feed.",
+  },
+  token: {
+    usage: "clank token <create|list|revoke>",
+    summary: "Manage scoped automation tokens.",
+  },
+  domain: {
+    usage: "clank domain <add|list|verify|remove>",
+    summary: "Manage custom domains and DNS verification.",
+  },
+  deploy: {
+    usage: "clank deploy [directory] [--name <name>] [--slug <slug>] [--org <id>] [--dry-run] [--output <file>] [--json]",
+    summary: "Build, package, migrate, and atomically deploy in one command.",
+  },
+  status: {
+    usage: "clank status",
+    summary: "Show the linked project and active release.",
+  },
+  releases: {
+    usage: "clank releases [delete <release-id> --confirm <phrase> [--allow-rollback-loss]]",
+    summary: "List releases or remove inactive artifact storage.",
+  },
+  logs: {
+    usage: "clank logs [--limit <count>]",
+    summary: "Read bounded application logs.",
+  },
+  rollback: {
+    usage: "clank rollback <release-id> [--restore-data --confirm <phrase>]",
+    summary: "Health-check and activate an earlier release.",
+  },
+  backup: {
+    usage: "clank backup <create|list|verify|restore>",
+    summary: "Create, verify, list, or restore encrypted backups.",
+  },
+  secrets: {
+    usage: "clank secrets <list|set|delete>",
+    summary: "Manage write-only runtime secrets.",
+  },
+  migrate: {
+    usage: "clank migrate <plan|apply> [directory]",
+    summary: "Inspect or apply local SQLite migrations.",
+  },
+  inspect: {
+    usage: "clank inspect <artifact>",
+    summary: "Verify and print a deployment artifact manifest.",
+  },
+  version: {
+    usage: "clank version",
+    summary: "Print the installed Clank version.",
+  },
+});
+const COMMAND_ALIASES = Object.freeze({
+  organization: "org",
+  audit: "activity",
+});
+const VALUE_OPTIONS = Object.freeze({
+  create: ["name", "framework"],
+  plan: ["blueprint", "output", "framework"],
+  explain: ["blueprint"],
+  generate: ["blueprint", "framework"],
+  login: ["server"],
+  logout: ["server"],
+  org: ["slug", "role"],
+  organization: ["slug", "role"],
+  project: ["slug", "org", "confirm"],
+  activity: ["org", "limit", "before"],
+  audit: ["org", "limit", "before"],
+  token: ["permissions", "expires-in", "name"],
+  deploy: ["name", "slug", "org", "output"],
+  releases: ["confirm"],
+  logs: ["limit"],
+  rollback: ["confirm"],
+  backup: ["reason", "confirm"],
+  secrets: ["from-env"],
+});
+const BOOLEAN_OPTIONS = Object.freeze({
+  help: ["json"],
+  generate: ["force"],
+  logout: ["local"],
+  project: ["acknowledge-data-loss"],
+  activity: ["json"],
+  audit: ["json"],
+  deploy: ["dry-run", "json"],
+  releases: ["allow-rollback-loss"],
+  rollback: ["restore-data"],
+  doctor: ["json"],
+});
 
 export async function run(command, args) {
+  const json = flag(args, "json");
   try {
+    validateOptions(command, args);
     switch (command) {
-      case "help": return help();
+      case "help": return help(args);
       case "version": return version();
-      case "create": return createProject(args);
-      case "plan": return blueprintPlan(args);
-      case "generate": return generateProject(args);
-      case "explain": return explainBlueprint(args);
-      case "login": return login(args);
-      case "logout": return logout(args);
-      case "whoami": return whoami(args);
+      case "create": return await createProject(args);
+      case "plan": return await blueprintPlan(args);
+      case "generate": return await generateProject(args);
+      case "explain": return await explainBlueprint(args);
+      case "doctor": return await doctor(args);
+      case "login": return await login(args);
+      case "logout": return await logout(args);
+      case "whoami": return await whoami(args);
       case "org":
-      case "organization": return organizationCommand(args);
-      case "project": return projectCommand(args);
+      case "organization": return await organizationCommand(args);
+      case "project": return await projectCommand(args);
       case "activity":
-      case "audit": return activity(args);
-      case "token": return tokenCommand(args);
-      case "domain": return domainCommand(args);
-      case "deploy": return deploy(args);
-      case "status": return status(args);
-      case "releases": return releases(args);
-      case "logs": return logs(args);
-      case "rollback": return rollback(args);
-      case "backup": return backupCommand(args);
-      case "secrets": return secrets(args);
-      case "migrate": return migrate(args);
-      case "inspect": return inspectArtifact(args);
-      default: throw new CliError(`Unknown command: ${command}. Run clank help.`);
+      case "audit": return await activity(args);
+      case "token": return await tokenCommand(args);
+      case "domain": return await domainCommand(args);
+      case "deploy": return await deploy(args);
+      case "status": return await status(args);
+      case "releases": return await releases(args);
+      case "logs": return await logs(args);
+      case "rollback": return await rollback(args);
+      case "backup": return await backupCommand(args);
+      case "secrets": return await secrets(args);
+      case "migrate": return await migrate(args);
+      case "inspect": return await inspectArtifact(args);
+      default: {
+        const suggestion = closestCommand(command);
+        throw new CliError(
+          `Unknown command: ${command}.${suggestion ? ` Did you mean "clank ${suggestion}"?` : " Run clank help."}`,
+          "UNKNOWN_COMMAND",
+        );
+      }
     }
   } catch (error) {
-    console.error(`clank: ${error instanceof Error ? error.message : String(error)}`);
+    const message = error instanceof Error ? error.message : String(error);
+    if (json) {
+      console.error(JSON.stringify({
+        ok: false,
+        error: {
+          code: error instanceof ApiError ? error.code : error instanceof CliError ? error.code : "CLANK_ERROR",
+          message,
+        },
+      }));
+    } else {
+      console.error(`clank: ${message}`);
+    }
     process.exitCode = 1;
   }
 }
@@ -65,11 +223,52 @@ function version() {
   console.log(packageJson.version);
 }
 
-function help() {
+function help(args = []) {
+  const topic = positionals(args)[0];
+  if (topic) {
+    const canonical = COMMAND_ALIASES[topic] ?? topic;
+    const entry = COMMANDS[canonical];
+    if (!entry) {
+      const suggestion = closestCommand(topic);
+      throw new CliError(
+        `Unknown help topic: ${topic}.${suggestion ? ` Did you mean "clank help ${suggestion}"?` : ""}`,
+        "UNKNOWN_COMMAND",
+      );
+    }
+    if (flag(args, "json")) {
+      console.log(JSON.stringify({
+        protocol: "clank-cli-help/1",
+        version: packageJson.version,
+        command: canonical,
+        ...entry,
+      }, null, 2));
+      return;
+    }
+    console.log(`${entry.summary}
+
+Usage:
+  ${entry.usage}
+
+Run clank help for the complete command list.`);
+    return;
+  }
+  if (flag(args, "json")) {
+    console.log(JSON.stringify({
+      protocol: "clank-cli-help/1",
+      version: packageJson.version,
+      commands: Object.entries(COMMANDS).map(([name, entry]) => ({ name, ...entry })),
+      aliases: COMMAND_ALIASES,
+    }, null, 2));
+    return;
+  }
   console.log(`Clank ${packageJson.version}
 
-Build:
+Start:
   clank create <directory>             Create a deploy-ready authenticated app
+  clank doctor [directory]             Check build and deployment readiness
+  clank deploy [directory]             Create, link, and deploy a project
+
+Build and agents:
   clank plan [clank.app.ts]            Print a deterministic generated-file plan
   clank explain [clank.app.ts]         Explain an app blueprint in plain language
   clank generate [directory]           Generate from clank.app.ts without executing it
@@ -101,7 +300,6 @@ Platform:
   clank domain list                     List custom domains
   clank domain verify <domain-id>       Verify the published TXT record
   clank domain remove <domain-id>       Remove a custom domain
-  clank deploy [directory]             Build, package, migrate, and atomically deploy
   clank status                         Show the linked project and active release
   clank releases                       List release history
   clank releases delete <release-id> --confirm="delete-release <slug> <id>"
@@ -119,6 +317,9 @@ Platform:
   clank migrate apply [directory]      Apply local migrations
   clank inspect <artifact>             Verify and print an artifact manifest
 
+Run clank help <command> or clank <command> --help for focused usage.
+Use clank help --json and clank doctor --json for agent-readable output.
+
 Deployment configuration is explicit in clank.deploy.json. No server-side
 package hooks are run, and no secrets are read from the project directory.`);
 }
@@ -126,7 +327,7 @@ package hooks are run, and no secrets are read from the project directory.`);
 async function blueprintPlan(args) {
   const path = await blueprintPath(positionals(args)[0] ?? option(args, "blueprint"));
   const blueprint = parseAppBlueprint(await readFile(path, "utf8"), path);
-  const plan = await createAppPlan(blueprint, { frameworkVersion: packageJson.version });
+  const plan = await createAppPlan(blueprint, generationOptions(args));
   const output = `${JSON.stringify(plan, null, 2)}\n`;
   const outputPath = option(args, "output");
   if (outputPath) {
@@ -149,7 +350,8 @@ async function generateProject(args) {
   const target = resolve(positionals(args)[0] ?? ".");
   const path = await blueprintPath(option(args, "blueprint"));
   const blueprint = parseAppBlueprint(await readFile(path, "utf8"), path);
-  const files = generateAppFiles(blueprint, { frameworkVersion: packageJson.version });
+  const generation = generationOptions(args);
+  const files = generateAppFiles(blueprint, generation);
   const force = flag(args, "force");
   let created = 0;
   let unchanged = 0;
@@ -180,13 +382,14 @@ async function generateProject(args) {
     await rename(temporary, destination);
     created++;
   }
-  const plan = await createAppPlan(blueprint, { frameworkVersion: packageJson.version });
+  const plan = await createAppPlan(blueprint, generation);
   const planPath = join(target, ".clank", "plan.json");
   await mkdir(dirname(planPath), { recursive: true, mode: 0o700 });
   await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
   console.log(`Generated ${blueprint.name}: ${created} files written, ${unchanged} unchanged.`);
   console.log(`Plan ${plan.digest}`);
   console.log(`Next: cd ${target} && npm install && npm run dev`);
+  console.log("Check: npm run doctor");
 }
 
 async function blueprintPath(value) {
@@ -213,12 +416,159 @@ async function createProject(args) {
   await cp(join(packageRoot, "templates", "auth-todo"), target, { recursive: true });
   await rename(join(target, "gitignore.txt"), join(target, ".gitignore"));
   await replaceInFile(join(target, "package.json"), "__PROJECT_NAME__", packageName(name));
-  await replaceInFile(join(target, "package.json"), "__CLANK_VERSION__", packageJson.version);
+  await replaceInFile(
+    join(target, "package.json"),
+    '"__CLANK_DEPENDENCY__"',
+    JSON.stringify(frameworkDependency(args)),
+  );
   await replaceInFile(join(target, "src", "server.tsx"), "__PROJECT_TITLE__", displayName(name));
   await replaceInFile(join(target, "src", "view.tsx"), "__PROJECT_TITLE__", displayName(name));
+  await replaceInFile(join(target, "README.md"), "__PROJECT_TITLE__", displayName(name));
   console.log(`Created ${displayName(name)} in ${target}`);
   console.log(`Next: cd ${positional[0] ?? "."} && npm install && npm run dev`);
+  console.log("Check: npm run doctor");
   console.log("Deploy: clank login --server <platform-url> && clank deploy");
+}
+
+async function doctor(args) {
+  const root = resolve(positionals(args)[0] ?? ".");
+  const checks = [];
+  const check = (id, status, message, fix) => {
+    checks.push({ id, status, message, ...(fix ? { fix } : {}) });
+  };
+
+  const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
+  if (major > 22 || (major === 22 && minor >= 16)) {
+    check("node", "pass", `Node ${process.versions.node} satisfies >=22.16.`);
+  } else {
+    check("node", "fail", `Node ${process.versions.node} is too old.`, "Install Node 22.16 or newer.");
+  }
+
+  let config;
+  try {
+    config = await readDeploymentConfig(root);
+    check("config", "pass", "clank.deploy.json is valid.");
+  } catch (error) {
+    const missing = error?.code === "ENOENT";
+    check(
+      "config",
+      "fail",
+      missing ? "clank.deploy.json was not found." : `Deployment config is invalid: ${errorMessage(error)}`,
+      missing ? "Run clank create or add clank.deploy.json." : "Fix the deployment config before deploying.",
+    );
+  }
+
+  if (config) {
+    try {
+      const entry = await lstat(resolve(root, config.entry));
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new Error("the configured entry is not a real regular file");
+      }
+      check("build", "pass", `${config.entry} is built.`);
+    } catch (error) {
+      if (config.build) {
+        check(
+          "build",
+          "warn",
+          `${config.entry} is not built yet; deploy will run ${formatCommand(config.build.command)}.`,
+          "Run npm run build for a local compile check.",
+        );
+      } else {
+        check(
+          "build",
+          "fail",
+          `${config.entry} is unavailable and no build command is configured.`,
+          "Build the entry or add build.command to clank.deploy.json.",
+        );
+      }
+    }
+
+    try {
+      const migrations = await loadMigrations(resolve(root, config.database.migrations));
+      check(
+        "migrations",
+        migrations.length ? "pass" : "warn",
+        `${migrations.length} immutable SQL migration${migrations.length === 1 ? "" : "s"} validated.`,
+        migrations.length ? undefined : "Add an ordered migration such as migrations/0001_initial.sql.",
+      );
+    } catch (error) {
+      check("migrations", "fail", `Migrations are invalid: ${errorMessage(error)}`, "Fix migration names or SQL history.");
+    }
+  }
+
+  try {
+    const packageValue = await readLocalJson(join(root, "package.json"));
+    const scripts = plainRecord(packageValue.scripts) ? packageValue.scripts : {};
+    if (typeof scripts.build === "string" && typeof scripts.dev === "string") {
+      check("scripts", "pass", "package.json exposes build and dev commands.");
+    } else {
+      check("scripts", "warn", "package.json does not expose both build and dev commands.", "Add build and dev scripts.");
+    }
+  } catch (error) {
+    check(
+      "scripts",
+      error?.code === "ENOENT" ? "warn" : "fail",
+      error?.code === "ENOENT" ? "package.json was not found." : "package.json is invalid.",
+      "Add a valid package.json with build and dev scripts.",
+    );
+  }
+
+  let profile;
+  try {
+    profile = await activeProfile();
+    if (!profile) {
+      check("login", "warn", "The CLI is not logged in.", "Run clank login --server <platform-url>.");
+    } else if (profile.expiresAt <= Date.now()) {
+      check("login", "warn", `The CLI token for ${profile.server} has expired.`, "Run clank login again.");
+    } else {
+      check("login", "pass", `CLI credentials for ${profile.server} are available.`);
+    }
+  } catch (error) {
+    check("login", "fail", errorMessage(error), "Repair or remove the invalid CLI configuration.");
+  }
+
+  try {
+    const link = await readLink(root);
+    if (!link) {
+      check("project", "warn", "This directory is not linked; the first deploy will create a project.");
+    } else if (profile && link.server !== profile.server) {
+      check(
+        "project",
+        "fail",
+        `The project is linked to ${link.server}, but the active login is for ${profile.server}.`,
+        "Log in to the linked platform or explicitly relink the project.",
+      );
+    } else {
+      check("project", "pass", `Project ${link.projectId} is linked to ${link.server}.`);
+    }
+  } catch (error) {
+    check("project", "fail", errorMessage(error), "Repair or remove .clank/project.json.");
+  }
+
+  const summary = {
+    pass: checks.filter((entry) => entry.status === "pass").length,
+    warn: checks.filter((entry) => entry.status === "warn").length,
+    fail: checks.filter((entry) => entry.status === "fail").length,
+  };
+  const report = {
+    protocol: "clank-doctor/1",
+    ok: summary.fail === 0,
+    root,
+    summary,
+    checks,
+  };
+  if (flag(args, "json")) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(`Clank doctor · ${root}`);
+    for (const entry of checks) {
+      const marker = entry.status === "pass" ? "✓" : entry.status === "warn" ? "!" : "✗";
+      console.log(`${marker} ${entry.id.padEnd(10)} ${entry.message}`);
+      if (entry.fix) console.log(`  Next: ${entry.fix}`);
+    }
+    console.log(`${summary.pass} passed, ${summary.warn} warnings, ${summary.fail} failed.`);
+  }
+  if (!report.ok) process.exitCode = 1;
 }
 
 async function login(args) {
@@ -601,38 +951,76 @@ async function domainCommand(args) {
 
 async function deploy(args) {
   const root = resolve(positionals(args)[0] ?? ".");
-  const profile = await requireProfile();
+  const startedAt = performance.now();
+  const json = flag(args, "json");
   const config = await readDeploymentConfig(root);
-  if (config.build) await runBuild(config.build.command, root);
+  const buildStartedAt = performance.now();
+  if (config.build) await runBuild(config.build.command, root, { quiet: json });
+  const buildMs = performance.now() - buildStartedAt;
+  const packageStartedAt = performance.now();
   const artifact = await createDeploymentBundle(root, config, {
     frameworkRoot: packageRoot,
     frameworkVersion: packageJson.version,
     nodeVersion: process.version,
   });
   const digest = await deploymentDigest(artifact);
+  const packageMs = performance.now() - packageStartedAt;
+  let artifactPath;
   if (flag(args, "dry-run") || option(args, "output")) {
     const output = resolve(option(args, "output") ?? join(root, ".clank", "artifacts", `${digest}.clank.gz`));
-    await mkdir(dirname(output), { recursive: true, mode: 0o700 });
-    await writeFile(output, artifact, { mode: 0o600 });
-    console.log(`Verified artifact ${digest}`);
-    console.log(output);
-    if (flag(args, "dry-run")) return;
+    await writePrivateFile(output, artifact);
+    artifactPath = output;
+    if (flag(args, "dry-run")) {
+      const result = {
+        protocol: "clank-deploy-result/1",
+        ok: true,
+        dryRun: true,
+        artifact: { digest, bytes: artifact.byteLength, path: output },
+        timing: {
+          buildMs: roundedMilliseconds(buildMs),
+          packageMs: roundedMilliseconds(packageMs),
+          totalMs: roundedMilliseconds(performance.now() - startedAt),
+        },
+      };
+      if (json) console.log(JSON.stringify(result, null, 2));
+      else {
+        console.log(`Verified artifact ${digest}`);
+        console.log(output);
+        console.log(`Ready in ${formatDuration(result.timing.totalMs)}; nothing was uploaded.`);
+      }
+      return;
+    }
   }
+  if (!json) console.log(`Packaged ${artifact.byteLength} bytes · ${digest.slice(0, 12)}`);
+
+  const profile = await requireProfile();
   let link = await readLink(root);
   if (!link) {
-    const name = basename(root);
+    const name = option(args, "name") ?? basename(root);
     const payload = await platformRequest(profile.server, "/api/projects", {
       method: "POST",
       token: profile.token,
-      body: { name },
+      body: {
+        name,
+        ...(option(args, "slug") ? { slug: option(args, "slug") } : {}),
+        ...(option(args, "org") ? { organizationId: option(args, "org") } : {}),
+      },
     });
     await saveLink(root, profile.server, payload.project.id);
     link = { version: 1, server: profile.server, projectId: payload.project.id };
-    console.log(`Created project ${payload.project.slug}.`);
+    if (!json) console.log(`Created and linked project ${payload.project.slug}.`);
+  } else if ((option(args, "name") || option(args, "slug") || option(args, "org")) && !json) {
+    console.log("Project already linked; --name, --slug, and --org are only used on the first deploy.");
   }
   if (link.server !== profile.server) {
     throw new CliError(`This directory is linked to ${link.server}; log in there or relink it.`);
   }
+  const idempotencyKey = await deploymentAttempt(root, {
+    server: profile.server,
+    projectId: link.projectId,
+    digest,
+  });
+  const uploadStartedAt = performance.now();
   const { response, payload } = await fetchPlatformJson(
     `${profile.server}/api/projects/${encodeURIComponent(link.projectId)}/releases`,
     {
@@ -642,16 +1030,43 @@ async function deploy(args) {
       "content-type": "application/vnd.clank.deploy+gzip",
       "content-length": String(artifact.byteLength),
       "x-clank-content-sha256": digest,
-      "x-clank-idempotency-key": randomToken(),
+      "x-clank-idempotency-key": idempotencyKey,
     },
     body: artifact,
     },
     PLATFORM_DEPLOY_TIMEOUT_MS,
   );
+  await rm(deploymentAttemptPath(root), { force: true });
   if (!response.ok) throw ApiError.from(payload, response.status);
-  console.log(`Deployed release ${payload.release.id}`);
-  console.log(`Digest: ${payload.release.digest}`);
-  console.log(`URL: ${payload.release.directUrl ?? payload.release.url}`);
+  const result = {
+    protocol: "clank-deploy-result/1",
+    ok: true,
+    dryRun: false,
+    project: { id: link.projectId, server: profile.server },
+    release: {
+      id: payload.release.id,
+      digest: payload.release.digest,
+      url: payload.release.directUrl ?? payload.release.url,
+    },
+    artifact: {
+      digest,
+      bytes: artifact.byteLength,
+      ...(artifactPath ? { path: artifactPath } : {}),
+    },
+    timing: {
+      buildMs: roundedMilliseconds(buildMs),
+      packageMs: roundedMilliseconds(packageMs),
+      uploadAndActivateMs: roundedMilliseconds(performance.now() - uploadStartedAt),
+      totalMs: roundedMilliseconds(performance.now() - startedAt),
+    },
+  };
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`Deployed release ${result.release.id} in ${formatDuration(result.timing.totalMs)}`);
+    console.log(`Digest: ${result.release.digest}`);
+    console.log(`URL: ${result.release.url}`);
+  }
 }
 
 async function status() {
@@ -847,7 +1262,7 @@ async function inspectArtifact(args) {
   }, null, 2));
 }
 
-async function runBuild(command, cwd) {
+async function runBuild(command, cwd, options = {}) {
   const [rawExecutable, ...rawArguments] = command;
   const frameworkCommand = rawExecutable === "clank" || rawExecutable === "proact";
   const executable = frameworkCommand ? process.execPath : rawExecutable;
@@ -855,7 +1270,11 @@ async function runBuild(command, cwd) {
     ? [resolve(process.argv[1]), ...rawArguments]
     : rawArguments;
   await new Promise((resolvePromise, reject) => {
-    const child = spawn(executable, arguments_, { cwd, stdio: "inherit", shell: false });
+    const child = spawn(executable, arguments_, {
+      cwd,
+      stdio: options.quiet ? ["ignore", "ignore", "ignore"] : "inherit",
+      shell: false,
+    });
     child.once("error", reject);
     child.once("exit", (code, signal) => code === 0
       ? resolvePromise()
@@ -1038,6 +1457,49 @@ async function saveLink(root, server, projectId) {
   }));
 }
 
+function deploymentAttemptPath(root) {
+  return join(root, ".clank", "deploy-attempt.json");
+}
+
+async function deploymentAttempt(root, expected) {
+  const path = deploymentAttemptPath(root);
+  try {
+    const saved = await readLocalJson(path);
+    const valid = plainRecord(saved)
+      && saved.version === 1
+      && typeof saved.server === "string"
+      && typeof saved.projectId === "string"
+      && typeof saved.digest === "string"
+      && typeof saved.idempotencyKey === "string"
+      && Number.isSafeInteger(saved.createdAt)
+      && saved.createdAt > 0
+      && /^[a-f0-9]{64}$/u.test(saved.digest)
+      && /^[A-Za-z0-9_-]{16,128}$/u.test(saved.idempotencyKey);
+    if (!valid) throw new Error("invalid");
+    if (saved.server === expected.server
+      && saved.projectId === expected.projectId
+      && saved.digest === expected.digest
+      && Date.now() - saved.createdAt <= 24 * 60 * 60 * 1_000) {
+      return saved.idempotencyKey;
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw new CliError(
+        "Invalid .clank/deploy-attempt.json. Remove it after confirming no deployment is still running.",
+        "INVALID_DEPLOY_ATTEMPT",
+      );
+    }
+  }
+  const idempotencyKey = randomToken();
+  await writePrivateJson(path, {
+    version: 1,
+    ...expected,
+    idempotencyKey,
+    createdAt: Date.now(),
+  });
+  return idempotencyKey;
+}
+
 function normalizeServer(value) {
   if (!value) return null;
   const url = new URL(value);
@@ -1070,10 +1532,14 @@ async function readLocalJson(path) {
 }
 
 async function writePrivateJson(path, value) {
+  await writePrivateFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function writePrivateFile(path, value) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    await writeFile(temporary, value, { mode: 0o600 });
     await chmod(temporary, 0o600);
     await rename(temporary, path);
   } finally {
@@ -1091,6 +1557,41 @@ function option(args, name) {
   const exactIndex = args.indexOf(`--${name}`);
   if (exactIndex !== -1) return args[exactIndex + 1];
   return args.find((entry) => entry.startsWith(`--${name}=`))?.slice(name.length + 3);
+}
+
+function validateOptions(command, args) {
+  const valueOptions = new Set(VALUE_OPTIONS[command] ?? []);
+  const booleanOptions = new Set(BOOLEAN_OPTIONS[command] ?? []);
+  const knownOptions = [...valueOptions, ...booleanOptions];
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index];
+    if (!argument.startsWith("--")) continue;
+    const separator = argument.indexOf("=");
+    const name = argument.slice(2, separator === -1 ? undefined : separator);
+    if (booleanOptions.has(name)) {
+      if (separator !== -1) {
+        throw new CliError(`--${name} is a flag and does not take a value.`, "INVALID_OPTION");
+      }
+      continue;
+    }
+    if (!valueOptions.has(name)) {
+      const suggestion = closestValue(name, knownOptions);
+      throw new CliError(
+        `Unknown option --${name} for clank ${command}.${suggestion ? ` Did you mean --${suggestion}?` : ""}`,
+        "UNKNOWN_OPTION",
+      );
+    }
+    if (separator !== -1) {
+      if (argument.slice(separator + 1) === "") {
+        throw new CliError(`--${name} requires a value.`, "MISSING_OPTION_VALUE");
+      }
+      continue;
+    }
+    if (index + 1 >= args.length || args[index + 1].startsWith("--")) {
+      throw new CliError(`--${name} requires a value.`, "MISSING_OPTION_VALUE");
+    }
+    index++;
+  }
 }
 
 function flag(args, name) {
@@ -1144,6 +1645,23 @@ function optionalPositiveIntegerOption(args, name) {
   return value;
 }
 
+function generationOptions(args) {
+  return {
+    frameworkVersion: packageJson.version,
+    frameworkDependency: frameworkDependency(args),
+  };
+}
+
+function frameworkDependency(args) {
+  const value = option(args, "framework");
+  if (value === undefined) return `^${packageJson.version}`;
+  if (value === "local") return `file:${packageRoot}`;
+  if (value.length > 2_048 || /[\u0000-\u001f"\\]/u.test(value)) {
+    throw new CliError("--framework must be a safe npm dependency spec or the word local.", "INVALID_FRAMEWORK");
+  }
+  return value;
+}
+
 function inside(parent, child) {
   const path = relative(parent, child);
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
@@ -1179,6 +1697,57 @@ function randomToken() {
   return crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
 }
 
+function roundedMilliseconds(value) {
+  return Math.round(value * 10) / 10;
+}
+
+function formatDuration(milliseconds) {
+  return milliseconds < 1_000
+    ? `${Math.round(milliseconds)}ms`
+    : `${(milliseconds / 1_000).toFixed(1)}s`;
+}
+
+function formatCommand(command) {
+  return command.map((argument) => JSON.stringify(argument)).join(" ");
+}
+
+function closestCommand(value) {
+  return closestValue(value, [...Object.keys(COMMANDS), ...Object.keys(COMMAND_ALIASES)]);
+}
+
+function closestValue(value, choices) {
+  let best;
+  let distance = Infinity;
+  for (const choice of choices) {
+    const current = editDistance(value, choice);
+    if (current < distance) {
+      best = choice;
+      distance = current;
+    }
+  }
+  return distance <= Math.max(2, Math.floor(value.length / 3)) ? best : undefined;
+}
+
+function editDistance(left, right) {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex++) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex++) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1] + 1,
+        previous[rightIndex] + 1,
+        previous[rightIndex - 1] + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[right.length];
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
 }
@@ -1189,7 +1758,12 @@ async function readStandardInput() {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-class CliError extends Error {}
+class CliError extends Error {
+  constructor(message, code = "CLI_ERROR") {
+    super(message);
+    this.code = code;
+  }
+}
 
 class ApiError extends Error {
   constructor(message, code, status, retryAfter) {

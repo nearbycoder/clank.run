@@ -26,6 +26,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Workspace people administration in the dashboard and CLI, including browser acceptance, member role changes, immediate removal, safe pending-invitation listing, one-time token copy, replacement, and revocation.
 - Quota-aware workspace creation in the People console with safe slug preview and immediate selection.
 - Durable SQLite-backed deployment-platform authentication and CLI device-start rate limits shared across control-plane runtimes and restarts.
+- Command-aware human and JSON CLI help, agent-readable readiness diagnostics, generated `README.md`/`AGENTS.md` guides, and local-checkout scaffolding that does not require an npm release.
+- Offline deterministic deployment dry-runs, structured deployment results with timing, one-command first-project naming/workspace selection, and retry-safe persisted idempotency attempts.
 
 ### Fixed
 
@@ -55,6 +57,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - CLI device login prints its browser approval URL without launching an operating-system command.
 - The minimum runtime is Node 22.16, the first Node 22 release with the built-in SQLite backup API used by migrations and recovery.
 - The official package name is `clank.run`, avoiding collision with the unrelated npm package named `clank`; binaries remain `clank` and `clank-platform`.
+- Command-specific `--help` no longer authenticates or executes the command, dry-run deploys no longer require login, asynchronous CLI failures now reliably exit non-zero without stack traces, and unknown long options fail with spelling guidance instead of being ignored.
+- Generated authenticated apps now map the browser's actual `clank.run` module specifier, allowing the server-rendered auth screen to hydrate and become interactive.
+- Local deployment artifacts are now written through a private atomic replacement, preventing a pre-existing output symlink from redirecting CLI writes.
 
 ## 0.7.0 - 2026-07-16
 

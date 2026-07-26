@@ -12,7 +12,31 @@ npm install
 npm run dev
 ```
 
-The generated app includes auth, an owned Todo table, SSR, hydration, live updates, Tailwind, a health route, deployment configuration, and its first migration. Its only dependency is the official `clank.run` package, which has no transitive dependencies. The exact CLI runtime is still embedded into deployment artifacts, so the platform never runs an install hook.
+The generated app includes auth, an owned Todo table, SSR, hydration, live updates, Tailwind, a health route, deployment configuration, its first migration, a human `README.md`, and an agent-oriented `AGENTS.md`. Its only dependency is the official `clank.run` package, which has no transitive dependencies. The exact CLI runtime is still embedded into deployment artifacts, so the platform never runs an install hook.
+
+Until a Clank version is published, or while changing the framework and an app together, point the scaffold at the current checkout:
+
+```sh
+node /path/to/clank/scripts/clank.mjs create my-app --framework=local
+cd my-app
+npm install
+```
+
+`--framework` also accepts an explicit npm dependency spec, tarball, or `file:` path. Blueprint `plan` and `generate` accept the same option so their checksum includes the actual dependency choice.
+
+## Help and readiness
+
+```sh
+clank help
+clank deploy --help
+clank help --json
+clank doctor
+clank doctor --json
+```
+
+Every command supports focused `--help` without authenticating or executing the command. Unknown commands and long options fail non-zero and suggest a close known spelling instead of being ignored.
+
+`doctor` validates the Node version, deployment configuration, compiled entry state, migration names and checksums, package scripts, CLI login, and local project link. Missing login or a first-deploy link is a warning, not a local-build failure. Its `clank-doctor/1` JSON report and the `clank-cli-help/1` command manifest are stable agent surfaces.
 
 ## Authenticate
 
@@ -78,10 +102,16 @@ clank deploy
 clank deploy ../another-app
 clank deploy --dry-run
 clank deploy --output=/secure/path/release.clank.gz
+clank deploy --name="Customer workspace" --slug=customer-workspace --org=<organization-id>
+clank deploy --json
 clank inspect /secure/path/release.clank.gz
 ```
 
-Deployment validates config, runs the local build without a shell, packages included files plus the exact Clank runtime, verifies the artifact locally, creates a project if needed, uploads with a digest/idempotency key, and waits for migration and health.
+Deployment validates config, runs the local build without a shell, packages included files plus the exact Clank runtime, verifies the artifact locally, creates and links a project if needed, uploads with a digest/idempotency key, and waits for migration and health. `--name`, `--slug`, and `--org` configure that automatic first project creation, so login plus one deploy command is sufficient.
+
+`--dry-run` is deliberately offline: it builds and writes a verified artifact without reading a login, creating a project, or contacting a platform. `--json` suppresses human progress output and emits one `clank-deploy-result/1` document with artifact, release, URL, and timing data.
+
+Before upload the CLI stores a non-secret attempt record in `.clank/deploy-attempt.json`. If the connection fails after the platform may have accepted the artifact, the next identical deploy within 24 hours reuses the same idempotency key and converges on the original release. A definitive platform response clears the record.
 
 ## Status and rollback
 
@@ -123,4 +153,4 @@ Production migrations always run inside the deployment transaction.
 
 Use `clank token create` to issue a short-lived project token containing only the CI job's required permissions, and isolate it with a dedicated `CLANK_HOME`. Membership and token scope are re-evaluated on every request; removing the member or revoking the token stops future access.
 
-Successful commands exit `0`; input, auth, build, upload, migration, or health failures exit non-zero. Failed server revocation prevents `logout` from silently deleting the only local token reference. `--local` is for platform recovery.
+Successful commands exit `0`; input, auth, build, upload, migration, or health failures exit non-zero. Commands that document `--json` emit structured failures to standard error with a stable code and message. Failed server revocation prevents `logout` from silently deleting the only local token reference. `--local` is for platform recovery.

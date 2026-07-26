@@ -65,7 +65,7 @@ const app = createApp()
               type="importmap"
               nonce={nonce}
               dangerouslySetInnerHTML={{
-                __html: JSON.stringify({ imports: { clank: "/_clank/index.js" } }),
+                __html: JSON.stringify({ imports: { "clank.run": "/_clank/index.js" } }),
               }}
             />
             <script nonce={nonce} src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" />
