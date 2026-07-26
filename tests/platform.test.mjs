@@ -2024,7 +2024,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     const signedInHtml = await signedInConsole.text();
     assert.match(signedInHtml, /"authenticated":true/);
     assert.match(signedInHtml, /<section class="app-shell" id="app-view" hidden>/);
-    assert.match(signedInHtml, /Ship fast\./);
+    assert.match(signedInHtml, /Build it\./);
     for (const path of [
       "/login",
       "/overview",
@@ -2059,6 +2059,11 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     ));
     assert.equal(unknownConsoleRoute.status, 404);
     assert.equal((await unknownConsoleRoute.json()).error.code, "NOT_FOUND");
+    const signedOutUnknownConsoleRoute = await platform.handle(jsonRequest(
+      "/projects/private-site/not-a-section",
+    ));
+    assert.equal(signedOutUnknownConsoleRoute.status, 404);
+    assert.equal((await signedOutUnknownConsoleRoute.json()).error.code, "NOT_FOUND");
     const dashboard = await payload(platform, jsonRequest("/api/dashboard", { cookie: firstCookie }));
     const organizationId = dashboard.organizations[0].id;
     const invitation = await payload(platform, jsonRequest(
