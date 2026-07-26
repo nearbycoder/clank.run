@@ -7,9 +7,79 @@ import {
   createHttpPostgresDriver,
   createManagedIngress,
   createMemoryDomainStore,
+  defineAuth,
+  defineBackend,
+  defineDatabase,
   inspectDomainRouting,
+  openBackend,
   planExternalMigrations,
+  serve,
 } from "../dist/index.js";
+
+test("managed ingress preserves the public origin for application auth", async () => {
+  const runtime = await openBackend(defineBackend({
+    schema: defineDatabase({}),
+    auth: defineAuth({
+      password: {
+        minLength: 8,
+        cost: 1024,
+        maxMemory: 4 * 1024 * 1024,
+      },
+    }),
+  }).functions(() => ({})), { path: ":memory:", wal: false });
+  const server = await serve(({ handle: (request) => runtime.handle(request) }), {
+    port: 0,
+    trustProxy: true,
+    allowedHosts: ["todo.apps.example.test"],
+  });
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_auth",
+      projectId: "project_auth",
+      hosts: ["todo.apps.example.test"],
+      upstream: server.url,
+      active: true,
+    }],
+  });
+
+  try {
+    const origin = "https://todo.apps.example.test";
+    const registration = await ingress.handle(new Request(`${origin}/__clank/auth/register`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin,
+        "sec-fetch-site": "same-origin",
+      },
+      body: JSON.stringify({
+        email: "managed-ingress@example.test",
+        password: "correct horse battery staple",
+        profile: { name: "Managed ingress" },
+      }),
+    }));
+    assert.equal(registration.status, 201, await registration.clone().text());
+    assert.match(registration.headers.get("set-cookie"), /^__Host-clank-id=/);
+    assert.equal(registration.headers.get("x-clank-route-id"), "route_auth");
+
+    const rejected = await ingress.handle(new Request(`${origin}/__clank/auth/login`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://attacker.example",
+        "sec-fetch-site": "cross-site",
+      },
+      body: JSON.stringify({
+        email: "managed-ingress@example.test",
+        password: "correct horse battery staple",
+      }),
+    }));
+    assert.equal(rejected.status, 403);
+    assert.equal((await rejected.json()).error.code, "ORIGIN_MISMATCH");
+  } finally {
+    await server.close();
+    runtime.close();
+  }
+});
 
 test("managed ingress routes by verified host, strips hop headers, bounds bodies, and opens circuits", async () => {
   const calls = [];

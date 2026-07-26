@@ -81,3 +81,30 @@ Passkeys registered by releases before 0.7 used `residentKey: "preferred"`. Most
 - Keep password peppers and delivery credentials in platform secrets.
 - Treat account-wide CLI credentials as interactive developer credentials. Use project-scoped tokens for CI.
 - Revoke sessions after material identity or authorization changes.
+
+## Troubleshooting origin rejection
+
+`Cross-origin auth request rejected.` means the browser's exact `Origin` did not
+match the origin reconstructed by the application server, or Fetch Metadata
+identified a cross-site request. Do not disable this check or rewrite the
+browser's `Origin`; both would weaken CSRF protection.
+
+For an app deployed by Clank, open the canonical URL reported by `clank status`
+and reload it before retrying. Managed ingress configures the generated runtime
+automatically and is covered by an end-to-end auth regression.
+
+For a self-hosted app behind an exclusive trusted reverse proxy:
+
+```ts
+await serve(app, {
+  hostname: "127.0.0.1",
+  trustProxy: true,
+  allowedHosts: ["tasks.example.com"],
+});
+```
+
+The proxy must replace `X-Forwarded-Host` and `X-Forwarded-Proto` with the
+browser-visible host and protocol, and untrusted clients must not be able to
+reach the Node listener directly. When `TRUST_PROXY` and `ALLOWED_HOSTS` are
+read from environment variables, verify those variables in the running
+process—not only in a local shell.
