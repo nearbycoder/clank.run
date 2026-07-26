@@ -11,6 +11,6 @@
     "deploy": "clank deploy"
   },
   "dependencies": {
-    "clank.run": "__CLANK_DEPENDENCY__"
+    "@clank.run/framework": "__CLANK_DEPENDENCY__"
   }
 }

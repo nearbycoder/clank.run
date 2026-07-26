@@ -3,7 +3,7 @@
 Clank authentication is built into the framework and uses the application SQLite database. Passwords use bounded scrypt work, session and one-time tokens are stored only as SHA-256 digests, browser sessions use `HttpOnly` and `SameSite=Strict` cookies, and every state-changing browser request requires an origin check plus a session-bound CSRF token.
 
 ```ts
-import { defineAuth } from "clank.run/auth";
+import { defineAuth } from "@clank.run/framework/auth";
 
 export const auth = defineAuth({
   emailVerification: {

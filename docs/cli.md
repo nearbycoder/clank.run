@@ -12,7 +12,7 @@ npm install
 npm run dev
 ```
 
-The generated app includes auth, an owned Todo table, SSR, hydration, live updates, Tailwind, a health route, deployment configuration, its first migration, a human `README.md`, and an agent-oriented `AGENTS.md`. Its only dependency is the official `clank.run` package, which has no transitive dependencies. The exact CLI runtime is still embedded into deployment artifacts, so the platform never runs an install hook.
+The generated app includes auth, an owned Todo table, SSR, hydration, live updates, Tailwind, a health route, deployment configuration, its first migration, a human `README.md`, and an agent-oriented `AGENTS.md`. Its only dependency is the official `@clank.run/framework` package, which has no transitive dependencies. The exact CLI runtime is still embedded into deployment artifacts, so the platform never runs an install hook.
 
 Until a Clank version is published, or while changing the framework and an app together, point the scaffold at the current checkout:
 

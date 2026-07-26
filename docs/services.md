@@ -8,7 +8,7 @@ import {
   defineServiceDriver,
   openJobQueue,
   openLocalFileStore,
-} from "clank.run/services";
+} from "@clank.run/framework/services";
 import { assertServices } from "./service-requirements.ts";
 
 const files = await openLocalFileStore({
@@ -71,4 +71,3 @@ Cron schedules should enqueue jobs with stable unique keys such as `daily-report
 ## Production boundaries
 
 Local files and a single SQLite job database are appropriate for a single-node deployment. Horizontal deployments must bind compatible remote object storage and a shared job/database topology. Service capabilities are part of the blueprint so the deployment platform can refuse an incomplete production plan instead of silently degrading.
-

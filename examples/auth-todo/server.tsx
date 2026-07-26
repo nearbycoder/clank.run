@@ -1,4 +1,4 @@
-/* @clankImportSource clank.run */
+/* @clankImportSource @clank.run/framework */
 import {
   AuthGate,
   authState,
@@ -11,7 +11,7 @@ import {
   securityHeaders,
   serve,
   staticFiles,
-} from "clank.run";
+} from "@clank.run/framework";
 import { backend } from "./backend.ts";
 import { TodoWorkspace } from "./view.tsx";
 
@@ -77,7 +77,7 @@ const app = createApp()
               type="importmap"
               nonce={nonce}
               dangerouslySetInnerHTML={{
-                __html: JSON.stringify({ imports: { "clank.run": "/dist/index.js" } }),
+                __html: JSON.stringify({ imports: { "@clank.run/framework": "/dist/index.js" } }),
               }}
             />
             <script nonce={nonce} src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" />

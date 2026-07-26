@@ -35,10 +35,15 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
-      - name: Match package version to release tag
+      - name: Select trusted-publishing npm
+        run: npm install --global npm@11.18.0
+
+      - name: Match package identity and version to release tag
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
+          test "$(npm --version)" = "11.18.0"
+          test "$(node -p 'require("./package.json").name')" = "@clank.run/framework"
           PACKAGE_VERSION="$(node -p 'require("./package.json").version')"
           test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
 
@@ -63,5 +68,5 @@ jobs:
           TARBALL: ${{ steps.pack.outputs.tarball }}
         run: gh release upload "$RELEASE_TAG" "$TARBALL" --clobber
 
-      - name: Publish to npm through trusted publishing
-        run: npm publish
+      - name: Stage on npm through trusted publishing
+        run: npm stage publish --access public

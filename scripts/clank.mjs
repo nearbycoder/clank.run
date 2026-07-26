@@ -33,8 +33,8 @@ if (args.includes("--help") || args.includes("-h")) {
   console.log(`Clank compiler
 
 Usage:
-  clank build [input=src] [output=dist] [--jsx-import-source=clank.run]
-  clank watch [input=src] [output=dist] [--jsx-import-source=clank.run]
+  clank build [input=src] [output=dist] [--jsx-import-source=@clank.run/framework]
+  clank watch [input=src] [output=dist] [--jsx-import-source=@clank.run/framework]
 
 Compiles .ts and .tsx modules, copies static files, and installs no packages.`);
   process.exit(process.exitCode ?? 0);
@@ -58,7 +58,7 @@ if (positionals.length > 2) {
 const option = (name, fallback) => args.find((argument) => argument.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const input = resolve(positionals[0] ?? "src");
 const output = resolve(positionals[1] ?? "dist");
-const jsxImportSource = option("jsx-import-source", "clank.run");
+const jsxImportSource = option("jsx-import-source", "@clank.run/framework");
 
 const inside = (parent, child) => {
   const path = relative(parent, child);

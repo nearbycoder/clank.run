@@ -1,6 +1,7 @@
 dist/
 clank-*.tgz
 clank.run-*.tgz
+clank.run-framework-*.tgz
 examples/fullstack/*.sqlite
 examples/fullstack/*.sqlite-shm
 examples/fullstack/*.sqlite-wal

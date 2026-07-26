@@ -1,5 +1,5 @@
-/* @clankImportSource clank.run */
-import { For, signal, type Id } from "clank.run";
+/* @clankImportSource @clank.run/framework */
+import { For, signal, type Id } from "@clank.run/framework";
 import type { Todo } from "./backend.ts";
 
 export function TodoApp(props: {

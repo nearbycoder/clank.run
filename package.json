@@ -1,8 +1,8 @@
 {
-  "name": "clank.run",
+  "name": "@clank.run/framework",
   "version": "0.7.0",
-  "description": "An AI-first, dependency-free full-stack TypeScript framework and open-source deployment platform.",
-  "homepage": "https://github.com/nearbycoder/clank.run#readme",
+  "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, and deployment.",
+  "homepage": "https://docs.clank.run",
   "bugs": {
     "url": "https://github.com/nearbycoder/clank.run/issues"
   },
@@ -10,6 +10,11 @@
     "type": "git",
     "url": "git+https://github.com/nearbycoder/clank.run.git"
   },
+  "author": {
+    "name": "Clank contributors",
+    "url": "https://github.com/nearbycoder/clank.run/graphs/contributors"
+  },
+  "license": "MIT",
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -46,8 +51,8 @@
     }
   },
   "bin": {
-    "clank": "./scripts/clank.mjs",
-    "clank-platform": "./scripts/clank-platform.mjs"
+    "clank": "scripts/clank.mjs",
+    "clank-platform": "scripts/clank-platform.mjs"
   },
   "files": [
     "dist",
@@ -86,7 +91,9 @@
     "node": ">=22.16"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
   },
   "keywords": [
     "reactive",
@@ -98,7 +105,10 @@
     "sqlite",
     "realtime",
     "deployment",
-    "platform"
+    "platform",
+    "fine-grained",
+    "jsx",
+    "developer-tools"
   ],
-  "license": "MIT"
+  "packageManager": "npm@11.18.0"
 }

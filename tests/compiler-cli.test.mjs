@@ -561,7 +561,7 @@ test("create scaffolds a named, buildable authenticated application", async () =
     const readme = await readFile(join(target, "README.md"), "utf8");
     const agentGuide = await readFile(join(target, "AGENTS.md"), "utf8");
     assert.equal(packageJson.name, "team-tasks");
-    assert.equal(packageJson.dependencies["clank.run"], `^${frameworkVersion}`);
+    assert.equal(packageJson.dependencies["@clank.run/framework"], `^${frameworkVersion}`);
     assert.match(packageJson.scripts.dev, /dist\/server\.js/);
     assert.equal(packageJson.scripts.doctor, "clank doctor");
     assert.equal(packageJson.scripts["deploy:check"], "clank deploy --dry-run");
@@ -569,7 +569,7 @@ test("create scaffolds a named, buildable authenticated application", async () =
     assert.doesNotMatch(view, /__PROJECT_TITLE__/);
     assert.doesNotMatch(JSON.stringify(packageJson), /__CLANK_VERSION__/);
     assert.match(server, /title: "Team Tasks"/);
-    assert.match(server, /imports: \{ "clank\.run": "\/_clank\/index\.js" \}/);
+    assert.match(server, /imports: \{ "@clank\.run\/framework": "\/_clank\/index\.js" \}/);
     assert.match(view, />Team Tasks</);
     assert.match(view, /<For each=\{props\.todos\} by="_id"/);
     assert.equal(tsconfig.compilerOptions.allowImportingTsExtensions, true);
@@ -602,7 +602,7 @@ test("create can use this checkout without a published package and dry-run deplo
     assert.equal(created.code, 0, created.stderr);
     const packageJson = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
     assert.equal(
-      packageJson.dependencies["clank.run"],
+      packageJson.dependencies["@clank.run/framework"],
       `file:${fileURLToPath(repository).replace(/\/$/u, "")}`,
     );
 
@@ -797,10 +797,14 @@ test("SSR reference apps map the bare module specifier emitted by their shared v
       fileURLToPath(new URL(`examples/${example}/view.js`, repository)),
       "utf8",
     );
-    assert.match(sharedView, /from "clank\.run"/, `${example} should exercise the package-style browser import`);
+    assert.match(
+      sharedView,
+      /from "@clank\.run\/framework"/,
+      `${example} should exercise the package-style browser import`,
+    );
     assert.match(
       serverSource,
-      /imports:\s*\{\s*"clank\.run":\s*"\/dist\/index\.js"\s*\}/,
+      /imports:\s*\{\s*"@clank\.run\/framework":\s*"\/dist\/index\.js"\s*\}/,
       `${example} must resolve the same package-style import in its browser import map`,
     );
   }

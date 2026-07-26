@@ -11,7 +11,7 @@ import {
   defineDatabase,
   defineTable,
   s,
-} from "clank.run";
+} from "@clank.run/framework";
 
 export const auth = defineAuth();
 
@@ -45,7 +45,7 @@ An `.owned()` table automatically writes the current user ID on insert and adds 
 ## Browser client
 
 ```tsx
-import { AuthGate, createClient, onCleanup } from "clank.run";
+import { AuthGate, createClient, onCleanup } from "@clank.run/framework";
 import type { backend } from "./backend.ts";
 
 const client = createClient<typeof backend>();

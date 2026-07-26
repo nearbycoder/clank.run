@@ -1,4 +1,4 @@
-/* @clankImportSource clank.run */
+/* @clankImportSource @clank.run/framework */
 import {
   AuthGate,
   authState,
@@ -11,7 +11,7 @@ import {
   securityHeaders,
   serve,
   staticFiles,
-} from "clank.run";
+} from "@clank.run/framework";
 import { backend } from "./backend.ts";
 import { TodoView } from "./view.tsx";
 
@@ -19,7 +19,7 @@ const environment = (globalThis as unknown as {
   process?: { env?: Record<string, string | undefined> };
 }).process?.env;
 const root = decodeURIComponent(new URL("./", import.meta.url).pathname);
-const frameworkRoot = decodeURIComponent(new URL("../node_modules/clank.run/dist/", import.meta.url).pathname);
+const frameworkRoot = decodeURIComponent(new URL("../node_modules/@clank.run/framework/dist/", import.meta.url).pathname);
 const databasePath = environment?.CLANK_DATABASE_PATH
   ?? environment?.CLANK_DATABASE
   ?? environment?.PROACT_DATABASE_PATH
@@ -65,7 +65,7 @@ const app = createApp()
               type="importmap"
               nonce={nonce}
               dangerouslySetInnerHTML={{
-                __html: JSON.stringify({ imports: { "clank.run": "/_clank/index.js" } }),
+                __html: JSON.stringify({ imports: { "@clank.run/framework": "/_clank/index.js" } }),
               }}
             />
             <script nonce={nonce} src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" />

@@ -79,6 +79,6 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Re-certified all 148 tests at 82.90% line, 69.76% branch, and 82.67% function coverage, plus documentation/declaration audit, packed conformance, and package/current-tree/history security scans.
 - [x] Browser-verified a newly created local-checkout consumer through auth-mode switching, registration, todo creation, a second login, cross-browser live completion, zero error overlays, and no horizontal overflow.
 - [x] Hardened hydration ownership so abandoned listeners, directives, keyed rows, and component output are cleaned without disguising application errors as structural mismatches.
-- [x] Added case-sensitive SVG and `foreignObject` namespace hydration, and aligned both bundled SSR examples with the browser's exact `clank.run` import-map specifier.
+- [x] Added case-sensitive SVG and `foreignObject` namespace hydration, and aligned both bundled SSR examples with the browser's exact framework import-map specifier.
 - [x] Re-certified all 166 tests, coverage floors, 46-file documentation audit, packaged conformance, and repository/history security scans.
 - [x] Browser-verified node-preserving `attached` hydration, refresh, and post-hydration mutations in the full-stack example plus `attached` hydration in the authenticated example.
