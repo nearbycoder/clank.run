@@ -673,6 +673,7 @@ test("deploy retries reuse a persisted idempotency key after an ambiguous networ
       release: {
         id: "release_retry_test",
         digest,
+        url: "https://retry-app.apps.example.test",
         directUrl: "http://127.0.0.1:9999",
       },
     }));
@@ -718,6 +719,7 @@ test("deploy retries reuse a persisted idempotency key after an ambiguous networ
     assert.equal(second.code, 0, second.stderr);
     const deployed = JSON.parse(second.stdout);
     assert.equal(deployed.release.id, "release_retry_test");
+    assert.equal(deployed.release.url, "https://retry-app.apps.example.test");
     assert.equal(requests, 2);
     assert.equal(keys[0], keys[1]);
     await assert.rejects(access(join(target, ".clank", "deploy-attempt.json")), (error) => error.code === "ENOENT");

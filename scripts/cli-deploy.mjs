@@ -1046,7 +1046,7 @@ async function deploy(args) {
     release: {
       id: payload.release.id,
       digest: payload.release.digest,
-      url: payload.release.directUrl ?? payload.release.url,
+      url: payload.release.url ?? payload.release.directUrl,
     },
     artifact: {
       digest,
