@@ -65,6 +65,7 @@ const SENSITIVE_SEGMENTS = new Set([
   "id_ed25519",
 ]);
 const SAFE_ENV_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
+const ATOMIC_BUILD_TEMPORARY_FILE = /\.clank-build-\d+-\d+$/u;
 
 /** Reads and strictly validates the transparent deployment contract. */
 export async function readDeploymentConfig(
@@ -351,6 +352,8 @@ async function collectPath(
   };
   const resolved = path.resolve(target);
   if (resolved !== root && !resolved.startsWith(root + path.sep)) throw new Error("Included paths must stay inside the project.");
+  const name = resolved.slice(resolved.lastIndexOf(path.sep) + 1);
+  if (ATOMIC_BUILD_TEMPORARY_FILE.test(name)) return;
   const stats = await fs.lstat(resolved);
   if (stats.isSymbolicLink()) throw new Error(`Deployment symbolic links are not allowed: ${resolved}`);
   if (stats.isDirectory()) {
@@ -362,16 +365,16 @@ async function collectPath(
   if (!stats.isFile()) throw new Error(`Deployment includes a special file: ${resolved}`);
   const relative = safeRelativePath(path.relative(root, resolved).replaceAll(path.sep, "/"), "file path");
   assertNotSensitive(relative);
-  const name = prefix ? `${prefix}/${relative}` : relative;
-  if (files.has(name)) throw new Error(`Duplicate deployment path: ${name}`);
+  const artifactName = prefix ? `${prefix}/${relative}` : relative;
+  if (files.has(artifactName)) throw new Error(`Duplicate deployment path: ${artifactName}`);
   const maxFile = limits.maxFileBytes ?? 20 * 1024 * 1024;
-  if (stats.size > maxFile) throw new Error(`Deployment file ${name} exceeds ${maxFile} bytes.`);
+  if (stats.size > maxFile) throw new Error(`Deployment file ${artifactName} exceeds ${maxFile} bytes.`);
   if (files.size >= (limits.maxFiles ?? 20_000)) throw new Error("Deployment has too many files.");
   const bytes = await fs.readFile(resolved);
   const total = [...files.values()].reduce((sum, file) => sum + file.size, 0) + bytes.byteLength;
   if (total > (limits.maxTotalBytes ?? 100 * 1024 * 1024)) throw new Error("Deployment is too large.");
-  files.set(name, Object.freeze({
-    path: name,
+  files.set(artifactName, Object.freeze({
+    path: artifactName,
     size: bytes.byteLength,
     sha256: await sha256(bytes),
     mode: stats.mode & 0o111 ? 0o755 : 0o644,
