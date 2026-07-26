@@ -47,6 +47,7 @@ const required = [
   ".github/dependabot.yml",
   ".github/workflows/ci.yml",
   ".github/workflows/codeql.yml",
+  ".github/workflows/docs-deploy.yml",
   ".github/workflows/release.yml",
   "docs/security-asvs.md",
   "docs/threat-model.md",
@@ -62,6 +63,7 @@ pass("security policy, ownership, static analysis, and readiness evidence are pr
 const workflows = await Promise.all([
   ".github/workflows/ci.yml",
   ".github/workflows/codeql.yml",
+  ".github/workflows/docs-deploy.yml",
   ".github/workflows/release.yml",
 ].map(async (relative) => [relative, await read(relative)]));
 for (const [relative, source] of workflows) {
@@ -76,9 +78,23 @@ for (const [relative, source] of workflows) {
 }
 const ci = workflows.find(([relative]) => relative.endsWith("/ci.yml"))?.[1] ?? "";
 const codeql = workflows.find(([relative]) => relative.endsWith("/codeql.yml"))?.[1] ?? "";
+const docsDeploy = workflows.find(([relative]) => relative.endsWith("/docs-deploy.yml"))?.[1] ?? "";
 const release = workflows.find(([relative]) => relative.endsWith("/release.yml"))?.[1] ?? "";
 if (!/permissions:\s*\n\s*contents:\s*read/u.test(ci)) fail("CI must use read-only repository contents permission.");
 if (!/security-events:\s*write/u.test(codeql)) fail("CodeQL must be able to upload security results.");
+if (!/permissions:\s*\n\s*contents:\s*read/u.test(docsDeploy)
+  || !/workflow_run\.conclusion == 'success'/u.test(docsDeploy)
+  || !/workflow_run\.event == 'push'/u.test(docsDeploy)
+  || !/workflow_run\.head_branch == 'main'/u.test(docsDeploy)
+  || !/workflow_run\.head_repository\.full_name == github\.repository/u.test(docsDeploy)
+  || !/ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/u.test(docsDeploy)) {
+  fail("Documentation deployment must use the exact successful, same-repository main CI revision.");
+}
+if (!/environment:\s*\n\s*name:\s*docs/u.test(docsDeploy)
+  || !/\$\{\{ secrets\.CLANK_DOCS_TOKEN \}\}/u.test(docsDeploy)
+  || !/\$\{\{ vars\.CLANK_DOCS_PROJECT_ID \}\}/u.test(docsDeploy)) {
+  fail("Documentation deployment must isolate its project-scoped identity in the docs environment.");
+}
 if (!/id-token:\s*write/u.test(release) || !/npm stage publish --access public/u.test(release)) {
   fail("The release workflow must use public npm staged publishing through GitHub OIDC.");
 }
