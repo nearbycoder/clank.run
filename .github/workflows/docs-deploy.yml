@@ -28,7 +28,7 @@ jobs:
       name: docs
       url: https://docs.clank.run
     env:
-      CLANK_HOME: ${{ runner.temp }}/clank-docs
+      CLANK_HOME: ${{ github.workspace }}/.clank/docs-ci
       CLANK_SERVER: https://clank.run
     steps:
       - name: Check out the CI-verified main revision
