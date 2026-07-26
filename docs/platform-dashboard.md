@@ -6,6 +6,28 @@ Clank Deploy includes a dependency-free browser console for operating sites, tra
 
 Open the configured `CLANK_PLATFORM_URL` and sign in with a platform account. A valid browser session opens the dashboard directly after a refresh. Expired sessions return to the sign-in view, and every authenticated browser mutation requires the session CSRF token. The first installation account uses the one-time bootstrap unless the operator explicitly enables public registration. Later invitees can choose **Use invitation** to create only the email-bound invited account and join its workspace without reopening public signup.
 
+The console uses normal, refresh-safe URLs rather than keeping navigation only in page memory:
+
+| URL | View |
+| --- | --- |
+| `/login`, `/signup`, `/invite` | Account access and invitation-assisted registration |
+| `/overview` | Account-wide site and traffic summary |
+| `/activity` | Authorized workspace audit history |
+| `/workspaces/<workspace-slug>/people` | Members, roles, and invitations for one workspace |
+| `/projects/<project-slug>/performance` | Project traffic and latency, with `?range=1h\|24h\|7d\|30d` |
+| `/projects/<project-slug>/domains` | Domain ownership, routing, and TLS |
+| `/projects/<project-slug>/deployments` | Immutable releases and storage lifecycle |
+| `/projects/<project-slug>/backups` | Scheduled and manual encrypted backups |
+| `/projects/<project-slug>/logs` | Redacted runtime logs |
+| `/projects/<project-slug>/settings` | Administrative and destructive project controls |
+
+Links update browser history, Back/Forward restores the matching view, and every listed URL can be
+opened or refreshed directly. The server recognizes only this bounded route grammar. Before login,
+a protected deep link renders the generic account-access shell without confirming that its workspace
+or project exists; after authentication, the client resolves the slug only against the caller's
+authorized dashboard payload. Unknown sections return `404`, and trailing slashes redirect to their
+canonical URL while preserving the query string.
+
 The overview shows:
 
 - sites and current supervisor state;
