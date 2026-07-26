@@ -64,3 +64,8 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Added quota-aware browser workspace creation with safe slug preview, immediate selection, and a responsive limit state.
 - [x] Re-certified all 141 tests at 82.53% line, 69.56% branch, and 82.36% function coverage, plus packed conformance and repository/history security scans.
 - [x] Browser-verified authenticated workspace creation, automatic slugging, immediate selection, enforced quota disabling, and desktop/mobile layout without overflow.
+- [x] Added invitation-assisted registration so a new collaborator can create only the email-bound invited account and join atomically while ordinary signup remains closed.
+- [x] Serialized first-account bootstrap across control-plane runtimes with an expiring SQLite claim and stable losing-account cleanup, and aligned platform policy with normalized auth paths.
+- [x] Reloaded the server-rendered console at sign-out and session expiry so prior-account DOM and stale signup policy cannot cross an identity transition.
+- [x] Re-certified all 143 tests at 82.56% line, 69.57% branch, and 82.36% function coverage, plus 45-file documentation/declaration audit, packed conformance, and repository/history security scans.
+- [x] Browser-verified bootstrap closure, same-browser owner-to-invitee onboarding, consumed-invitation privacy, persistent refresh authentication, zero console/page errors, and a 390px People layout without horizontal overflow.

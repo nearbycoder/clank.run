@@ -1,4 +1,12 @@
-import { AuthError, defineAuth, openAuth, type AuthRequest, type AuthRuntime, type DefaultAuthProfile } from "./auth.ts";
+import {
+  AuthError,
+  defineAuth,
+  openAuth,
+  type AuthRequest,
+  type AuthRuntime,
+  type AuthUserId,
+  type DefaultAuthProfile,
+} from "./auth.ts";
 import { defineDatabase, openSQLite, type SQLiteDatabase } from "./backend.ts";
 import {
   decodeDeploymentBundle,
@@ -239,6 +247,7 @@ const BACKUP_CONCURRENCY = 2;
 const DEFAULT_RELEASES_PER_PROJECT = 50;
 const DEFAULT_RELEASE_STORAGE_BYTES = 20 * 1024 * 1024 * 1024;
 const MAX_PENDING_INVITATIONS_PER_ORGANIZATION = 100;
+const BOOTSTRAP_CLAIM_MS = 5 * 60_000;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -368,7 +377,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const paths = await prepareDirectories(options.dataDirectory);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
-  const storage = await openPlatformDatabase(paths.controlDatabase, signupMode !== false);
+  const storage = await openPlatformDatabase(paths.controlDatabase);
   const orchestrator = openDeploymentOrchestrator(storage.database);
   const leaseOwner = `control-${(globalThis as any).process?.pid ?? 0}-${crypto.randomUUID()}`;
   const active = new Map<string, ActiveProcess>();
@@ -1278,16 +1287,36 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         ? "/__proact/auth"
         : "/__clank/auth";
       if (url.pathname === authPrefix || url.pathname.startsWith(`${authPrefix}/`)) {
-        const registering = request.method === "POST" && url.pathname === `${authPrefix}/register`;
+        const authOperation = url.pathname.slice(authPrefix.length).replace(/^\/+/, "");
+        const registering = request.method === "POST" && authOperation === "register";
+        const invitationRegistering = request.method === "POST" && authOperation === "invited-register";
+        if (invitationRegistering) {
+          return await registerWithInvitation(storage, request, authPrefix);
+        }
+        if (registering && signupMode === false) {
+          return problem(403, "SIGNUP_DISABLED", "Platform registration is closed.");
+        }
         if (registering && signupMode === "bootstrap") {
-          const count = Number(storage.internal.prepare("SELECT count(*) AS count FROM clank_auth_users").get()?.count ?? 0);
-          if (count > 0) return problem(403, "SIGNUP_DISABLED", "Platform registration is closed.");
           if (bootstrapRegistrationActive) return problem(409, "SIGNUP_IN_PROGRESS", "The first account is already being created.");
+          const claimId = `bootstrap_${crypto.randomUUID()}`;
+          const claim = claimBootstrapRegistration(storage, claimId);
+          if (claim === "registered") {
+            return problem(403, "SIGNUP_DISABLED", "Platform registration is closed.");
+          }
+          if (claim === "busy") {
+            return problem(409, "SIGNUP_IN_PROGRESS", "The first account is already being created.");
+          }
           bootstrapRegistrationActive = true;
           try {
-            return await storage.auth.handle(request, authPrefix);
+            const response = await storage.auth.handle(request, authPrefix);
+            return response.status === 201
+              ? retainBootstrapWinner(storage, response)
+              : response;
           } finally {
             bootstrapRegistrationActive = false;
+            storage.internal.prepare(
+              "DELETE FROM clank_platform_bootstrap_claim WHERE singleton = 1 AND claim_id = ?",
+            ).run(claimId);
           }
         }
         return storage.auth.handle(request, authPrefix);
@@ -1300,6 +1329,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           auth,
           url.searchParams.get("code") ?? "",
           signupMode === true || (signupMode === "bootstrap" && userCount === 0),
+          signupMode === "bootstrap",
         );
       }
       if (url.pathname === "/api/device/start" && request.method === "POST") {
@@ -2356,11 +2386,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
 }
 
-async function openPlatformDatabase(path: string, signup: boolean): Promise<PlatformDatabase> {
+async function openPlatformDatabase(path: string): Promise<PlatformDatabase> {
   const schema = defineDatabase({});
   const database = await openSQLite(schema, { path });
   const internal = database[SQLITE_INTERNAL];
-  const authDefinition = defineAuth({ signup });
+  // The platform gates public, bootstrap, and invitation-assisted registration
+  // before delegating to auth. Keeping the internal primitive enabled lets a
+  // valid invitation authorize one account even when public signup is closed.
+  const authDefinition = defineAuth({ signup: true });
   const auth = await openAuth(authDefinition, database);
   for (const table of [
     "tokens",
@@ -2390,6 +2423,11 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     organization_id TEXT,
     project_id TEXT,
     permissions TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(permissions))
+  )`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_bootstrap_claim (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    claim_id TEXT NOT NULL UNIQUE,
+    expires_at INTEGER NOT NULL
   )`);
   const tokenColumns = internal.prepare("PRAGMA table_info(clank_platform_tokens)").all();
   if (!tokenColumns.some((column) => column.name === "organization_id")) {
@@ -3485,6 +3523,126 @@ function workspaceAuditEvents(
     events,
     nextBefore: events.length === limit ? Number(events.at(-1)!.id) : null,
   };
+}
+
+async function registerWithInvitation(
+  storage: PlatformDatabase,
+  request: Request,
+  authPrefix: string,
+): Promise<Response> {
+  if (!requestOriginAllowed(request)) {
+    throw new PlatformError(403, "ORIGIN_MISMATCH", "Cross-origin auth request rejected.");
+  }
+  const input = plainObject(await readJsonRequest(request, 24 * 1024));
+  exact(input, ["token", "email", "password", "profile"]);
+  const token = boundedString(input.token, "token", 20, 300);
+  const email = normalizeEmail(input.email);
+  const now = Date.now();
+  const invitation = storage.internal.prepare(`SELECT id, organization_id, email, role
+    FROM clank_platform_invitations
+    WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+    .get(syncHash(token), now);
+  if (!invitation || String(invitation.email).toLowerCase() !== email) {
+    throw new PlatformError(400, "INVALID_INVITATION", "Invitation is invalid or expired.");
+  }
+  const role = validateOrganizationRole(String(invitation.role), false);
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+  headers.set("content-type", "application/json");
+  const registerUrl = new URL(request.url);
+  registerUrl.pathname = `${authPrefix}/register`;
+  registerUrl.search = "";
+  const registration = await storage.auth.handle(new Request(registerUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      email,
+      password: input.password,
+      ...(input.profile === undefined ? {} : { profile: input.profile }),
+    }),
+  }), authPrefix);
+  if (registration.status !== 201) return registration;
+  const payload = plainObject(await registration.clone().json());
+  const user = plainObject(payload.user);
+  const userId = boundedString(user.id, "registered user id", 8, 128);
+  if (normalizeEmail(user.email) !== email) {
+    removeNewPlatformAccount(storage, userId);
+    throw new Error("Invitation registration returned an unexpected account.");
+  }
+  try {
+    storage.internal.transaction((changes) => {
+      const accepted = storage.internal.prepare(`UPDATE clank_platform_invitations SET accepted_at = ?
+        WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+        .run(Date.now(), invitation.id, Date.now());
+      if (Number(accepted.changes) !== 1) {
+        throw new PlatformError(409, "INVITATION_USED", "Invitation was already handled.");
+      }
+      storage.internal.prepare(`INSERT INTO clank_platform_memberships
+        (organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(invitation.organization_id, userId, role, now, now);
+      changes.record("__platform", String(invitation.organization_id));
+    });
+  } catch (error) {
+    removeNewPlatformAccount(storage, userId);
+    if (error instanceof PlatformError) return problem(error.status, error.code, error.message);
+    throw error;
+  }
+  audit(storage.internal, userId, null, null, "invitation.accept", {
+    organizationId: String(invitation.organization_id),
+    invitationId: String(invitation.id),
+  });
+  return new Response(JSON.stringify({
+    ...payload,
+    organizationId: String(invitation.organization_id),
+    role,
+  }), {
+    status: 201,
+    headers: registration.headers,
+  });
+}
+
+function claimBootstrapRegistration(
+  storage: PlatformDatabase,
+  claimId: string,
+): "acquired" | "registered" | "busy" {
+  return storage.internal.transaction(() => {
+    const userCount = Number(storage.internal.prepare(
+      "SELECT count(*) AS count FROM clank_auth_users",
+    ).get()?.count ?? 0);
+    if (userCount > 0) return "registered";
+    const now = Date.now();
+    storage.internal.prepare(
+      "DELETE FROM clank_platform_bootstrap_claim WHERE singleton = 1 AND expires_at <= ?",
+    ).run(now);
+    const inserted = storage.internal.prepare(`INSERT INTO clank_platform_bootstrap_claim
+      (singleton, claim_id, expires_at) VALUES (1, ?, ?)
+      ON CONFLICT(singleton) DO NOTHING`)
+      .run(claimId, now + BOOTSTRAP_CLAIM_MS);
+    return Number(inserted.changes) === 1 ? "acquired" : "busy";
+  });
+}
+
+async function retainBootstrapWinner(
+  storage: PlatformDatabase,
+  response: Response,
+): Promise<Response> {
+  const payload = plainObject(await response.clone().json());
+  const user = plainObject(payload.user);
+  const userId = boundedString(user.id, "registered user id", 8, 128);
+  const winner = storage.internal.prepare(
+    "SELECT id FROM clank_auth_users ORDER BY rowid LIMIT 1",
+  ).get();
+  if (winner && String(winner.id) === userId) return response;
+  removeNewPlatformAccount(storage, userId);
+  return problem(409, "SIGNUP_IN_PROGRESS", "Another account completed bootstrap registration.");
+}
+
+function removeNewPlatformAccount(storage: PlatformDatabase, userId: string): void {
+  storage.internal.transaction((changes) => {
+    const removed = storage.internal.prepare("DELETE FROM clank_auth_users WHERE id = ?").run(userId);
+    if (Number(removed.changes) === 1) changes.record("__auth", userId, userId);
+  });
+  storage.auth.notifyUserChange(userId as AuthUserId);
 }
 
 function api(value: unknown, status = 200): Response {

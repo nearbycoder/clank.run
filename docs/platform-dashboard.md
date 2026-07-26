@@ -4,7 +4,7 @@ Clank Deploy includes a dependency-free browser console for operating sites, tra
 
 ## Dashboard
 
-Open the configured `CLANK_PLATFORM_URL` and sign in with a platform account. A valid browser session opens the dashboard directly after a refresh. Expired sessions return to the sign-in view, and every browser mutation requires the session CSRF token.
+Open the configured `CLANK_PLATFORM_URL` and sign in with a platform account. A valid browser session opens the dashboard directly after a refresh. Expired sessions return to the sign-in view, and every authenticated browser mutation requires the session CSRF token. The first installation account uses the one-time bootstrap unless the operator explicitly enables public registration. Later invitees can choose **Use invitation** to create only the email-bound invited account and join its workspace without reopening public signup.
 
 The overview shows:
 
@@ -140,6 +140,7 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `POST /api/organizations` — create an owned workspace under the account quota.
 - `GET /api/organizations/:id` — workspace capabilities, member roster, and administrator-only active invitation metadata.
 - `POST /api/organizations/:id/invitations` — create or replace an email-bound, single-use invitation.
+- `POST /__clank/auth/invited-register` — create an invitation-bound account and consume its workspace membership in one flow.
 - `DELETE /api/organizations/:id/invitations/:invitationId` — revoke an active invitation.
 - `PATCH /api/organizations/:id/members/:userId` — change a member role with last-owner and owner-only protections.
 - `DELETE /api/organizations/:id/members/:userId` — leave or administratively remove membership and revoke workspace-scoped credentials.
