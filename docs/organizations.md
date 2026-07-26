@@ -37,11 +37,12 @@ Invitation tokens are hashed at rest, expire after seven days by default, are bo
 
 Reissuing an invitation for the same workspace and normalized email atomically revokes every older active token. Existing members cannot be reinvited; change their role directly instead. A workspace can retain at most 100 active invitations, and owners or administrators can revoke one before it is accepted. These mutations are recorded in workspace activity.
 
-The browser console exposes the complete flow under **People**. A signed-in recipient can paste a token into **Join another workspace**; the server requires the token's normalized email to match that account. The page also shows the current role and site usage, lets authorized users update roles or remove members, and reveals a newly created token only in the current page state. Member removal immediately revokes the removed account's organization- and project-scoped tokens. The last owner cannot leave or be demoted, and an administrator cannot grant, change, or remove an owner.
+The browser console exposes the complete flow under **People**. An account below its owned-workspace quota can create and immediately select a workspace there. A signed-in recipient can paste a token into **Join another workspace**; the server requires the token's normalized email to match that account. The page also shows the current role and site usage, lets authorized users update roles or remove members, and reveals a newly created token only in the current page state. Member removal immediately revokes the removed account's organization- and project-scoped tokens. The last owner cannot leave or be demoted, and an administrator cannot grant, change, or remove an owner.
 
 ## Organization API
 
 - `GET /api/organizations/:id` returns the organization, access capabilities, members, active invitation limit, and active invitations when the caller may administer them.
+- `POST /api/organizations` creates an owned workspace with `{ "name": "...", "slug": "..." }` under the account quota.
 - `POST /api/organizations/:id/invitations` creates or replaces an email-bound invitation with `{ "email": "...", "role": "developer" }`.
 - `DELETE /api/organizations/:id/invitations/:invitationId` revokes an active invitation.
 - `PATCH /api/organizations/:id/members/:userId` changes a role with `{ "role": "admin" }`.
