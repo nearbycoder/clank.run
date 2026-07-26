@@ -4,6 +4,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+### Added
+
+- Successful protected-main CI revisions now automatically build, validate, and deploy `docs.clank.run` through a dedicated GitHub environment and a least-privilege project token.
+
+### Fixed
+
+- Deployment artifact collection now ignores the compiler's atomic temporary files, preventing a concurrent framework build from producing a transient file or `ENOENT` failure in an otherwise deterministic bundle.
+
 ## 0.8.0 - 2026-07-26
 
 ### Added

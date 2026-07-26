@@ -37,6 +37,15 @@ Clank releases are built from reviewed source, submitted through npm trusted pub
 
 9. Require two-factor authentication, disallow traditional publish tokens, and revoke any bootstrap token or saved npm session that is no longer needed.
 10. Enable GitHub private vulnerability reporting.
+11. Create a GitHub Actions environment named `docs`, restrict it to protected branches, and set:
+    - `CLANK_DOCS_PROJECT_ID` as an environment variable containing the linked `docs.clank.run` project ID; and
+    - `CLANK_DOCS_TOKEN` as an environment secret containing a project token limited to `read,deploy`.
+
+Create the documentation token from the linked `docs-site` directory with
+`clank token create --name github-actions-docs --permissions read,deploy --expires-in=31536000`.
+The secret is shown once. Store it directly in the `docs` environment, record its expiry in the
+operator calendar, and replace then revoke it before it expires. Never use an account-wide device
+token for the workflow.
 
 The release workflow uses Node 24 with npm 11.18.0 and requests `id-token: write` only in the publish job. npm exchanges that GitHub OIDC identity for a short-lived credential and automatically produces package provenance for the public package.
 
@@ -57,9 +66,16 @@ The `clank` npm name belongs to an unrelated project. Do not publish or document
    - the npm package shows provenance;
    - the attached `.tgz` verifies with `gh attestation verify`;
    - a fresh consumer can install, scaffold, build, and run; and
+   - `https://docs.clank.run/healthz` reports the released framework version; and
    - the package contains no database, credential, environment, platform-state, or unrelated generated files.
 
 The GitHub release event runs the complete gate again, packs one tarball, creates a GitHub artifact attestation for it, attaches it to the release, and submits the same source to npm's staged-publishing queue through trusted publishing.
+
+Every successful same-repository `main` CI run also starts the documentation deployment workflow.
+It checks out the exact commit that passed CI, rebuilds the complete documentation corpus, runs
+`doctor` and a deterministic dry-run, then deploys to the fixed `docs.clank.run` project. The
+project-scoped token is available only through the protected `docs` environment. Pull requests,
+forks, failed CI runs, other branches, and unverified revisions cannot reach the deployment job.
 
 ## Failure handling
 

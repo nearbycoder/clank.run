@@ -33,6 +33,10 @@ test("deployment bundles are deterministic, checksummed, bounded, and traversal-
     await mkdir(join(root, "dist"));
     await mkdir(join(root, "migrations"));
     await writeFile(join(root, "dist", "server.js"), "console.log('safe');\n");
+    await writeFile(
+      join(root, "dist", "server.js.clank-build-3059-50"),
+      "incomplete atomic compiler output\n",
+    );
     await writeFile(join(root, "migrations", "0001_init.sql"), "CREATE TABLE example (id TEXT PRIMARY KEY);\n");
     const first = await createDeploymentBundle(root, config, {
       frameworkVersion: "0.5.0",

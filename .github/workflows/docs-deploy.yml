@@ -1,0 +1,113 @@
+name: Deploy documentation
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-documentation-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, verify, and deploy
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: docs
+      url: https://docs.clank.run
+    env:
+      CLANK_HOME: ${{ github.workspace }}/.clank/docs-ci
+      CLANK_SERVER: https://clank.run
+    steps:
+      - name: Check out the CI-verified main revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Select supported Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Build documentation
+        working-directory: docs-site
+        run: npm run build
+
+      - name: Configure project-scoped deployment identity
+        env:
+          CLANK_DOCS_PROJECT_ID: ${{ vars.CLANK_DOCS_PROJECT_ID }}
+          CLANK_DOCS_TOKEN: ${{ secrets.CLANK_DOCS_TOKEN }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { chmod, mkdir, writeFile } from "node:fs/promises";
+          import { join } from "node:path";
+
+          const server = process.env.CLANK_SERVER;
+          const projectId = process.env.CLANK_DOCS_PROJECT_ID ?? "";
+          const token = process.env.CLANK_DOCS_TOKEN ?? "";
+          if (server !== "https://clank.run") throw new Error("Unexpected documentation deployment server.");
+          if (!/^[A-Za-z0-9_-]{8,128}$/u.test(projectId)) {
+            throw new Error("CLANK_DOCS_PROJECT_ID is missing or invalid.");
+          }
+          if (!/^[\x21-\x7e]{20,16384}$/u.test(token)) {
+            throw new Error("CLANK_DOCS_TOKEN is missing or invalid.");
+          }
+
+          const configDirectory = process.env.CLANK_HOME;
+          const projectDirectory = join(process.env.GITHUB_WORKSPACE, "docs-site", ".clank");
+          await Promise.all([
+            mkdir(configDirectory, { recursive: true, mode: 0o700 }),
+            mkdir(projectDirectory, { recursive: true, mode: 0o700 }),
+          ]);
+          await Promise.all([
+            writeFile(
+              join(configDirectory, "config.json"),
+              `${JSON.stringify({
+                version: 1,
+                current: server,
+                profiles: {
+                  [server]: {
+                    token,
+                    expiresAt: Number.MAX_SAFE_INTEGER,
+                  },
+                },
+              })}\n`,
+              { mode: 0o600 },
+            ),
+            writeFile(
+              join(projectDirectory, "project.json"),
+              `${JSON.stringify({ version: 1, server, projectId })}\n`,
+              { mode: 0o600 },
+            ),
+          ]);
+          await Promise.all([
+            chmod(configDirectory, 0o700),
+            chmod(join(configDirectory, "config.json"), 0o600),
+            chmod(projectDirectory, 0o700),
+            chmod(join(projectDirectory, "project.json"), 0o600),
+          ]);
+          NODE
+
+      - name: Verify deployment inputs
+        working-directory: docs-site
+        run: |
+          npm run doctor
+          npm run deploy:check
+
+      - name: Deploy documentation
+        working-directory: docs-site
+        run: node ../scripts/clank.mjs deploy . --json
