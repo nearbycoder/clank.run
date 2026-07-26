@@ -64,6 +64,10 @@ export interface PlatformLimits {
   domainsPerProject?: number;
   /** Retention for minute-level ingress metrics. Defaults to 30 days. */
   metricRetentionDays?: number;
+  /** Maximum retained release artifacts per project. Defaults to 50. */
+  releasesPerProject?: number;
+  /** Maximum retained release and pre-deploy snapshot bytes per project. Defaults to 20 GiB. */
+  releaseStorageBytesPerProject?: number;
 }
 
 export interface PlatformBackupOptions {
@@ -168,6 +172,10 @@ interface ReleaseRow {
   status: string;
   digest: string;
   artifactBytes: number;
+  runtimeBytes: number;
+  snapshotBytes: number;
+  storageBytes: number;
+  artifactAvailable: boolean;
   frameworkVersion: string;
   nodeVersion: string;
   config: DeploymentBundle["config"];
@@ -228,6 +236,8 @@ const DEFAULT_BACKUP_MAX_COUNT = 30;
 const DEFAULT_BACKUP_MAX_AGE_MS = 90 * 24 * 60 * 60_000;
 const DEFAULT_BACKUP_MAX_DATABASE_BYTES = 10 * 1024 * 1024 * 1024;
 const BACKUP_CONCURRENCY = 2;
+const DEFAULT_RELEASES_PER_PROJECT = 50;
+const DEFAULT_RELEASE_STORAGE_BYTES = 20 * 1024 * 1024 * 1024;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -330,6 +340,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       "limits.metricRetentionDays",
       1,
       365,
+    ),
+    releasesPerProject: integerInRange(
+      options.limits?.releasesPerProject ?? DEFAULT_RELEASES_PER_PROJECT,
+      "limits.releasesPerProject",
+      2,
+      100,
+    ),
+    releaseStorageBytesPerProject: integerInRange(
+      options.limits?.releaseStorageBytesPerProject ?? DEFAULT_RELEASE_STORAGE_BYTES,
+      "limits.releaseStorageBytesPerProject",
+      1,
+      Number.MAX_SAFE_INTEGER,
     ),
   });
   const tlsAskToken = options.ingress?.tlsAskToken === undefined
@@ -767,20 +789,45 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         "Changing database.path would create a second production database. Migrate it explicitly before deploying.",
       );
     }
+    const bundleStorageBytes = bundle.files.reduce((total, file) => total + file.size, 0);
+    let databaseStorageBytes: number;
+    try {
+      databaseStorageBytes = await projectDatabaseFootprint(
+        paths.projects,
+        project,
+        bundle.config.database.path,
+      );
+    } catch (error) {
+      try { options.onError?.(error); } catch { /* Operator reporting must not change deployment validation. */ }
+      throw new PlatformError(
+        422,
+        "INVALID_DATABASE_STORAGE",
+        "Project database storage must use regular files without symbolic links.",
+      );
+    }
+    assertReleaseCapacity(
+      storage.internal,
+      project.id,
+      bundleStorageBytes + databaseStorageBytes,
+      limits,
+    );
     const releaseId = await randomId(18);
     const releaseDirectory = await newReleaseDirectory(paths.projects, project.id, releaseId);
     const previousReleaseId = project.activeReleaseId;
     const createdAt = Date.now();
     storage.internal.prepare(`INSERT INTO clank_platform_releases
-      (id, project_id, previous_release_id, status, digest, artifact_bytes, framework_version,
-       node_version, config, directory, backup_path, idempotency_key, created_at)
-      VALUES (?, ?, ?, 'staging', ?, ?, ?, ?, ?, ?, NULL, ?, ?)`)
+      (id, project_id, previous_release_id, status, digest, artifact_bytes, runtime_bytes,
+       snapshot_bytes, storage_bytes, artifact_available, framework_version, node_version,
+       config, directory, backup_path, idempotency_key, created_at)
+      VALUES (?, ?, ?, 'staging', ?, ?, ?, 0, ?, 1, ?, ?, ?, ?, NULL, ?, ?)`)
       .run(
         releaseId,
         project.id,
         previousReleaseId,
         digest,
         bytes.byteLength,
+        bundleStorageBytes,
+        bundleStorageBytes + databaseStorageBytes,
         bundle.provenance.frameworkVersion,
         bundle.provenance.nodeVersion,
         JSON.stringify(bundle.config),
@@ -790,6 +837,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       );
     let backupPath: string | null = null;
     let databaseExisted = false;
+    let preMigrationCapacityRejection: PlatformError | null = null;
     try {
       await extractDeploymentBundle(bundle, releaseDirectory);
       const dataRoot = await projectDataDirectory(paths.projects, project.id);
@@ -799,8 +847,26 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (databaseExisted) {
         backupPath = await releaseBackupPath(paths.projects, project.id, releaseId);
         await backupSQLite(databasePath, backupPath);
-        storage.internal.prepare("UPDATE clank_platform_releases SET backup_path = ? WHERE id = ?")
-          .run(backupPath, releaseId);
+        const actualBackupBytes = await regularFileBytes(backupPath);
+        storage.internal.prepare(
+          `UPDATE clank_platform_releases
+            SET backup_path = ?, snapshot_bytes = ?, storage_bytes = runtime_bytes + ?
+            WHERE id = ?`,
+        ).run(backupPath, actualBackupBytes, actualBackupBytes, releaseId);
+        try {
+          assertReleaseCapacity(
+            storage.internal,
+            project.id,
+            bundleStorageBytes + actualBackupBytes,
+            limits,
+            releaseId,
+          );
+        } catch (error) {
+          if (error instanceof PlatformError && error.code === "RELEASE_STORAGE_LIMIT_REACHED") {
+            preMigrationCapacityRejection = error;
+          }
+          throw error;
+        }
       }
       const migrationDirectory = await safeReleasePath(releaseDirectory, bundle.config.database.migrations);
       await applyMigrations({
@@ -841,6 +907,46 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     } catch (error) {
       options.onError?.(error);
       await stopProject(project.id);
+      if (error === preMigrationCapacityRejection) {
+        let cleanupSucceeded = true;
+        let restartSucceeded = true;
+        try {
+          await deleteReleaseStorage(paths.projects, project.id, releaseId);
+          storage.internal.prepare(
+            "DELETE FROM clank_platform_releases WHERE id = ? AND project_id = ?",
+          ).run(releaseId, project.id);
+        } catch (cleanupError) {
+          cleanupSucceeded = false;
+          options.onError?.(cleanupError);
+          storage.internal.prepare(
+            "UPDATE clank_platform_releases SET status = 'failed', failure = ? WHERE id = ?",
+          ).run("Release storage rejection cleanup failed.", releaseId);
+        }
+        if (previousReleaseId) {
+          const previous = releaseById(storage.internal, previousReleaseId);
+          if (previous) {
+            try {
+              await startRelease(project, previous, decryptProjectSecrets(storage.internal, project.id, masterKey));
+            } catch (restartError) {
+              restartSucceeded = false;
+              options.onError?.(restartError);
+            }
+          }
+        }
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.reject", {
+          releaseId,
+          digest,
+          code: preMigrationCapacityRejection.code,
+          cleanupSucceeded,
+          restartSucceeded,
+        });
+        if (cleanupSucceeded && restartSucceeded) throw preMigrationCapacityRejection;
+        throw new PlatformError(
+          422,
+          "DEPLOYMENT_RECOVERY_FAILED",
+          "The deployment was rejected, but automatic release cleanup or restart failed.",
+        );
+      }
       try {
         const dataRoot = await projectDataDirectory(paths.projects, project.id);
         const databasePath = await safeProjectDataPath(dataRoot, bundle.config.database.path);
@@ -880,6 +986,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const target = releaseById(storage.internal, targetId);
     if (!current || !target || target.projectId !== project.id) {
       throw new PlatformError(404, "RELEASE_NOT_FOUND", "Release not found.");
+    }
+    if (!target.artifactAvailable) {
+      throw new PlatformError(409, "RELEASE_ARTIFACT_UNAVAILABLE", "This release's runtime artifact has been removed.");
     }
     if (target.id === current.id) return releasePayload(project, current, appUrlTemplate);
     if (restoreData) {
@@ -927,6 +1036,76 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       await startRelease(project, current, decryptProjectSecrets(storage.internal, project.id, masterKey));
       throw new PlatformError(422, "ROLLBACK_FAILED", safeError(error));
     }
+  });
+
+  const cleanupRelease = async (
+    principal: TokenPrincipal,
+    project: ProjectRow,
+    releaseId: string,
+    confirmation: string,
+    allowRollbackLoss: boolean,
+  ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
+    const currentProject = projectById(storage.internal, project.id);
+    const release = releaseById(storage.internal, releaseId);
+    if (!currentProject || !release || release.projectId !== project.id) {
+      throw new PlatformError(404, "RELEASE_NOT_FOUND", "Release not found.");
+    }
+    const expected = `delete-release ${project.slug} ${release.id}`;
+    if (confirmation !== expected) {
+      throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
+    }
+    if (!release.artifactAvailable) {
+      return {
+        ...publicRelease(release),
+        cleanup: {
+          allowed: false,
+          rollbackProtected: currentProject.activeReleaseId
+            ? releaseById(storage.internal, currentProject.activeReleaseId)?.previousReleaseId === release.id
+            : false,
+        },
+      };
+    }
+    if (currentProject.activeReleaseId === release.id) {
+      throw new PlatformError(409, "ACTIVE_RELEASE_PROTECTED", "The active release artifact cannot be removed.");
+    }
+    const activeRelease = currentProject.activeReleaseId
+      ? releaseById(storage.internal, currentProject.activeReleaseId)
+      : null;
+    const rollbackProtected = activeRelease?.previousReleaseId === release.id;
+    if (rollbackProtected && !allowRollbackLoss) {
+      throw new PlatformError(
+        409,
+        "RELEASE_ROLLBACK_PROTECTED",
+        "This release is the active release's immediate rollback target. Explicitly allow rollback loss to remove it.",
+      );
+    }
+    await deleteReleaseStorage(paths.projects, project.id, release.id);
+    if (rollbackProtected && activeRelease?.backupPath) {
+      await deleteReleaseSnapshot(paths.projects, project.id, activeRelease.id);
+    }
+    storage.internal.transaction((changes) => {
+      storage.internal.prepare(`UPDATE clank_platform_releases
+        SET artifact_available = 0, runtime_bytes = 0, snapshot_bytes = 0,
+          storage_bytes = 0, backup_path = NULL
+        WHERE id = ? AND project_id = ?`).run(release.id, project.id);
+      if (rollbackProtected && activeRelease?.backupPath) {
+        storage.internal.prepare(`UPDATE clank_platform_releases
+          SET snapshot_bytes = 0, storage_bytes = runtime_bytes, backup_path = NULL
+          WHERE id = ? AND project_id = ?`).run(activeRelease.id, project.id);
+      }
+      audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.cleanup", {
+        releaseId: release.id,
+        storageBytes: release.storageBytes,
+        rollbackProtected,
+        activeSnapshotBytes: rollbackProtected ? activeRelease?.snapshotBytes ?? 0 : 0,
+      });
+      changes.record("__platform", project.id);
+    });
+    const cleaned = releaseById(storage.internal, release.id)!;
+    return {
+      ...publicRelease(cleaned),
+      cleanup: { allowed: false, rollbackProtected: false },
+    };
   });
 
   const handle = async (request: Request): Promise<Response> => {
@@ -1447,8 +1626,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const matched = /^\/api\/projects\/([A-Za-z0-9_-]{8,128})(?:\/(.*))?$/.exec(url.pathname);
       if (!matched) throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
       const operation = matched[2] ?? "";
-      const requiredPermission: ProjectPermission = operation === "releases" && request.method === "POST"
-        ? "deploy"
+      const requiredPermission: ProjectPermission = operation.startsWith("releases/")
+        && request.method === "DELETE"
+        ? "rollback"
+        : operation === "releases" && request.method === "POST"
+          ? "deploy"
         : operation === "rollback"
           ? "rollback"
           : operation.startsWith("backups") && request.method !== "GET"
@@ -1469,6 +1651,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const domainCount = Number(storage.internal.prepare(
           "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
         ).get(project.id)?.count ?? 0);
+        const releaseUsage = releaseStorageUsage(storage.internal, project.id);
         return api({
           ok: true,
           project: {
@@ -1479,14 +1662,59 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           },
           activeRelease: release ? publicRelease(release) : null,
           limits: publicLimits(limits, options.maxArtifactBytes),
-          usage: { domains: domainCount },
+          usage: { domains: domainCount, ...releaseUsage },
         });
       }
       if (operation === "releases" && request.method === "GET") {
-        const rows = storage.internal.prepare(
+        const availableRows = storage.internal.prepare(
+          `SELECT * FROM clank_platform_releases
+            WHERE project_id = ? AND artifact_available = 1
+            ORDER BY created_at DESC LIMIT 100`,
+        ).all(project.id);
+        const recentRows = storage.internal.prepare(
           "SELECT * FROM clank_platform_releases WHERE project_id = ? ORDER BY created_at DESC LIMIT 100",
         ).all(project.id);
-        return api({ ok: true, releases: rows.map((row) => publicRelease(releaseRow(row))) });
+        const rows = [...new Map(
+          [...availableRows, ...recentRows].map((row) => [String(row.id), row]),
+        ).values()].sort((left, right) => Number(right.created_at) - Number(left.created_at));
+        const activeRelease = project.activeReleaseId
+          ? releaseById(storage.internal, project.activeReleaseId)
+          : null;
+        return api({
+          ok: true,
+          releases: rows.map((row) => {
+            const release = releaseRow(row);
+            return {
+              ...publicRelease(release),
+              cleanup: {
+                allowed: release.artifactAvailable && release.id !== project.activeReleaseId,
+                rollbackProtected: release.id === activeRelease?.previousReleaseId,
+              },
+            };
+          }),
+          usage: releaseStorageUsage(storage.internal, project.id),
+          limits: {
+            releases: limits.releasesPerProject,
+            storageBytes: limits.releaseStorageBytesPerProject,
+          },
+        });
+      }
+      const releaseCleanupMatch = /^releases\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
+      if (releaseCleanupMatch && request.method === "DELETE") {
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["confirmation", "allowRollbackLoss"]);
+        const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
+        const allowRollbackLoss = input.allowRollbackLoss === true;
+        return api({
+          ok: true,
+          release: await cleanupRelease(
+            principal,
+            project,
+            releaseCleanupMatch[1]!,
+            confirmation,
+            allowRollbackLoss,
+          ),
+        });
       }
       if (operation === "releases" && request.method === "POST") {
         const contentType = request.headers.get("content-type")?.split(";", 1)[0];
@@ -1502,6 +1730,17 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ?? request.headers.get("x-proact-idempotency-key")
           ?? "";
         if (!/^[A-Za-z0-9_-]{16,128}$/.test(idempotencyKey)) throw new PlatformError(400, "IDEMPOTENCY_REQUIRED", "A valid idempotency key is required.");
+        const existingRelease = storage.internal.prepare(
+          "SELECT 1 AS present FROM clank_platform_releases WHERE project_id = ? AND idempotency_key = ?",
+        ).get(project.id, idempotencyKey);
+        if (!existingRelease
+          && releaseStorageUsage(storage.internal, project.id).releases >= limits.releasesPerProject) {
+          throw new PlatformError(
+            409,
+            "RELEASE_LIMIT_REACHED",
+            `This site has reached its ${limits.releasesPerProject}-release artifact limit. Remove an inactive release before deploying again.`,
+          );
+        }
         const max = options.maxArtifactBytes ?? 100 * 1024 * 1024;
         let bytes: Uint8Array;
         try { bytes = await readRequestBytes(request, max); }
@@ -2081,6 +2320,10 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     status TEXT NOT NULL,
     digest TEXT NOT NULL,
     artifact_bytes INTEGER NOT NULL,
+    runtime_bytes INTEGER NOT NULL DEFAULT 0,
+    snapshot_bytes INTEGER NOT NULL DEFAULT 0,
+    storage_bytes INTEGER NOT NULL DEFAULT 0,
+    artifact_available INTEGER NOT NULL DEFAULT 1,
     framework_version TEXT NOT NULL,
     node_version TEXT NOT NULL,
     config TEXT NOT NULL CHECK (json_valid(config)),
@@ -2092,6 +2335,22 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     failure TEXT,
     UNIQUE(project_id, idempotency_key)
   )`);
+  const releaseColumns = internal.prepare("PRAGMA table_info(clank_platform_releases)").all();
+  if (!releaseColumns.some((column) => column.name === "artifact_available")) {
+    internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN artifact_available INTEGER NOT NULL DEFAULT 1");
+  }
+  if (!releaseColumns.some((column) => column.name === "storage_bytes")) {
+    internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN storage_bytes INTEGER NOT NULL DEFAULT 0");
+    internal.exec("UPDATE clank_platform_releases SET storage_bytes = artifact_bytes");
+  }
+  if (!releaseColumns.some((column) => column.name === "runtime_bytes")) {
+    internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN runtime_bytes INTEGER NOT NULL DEFAULT 0");
+    internal.exec(`UPDATE clank_platform_releases
+      SET runtime_bytes = CASE WHEN artifact_available = 1 THEN artifact_bytes ELSE 0 END`);
+  }
+  if (!releaseColumns.some((column) => column.name === "snapshot_bytes")) {
+    internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN snapshot_bytes INTEGER NOT NULL DEFAULT 0");
+  }
   internal.exec("DROP INDEX IF EXISTS proact_platform_releases_project");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_releases_project ON clank_platform_releases (project_id, created_at)");
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_secrets (
@@ -2225,6 +2484,10 @@ function releaseRow(row: Record<string, unknown>): ReleaseRow {
     status: String(row.status),
     digest: String(row.digest),
     artifactBytes: Number(row.artifact_bytes),
+    runtimeBytes: Number(row.runtime_bytes ?? row.artifact_bytes),
+    snapshotBytes: Number(row.snapshot_bytes ?? 0),
+    storageBytes: Number(row.storage_bytes ?? row.artifact_bytes),
+    artifactAvailable: Number(row.artifact_available ?? 1) === 1,
     frameworkVersion: String(row.framework_version),
     nodeVersion: String(row.node_version),
     config: JSON.parse(String(row.config)),
@@ -2683,6 +2946,8 @@ function publicLimits(limits: Required<PlatformLimits>, maxArtifactBytes?: numbe
     projectsPerOrganization: limits.projectsPerOrganization,
     domainsPerProject: limits.domainsPerProject,
     metricRetentionDays: limits.metricRetentionDays,
+    releasesPerProject: limits.releasesPerProject,
+    releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
     maxArtifactBytes: maxArtifactBytes ?? 100 * 1024 * 1024,
   };
 }
@@ -2742,6 +3007,7 @@ function dashboardPayload(
     const domainUsage = internal.prepare(`SELECT count(*) AS count,
       sum(CASE WHEN status = 'verified' AND routing_status = 'ready' THEN 1 ELSE 0 END) AS ready
       FROM clank_platform_domains WHERE project_id = ?`).get(project.id);
+    const releases = releaseStorageUsage(internal, project.id);
     const metrics = metricSeries(internal, project.id, "24h").summary as Record<string, number>;
     return {
       ...projectPayload(project),
@@ -2750,6 +3016,11 @@ function dashboardPayload(
       runtimeStatus: active.has(project.id) ? "online" : release ? "degraded" : "not_deployed",
       activeRelease: release ? publicRelease(release) : null,
       domains: { count: Number(domainUsage?.count ?? 0), ready: Number(domainUsage?.ready ?? 0), limit: limits.domainsPerProject },
+      releases: {
+        ...releases,
+        limit: limits.releasesPerProject,
+        storageLimitBytes: limits.releaseStorageBytesPerProject,
+      },
       metrics,
     };
   });
@@ -2801,6 +3072,8 @@ function publicRelease(release: ReleaseRow): Record<string, unknown> {
     status: release.status,
     digest: release.digest,
     artifactBytes: release.artifactBytes,
+    storageBytes: release.storageBytes,
+    artifactAvailable: release.artifactAvailable,
     frameworkVersion: release.frameworkVersion,
     nodeVersion: release.nodeVersion,
     createdAt: release.createdAt,
@@ -3148,6 +3421,82 @@ async function projectDataDirectory(projectsRoot: string, projectId: string): Pr
   return root;
 }
 
+function releaseStorageUsage(
+  internal: SQLiteInternal,
+  projectId: string,
+  excludeReleaseId?: string,
+): { releases: number; storageBytes: number } {
+  const row = excludeReleaseId
+    ? internal.prepare(`SELECT
+        sum(CASE WHEN artifact_available = 1 THEN 1 ELSE 0 END) AS releases,
+        sum(CASE WHEN artifact_available = 1 THEN storage_bytes ELSE 0 END) AS storage_bytes
+      FROM clank_platform_releases WHERE project_id = ? AND id <> ?`).get(projectId, excludeReleaseId)
+    : internal.prepare(`SELECT
+        sum(CASE WHEN artifact_available = 1 THEN 1 ELSE 0 END) AS releases,
+        sum(CASE WHEN artifact_available = 1 THEN storage_bytes ELSE 0 END) AS storage_bytes
+      FROM clank_platform_releases WHERE project_id = ?`).get(projectId);
+  return {
+    releases: Number(row?.releases ?? 0),
+    storageBytes: Number(row?.storage_bytes ?? 0),
+  };
+}
+
+function assertReleaseCapacity(
+  internal: SQLiteInternal,
+  projectId: string,
+  nextStorageBytes: number,
+  limits: Required<PlatformLimits>,
+  excludeReleaseId?: string,
+): void {
+  const usage = releaseStorageUsage(internal, projectId, excludeReleaseId);
+  if (usage.releases + 1 > limits.releasesPerProject) {
+    throw new PlatformError(
+      409,
+      "RELEASE_LIMIT_REACHED",
+      `This site has reached its ${limits.releasesPerProject}-release artifact limit. Remove an inactive release before deploying again.`,
+    );
+  }
+  if (usage.storageBytes + nextStorageBytes > limits.releaseStorageBytesPerProject) {
+    throw new PlatformError(
+      409,
+      "RELEASE_STORAGE_LIMIT_REACHED",
+      `This deployment would exceed the site's ${limits.releaseStorageBytesPerProject}-byte release storage limit. Remove an inactive release before deploying again.`,
+    );
+  }
+}
+
+async function projectDatabaseFootprint(
+  projectsRoot: string,
+  project: ProjectRow,
+  configuredPath: string,
+): Promise<number> {
+  const dataRoot = await projectDataDirectory(projectsRoot, project.id);
+  const databasePath = await safeProjectDataPath(dataRoot, project.databasePath ?? configuredPath);
+  return await regularFileBytes(databasePath, true)
+    + await regularFileBytes(`${databasePath}-wal`, true)
+    + await regularFileBytes(`${databasePath}-shm`, true);
+}
+
+async function regularFileBytes(path: string, missingAllowed = false): Promise<number> {
+  const fsName = "node:fs/promises";
+  const fs = await import(fsName) as unknown as {
+    lstat(path: string): Promise<{ size: number; isFile(): boolean; isSymbolicLink(): boolean }>;
+  };
+  try {
+    const stats = await fs.lstat(path);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new Error("Release storage input must be a regular file.");
+    }
+    if (!Number.isSafeInteger(stats.size) || stats.size < 0) {
+      throw new Error("Release storage input has an invalid size.");
+    }
+    return stats.size;
+  } catch (error) {
+    if (missingAllowed && (error as { code?: string }).code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
 async function projectBackupManager(
   projectsRoot: string,
   project: ProjectRow,
@@ -3192,6 +3541,92 @@ async function newReleaseDirectory(projectsRoot: string, projectId: string, rele
   const directory = path.join(projectsRoot, projectId, "releases", releaseId);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   return directory;
+}
+
+async function deleteReleaseStorage(
+  projectsRoot: string,
+  projectId: string,
+  releaseId: string,
+): Promise<void> {
+  if (!/^[A-Za-z0-9_-]{8,128}$/u.test(projectId) || !/^[A-Za-z0-9_-]{8,128}$/u.test(releaseId)) {
+    throw new Error("Release storage identifier is invalid.");
+  }
+  const fsName = "node:fs/promises";
+  const fs = await import(fsName) as unknown as {
+    rm(path: string, options: { recursive?: boolean; force: true }): Promise<void>;
+  };
+  const parents = await releaseStorageParents(projectsRoot, projectId);
+  if (parents.releases) {
+    const releaseDirectory = await safeChildPath(
+      projectsRoot,
+      `${projectId}/releases/${releaseId}`,
+    );
+    await fs.rm(releaseDirectory, { recursive: true, force: true });
+  }
+  if (parents.backups) await deleteReleaseSnapshotFiles(projectsRoot, projectId, releaseId);
+}
+
+async function deleteReleaseSnapshot(
+  projectsRoot: string,
+  projectId: string,
+  releaseId: string,
+): Promise<void> {
+  if (!/^[A-Za-z0-9_-]{8,128}$/u.test(projectId) || !/^[A-Za-z0-9_-]{8,128}$/u.test(releaseId)) {
+    throw new Error("Release storage identifier is invalid.");
+  }
+  const parents = await releaseStorageParents(projectsRoot, projectId);
+  if (parents.backups) await deleteReleaseSnapshotFiles(projectsRoot, projectId, releaseId);
+}
+
+async function deleteReleaseSnapshotFiles(
+  projectsRoot: string,
+  projectId: string,
+  releaseId: string,
+): Promise<void> {
+  const fsName = "node:fs/promises";
+  const fs = await import(fsName) as unknown as {
+    rm(path: string, options: { force: true }): Promise<void>;
+  };
+  const backupPath = await safeChildPath(
+    projectsRoot,
+    `${projectId}/backups/${releaseId}.sqlite`,
+  );
+  await Promise.all(
+    [backupPath, `${backupPath}-wal`, `${backupPath}-shm`]
+      .map((target) => fs.rm(target, { force: true })),
+  );
+}
+
+async function releaseStorageParents(
+  projectsRoot: string,
+  projectId: string,
+): Promise<{ releases: boolean; backups: boolean }> {
+  const pathName = "node:path";
+  const path = await import(pathName) as unknown as { join(...segments: string[]): string };
+  const projectRoot = await safeChildPath(projectsRoot, projectId);
+  await requireRealDirectory(projectsRoot);
+  await requireRealDirectory(projectRoot);
+  return {
+    releases: await requireRealDirectory(path.join(projectRoot, "releases"), true),
+    backups: await requireRealDirectory(path.join(projectRoot, "backups"), true),
+  };
+}
+
+async function requireRealDirectory(path: string, missingAllowed = false): Promise<boolean> {
+  const fsName = "node:fs/promises";
+  const fs = await import(fsName) as unknown as {
+    lstat(path: string): Promise<{ isDirectory(): boolean; isSymbolicLink(): boolean }>;
+  };
+  try {
+    const stats = await fs.lstat(path);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new Error("Release storage parent must be a real directory.");
+    }
+    return true;
+  } catch (error) {
+    if (missingAllowed && (error as { code?: string }).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function releaseBackupPath(projectsRoot: string, projectId: string, releaseId: string): Promise<string> {

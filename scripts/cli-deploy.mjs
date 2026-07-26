@@ -97,6 +97,7 @@ Platform:
   clank deploy [directory]             Build, package, migrate, and atomically deploy
   clank status                         Show the linked project and active release
   clank releases                       List release history
+  clank releases delete <release-id> --confirm="delete-release <slug> <id>"
   clank logs [--limit=200]             Read application logs
   clank rollback <release-id>          Roll back code after a health check
   clank rollback <id> --restore-data --confirm="restore <slug>"
@@ -555,12 +556,36 @@ async function status() {
   console.log(`Port: ${payload.project.port}`);
 }
 
-async function releases() {
+async function releases(args) {
   const { profile, link } = await linkedContext(process.cwd());
+  const values = positionals(args);
+  if (values[0] === "delete") {
+    const releaseId = values[1];
+    const confirmation = option(args, "confirm");
+    if (!releaseId || !confirmation) {
+      throw new CliError('Usage: clank releases delete <release-id> --confirm="delete-release <slug> <release-id>"');
+    }
+    await platformRequest(
+      profile.server,
+      `/api/projects/${link.projectId}/releases/${encodeURIComponent(releaseId)}`,
+      {
+        method: "DELETE",
+        token: profile.token,
+        body: {
+          confirmation,
+          allowRollbackLoss: flag(args, "allow-rollback-loss"),
+        },
+      },
+    );
+    console.log(`Removed release storage ${releaseId}.`);
+    return;
+  }
+  if (values.length) throw new CliError("Usage: clank releases");
   const payload = await platformRequest(profile.server, `/api/projects/${link.projectId}/releases`, { token: profile.token });
   for (const release of payload.releases) {
-    console.log(`${release.id}  ${release.status.padEnd(8)}  ${release.digest.slice(0, 12)}  ${new Date(release.createdAt).toISOString()}`);
+    console.log(`${release.id}  ${release.status.padEnd(8)}  ${release.artifactAvailable ? `${release.storageBytes} bytes` : "removed"}  ${release.digest.slice(0, 12)}  ${new Date(release.createdAt).toISOString()}`);
   }
+  console.log(`Usage: ${payload.usage.releases}/${payload.limits.releases} artifacts, ${payload.usage.storageBytes}/${payload.limits.storageBytes} bytes.`);
 }
 
 async function logs(args) {
@@ -970,7 +995,7 @@ function positionals(args) {
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
     if (argument.startsWith("--")) {
-      if (!argument.includes("=") && !["--dry-run", "--restore-data", "--local", "--force"].includes(argument)) index++;
+      if (!argument.includes("=") && !["--dry-run", "--restore-data", "--local", "--force", "--allow-rollback-loss"].includes(argument)) index++;
       continue;
     }
     output.push(argument);

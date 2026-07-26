@@ -24,6 +24,7 @@ Any known cross-tenant access, authentication bypass, remote code execution acro
 - Managed ingress performs exact-host HTTP proxying, automatically reconciles customer DNS routing with durable bounded leases, and supplies a restricted Caddy certificate-permission lookup. It does not itself issue or store certificates, change customer DNS, provide a WAF/DDoS edge, or proxy WebSocket upgrades. Put it behind the documented production edge.
 - Local file and email drivers are development/reference implementations. Configure durable object storage and a production email provider for hosted workloads.
 - Verified encrypted backups run automatically every 24 hours by default and coordinate through durable leases, but repositories remain local unless the operator replicates them. The encryption key must be backed up separately.
+- Release files and pre-deploy snapshots are locally retained behind enforced per-project count/byte ceilings. Pre-upgrade releases begin with upload-byte accounting; clean or redeploy old artifacts when exact extracted-size accounting is required.
 - Tailwind's browser build is for development; production apps should compile and serve CSS.
 - Passkey support accepts `none` attestation and does not perform enterprise authenticator attestation policy.
 - Application-specific authorization, privacy, retention, moderation, payments, regulatory compliance, and abuse prevention are not inferred by the framework.

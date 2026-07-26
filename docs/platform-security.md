@@ -52,6 +52,8 @@ The generated local key is onboarding convenience, not protection from a comprom
 - Database paths are checked component-by-component for symlink substitution before backup or migration.
 - Deploy migrations stop the app and take a pre-change snapshot; scheduled recovery points use SQLite's consistent online backup API and are encrypted and verified before publication.
 - Scheduled backup work uses expiring durable claims across control planes, and public metadata omits the host database path.
+- Per-project release count and byte quotas include extracted runtime files and pre-deploy snapshots; cleanup is contained to derived project/release paths.
+- Active artifacts cannot be removed; cleanup requires rollback scope, and deleting the immediate rollback target requires a separate rollback-loss decision that also prunes its now-unusable matching data snapshot.
 - Failure restores prior data/code.
 - Data rollback is narrow and explicitly confirmed.
 

@@ -68,6 +68,11 @@ const platform = await openPlatform({
     projectsPerOrganization: number(process.env.CLANK_MAX_PROJECTS_PER_ORGANIZATION, 10),
     domainsPerProject: number(process.env.CLANK_MAX_DOMAINS_PER_PROJECT, 5),
     metricRetentionDays: number(process.env.CLANK_METRICS_RETENTION_DAYS, 30),
+    releasesPerProject: number(process.env.CLANK_MAX_RELEASES_PER_PROJECT, 50),
+    releaseStorageBytesPerProject: number(
+      process.env.CLANK_MAX_RELEASE_STORAGE_BYTES_PER_PROJECT,
+      20 * 1024 * 1024 * 1024,
+    ),
   },
   backups: {
     intervalMs: backupInterval === "0"
