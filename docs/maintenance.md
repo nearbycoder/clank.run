@@ -39,4 +39,7 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Added durable DNS leases so multiple control planes cannot check and commit the same domain concurrently.
 - [x] Added lookup deadlines, stale-result fencing, shutdown coordination, API status, and dashboard cadence visibility.
 - [x] Removed the remaining console letter mark so no logo treatment remains.
+- [x] Added durable scheduled encrypted backups with cross-control-plane claims, retention, private failure reporting, and graceful draining.
+- [x] Added backup cadence/status, manual creation, and verification to the deployment console without exposing host paths.
+- [x] Added automatic-backup encryption, failure, retention, multi-control-plane, and shutdown regression coverage.
 - [ ] Record the final full-suite, security, conformance, browser, and GitHub CI results in the follow-up pull request.

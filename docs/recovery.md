@@ -39,6 +39,8 @@ Logical manifests are HMAC authenticated and are also bound as AEAD additional d
 
 ## Platform workflow
 
+Clank Deploy creates and verifies an encrypted backup for every deployed project every 24 hours by default. The schedule is durable: due work and expiring lease tokens live in the control database, so multiple control-plane processes cannot back up the same project concurrently. Existing databases are due when automation first starts; a newly deployed database is due after one interval. Manual backups reset the next scheduled time.
+
 ```sh
 clank backup create --reason "before bulk import"
 clank backup list
@@ -50,6 +52,20 @@ clank backup restore <backup-id> \
 Before a platform restore, Clank creates and verifies a safety backup of the current database, stops the application, restores the requested backup, and restarts the active release. If restore or restart fails, it attempts to restore the safety backup before reporting failure.
 
 Backup creation, verification, and restore are audited. The `rollback` project permission is required for mutations; read access can list backup metadata.
+
+The deployment console's **Backups** view shows the cadence, next run, active work, last failure, retained restore points, and manual create/verify actions. Host filesystem paths are deliberately omitted from browser and CLI responses. Unexpected scheduler errors go only to the operator error callback; users receive a fixed failure status without exception text.
+
+Platform retention defaults to 30 backups and 90 days per project. Configure it with:
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `CLANK_BACKUP_INTERVAL_MS` | `86400000` | Automatic cadence; `0` disables scheduling |
+| `CLANK_BACKUP_BATCH_SIZE` | `5` | Maximum projects claimed in one pass |
+| `CLANK_BACKUP_MAX_COUNT` | `30` | Maximum retained backups per project |
+| `CLANK_BACKUP_MAX_AGE_MS` | `7776000000` | Maximum retained age |
+| `CLANK_BACKUP_MAX_DATABASE_BYTES` | `10737418240` | Maximum source database size |
+
+Disabling automation does not disable manual backup, verification, or restore. It also does not delete existing restore points.
 
 ## Recovery objectives
 
@@ -63,5 +79,4 @@ Operators should set and test explicit objectives:
 
 Run `verify` automatically and perform recurring restore drills into a temporary environment. A backup that has never been decrypted and opened is not a proven recovery point.
 
-The built-in repository is local. A remote repository can synchronize completed backup directories because a backup becomes visible only after its encrypted envelope and authenticated manifest are complete.
-
+The built-in repository is local. A remote repository can synchronize completed backup directories because a backup becomes visible only after its encrypted envelope and authenticated manifest are complete. Replicate `projects/<id>/recovery/` off-host; the local schedule alone does not protect against loss of the platform disk or master key.

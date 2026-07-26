@@ -22,6 +22,18 @@ export interface PlatformLimits {
     /** Retention for minute-level ingress metrics. Defaults to 30 days. */
     metricRetentionDays?: number;
 }
+export interface PlatformBackupOptions {
+    /** Encrypted backup cadence. Defaults to 24 hours; false disables automatic backups. */
+    intervalMs?: number | false;
+    /** Maximum projects claimed by one backup pass. Defaults to 5. */
+    batchSize?: number;
+    /** Maximum retained backups per project. Defaults to 30. */
+    maxBackups?: number;
+    /** Maximum backup age. Defaults to 90 days. */
+    maxAgeMs?: number;
+    /** Maximum source database size accepted by the backup engine. Defaults to 10 GiB. */
+    maxDatabaseBytes?: number;
+}
 export interface ClankPlatformOptions {
     dataDirectory: string;
     publicUrl: string;
@@ -40,6 +52,7 @@ export interface ClankPlatformOptions {
     deviceCodeLifetimeMs?: number;
     accessTokenLifetimeMs?: number;
     limits?: PlatformLimits;
+    backups?: PlatformBackupOptions;
     ingress?: {
         enabled?: boolean;
         baseDomain?: string;

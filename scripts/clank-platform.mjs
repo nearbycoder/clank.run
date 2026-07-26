@@ -35,6 +35,7 @@ const customDomainTarget = environment("CLANK_CUSTOM_DOMAIN_TARGET", "PROACT_CUS
 const customDomainAddresses = list(environment("CLANK_CUSTOM_DOMAIN_ADDRESSES", "PROACT_CUSTOM_DOMAIN_ADDRESSES"));
 const ingressEnabled = environment("CLANK_INGRESS", "PROACT_INGRESS") === "1" || Boolean(ingressBaseDomain);
 const domainRecheckInterval = process.env.CLANK_DOMAIN_RECHECK_INTERVAL_MS;
+const backupInterval = process.env.CLANK_BACKUP_INTERVAL_MS;
 const ingress = ingressEnabled ? {
   enabled: true,
   ...(ingressBaseDomain ? { baseDomain: ingressBaseDomain } : {}),
@@ -68,6 +69,15 @@ const platform = await openPlatform({
     domainsPerProject: number(process.env.CLANK_MAX_DOMAINS_PER_PROJECT, 5),
     metricRetentionDays: number(process.env.CLANK_METRICS_RETENTION_DAYS, 30),
   },
+  backups: {
+    intervalMs: backupInterval === "0"
+      ? false
+      : number(backupInterval, 24 * 60 * 60_000),
+    batchSize: number(process.env.CLANK_BACKUP_BATCH_SIZE, 5),
+    maxBackups: number(process.env.CLANK_BACKUP_MAX_COUNT, 30),
+    maxAgeMs: number(process.env.CLANK_BACKUP_MAX_AGE_MS, 90 * 24 * 60 * 60_000),
+    maxDatabaseBytes: number(process.env.CLANK_BACKUP_MAX_DATABASE_BYTES, 10 * 1024 * 1024 * 1024),
+  },
   ...(ingress ? { ingress } : {}),
   onError: (error) => console.error("[platform]", error),
 });
@@ -89,6 +99,7 @@ console.log(`Clank deployment platform: ${publicUrl}`);
 console.log(`Platform data: ${platform.dataDirectory}`);
 console.log(`Runner: ${runner.kind}`);
 console.log(`Managed ingress: ${ingressEnabled ? "enabled" : "disabled"}`);
+console.log(`Automatic backups: ${backupInterval === "0" ? "disabled" : "enabled"}`);
 
 let closing;
 const close = async () => {

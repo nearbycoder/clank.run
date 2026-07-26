@@ -19,6 +19,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Enforced line, branch, and function coverage floors plus a documentation audit that verifies local links, guide indexing, declaration synchronization, and package export targets.
 - Storage-backed `/healthz` and `/readyz` probes alongside the process-only `/livez` endpoint.
 - Bounded automatic custom-domain routing reconciliation with durable cross-control-plane leases, lookup deadlines, operator configuration, and dashboard status.
+- Automatic verified encrypted database backups with durable cross-control-plane leases, configurable cadence and retention, private failure reporting, and dashboard controls.
 
 ### Fixed
 
@@ -27,6 +28,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Platform signal handling now closes both the HTTP listener and control-plane state, reports shutdown failures, and enforces a 30-second termination deadline.
 - Project navigation now resets scroll position and closes the mobile drawer; the detail tab row stays within narrow viewports without a page-level horizontal scrollbar or clipped breadcrumb, and the console explicitly serves no favicon asset.
 - The deployment console no longer renders or requests a logo asset or letter-mark treatment.
+- Backup API responses no longer expose private host database paths.
 - Managed ingress now fixes the upstream origin before applying a request path and streaming-bounds bodies without `Content-Length`, closing scheme-relative SSRF and unbounded-buffer paths.
 - Pending custom-domain assignments can no longer be moved between projects; platform-owned DNS namespaces are reserved.
 - Refreshed dashboard sessions now render one consistent authentication state and return to sign-in when a session expires.
