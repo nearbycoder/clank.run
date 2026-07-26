@@ -1,0 +1,12 @@
+{
+  "name": "clank-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs && node --disable-warning=ExperimentalWarning dist/server.js",
+    "doctor": "node ../scripts/clank.mjs doctor .",
+    "deploy:check": "node ../scripts/clank.mjs deploy . --dry-run",
+    "deploy": "node ../scripts/clank.mjs deploy ."
+  }
+}
