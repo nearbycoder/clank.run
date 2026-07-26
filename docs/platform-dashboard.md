@@ -1,6 +1,6 @@
 # Deployment dashboard, quotas, and domains
 
-Clank Deploy includes a dependency-free browser console for operating sites, traffic, releases, logs, and custom domains. It is served by the same authenticated control plane as the CLI API; there is no separate dashboard service or browser package to install.
+Clank includes a dependency-free browser console for operating projects, traffic, releases, logs, and custom domains. It is served by the same authenticated control plane as the CLI API; there is no separate dashboard service or browser package to install.
 
 ## Dashboard
 
@@ -11,7 +11,7 @@ The console uses normal, refresh-safe URLs rather than keeping navigation only i
 | URL | View |
 | --- | --- |
 | `/login`, `/signup`, `/invite` | Account access and invitation-assisted registration |
-| `/overview` | Account-wide site and traffic summary |
+| `/overview` | Account-wide project and traffic summary |
 | `/activity` | Authorized workspace audit history |
 | `/workspaces/<workspace-slug>/people` | Members, roles, and invitations for one workspace |
 | `/projects/<project-slug>/performance` | Project traffic and latency, with `?range=1h\|24h\|7d\|30d` |
@@ -30,16 +30,23 @@ canonical URL while preserving the query string.
 
 The overview shows:
 
-- sites and current supervisor state;
+- projects and current supervisor state;
 - requests, 5xx error rate, and known ingress bytes for the last 24 hours;
-- enforced site capacity across the account's organizations; and
-- a site picker with request and p95-latency summaries.
+- enforced project capacity across the account's organizations; and
+- a searchable project list with request and p95-latency summaries.
+
+Selecting a project switches the desktop sidebar to contextual project navigation with an explicit
+return to **All projects**. Narrow screens use the same links in a horizontally scrollable tab bar
+and keep the off-canvas sidebar out of the keyboard and accessibility trees while it is closed.
+Each project URL loads shared project metadata plus only the selected view's bounded dataset. For
+example, opening Performance requests metrics but does not also download domains, releases,
+backups, and logs.
 
 The workspace Activity view shows append-only API history across every organization where the current owner, administrator, or developer role permits audit access. Events identify their action, target, actor, timestamp, and expandable safe metadata. Pagination uses a descending event-ID cursor, so concurrent new events do not duplicate or skip older pages. Deleted projects remain named and visibly marked as deleted.
 
-The **People** view creates and switches between the account's workspaces, then shows the current role, members, pending invitations, and site usage. The creation control reflects the transactionally enforced owned-workspace quota and selects the new workspace immediately. A signed-in recipient can paste an email-bound token to join without using the CLI. Owners and administrators can invite by email, copy the single-use token once, revoke pending invitations, change roles, remove collaborators, or leave when last-owner protection permits. Pending invitation addresses are hidden from developers and viewers, including email redaction in developer activity metadata; disabled controls reflect server capabilities, but every operation is authorized again by the API.
+The **People** view creates and switches between the account's workspaces, then shows the current role, members, pending invitations, and project usage. The creation control reflects the transactionally enforced owned-workspace quota and selects the new workspace immediately. A signed-in recipient can paste an email-bound token to join without using the CLI. Owners and administrators can invite by email, copy the single-use token once, revoke pending invitations, change roles, remove collaborators, or leave when last-owner protection permits. Pending invitation addresses are hidden from developers and viewers, including email redaction in developer activity metadata; disabled controls reflect server capabilities, but every operation is authorized again by the API.
 
-Each site has performance, domains, deployments, backups, logs, and settings views. The performance chart supports `1h`, `24h`, `7d`, and `30d` windows. The domains view walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. The deployments view shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. The backups view exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. The settings view gives owners and administrators a confirmation-gated way to permanently delete the site and reclaim its quota. A project without a first deployment reports that its isolated database is not available instead of failing the whole project screen.
+Each project has performance, deployments, domains, logs, backups, and settings views. The project header shows its production URL, runtime state, workspace, and current role. Performance identifies the active production release, presents the exact `clank deploy` next step when no release exists, and supports `1h`, `24h`, `7d`, and `30d` metric windows. Domains walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. Deployments shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. Backups exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. Settings makes operational identity and database provisioning state visible, then gives owners and administrators a confirmation-gated way to permanently delete the project and reclaim its quota. A project without a first deployment reports that its isolated database will be provisioned on first deploy instead of failing the whole screen.
 
 The dashboard uses the same organization membership and project-permission checks as the CLI. API values are inserted with DOM `textContent` or attributes rather than HTML parsing. The page has a nonce-bound script, restrictive CSP, no-store responses, framing denial, and no third-party assets.
 
@@ -50,8 +57,8 @@ Limits are operator configuration, not cosmetic dashboard values:
 | Environment variable | Default | Enforcement boundary |
 | --- | ---: | --- |
 | `CLANK_MAX_ORGANIZATIONS_PER_ACCOUNT` | `5` | Account-owned organization count and insert in one SQLite transaction |
-| `CLANK_MAX_PROJECTS_PER_ACCOUNT` | `10` | Account-owned site count and insert in one SQLite transaction |
-| `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Site count and insert in one SQLite transaction |
+| `CLANK_MAX_PROJECTS_PER_ACCOUNT` | `10` | Account-owned project count and insert in one SQLite transaction |
+| `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Project count and insert in one SQLite transaction |
 | `CLANK_MAX_DOMAINS_PER_PROJECT` | `5` | Domain assignment and count in one SQLite transaction |
 | `CLANK_METRICS_RETENTION_DAYS` | `30` | Minute ingress-metric retention |
 | `CLANK_MAX_RELEASES_PER_PROJECT` | `50` | Available release-artifact count (valid range 2–100) checked under the distributed project lock |
@@ -61,7 +68,7 @@ The API returns `ORGANIZATION_LIMIT_REACHED`, `ACCOUNT_PROJECT_LIMIT_REACHED`, `
 
 These are fixed installation-wide ceilings today. Account and organization limits are checked in the same SQLite write transactions as their inserts. Release limits are rechecked while holding the project's durable cross-control-plane lease, so concurrent deploys cannot bypass capacity. A hosted service can later resolve plan-specific limits before entering those transactions; billing state must never be the only enforcement layer.
 
-A successful permanent site deletion immediately releases the account/organization site count, slug, application port, and custom-domain assignments. The deletion path uses the same durable per-project lock as deployment and backup work, then removes platform-managed storage and control metadata. Exact confirmation and explicit data-loss acknowledgement are required; only an owner/admin account session or account-wide token can perform it.
+A successful permanent project deletion immediately releases the account/organization project count, slug, application port, and custom-domain assignments. The deletion path uses the same durable per-project lock as deployment and backup work, then removes platform-managed storage and control metadata. Exact confirmation and explicit data-loss acknowledgement are required; only an owner/admin account session or account-wide token can perform it.
 
 ## Release storage lifecycle
 
@@ -157,7 +164,7 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 
 ## Browser/API endpoints
 
-- `GET /api/dashboard` — account, organizations, enforced limits, sites, 24-hour summaries, and domain-edge configuration.
+- `GET /api/dashboard` — account, organizations, enforced limits, projects, 24-hour summaries, and domain-edge configuration.
 - `GET /api/audit?limit=100&before=<event-id>&organizationId=<id>` — role-filtered, cursor-paginated workspace activity including deleted projects.
 - `POST /api/organizations` — create an owned workspace under the account quota.
 - `GET /api/organizations/:id` — workspace capabilities, member roster, and administrator-only active invitation metadata.
@@ -166,10 +173,10 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `DELETE /api/organizations/:id/invitations/:invitationId` — revoke an active invitation.
 - `PATCH /api/organizations/:id/members/:userId` — change a member role with last-owner and owner-only protections.
 - `DELETE /api/organizations/:id/members/:userId` — leave or administratively remove membership and revoke workspace-scoped credentials.
-- `GET /api/projects/:id` — project status, usage, current organization role, and whether the principal may delete the site.
+- `GET /api/projects/:id` — project status, usage, current organization role, and whether the principal may delete the project.
 - `DELETE /api/projects/:id` — owner/admin-only permanent deletion with `{ "confirmation": "delete-site <slug>", "acknowledgeDataLoss": true }`.
 - `GET /api/projects/:id/metrics?range=24h` — bounded metric summary and downsampled points.
-- `GET /api/projects/:id/domains` — ownership, routing, observed DNS, TLS state, site limit, and reconciliation status.
+- `GET /api/projects/:id/domains` — ownership, routing, observed DNS, TLS state, project limit, and reconciliation status.
 - `POST /api/projects/:id/domains` — reserve a hostname and create the ownership challenge.
 - `POST /api/projects/:id/domains/:domainId/verify` — verify TXT ownership and refresh routing.
 - `POST /api/projects/:id/domains/:domainId/check` — refresh routing without changing ownership.
