@@ -194,39 +194,67 @@ function HomePage() {
   return (
     <div class="home">
       <section class="home-hero">
-        <div class="home-eyebrow"><span /> Framework and deployment platform</div>
-        <h1>Build software that<br /><em>explains itself.</em></h1>
-        <p>Clank is a dependency-free, full-stack TypeScript framework designed for people and coding agents. Start with one command, keep live SQLite state, and deploy the complete application through the same open-source control plane.</p>
+        <div class="home-eyebrow"><span /> Official npm package · Clank {manifest.frameworkVersion}</div>
+        <h1>Install one package.<br /><em>Ship the whole app.</em></h1>
+        <p><code>@clank.run/framework</code> includes the reactive TypeScript runtime, compiler, authenticated starter, live SQLite data, and deployment CLI. Create a working full-stack app without cloning this repository or assembling a toolchain.</p>
         <div class="hero-actions">
-          <a class="primary-action" href="/docs/getting-started">Start building <span>→</span></a>
-          <a class="secondary-action" href="/docs/cli">Deploy with the CLI</a>
+          <a class="primary-action" href="/docs/getting-started">Get started with npm <span>→</span></a>
+          <a class="secondary-action" href="/docs/application-recipes">Choose an app shape</a>
         </div>
         <div class="install-command">
           <span class="command-prompt">$</span>
-          <code>clank create my-app</code>
-          <button type="button" data-copy-text="clank create my-app" aria-label="Copy create command">Copy</button>
+          <code>npm install --global @clank.run/framework</code>
+          <button type="button" data-copy-text="npm install --global @clank.run/framework" aria-label="Copy npm install command">Copy</button>
         </div>
       </section>
 
-      <section class="home-proof" aria-label="Framework properties">
-        <article><strong>0</strong><span>runtime dependencies</span></article>
-        <article><strong>1</strong><span>typed app contract</span></article>
-        <article><strong>Live</strong><span>cross-session updates</span></article>
-        <article><strong>Atomic</strong><span>deploy and rollback</span></article>
+      <section class="home-proof" aria-label="Package properties">
+        <article><strong>1</strong><span>application dependency</span></article>
+        <article><strong>0</strong><span>transitive dependencies</span></article>
+        <article><strong>Built in</strong><span>auth, SSR, SQLite, live sync</span></article>
+        <article><strong>Included</strong><span>compiler and deploy CLI</span></article>
       </section>
 
       <section class="home-section">
         <div class="section-heading">
-          <span>01 / Mental model</span>
-          <h2>One stack, end to end.</h2>
-          <p>The browser, server, database, agent contract, and deployment artifact share the same explicit TypeScript model.</p>
+          <span>01 / Quick start</span>
+          <h2>Running in four commands.</h2>
+          <p>The npm package creates a complete application with safe defaults. Install, scaffold, resolve the one dependency, and start the server.</p>
+        </div>
+        <div class="quickstart">
+          <ol>
+            <li><span>01</span><div><strong>Install the CLI</strong><code>npm install --global @clank.run/framework</code></div></li>
+            <li><span>02</span><div><strong>Create an app</strong><code>clank create my-app</code></div></li>
+            <li><span>03</span><div><strong>Install its locked package</strong><code>cd my-app &amp;&amp; npm install</code></div></li>
+            <li><span>04</span><div><strong>Run it locally</strong><code>npm run dev</code></div></li>
+          </ol>
+          <aside>
+            <span class="quickstart-label">The starter is already wired</span>
+            <ul>
+              <li><span aria-hidden="true">✓</span> Registration and secure sessions</li>
+              <li><span aria-hidden="true">✓</span> Private user-owned SQLite data</li>
+              <li><span aria-hidden="true">✓</span> SSR, hydration, and live updates</li>
+              <li><span aria-hidden="true">✓</span> Tailwind utility styling</li>
+              <li><span aria-hidden="true">✓</span> Migrations and deployment config</li>
+              <li><span aria-hidden="true">✓</span> Human and agent instructions</li>
+            </ul>
+            <a href="/docs/getting-started">Follow the complete walkthrough <span>→</span></a>
+          </aside>
+        </div>
+      </section>
+
+      <section class="home-section">
+        <div class="section-heading">
+          <span>02 / One package</span>
+          <h2>Everything needed to build.</h2>
+          <p>The browser, server, database, agent contract, and deployment artifact use one versioned TypeScript package.</p>
         </div>
         <div class="architecture-map">
-          <a href="/docs/rendering"><small>UI</small><strong>Signals + TSX</strong><span>Fine-grained DOM updates</span></a>
+          <a href="/docs/rendering"><small>Runtime</small><strong>Signals + TSX</strong><span>Typed UI and fine-grained updates</span></a>
           <span class="map-arrow">→</span>
-          <a href="/docs/full-stack"><small>Server</small><strong>Fetch + SSR</strong><span>Typed routes and hydration</span></a>
+          <a href="/docs/auth"><small>Starter</small><strong>Auth + live data</strong><span>SSR and user-owned SQLite</span></a>
           <span class="map-arrow">→</span>
-          <a href="/docs/database"><small>Data</small><strong>SQLite + revisions</strong><span>Transactional live queries</span></a>
+          <a href="/docs/cli"><small>CLI</small><strong>Build + verify</strong><span>Compiler, doctor, and artifacts</span></a>
           <span class="map-arrow">→</span>
           <a href="/docs/deployment-platform"><small>Ship</small><strong>Verified releases</strong><span>Migrate, health-check, activate</span></a>
         </div>
@@ -234,15 +262,15 @@ function HomePage() {
 
       <section class="home-section">
         <div class="section-heading">
-          <span>02 / Choose a path</span>
-          <h2>Documentation with an opinion.</h2>
-          <p>Each guide states the contract, safe defaults, failure boundaries, and commands an agent can execute.</p>
+          <span>03 / Learn by task</span>
+          <h2>Continue from a working app.</h2>
+          <p>Start with the generated application, then open only the guide needed for the next product change.</p>
         </div>
         <div class="path-grid">
-          <a href="/docs/getting-started"><span>Start</span><strong>Create the first app</strong><p>Project shape, compiler, examples, and the shortest path to a working full-stack application.</p><i>Read the guide →</i></a>
-          <a href="/docs/architecture"><span>Understand</span><strong>See how Clank works</strong><p>Reactive graph, rendering, backend contracts, SQLite revisions, and runtime boundaries.</p><i>Read the guide →</i></a>
+          <a href="/docs/rendering"><span>Build the UI</span><strong>Components and reactivity</strong><p>Edit typed TSX, add signals and forms, preserve SSR, and style with Tailwind.</p><i>Open the framework guide →</i></a>
+          <a href="/docs/full-stack"><span>Add product data</span><strong>Backend, auth, and SQLite</strong><p>Declare validated functions and user-owned tables with inferred client types and live queries.</p><i>Open the full-stack guide →</i></a>
           <a href="/docs/cli"><span>Deploy</span><strong>Ship from the terminal</strong><p>Login, projects, secrets, migrations, verified artifacts, logs, backups, and rollback.</p><i>Read the guide →</i></a>
-          <a href="/docs/blueprints"><span>Generate</span><strong>Build with an agent</strong><p>Static blueprints, deterministic plans, agent-readable help, and reproducible generation.</p><i>Read the guide →</i></a>
+          <a href="/docs/ai-first"><span>Use an agent</span><strong>Describe the product</strong><p>Keep important controls semantic, actions explicit, generation deterministic, and verification executable.</p><i>Open the agent guide →</i></a>
         </div>
       </section>
 
@@ -261,9 +289,9 @@ function HomePage() {
 
       <section class="home-section guide-directory">
         <div class="section-heading">
-          <span>03 / Complete reference</span>
+          <span>04 / Complete reference</span>
           <h2>Every maintained guide.</h2>
-          <p>{docs.length} documents and {docs.reduce((sum, doc) => sum + doc.words, 0).toLocaleString()} words, built directly from the repository.</p>
+          <p>{docs.length} documents and {docs.reduce((sum, doc) => sum + doc.words, 0).toLocaleString()} words, versioned with the npm package and built from the canonical source.</p>
         </div>
         <div class="directory-grid">
           <For each={manifest.groups} by="id">

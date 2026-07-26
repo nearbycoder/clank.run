@@ -1,183 +1,239 @@
-# Getting started
+# Getting started with the npm package
+
+Install one npm package, create an authenticated full-stack application, and run it locally. You do not need to clone the Clank repository or assemble a framework toolchain.
 
 ## Requirements
 
-- Node.js 22.16 or newer for the zero-package TypeScript build and built-in SQLite backup support.
-- A modern browser with ES modules, Proxy, AbortController, and the DOM APIs.
+- Node.js 22.16 or newer.
+- npm 10 or newer.
+- A modern browser.
 
-For the published CLI and framework:
+The official package is `@clank.run/framework`. The unscoped `clank` package on npm is a different project.
+
+## 1. Install Clank
+
+Install the package globally to make the `clank` command available in every project:
 
 ```sh
 npm install --global @clank.run/framework
 clank --version
 ```
 
-There is no install step in this repository. The `package.json` contains no dependency fields. Run:
+The package contains the framework runtime, TypeScript and TSX compiler, project starter, development commands, deployment client, and type declarations. It has no transitive npm dependencies.
+
+Prefer a project-local CLI? Install the same package in an existing project and run its binary through npm:
 
 ```sh
-npm run build
-npm run dev
+npm install @clank.run/framework
+npx clank --version
 ```
 
-The build script first lowers TSX into fine-grained Clank bindings, then uses Node's built-in `stripTypeScriptTypes` transform. It writes browser modules to `dist/` without bundling them.
+The rest of this guide uses the global `clank` command.
 
-## Project shape
-
-```text
-src/                    framework TypeScript
-dist/                   generated browser modules
-examples/hello/         complete interactive application
-examples/todo/          focused keyed todo application
-examples/commerce/      client commerce catalog, cart, and checkout
-examples/dashboard/     responsive SaaS admin and data table
-examples/booking/       multi-step travel booking flow
-examples/fullstack/     shared SSR/client todo with SQLite live sync
-examples/auth-todo/     auth-first SSR todo with owned data and live sync
-scripts/tsx.mjs         dependency-free fine-grained TSX transform
-scripts/clank.mjs      public build/watch CLI
-scripts/build.mjs       repository build orchestration
-scripts/dev.mjs         static development server and watcher
-tests/                  Node test-runner suites
-docs/                   framework guides
-```
-
-## Create an agent-ready application
-
-The default scaffold is a complete authenticated, live, deployable app rather than an empty component:
+## 2. Create an application
 
 ```sh
 clank create my-app
 cd my-app
 npm install
-npm run doctor
+```
+
+`clank create` starts with a working product rather than a blank component. The generated application already has:
+
+- email and password registration, login, logout, secure sessions, and CSRF protection;
+- private per-user Todo data in SQLite;
+- server rendering and node-preserving browser hydration;
+- live updates across tabs and browsers;
+- validated queries and mutations with inferred TypeScript types;
+- Tailwind utility styling;
+- an initial immutable database migration;
+- health checks and deterministic deployment configuration; and
+- `README.md` and `AGENTS.md` instructions for people and coding agents.
+
+The generated `package.json` has one application dependency:
+
+```json
+{
+  "dependencies": {
+    "@clank.run/framework": "^0.7.0"
+  }
+}
+```
+
+The scaffold uses the version of the CLI that created it. Commit the generated lockfile so every human, agent, and deployment uses the same resolved package.
+
+## 3. Run it
+
+```sh
 npm run dev
 ```
 
-It includes `README.md` for a person and `AGENTS.md` with commands, file ownership, security invariants, migration rules, and a definition of done for a coding agent. Before a registry release exists, contributors can use the current checkout directly:
+Open `http://127.0.0.1:3000`, register an account, and create a Todo. Open the same URL in a second browser and sign in with the same account; committed changes update both sessions.
+
+The starter stores local data in `app.sqlite`. That file, generated JavaScript, and local deployment state are ignored by Git.
+
+## Your application files
+
+This is the structure of the app created from npm, not the structure of the Clank framework repository:
+
+```text
+my-app/
+├── src/
+│   ├── backend.ts       auth, database schema, queries, and mutations
+│   ├── view.tsx         accessible server/client UI
+│   ├── app.tsx          hydration, live data, and browser interactions
+│   └── server.tsx       routes, SSR, security headers, and static files
+├── migrations/
+│   └── 0001_app_metadata.sql
+├── AGENTS.md            app map, invariants, and definition of done
+├── README.md            human setup and deployment instructions
+├── clank.deploy.json    build, database, health, and artifact contract
+├── package.json         scripts and the Clank package dependency
+└── tsconfig.json
+```
+
+Start in `src/view.tsx` when changing what the app looks like. Put trusted data rules in `src/backend.ts`, browser coordination in `src/app.tsx`, and HTTP or SSR behavior in `src/server.tsx`. Never hand-edit `dist/`; Clank generates it.
+
+## Everyday commands
+
+The generated npm scripts keep the normal workflow short:
 
 ```sh
-node /path/to/clank/scripts/clank.mjs create my-app --framework=local
+npm run dev           # build and start the local server
+npm run build         # compile src/ into dist/
+npm run doctor        # check Node, config, migrations, login, and project link
+npm run deploy:check  # build and verify an offline deployment artifact
+npm run deploy        # build, migrate, health-check, and deploy
 ```
 
-Run `clank help --json` for the machine-readable CLI contract and `clank doctor --json` for readiness diagnostics.
-
-## HTML entry point
-
-```html
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>My Clank app</title>
-  </head>
-  <body>
-    <main id="app"></main>
-    <script type="module" src="/app.js"></script>
-  </body>
-</html>
-```
-
-## Application entry point
-
-```tsx
-import { render, signal } from "/dist/index.js";
-
-const name = signal("world");
-
-function App() {
-  return (
-    <main class="mx-auto max-w-xl p-8">
-      <h1 class="text-3xl font-bold">Hello, {name.value}</h1>
-      <input bind:value={name} agentId="name" agentLabel="Name" />
-    </main>
-  );
-}
-
-const dispose = render(document.querySelector("#app")!, <App />);
-```
-
-`render()` returns a disposer. Call it when the application root should unmount.
-
-## Compile your own app
-
-The published package includes a `clank` executable. It compiles `.ts` and `.tsx`, copies static assets, and can watch the source tree:
+You can call the package CLI directly when you need more control:
 
 ```sh
 clank build src dist
 clank watch src dist
+clank doctor --json
+clank help --json
 ```
 
-The default generated TSX import is `@clank.run/framework`, the official npm package. For direct browser modules without an import map, point it at the served framework module:
+The JSON forms are stable interfaces for coding agents and automation.
+
+## Make the first change
+
+Components are ordinary functions that return typed TSX. Reactive values use `.value`, and Clank updates only the DOM bindings that read them:
+
+```tsx
+/* @clankImportSource @clank.run/framework */
+import { computed, signal } from "@clank.run/framework";
+
+export function Counter() {
+  const count = signal(0);
+  const label = computed(() => `Count: ${count.value}`);
+
+  return (
+    <button
+      class="rounded-lg bg-slate-950 px-4 py-2 font-semibold text-white"
+      onClick={() => count.value++}
+      agentId="increment"
+      agentLabel="Increase count"
+    >
+      {label.value}
+    </button>
+  );
+}
+```
+
+The `@clankImportSource` comment tells Clank's compiler where JSX primitives come from. `agentId` gives an important control a stable machine-readable identity, while `agentLabel` explains its purpose without changing the visible UI.
+
+## Add data safely
+
+The starter's `src/backend.ts` is the source of truth for data and authorization:
+
+```ts
+import { defineDatabase, defineTable, s } from "@clank.run/framework";
+
+export const schema = defineDatabase({
+  todos: defineTable({
+    title: s.string({ min: 1, max: 160 }),
+    done: s.boolean(),
+  }).owned(),
+});
+```
+
+`.owned()` scopes records to the signed-in user. Define validated queries and mutations beside the schema; the browser client infers their arguments and results without a code-generation step. Read [Full-stack applications](full-stack.md), [Authentication](auth.md), and [Database revisions and correctness](database.md) before expanding the starter's data model.
+
+Add a new numbered SQL file for every schema change:
+
+```text
+migrations/0002_add_due_dates.sql
+```
+
+Never edit or reorder an applied migration. Clank checks migration history before activation and backs up the database before production migrations. See [SQLite migrations](migrations.md).
+
+## Use Tailwind
+
+The starter is already configured for Tailwind utility classes, so you can edit `class` values in TSX immediately. Clank does not wrap or reinterpret Tailwind; classes are emitted as normal HTML attributes. For a compiled production stylesheet, follow [Tailwind CSS](tailwind.md).
+
+## Build with an agent
+
+Open the generated directory in your coding agent and describe the product you want. For example:
+
+```text
+Turn this starter into a shared meal planner. Keep authentication, make every
+record user-owned, add immutable migrations, preserve live updates, and run
+npm run build, npm run doctor, and npm run deploy:check when finished.
+```
+
+The generated `AGENTS.md` tells the agent where each concern belongs, which security and migration invariants it must preserve, and how to prove the app is deployable. The documentation is also available as [a compact agent map](https://docs.clank.run/llms.txt), [the complete Markdown corpus](https://docs.clank.run/llms-full.txt), and [structured JSON](https://docs.clank.run/api/docs.json).
+
+## Deploy
+
+Sign in once, check the app, and deploy:
 
 ```sh
-clank build src dist --jsx-import-source=/vendor/clank/index.js
+clank login --server=https://clank.run
+clank whoami
+npm run doctor
+npm run deploy
 ```
 
-You can override that choice in an individual `.tsx` file with `@clankImportSource` in its leading comment. Clank intentionally uses its own pragma name so TypeScript does not look for a conventional `jsx-runtime` package.
+The first deployment creates and links an isolated project automatically. The CLI builds locally, packages the exact framework runtime and application files, verifies their digests, applies migrations, waits for the health check, and then activates the release.
 
-For editor type checking, use `"jsx": "preserve"` and include Clank's declarations. The compiler itself performs syntax lowering rather than static type checking; run `tsc --noEmit` in CI when a TypeScript compiler is available.
+Use `npm run deploy:check` whenever you only want to build and inspect the artifact. It does not require login or network access. Continue with the [Deployment CLI](cli.md) for custom domains, secrets, logs, rollback, backups, organizations, and automation.
 
-## Development commands
+## Package imports
 
-```sh
-npm run build   # compile TypeScript with Node itself
-npm test        # build, then run all tests
-npm run check   # build, assert zero dependencies, run tests
-npm run dev     # rebuild on changes and serve the example
+Import from the root for most apps:
+
+```ts
+import {
+  createApp,
+  defineBackend,
+  renderDocument,
+  signal,
+} from "@clank.run/framework";
 ```
 
-## Import boundaries
-
-The root module exports everything. Smaller public paths are also available:
+Focused public entry points are also available:
 
 ```ts
 import { signal } from "@clank.run/framework/core";
-import { h, render } from "@clank.run/framework/dom";
+import { render } from "@clank.run/framework/dom";
 import { createRouter } from "@clank.run/framework/router";
-import { defineAction, s } from "@clank.run/framework/ai";
 import { createForm } from "@clank.run/framework/forms";
-import { createDialog, createTabs } from "@clank.run/framework/ui";
-import { createApp, json } from "@clank.run/framework/server";
-import { defineAuth, createAuthClient } from "@clank.run/framework/auth";
-import { defineBackend, defineDatabase, defineTable } from "@clank.run/framework/backend";
-import { renderDocument } from "@clank.run/framework/ssr";
-import { serve, staticFiles } from "@clank.run/framework/node";
-import { compile, transformTSX } from "@clank.run/framework/compiler";
+import { defineAuth } from "@clank.run/framework/auth";
+import { defineBackend } from "@clank.run/framework/backend";
+import { createApp } from "@clank.run/framework/server";
+import { serve } from "@clank.run/framework/node";
 ```
 
-No API mutates global state merely by being imported.
+Imports do not mutate global state. The package ships its TypeScript declarations and supports strict editor type checking with `"jsx": "preserve"`.
 
-Clank's JSX declarations type native element properties, event `currentTarget`, reactive attributes, bind/ref/directive protocols, ARIA/data attributes, and hyphenated custom elements. Misspelled native tags fail strict TypeScript rather than silently becoming unknown elements.
+## Next steps
 
-## Todo example
-
-The focused [todo source](../examples/todo/app.tsx) demonstrates the normal application shape: signals for state, computed derivations, a keyed `For`, ordinary event handlers, `bind:value`, semantic agent metadata, and Tailwind utility classes. After `npm run dev`, it is served at `/examples/todo/index.html`.
-
-## Full-stack example
-
-```sh
-npm run dev:fullstack
-```
-
-The [full-stack todo](../examples/fullstack/backend.ts) declares its document schema and query/mutation tree once. The shared [view](../examples/fullstack/view.tsx) renders on the server and hydrates in the browser. The [server](../examples/fullstack/server.tsx) uses SQLite, the Fetch router, the Node adapter, and the Tailwind browser build without adding a package dependency. See the [full-stack guide](full-stack.md) for the complete data flow.
-
-## Auth-first example
-
-```sh
-npm run dev:auth
-```
-
-The [authenticated Todo](../examples/auth-todo/backend.ts) adds `defineAuth()`, marks its private table `.owned()`, and uses `createClient<typeof backend>()` in the browser. The framework supplies registration, login, sessions, CSRF headers, an accessible default auth screen, SSR auth state, private query scoping, and live multi-tab updates.
-
-Read [Authentication](auth.md) before adding custom profile fields, roles, or production deployment settings.
-
-## Complete interface variants
-
-Run `npm run dev`, then open:
-
-- `/examples/commerce/`
-- `/examples/dashboard/`
-- `/examples/booking/`
-
-They exercise the form and headless UI APIs across product catalog, administrative, and multi-step workflow designs. See [Application recipes](application-recipes.md) for how to choose the corresponding architecture.
+- [Application recipes](application-recipes.md): choose the right client, server, data, and deployment shape.
+- [Reactivity](reactivity.md): learn signals, computed values, effects, stores, resources, and transactions.
+- [Rendering and components](rendering.md): understand TSX, keyed lists, SSR, and hydration.
+- [Routing](routing.md): add URL-driven pages, parameters, loaders, guards, and navigation.
+- [Authentication](auth.md): customize profiles, sessions, authorization, and the default auth UI.
+- [Deployment CLI](cli.md): ship and operate the application.
+- [Contributing to Clank](../CONTRIBUTING.md): clone the framework repository only when you want to change Clank itself.

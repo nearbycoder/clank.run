@@ -70,7 +70,10 @@ test("documentation site serves every human and agent contract securely", async 
   assert.match(response.headers.get("content-security-policy") ?? "", /default-src 'self'/u);
   assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/u);
   assert.match(response.headers.get("x-content-type-options") ?? "", /nosniff/u);
-  assert.match(home, /Build software that/u);
+  assert.match(home, /Install one package/u);
+  assert.match(home, /npm install --global @clank\.run\/framework/u);
+  assert.match(home, /Running in four commands/u);
+  assert.match(home, /Registration and secure sessions/u);
   assert.match(home, /Machine-readable by default/u);
   assert.match(home, /<link rel="canonical" href="https:\/\/docs\.clank\.run\/"/u);
 
@@ -99,6 +102,13 @@ test("documentation site serves every human and agent contract securely", async 
   assert.match(cli, /Deployment CLI/u);
   assert.match(cli, /Raw Markdown/u);
   assert.match(cli, /On this page/u);
+
+  const gettingStarted = await (await fetch(`${origin}/docs/getting-started`)).text();
+  assert.match(gettingStarted, /Getting started with the npm package/u);
+  assert.match(gettingStarted, /You do not need to clone the Clank repository/u);
+  assert.match(gettingStarted, /This is the structure of the app created from npm/u);
+  assert.match(gettingStarted, /src\/backend\.ts/u);
+  assert.match(gettingStarted, /npm run deploy:check/u);
 
   const redirect = await fetch(`${origin}/docs`, { redirect: "manual" });
   assert.equal(redirect.status, 308);

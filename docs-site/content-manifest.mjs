@@ -1,12 +1,12 @@
 export const groups = [
   {
     id: "start",
-    title: "Start here",
-    description: "Orient yourself, choose an application shape, and ship the first working version.",
+    title: "Start with npm",
+    description: "Install the package, create an app, choose its shape, and ship the first working version.",
     entries: [
       ["getting-started", "docs/getting-started.md"],
-      ["ai-first", "docs/ai-first.md"],
       ["application-recipes", "docs/application-recipes.md"],
+      ["ai-first", "docs/ai-first.md"],
       ["public-beta", "docs/public-beta.md"]
     ]
   },
