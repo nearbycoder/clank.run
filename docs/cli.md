@@ -44,6 +44,22 @@ Links are written to `.clank/project.json` and should normally remain uncommitte
 
 Deletion is permanent and requires an account-wide token plus an owner/admin organization role. Project-scoped tokens are rejected even if they have `tokens` permission. A successful deletion removes the matching local project link, but leaves other directories and off-platform copies untouched. See [Site deletion](deployment-platform.md#site-deletion).
 
+## Workspaces and access
+
+```sh
+clank org list
+clank org create "Acme Engineering" --slug=acme
+clank org members <organization-id>
+clank org invite <organization-id> person@example.com --role=developer
+clank org invitations <organization-id>
+clank org revoke-invite <organization-id> <invitation-id>
+clank org accept <single-use-token>
+clank org role <organization-id> <user-id> <owner|admin|developer|viewer>
+clank org remove <organization-id> <user-id>
+```
+
+Invitation creation prints its email-bound token once. Reissuing for the same email invalidates older tokens. Invitation lists contain identifiers and safe metadata, never tokens or hashes. Only owners and administrators can create/revoke invitations or change/remove members; only an owner can grant or change the owner role, and the last owner is protected.
+
 ## Workspace activity
 
 ```sh

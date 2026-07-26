@@ -85,7 +85,10 @@ Platform:
   clank org invite <org> <email>        Create a single-use invitation
   clank org accept <token>              Accept an invitation
   clank org members <org>               List organization membership
+  clank org invitations <org>           List active invitations
+  clank org role <org> <user> <role>    Change a member role
   clank org remove <org> <user>         Remove a member and revoke scoped tokens
+  clank org revoke-invite <org> <id>    Revoke an active invitation
   clank project create <name>          Create and link a project
   clank project list                   List projects
   clank project link <project-id>      Link this directory
@@ -346,6 +349,35 @@ async function organizationCommand(args) {
     for (const member of payload.members) console.log(`${member.id}  ${member.email}  ${member.role}`);
     return;
   }
+  if (subcommand === "invitations") {
+    const organizationId = positionals(args)[0];
+    if (!organizationId) throw new CliError("Usage: clank org invitations <organization-id>");
+    const payload = await platformRequest(
+      profile.server,
+      `/api/organizations/${encodeURIComponent(organizationId)}`,
+      { token: profile.token },
+    );
+    if (!payload.invitations.length) return console.log("No pending invitations.");
+    for (const invitation of payload.invitations) {
+      console.log(
+        `${invitation.id}  ${invitation.email}  ${invitation.role}  expires ${new Date(invitation.expiresAt).toISOString()}`,
+      );
+    }
+    return;
+  }
+  if (subcommand === "role") {
+    const [organizationId, userId, role] = positionals(args);
+    if (!organizationId || !userId || !role) {
+      throw new CliError("Usage: clank org role <organization-id> <user-id> <owner|admin|developer|viewer>");
+    }
+    await platformRequest(
+      profile.server,
+      `/api/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(userId)}`,
+      { method: "PATCH", token: profile.token, body: { role } },
+    );
+    console.log(`Changed ${userId} to ${role}.`);
+    return;
+  }
   if (subcommand === "remove") {
     const [organizationId, userId] = positionals(args);
     if (!organizationId || !userId) throw new CliError("Usage: clank org remove <organization-id> <user-id>");
@@ -357,7 +389,22 @@ async function organizationCommand(args) {
     console.log(`Removed ${userId} and revoked its project-scoped tokens.`);
     return;
   }
-  throw new CliError("Usage: clank org <list|create|invite|accept|members|remove>");
+  if (subcommand === "revoke-invite") {
+    const [organizationId, invitationId] = positionals(args);
+    if (!organizationId || !invitationId) {
+      throw new CliError("Usage: clank org revoke-invite <organization-id> <invitation-id>");
+    }
+    await platformRequest(
+      profile.server,
+      `/api/organizations/${encodeURIComponent(organizationId)}/invitations/${encodeURIComponent(invitationId)}`,
+      { method: "DELETE", token: profile.token },
+    );
+    console.log(`Revoked invitation ${invitationId}.`);
+    return;
+  }
+  throw new CliError(
+    "Usage: clank org <list|create|invite|accept|members|invitations|role|remove|revoke-invite>",
+  );
 }
 
 async function projectCommand(args) {
