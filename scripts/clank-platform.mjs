@@ -53,6 +53,7 @@ const ingress = ingressEnabled ? {
 const platform = await openPlatform({
   dataDirectory,
   publicUrl,
+  platformAdminEmails: list(process.env.CLANK_PLATFORM_ADMIN_EMAILS),
   runner,
   signup,
   masterKey: environment("CLANK_PLATFORM_MASTER_KEY", "PROACT_PLATFORM_MASTER_KEY"),
