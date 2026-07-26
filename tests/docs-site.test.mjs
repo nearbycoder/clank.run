@@ -247,7 +247,7 @@ test("documentation code fences highlight supported languages without changing o
   assert.match(rendered.html, /class="tok-keyword">SELECT<\/span>/u);
   assert.match(rendered.html, /class="tok-tag">script<\/span>/u);
   assert.match(rendered.html, /&lt;\/code&gt;&lt;script&gt;globalThis\.compromised/u);
-  assert.doesNotMatch(rendered.html, /<script>/u);
+  assert.doesNotMatch(rendered.html, /<script>/iu);
 
   assert.match(highlightCode("color: var(--accent);", "css"), /tok-property">color/u);
   assert.match(highlightCode("const delta = left-right;", "ts"), /tok-operator">-<\/span>/u);
