@@ -684,8 +684,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       CLANK_DATABASE: databaseHostPath,
       PROACT_DATABASE_PATH: databaseHostPath,
       PROACT_DATABASE: databaseHostPath,
-      ALLOWED_HOSTS: `localhost,127.0.0.1,${options.appHostname ?? "127.0.0.1"}`,
-      TRUST_PROXY: "0",
+      // Managed applications are reachable only through the loopback-bound
+      // ingress. Trust its overwritten forwarding headers so auth, secure
+      // cookies, passkeys, and generated URLs see the verified public origin.
+      // Host admission remains at the ingress because verified custom domains
+      // can be attached without restarting the application process.
+      ALLOWED_HOSTS: ingressEnabled
+        ? ""
+        : `localhost,127.0.0.1,${options.appHostname ?? "127.0.0.1"}`,
+      TRUST_PROXY: ingressEnabled ? "1" : "0",
     };
     await assertPortAvailable(project.port);
     const child = await spawnRelease(
