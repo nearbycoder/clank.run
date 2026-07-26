@@ -300,6 +300,42 @@ test("caller-controlled IP headers cannot bypass authentication rate limits", as
   }
 });
 
+test("successful login clears prior failed-attempt rate-limit state", async () => {
+  const fixture = await createFixture({ rateLimit: { attempts: 2, windowMs: 60_000 } });
+  try {
+    await register(fixture.runtime, "rate-reset@example.com");
+    const failed = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      body: { email: "rate-reset@example.com", password: "wrong password" },
+    }));
+    assert.equal(failed.status, 401);
+    const successful = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      body: {
+        email: "rate-reset@example.com",
+        password: "correct horse battery staple",
+      },
+    }));
+    assert.equal(successful.status, 200);
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const afterReset = await fixture.runtime.handle(request("/__clank/auth/login", {
+        method: "POST",
+        body: { email: "rate-reset@example.com", password: "wrong password" },
+      }));
+      assert.equal(afterReset.status, 401);
+    }
+    const limited = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      body: { email: "rate-reset@example.com", password: "wrong password" },
+    }));
+    assert.equal(limited.status, 429);
+    assert.equal((await limited.json()).error.code, "RATE_LIMITED");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("passkey discovery does not reveal whether an account or credential exists", async () => {
   const fixture = await createFixture();
   try {

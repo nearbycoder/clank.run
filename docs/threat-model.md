@@ -39,7 +39,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 
 | Threat | Representative attack | Principal controls | Residual responsibility |
 | --- | --- | --- | --- |
-| Account takeover | Credential stuffing, reset replay, stolen session, cloned authenticator | Scrypt, generic login errors, rate-limit interface, single-use recovery, MFA, WebAuthn verification/counters, revocation | Shared limiter, bot defense, email security, user/device risk policy |
+| Account takeover | Credential stuffing, reset replay, stolen session, cloned authenticator | Scrypt, generic login errors, shared HMAC-keyed control-plane rate limits, single-use recovery, MFA, WebAuthn verification/counters, revocation | Upstream abuse controls, bot defense, email security, user/device risk policy |
 | Cross-site action | CSRF, forged Origin, cross-site device approval | Strict cookies, CSRF token, Fetch Metadata/origin checks | Correct proxy scheme/host configuration and CSP |
 | Tenant escape | Guess project/user IDs, reuse scoped token, stale membership | Owned SQL, membership/role checks, project/scope checks on every request, revocation | Domain-specific row/resource authorization |
 | Privilege escalation | Admin grants excess scopes, removes last owner, uses viewer token to deploy | Role matrix, scope intersection, last-owner protection, audit | Periodic access review and separation of duties |
@@ -55,7 +55,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 | Audit repudiation or tenant disclosure | Hide a destructive event, read another workspace, reuse stale elevated scope | Non-cascading organization attribution, current membership/role joins, project-token intersection, bounded cursor pagination, no audit mutation API, deleted-target retention | Trusted SQLite admins can alter local rows; replicate or sign events independently when operator tampering is in scope |
 | Supply-chain compromise | Mutable CI action, leaked npm token, package includes local state | Commit-pinned actions, least privilege, OIDC trusted publishing, attestation, package allowlist, zero dependencies | GitHub/npm account security and protected release environment |
 | Compiler boundary confusion | Treat attacker-controlled data as TSX source or assume generated code is sandboxed | Compiler accepts project source only, performs no build-time evaluation, and emits reviewable modules | Never compile request/database values; isolate mutually untrusted app execution |
-| Denial of service | Chunked oversized request, CBOR/artifact bomb, repeated retained releases, scrypt exhaustion, failing upstream, unbounded metric labels, site/domain exhaustion | Streaming byte/count/time bounds, CBOR depth/collection limits, per-project artifact count/byte ceilings, password queue, circuits, transactional quotas, fixed-cardinality metrics, leases/retries | Edge rate limits, whole-volume monitoring, compute quotas, autoscaling, capacity planning |
+| Denial of service | Chunked oversized request, CBOR/artifact bomb, repeated retained releases, scrypt/device-code exhaustion, high-cardinality limiter keys, failing upstream, unbounded metric labels, site/domain exhaustion | Streaming byte/count/time bounds, CBOR depth/collection limits, per-project artifact count/byte ceilings, password queue, bounded durable rate-limit state, circuits, transactional quotas, fixed-cardinality metrics, leases/retries | Edge rate limits, whole-volume monitoring, compute quotas, autoscaling, capacity planning |
 
 ## Explicit assumptions
 

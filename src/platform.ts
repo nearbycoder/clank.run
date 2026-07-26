@@ -3,6 +3,7 @@ import {
   defineAuth,
   openAuth,
   type AuthRequest,
+  type AuthRateLimitStore,
   type AuthRuntime,
   type AuthUserId,
   type DefaultAuthProfile,
@@ -215,6 +216,7 @@ interface PlatformDatabase {
   database: SQLiteDatabase<ReturnType<typeof defineDatabase<{}>>>;
   internal: SQLiteInternal;
   auth: AuthRuntime<DefaultAuthProfile>;
+  rateLimits: AuthRateLimitStore;
 }
 
 class PlatformError extends Error {
@@ -248,6 +250,8 @@ const DEFAULT_RELEASES_PER_PROJECT = 50;
 const DEFAULT_RELEASE_STORAGE_BYTES = 20 * 1024 * 1024 * 1024;
 const MAX_PENDING_INVITATIONS_PER_ORGANIZATION = 100;
 const BOOTSTRAP_CLAIM_MS = 5 * 60_000;
+const MAX_PLATFORM_RATE_LIMIT_KEYS = 20_000;
+const PLATFORM_RATE_LIMIT_PRUNE_TARGET = 18_000;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -377,7 +381,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const paths = await prepareDirectories(options.dataDirectory);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
-  const storage = await openPlatformDatabase(paths.controlDatabase);
+  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
   const orchestrator = openDeploymentOrchestrator(storage.database);
   const leaseOwner = `control-${(globalThis as any).process?.pid ?? 0}-${crypto.randomUUID()}`;
   const active = new Map<string, ActiveProcess>();
@@ -388,7 +392,6 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     cancelled: boolean;
     timer?: ReturnType<typeof setTimeout>;
   }>();
-  const deviceLimiter = new Map<string, { count: number; resetAt: number }>();
   let bootstrapRegistrationActive = false;
   let closed = false;
 
@@ -1333,7 +1336,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         );
       }
       if (url.pathname === "/api/device/start" && request.method === "POST") {
-        enforceDeviceRateLimit(deviceLimiter, request);
+        await enforceDeviceRateLimit(storage.rateLimits, request);
         const input = plainObject(await readJsonRequest(request, 8 * 1024));
         exact(input, ["clientName"]);
         const clientName = boundedString(input.clientName, "clientName", 1, 100);
@@ -2386,14 +2389,25 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
 }
 
-async function openPlatformDatabase(path: string): Promise<PlatformDatabase> {
+async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promise<PlatformDatabase> {
   const schema = defineDatabase({});
   const database = await openSQLite(schema, { path });
   const internal = database[SQLITE_INTERNAL];
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_rate_limits (
+    key_hash TEXT PRIMARY KEY,
+    attempts TEXT NOT NULL CHECK (json_valid(attempts) AND json_type(attempts) = 'array'),
+    expires_at INTEGER NOT NULL
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_rate_limits_expiry
+    ON clank_platform_rate_limits (expires_at)`);
+  const rateLimits = createPlatformRateLimitStore(internal, masterKey);
   // The platform gates public, bootstrap, and invitation-assisted registration
   // before delegating to auth. Keeping the internal primitive enabled lets a
   // valid invitation authorize one account even when public signup is closed.
-  const authDefinition = defineAuth({ signup: true });
+  const authDefinition = defineAuth({
+    signup: true,
+    rateLimit: { store: rateLimits },
+  });
   const auth = await openAuth(authDefinition, database);
   for (const table of [
     "tokens",
@@ -2700,7 +2714,7 @@ async function openPlatformDatabase(path: string): Promise<PlatformDatabase> {
     internal.prepare("UPDATE clank_platform_projects SET organization_id = ? WHERE owner_id = ? AND organization_id IS NULL")
       .run(organizationId, userId);
   }
-  return { database, internal, auth };
+  return { database, internal, auth, rateLimits };
 }
 
 async function requireBrowserAuth(
@@ -4622,19 +4636,89 @@ function normalizeUserCode(value: string): string {
   return code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : value.toUpperCase();
 }
 
-function enforceDeviceRateLimit(
-  limiter: Map<string, { count: number; resetAt: number }>,
+function createPlatformRateLimitStore(
+  internal: SQLiteInternal,
+  masterKey: Uint8Array,
+): AuthRateLimitStore {
+  const digest = (key: string): string => {
+    const module = (globalThis as any).process.getBuiltinModule?.("node:crypto");
+    if (!module) throw new Error("Node crypto module is unavailable.");
+    return module.createHmac("sha256", masterKey)
+      .update("clank-platform-rate-limit\0")
+      .update(key)
+      .digest("base64url");
+  };
+  const attemptsFrom = (value: unknown): number[] => {
+    const parsed = JSON.parse(String(value));
+    if (!Array.isArray(parsed)
+      || parsed.length > 10_000
+      || parsed.some((entry) => !Number.isSafeInteger(entry) || entry <= 0)) {
+      throw new Error("Platform rate-limit state is invalid.");
+    }
+    return parsed;
+  };
+  return {
+    consume(key, limit, windowMs) {
+      const keyHash = digest(key);
+      const now = Date.now();
+      return internal.transaction(() => {
+        internal.prepare("DELETE FROM clank_platform_rate_limits WHERE expires_at <= ?").run(now);
+        const row = internal.prepare(
+          "SELECT attempts FROM clank_platform_rate_limits WHERE key_hash = ?",
+        ).get(keyHash);
+        const recent = row
+          ? attemptsFrom(row.attempts)
+              .filter((attempt) => attempt > now - windowMs)
+              .map((attempt) => Math.min(attempt, now))
+              .sort((left, right) => left - right)
+          : [];
+        if (recent.length >= limit) {
+          return Math.max(1, Math.ceil((windowMs - (now - recent[0])) / 1_000));
+        }
+        recent.push(now);
+        internal.prepare(`INSERT INTO clank_platform_rate_limits
+          (key_hash, attempts, expires_at) VALUES (?, ?, ?)
+          ON CONFLICT(key_hash) DO UPDATE SET
+            attempts = excluded.attempts,
+            expires_at = excluded.expires_at`)
+          .run(keyHash, JSON.stringify(recent), now + windowMs);
+        if (!row) {
+          const count = Number(internal.prepare(
+            "SELECT count(*) AS count FROM clank_platform_rate_limits",
+          ).get()?.count ?? 0);
+          if (count > MAX_PLATFORM_RATE_LIMIT_KEYS) {
+            internal.prepare(`DELETE FROM clank_platform_rate_limits WHERE key_hash IN (
+              SELECT key_hash FROM clank_platform_rate_limits
+              ORDER BY expires_at, rowid LIMIT ?
+            )`).run(count - PLATFORM_RATE_LIMIT_PRUNE_TARGET);
+          }
+        }
+        return undefined;
+      });
+    },
+    clear(key) {
+      internal.prepare("DELETE FROM clank_platform_rate_limits WHERE key_hash = ?").run(digest(key));
+    },
+    close() {
+      // The platform database owns the shared limiter lifecycle.
+    },
+  };
+}
+
+async function enforceDeviceRateLimit(
+  limiter: AuthRateLimitStore,
   request: Request,
-): void {
-  const now = Date.now();
+): Promise<void> {
   const key = trustedClientAddress(request) ?? "unknown";
-  const current = limiter.get(key);
-  if (!current || current.resetAt <= now) {
-    limiter.set(key, { count: 1, resetAt: now + 60_000 });
-    return;
+  const retryAfter = await limiter.consume(`device\n${key}`, 10, 60_000);
+  if (retryAfter !== undefined) {
+    throw new PlatformError(
+      429,
+      "RATE_LIMITED",
+      "Too many device authorization attempts.",
+      retryAfter,
+    );
   }
-  current.count++;
-  if (current.count > 10) throw new PlatformError(429, "RATE_LIMITED", "Too many device authorization attempts.", Math.ceil((current.resetAt - now) / 1_000));
 }
 
 async function randomUserCode(): Promise<string> {

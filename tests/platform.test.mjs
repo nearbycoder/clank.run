@@ -2268,6 +2268,133 @@ test("bootstrap registration is claimed transactionally across control-plane run
   }
 });
 
+test("platform auth and device rate limits survive control-plane changes without storing raw identities", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-rate-limits-"));
+  const options = {
+    dataDirectory: root,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4536,
+    appPortEnd: 4537,
+    signup: true,
+    backups: { intervalMs: false },
+  };
+  let firstPlatform = await openPlatform(options);
+  let secondPlatform = await openPlatform(options);
+  let thirdPlatform;
+  try {
+    const registered = await firstPlatform.handle(jsonRequest("/__clank/auth/register", {
+      method: "POST",
+      body: {
+        email: "durable-limit@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "durable limit" },
+      },
+    }));
+    assert.equal(registered.status, 201);
+
+    for (const platform of [firstPlatform, secondPlatform]) {
+      const rejected = await platform.handle(jsonRequest("/__clank/auth/login", {
+        method: "POST",
+        body: {
+          email: "durable-limit@example.com",
+          password: "wrong password value",
+        },
+      }));
+      assert.equal(rejected.status, 401);
+      assert.equal((await rejected.json()).error.code, "INVALID_CREDENTIALS");
+    }
+
+    let control = new DatabaseSync(join(root, "control.sqlite"), { readOnly: true });
+    let rateLimits = control.prepare(
+      "SELECT key_hash, attempts FROM clank_platform_rate_limits ORDER BY expires_at",
+    ).all();
+    control.close();
+    assert.deepEqual(
+      rateLimits.map((row) => JSON.parse(row.attempts).length).sort((left, right) => left - right),
+      [1, 2],
+    );
+    assert.ok(rateLimits.every((row) => /^[A-Za-z0-9_-]{43}$/u.test(row.key_hash)));
+    assert.doesNotMatch(JSON.stringify(rateLimits), /durable-limit|example\\.com|unknown/iu);
+
+    const loggedIn = await secondPlatform.handle(jsonRequest("/__clank/auth/login", {
+      method: "POST",
+      body: {
+        email: "durable-limit@example.com",
+        password: "correct horse battery staple",
+      },
+    }));
+    assert.equal(loggedIn.status, 200);
+    control = new DatabaseSync(join(root, "control.sqlite"), { readOnly: true });
+    rateLimits = control.prepare("SELECT attempts FROM clank_platform_rate_limits").all();
+    control.close();
+    assert.deepEqual(rateLimits.map((row) => JSON.parse(row.attempts).length), [1]);
+
+    for (let index = 0; index < 10; index++) {
+      const platform = index % 2 === 0 ? firstPlatform : secondPlatform;
+      const started = await platform.handle(jsonRequest("/api/device/start", {
+        method: "POST",
+        body: { clientName: `durable device ${index}` },
+      }));
+      assert.equal(started.status, 201);
+    }
+    control = new DatabaseSync(join(root, "control.sqlite"));
+    const future = Date.now() + 30_000;
+    control.prepare(`UPDATE clank_platform_rate_limits SET attempts = ?, expires_at = ?
+      WHERE json_array_length(attempts) = 10`)
+      .run(JSON.stringify(Array.from({ length: 10 }, () => future)), future + 60_000);
+    control.close();
+    await Promise.all([firstPlatform.close(), secondPlatform.close()]);
+    thirdPlatform = await openPlatform(options);
+    const limited = await thirdPlatform.handle(jsonRequest("/api/device/start", {
+      method: "POST",
+      body: { clientName: "one too many" },
+    }));
+    assert.equal(limited.status, 429);
+    const limitedBody = await limited.json();
+    assert.equal(limitedBody.error.code, "RATE_LIMITED");
+    assert.ok(limitedBody.error.retryAfter > 0);
+    assert.ok(limitedBody.error.retryAfter <= 60);
+
+    await thirdPlatform.close();
+    thirdPlatform = undefined;
+    control = new DatabaseSync(join(root, "control.sqlite"));
+    control.exec("DELETE FROM clank_platform_rate_limits");
+    const insert = control.prepare(`INSERT INTO clank_platform_rate_limits
+      (key_hash, attempts, expires_at) VALUES (?, ?, ?)`);
+    control.exec("BEGIN IMMEDIATE");
+    try {
+      for (let index = 0; index < 20_000; index++) {
+        insert.run(`seed-${String(index).padStart(5, "0")}`, JSON.stringify([Date.now()]), Date.now() + 60_000);
+      }
+      control.exec("COMMIT");
+    } catch (error) {
+      control.exec("ROLLBACK");
+      throw error;
+    }
+    control.close();
+
+    thirdPlatform = await openPlatform(options);
+    const bounded = await thirdPlatform.handle(jsonRequest("/api/device/start", {
+      method: "POST",
+      body: { clientName: "bounded state" },
+    }));
+    assert.equal(bounded.status, 201);
+    control = new DatabaseSync(join(root, "control.sqlite"), { readOnly: true });
+    const retained = control.prepare(
+      "SELECT count(*) AS count FROM clank_platform_rate_limits",
+    ).get().count;
+    control.close();
+    assert.equal(retained, 18_000);
+  } finally {
+    await Promise.all([
+      firstPlatform.close(),
+      secondPlatform.close(),
+      thirdPlatform?.close(),
+    ]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("platform reports unexpected failures privately without exposing exception text", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-errors-"));
   const privateMessage = "internal resolver credential: operator-secret";
