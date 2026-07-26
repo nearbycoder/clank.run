@@ -50,6 +50,7 @@ The audit covered:
 | CLI state writes and control-plane responses lacked complete interruption/resource bounds | Added strict bounded config/link parsing, atomic private replacement, request deadlines, strict UTF-8 JSON parsing, and response byte caps | CLI regression tests and packaged conformance |
 | `/healthz` reported a constant result and signal shutdown could skip platform cleanup after an HTTP close failure | Added storage-backed readiness, separate liveness, and bounded cleanup that attempts both layers | Platform readiness tests and conformance process shutdown |
 | Repeated deployments retained unbounded extracted files and rollback snapshots | Added locked per-project count/byte ceilings plus path-derived, rollback-scoped cleanup that preserves immutable evidence | Platform quota, authorization, symlink, snapshot, CLI, and dashboard regressions |
+| Enforced site quotas had no safe user-facing reclamation path | Added owner/admin-only permanent deletion with dual confirmation, scoped-token denial, durable locking, path-safe storage cleanup, metadata cascades, token revocation, and surviving audit evidence | Platform RBAC, CSRF, path substitution, runtime, storage, orchestration, quota/slug/port/domain reuse, CLI, and dashboard regressions |
 
 ## Readability decisions
 

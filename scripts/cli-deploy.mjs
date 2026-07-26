@@ -87,6 +87,7 @@ Platform:
   clank project create <name>          Create and link a project
   clank project list                   List projects
   clank project link <project-id>      Link this directory
+  clank project delete [project-id] --confirm="delete-site <slug>" --acknowledge-data-loss
   clank token create                    Create a scoped token for the linked project
   clank token list                      List active CLI and project tokens
   clank token revoke <token-id>         Revoke a token
@@ -390,7 +391,31 @@ async function projectCommand(args) {
     console.log(`Linked ${payload.project.slug} (${payload.project.id})`);
     return;
   }
-  throw new CliError("Usage: clank project <create|list|link>");
+  if (subcommand === "delete") {
+    const currentLink = await readLink(process.cwd());
+    const id = positionals(args)[0] ?? currentLink?.projectId;
+    const confirmation = option(args, "confirm");
+    if (!id || !confirmation || !flag(args, "acknowledge-data-loss")) {
+      throw new CliError(
+        'Usage: clank project delete [project-id] --confirm="delete-site <slug>" --acknowledge-data-loss',
+      );
+    }
+    const payload = await platformRequest(
+      profile.server,
+      `/api/projects/${encodeURIComponent(id)}`,
+      {
+        method: "DELETE",
+        token: profile.token,
+        body: { confirmation, acknowledgeDataLoss: true },
+      },
+    );
+    if (currentLink?.server === profile.server && currentLink.projectId === id) {
+      await rm(join(process.cwd(), ".clank", "project.json"), { force: true });
+    }
+    console.log(`Deleted ${payload.project.slug} (${payload.project.id}) and its application data.`);
+    return;
+  }
+  throw new CliError("Usage: clank project <create|list|link|delete>");
 }
 
 async function tokenCommand(args) {
@@ -995,7 +1020,14 @@ function positionals(args) {
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
     if (argument.startsWith("--")) {
-      if (!argument.includes("=") && !["--dry-run", "--restore-data", "--local", "--force", "--allow-rollback-loss"].includes(argument)) index++;
+      if (!argument.includes("=") && ![
+        "--dry-run",
+        "--restore-data",
+        "--local",
+        "--force",
+        "--allow-rollback-loss",
+        "--acknowledge-data-loss",
+      ].includes(argument)) index++;
       continue;
     }
     output.push(argument);

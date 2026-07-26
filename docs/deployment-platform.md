@@ -136,6 +136,22 @@ clank releases delete <inactive-release-id> \
 
 Cleanup requires `rollback` permission. The active artifact is never removable. Add `--allow-rollback-loss` only when intentionally removing the active release's immediate predecessor; that removes the predecessor's runtime files and the active release's matching data-restore snapshot. Cleanup preserves release metadata and audit history.
 
+## Site deletion
+
+Owners and organization administrators can permanently reclaim a site slot from the dashboard or CLI:
+
+```sh
+clank project delete [project-id] \
+  --confirm="delete-site <project-slug>" \
+  --acknowledge-data-loss
+```
+
+Deletion requires an account-wide browser session or CLI token. A project-scoped token is deliberately insufficient, including one with `tokens` permission. Browser deletion also passes the normal same-origin and CSRF checks. The exact slug-bound phrase and separate acknowledgement make accidental generic confirmation impossible.
+
+The operation holds the same durable project lock used by deploy, rollback, release cleanup, and backup work. It rechecks current membership under that lock, stops the supervised application, validates that the platform project path and its parents are real directories rather than symbolic links, and removes the complete project root. Only then does one control-database transaction revoke active project tokens, remove orchestration placement/operation state, delete project metadata and its cascading domain/release/secret/log/metric/backup-schedule rows, and append a surviving `project.delete` audit event.
+
+If filesystem validation or removal fails, project metadata remains and Clank attempts to restart the prior active release. If the later metadata transaction fails after files were removed, the API reports a fixed recovery-safe error and a retry completes cleanup. A successful response means the platform-managed local application database, releases, rollback snapshots, encrypted recovery points, secrets, logs, metrics, domains, and scoped tokens are gone. External databases, copied artifacts, Caddy certificate storage, replicated/off-host backups, and other operator-managed copies are not discovered or erased.
+
 ## Rollback
 
 Code-only rollback is the default:
@@ -201,6 +217,7 @@ Browser session:
 - `GET /api/dashboard`
 - project status, metrics, releases, logs, and domains;
 - project and domain creation/removal with CSRF;
+- `DELETE /api/projects/:id` with exact confirmation and explicit data-loss acknowledgement;
 - `GET /api/device/info`
 - `POST /api/device/approve`
 - `POST /api/device/deny`
@@ -210,6 +227,7 @@ Bearer:
 
 - account and token listing/revocation;
 - project creation/listing/status;
+- owner/admin-only permanent project deletion using an account-wide token;
 - release upload/history/rollback;
 - release storage usage and confirmation-gated inactive artifact cleanup;
 - logs, encrypted secrets, scheduled/manual backup operations, and audit events.

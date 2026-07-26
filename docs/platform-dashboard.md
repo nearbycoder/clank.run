@@ -13,7 +13,7 @@ The overview shows:
 - enforced site capacity across the account's organizations; and
 - a site picker with request and p95-latency summaries.
 
-Each site has performance, domains, deployments, backups, and logs views. The performance chart supports `1h`, `24h`, `7d`, and `30d` windows. The domains view walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. The deployments view shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. The backups view exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. A project without a first deployment reports that its isolated database is not available instead of failing the whole project screen.
+Each site has performance, domains, deployments, backups, logs, and settings views. The performance chart supports `1h`, `24h`, `7d`, and `30d` windows. The domains view walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. The deployments view shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. The backups view exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. The settings view gives owners and administrators a confirmation-gated way to permanently delete the site and reclaim its quota. A project without a first deployment reports that its isolated database is not available instead of failing the whole project screen.
 
 The dashboard uses the same organization membership and project-permission checks as the CLI. API values are inserted with DOM `textContent` or attributes rather than HTML parsing. The page has a nonce-bound script, restrictive CSP, no-store responses, framing denial, and no third-party assets.
 
@@ -34,6 +34,8 @@ Limits are operator configuration, not cosmetic dashboard values:
 The API returns `ORGANIZATION_LIMIT_REACHED`, `ACCOUNT_PROJECT_LIMIT_REACHED`, `PROJECT_LIMIT_REACHED`, or `DOMAIN_LIMIT_REACHED` with HTTP `409` when capacity is exhausted. Account limits count organizations created by the account and projects owned by the account; joining someone else's organization does not consume the invitee's creator quota. A pending or verified hostname belongs to exactly one project; another project cannot replace its challenge. The console hostname, custom-domain target, base domain, and the base-domain application namespace are reserved.
 
 These are fixed installation-wide ceilings today. Account and organization limits are checked in the same SQLite write transactions as their inserts. Release limits are rechecked while holding the project's durable cross-control-plane lease, so concurrent deploys cannot bypass capacity. A hosted service can later resolve plan-specific limits before entering those transactions; billing state must never be the only enforcement layer.
+
+A successful permanent site deletion immediately releases the account/organization site count, slug, application port, and custom-domain assignments. The deletion path uses the same durable per-project lock as deployment and backup work, then removes platform-managed storage and control metadata. Exact confirmation and explicit data-loss acknowledgement are required; only an owner/admin account session or account-wide token can perform it.
 
 ## Release storage lifecycle
 
@@ -130,6 +132,8 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 ## Browser/API endpoints
 
 - `GET /api/dashboard` — account, organizations, enforced limits, sites, 24-hour summaries, and domain-edge configuration.
+- `GET /api/projects/:id` — project status, usage, current organization role, and whether the principal may delete the site.
+- `DELETE /api/projects/:id` — owner/admin-only permanent deletion with `{ "confirmation": "delete-site <slug>", "acknowledgeDataLoss": true }`.
 - `GET /api/projects/:id/metrics?range=24h` — bounded metric summary and downsampled points.
 - `GET /api/projects/:id/domains` — ownership, routing, observed DNS, TLS state, site limit, and reconciliation status.
 - `POST /api/projects/:id/domains` — reserve a hostname and create the ownership challenge.

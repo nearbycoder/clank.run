@@ -860,6 +860,344 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
   }
 });
 
+test("site deletion is admin-only, path-safe, auditable, and releases every managed resource", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-site-delete-"));
+  const dataDirectory = join(root, "platform");
+  const platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4551,
+    appPortEnd: 4553,
+    signup: true,
+    backups: { intervalMs: false },
+    limits: {
+      projectsPerAccount: 2,
+      projectsPerOrganization: 2,
+      domainsPerProject: 2,
+    },
+    ingress: {
+      enabled: true,
+      customDomainTarget: "edge.example.test",
+      tlsAskToken: "site-delete-tls-token",
+      resolveTxt: async () => [],
+      resolveCname: async () => [],
+      resolve4: async () => [],
+      resolve6: async () => [],
+    },
+  });
+  try {
+    const owner = await authorizeCli(platform, "site-delete-owner@example.com");
+    const developer = await authorizeCli(platform, "site-delete-developer@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const organizationId = dashboard.organizations[0].id;
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Disposable Tasks",
+        slug: "disposable-tasks",
+        organizationId,
+      },
+    }), 201);
+    const projectId = created.project.id;
+    const unsafe = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Path Safety",
+        slug: "path-safety",
+        organizationId,
+      },
+    }), 201);
+
+    const invitation = await payload(platform, jsonRequest(`/api/organizations/${organizationId}/invitations`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { email: "site-delete-developer@example.com", role: "developer" },
+    }), 201);
+    await payload(platform, jsonRequest("/api/invitations/accept", {
+      method: "POST",
+      token: developer.accessToken,
+      body: { token: invitation.invitation.token },
+    }));
+    const ownerDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: owner.accessToken,
+    }));
+    const developerDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: developer.accessToken,
+    }));
+    assert.deepEqual(ownerDetail.access, { role: "owner", canDelete: true });
+    assert.deepEqual(developerDetail.access, { role: "developer", canDelete: false });
+
+    const developerDenied = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      method: "DELETE",
+      token: developer.accessToken,
+      body: {
+        confirmation: "delete-site disposable-tasks",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    assert.equal(developerDenied.status, 403);
+    assert.equal((await developerDenied.json()).error.code, "ROLE_DENIED");
+    await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/members/${developer.user.id}`,
+      {
+        method: "PATCH",
+        token: owner.accessToken,
+        body: { role: "admin" },
+      },
+    ));
+    const adminDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: developer.accessToken,
+    }));
+    assert.deepEqual(adminDetail.access, { role: "admin", canDelete: true });
+    const missingCsrf = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      method: "DELETE",
+      cookie: owner.cookie,
+      body: {
+        confirmation: "delete-site disposable-tasks",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    assert.equal(missingCsrf.status, 403);
+    assert.equal((await missingCsrf.json()).error.code, "INVALID_CSRF");
+    const wrongConfirmation = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: "delete-site another-project",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    assert.equal(wrongConfirmation.status, 400);
+    assert.equal((await wrongConfirmation.json()).error.code, "CONFIRMATION_REQUIRED");
+    const missingAcknowledgement = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: "delete-site disposable-tasks",
+        acknowledgeDataLoss: false,
+      },
+    }));
+    assert.equal(missingAcknowledgement.status, 400);
+    assert.equal((await missingAcknowledgement.json()).error.code, "DATA_LOSS_ACKNOWLEDGEMENT_REQUIRED");
+
+    const scoped = await payload(platform, jsonRequest(`/api/projects/${projectId}/tokens`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Deletion must reject this token",
+        permissions: ["read", "tokens"],
+        expiresIn: 3600,
+      },
+    }), 201);
+    const scopedDenied = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      method: "DELETE",
+      token: scoped.token.accessToken,
+      body: {
+        confirmation: "delete-site disposable-tasks",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    assert.equal(scopedDenied.status, 403);
+    assert.equal((await scopedDenied.json()).error.code, "TOKEN_SCOPE_DENIED");
+
+    const sentinelDirectory = join(root, "outside-project-storage");
+    const sentinelFile = join(sentinelDirectory, "keep.txt");
+    await mkdir(sentinelDirectory);
+    await writeFile(sentinelFile, "do not remove");
+    const unsafeProjectRoot = join(dataDirectory, "projects", unsafe.project.id);
+    await symlink(sentinelDirectory, unsafeProjectRoot, "dir");
+    const unsafeDeletion = await platform.handle(jsonRequest(`/api/projects/${unsafe.project.id}`, {
+      method: "DELETE",
+      token: developer.accessToken,
+      body: {
+        confirmation: "delete-site path-safety",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    assert.equal(unsafeDeletion.status, 409);
+    assert.equal((await unsafeDeletion.json()).error.code, "PROJECT_STORAGE_UNSAFE");
+    assert.equal(await readFile(sentinelFile, "utf8"), "do not remove");
+    await payload(platform, jsonRequest(`/api/projects/${unsafe.project.id}`, {
+      token: owner.accessToken,
+    }));
+    await unlink(unsafeProjectRoot);
+    await payload(platform, jsonRequest(`/api/projects/${unsafe.project.id}`, {
+      method: "DELETE",
+      token: developer.accessToken,
+      body: {
+        confirmation: "delete-site path-safety",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    const capacityReplacement = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Capacity Reclaimed",
+        slug: "capacity-reclaimed",
+        organizationId,
+      },
+    }), 201);
+
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/secrets`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { values: { AUDIT_SHORT_SECRET: "abc" } },
+    }));
+    const deployed = await deploy(
+      platform,
+      projectId,
+      owner.accessToken,
+      await appArtifact(join(root, "source"), "before-deletion", [
+        ["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"],
+      ]),
+      "site-delete-release-key",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    assert.equal(await fetch(deployed.body.release.directUrl).then((response) => response.text()), "before-deletion");
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/domains`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { hostname: "reusable.customer.test" },
+    }), 201);
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/backups`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { reason: "pre-deletion evidence" },
+    }), 201);
+
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    control.prepare(`INSERT INTO clank_platform_metrics
+      (project_id, bucket_started_at, request_count, status_2xx)
+      VALUES (?, ?, 1, 1)`).run(projectId, Date.now());
+    control.prepare(`INSERT INTO clank_platform_logs
+      (project_id, release_id, stream, message, created_at)
+      VALUES (?, ?, 'stdout', 'deletion evidence', ?)`)
+      .run(projectId, deployed.body.release.id, Date.now());
+    control.prepare(`INSERT INTO clank_deployment_placements
+      (project_id, desired_release_id, desired_state, assigned_node_id, region, generation,
+       observed_release_id, observed_state, observed_generation, updated_at)
+      VALUES (?, ?, 'running', NULL, NULL, 1, ?, 'running', 1, ?)`)
+      .run(projectId, deployed.body.release.id, deployed.body.release.id, Date.now());
+    control.prepare(`INSERT INTO clank_deployment_operations
+      (id, project_id, action, payload, state, node_id, attempts, max_attempts, fence,
+       lease_token_hash, lease_expires_at, next_attempt_at, idempotency_key, result, error,
+       created_at, updated_at)
+      VALUES (?, ?, 'deploy', '{}', 'succeeded', NULL, 1, 3, 0,
+       NULL, NULL, ?, ?, '{}', NULL, ?, ?)`)
+      .run(
+        "operation_site_delete_test",
+        projectId,
+        Date.now(),
+        "operation-site-delete-test",
+        Date.now(),
+        Date.now(),
+      );
+    assert.equal(control.prepare(
+      "SELECT count(*) AS count FROM clank_deployment_placements WHERE project_id = ?",
+    ).get(projectId).count, 1);
+    assert.equal(control.prepare(
+      "SELECT count(*) AS count FROM clank_platform_backup_schedules WHERE project_id = ?",
+    ).get(projectId).count, 1);
+    control.close();
+
+    const deleted = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: "delete-site disposable-tasks",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    assert.equal(deleted.project.id, projectId);
+    assert.equal(deleted.project.revokedTokens, 1);
+    assert.equal(deleted.project.domains, 1);
+    assert.equal(deleted.project.releases, 1);
+    assert.equal(deleted.project.secrets, 1);
+    assert.ok(deleted.project.logs >= 1);
+    assert.equal(deleted.project.metrics, 1);
+    assert.equal(deleted.project.backupSchedules, 1);
+    await assert.rejects(
+      stat(join(dataDirectory, "projects", projectId)),
+      (error) => error.code === "ENOENT",
+    );
+    await assert.rejects(
+      fetch(deployed.body.release.directUrl, { signal: AbortSignal.timeout(1_000) }),
+    );
+    const scopedRevoked = await platform.handle(jsonRequest("/api/account", {
+      token: scoped.token.accessToken,
+    }));
+    assert.equal(scopedRevoked.status, 401);
+    const deletedProject = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(deletedProject.status, 404);
+
+    const finalControl = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
+    for (const [table, column] of [
+      ["clank_platform_projects", "id"],
+      ["clank_platform_domains", "project_id"],
+      ["clank_platform_releases", "project_id"],
+      ["clank_platform_secrets", "project_id"],
+      ["clank_platform_logs", "project_id"],
+      ["clank_platform_metrics", "project_id"],
+      ["clank_platform_backup_schedules", "project_id"],
+      ["clank_deployment_placements", "project_id"],
+      ["clank_deployment_operations", "project_id"],
+    ]) {
+      assert.equal(
+        finalControl.prepare(`SELECT count(*) AS count FROM ${table} WHERE ${column} = ?`).get(projectId).count,
+        0,
+        `${table} must not retain project state`,
+      );
+    }
+    assert.ok(finalControl.prepare(
+      "SELECT revoked_at FROM clank_platform_tokens WHERE id = ?",
+    ).get(scoped.token.id).revoked_at);
+    const deletionAudit = finalControl.prepare(`SELECT metadata
+      FROM clank_platform_audit WHERE project_id = ? AND action = 'project.delete'
+      ORDER BY id DESC LIMIT 1`).get(projectId);
+    assert.ok(deletionAudit, "deletion audit history must outlive project metadata");
+    assert.equal(JSON.parse(deletionAudit.metadata).slug, "disposable-tasks");
+    finalControl.close();
+
+    const recreated = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Disposable Tasks Recreated",
+        slug: "disposable-tasks",
+        organizationId,
+      },
+    }), 201);
+    assert.equal(recreated.project.port, created.project.port, "deletion must release the application port");
+    await payload(platform, jsonRequest(`/api/projects/${recreated.project.id}/domains`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { hostname: "reusable.customer.test" },
+    }), 201);
+    const redeployed = await deploy(
+      platform,
+      recreated.project.id,
+      owner.accessToken,
+      await appArtifact(join(root, "recreated-source"), "after-deletion", [
+        ["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"],
+      ]),
+      "site-delete-recreated-release-key",
+    );
+    assert.equal(redeployed.response.status, 201, JSON.stringify(redeployed.body));
+    assert.equal(await fetch(redeployed.body.release.directUrl).then((response) => response.text()), "after-deletion");
+    assert.notEqual(capacityReplacement.project.id, recreated.project.id);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("release storage quotas are enforced and cleanup preserves authorization and rollback safety", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-release-storage-"));
   const platform = await openPlatform({

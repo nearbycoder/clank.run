@@ -21,6 +21,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Bounded automatic custom-domain routing reconciliation with durable cross-control-plane leases, lookup deadlines, operator configuration, and dashboard status.
 - Automatic verified encrypted database backups with durable cross-control-plane leases, configurable cadence and retention, private failure reporting, and dashboard controls.
 - Enforced per-project release count/byte quotas plus rollback-scoped dashboard and CLI cleanup for inactive runtime artifacts and pre-deploy snapshots.
+- Owner/admin-only permanent site deletion in the dashboard, API, and CLI with exact confirmation, explicit data-loss acknowledgement, scoped-token denial, path-safe storage removal, token revocation, and retained audit evidence.
 
 ### Fixed
 
@@ -31,6 +32,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - The deployment console no longer renders or requests a logo asset or letter-mark treatment.
 - Backup API responses no longer expose private host database paths.
 - Repeated deployments can no longer grow retained release storage without an installation-defined ceiling.
+- Site quotas can now be reclaimed without operator-side SQLite or filesystem edits.
 - Managed ingress now fixes the upstream origin before applying a request path and streaming-bounds bodies without `Content-Length`, closing scheme-relative SSRF and unbounded-buffer paths.
 - Pending custom-domain assignments can no longer be moved between projects; platform-owned DNS namespaces are reserved.
 - Refreshed dashboard sessions now render one consistent authentication state and return to sign-in when a session expires.
