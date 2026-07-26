@@ -263,6 +263,114 @@ test("deployed framework auth receives its exact managed public origin", async (
     }));
     assert.equal(rejected.status, 403);
     assert.equal((await rejected.json()).error.code, "ORIGIN_MISMATCH");
+
+    const metrics = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/metrics?range=15m`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(metrics.range, "15m");
+    assert.ok(metrics.points.length >= 15 && metrics.points.length <= 17);
+    assert.equal(metrics.summary.requests, 2);
+    assert.equal(metrics.summary.methods.POST, 2);
+    assert.equal(metrics.summary.status.success, 1);
+    assert.equal(metrics.summary.status.clientError, 1);
+    assert.equal(
+      metrics.summary.latencyDistribution.reduce((total, bucket) => total + bucket.requests, 0),
+      metrics.summary.requests,
+    );
+    assert.equal(metrics.comparison.previous.requests, 0);
+    assert.equal(metrics.comparison.change.requestsPercent, null);
+    assert.ok(metrics.summary.peakRequestsPerMinute >= 2);
+    assert.equal(metrics.summary.lastRequestAt % 60_000, 0);
+    assert.equal(Object.hasOwn(metrics.summary, "paths"), false);
+
+    const previousAt = Math.floor((Date.now() - 16 * 60_000) / 60_000) * 60_000;
+    const control = new DatabaseSync(join(root, "platform", "control.sqlite"));
+    control.prepare(`INSERT INTO clank_platform_metrics
+      (project_id, bucket_started_at, request_count, error_count,
+       status_2xx, duration_sum_ms, duration_max_ms,
+       latency_le_50, latency_le_100, latency_le_250, latency_le_500,
+       latency_le_1000, latency_le_2500, latency_le_5000, latency_inf,
+       request_bytes, response_bytes, method_post)
+      VALUES (?, ?, 1, 0, 1, 10, 10, 1, 1, 1, 1, 1, 1, 1, 1, 50, 200, 1)`)
+      .run(created.project.id, previousAt);
+    control.close();
+    const compared = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/metrics?range=15m`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(compared.comparison.previous.requests, 1);
+    assert.equal(compared.comparison.previous.methods.POST, 1);
+    assert.equal(compared.comparison.previous.lastRequestAt, previousAt);
+    assert.equal(compared.comparison.change.requestsPercent, 1);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy metric buckets gain bounded method counters without losing traffic", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-metric-upgrade-"));
+  const dataDirectory = join(root, "platform");
+  let platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    backups: { intervalMs: false },
+  });
+  await platform.close();
+  const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+  control.exec(`
+    DROP TABLE clank_platform_metrics;
+    CREATE TABLE clank_platform_metrics (
+      project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+      bucket_started_at INTEGER NOT NULL,
+      request_count INTEGER NOT NULL DEFAULT 0,
+      error_count INTEGER NOT NULL DEFAULT 0,
+      status_2xx INTEGER NOT NULL DEFAULT 0,
+      status_3xx INTEGER NOT NULL DEFAULT 0,
+      status_4xx INTEGER NOT NULL DEFAULT 0,
+      status_5xx INTEGER NOT NULL DEFAULT 0,
+      duration_sum_ms REAL NOT NULL DEFAULT 0,
+      duration_max_ms REAL NOT NULL DEFAULT 0,
+      latency_le_50 INTEGER NOT NULL DEFAULT 0,
+      latency_le_100 INTEGER NOT NULL DEFAULT 0,
+      latency_le_250 INTEGER NOT NULL DEFAULT 0,
+      latency_le_500 INTEGER NOT NULL DEFAULT 0,
+      latency_le_1000 INTEGER NOT NULL DEFAULT 0,
+      latency_le_2500 INTEGER NOT NULL DEFAULT 0,
+      latency_le_5000 INTEGER NOT NULL DEFAULT 0,
+      latency_inf INTEGER NOT NULL DEFAULT 0,
+      request_bytes INTEGER NOT NULL DEFAULT 0,
+      response_bytes INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (project_id, bucket_started_at)
+    );
+  `);
+  control.close();
+
+  try {
+    platform = await openPlatform({
+      dataDirectory,
+      publicUrl: "http://127.0.0.1:4200",
+      signup: true,
+      backups: { intervalMs: false },
+    });
+    const upgraded = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
+    const columns = upgraded.prepare("PRAGMA table_info(clank_platform_metrics)").all()
+      .map((column) => column.name);
+    upgraded.close();
+    for (const method of [
+      "method_get",
+      "method_head",
+      "method_post",
+      "method_put",
+      "method_patch",
+      "method_delete",
+      "method_options",
+      "method_other",
+    ]) {
+      assert.ok(columns.includes(method), `missing upgraded metric column ${method}`);
+    }
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
@@ -348,6 +456,14 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.equal(analytics.totals.projects, 1);
     assert.equal(analytics.traffic.summary.requests, 3);
     assert.equal(analytics.traffic.summary.errors, 1);
+    assert.equal(analytics.traffic.summary.methods.OTHER, 3);
+    assert.equal(
+      analytics.traffic.summary.latencyDistribution.reduce(
+        (total, bucket) => total + bucket.requests,
+        0,
+      ),
+      3,
+    );
     assert.equal(analytics.traffic.points.length, 1);
     assert.equal(analytics.topProjects[0].id, project.project.id);
     assert.equal(analytics.topProjects[0].requests, 3);
