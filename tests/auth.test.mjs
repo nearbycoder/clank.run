@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  createAuthClient,
   defineAuth,
   defineBackend,
   defineDatabase,
@@ -47,7 +48,7 @@ function sessionFrom(response, payload) {
   };
 }
 
-async function createFixture(authOptions = {}) {
+async function createFixture(authOptions = {}, backendOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), "clank-auth-"));
   const path = join(directory, "app.sqlite");
   const schema = defineDatabase({
@@ -87,7 +88,7 @@ async function createFixture(authOptions = {}) {
       }),
     },
   }));
-  const runtime = await openBackend(backend, { path, wal: false });
+  const runtime = await openBackend(backend, { path, wal: false, ...backendOptions });
   return {
     path,
     runtime,
@@ -157,6 +158,65 @@ test("auth issues hardened cookies, hashes credentials, and protects state-chang
   } finally {
     await fixture.close();
   }
+});
+
+test("backend allowed origins cover auth routes without permitting cross-site requests", async () => {
+  const allowedOrigin = "https://app.todo.test";
+  const fixture = await createFixture({}, {
+    allowedOrigins: [allowedOrigin, "https://frontend.example"],
+  });
+  const registration = (origin, site) => fixture.runtime.handle(new Request(
+    "https://api.todo.test/__clank/auth/register",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin,
+        "sec-fetch-site": site,
+      },
+      body: JSON.stringify({
+        email: `${site}-${crypto.randomUUID()}@example.com`,
+        password: "correct horse battery staple",
+        profile: { name: site },
+      }),
+    },
+  ));
+  try {
+    const allowed = await registration(allowedOrigin, "same-site");
+    assert.equal(allowed.status, 201, await allowed.clone().text());
+
+    const unlisted = await registration("https://other.todo.test", "same-site");
+    assert.equal(unlisted.status, 403);
+    assert.equal((await unlisted.json()).error.code, "ORIGIN_MISMATCH");
+
+    const crossSite = await registration("https://frontend.example", "cross-site");
+    assert.equal(crossSite.status, 403);
+    assert.equal((await crossSite.json()).error.code, "ORIGIN_MISMATCH");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("auth client includes credentials only when a remote API URL is explicit", async () => {
+  const requests = [];
+  const fetcher = async (url, init) => {
+    requests.push({ url, init });
+    return Response.json({ ok: true, user: null, session: null });
+  };
+  const sameOrigin = createAuthClient({ immediate: false, fetch: fetcher });
+  const remote = createAuthClient({
+    url: "https://api.todo.test",
+    immediate: false,
+    fetch: fetcher,
+  });
+
+  await sameOrigin.reload();
+  await remote.reload();
+
+  assert.equal(requests[0].url, "/__clank/auth/session");
+  assert.equal(requests[0].init.credentials, "same-origin");
+  assert.equal(requests[1].url, "https://api.todo.test/__clank/auth/session");
+  assert.equal(requests[1].init.credentials, "include");
 });
 
 test("owned data, query caches, SSR callers, and sessions remain isolated by user", async () => {

@@ -74,8 +74,18 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
   const hostname = options.hostname ?? "127.0.0.1";
   const requestedPort = options.port ?? 3000;
   const handler = typeof app === "function" ? app : (request: Request) => app.handle(request);
-  const effectiveOptions: ServeOptions = options.allowedHosts === undefined && isLoopbackHost(hostname)
-    ? { ...options, allowedHosts: ["localhost", "127.0.0.1", "::1", hostname] }
+  const managedIngress = options.trustProxy === true
+    && (globalThis as any).process?.env?.CLANK_MANAGED_INGRESS === "1";
+  const effectiveOptions: ServeOptions = options.allowedHosts === undefined
+    ? managedIngress
+      // Clank's loopback-only managed ingress already performs exact project
+      // host admission and overwrites the forwarding headers. An explicit
+      // empty list keeps the adapter from restoring its direct-listener
+      // loopback defaults when application code filters an empty env list.
+      ? { ...options, allowedHosts: [] }
+      : isLoopbackHost(hostname)
+        ? { ...options, allowedHosts: ["localhost", "127.0.0.1", "::1", hostname] }
+        : options
     : options;
 
   const server = createServer({

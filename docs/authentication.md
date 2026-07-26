@@ -91,7 +91,36 @@ browser's `Origin`; both would weaken CSRF protection.
 
 For an app deployed by Clank, open the canonical URL reported by `clank status`
 and reload it before retrying. Managed ingress configures the generated runtime
-automatically and is covered by an end-to-end auth regression.
+automatically and is covered by an end-to-end auth regression. The platform
+injects `TRUST_PROXY=1` and the reserved `CLANK_MANAGED_INGRESS=1` marker into
+the application process. The Node adapter uses that marker only with trusted
+proxy mode, preserving the public host while leaving host admission at Clank's
+loopback-only managed ingress. Applications must not set this marker themselves.
+
+During local development, a UI and API on different ports are different
+origins even when both use `localhost`. Allowlist the UI origin on the backend,
+configure credentialed CORS, and give the auth client the API URL:
+
+```ts
+const uiOrigin = "http://localhost:5173";
+const runtime = await openBackend(backend, {
+  allowedOrigins: [uiOrigin],
+});
+
+const app = createApp()
+  .use(cors({ origin: uiOrigin, credentials: true }))
+  .route("*", "*", ({ request }) => runtime.handle(request));
+
+const auth = createAuthClient({
+  url: "http://localhost:3000",
+});
+```
+
+`allowedOrigins` now applies consistently to both backend RPC and its mounted
+auth routes. An explicit client `url` uses credentialed requests. This is for
+trusted, same-site origins such as localhost ports or sibling subdomains;
+Fetch Metadata still rejects genuinely cross-site auth requests. Production
+Clank apps should keep the default same-origin client and need no allowlist.
 
 For a self-hosted app behind an exclusive trusted reverse proxy:
 
