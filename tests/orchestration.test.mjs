@@ -17,7 +17,6 @@ async function fixture() {
   });
   const orchestrator = openDeploymentOrchestrator(database, {
     distributedLeaseMs: 200,
-    operationLeaseMs: 200,
     retryBaseMs: 10,
   });
   return {
@@ -120,7 +119,6 @@ test("node placement, desired generations, operation retries, and stale-worker f
     test.orchestrator.close();
     const reopened = openDeploymentOrchestrator(test.database, {
       distributedLeaseMs: 200,
-      operationLeaseMs: 200,
       retryBaseMs: 10,
     });
     assert.equal(reopened.operation(direct.operation.id).state, "queued");
