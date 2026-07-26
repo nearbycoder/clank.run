@@ -31,3 +31,12 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 - [x] Corrected file-service and TypeScript-gate documentation so the published contract matches the implementation.
 
 The final certification result and exact test counts belong in the pull request or release record after the complete gate and browser review finish.
+
+## 2026-07-26 follow-up
+
+- [x] Merged the complete 2026-07-25 security and release-certification pass into `main`.
+- [x] Replaced manual-only custom-domain routing refresh with bounded scheduled reconciliation.
+- [x] Added durable DNS leases so multiple control planes cannot check and commit the same domain concurrently.
+- [x] Added lookup deadlines, stale-result fencing, shutdown coordination, API status, and dashboard cadence visibility.
+- [x] Removed the remaining console letter mark so no logo treatment remains.
+- [ ] Record the final full-suite, security, conformance, browser, and GitHub CI results in the follow-up pull request.

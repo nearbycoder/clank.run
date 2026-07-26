@@ -55,6 +55,12 @@ export interface ClankPlatformOptions {
         resolveCname?: (hostname: string) => Promise<readonly string[]>;
         resolve4?: (hostname: string) => Promise<readonly string[]>;
         resolve6?: (hostname: string) => Promise<readonly string[]>;
+        /** Refresh custom-domain routing in the background. Defaults to 5 minutes; false disables it. */
+        domainRecheckIntervalMs?: number | false;
+        /** Maximum domains claimed by one reconciliation pass. Defaults to 25. */
+        domainRecheckBatchSize?: number;
+        /** Maximum time spent on one domain before its claim is released. Defaults to 10 seconds. */
+        domainRecheckTimeoutMs?: number;
     };
     /** Receives unexpected failures for private operator logging. */
     onError?: (error: unknown) => void;
