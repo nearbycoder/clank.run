@@ -64,31 +64,39 @@ export function createPlatformBackupScheduler(options: {
   const registerProject = (projectId: string): void => {
     if (!policy.enabled || closed) return;
     const now = Date.now();
-    internal.prepare(`INSERT INTO clank_platform_backup_schedules
-      (project_id, next_backup_at, lease_token, lease_until, last_started_at,
-       last_completed_at, last_backup_id, last_error, updated_at)
-      VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?)
-      ON CONFLICT(project_id) DO NOTHING`)
-      .run(projectId, now + policy.intervalMs!, now);
+    try {
+      internal.prepare(`INSERT INTO clank_platform_backup_schedules
+        (project_id, next_backup_at, lease_token, lease_until, last_started_at,
+         last_completed_at, last_backup_id, last_error, updated_at)
+        VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?)
+        ON CONFLICT(project_id) DO NOTHING`)
+        .run(projectId, now + policy.intervalMs!, now);
+    } catch (error) {
+      report(error);
+    }
   };
 
   const recordBackup = (projectId: string, backup: BackupManifest): void => {
     if (closed) return;
     const now = Date.now();
-    internal.prepare(`INSERT INTO clank_platform_backup_schedules
-      (project_id, next_backup_at, lease_token, lease_until, last_started_at,
-       last_completed_at, last_backup_id, last_error, updated_at)
-      VALUES (?, ?, NULL, NULL, ?, ?, ?, NULL, ?)
-      ON CONFLICT(project_id) DO UPDATE SET
-        next_backup_at = excluded.next_backup_at,
-        lease_token = NULL,
-        lease_until = NULL,
-        last_started_at = excluded.last_started_at,
-        last_completed_at = excluded.last_completed_at,
-        last_backup_id = excluded.last_backup_id,
-        last_error = NULL,
-        updated_at = excluded.updated_at`)
-      .run(projectId, policy.enabled ? now + policy.intervalMs! : null, now, now, backup.id, now);
+    try {
+      internal.prepare(`INSERT INTO clank_platform_backup_schedules
+        (project_id, next_backup_at, lease_token, lease_until, last_started_at,
+         last_completed_at, last_backup_id, last_error, updated_at)
+        VALUES (?, ?, NULL, NULL, ?, ?, ?, NULL, ?)
+        ON CONFLICT(project_id) DO UPDATE SET
+          next_backup_at = excluded.next_backup_at,
+          lease_token = NULL,
+          lease_until = NULL,
+          last_started_at = excluded.last_started_at,
+          last_completed_at = excluded.last_completed_at,
+          last_backup_id = excluded.last_backup_id,
+          last_error = NULL,
+          updated_at = excluded.updated_at`)
+        .run(projectId, policy.enabled ? now + policy.intervalMs! : null, now, now, backup.id, now);
+    } catch (error) {
+      report(error);
+    }
   };
 
   const claim = (now: number): BackupClaim[] => internal.transaction(() => {
@@ -118,12 +126,17 @@ export function createPlatformBackupScheduler(options: {
   const work = async (claim: BackupClaim): Promise<void> => {
     let leaseLost = false;
     const renewer = setInterval(() => {
-      const now = Date.now();
-      const result = internal.prepare(`UPDATE clank_platform_backup_schedules
-        SET lease_until = ?, updated_at = ?
-        WHERE project_id = ? AND lease_token = ? AND lease_until > ?`)
-        .run(now + leaseMs, now, claim.projectId, claim.token, now);
-      if (Number(result.changes) !== 1) leaseLost = true;
+      try {
+        const now = Date.now();
+        const result = internal.prepare(`UPDATE clank_platform_backup_schedules
+          SET lease_until = ?, updated_at = ?
+          WHERE project_id = ? AND lease_token = ? AND lease_until > ?`)
+          .run(now + leaseMs, now, claim.projectId, claim.token, now);
+        if (Number(result.changes) !== 1) leaseLost = true;
+      } catch (error) {
+        leaseLost = true;
+        report(error);
+      }
     }, Math.max(1_000, Math.floor(leaseMs / 3)));
     renewer.unref?.();
     try {
@@ -158,7 +171,18 @@ export function createPlatformBackupScheduler(options: {
   const run = async (): Promise<void> => {
     if (!policy.enabled || closed || flight) return;
     const claims = claim(Date.now());
-    await runBounded(claims, policy.concurrency, work, () => closed);
+    try {
+      await runBounded(claims, policy.concurrency, work, () => closed);
+    } finally {
+      internal.transaction(() => {
+        for (const entry of claims) {
+          internal.prepare(`UPDATE clank_platform_backup_schedules
+            SET lease_token = NULL, lease_until = NULL, updated_at = ?
+            WHERE project_id = ? AND lease_token = ?`)
+            .run(Date.now(), entry.projectId, entry.token);
+        }
+      });
+    }
   };
 
   const nextDelay = (): number => {
@@ -178,6 +202,15 @@ export function createPlatformBackupScheduler(options: {
 
   const schedule = (requestedDelayMs?: number): void => {
     if (!policy.enabled || closed || timer) return;
+    let delayMs = requestedDelayMs;
+    if (delayMs === undefined) {
+      try {
+        delayMs = nextDelay();
+      } catch (error) {
+        report(error);
+        delayMs = retryMs;
+      }
+    }
     timer = setTimeout(() => {
       timer = undefined;
       const current = run().catch(report);
@@ -186,7 +219,7 @@ export function createPlatformBackupScheduler(options: {
         if (flight === current) flight = undefined;
         if (!closed) schedule();
       });
-    }, requestedDelayMs ?? nextDelay());
+    }, delayMs);
     timer.unref?.();
   };
 
@@ -194,13 +227,18 @@ export function createPlatformBackupScheduler(options: {
     start() {
       if (!policy.enabled || closed) return;
       const now = Date.now();
-      internal.prepare(`INSERT INTO clank_platform_backup_schedules
-        (project_id, next_backup_at, lease_token, lease_until, last_started_at,
-         last_completed_at, last_backup_id, last_error, updated_at)
-        SELECT id, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?
-        FROM clank_platform_projects WHERE database_path IS NOT NULL
-        ON CONFLICT(project_id) DO NOTHING`).run(now, now);
-      schedule(0);
+      try {
+        internal.prepare(`INSERT INTO clank_platform_backup_schedules
+          (project_id, next_backup_at, lease_token, lease_until, last_started_at,
+           last_completed_at, last_backup_id, last_error, updated_at)
+          SELECT id, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?
+          FROM clank_platform_projects WHERE database_path IS NOT NULL
+          ON CONFLICT(project_id) DO NOTHING`).run(now, now);
+        schedule(0);
+      } catch (error) {
+        report(error);
+        schedule(retryMs);
+      }
     },
     registerProject,
     recordBackup,

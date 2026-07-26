@@ -214,7 +214,9 @@ test("durable backup claims prevent duplicate work and graceful close drains an 
       id TEXT PRIMARY KEY,
       database_path TEXT
     );
-    INSERT INTO clank_platform_projects (id, database_path) VALUES ('project_1', 'app.sqlite');
+    INSERT INTO clank_platform_projects (id, database_path) VALUES
+      ('project_1', 'app.sqlite'),
+      ('project_2', 'app.sqlite');
   `);
   setup.close();
   const firstDatabase = new DatabaseSync(databasePath);
@@ -222,7 +224,7 @@ test("durable backup claims prevent duplicate work and graceful close drains an 
   const policy = {
     enabled: true,
     intervalMs: 60_000,
-    batchSize: 1,
+    batchSize: 2,
     concurrency: 1,
     maxBackups: 30,
     maxAgeMs: 90 * 24 * 60 * 60_000,
@@ -271,13 +273,17 @@ test("durable backup claims prevent duplicate work and graceful close drains an 
     assert.equal(closed, false, "close must wait for the active encrypted backup");
     releaseBackup();
     await closing;
-    const row = firstDatabase.prepare(
-      "SELECT lease_token, lease_until, last_backup_id, last_error FROM clank_platform_backup_schedules",
-    ).get();
-    assert.equal(row.lease_token, null);
-    assert.equal(row.lease_until, null);
-    assert.equal(row.last_backup_id, "bk_0000000000000_scheduler_test");
-    assert.equal(row.last_error, null);
+    const rows = firstDatabase.prepare(
+      `SELECT project_id, lease_token, lease_until, last_backup_id, last_error
+       FROM clank_platform_backup_schedules ORDER BY project_id`,
+    ).all();
+    assert.equal(rows[0].lease_token, null);
+    assert.equal(rows[0].lease_until, null);
+    assert.equal(rows[0].last_backup_id, "bk_0000000000000_scheduler_test");
+    assert.equal(rows[0].last_error, null);
+    assert.equal(rows[1].lease_token, null, "unstarted claims must be released during shutdown");
+    assert.equal(rows[1].lease_until, null);
+    assert.equal(rows[1].last_backup_id, null);
   } finally {
     releaseBackup();
     await first.close();
