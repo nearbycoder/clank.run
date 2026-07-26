@@ -113,6 +113,8 @@ Clank automatically creates authenticated, AES-256-GCM encrypted recovery points
 
 Permanent site deletion removes the complete matching `projects/<id>/` tree after symlink-safe validation, then removes its control rows and revokes project tokens. It does not reach copied/off-host backups, external databases, artifact mirrors, or Caddy certificate storage. Include those systems in tenant-retention and erasure runbooks, and preserve the control database if deletion audit history must remain available.
 
+Audit rows live in `control.sqlite`, retain organization attribution after project removal, and upgrade in place from earlier schemas. The public API does not mutate them, but SQLite administrators can. Export them to a separate append-only audit system when control-plane operator tampering or longer retention is in scope.
+
 ## Upgrades
 
 1. Back up data and key.

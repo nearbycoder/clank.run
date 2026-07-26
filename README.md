@@ -25,7 +25,7 @@ The framework itself has no dependencies, dev dependencies, peer dependencies, v
 | SSR | Async string rendering, full-document templates, safe state serialization, CSP nonces, context and keyed lists, marker-based DOM-preserving hydration |
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, Tailwind Play CDN and compiled Tailwind CSS compatibility |
-| Deploy | Full browser console, ingress performance metrics, enforced account/organization/site/domain/release-storage quotas, custom DNS/TLS onboarding, browser-approved CLI auth, deterministic artifacts, encrypted secrets, immutable migrations, SQLite backups, storage-backed readiness, health-gated releases, confirmation-gated release and site deletion, logs, audit, rollback |
+| Deploy | Full browser console, workspace activity feed, ingress performance metrics, enforced account/organization/site/domain/release-storage quotas, custom DNS/TLS onboarding, browser-approved CLI auth, deterministic artifacts, encrypted secrets, immutable migrations, SQLite backups, storage-backed readiness, health-gated releases, confirmation-gated release and site deletion, logs, audit, rollback |
 
 ## Run it
 

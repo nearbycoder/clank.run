@@ -53,3 +53,7 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Added exact confirmation, explicit data-loss acknowledgement, CSRF/scope/RBAC checks, durable locking, and symlink-safe project-root removal.
 - [x] Re-certified all 138 tests at 82.22% line, 69.13% branch, and 82.21% function coverage, plus packed conformance and repository/history security scans.
 - [x] Browser-verified exact-confirmation deletion, quota refresh, persistent authentication, console health, and desktop/mobile layout without overflow.
+- [x] Added a durable workspace activity feed that keeps deleted-site evidence reachable through the dashboard, API, and structured CLI output.
+- [x] Added organization attribution and old-schema backfill without weakening role, membership, project-token, pagination, or input boundaries.
+- [x] Re-certified all 140 tests at 82.38% line, 69.30% branch, and 82.26% function coverage, plus packed conformance and repository/history security scans.
+- [x] Browser-verified deleted-site activity, expandable metadata, authenticated refresh, console health, and desktop/mobile layout without overflow.

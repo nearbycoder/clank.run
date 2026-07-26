@@ -152,6 +152,14 @@ The operation holds the same durable project lock used by deploy, rollback, rele
 
 If filesystem validation or removal fails, project metadata remains and Clank attempts to restart the prior active release. If the later metadata transaction fails after files were removed, the API reports a fixed recovery-safe error and a retry completes cleanup. A successful response means the platform-managed local application database, releases, rollback snapshots, encrypted recovery points, secrets, logs, metrics, domains, and scoped tokens are gone. External databases, copied artifacts, Caddy certificate storage, replicated/off-host backups, and other operator-managed copies are not discovered or erased.
 
+## Workspace audit history
+
+Every project and organization event carries durable organization attribution in the control database. The Activity dashboard and `clank activity --json` expose the same newest-first, cursor-paginated feed. Owners, administrators, and developers can read history only for organizations where their current role permits `audit`; viewers are excluded. Project-scoped tokens must include `audit`, are rechecked against current membership, and see only their project.
+
+Project deletion removes application state but not its audit rows, organization attribution, actor identity, or safe metadata. The deleted target is therefore still visible through `GET /api/audit` after `/api/projects/:id/audit` naturally becomes unavailable. Upgrading an older control database adds the organization column in place and backfills it from live project rows or the project's recorded create/delete metadata.
+
+The API is append-only, not a cryptographically signed transparency log. A trusted database administrator can still alter SQLite directly; export audit records to an independently controlled append-only sink when that threat is in scope.
+
 ## Rollback
 
 Code-only rollback is the default:
@@ -215,6 +223,7 @@ Device/public:
 Browser session:
 
 - `GET /api/dashboard`
+- `GET /api/audit?limit=100&before=<event-id>&organizationId=<id>` — role-filtered workspace history that survives project deletion;
 - project status, metrics, releases, logs, and domains;
 - project and domain creation/removal with CSRF;
 - `DELETE /api/projects/:id` with exact confirmation and explicit data-loss acknowledgement;

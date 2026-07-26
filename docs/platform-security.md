@@ -56,10 +56,13 @@ The generated local key is onboarding convenience, not protection from a comprom
 - Active artifacts cannot be removed; cleanup requires rollback scope, and deleting the immediate rollback target requires a separate rollback-loss decision that also prunes its now-unusable matching data snapshot.
 - Permanent site deletion requires an owner/admin account principal, exact slug-bound confirmation, a separate data-loss acknowledgement, and the durable project lock. Project-scoped tokens cannot invoke it.
 - Site storage removal derives the directory from the validated project ID, rejects symbolic-link parents/roots, and occurs before metadata removal. Active project tokens and distributed orchestration rows are cleared, while the deletion audit event survives the project cascade.
+- Audit rows carry non-cascading organization attribution. Workspace feeds join current membership, exclude viewers, scope project tokens to one project, cap pages at 200 events, and use parameterized descending-ID cursors.
 - Failure restores prior data/code.
 - Data rollback is narrow and explicitly confirmed.
 
 Export completed encrypted backup directories off-host and keep the master key in a separate failure domain. Site deletion removes the platform-managed local recovery directory but cannot erase already replicated backups, external databases, copied artifacts, or edge certificate storage; operators must apply the same retention/deletion request to those systems.
+
+The control-plane audit API has no update or delete operation, but the trusted SQLite administrator can modify local history. Replicate events to a separately administered append-only or signed log when operator tampering is part of the threat model.
 
 ## Runner hardening
 

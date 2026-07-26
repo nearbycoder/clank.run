@@ -22,6 +22,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Automatic verified encrypted database backups with durable cross-control-plane leases, configurable cadence and retention, private failure reporting, and dashboard controls.
 - Enforced per-project release count/byte quotas plus rollback-scoped dashboard and CLI cleanup for inactive runtime artifacts and pre-deploy snapshots.
 - Owner/admin-only permanent site deletion in the dashboard, API, and CLI with exact confirmation, explicit data-loss acknowledgement, scoped-token denial, path-safe storage removal, token revocation, and retained audit evidence.
+- A role-filtered, cursor-paginated workspace activity feed in the dashboard, API, and CLI that retains deleted-site history and upgrades existing audit rows with organization attribution.
 
 ### Fixed
 
