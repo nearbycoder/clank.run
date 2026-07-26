@@ -87,20 +87,22 @@ Clank will route the host only after both ownership and routing checks succeed.
 
 1. Open `https://clank.run` and create the bootstrap owner with a unique password of at least 12
    characters.
-2. In a local checkout, set the platform and start browser-assisted device authorization:
+2. In a local checkout, start browser-assisted device authorization:
 
    ```sh
-   clank link https://clank.run
-   clank login
+   clank login --server https://clank.run
    ```
 
 3. Create or scaffold an application and deploy it:
 
    ```sh
-   clank create my-app --template auth-todo
+   clank create my-app
    cd my-app
    clank deploy
    ```
+
+`clank create` scaffolds the authenticated to-do starter by default, including its migrations and
+deployment manifest.
 
 Each project receives a separate directory and SQLite database under `/data/projects/<project-id>`.
 Database migrations are planned and applied by Clank during deployment; a failed health check or
