@@ -7,8 +7,8 @@ same listener; Clank then routes application hosts to their supervised loopback 
 ## Topology
 
 ```text
-clink.run ───────────────┐
-*.apps.clink.run ────────┼─ Railway edge ─ Clank control plane :$PORT
+clank.run ───────────────┐
+*.apps.clank.run ────────┼─ Railway edge ─ Clank control plane :$PORT
 approved custom domains ┘                    ├─ app :4300 ─ projects/<id>/data/app.sqlite
                                              ├─ app :4301 ─ projects/<id>/data/app.sqlite
                                              └─ /data/control.sqlite
@@ -35,15 +35,15 @@ The service needs these variables:
 HOST=0.0.0.0
 NODE_ENV=production
 TRUST_PROXY=1
-CLANK_PLATFORM_URL=https://clink.run
+CLANK_PLATFORM_URL=https://clank.run
 CLANK_PLATFORM_DATA=/data
 CLANK_PLATFORM_MASTER_KEY=<base64url-encoded 32-byte secret>
 CLANK_SIGNUP=bootstrap
 CLANK_RUNNER=process
 CLANK_INGRESS=1
-CLANK_INGRESS_BASE_DOMAIN=apps.clink.run
-CLANK_APP_URL_TEMPLATE=https://{slug}.apps.clink.run
-CLANK_CUSTOM_DOMAIN_TARGET=apps.clink.run
+CLANK_INGRESS_BASE_DOMAIN=apps.clank.run
+CLANK_APP_URL_TEMPLATE=https://{slug}.apps.clank.run
+CLANK_CUSTOM_DOMAIN_TARGET=apps.clank.run
 CLANK_MAX_PROJECTS_PER_ACCOUNT=10
 CLANK_MAX_PROJECTS_PER_ORGANIZATION=10
 CLANK_MAX_DOMAINS_PER_PROJECT=5
@@ -62,11 +62,17 @@ Additional people join through email-bound invitations created by an owner or ad
 
 ## Domains
 
-Attach both `clink.run` and `*.apps.clink.run` to the Railway service. Publish every CNAME and TXT
-validation record Railway returns. Cloudflare records must be DNS-only until Railway finishes
-certificate validation; proxying can be evaluated afterward.
+Attach both `clank.run` and `*.apps.clank.run` to the Railway service. Publish every routing, ACME,
+and TXT validation record Railway returns.
 
-The wildcard gives every project an immediate `https://<slug>.apps.clink.run` URL. Railway must also
+`clank.run` is registered with and delegated to Vercel DNS. Replace Vercel's default apex and
+wildcard routing aliases while preserving its CAA records:
+
+- add an apex `ALIAS` targeting the hostname Railway supplies for `clank.run`;
+- add the `*.apps` and `_acme-challenge.apps` CNAME records Railway supplies;
+- add the `_railway-verify` and `_railway-verify.apps` TXT records Railway supplies.
+
+The wildcard gives every project an immediate `https://<slug>.apps.clank.run` URL. Railway must also
 know about a customer-owned custom domain before its edge can issue a certificate for that host.
 For the current single-tenant deployment, add the hostname to the same service with:
 
@@ -79,12 +85,12 @@ Clank will route the host only after both ownership and routing checks succeed.
 
 ## First account and CLI
 
-1. Open `https://clink.run` and create the bootstrap owner with a unique password of at least 12
+1. Open `https://clank.run` and create the bootstrap owner with a unique password of at least 12
    characters.
 2. In a local checkout, set the platform and start browser-assisted device authorization:
 
    ```sh
-   clank link https://clink.run
+   clank link https://clank.run
    clank login
    ```
 
@@ -106,9 +112,9 @@ Before each framework upgrade, download or snapshot the Railway volume and prese
 master key. After deployment, verify:
 
 ```sh
-curl --fail https://clink.run/livez
-curl --fail https://clink.run/readyz
-curl --fail https://clink.run/_clank/readyz
+curl --fail https://clank.run/livez
+curl --fail https://clank.run/readyz
+curl --fail https://clank.run/_clank/readyz
 railway logs --service clank --lines 100
 ```
 
