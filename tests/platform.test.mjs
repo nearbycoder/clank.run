@@ -11,6 +11,8 @@ import {
   parseDeploymentConfig,
 } from "../dist/index.js";
 
+const IMPERSONATION_RECENT_AUTH_MS_FOR_TEST = 30 * 60_000;
+
 function jsonRequest(path, { method = "GET", body, token, cookie, csrf, origin = "http://127.0.0.1:4200" } = {}) {
   return new Request(`http://127.0.0.1:4200${path}`, {
     method,
@@ -215,6 +217,15 @@ test("operator allowlist grants browser-only global administration and revokes i
 
     const account = await payload(platform, jsonRequest("/api/account", { cookie: admin.cookie }));
     assert.equal(account.account.platformRole, "platform_admin");
+    assert.equal(dashboard.account.platformRole, "platform_admin");
+    const operatorConsole = await platform.handle(jsonRequest("/admin", { cookie: admin.cookie }));
+    assert.equal(operatorConsole.status, 200);
+    const operatorHtml = await operatorConsole.text();
+    assert.match(operatorHtml, /"platformAdmin":true/);
+    assert.match(operatorHtml, /id="operator-navigation"/);
+    assert.match(operatorHtml, /id="admin-page"/);
+    assert.match(operatorHtml, /\/api\/admin\/analytics/);
+    assert.match(operatorHtml, /id="impersonation-dialog"/);
 
     await platform.close();
     platform = await openPlatform({
@@ -229,6 +240,279 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.equal((await revoked.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
     const demoted = await payload(platform, jsonRequest("/api/account", { cookie: admin.cookie }));
     assert.equal(demoted.account.platformRole, "user");
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("platform impersonation is recent-auth, session-bound, read-only, expiring, and audited", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-impersonation-"));
+  const dataDirectory = join(root, "platform");
+  const platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    platformAdminEmails: ["admin@example.com", "other-admin@example.com"],
+    backups: { intervalMs: false },
+  });
+  const origin = "https://console.example.test";
+  const browserRequest = (path, { method = "GET", body, cookie, csrf, requestOrigin = origin } = {}) =>
+    new Request(`${origin}${path}`, {
+      method,
+      headers: {
+        ...(body === undefined ? {} : {
+          "content-type": "application/json",
+          origin: requestOrigin,
+        }),
+        ...(cookie ? { cookie } : {}),
+        ...(csrf ? { "x-clank-csrf": csrf } : {}),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  try {
+    const admin = await authorizeCli(platform, "admin@example.com");
+    const target = await authorizeCli(platform, "target@example.com");
+    const otherAdmin = await authorizeCli(platform, "other-admin@example.com");
+    const adminBrowserCookie = admin.cookie.replace(/^clank-id=/, "__Host-clank-id=");
+    const targetBrowserCookie = target.cookie.replace(/^clank-id=/, "__Host-clank-id=");
+    const targetDashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      cookie: target.cookie,
+    }));
+    const targetProject = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      cookie: target.cookie,
+      csrf: target.csrfToken,
+      body: {
+        name: "Target project",
+        slug: "target-project",
+        organizationId: targetDashboard.organizations[0].id,
+      },
+    }), 201);
+
+    const crossOrigin = await platform.handle(browserRequest("/api/admin/impersonation", {
+      method: "POST",
+      cookie: adminBrowserCookie,
+      csrf: admin.csrfToken,
+      requestOrigin: "https://attacker.example",
+      body: {
+        targetUserId: target.user.id,
+        reason: "Investigate customer report",
+        confirmation: target.user.email,
+      },
+    }));
+    assert.equal(crossOrigin.status, 403);
+    assert.equal((await crossOrigin.json()).error.code, "ORIGIN_MISMATCH");
+
+    const selfDenied = await platform.handle(browserRequest("/api/admin/impersonation", {
+      method: "POST",
+      cookie: adminBrowserCookie,
+      csrf: admin.csrfToken,
+      body: {
+        targetUserId: admin.user.id,
+        reason: "Investigate administrator report",
+        confirmation: admin.user.email,
+      },
+    }));
+    assert.equal(selfDenied.status, 422);
+    assert.equal((await selfDenied.json()).error.code, "INVALID_TARGET");
+
+    const adminTargetDenied = await platform.handle(browserRequest("/api/admin/impersonation", {
+      method: "POST",
+      cookie: adminBrowserCookie,
+      csrf: admin.csrfToken,
+      body: {
+        targetUserId: otherAdmin.user.id,
+        reason: "Investigate administrator report",
+        confirmation: otherAdmin.user.email,
+      },
+    }));
+    assert.equal(adminTargetDenied.status, 403);
+    assert.equal((await adminTargetDenied.json()).error.code, "ADMIN_TARGET_DENIED");
+
+    const mismatched = await platform.handle(browserRequest("/api/admin/impersonation", {
+      method: "POST",
+      cookie: adminBrowserCookie,
+      csrf: admin.csrfToken,
+      body: {
+        targetUserId: target.user.id,
+        reason: "Investigate customer report",
+        confirmation: "someone-else@example.com",
+      },
+    }));
+    assert.equal(mismatched.status, 422);
+    assert.equal((await mismatched.json()).error.code, "CONFIRMATION_MISMATCH");
+
+    const controlReason = await platform.handle(browserRequest("/api/admin/impersonation", {
+      method: "POST",
+      cookie: adminBrowserCookie,
+      csrf: admin.csrfToken,
+      body: {
+        targetUserId: target.user.id,
+        reason: "Investigate\ncustomer report",
+        confirmation: target.user.email,
+      },
+    }));
+    assert.equal(controlReason.status, 422);
+    assert.equal((await controlReason.json()).error.code, "INVALID_INPUT");
+
+    const startedResponse = await platform.handle(browserRequest("/api/admin/impersonation", {
+      method: "POST",
+      cookie: adminBrowserCookie,
+      csrf: admin.csrfToken,
+      body: {
+        targetUserId: target.user.id,
+        reason: "Investigate customer report",
+        confirmation: target.user.email,
+      },
+    }));
+    assert.equal(startedResponse.status, 200);
+    const started = await startedResponse.json();
+    const setCookie = startedResponse.headers.get("set-cookie");
+    assert.match(setCookie, /^__Host-clank-impersonation=/);
+    assert.match(setCookie, /; HttpOnly/);
+    assert.match(setCookie, /; SameSite=Strict/);
+    assert.match(setCookie, /; Secure/);
+    assert.equal(started.impersonation.readOnly, true);
+    assert.equal(started.impersonation.target.id, target.user.id);
+    const impersonationCookie = setCookie.split(";", 1)[0];
+    const impersonationToken = impersonationCookie.split("=", 2)[1];
+    const combinedCookie = `${adminBrowserCookie}; ${impersonationCookie}`;
+
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    const stored = control.prepare(
+      "SELECT token_hash, actor_user_id, actor_session_id, target_user_id FROM clank_platform_impersonations WHERE id = ?",
+    ).get(started.impersonation.id);
+    assert.notEqual(stored.token_hash, impersonationToken);
+    assert.equal(stored.actor_user_id, admin.user.id);
+    assert.equal(stored.target_user_id, target.user.id);
+
+    const viewed = await payload(platform, browserRequest("/api/dashboard", {
+      cookie: combinedCookie,
+    }));
+    assert.equal(viewed.account.email, target.user.email);
+    assert.equal(viewed.account.impersonation.actor.email, admin.user.email);
+    assert.equal(viewed.account.impersonation.readOnly, true);
+    assert.deepEqual(viewed.projects.map((project) => project.id), [targetProject.project.id]);
+    const cookieTossingResistant = await payload(platform, browserRequest("/api/dashboard", {
+      cookie: `clank-impersonation=${"a".repeat(43)}; ${combinedCookie}`,
+    }));
+    assert.equal(cookieTossingResistant.account.email, target.user.email);
+
+    const account = await payload(platform, browserRequest("/api/account", {
+      cookie: combinedCookie,
+    }));
+    assert.equal(account.account.id, target.user.id);
+    assert.equal(account.actor.id, admin.user.id);
+    assert.equal(account.impersonation.id, started.impersonation.id);
+    const impersonatedConsole = await platform.handle(browserRequest("/overview", {
+      cookie: combinedCookie,
+    }));
+    assert.equal(impersonatedConsole.status, 200);
+    const impersonatedHtml = await impersonatedConsole.text();
+    assert.match(impersonatedHtml, /"platformAdmin":false/);
+    assert.match(impersonatedHtml, /"readOnly":true/);
+    assert.match(impersonatedHtml, /id="impersonation-banner"/);
+    assert.match(impersonatedHtml, /data-mutation/);
+
+    const adminControlsDenied = await platform.handle(browserRequest("/api/admin/users", {
+      cookie: combinedCookie,
+    }));
+    assert.equal(adminControlsDenied.status, 403);
+    assert.equal((await adminControlsDenied.json()).error.code, "IMPERSONATION_ACTIVE");
+
+    const mutationDenied = await platform.handle(browserRequest("/api/projects", {
+      method: "POST",
+      cookie: combinedCookie,
+      csrf: admin.csrfToken,
+      body: {
+        name: "Must not exist",
+        slug: "must-not-exist",
+        organizationId: targetDashboard.organizations[0].id,
+      },
+    }));
+    assert.equal(mutationDenied.status, 403);
+    assert.equal((await mutationDenied.json()).error.code, "IMPERSONATION_READ_ONLY");
+
+    const authDenied = await platform.handle(browserRequest("/__clank/auth/change-password", {
+      method: "POST",
+      cookie: combinedCookie,
+      csrf: admin.csrfToken,
+      body: {
+        currentPassword: "correct horse battery staple",
+        newPassword: "another correct horse battery staple",
+      },
+    }));
+    assert.equal(authDenied.status, 403);
+    assert.equal((await authDenied.json()).error.code, "IMPERSONATION_READ_ONLY");
+    const authReadDenied = await platform.handle(browserRequest("/__clank/auth/session", {
+      cookie: combinedCookie,
+    }));
+    assert.equal(authReadDenied.status, 403);
+    assert.equal((await authReadDenied.json()).error.code, "IMPERSONATION_READ_ONLY");
+
+    const stolenCookie = await payload(platform, browserRequest("/api/account", {
+      cookie: `${targetBrowserCookie}; ${impersonationCookie}`,
+    }));
+    assert.equal(stolenCookie.account.id, target.user.id);
+    assert.equal(stolenCookie.actor, null);
+    assert.equal(stolenCookie.impersonation, null);
+
+    control.prepare("UPDATE clank_platform_impersonations SET expires_at = ? WHERE id = ?")
+      .run(Date.now() - 1, started.impersonation.id);
+    const expired = await payload(platform, browserRequest("/api/account", {
+      cookie: combinedCookie,
+    }));
+    assert.equal(expired.account.id, admin.user.id);
+    assert.equal(expired.actor, null);
+    assert.equal(expired.impersonation, null);
+
+    const stoppedResponse = await platform.handle(browserRequest("/api/admin/impersonation", {
+      method: "DELETE",
+      cookie: combinedCookie,
+      csrf: admin.csrfToken,
+      body: {},
+    }));
+    assert.equal(stoppedResponse.status, 200);
+    assert.equal((await stoppedResponse.json()).stopped, true);
+    assert.match(stoppedResponse.headers.get("set-cookie"), /^__Host-clank-impersonation=;/);
+    assert.match(stoppedResponse.headers.get("set-cookie"), /Max-Age=0/);
+
+    const auditRows = control.prepare(`SELECT actor_user_id, action, metadata
+      FROM clank_platform_audit
+      WHERE action IN ('impersonation.start', 'impersonation.stop')
+      ORDER BY id`).all();
+    assert.deepEqual(auditRows.map((row) => row.actor_user_id), [admin.user.id, admin.user.id]);
+    assert.deepEqual(auditRows.map((row) => row.action), ["impersonation.start", "impersonation.stop"]);
+    assert.equal(JSON.parse(auditRows[0].metadata).targetUserId, target.user.id);
+    assert.equal(JSON.parse(auditRows[0].metadata).reason, "Investigate customer report");
+    const supportAnalytics = await payload(platform, browserRequest("/api/admin/analytics", {
+      cookie: adminBrowserCookie,
+    }));
+    assert.deepEqual(
+      supportAnalytics.supportAccess.map((event) => event.action),
+      ["impersonation.stop", "impersonation.start"],
+    );
+    assert.equal(supportAnalytics.supportAccess[0].actor.id, admin.user.id);
+    assert.equal(supportAnalytics.supportAccess[0].target.id, target.user.id);
+    assert.equal(supportAnalytics.supportAccess[0].reason, "Investigate customer report");
+    assert.equal(supportAnalytics.supportAccess[0].stoppedAt > 0, true);
+
+    control.prepare("UPDATE clank_auth_sessions SET created_at = ? WHERE user_id = ?")
+      .run(Date.now() - IMPERSONATION_RECENT_AUTH_MS_FOR_TEST - 1, admin.user.id);
+    control.close();
+    const staleAuth = await platform.handle(browserRequest("/api/admin/impersonation", {
+      method: "POST",
+      cookie: adminBrowserCookie,
+      csrf: admin.csrfToken,
+      body: {
+        targetUserId: target.user.id,
+        reason: "Investigate another report",
+        confirmation: target.user.email,
+      },
+    }));
+    assert.equal(staleAuth.status, 403);
+    assert.equal((await staleAuth.json()).error.code, "RECENT_AUTH_REQUIRED");
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
@@ -2153,6 +2437,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       "/workspaces",
       "/workspaces/personal/people",
       "/activity",
+      "/admin",
       "/projects/my-todo",
       "/projects/my-todo/performance",
       "/projects/my-todo/domains",

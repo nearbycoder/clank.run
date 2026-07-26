@@ -63,7 +63,10 @@ Additional people join through email-bound invitations created by an owner or ad
 `CLANK_PLATFORM_ADMIN_EMAILS` is an exact, comma-separated operator allowlist. Matching accounts
 receive the separate `platform_admin` role; removing an address revokes that role on the next
 control-plane start. Global administration is available only to an interactive browser session,
-never to a CLI bearer token.
+never to a CLI bearer token. After signing in, an allowlisted operator can open `/admin` for
+installation-wide analytics and the redacted account directory. Read-only support impersonation is
+short-lived, recent-auth gated, reason-bound, visibly labeled, and audited; it is not a substitute
+for limiting and protecting the operator allowlist.
 
 ## Domains
 

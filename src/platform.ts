@@ -204,6 +204,18 @@ interface TokenPrincipal {
   organizationId: string | null;
   projectId: string | null;
   permissions: readonly ProjectPermission[];
+  impersonation: PlatformImpersonation | null;
+}
+
+interface PlatformImpersonation {
+  id: string;
+  actorUserId: string;
+  actorEmail: string;
+  targetUserId: string;
+  targetEmail: string;
+  reason: string;
+  createdAt: number;
+  expiresAt: number;
 }
 
 type OrganizationRole = "owner" | "admin" | "developer" | "viewer";
@@ -255,6 +267,10 @@ const BOOTSTRAP_CLAIM_MS = 5 * 60_000;
 const MAX_PLATFORM_RATE_LIMIT_KEYS = 20_000;
 const PLATFORM_RATE_LIMIT_PRUNE_TARGET = 18_000;
 const PLATFORM_ADMIN_ROLE = "platform_admin";
+const IMPERSONATION_DURATION_MS = 15 * 60_000;
+const IMPERSONATION_RECENT_AUTH_MS = 30 * 60_000;
+const IMPERSONATION_COOKIE = "clank-impersonation";
+const SECURE_IMPERSONATION_COOKIE = "__Host-clank-impersonation";
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -1337,6 +1353,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         ? "/__proact/auth"
         : "/__clank/auth";
       if (url.pathname === authPrefix || url.pathname.startsWith(`${authPrefix}/`)) {
+        const actor = await storage.auth.resolve(request);
+        if (actor.user && actor.session && resolvePlatformImpersonation(storage.internal, request, actor)) {
+          throw new PlatformError(
+            403,
+            "IMPERSONATION_READ_ONLY",
+            "Exit read-only impersonation before using authentication controls.",
+          );
+        }
         const authOperation = url.pathname.slice(authPrefix.length).replace(/^\/+/, "");
         const registering = request.method === "POST" && authOperation === "register";
         const invitationRegistering = request.method === "POST" && authOperation === "invited-register";
@@ -1373,6 +1397,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       if (consolePath) {
         const auth = await storage.auth.resolve(request);
+        const impersonation = auth.user && auth.session
+          ? resolvePlatformImpersonation(storage.internal, request, auth)
+          : null;
+        const platformRole = auth.user
+          ? String(storage.internal.prepare(
+            "SELECT role FROM clank_auth_users WHERE id = ? AND disabled = 0",
+          ).get(auth.user.id)?.role ?? "user")
+          : null;
         const userCount = Number(storage.internal.prepare("SELECT count(*) AS count FROM clank_auth_users").get()?.count ?? 0);
         return platformConsolePage(
           publicUrl,
@@ -1380,6 +1412,24 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           url.searchParams.get("code") ?? "",
           signupMode === true || (signupMode === "bootstrap" && userCount === 0),
           signupMode === "bootstrap",
+          {
+            platformRole,
+            impersonation: impersonation ? {
+              id: impersonation.id,
+              actor: {
+                id: impersonation.actorUserId,
+                email: impersonation.actorEmail,
+              },
+              target: {
+                id: impersonation.targetUserId,
+                email: impersonation.targetEmail,
+              },
+              reason: impersonation.reason,
+              createdAt: impersonation.createdAt,
+              expiresAt: impersonation.expiresAt,
+              readOnly: true,
+            } : null,
+          },
         );
       }
       if (url.pathname === "/api/device/start" && request.method === "POST") {
@@ -1447,6 +1497,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       if (url.pathname === "/api/device/info" && request.method === "GET") {
         const auth = await requireBrowserAuth(storage.auth, request);
+        rejectActiveImpersonation(storage.internal, request, auth);
         const code = normalizeUserCode(url.searchParams.get("code") ?? "");
         const row = storage.internal.prepare(
           "SELECT user_code, client_name, status, expires_at FROM clank_platform_device_codes WHERE user_code = ?",
@@ -1456,6 +1507,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       if ((url.pathname === "/api/device/approve" || url.pathname === "/api/device/deny") && request.method === "POST") {
         const auth = await requireBrowserAuth(storage.auth, request);
+        rejectActiveImpersonation(storage.internal, request, auth);
         await storage.auth.verifyCsrf(request, auth);
         const input = plainObject(await readJsonRequest(request, 8 * 1024));
         exact(input, ["code"]);
@@ -1468,6 +1520,94 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (Number(result.changes) !== 1) throw new PlatformError(409, "CODE_UNAVAILABLE", "Device code is expired or already handled.");
         audit(storage.internal, auth.user!.id, null, null, `device.${status}`, { code });
         return api({ ok: true, status });
+      }
+      if (url.pathname === "/api/admin/impersonation" && request.method === "POST") {
+        const auth = await requirePlatformAdmin(storage, request, true);
+        if (Date.now() - auth.session!.createdAt > IMPERSONATION_RECENT_AUTH_MS) {
+          throw new PlatformError(
+            403,
+            "RECENT_AUTH_REQUIRED",
+            "Sign in again before starting an impersonation session.",
+          );
+        }
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["targetUserId", "reason", "confirmation"]);
+        const targetUserId = boundedString(input.targetUserId, "targetUserId", 8, 128);
+        if (!/^[A-Za-z0-9_-]+$/u.test(targetUserId)) {
+          throw new PlatformError(422, "INVALID_INPUT", "targetUserId is invalid.");
+        }
+        const reason = boundedString(input.reason, "reason", 8, 500).trim();
+        if (reason.length < 8 || /[\u0000-\u001f\u007f]/u.test(reason)) {
+          throw new PlatformError(
+            422,
+            "INVALID_INPUT",
+            "reason must contain at least 8 characters and no control characters.",
+          );
+        }
+        const target = storage.internal.prepare(
+          "SELECT id, email, role, disabled FROM clank_auth_users WHERE id = ?",
+        ).get(targetUserId);
+        if (!target || Number(target.disabled) !== 0) {
+          throw new PlatformError(404, "USER_NOT_FOUND", "The target account is unavailable.");
+        }
+        if (String(target.id) === auth.user!.id) {
+          throw new PlatformError(422, "INVALID_TARGET", "A platform administrator cannot impersonate their own account.");
+        }
+        if (String(target.role) === PLATFORM_ADMIN_ROLE) {
+          throw new PlatformError(403, "ADMIN_TARGET_DENIED", "Platform administrators cannot impersonate one another.");
+        }
+        const confirmation = normalizeEmail(input.confirmation);
+        if (confirmation !== String(target.email).trim().toLowerCase()) {
+          throw new PlatformError(422, "CONFIRMATION_MISMATCH", "Type the target account email exactly.");
+        }
+        const rawToken = await randomToken(32);
+        const id = await randomId(18);
+        const now = Date.now();
+        const expiresAt = now + IMPERSONATION_DURATION_MS;
+        storage.internal.transaction((changes) => {
+          storage.internal.prepare(`UPDATE clank_platform_impersonations SET revoked_at = ?
+            WHERE actor_user_id = ? AND actor_session_id = ? AND revoked_at IS NULL`)
+            .run(now, auth.user!.id, auth.session!.id);
+          storage.internal.prepare(`INSERT INTO clank_platform_impersonations
+            (id, token_hash, actor_user_id, actor_session_id, target_user_id, reason,
+             created_at, expires_at, revoked_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
+            .run(
+              id,
+              syncHash(rawToken),
+              auth.user!.id,
+              auth.session!.id,
+              targetUserId,
+              reason,
+              now,
+              expiresAt,
+            );
+          audit(storage.internal, auth.user!.id, null, null, "impersonation.start", {
+            impersonationId: id,
+            targetUserId,
+            targetEmail: String(target.email),
+            reason,
+            expiresAt,
+          });
+          changes.record("__platform", auth.user!.id);
+        });
+        return apiWithCookie({
+          ok: true,
+          impersonation: {
+            id,
+            actor: { id: auth.user!.id, email: auth.user!.email },
+            target: { id: targetUserId, email: String(target.email) },
+            reason,
+            createdAt: now,
+            expiresAt,
+            readOnly: true,
+          },
+        }, impersonationCookie(request, rawToken, IMPERSONATION_DURATION_MS));
+      }
+      if (url.pathname === "/api/admin/impersonation" && request.method === "DELETE") {
+        const auth = await requireBrowserAuth(storage.auth, request);
+        await storage.auth.verifyCsrf(request, auth);
+        return stopPlatformImpersonation(storage.internal, request, auth);
       }
       if (url.pathname === "/api/admin/users" && request.method === "GET") {
         await requirePlatformAdmin(storage, request);
@@ -1528,7 +1668,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (principal.projectId && !principal.permissions.includes("read")) {
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metrics.");
         }
-        if (!principal.projectId) await ensurePersonalOrganization(storage.internal, principal, limits.organizationsPerAccount);
+        if (!principal.projectId && !principal.impersonation) {
+          await ensurePersonalOrganization(storage.internal, principal, limits.organizationsPerAccount);
+        }
         return api(dashboardPayload(
           storage.internal,
           principal,
@@ -1553,6 +1695,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             email: principal.email,
             platformRole: String(account?.role ?? "user"),
           },
+          actor: principal.impersonation ? {
+            id: principal.impersonation.actorUserId,
+            email: principal.impersonation.actorEmail,
+            platformRole: PLATFORM_ADMIN_ROLE,
+          } : null,
+          impersonation: principal.impersonation ? {
+            id: principal.impersonation.id,
+            reason: principal.impersonation.reason,
+            createdAt: principal.impersonation.createdAt,
+            expiresAt: principal.impersonation.expiresAt,
+            readOnly: true,
+          } : null,
           token: principal.tokenId === null ? null : {
             id: principal.tokenId,
             organizationId: principal.organizationId,
@@ -2550,6 +2704,21 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   internal.exec("DROP INDEX IF EXISTS proact_platform_tokens_user");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_tokens_user ON clank_platform_tokens (user_id)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_impersonations (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    actor_user_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    actor_session_id TEXT NOT NULL REFERENCES clank_auth_sessions(id) ON DELETE CASCADE,
+    target_user_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    reason TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_impersonations_actor
+    ON clank_platform_impersonations (actor_user_id, actor_session_id, expires_at)`);
+  internal.prepare(`DELETE FROM clank_platform_impersonations
+    WHERE expires_at <= ? OR revoked_at IS NOT NULL`).run(Date.now());
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_device_codes (
     device_hash TEXT PRIMARY KEY,
     user_code TEXT NOT NULL UNIQUE,
@@ -2838,8 +3007,134 @@ async function requirePlatformAdmin(
   if (auth.user!.role !== PLATFORM_ADMIN_ROLE) {
     throw new PlatformError(403, "PLATFORM_ADMIN_REQUIRED", "Platform administrator access is required.");
   }
+  rejectActiveImpersonation(storage.internal, request, auth);
   if (verifyCsrf) await storage.auth.verifyCsrf(request, auth);
   return auth;
+}
+
+function resolvePlatformImpersonation(
+  internal: SQLiteInternal,
+  request: Request,
+  auth: AuthRequest<DefaultAuthProfile>,
+): PlatformImpersonation | null {
+  if (!auth.user || !auth.session) return null;
+  const token = impersonationToken(request);
+  if (!token) return null;
+  const row = internal.prepare(`SELECT
+      i.id,
+      i.actor_user_id,
+      i.actor_session_id,
+      i.target_user_id,
+      i.reason,
+      i.created_at,
+      i.expires_at,
+      i.revoked_at,
+      actor.email AS actor_email,
+      actor.role AS actor_role,
+      actor.disabled AS actor_disabled,
+      target.email AS target_email,
+      target.role AS target_role,
+      target.disabled AS target_disabled
+    FROM clank_platform_impersonations i
+    JOIN clank_auth_users actor ON actor.id = i.actor_user_id
+    JOIN clank_auth_users target ON target.id = i.target_user_id
+    WHERE i.token_hash = ?`).get(syncHash(token));
+  if (
+    !row
+    || row.revoked_at !== null
+    || Number(row.expires_at) <= Date.now()
+    || String(row.actor_user_id) !== auth.user.id
+    || String(row.actor_session_id) !== auth.session.id
+    || String(row.actor_role) !== PLATFORM_ADMIN_ROLE
+    || Number(row.actor_disabled) !== 0
+    || String(row.target_role) === PLATFORM_ADMIN_ROLE
+    || Number(row.target_disabled) !== 0
+  ) return null;
+  return {
+    id: String(row.id),
+    actorUserId: String(row.actor_user_id),
+    actorEmail: String(row.actor_email),
+    targetUserId: String(row.target_user_id),
+    targetEmail: String(row.target_email),
+    reason: String(row.reason),
+    createdAt: Number(row.created_at),
+    expiresAt: Number(row.expires_at),
+  };
+}
+
+function rejectActiveImpersonation(
+  internal: SQLiteInternal,
+  request: Request,
+  auth: AuthRequest<DefaultAuthProfile>,
+): void {
+  if (resolvePlatformImpersonation(internal, request, auth)) {
+    throw new PlatformError(
+      403,
+      "IMPERSONATION_ACTIVE",
+      "Exit impersonation before using administrator or identity controls.",
+    );
+  }
+}
+
+function stopPlatformImpersonation(
+  internal: SQLiteInternal,
+  request: Request,
+  auth: AuthRequest<DefaultAuthProfile>,
+): Response {
+  const token = impersonationToken(request);
+  const now = Date.now();
+  const row = token
+    ? internal.prepare(`SELECT i.id, i.target_user_id, i.reason, i.created_at, i.expires_at,
+        target.email AS target_email
+      FROM clank_platform_impersonations i
+      JOIN clank_auth_users target ON target.id = i.target_user_id
+      WHERE i.token_hash = ? AND i.actor_user_id = ? AND i.actor_session_id = ?
+        AND i.revoked_at IS NULL`).get(syncHash(token), auth.user!.id, auth.session!.id)
+    : undefined;
+  if (row) {
+    internal.transaction((changes) => {
+      const result = internal.prepare(`UPDATE clank_platform_impersonations SET revoked_at = ?
+        WHERE id = ? AND revoked_at IS NULL`).run(now, row.id);
+      if (Number(result.changes) === 1) {
+        audit(internal, auth.user!.id, null, null, "impersonation.stop", {
+          impersonationId: String(row.id),
+          targetUserId: String(row.target_user_id),
+          targetEmail: String(row.target_email),
+          reason: String(row.reason),
+          createdAt: Number(row.created_at),
+          expiresAt: Number(row.expires_at),
+          stoppedAt: now,
+        });
+        changes.record("__platform", auth.user!.id);
+      }
+    });
+  }
+  return apiWithCookie({
+    ok: true,
+    stopped: Boolean(row),
+  }, impersonationCookie(request, "", 0));
+}
+
+function impersonationToken(request: Request): string | null {
+  const expectedName = new URL(request.url).protocol === "https:"
+    ? SECURE_IMPERSONATION_COOKIE
+    : IMPERSONATION_COOKIE;
+  const cookie = request.headers.get("cookie") ?? "";
+  for (const part of cookie.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator === -1) continue;
+    const name = part.slice(0, separator).trim();
+    if (name !== expectedName) continue;
+    const token = part.slice(separator + 1).trim();
+    if (/^[A-Za-z0-9_-]{20,200}$/u.test(token)) return token;
+  }
+  return null;
+}
+
+function impersonationCookie(request: Request, value: string, lifetimeMs: number): string {
+  const secure = new URL(request.url).protocol === "https:";
+  const name = secure ? SECURE_IMPERSONATION_COOKIE : IMPERSONATION_COOKIE;
+  return `${name}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.max(0, Math.floor(lifetimeMs / 1_000))}${secure ? "; Secure" : ""}`;
 }
 
 function reconcilePlatformAdminRoles(
@@ -2881,22 +3176,32 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
     organizationId: row.organization_id === null ? null : String(row.organization_id),
     projectId: row.project_id === null ? null : String(row.project_id),
     permissions: parseProjectPermissions(row.permissions),
+    impersonation: null,
   };
 }
 
 async function requirePlatformPrincipal(storage: PlatformDatabase, request: Request): Promise<TokenPrincipal> {
   if (request.headers.has("authorization")) return requireToken(storage.internal, request);
   const auth = await requireBrowserAuth(storage.auth, request);
+  const impersonation = resolvePlatformImpersonation(storage.internal, request, auth);
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+    if (impersonation) {
+      throw new PlatformError(
+        403,
+        "IMPERSONATION_READ_ONLY",
+        "This impersonation session is read-only.",
+      );
+    }
     await storage.auth.verifyCsrf(request, auth);
   }
   return {
     tokenId: null,
-    userId: auth.user!.id,
-    email: auth.user!.email,
+    userId: impersonation?.targetUserId ?? auth.user!.id,
+    email: impersonation?.targetEmail ?? auth.user!.email,
     organizationId: null,
     projectId: null,
     permissions: [],
+    impersonation,
   };
 }
 
@@ -3294,6 +3599,18 @@ function platformAdminAnalytics(
   let cumulativeUsers = Number(internal.prepare(
     "SELECT count(*) AS count FROM clank_auth_users WHERE created_at < ?",
   ).get(start)?.count ?? 0);
+  const supportRows = internal.prepare(`SELECT
+      a.id,
+      a.actor_user_id,
+      a.action,
+      a.metadata,
+      a.created_at,
+      u.email AS actor_email
+    FROM clank_platform_audit a
+    LEFT JOIN clank_auth_users u ON u.id = a.actor_user_id
+    WHERE a.action IN ('impersonation.start', 'impersonation.stop')
+    ORDER BY a.id DESC
+    LIMIT 25`).all();
   return {
     range: range.name,
     start,
@@ -3326,6 +3643,25 @@ function platformAdminAnalytics(
         at: Number(row.point_at),
         newUsers,
         totalUsers: cumulativeUsers,
+      };
+    }),
+    supportAccess: supportRows.map((row) => {
+      const metadata = JSON.parse(String(row.metadata)) as Record<string, unknown>;
+      return {
+        id: Number(row.id),
+        action: String(row.action),
+        createdAt: Number(row.created_at),
+        actor: {
+          id: String(row.actor_user_id),
+          email: row.actor_email === null ? null : String(row.actor_email),
+        },
+        target: {
+          id: String(metadata.targetUserId ?? ""),
+          email: String(metadata.targetEmail ?? ""),
+        },
+        reason: String(metadata.reason ?? ""),
+        expiresAt: Number(metadata.expiresAt ?? 0),
+        stoppedAt: metadata.stoppedAt === undefined ? null : Number(metadata.stoppedAt),
       };
     }),
     topProjects: topRows.map((row) => ({
@@ -3680,11 +4016,26 @@ function dashboardPayload(
       (SELECT count(*) FROM clank_platform_organizations WHERE created_by = ?) AS organizations,
       (SELECT count(*) FROM clank_platform_projects WHERE owner_id = ?) AS projects`)
     .get(principal.userId, principal.userId);
+  const platformAccount = internal.prepare(
+    "SELECT role FROM clank_auth_users WHERE id = ? AND disabled = 0",
+  ).get(principal.userId);
   return {
     ok: true,
     account: {
       id: principal.userId,
       email: principal.email,
+      platformRole: String(platformAccount?.role ?? "user"),
+      impersonation: principal.impersonation ? {
+        id: principal.impersonation.id,
+        actor: {
+          id: principal.impersonation.actorUserId,
+          email: principal.impersonation.actorEmail,
+        },
+        reason: principal.impersonation.reason,
+        createdAt: principal.impersonation.createdAt,
+        expiresAt: principal.impersonation.expiresAt,
+        readOnly: true,
+      } : null,
       usage: {
         organizations: Number(ownedUsage?.organizations ?? 0),
         projects: Number(ownedUsage?.projects ?? 0),
@@ -4007,6 +4358,12 @@ function api(value: unknown, status = 200): Response {
       "referrer-policy": "no-referrer",
     },
   });
+}
+
+function apiWithCookie(value: unknown, cookie: string, status = 200): Response {
+  const response = api(value, status);
+  response.headers.append("set-cookie", cookie);
+  return response;
 }
 
 function problem(status: number, code: string, message: string, retryAfter?: number): Response {
@@ -4674,6 +5031,7 @@ const PLATFORM_CONSOLE_STATIC_PATHS = new Set([
   "/projects",
   "/workspaces",
   "/activity",
+  "/admin",
 ]);
 const PLATFORM_CONSOLE_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/u;
 const PLATFORM_PROJECT_SECTIONS = new Set([
@@ -4714,7 +5072,8 @@ function isPlatformConsoleNamespacePath(pathname: string): boolean {
     || firstSegment === "overview"
     || firstSegment === "projects"
     || firstSegment === "workspaces"
-    || firstSegment === "activity";
+    || firstSegment === "activity"
+    || firstSegment === "admin";
 }
 
 function domainResolver(options: ClankPlatformOptions["ingress"]): DomainDnsResolver | undefined {

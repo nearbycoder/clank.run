@@ -13,6 +13,7 @@ The console uses normal, refresh-safe URLs rather than keeping navigation only i
 | `/login`, `/signup`, `/invite` | Account access and invitation-assisted registration |
 | `/overview` | Account-wide project and traffic summary |
 | `/activity` | Authorized workspace audit history |
+| `/admin` | Browser-only global analytics, account directory, and support access for allowlisted operators |
 | `/workspaces/<workspace-slug>/people` | Members, roles, and invitations for one workspace |
 | `/projects/<project-slug>/performance` | Project traffic and latency, with `?range=1h\|24h\|7d\|30d` |
 | `/projects/<project-slug>/domains` | Domain ownership, routing, and TLS |
@@ -45,6 +46,21 @@ backups, and logs.
 The workspace Activity view shows append-only API history across every organization where the current owner, administrator, or developer role permits audit access. Events identify their action, target, actor, timestamp, and expandable safe metadata. Pagination uses a descending event-ID cursor, so concurrent new events do not duplicate or skip older pages. Deleted projects remain named and visibly marked as deleted.
 
 The **People** view creates and switches between the account's workspaces, then shows the current role, members, pending invitations, and project usage. The creation control reflects the transactionally enforced owned-workspace quota and selects the new workspace immediately. A signed-in recipient can paste an email-bound token to join without using the CLI. Owners and administrators can invite by email, copy the single-use token once, revoke pending invitations, change roles, remove collaborators, or leave when last-owner protection permits. Pending invitation addresses are hidden from developers and viewers, including email redaction in developer activity metadata; disabled controls reflect server capabilities, but every operation is authorized again by the API.
+
+Allowlisted platform operators see a separate **Control plane** view. Its range-selectable global
+traffic histogram, capacity totals, account growth, and top-project table aggregate the complete
+installation. The cursor-paginated account directory exposes only operational identity and usage
+metadata and supports bounded email/name search. CLI bearer tokens cannot open these APIs.
+
+An operator may start a 15-minute read-only support session from an eligible account row after
+entering a reason and the exact target email. The target's authorized dashboard becomes visible,
+but every server-side mutation, identity control, device approval, and operator API is denied. A
+persistent warning identifies both accounts, the reason, and expiry. Exit restores the real
+operator, and sign-out revokes the support session before ending the account session. Operators
+cannot impersonate themselves, disabled accounts, or other platform administrators, and both start
+and stop events remain attributed to the real operator.
+The operator view keeps the latest 25 start/stop records visible with the real operator, target,
+reason, timestamp, and planned expiry; the durable audit table remains the source of truth.
 
 Each project has performance, deployments, domains, logs, backups, and settings views. The project header shows its production URL, runtime state, workspace, and current role. Performance identifies the active production release, presents the exact `clank deploy` next step when no release exists, and supports `1h`, `24h`, `7d`, and `30d` metric windows. Domains walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. Deployments shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. Backups exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. Settings makes operational identity and database provisioning state visible, then gives owners and administrators a confirmation-gated way to permanently delete the project and reclaim its quota. A project without a first deployment reports that its isolated database will be provisioned on first deploy instead of failing the whole screen.
 
@@ -165,6 +181,10 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 ## Browser/API endpoints
 
 - `GET /api/dashboard` — account, organizations, enforced limits, projects, 24-hour summaries, and domain-edge configuration.
+- `GET /api/admin/analytics?range=24h` — browser-platform-admin-only global capacity, traffic, account growth, and top-project summaries.
+- `GET /api/admin/users?limit=50&before=<cursor>&query=<text>` — browser-platform-admin-only redacted account directory.
+- `POST /api/admin/impersonation` — recent-auth platform administrator starts a reason-bound read-only support session after exact email confirmation.
+- `DELETE /api/admin/impersonation` — revoke the current browser-session-bound support session.
 - `GET /api/audit?limit=100&before=<event-id>&organizationId=<id>` — role-filtered, cursor-paginated workspace activity including deleted projects.
 - `POST /api/organizations` — create an owned workspace under the account quota.
 - `GET /api/organizations/:id` — workspace capabilities, member roster, and administrator-only active invitation metadata.

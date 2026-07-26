@@ -29,6 +29,19 @@ denied even when they belong to an operator. The user directory returns identity
 membership, project, and aggregate storage metadata but never password hashes, session/CSRF
 secrets, token hashes, raw tokens, recovery material, passkeys, or application-database users.
 
+Support impersonation is deliberately narrower than administrator access. Starting it requires the
+operator's same-origin browser session, CSRF token, a session created within the last 30 minutes, an
+8–500 character audit reason, and exact target-email confirmation. An operator cannot target
+themselves, a disabled account, or another platform administrator. The opaque 15-minute capability
+is stored only as a hash, bound to the operator's current browser session, and carried in a separate
+`HttpOnly`, `Secure`, `SameSite=Strict` cookie. The effective target identity applies only to safe
+read methods: tenant, identity, device-approval, and platform-administration mutations are rejected
+server-side. A permanent console banner names the operator, target, reason, and expiry; starting and
+stopping are attributed to the real operator in the audit log. Signing out first revokes the support
+session. These controls reduce accidental change and token replay, but impersonation still exposes
+all data that the target can read, so operators need strong account security and a documented
+support-access policy.
+
 Sign-out and an authenticated API `401` reload the console from the server instead of reusing an in-memory dashboard. This clears prior-account DOM and recomputes both session state and bootstrap availability before another identity can use the page.
 
 Invitation tokens are email-bound, single-use, expiring, hashed at rest, and returned only by the create response. A valid token is a narrowly scoped account-creation capability even when ordinary registration is closed. The assisted route enforces the configured origin policy before token lookup, uses the normal bounded registration, rate-limit, password-validation, and scrypt path, then transactionally rechecks and consumes the invitation with membership creation. A race or membership failure deletes the new account and its cascaded session before responding; invalid, expired, revoked, mismatched, and replayed tokens receive a generic invitation error.
