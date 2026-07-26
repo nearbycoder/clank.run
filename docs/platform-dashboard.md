@@ -13,6 +13,8 @@ The overview shows:
 - enforced site capacity across the account's organizations; and
 - a site picker with request and p95-latency summaries.
 
+The workspace Activity view shows append-only API history across every organization where the current owner, administrator, or developer role permits audit access. Events identify their action, target, actor, timestamp, and expandable safe metadata. Pagination uses a descending event-ID cursor, so concurrent new events do not duplicate or skip older pages. Deleted projects remain named and visibly marked as deleted.
+
 Each site has performance, domains, deployments, backups, logs, and settings views. The performance chart supports `1h`, `24h`, `7d`, and `30d` windows. The domains view walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. The deployments view shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. The backups view exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. The settings view gives owners and administrators a confirmation-gated way to permanently delete the site and reclaim its quota. A project without a first deployment reports that its isolated database is not available instead of failing the whole project screen.
 
 The dashboard uses the same organization membership and project-permission checks as the CLI. API values are inserted with DOM `textContent` or attributes rather than HTML parsing. The page has a nonce-bound script, restrictive CSP, no-store responses, framing denial, and no third-party assets.
@@ -132,6 +134,7 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 ## Browser/API endpoints
 
 - `GET /api/dashboard` — account, organizations, enforced limits, sites, 24-hour summaries, and domain-edge configuration.
+- `GET /api/audit?limit=100&before=<event-id>&organizationId=<id>` — role-filtered, cursor-paginated workspace activity including deleted projects.
 - `GET /api/projects/:id` — project status, usage, current organization role, and whether the principal may delete the site.
 - `DELETE /api/projects/:id` — owner/admin-only permanent deletion with `{ "confirmation": "delete-site <slug>", "acknowledgeDataLoss": true }`.
 - `GET /api/projects/:id/metrics?range=24h` — bounded metric summary and downsampled points.

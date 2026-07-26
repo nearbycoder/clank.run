@@ -1390,6 +1390,31 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
 
       const principal = await requirePlatformPrincipal(storage, request);
+      if (url.pathname === "/api/audit" && request.method === "GET") {
+        const limit = queryInteger(url.searchParams.get("limit"), "limit", 100, 1, 200);
+        const before = queryInteger(url.searchParams.get("before"), "before", null, 1, Number.MAX_SAFE_INTEGER);
+        const organizationId = url.searchParams.get("organizationId");
+        if (organizationId !== null) {
+          if (!/^[A-Za-z0-9_-]{8,128}$/u.test(organizationId)) {
+            throw new PlatformError(422, "INVALID_INPUT", "organizationId is invalid.");
+          }
+          if (principal.projectId) {
+            throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot select a workspace audit feed.");
+          }
+          const membership = organizationMembership(storage.internal, organizationId, principal.userId);
+          if (!roleAllows(membership.role, "audit")) {
+            throw new PlatformError(403, "ROLE_DENIED", `The ${membership.role} role cannot perform audit operations.`);
+          }
+        }
+        const result = workspaceAuditEvents(
+          storage.internal,
+          principal,
+          limit,
+          before,
+          organizationId,
+        );
+        return api({ ok: true, ...result });
+      }
       if (url.pathname === "/api/dashboard" && request.method === "GET") {
         if (principal.projectId && !principal.permissions.includes("read")) {
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metrics.");
@@ -2488,10 +2513,37 @@ async function openPlatformDatabase(path: string, signup: boolean): Promise<Plat
     actor_user_id TEXT NOT NULL,
     actor_token_id TEXT,
     project_id TEXT,
+    organization_id TEXT,
     action TEXT NOT NULL,
     metadata TEXT NOT NULL CHECK (json_valid(metadata)),
     created_at INTEGER NOT NULL
   )`);
+  const auditColumns = internal.prepare("PRAGMA table_info(clank_platform_audit)").all();
+  if (!auditColumns.some((column) => column.name === "organization_id")) {
+    internal.exec("ALTER TABLE clank_platform_audit ADD COLUMN organization_id TEXT");
+    internal.exec(`UPDATE clank_platform_audit
+      SET organization_id = (
+        SELECT organization_id FROM clank_platform_projects
+        WHERE clank_platform_projects.id = clank_platform_audit.project_id
+      )
+      WHERE organization_id IS NULL AND project_id IS NOT NULL`);
+    internal.exec(`UPDATE clank_platform_audit AS target
+      SET organization_id = (
+        SELECT json_extract(source.metadata, '$.organizationId')
+        FROM clank_platform_audit AS source
+        WHERE source.project_id = target.project_id
+          AND json_type(source.metadata, '$.organizationId') = 'text'
+        ORDER BY source.id DESC
+        LIMIT 1
+      )
+      WHERE target.organization_id IS NULL AND target.project_id IS NOT NULL`);
+    internal.exec(`UPDATE clank_platform_audit
+      SET organization_id = json_extract(metadata, '$.organizationId')
+      WHERE organization_id IS NULL
+        AND json_type(metadata, '$.organizationId') = 'text'`);
+  }
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_audit_organization ON clank_platform_audit (organization_id, id DESC)");
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_audit_project ON clank_platform_audit (project_id, id DESC)");
   internal.prepare("DELETE FROM clank_platform_device_codes WHERE expires_at <= ?").run(Date.now());
   internal.prepare("DELETE FROM clank_platform_tokens WHERE expires_at <= ?").run(Date.now());
   internal.prepare("DELETE FROM clank_platform_invitations WHERE expires_at <= ? OR revoked_at IS NOT NULL").run(Date.now());
@@ -3217,10 +3269,126 @@ function audit(
   action: string,
   metadata: Record<string, unknown>,
 ): void {
+  const projectOrganization = projectId === null
+    ? null
+    : internal.prepare("SELECT organization_id FROM clank_platform_projects WHERE id = ?").get(projectId);
+  const organizationId = projectOrganization?.organization_id === null
+    || projectOrganization?.organization_id === undefined
+    ? typeof metadata.organizationId === "string"
+      ? metadata.organizationId
+      : null
+    : String(projectOrganization.organization_id);
   internal.prepare(`INSERT INTO clank_platform_audit
-    (actor_user_id, actor_token_id, project_id, action, metadata, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(userId, tokenId, projectId, action, JSON.stringify(metadata), Date.now());
+    (actor_user_id, actor_token_id, project_id, organization_id, action, metadata, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(userId, tokenId, projectId, organizationId, action, JSON.stringify(metadata), Date.now());
+}
+
+function workspaceAuditEvents(
+  internal: SQLiteInternal,
+  principal: TokenPrincipal,
+  limit: number,
+  before: number | null,
+  organizationId: string | null,
+): { events: Record<string, unknown>[]; nextBefore: number | null } {
+  let rows: Record<string, unknown>[];
+  if (principal.projectId) {
+    accessibleProject(internal, principal.projectId, principal, "audit");
+    rows = internal.prepare(`SELECT a.id, a.organization_id, a.project_id, a.action, a.metadata,
+      a.created_at, a.actor_user_id, a.actor_token_id, u.email AS actor_email,
+        o.name AS organization_name, o.slug AS organization_slug,
+        p.id AS live_project_id,
+        COALESCE(p.name, (
+          SELECT json_extract(history.metadata, '$.name')
+          FROM clank_platform_audit history
+          WHERE history.project_id = a.project_id
+            AND json_type(history.metadata, '$.name') = 'text'
+          ORDER BY history.id DESC LIMIT 1
+        )) AS project_name,
+        COALESCE(p.slug, (
+          SELECT json_extract(history.metadata, '$.slug')
+          FROM clank_platform_audit history
+          WHERE history.project_id = a.project_id
+            AND json_type(history.metadata, '$.slug') = 'text'
+          ORDER BY history.id DESC LIMIT 1
+        )) AS project_slug
+      FROM clank_platform_audit a
+      LEFT JOIN clank_auth_users u ON u.id = a.actor_user_id
+      LEFT JOIN clank_platform_organizations o ON o.id = a.organization_id
+      LEFT JOIN clank_platform_projects p ON p.id = a.project_id
+      WHERE a.project_id = ? AND (? IS NULL OR a.id < ?)
+      ORDER BY a.id DESC LIMIT ?`)
+      .all(principal.projectId, before, before, limit);
+  } else {
+    rows = internal.prepare(`SELECT a.id, a.organization_id, a.project_id, a.action, a.metadata,
+      a.created_at, a.actor_user_id, a.actor_token_id, u.email AS actor_email,
+        o.name AS organization_name, o.slug AS organization_slug,
+        p.id AS live_project_id,
+        COALESCE(p.name, (
+          SELECT json_extract(history.metadata, '$.name')
+          FROM clank_platform_audit history
+          WHERE history.project_id = a.project_id
+            AND json_type(history.metadata, '$.name') = 'text'
+          ORDER BY history.id DESC LIMIT 1
+        )) AS project_name,
+        COALESCE(p.slug, (
+          SELECT json_extract(history.metadata, '$.slug')
+          FROM clank_platform_audit history
+          WHERE history.project_id = a.project_id
+            AND json_type(history.metadata, '$.slug') = 'text'
+          ORDER BY history.id DESC LIMIT 1
+        )) AS project_slug
+      FROM clank_platform_audit a
+      JOIN clank_platform_memberships m
+        ON m.organization_id = a.organization_id AND m.user_id = ?
+      LEFT JOIN clank_auth_users u ON u.id = a.actor_user_id
+      LEFT JOIN clank_platform_organizations o ON o.id = a.organization_id
+      LEFT JOIN clank_platform_projects p ON p.id = a.project_id
+      WHERE m.role IN ('owner', 'admin', 'developer')
+        AND (? IS NULL OR a.organization_id = ?)
+        AND (? IS NULL OR a.id < ?)
+      ORDER BY a.id DESC LIMIT ?`)
+      .all(principal.userId, organizationId, organizationId, before, before, limit);
+  }
+  const events = rows.map((row) => {
+    const metadata = JSON.parse(String(row.metadata)) as Record<string, unknown>;
+    const projectId = row.project_id === null ? null : String(row.project_id);
+    const projectName = row.project_name === null || row.project_name === undefined
+      ? typeof metadata.name === "string"
+        ? metadata.name
+        : typeof metadata.slug === "string"
+          ? metadata.slug
+          : projectId
+      : String(row.project_name);
+    return {
+      id: Number(row.id),
+      organization: row.organization_id === null ? null : {
+        id: String(row.organization_id),
+        name: row.organization_name === null ? String(row.organization_id) : String(row.organization_name),
+        slug: row.organization_slug === null ? null : String(row.organization_slug),
+      },
+      project: projectId === null ? null : {
+        id: projectId,
+        name: projectName,
+        slug: row.project_slug === null || row.project_slug === undefined
+          ? typeof metadata.slug === "string" ? metadata.slug : null
+          : String(row.project_slug),
+        deleted: row.live_project_id === null || row.live_project_id === undefined,
+      },
+      action: String(row.action),
+      metadata,
+      createdAt: Number(row.created_at),
+      actor: {
+        id: String(row.actor_user_id),
+        email: row.actor_email === null ? null : String(row.actor_email),
+        tokenId: row.actor_token_id === null ? null : String(row.actor_token_id),
+      },
+    };
+  });
+  return {
+    events,
+    nextBefore: events.length === limit ? Number(events.at(-1)!.id) : null,
+  };
 }
 
 function api(value: unknown, status = 200): Response {
@@ -4165,6 +4333,34 @@ function integerInRange(value: unknown, name: string, minimum: number, maximum: 
     throw new PlatformError(422, "INVALID_INPUT", `${name} must be an integer from ${minimum} to ${maximum}.`);
   }
   return Number(value);
+}
+
+function queryInteger(
+  value: string | null,
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number;
+function queryInteger(
+  value: string | null,
+  name: string,
+  fallback: null,
+  minimum: number,
+  maximum: number,
+): number | null;
+function queryInteger(
+  value: string | null,
+  name: string,
+  fallback: number | null,
+  minimum: number,
+  maximum: number,
+): number | null {
+  if (value === null) return fallback;
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) {
+    throw new PlatformError(422, "INVALID_INPUT", `${name} must be an integer from ${minimum} to ${maximum}.`);
+  }
+  return integerInRange(Number(value), name, minimum, maximum);
 }
 
 function normalizeUserCode(value: string): string {

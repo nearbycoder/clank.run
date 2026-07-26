@@ -322,6 +322,94 @@ test("project deletion CLI requires explicit data-loss intent and removes a matc
   }
 });
 
+test("activity CLI validates cursors and emits the workspace audit feed as structured JSON", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-activity-"));
+  const home = join(root, "home");
+  let observed;
+  const server = createHttpServer((request, response) => {
+    observed = {
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+    };
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      ok: true,
+      events: [{
+        id: 8,
+        action: "project.delete",
+        createdAt: 1_700_000_000_000,
+        organization: { id: "organization_activity", name: "Workspace" },
+        project: { id: "project_activity", name: "Tasks", deleted: true },
+        actor: { id: "user_activity", email: "owner@example.com", tokenId: null },
+        metadata: { slug: "tasks" },
+      }],
+      nextBefore: 8,
+    }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}/`;
+  try {
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_activity_test_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    const invalid = await runCliResult(["activity", "--limit=201"], repository, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(invalid.code, 1);
+    assert.match(invalid.stderr, /--limit must be an integer from 1 to 200/);
+    assert.equal(observed, undefined);
+
+    const result = await runCliResult([
+      "audit",
+      "--org=organization_activity",
+      "--limit=2",
+      "--before=9",
+      "--json",
+    ], repository, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      ok: true,
+      events: [{
+        id: 8,
+        action: "project.delete",
+        createdAt: 1_700_000_000_000,
+        organization: { id: "organization_activity", name: "Workspace" },
+        project: { id: "project_activity", name: "Tasks", deleted: true },
+        actor: { id: "user_activity", email: "owner@example.com", tokenId: null },
+        metadata: { slug: "tasks" },
+      }],
+      nextBefore: 8,
+    });
+    assert.deepEqual(observed, {
+      method: "GET",
+      url: "/api/audit?limit=2&before=9&organizationId=organization_activity",
+      authorization: "Bearer clnk_activity_test_token",
+    });
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("create scaffolds a named, buildable authenticated application", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-create-"));
   const target = join(root, "team-tasks");

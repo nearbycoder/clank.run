@@ -40,6 +40,8 @@ export async function run(command, args) {
       case "org":
       case "organization": return organizationCommand(args);
       case "project": return projectCommand(args);
+      case "activity":
+      case "audit": return activity(args);
       case "token": return tokenCommand(args);
       case "domain": return domainCommand(args);
       case "deploy": return deploy(args);
@@ -88,6 +90,7 @@ Platform:
   clank project list                   List projects
   clank project link <project-id>      Link this directory
   clank project delete [project-id] --confirm="delete-site <slug>" --acknowledge-data-loss
+  clank activity [--org=<id>] [--limit=100] [--before=<cursor>] [--json]
   clank token create                    Create a scoped token for the linked project
   clank token list                      List active CLI and project tokens
   clank token revoke <token-id>         Revoke a token
@@ -416,6 +419,38 @@ async function projectCommand(args) {
     return;
   }
   throw new CliError("Usage: clank project <create|list|link|delete>");
+}
+
+async function activity(args) {
+  const profile = await requireProfile();
+  const limit = positiveIntegerOption(args, "limit", 100, 200);
+  const before = optionalPositiveIntegerOption(args, "before");
+  const organizationId = option(args, "org");
+  const search = new URLSearchParams({ limit: String(limit) });
+  if (before !== null) search.set("before", String(before));
+  if (organizationId) search.set("organizationId", organizationId);
+  const payload = await platformRequest(profile.server, `/api/audit?${search}`, {
+    token: profile.token,
+  });
+  if (flag(args, "json")) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  if (!payload.events.length) {
+    console.log("No auditable workspace events.");
+    return;
+  }
+  for (const event of payload.events) {
+    const target = event.project?.name ?? event.organization?.name ?? "Account";
+    const deleted = event.project?.deleted ? " (deleted)" : "";
+    const actor = event.actor?.email ?? event.actor?.id ?? "unknown";
+    console.log(
+      `${event.id}  ${new Date(event.createdAt).toISOString()}  ${event.action}  ${target}${deleted}  ${actor}`,
+    );
+  }
+  if (payload.nextBefore) {
+    console.log(`More events: clank activity --before=${payload.nextBefore}`);
+  }
 }
 
 async function tokenCommand(args) {
@@ -1027,12 +1062,39 @@ function positionals(args) {
         "--force",
         "--allow-rollback-loss",
         "--acknowledge-data-loss",
+        "--json",
       ].includes(argument)) index++;
       continue;
     }
     output.push(argument);
   }
   return output;
+}
+
+function positiveIntegerOption(args, name, fallback, maximum) {
+  const raw = option(args, name);
+  if (raw === undefined) return fallback;
+  if (!/^[1-9][0-9]*$/u.test(raw)) {
+    throw new CliError(`--${name} must be an integer from 1 to ${maximum}.`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value > maximum) {
+    throw new CliError(`--${name} must be an integer from 1 to ${maximum}.`);
+  }
+  return value;
+}
+
+function optionalPositiveIntegerOption(args, name) {
+  const raw = option(args, name);
+  if (raw === undefined) return null;
+  if (!/^[1-9][0-9]*$/u.test(raw)) {
+    throw new CliError(`--${name} must be a positive integer.`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new CliError(`--${name} must be a positive integer.`);
+  }
+  return value;
 }
 
 function inside(parent, child) {

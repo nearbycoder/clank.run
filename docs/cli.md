@@ -44,6 +44,17 @@ Links are written to `.clank/project.json` and should normally remain uncommitte
 
 Deletion is permanent and requires an account-wide token plus an owner/admin organization role. Project-scoped tokens are rejected even if they have `tokens` permission. A successful deletion removes the matching local project link, but leaves other directories and off-platform copies untouched. See [Site deletion](deployment-platform.md#site-deletion).
 
+## Workspace activity
+
+```sh
+clank activity
+clank activity --org=<organization-id> --limit=100
+clank activity --before=<cursor>
+clank activity --json
+```
+
+`clank audit` is an alias. The feed is newest first and includes the event ID, action, target, actor, timestamp, and safe audit metadata. `--json` prints the complete stable response for agents and automation. Owners, administrators, and developers can read events for their current organizations; viewers cannot. A project-scoped token needs `audit` permission and receives only that project's events.
+
 ## Deploy and inspect
 
 ```sh

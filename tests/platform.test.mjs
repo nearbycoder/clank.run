@@ -941,6 +941,12 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     }));
     assert.equal(developerDenied.status, 403);
     assert.equal((await developerDenied.json()).error.code, "ROLE_DENIED");
+    const developerAudit = await payload(platform, jsonRequest(
+      `/api/audit?organizationId=${organizationId}&limit=5`,
+      { token: developer.accessToken },
+    ));
+    assert.ok(developerAudit.events.length > 0);
+    assert.ok(developerAudit.events.every((event) => event.organization.id === organizationId));
     await payload(platform, jsonRequest(
       `/api/organizations/${organizationId}/members/${developer.user.id}`,
       {
@@ -989,10 +995,21 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
       token: owner.accessToken,
       body: {
         name: "Deletion must reject this token",
-        permissions: ["read", "tokens"],
+        permissions: ["read", "tokens", "audit"],
         expiresIn: 3600,
       },
     }), 201);
+    const scopedAudit = await payload(platform, jsonRequest("/api/audit?limit=2", {
+      token: scoped.token.accessToken,
+    }));
+    assert.ok(scopedAudit.events.length > 0);
+    assert.ok(scopedAudit.events.every((event) => event.project.id === projectId));
+    const scopedOrganizationAudit = await platform.handle(jsonRequest(
+      `/api/audit?organizationId=${organizationId}`,
+      { token: scoped.token.accessToken },
+    ));
+    assert.equal(scopedOrganizationAudit.status, 403);
+    assert.equal((await scopedOrganizationAudit.json()).error.code, "TOKEN_SCOPE_DENIED");
     const scopedDenied = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
       method: "DELETE",
       token: scoped.token.accessToken,
@@ -1042,6 +1059,23 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
         organizationId,
       },
     }), 201);
+    await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/members/${developer.user.id}`,
+      {
+        method: "PATCH",
+        token: owner.accessToken,
+        body: { role: "viewer" },
+      },
+    ));
+    const viewerAudit = await platform.handle(jsonRequest(`/api/audit?organizationId=${organizationId}`, {
+      token: developer.accessToken,
+    }));
+    assert.equal(viewerAudit.status, 403);
+    assert.equal((await viewerAudit.json()).error.code, "ROLE_DENIED");
+    const viewerUnfilteredAudit = await payload(platform, jsonRequest("/api/audit", {
+      token: developer.accessToken,
+    }));
+    assert.deepEqual(viewerUnfilteredAudit.events, []);
 
     await payload(platform, jsonRequest(`/api/projects/${projectId}/secrets`, {
       method: "PUT",
@@ -1136,6 +1170,46 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
       token: owner.accessToken,
     }));
     assert.equal(deletedProject.status, 404);
+    const workspaceAudit = await payload(platform, jsonRequest(
+      `/api/audit?organizationId=${organizationId}&limit=2`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(workspaceAudit.events.length, 2);
+    assert.ok(workspaceAudit.nextBefore);
+    const deletionEvent = workspaceAudit.events.find((event) => event.action === "project.delete");
+    assert.ok(deletionEvent, "workspace activity must expose deletion after the project row is gone");
+    assert.equal(deletionEvent.organization.id, organizationId);
+    assert.deepEqual(deletionEvent.project, {
+      id: projectId,
+      name: "Disposable Tasks",
+      slug: "disposable-tasks",
+      deleted: true,
+    });
+    assert.equal(deletionEvent.actor.email, "site-delete-owner@example.com");
+    const completeWorkspaceAudit = await payload(platform, jsonRequest(
+      `/api/audit?organizationId=${organizationId}&limit=200`,
+      { token: owner.accessToken },
+    ));
+    const deletedReleaseEvent = completeWorkspaceAudit.events.find((event) => (
+      event.action === "release.activate" && event.project?.id === projectId
+    ));
+    assert.ok(deletedReleaseEvent);
+    assert.equal(deletedReleaseEvent.project.name, "Disposable Tasks");
+    assert.equal(deletedReleaseEvent.project.slug, "disposable-tasks");
+    assert.equal(deletedReleaseEvent.project.deleted, true);
+    const olderAudit = await payload(platform, jsonRequest(
+      `/api/audit?organizationId=${organizationId}&limit=2&before=${workspaceAudit.nextBefore}`,
+      { token: owner.accessToken },
+    ));
+    assert.ok(olderAudit.events.length > 0);
+    assert.equal(
+      olderAudit.events.some((event) => workspaceAudit.events.some((current) => current.id === event.id)),
+      false,
+    );
+    const invalidAuditCursor = await platform.handle(jsonRequest("/api/audit?before=1e2", {
+      token: owner.accessToken,
+    }));
+    assert.equal(invalidAuditCursor.status, 422);
 
     const finalControl = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
     for (const [table, column] of [
@@ -1192,6 +1266,86 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     assert.equal(redeployed.response.status, 201, JSON.stringify(redeployed.body));
     assert.equal(await fetch(redeployed.body.release.directUrl).then((response) => response.text()), "after-deletion");
     assert.notEqual(capacityReplacement.project.id, recreated.project.id);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy audit rows gain workspace attribution without losing their history", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-audit-upgrade-"));
+  const dataDirectory = join(root, "platform");
+  let platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4554,
+    appPortEnd: 4556,
+    signup: true,
+    backups: { intervalMs: false },
+  });
+  try {
+    const owner = await authorizeCli(platform, "audit-upgrade@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const organizationId = dashboard.organizations[0].id;
+    const project = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Audit Upgrade",
+        slug: "audit-upgrade",
+        organizationId,
+      },
+    }), 201);
+    await platform.close();
+
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    control.prepare("DELETE FROM clank_platform_projects WHERE id = ?").run(project.project.id);
+    control.exec(`
+      ALTER TABLE clank_platform_audit RENAME TO clank_platform_audit_with_organization;
+      CREATE TABLE clank_platform_audit (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_user_id TEXT NOT NULL,
+        actor_token_id TEXT,
+        project_id TEXT,
+        action TEXT NOT NULL,
+        metadata TEXT NOT NULL CHECK (json_valid(metadata)),
+        created_at INTEGER NOT NULL
+      );
+      INSERT INTO clank_platform_audit
+        (id, actor_user_id, actor_token_id, project_id, action, metadata, created_at)
+      SELECT id, actor_user_id, actor_token_id, project_id, action, metadata, created_at
+      FROM clank_platform_audit_with_organization;
+      DROP TABLE clank_platform_audit_with_organization;
+    `);
+    control.close();
+
+    platform = await openPlatform({
+      dataDirectory,
+      publicUrl: "http://127.0.0.1:4200",
+      appPortStart: 4554,
+      appPortEnd: 4556,
+      signup: true,
+      backups: { intervalMs: false },
+    });
+    const upgraded = await payload(platform, jsonRequest(
+      `/api/audit?organizationId=${organizationId}`,
+      { token: owner.accessToken },
+    ));
+    const projectEvent = upgraded.events.find((event) => event.action === "project.create");
+    assert.ok(projectEvent);
+    assert.equal(projectEvent.organization.id, organizationId);
+    assert.equal(projectEvent.project.id, project.project.id);
+    assert.equal(projectEvent.project.deleted, true);
+    const upgradedControl = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
+    assert.ok(upgradedControl.prepare(
+      "PRAGMA table_info(clank_platform_audit)",
+    ).all().some((column) => column.name === "organization_id"));
+    assert.equal(upgradedControl.prepare(
+      "SELECT organization_id FROM clank_platform_audit WHERE action = 'project.create'",
+    ).get().organization_id, organizationId);
+    upgradedControl.close();
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
