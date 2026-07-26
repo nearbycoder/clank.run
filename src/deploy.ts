@@ -66,6 +66,20 @@ const SENSITIVE_SEGMENTS = new Set([
 ]);
 const SAFE_ENV_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
 const ATOMIC_BUILD_TEMPORARY_FILE = /\.clank-build-\d+-\d+$/u;
+const MAX_SOURCE_SNAPSHOT_ATTEMPTS = 8;
+
+class DeploymentSourceChangedError extends Error {
+  constructor(path: string) {
+    super(`Deployment source changed while reading ${path}.`);
+    this.name = "DeploymentSourceChangedError";
+  }
+}
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
 
 /** Reads and strictly validates the transparent deployment contract. */
 export async function readDeploymentConfig(
@@ -187,23 +201,39 @@ export async function createDeploymentBundle(
     sep: string;
   };
   const base = path.resolve(root);
-  const files = new Map<string, DeploymentFile>();
-  for (const included of config.include) {
-    await collectPath(base, path.resolve(base, included), files, options, path);
-  }
-  if (options.frameworkRoot) {
-    const framework = path.resolve(options.frameworkRoot);
-    for (const included of ["dist", "package.json", "LICENSE"]) {
-      await collectPath(
-        framework,
-        path.join(framework, included),
-        files,
-        options,
-        path,
-        "node_modules/@clank.run/framework",
-      );
+  let files: Map<string, DeploymentFile> | undefined;
+  for (let attempt = 0; attempt < MAX_SOURCE_SNAPSHOT_ATTEMPTS; attempt++) {
+    const snapshot = new Map<string, DeploymentFile>();
+    try {
+      for (const included of config.include) {
+        await collectPath(base, path.resolve(base, included), snapshot, options, path);
+      }
+      if (options.frameworkRoot) {
+        const framework = path.resolve(options.frameworkRoot);
+        for (const included of ["dist", "package.json", "LICENSE"]) {
+          await collectPath(
+            framework,
+            path.join(framework, included),
+            snapshot,
+            options,
+            path,
+            "node_modules/@clank.run/framework",
+          );
+        }
+      }
+      files = snapshot;
+      break;
+    } catch (error) {
+      if (!(error instanceof DeploymentSourceChangedError)) throw error;
+      if (attempt === MAX_SOURCE_SNAPSHOT_ATTEMPTS - 1) {
+        throw new Error("Deployment source kept changing while it was packaged. Stop concurrent builds and retry.");
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.min(5 * (2 ** attempt), 80));
+      });
     }
   }
+  if (!files) throw new Error("Deployment source could not be snapshotted.");
   if (!files.has(config.entry)) throw new Error(`Deployment entry ${config.entry} was not packaged.`);
   const bundle: DeploymentBundle = {
     protocol: "clank-deploy/1",
@@ -337,28 +367,59 @@ async function collectPath(
     sep: string;
   },
   prefix = "",
+  required = true,
 ): Promise<void> {
   const fsName = "node:fs/promises";
+  type FileStats = {
+    ctimeMs: number;
+    dev: number;
+    ino: number;
+    isDirectory(): boolean;
+    isFile(): boolean;
+    isSymbolicLink(): boolean;
+    mtimeMs: number;
+    size: number;
+    mode: number;
+  };
+  type DirectoryEntry = { name: string };
   const fs = await import(fsName) as unknown as {
-    lstat(path: string): Promise<{
-      isDirectory(): boolean;
-      isFile(): boolean;
-      isSymbolicLink(): boolean;
-      size: number;
-      mode: number;
-    }>;
+    lstat(path: string): Promise<FileStats>;
     readFile(path: string): Promise<Uint8Array>;
-    readdir(path: string, options: { withFileTypes: true }): Promise<Array<{ name: string }>>;
+    readdir(path: string, options: { withFileTypes: true }): Promise<DirectoryEntry[]>;
   };
   const resolved = path.resolve(target);
   if (resolved !== root && !resolved.startsWith(root + path.sep)) throw new Error("Included paths must stay inside the project.");
   const name = resolved.slice(resolved.lastIndexOf(path.sep) + 1);
   if (ATOMIC_BUILD_TEMPORARY_FILE.test(name)) return;
-  const stats = await fs.lstat(resolved);
+  let stats: FileStats;
+  try {
+    stats = await fs.lstat(resolved);
+  } catch (error) {
+    if (!required && errorCode(error) === "ENOENT") throw new DeploymentSourceChangedError(resolved);
+    throw error;
+  }
   if (stats.isSymbolicLink()) throw new Error(`Deployment symbolic links are not allowed: ${resolved}`);
   if (stats.isDirectory()) {
-    for (const entry of (await fs.readdir(resolved, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      await collectPath(root, path.join(resolved, entry.name), files, limits, path, prefix);
+    let entries: DirectoryEntry[];
+    try {
+      entries = (await fs.readdir(resolved, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") throw new DeploymentSourceChangedError(resolved);
+      throw error;
+    }
+    for (const entry of entries) {
+      await collectPath(root, path.join(resolved, entry.name), files, limits, path, prefix, false);
+    }
+    let confirmedEntries: DirectoryEntry[];
+    try {
+      confirmedEntries = (await fs.readdir(resolved, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") throw new DeploymentSourceChangedError(resolved);
+      throw error;
+    }
+    if (entries.length !== confirmedEntries.length
+      || entries.some((entry, entryIndex) => entry.name !== confirmedEntries[entryIndex]?.name)) {
+      throw new DeploymentSourceChangedError(resolved);
     }
     return;
   }
@@ -370,7 +431,26 @@ async function collectPath(
   const maxFile = limits.maxFileBytes ?? 20 * 1024 * 1024;
   if (stats.size > maxFile) throw new Error(`Deployment file ${artifactName} exceeds ${maxFile} bytes.`);
   if (files.size >= (limits.maxFiles ?? 20_000)) throw new Error("Deployment has too many files.");
-  const bytes = await fs.readFile(resolved);
+  let bytes: Uint8Array;
+  let confirmed: FileStats;
+  try {
+    bytes = await fs.readFile(resolved);
+    confirmed = await fs.lstat(resolved);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") throw new DeploymentSourceChangedError(resolved);
+    throw error;
+  }
+  if (!confirmed.isFile()
+    || confirmed.isSymbolicLink()
+    || confirmed.dev !== stats.dev
+    || confirmed.ino !== stats.ino
+    || confirmed.size !== stats.size
+    || confirmed.mtimeMs !== stats.mtimeMs
+    || confirmed.ctimeMs !== stats.ctimeMs
+    || confirmed.mode !== stats.mode
+    || bytes.byteLength !== stats.size) {
+    throw new DeploymentSourceChangedError(resolved);
+  }
   const total = [...files.values()].reduce((sum, file) => sum + file.size, 0) + bytes.byteLength;
   if (total > (limits.maxTotalBytes ?? 100 * 1024 * 1024)) throw new Error("Deployment is too large.");
   files.set(artifactName, Object.freeze({

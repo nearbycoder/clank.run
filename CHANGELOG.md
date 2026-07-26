@@ -7,10 +7,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 ### Added
 
 - Successful protected-main CI revisions now automatically build, validate, and deploy `docs.clank.run` through a dedicated GitHub environment and a least-privilege project token.
+- Documentation code fences now use dependency-free, server-rendered syntax highlighting for TypeScript, TSX, JavaScript, shell, JSON, SQL, HTML, CSS, configuration, and Mermaid examples.
 
 ### Fixed
 
 - Deployment artifact collection now ignores the compiler's atomic temporary files, preventing a concurrent framework build from producing a transient file or `ENOENT` failure in an otherwise deterministic bundle.
+- Deployment packaging now retries a complete, metadata-verified source snapshot when files or directory entries change during collection, preventing concurrent cleanup or replacement from producing partial artifacts.
 
 ## 0.8.0 - 2026-07-26
 
