@@ -117,6 +117,8 @@ Permanent site deletion removes the complete matching `projects/<id>/` tree afte
 
 Audit rows live in `control.sqlite`, retain organization attribution after project removal, and upgrade in place from earlier schemas. The public API does not mutate them, but SQLite administrators can. Export them to a separate append-only audit system when control-plane operator tampering or longer retention is in scope.
 
+Authentication and CLI device-start rate-limit windows also live in `control.sqlite`. Their client/account keys are HMAC pseudonyms under the platform master key, expire automatically, and remain effective when requests move between control-plane processes or the process restarts. The table is bounded, so keep the console behind production edge rate limiting and DDoS controls.
+
 ## Upgrades
 
 1. Back up data and key.

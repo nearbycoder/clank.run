@@ -68,7 +68,7 @@ interface AuthRateLimitStore {
 }
 ```
 
-`consume` returns the retry delay in seconds when the limit is exceeded. The built-in store is safe for a single process; horizontally scaled deployments should provide a shared implementation.
+`consume` returns the retry delay in seconds when the limit is exceeded. A successful password login clears the same key after credential verification, so prior failures do not continue throttling the authenticated user. The built-in application store is safe for a single process; horizontally scaled applications should provide a shared implementation. Clank Deploy supplies its own control-database-backed shared store.
 
 Clank's Node adapter attaches the socket or trusted-proxy address out of band. Authentication never trusts caller-supplied `x-clank-client-ip` or `x-forwarded-for` headers. A non-Node adapter can provide `rateLimit.clientKey(request)`, but that callback must return identity authenticated by the adapter or edge rather than copying an unverified request header.
 

@@ -629,7 +629,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     if (!row || Number(row.disabled) !== 0 || !valid) {
       throw new AuthError("INVALID_CREDENTIALS", "Email or password is incorrect.", 401);
     }
-    await limiter.clear(rateLimitKey(request, input.email, "login"));
+    await limiter.clear(rateLimitKey(definition.rateLimit, request, input.email, "login"));
     const userId = String(row.id) as AuthUserId;
     if (definition.mfa.required) return { mfa: await beginMfa(userId, String(row.email)) };
     return { session: await createSession(userId) };

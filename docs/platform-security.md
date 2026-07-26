@@ -16,6 +16,8 @@ Never operate the process runner as a public code sandbox.
 
 Browser accounts inherit Clank's scrypt passwords, hardened cookies, CSRF, generic login errors, expiry, idle timeout, verification, recovery, email-code MFA, WebAuthn passkeys, and revocation.
 
+Password registration/login and CLI device-start throttles use atomic sliding windows in the control database, so another control-plane process or restart cannot reset them. Keys are HMAC-SHA-256 pseudonyms under the platform master key; raw client/account combinations are not stored. Expired windows are removed on use, future timestamps caused by clock rollback are conservatively clamped, and high-cardinality state is pruned from 20,000 to 18,000 keys. Keep upstream IP/account abuse controls because bounded local state can still be pressured by a distributed attacker.
+
 Registration defaults to a race-guarded first-account bootstrap. The platform applies its policy to the same normalized auth operation as the low-level router, including repeated-slash compatibility paths. An expiring singleton claim in the control database serializes bootstrap across control-plane runtimes; a stable insertion-order check removes any losing account before its session is returned. Public signup must be enabled explicitly. Organizations include owner/admin/developer/viewer roles, invitations, last-owner protection, and project-scoped CLI tokens whose permissions are intersected with current membership on every request.
 
 Sign-out and an authenticated API `401` reload the console from the server instead of reusing an in-memory dashboard. This clears prior-account DOM and recomputes both session state and bootstrap availability before another identity can use the page.
@@ -83,7 +85,7 @@ Also pin image digests, patch the kernel/runtime, apply seccomp/AppArmor/SELinux
 - Permit direct access only from that proxy.
 - Enable proxy trust only in that topology.
 - Validate allowed hosts.
-- Add upstream auth/upload/request rate limits.
+- Add upstream auth/upload/request rate limits; the built-in shared limiter is a control-plane backstop, not a DDoS edge.
 
 Distributed leases, authenticated workers, desired generations, durable idempotent operations, node draining, retries, and monotonic fences are available. The built-in child-process supervisor still keeps process ownership in memory, so run one active supervisor per project/data directory unless using a remote worker/leader integration.
 

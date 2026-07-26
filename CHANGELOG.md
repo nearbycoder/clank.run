@@ -25,6 +25,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - A role-filtered, cursor-paginated workspace activity feed in the dashboard, API, and CLI that retains deleted-site history and upgrades existing audit rows with organization attribution.
 - Workspace people administration in the dashboard and CLI, including browser acceptance, member role changes, immediate removal, safe pending-invitation listing, one-time token copy, replacement, and revocation.
 - Quota-aware workspace creation in the People console with safe slug preview and immediate selection.
+- Durable SQLite-backed deployment-platform authentication and CLI device-start rate limits shared across control-plane runtimes and restarts.
 
 ### Fixed
 
@@ -32,6 +33,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - First-account bootstrap is now protected by an expiring SQLite claim across control-plane runtimes, preventing concurrent processes from creating multiple initial accounts.
 - Platform signup policy now evaluates the same normalized auth operation as the low-level router, closing repeated-slash registration bypasses.
 - Sign-out and expired-session transitions now reload the deployment console at the identity boundary, clearing prior-account dashboard DOM and recomputing bootstrap availability before another account signs in.
+- Successful password login now clears the exact failed-attempt rate-limit key instead of leaving the account throttled.
 - CLI profile and project-link state is now bounded, structurally validated, URL-canonicalized, privately and atomically replaced, and never reflected in parse errors.
 - CLI control-plane responses are streaming-bounded, decoded as strict UTF-8/JSON, and protected by finite request and deployment timeouts.
 - Platform signal handling now closes both the HTTP listener and control-plane state, reports shutdown failures, and enforces a 30-second termination deadline.

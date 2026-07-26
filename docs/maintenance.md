@@ -69,3 +69,7 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Reloaded the server-rendered console at sign-out and session expiry so prior-account DOM and stale signup policy cannot cross an identity transition.
 - [x] Re-certified all 143 tests at 82.56% line, 69.57% branch, and 82.36% function coverage, plus 45-file documentation/declaration audit, packed conformance, and repository/history security scans.
 - [x] Browser-verified bootstrap closure, same-browser owner-to-invitee onboarding, consumed-invitation privacy, persistent refresh authentication, zero console/page errors, and a 390px People layout without horizontal overflow.
+- [x] Moved platform auth and CLI device-start throttles into one HMAC-keyed, bounded SQLite sliding-window store shared across control-plane runtimes and restarts.
+- [x] Corrected successful-login rate-limit clearing and covered cross-runtime accumulation, restart persistence, clock rollback, raw-identity privacy, 429 behavior, and high-cardinality pruning.
+- [x] Re-certified all 145 tests at 82.61% line, 69.72% branch, and 82.47% function coverage, plus 45-file documentation/declaration audit, packed conformance, and repository/history security scans.
+- [x] Browser-verified generic wrong-password handling, successful retry/reset, authenticated refresh, hashed-only retained limiter state, and zero console/page errors.
