@@ -2701,6 +2701,11 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /class="table admin-user-table mobile-card-table"/);
     assert.match(signedInHtml, /@media\(max-width:900px\)/);
     assert.match(signedInHtml, /\.button,\.input,\.nav-button\{min-height:44px\}/);
+    assert.match(signedInHtml, /\.breadcrumbs\{flex:1;min-width:0;overflow:hidden;white-space:nowrap\}/);
+    assert.match(signedInHtml, /\.sidebar-account \.button\{flex:0 0 44px;min-width:44px\}/);
+    assert.match(signedInHtml, /\.activity-details summary\{display:inline-flex;align-items:center;min-height:44px\}/);
+    assert.match(signedInHtml, /grid-template-columns:repeat\(5,minmax\(44px,1fr\)\)/);
+    assert.match(signedInHtml, /link\.title=project\.name;link\.append\(el\("span","nav-text",project\.name\)\)/);
     assert.match(signedInHtml, /aria-labelledby="site-dialog-title"/);
     for (const path of [
       "/login",
