@@ -11,8 +11,12 @@ import {
   backupSQLite,
   restoreSQLiteBackup,
 } from "./migrations.ts";
-import { openBackupManager } from "./recovery.ts";
+import { openBackupManager, type BackupManifest } from "./recovery.ts";
 import { openDeploymentOrchestrator } from "./orchestration.ts";
+import {
+  createPlatformBackupScheduler,
+  type PlatformBackupPolicy,
+} from "./platform-backups.ts";
 import {
   createDomainManager,
   createManagedIngress,
@@ -62,6 +66,19 @@ export interface PlatformLimits {
   metricRetentionDays?: number;
 }
 
+export interface PlatformBackupOptions {
+  /** Encrypted backup cadence. Defaults to 24 hours; false disables automatic backups. */
+  intervalMs?: number | false;
+  /** Maximum projects claimed by one backup pass. Defaults to 5. */
+  batchSize?: number;
+  /** Maximum retained backups per project. Defaults to 30. */
+  maxBackups?: number;
+  /** Maximum backup age. Defaults to 90 days. */
+  maxAgeMs?: number;
+  /** Maximum source database size accepted by the backup engine. Defaults to 10 GiB. */
+  maxDatabaseBytes?: number;
+}
+
 export interface ClankPlatformOptions {
   dataDirectory: string;
   publicUrl: string;
@@ -80,6 +97,7 @@ export interface ClankPlatformOptions {
   deviceCodeLifetimeMs?: number;
   accessTokenLifetimeMs?: number;
   limits?: PlatformLimits;
+  backups?: PlatformBackupOptions;
   ingress?: {
     enabled?: boolean;
     baseDomain?: string;
@@ -204,6 +222,12 @@ const DEFAULT_DOMAIN_RECHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_DOMAIN_RECHECK_BATCH_SIZE = 25;
 const DEFAULT_DOMAIN_RECHECK_TIMEOUT_MS = 10_000;
 const DOMAIN_RECHECK_CONCURRENCY = 4;
+const DEFAULT_BACKUP_INTERVAL_MS = 24 * 60 * 60_000;
+const DEFAULT_BACKUP_BATCH_SIZE = 5;
+const DEFAULT_BACKUP_MAX_COUNT = 30;
+const DEFAULT_BACKUP_MAX_AGE_MS = 90 * 24 * 60 * 60_000;
+const DEFAULT_BACKUP_MAX_DATABASE_BYTES = 10 * 1024 * 1024 * 1024;
+const BACKUP_CONCURRENCY = 2;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -239,6 +263,43 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     100,
     60_000,
   );
+  const backupIntervalMs = options.backups?.intervalMs === false
+    ? false
+    : integerInRange(
+        options.backups?.intervalMs ?? DEFAULT_BACKUP_INTERVAL_MS,
+        "backups.intervalMs",
+        60_000,
+        365 * 24 * 60 * 60_000,
+      );
+  const backupPolicy: PlatformBackupPolicy = Object.freeze({
+    enabled: backupIntervalMs !== false,
+    intervalMs: backupIntervalMs === false ? null : backupIntervalMs,
+    batchSize: integerInRange(
+      options.backups?.batchSize ?? DEFAULT_BACKUP_BATCH_SIZE,
+      "backups.batchSize",
+      1,
+      100,
+    ),
+    concurrency: BACKUP_CONCURRENCY,
+    maxBackups: integerInRange(
+      options.backups?.maxBackups ?? DEFAULT_BACKUP_MAX_COUNT,
+      "backups.maxBackups",
+      1,
+      10_000,
+    ),
+    maxAgeMs: integerInRange(
+      options.backups?.maxAgeMs ?? DEFAULT_BACKUP_MAX_AGE_MS,
+      "backups.maxAgeMs",
+      60_000,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    maxDatabaseBytes: integerInRange(
+      options.backups?.maxDatabaseBytes ?? DEFAULT_BACKUP_MAX_DATABASE_BYTES,
+      "backups.maxDatabaseBytes",
+      1,
+      Number.MAX_SAFE_INTEGER,
+    ),
+  });
   const limits = Object.freeze({
     organizationsPerAccount: integerInRange(
       options.limits?.organizationsPerAccount ?? 5,
@@ -525,6 +586,24 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
   };
 
+  const backupScheduler = createPlatformBackupScheduler({
+    internal: storage.internal,
+    policy: backupPolicy,
+    async createBackup(projectId) {
+      return withProjectLock(projectId, async () => {
+        const project = projectById(storage.internal, projectId);
+        if (!project?.databasePath) throw new Error("Scheduled backup database is unavailable.");
+        const manager = await projectBackupManager(paths.projects, project, masterKey, backupPolicy);
+        try {
+          return await manager.create({ reason: "automatic scheduled backup" });
+        } finally {
+          manager.close();
+        }
+      });
+    },
+    onError: options.onError,
+  });
+
   const stopProject = async (projectId: string): Promise<void> => {
     const running = active.get(projectId);
     if (!running) return;
@@ -753,6 +832,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         digest,
         previousReleaseId,
       });
+      backupScheduler.registerProject(project.id);
       return releasePayload(
         { ...refreshedProject, activeReleaseId: releaseId, updatedAt: activatedAt },
         { ...release, status: "active", activatedAt, backupPath },
@@ -835,6 +915,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         to: target.id,
         restoreData,
       });
+      backupScheduler.registerProject(project.id);
       return releasePayload(
         { ...project, activeReleaseId: target.id, updatedAt: now },
         { ...target, status: "active", activatedAt: now },
@@ -1443,9 +1524,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         return api({ ok: true, release: await rollback(principal, project, releaseId, restoreData, confirmation) });
       }
       if (operation === "backups" && request.method === "GET") {
-        const manager = await projectBackupManager(paths.projects, project, masterKey);
+        const automation = backupScheduler.status(project.id, Boolean(project.databasePath));
+        if (!project.databasePath) return api({ ok: true, backups: [], automation });
+        const manager = await projectBackupManager(paths.projects, project, masterKey, backupPolicy);
         try {
-          return api({ ok: true, backups: await manager.list() });
+          return api({
+            ok: true,
+            backups: (await manager.list()).map(publicBackupManifest),
+            automation,
+          });
         } finally {
           manager.close();
         }
@@ -1456,22 +1543,27 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const reason = input.reason === undefined
           ? "manual"
           : boundedString(input.reason, "reason", 1, 200);
-        const manager = await projectBackupManager(paths.projects, project, masterKey);
-        try {
-          const backup = await manager.create({ reason });
-          audit(storage.internal, principal.userId, principal.tokenId, project.id, "backup.create", {
-            backupId: backup.id,
-            reason,
-            databaseSha256: backup.databaseSha256,
-          });
-          return api({ ok: true, backup }, 201);
-        } finally {
-          manager.close();
-        }
+        const backup = await withProjectLock(project.id, async () => {
+          const current = projectById(storage.internal, project.id);
+          if (!current) throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
+          const manager = await projectBackupManager(paths.projects, current, masterKey, backupPolicy);
+          try {
+            return await manager.create({ reason });
+          } finally {
+            manager.close();
+          }
+        });
+        backupScheduler.recordBackup(project.id, backup);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "backup.create", {
+          backupId: backup.id,
+          reason,
+          databaseSha256: backup.databaseSha256,
+        });
+        return api({ ok: true, backup: publicBackupManifest(backup) }, 201);
       }
       const backupMatch = /^backups\/(bk_[A-Za-z0-9_-]{16,128})\/(verify|restore)$/.exec(operation);
       if (backupMatch && request.method === "POST") {
-        const manager = await projectBackupManager(paths.projects, project, masterKey);
+        const manager = await projectBackupManager(paths.projects, project, masterKey, backupPolicy);
         try {
           if (backupMatch[2] === "verify") {
             const verification = await manager.verify(backupMatch[1]!);
@@ -1771,6 +1863,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
   }
   scheduleDomainReconciliation();
+  backupScheduler.start();
 
   return {
     handle,
@@ -1782,6 +1875,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (domainRecheckTimer) clearTimeout(domainRecheckTimer);
       domainRecheckTimer = undefined;
       await domainRecheckFlight?.catch(() => undefined);
+      await backupScheduler.close();
       for (const state of restartState.values()) {
         state.cancelled = true;
         if (state.timer) clearTimeout(state.timer);
@@ -3058,6 +3152,7 @@ async function projectBackupManager(
   projectsRoot: string,
   project: ProjectRow,
   masterKey: Uint8Array,
+  policy: PlatformBackupPolicy,
 ) {
   if (!project.databasePath) {
     throw new PlatformError(409, "DATABASE_UNAVAILABLE", "Deploy the project before creating a database backup.");
@@ -3075,10 +3170,16 @@ async function projectBackupManager(
     repositoryDirectory: path.join(projectsRoot, project.id, "recovery"),
     encryptionKey,
     keyId: `project-${project.id.slice(0, 12)}`,
-    maxBackups: 30,
-    maxAgeMs: 90 * 24 * 60 * 60 * 1_000,
+    maxBackups: policy.maxBackups,
+    maxAgeMs: policy.maxAgeMs,
+    maxDatabaseBytes: policy.maxDatabaseBytes,
     verifyAfterCreate: true,
   });
+}
+
+function publicBackupManifest(backup: BackupManifest): Omit<BackupManifest, "source"> {
+  const { source: _privateDatabasePath, ...manifest } = backup;
+  return manifest;
 }
 
 async function newReleaseDirectory(projectsRoot: string, projectId: string, releaseId: string): Promise<string> {

@@ -9,11 +9,11 @@ The platform is intentionally inspectable:
 - every artifact and file has a SHA-256 digest;
 - artifacts contain the exact Clank runtime used by the CLI;
 - SQL migrations have ordered, immutable checksums;
-- releases, failures, rollbacks, tokens, secret-name changes, and projects are audited;
+- releases, failures, rollbacks, backups, tokens, secret-name changes, and projects are audited;
 - secret values are encrypted and never returned by the API;
 - failed migrations or health checks restore the prior database and process.
 
-The browser console is also an operating surface, not only a login page. It shows site health, 1-hour through 30-day ingress performance, enforced capacity, releases, logs, and the full custom-domain lifecycle. See [Deployment dashboard, quotas, and domains](platform-dashboard.md).
+The browser console is also an operating surface, not only a login page. It shows site health, 1-hour through 30-day ingress performance, enforced capacity, releases, scheduled encrypted backups, logs, and the full custom-domain lifecycle. See [Deployment dashboard, quotas, and domains](platform-dashboard.md).
 
 ## Five-minute path
 
@@ -201,7 +201,7 @@ Bearer:
 - account and token listing/revocation;
 - project creation/listing/status;
 - release upload/history/rollback;
-- logs, encrypted secrets, and audit events.
+- logs, encrypted secrets, scheduled/manual backup operations, and audit events.
 
 Managed edge:
 

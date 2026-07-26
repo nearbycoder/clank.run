@@ -49,12 +49,13 @@ The generated local key is onboarding convenience, not protection from a comprom
 - Migration history is immutable.
 - Cross-database, extension, PRAGMA, and transaction-control SQL is rejected by default.
 - App configuration cannot enable unrestricted SQL unless the platform operator separately opts in.
-- Stopped-app database paths are checked component-by-component for symlink substitution before backup or migration.
-- Apps stop before backup/migration.
+- Database paths are checked component-by-component for symlink substitution before backup or migration.
+- Deploy migrations stop the app and take a pre-change snapshot; scheduled recovery points use SQLite's consistent online backup API and are encrypted and verified before publication.
+- Scheduled backup work uses expiring durable claims across control planes, and public metadata omits the host database path.
 - Failure restores prior data/code.
 - Data rollback is narrow and explicitly confirmed.
 
-Export backups off-host.
+Export completed encrypted backup directories off-host and keep the master key in a separate failure domain.
 
 ## Runner hardening
 

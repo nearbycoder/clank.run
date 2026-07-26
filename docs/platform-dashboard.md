@@ -13,7 +13,7 @@ The overview shows:
 - enforced site capacity across the account's organizations; and
 - a site picker with request and p95-latency summaries.
 
-Each site has performance, domains, deployments, and logs views. The performance chart supports `1h`, `24h`, `7d`, and `30d` windows. The domains view walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure.
+Each site has performance, domains, deployments, backups, and logs views. The performance chart supports `1h`, `24h`, `7d`, and `30d` windows. The domains view walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. The backups view exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. A project without a first deployment reports that its isolated database is not available instead of failing the whole project screen.
 
 The dashboard uses the same organization membership and project-permission checks as the CLI. API values are inserted with DOM `textContent` or attributes rather than HTML parsing. The page has a nonce-bound script, restrictive CSP, no-store responses, framing denial, and no third-party assets.
 
@@ -126,6 +126,10 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `POST /api/projects/:id/domains/:domainId/verify` — verify TXT ownership and refresh routing.
 - `POST /api/projects/:id/domains/:domainId/check` — refresh routing without changing ownership.
 - `DELETE /api/projects/:id/domains/:domainId` — remove and release the hostname.
+- `GET /api/projects/:id/backups` — safe backup metadata and durable scheduler status; host paths are omitted.
+- `POST /api/projects/:id/backups` — create and verify an encrypted restore point.
+- `POST /api/projects/:id/backups/:backupId/verify` — decrypt, authenticate, checksum, and integrity-check a restore point.
+- `POST /api/projects/:id/backups/:backupId/restore` — confirmation-gated restore with an automatic safety copy.
 - `GET /_clank/tls/ask?token=…&domain=…` — private Caddy permission lookup; not a customer API.
 
 Browser mutations require same-origin session authentication and CSRF. CLI calls use bearer tokens, whose organization role and project scope are re-evaluated on every request.

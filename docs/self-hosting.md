@@ -38,6 +38,11 @@ Clank Deploy is one Node control-plane process plus one supervised process or co
 | `CLANK_DOMAIN_RECHECK_INTERVAL_MS` | `300000` | Background custom-domain routing interval; `0` disables it |
 | `CLANK_DOMAIN_RECHECK_BATCH_SIZE` | `25` | Maximum domains durably claimed by one routing pass |
 | `CLANK_DOMAIN_RECHECK_TIMEOUT_MS` | `10000` | Per-domain DNS lookup deadline |
+| `CLANK_BACKUP_INTERVAL_MS` | `86400000` | Verified encrypted-backup cadence; `0` disables automatic runs |
+| `CLANK_BACKUP_BATCH_SIZE` | `5` | Maximum projects durably claimed by one backup pass |
+| `CLANK_BACKUP_MAX_COUNT` | `30` | Maximum retained backups per project |
+| `CLANK_BACKUP_MAX_AGE_MS` | `7776000000` | Maximum retained backup age |
+| `CLANK_BACKUP_MAX_DATABASE_BYTES` | `10737418240` | Maximum source database size accepted by backup creation |
 | `CLANK_MAX_ORGANIZATIONS_PER_ACCOUNT` | `5` | Transactionally enforced account organization limit |
 | `CLANK_MAX_PROJECTS_PER_ACCOUNT` | `10` | Transactionally enforced account-wide site limit |
 | `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Transactionally enforced site limit |
@@ -71,7 +76,7 @@ clank-platform
 
 Proxy the console and application hosts to port 4200. Clank performs exact-host project routing; the edge performs public DNS, TLS, WAF/rate limiting, and DDoS controls. The recommended Caddy On-Demand TLS configuration and DNS records are in [Deployment dashboard, quotas, and domains](platform-dashboard.md).
 
-Use `/livez` only to determine whether the process can answer HTTP. Use `/healthz` or `/readyz` for load-balancer readiness; those endpoints execute a control-database probe and return `503` when the platform cannot safely accept work. `SIGINT` and `SIGTERM` stop new HTTP work, close supervised applications and platform storage, and fail the process if shutdown cannot finish within 30 seconds.
+Use `/livez` only to determine whether the process can answer HTTP. Use `/healthz` or `/readyz` for load-balancer readiness; those endpoints execute a control-database probe and return `503` when the platform cannot safely accept work. `SIGINT` and `SIGTERM` stop new HTTP work, drain an active scheduled backup, close supervised applications and platform storage, and fail the process if shutdown cannot finish within 30 seconds.
 
 ## Tailscale
 
@@ -95,11 +100,14 @@ projects/<id>/
   data/app.sqlite
   releases/<release-id>/
   backups/<release-id>.sqlite
+  recovery/<backup-id>/
+    database.enc
+    manifest.json
 ```
 
 Use a local filesystem with correct SQLite locking/rename semantics. The platform sets umask `0077`.
 
-Back up the control database, project data, recoverable artifacts/source, and master key through separate paths. Pre-release snapshots are not a scheduled backup policy.
+Clank automatically creates authenticated, AES-256-GCM encrypted recovery points under `recovery/`. Durable control-database claims prevent duplicate scheduled work when multiple control-plane processes share the store. Back up the control database, completed recovery directories, recoverable artifacts/source, and master key through separate paths. Pre-release snapshots remain rollback material, not part of the recovery retention policy. See [Backup and disaster recovery](recovery.md).
 
 ## Upgrades
 
@@ -109,4 +117,4 @@ Back up the control database, project data, recoverable artifacts/source, and ma
 4. Start the selected active supervisor/worker topology.
 5. Verify browser login, CLI login, organization and scoped-token access, project status, ingress/domain state, app health, test deploy, backup verification, and rollback.
 
-Durable distributed locks, authenticated nodes, desired generations, operations/fencing, wildcard base-domain routing, ownership and routing verification, Caddy certificate eligibility, ingress metrics, enforced account/organization/site/domain limits, organization RBAC, and external database drivers are implemented. The included child-process supervisor remains single-leader and artifacts/backups are local by default; a hosted multi-region service still needs leader/remote-runner integration, external object storage, globally transactional control storage, shared metric storage, and a multi-region edge service.
+Durable distributed locks, authenticated nodes, desired generations, operations/fencing, wildcard base-domain routing, ownership and routing verification, Caddy certificate eligibility, ingress metrics, enforced account/organization/site/domain limits, organization RBAC, scheduled encrypted backups, and external database drivers are implemented. The included child-process supervisor remains single-leader and artifacts/backups are local by default; a hosted multi-region service still needs leader/remote-runner integration, external object storage, globally transactional control storage, shared metric storage, and a multi-region edge service.
