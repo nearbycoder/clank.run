@@ -1303,6 +1303,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if ((url.pathname === "/healthz" || url.pathname === "/readyz") && request.method === "GET") {
         return readiness();
       }
+      const consolePath = request.method === "GET"
+        ? canonicalPlatformConsolePath(url.pathname)
+        : null;
+      if (consolePath && consolePath !== url.pathname) {
+        const location = new URL(request.url);
+        location.pathname = consolePath;
+        return new Response(null, {
+          status: 308,
+          headers: {
+            location: `${location.pathname}${location.search}`,
+            "cache-control": "no-store",
+          },
+        });
+      }
       const authPrefix = url.pathname === "/__proact/auth" || url.pathname.startsWith("/__proact/auth/")
         ? "/__proact/auth"
         : "/__clank/auth";
@@ -1341,7 +1355,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         return storage.auth.handle(request, authPrefix);
       }
-      if (url.pathname === "/" && request.method === "GET") {
+      if (consolePath) {
         const auth = await storage.auth.resolve(request);
         const userCount = Number(storage.internal.prepare("SELECT count(*) AS count FROM clank_auth_users").get()?.count ?? 0);
         return platformConsolePage(
@@ -1369,7 +1383,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ok: true,
           deviceCode,
           userCode,
-          verificationUri: `${publicUrl}/?code=${encodeURIComponent(userCode)}`,
+          verificationUri: `${publicUrl}/login?code=${encodeURIComponent(userCode)}`,
           expiresIn: Math.floor((expiresAt - now) / 1_000),
           interval: 3,
         }, 201);
@@ -4342,6 +4356,47 @@ function normalizePublicUrl(value: string): string {
   }
   url.pathname = trimTrailingSlashes(url.pathname);
   return trimTrailingSlashes(url.href);
+}
+
+const PLATFORM_CONSOLE_STATIC_PATHS = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/invite",
+  "/overview",
+  "/projects",
+  "/workspaces",
+  "/activity",
+]);
+const PLATFORM_CONSOLE_SLUG = /^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/u;
+const PLATFORM_PROJECT_SECTIONS = new Set([
+  "performance",
+  "domains",
+  "deployments",
+  "backups",
+  "logs",
+  "settings",
+]);
+
+function canonicalPlatformConsolePath(pathname: string): string | null {
+  const canonical = pathname !== "/" && pathname.endsWith("/")
+    ? pathname.replace(/\/+$/u, "")
+    : pathname;
+  if (PLATFORM_CONSOLE_STATIC_PATHS.has(canonical)) return canonical;
+  const segments = canonical.slice(1).split("/");
+  if (segments.length === 3
+    && segments[0] === "workspaces"
+    && PLATFORM_CONSOLE_SLUG.test(segments[1]!)
+    && segments[2] === "people") {
+    return canonical;
+  }
+  if (segments[0] !== "projects"
+    || !PLATFORM_CONSOLE_SLUG.test(segments[1] ?? "")
+    || segments.length > 3) {
+    return null;
+  }
+  if (segments.length === 2) return canonical;
+  return PLATFORM_PROJECT_SECTIONS.has(segments[2]!) ? canonical : null;
 }
 
 function domainResolver(options: ClankPlatformOptions["ingress"]): DomainDnsResolver | undefined {

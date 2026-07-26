@@ -2025,6 +2025,40 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /"authenticated":true/);
     assert.match(signedInHtml, /<section class="app-shell" id="app-view" hidden>/);
     assert.match(signedInHtml, /Ship fast\./);
+    for (const path of [
+      "/login",
+      "/overview",
+      "/projects",
+      "/workspaces",
+      "/workspaces/personal/people",
+      "/activity",
+      "/projects/my-todo",
+      "/projects/my-todo/performance",
+      "/projects/my-todo/domains",
+      "/projects/my-todo/deployments",
+      "/projects/my-todo/backups",
+      "/projects/my-todo/logs",
+      "/projects/my-todo/settings",
+    ]) {
+      const routed = await platform.handle(jsonRequest(path, { cookie: signedInCookie }));
+      assert.equal(routed.status, 200, `${path} serves the refresh-safe console shell`);
+      assert.match(await routed.text(), /"authenticated":true/);
+    }
+    const signedOutDeepLink = await platform.handle(jsonRequest("/projects/private-site/domains"));
+    assert.equal(signedOutDeepLink.status, 200);
+    assert.match(await signedOutDeepLink.text(), /"authenticated":false/);
+    const canonical = await platform.handle(jsonRequest(
+      "/projects/my-todo/domains/?range=7d",
+      { cookie: signedInCookie },
+    ));
+    assert.equal(canonical.status, 308);
+    assert.equal(canonical.headers.get("location"), "/projects/my-todo/domains?range=7d");
+    const unknownConsoleRoute = await platform.handle(jsonRequest(
+      "/projects/my-todo/not-a-section",
+      { cookie: signedInCookie },
+    ));
+    assert.equal(unknownConsoleRoute.status, 404);
+    assert.equal((await unknownConsoleRoute.json()).error.code, "NOT_FOUND");
     const dashboard = await payload(platform, jsonRequest("/api/dashboard", { cookie: firstCookie }));
     const organizationId = dashboard.organizations[0].id;
     const invitation = await payload(platform, jsonRequest(
