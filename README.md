@@ -69,10 +69,11 @@ clank login --server=http://127.0.0.1:4200
 clank create my-app
 cd my-app
 npm install
+clank doctor
 clank deploy
 ```
 
-The generated app installs only Clank, which has no transitive dependencies. The CLI builds locally without a shell, vendors the exact Clank runtime, verifies every path and SHA-256 digest, applies ordered SQLite migrations behind a backup, health-checks the candidate, and restores the previous release automatically on failure.
+The generated app installs only Clank, which has no transitive dependencies, and includes `README.md` plus an agent-ready `AGENTS.md`. Before publishing Clank to npm, use `--framework=local` to install from the current checkout. The first deploy creates and links the site automatically. The CLI builds locally without a shell, vendors the exact Clank runtime, verifies every path and SHA-256 digest, applies ordered SQLite migrations behind a backup, health-checks the candidate, and restores the previous release automatically on failure. `clank deploy --dry-run` performs the complete local artifact check without login or network access.
 
 The smallest application is:
 

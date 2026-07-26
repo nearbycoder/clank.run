@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { join } from "node:path";
@@ -99,6 +99,48 @@ test("Clank CLI exposes its renamed version command", async () => {
     const result = await runCliOutput([command]);
     assert.equal(result.stdout.trim(), frameworkVersion);
     assert.equal(result.stderr, "");
+  }
+});
+
+test("CLI help is command-aware, agent-readable, and never executes the target command", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-help-"));
+  try {
+    const deployHelp = await runCliResult(["deploy", "--help"], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    });
+    assert.equal(deployHelp.code, 0);
+    assert.match(deployHelp.stdout, /clank deploy/);
+    assert.match(deployHelp.stdout, /--dry-run/);
+    assert.equal(deployHelp.stderr, "");
+
+    const machineHelp = await runCliOutput(["help", "doctor", "--json"], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    });
+    const parsed = JSON.parse(machineHelp.stdout);
+    assert.equal(parsed.protocol, "clank-cli-help/1");
+    assert.equal(parsed.command, "doctor");
+    assert.match(parsed.usage, /--json/);
+
+    const typo = await runCliResult(["depoy"], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    });
+    assert.equal(typo.code, 1);
+    assert.match(typo.stderr, /Did you mean "clank deploy"/);
+
+    const optionTypo = await runCliResult(["deploy", "--dryrun", "--json"], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    });
+    assert.equal(optionTypo.code, 1);
+    const error = JSON.parse(optionTypo.stderr);
+    assert.equal(error.ok, false);
+    assert.equal(error.error.code, "UNKNOWN_OPTION");
+    assert.match(error.error.message, /--dry-run/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -516,22 +558,172 @@ test("create scaffolds a named, buildable authenticated application", async () =
     const view = await readFile(join(target, "src", "view.tsx"), "utf8");
     const tsconfig = JSON.parse(await readFile(join(target, "tsconfig.json"), "utf8"));
     const gitignore = await readFile(join(target, ".gitignore"), "utf8");
+    const readme = await readFile(join(target, "README.md"), "utf8");
+    const agentGuide = await readFile(join(target, "AGENTS.md"), "utf8");
     assert.equal(packageJson.name, "team-tasks");
     assert.equal(packageJson.dependencies["clank.run"], `^${frameworkVersion}`);
     assert.match(packageJson.scripts.dev, /dist\/server\.js/);
+    assert.equal(packageJson.scripts.doctor, "clank doctor");
+    assert.equal(packageJson.scripts["deploy:check"], "clank deploy --dry-run");
     assert.doesNotMatch(server, /__PROJECT_TITLE__/);
     assert.doesNotMatch(view, /__PROJECT_TITLE__/);
     assert.doesNotMatch(JSON.stringify(packageJson), /__CLANK_VERSION__/);
     assert.match(server, /title: "Team Tasks"/);
+    assert.match(server, /imports: \{ "clank\.run": "\/_clank\/index\.js" \}/);
     assert.match(view, />Team Tasks</);
     assert.match(view, /<For each=\{props\.todos\} by="_id"/);
     assert.equal(tsconfig.compilerOptions.allowImportingTsExtensions, true);
     assert.match(gitignore, /\.clank/);
+    assert.match(readme, /# Team Tasks/);
+    assert.match(agentGuide, /Never edit, rename, or remove an applied migration/);
 
     await runCli(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "server.js"), "utf8"), /Team Tasks/);
     assert.match(await readFile(join(target, "dist", "view.js"), "utf8"), /Team Tasks/);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("create can use this checkout without a published package and dry-run deploy is offline", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-local-create-"));
+  const home = join(root, "home");
+  const target = join(root, "local-app");
+  try {
+    await mkdir(home);
+    const created = await runCliResult([
+      "create",
+      target,
+      "--framework=local",
+    ], repository, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(created.code, 0, created.stderr);
+    const packageJson = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
+    assert.equal(
+      packageJson.dependencies["clank.run"],
+      `file:${fileURLToPath(repository).replace(/\/$/u, "")}`,
+    );
+
+    const before = await runCliOutput(["doctor", "--json"], target, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    const beforeReport = JSON.parse(before.stdout);
+    assert.equal(beforeReport.protocol, "clank-doctor/1");
+    assert.equal(beforeReport.ok, true);
+    assert.equal(beforeReport.checks.find((check) => check.id === "build").status, "warn");
+    assert.equal(beforeReport.checks.find((check) => check.id === "login").status, "warn");
+
+    const sentinel = join(root, "artifact-sentinel");
+    const artifactPath = join(target, "verified.clank.gz");
+    await writeFile(sentinel, "do not replace");
+    await symlink(sentinel, artifactPath);
+    const dryRun = await runCliOutput([
+      "deploy",
+      "--dry-run",
+      `--output=${artifactPath}`,
+      "--json",
+    ], target, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    const result = JSON.parse(dryRun.stdout);
+    assert.equal(result.protocol, "clank-deploy-result/1");
+    assert.equal(result.ok, true);
+    assert.equal(result.dryRun, true);
+    assert.match(result.artifact.digest, /^[a-f0-9]{64}$/);
+    assert.equal(result.artifact.path, artifactPath);
+    await access(result.artifact.path);
+    assert.equal(await readFile(sentinel, "utf8"), "do not replace");
+    const artifactStats = await lstat(artifactPath);
+    assert.equal(artifactStats.isFile(), true);
+    assert.equal(artifactStats.isSymbolicLink(), false);
+
+    const after = JSON.parse((await runCliOutput(["doctor", "--json"], target, {
+      ...process.env,
+      CLANK_HOME: home,
+    })).stdout);
+    assert.equal(after.checks.find((check) => check.id === "build").status, "pass");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("deploy retries reuse a persisted idempotency key after an ambiguous network failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-retry-"));
+  const home = join(root, "home");
+  const target = join(root, "retry-app");
+  const keys = [];
+  let requests = 0;
+  const server = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    requests++;
+    keys.push(request.headers["x-clank-idempotency-key"]);
+    if (requests === 1) {
+      request.socket.destroy();
+      return;
+    }
+    const digest = request.headers["x-clank-content-sha256"];
+    response.writeHead(201, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      ok: true,
+      release: {
+        id: "release_retry_test",
+        digest,
+        directUrl: "http://127.0.0.1:9999",
+      },
+    }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}/`;
+  try {
+    await mkdir(home);
+    await runCli(["create", target], repository);
+    await mkdir(join(target, ".clank"), { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_retry_test_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    await writeFile(join(target, ".clank", "project.json"), JSON.stringify({
+      version: 1,
+      server: platform,
+      projectId: "project_retry_test",
+    }));
+
+    const first = await runCliResult(["deploy", "--json"], target, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(first.code, 1);
+    await access(join(target, ".clank", "deploy-attempt.json"));
+
+    const second = await runCliResult(["deploy", "--json"], target, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(second.code, 0, second.stderr);
+    const deployed = JSON.parse(second.stdout);
+    assert.equal(deployed.release.id, "release_retry_test");
+    assert.equal(requests, 2);
+    assert.equal(keys[0], keys[1]);
+    await assert.rejects(access(join(target, ".clank", "deploy-attempt.json")), (error) => error.code === "ENOENT");
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -73,3 +73,8 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Corrected successful-login rate-limit clearing and covered cross-runtime accumulation, restart persistence, clock rollback, raw-identity privacy, 429 behavior, and high-cardinality pruning.
 - [x] Re-certified all 145 tests at 82.61% line, 69.72% branch, and 82.47% function coverage, plus 45-file documentation/declaration audit, packed conformance, and repository/history security scans.
 - [x] Browser-verified generic wrong-password handling, successful retry/reset, authenticated refresh, hashed-only retained limiter state, and zero console/page errors.
+- [x] Added focused human and JSON CLI help, typo-safe options, readiness diagnostics, local-checkout scaffolding, offline deploy checks, structured timing results, and retry-safe deployment idempotency.
+- [x] Added human and agent operating guides to both scaffold paths, including commands, file ownership, security/migration invariants, and a definition of done.
+- [x] Corrected the generated browser import map discovered during fresh-app review so server-rendered authentication hydrates and becomes interactive.
+- [x] Re-certified all 148 tests at 82.90% line, 69.76% branch, and 82.67% function coverage, plus documentation/declaration audit, packed conformance, and package/current-tree/history security scans.
+- [x] Browser-verified a newly created local-checkout consumer through auth-mode switching, registration, todo creation, a second login, cross-browser live completion, zero error overlays, and no horizontal overflow.

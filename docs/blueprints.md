@@ -61,13 +61,14 @@ clank plan
 clank plan --output .clank/reviewed-plan.json
 clank generate .
 clank generate ./new-app --blueprint ./clank.app.ts
+clank generate ./new-app --blueprint ./clank.app.ts --framework=local
 ```
 
 `explain` summarizes identity, data, routes, operations, services, and unresolved production requirements.
 
 `plan` normalizes the contract and prints `clank-plan/1`, including every generated path, byte length, SHA-256 checksum, aggregate digest, and warning. Identical blueprints on the same Clank version produce identical plans.
 
-`generate` writes the authenticated full-stack application plus `.clank/plan.json`. It refuses to replace a changed file unless `--force` is supplied. The source blueprint is preserved when generating into its own directory.
+`generate` writes the authenticated full-stack application, human and agent operating guides, and `.clank/plan.json`. It refuses to replace a changed file unless `--force` is supplied. The source blueprint is preserved when generating into its own directory. `--framework=local` makes a generated app install directly from the current Clank checkout without requiring a published registry version.
 
 ## Static safety
 
