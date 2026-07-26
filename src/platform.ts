@@ -259,7 +259,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   // SQLite journals, backups, logs, and generated launchers owner-readable only.
   (globalThis as any).process.umask?.(0o077);
   const publicUrl = normalizePublicUrl(options.publicUrl);
-  const publicHostname = normalizeHostname(new URL(publicUrl).hostname);
+  const publicUrlObject = new URL(publicUrl);
+  const publicHostname = normalizeHostname(publicUrlObject.hostname);
+  const securePublicUrl = publicUrlObject.protocol === "https:";
   const baseDomain = options.ingress?.baseDomain
     ? normalizeHostname(options.ingress.baseDomain)
     : undefined;
@@ -1244,7 +1246,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
   };
 
-  const handle = async (request: Request): Promise<Response> => {
+  const handleRequest = async (request: Request): Promise<Response> => {
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
       const url = new URL(request.url);
@@ -2380,6 +2382,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       options.onError?.(error);
       return problem(500, "PLATFORM_ERROR", "The platform operation failed.");
     }
+  };
+
+  const handle = async (request: Request): Promise<Response> => {
+    const response = await handleRequest(request);
+    const requestUrl = new URL(request.url);
+    if (!securePublicUrl || normalizeHostname(requestUrl.hostname) !== publicHostname) return response;
+    const headers = new Headers(response.headers);
+    headers.set("strict-transport-security", "max-age=31536000");
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
   };
 
   const projects = storage.internal.prepare(
