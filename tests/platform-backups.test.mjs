@@ -122,7 +122,10 @@ test("scheduled platform backups are encrypted, private, observable, and retenti
         `/api/projects/${seed.projectId}/backups`,
         { token: seed.accessToken },
       ));
-      return result.backups.length === 1 ? result : undefined;
+      return result.backups.length === 1
+        && result.automation.lastBackupId === result.backups[0].id
+        ? result
+        : undefined;
     });
     assert.equal(scheduled.backups[0].reason, "automatic scheduled backup");
     assert.equal("source" in scheduled.backups[0], false, "host database paths must remain private");
