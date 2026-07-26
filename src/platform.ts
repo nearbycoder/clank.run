@@ -1214,6 +1214,29 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     };
   });
 
+  const readiness = (): Response => {
+    try {
+      const result = storage.internal.prepare("SELECT 1 AS ready").get();
+      if (Number(result?.ready) !== 1) throw new Error("Control database readiness probe failed.");
+      return api({
+        ok: true,
+        status: "ready",
+        checks: {
+          database: "ok",
+        },
+      });
+    } catch (error) {
+      options.onError?.(error);
+      return api({
+        ok: false,
+        status: "not_ready",
+        checks: {
+          database: "failed",
+        },
+      }, 503);
+    }
+  };
+
   const handle = async (request: Request): Promise<Response> => {
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
@@ -1249,6 +1272,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         return new Response(null, { status: 200, headers: { "cache-control": "no-store" } });
       }
+      // Hosted load balancers commonly probe with their own Host header. Keep
+      // one reserved control-plane path ahead of application-host dispatch
+      // without taking /healthz or /readyz away from deployed applications.
+      if (url.pathname === "/_clank/readyz" && request.method === "GET") {
+        return readiness();
+      }
       if (ingress && normalizeHostname(url.hostname) !== publicHostname) {
         return await ingress.handle(request);
       }
@@ -1265,26 +1294,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         });
       }
       if ((url.pathname === "/healthz" || url.pathname === "/readyz") && request.method === "GET") {
-        try {
-          const result = storage.internal.prepare("SELECT 1 AS ready").get();
-          if (Number(result?.ready) !== 1) throw new Error("Control database readiness probe failed.");
-          return api({
-            ok: true,
-            status: "ready",
-            checks: {
-              database: "ok",
-            },
-          });
-        } catch (error) {
-          options.onError?.(error);
-          return api({
-            ok: false,
-            status: "not_ready",
-            checks: {
-              database: "failed",
-            },
-          }, 503);
-        }
+        return readiness();
       }
       const authPrefix = url.pathname === "/__proact/auth" || url.pathname.startsWith("/__proact/auth/")
         ? "/__proact/auth"

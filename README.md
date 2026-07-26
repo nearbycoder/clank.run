@@ -135,6 +135,7 @@ render(document.querySelector("#app")!, <App />);
 - [Database revisions and correctness](docs/database.md)
 - [Platform security](docs/platform-security.md)
 - [Self-hosting](docs/self-hosting.md)
+- [Railway production deployment](docs/railway.md)
 - [Routing](docs/routing.md)
 - [Server primitives](docs/server.md)
 - [Full-stack SSR, SQLite, and live sync](docs/full-stack.md)

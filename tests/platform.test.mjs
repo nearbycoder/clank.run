@@ -561,6 +561,20 @@ test("platform device auth, ownership, encrypted secrets, atomic deploy, migrati
     },
   });
   try {
+    assert.deepEqual(await payload(platform, new Request(
+      "https://healthcheck.railway.app/_clank/readyz",
+    )), {
+      ok: true,
+      status: "ready",
+      checks: {
+        database: "ok",
+      },
+    });
+    const applicationReadiness = await platform.handle(new Request(
+      "https://missing.apps.example.test/readyz",
+    ));
+    assert.equal(applicationReadiness.status, 404);
+    assert.equal((await applicationReadiness.json()).error.code, "ROUTE_NOT_FOUND");
     const owner = await authorizeCli(platform, "owner@example.com");
     const other = await authorizeCli(platform, "other@example.com");
     const created = await payload(platform, jsonRequest("/api/projects", {
