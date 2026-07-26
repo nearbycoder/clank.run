@@ -430,9 +430,16 @@ test("account quotas prevent multiplying organizations to bypass hosted site lim
   });
   try {
     const owner = await authorizeCli(platform, "account-quota@example.com");
+    const missingCsrf = await platform.handle(jsonRequest("/api/organizations", {
+      method: "POST",
+      cookie: owner.cookie,
+      body: { name: "No CSRF workspace", slug: "no-csrf-workspace" },
+    }));
+    assert.equal(missingCsrf.status, 403);
     const firstOrganization = await payload(platform, jsonRequest("/api/organizations", {
       method: "POST",
-      token: owner.accessToken,
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
       body: { name: "First workspace", slug: "first-workspace" },
     }), 201);
     const firstProject = await payload(platform, jsonRequest("/api/projects", {

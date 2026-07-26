@@ -61,3 +61,6 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Preserved last-owner and owner-only role boundaries, capped active invitations at 100, rejected existing-member reinvites, and redacted invitation-recipient emails from developer activity.
 - [x] Re-certified all 141 tests at 82.53% line, 69.52% branch, and 82.36% function coverage, plus 45-file documentation/declaration audit, packed conformance, and repository/history security scans.
 - [x] Browser-verified two-account invitation acceptance, role promotion, removal/self-leave, replacement/revocation, persistent auth, console health, and desktop/mobile People layouts without overflow.
+- [x] Added quota-aware browser workspace creation with safe slug preview, immediate selection, and a responsive limit state.
+- [x] Re-certified all 141 tests at 82.53% line, 69.56% branch, and 82.36% function coverage, plus packed conformance and repository/history security scans.
+- [x] Browser-verified authenticated workspace creation, automatic slugging, immediate selection, enforced quota disabling, and desktop/mobile layout without overflow.

@@ -24,6 +24,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Owner/admin-only permanent site deletion in the dashboard, API, and CLI with exact confirmation, explicit data-loss acknowledgement, scoped-token denial, path-safe storage removal, token revocation, and retained audit evidence.
 - A role-filtered, cursor-paginated workspace activity feed in the dashboard, API, and CLI that retains deleted-site history and upgrades existing audit rows with organization attribution.
 - Workspace people administration in the dashboard and CLI, including browser acceptance, member role changes, immediate removal, safe pending-invitation listing, one-time token copy, replacement, and revocation.
+- Quota-aware workspace creation in the People console with safe slug preview and immediate selection.
 
 ### Fixed
 
