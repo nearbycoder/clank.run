@@ -21,6 +21,14 @@ clank --version
 
 The package contains the framework runtime, TypeScript and TSX compiler, project starter, development commands, deployment client, and type declarations. It has no transitive npm dependencies.
 
+Run `clank` by itself in an interactive terminal to choose a template and follow a guided create, login, check, or deploy workflow:
+
+```sh
+clank
+```
+
+Bare `clank` prints the full command reference when standard input is not interactive, so it never blocks an agent or CI job waiting for a prompt.
+
 Prefer a project-local CLI? Install the same package in an existing project and run its binary through npm:
 
 ```sh
@@ -55,7 +63,7 @@ The generated `package.json` has one application dependency:
 ```json
 {
   "dependencies": {
-    "@clank.run/framework": "^0.7.0"
+    "@clank.run/framework": "^0.8.0"
   }
 }
 ```
@@ -190,13 +198,13 @@ The generated `AGENTS.md` tells the agent where each concern belongs, which secu
 Sign in once, check the app, and deploy:
 
 ```sh
-clank login --server=https://clank.run
+clank login
 clank whoami
 npm run doctor
 npm run deploy
 ```
 
-The first deployment creates and links an isolated project automatically. The CLI builds locally, packages the exact framework runtime and application files, verifies their digests, applies migrations, waits for the health check, and then activates the release.
+Login uses `https://clank.run` by default. Pass `--server` only when using a self-hosted Clank control plane. The first deployment creates and links an isolated project automatically. The CLI builds locally, packages the exact framework runtime and application files, verifies their digests, applies migrations, waits for the health check, and then activates the release.
 
 Use `npm run deploy:check` whenever you only want to build and inspect the artifact. It does not require login or network access. Continue with the [Deployment CLI](cli.md) for custom domains, secrets, logs, rollback, backups, organizations, and automation.
 

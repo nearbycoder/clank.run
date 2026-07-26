@@ -4,8 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.8.0 - 2026-07-26
+
 ### Added
 
+- A dependency-free interactive launcher when `clank` runs in a terminal, with guided create, readiness, login, deploy, and help workflows plus authenticated and minimal full-stack templates.
+- A secure managed-platform default for `clank login`, so normal hosted use connects to `https://clank.run` without a `--server` flag while self-hosted platforms retain an explicit override.
 - The framework now publishes from the `@clank.run` npm organization as `@clank.run/framework`, with explicit public-registry, provenance, repository, documentation, and package-export metadata.
 - A fully authenticated deployment dashboard with site status, 1-hour through 30-day ingress charts, releases, logs, and guided custom-domain setup.
 - Transactionally enforced per-organization site and per-project custom-domain limits, with operator-configurable metric retention.
@@ -30,8 +34,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Command-aware human and JSON CLI help, agent-readable readiness diagnostics, generated `README.md`/`AGENTS.md` guides, and local-checkout scaffolding that does not require an npm release.
 - Offline deterministic deployment dry-runs, structured deployment results with timing, one-command first-project naming/workspace selection, and retry-safe persisted idempotency attempts.
 
+### Changed
+
+- Authentication now defaults to an eight-character password minimum across framework and platform forms; applications can still require a higher value, and scrypt hashing, bounded concurrency, rate limits, and optional server-only peppering remain in place.
+- The documentation site now begins with the published npm package and generated-app workflow, with hosted login examples consistently using the managed `clank.run` service.
+
 ### Fixed
 
+- Deployment-console header controls now center their labels and icons consistently, while account quota totals retain readable spacing at narrow widths.
 - Workspace invitations can now create their email-bound account and accept membership in one browser flow even when public registration is disabled or the one-time bootstrap is complete.
 - First-account bootstrap is now protected by an expiring SQLite claim across control-plane runtimes, preventing concurrent processes from creating multiple initial accounts.
 - Platform signup policy now evaluates the same normalized auth operation as the low-level router, closing repeated-slash registration bypasses.

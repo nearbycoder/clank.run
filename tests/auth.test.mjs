@@ -110,6 +110,14 @@ async function register(runtime, email) {
   return { response, ...sessionFrom(response, payload) };
 }
 
+test("auth defaults to an eight-character password minimum", () => {
+  assert.equal(defineAuth().password.minLength, 8);
+  assert.throws(
+    () => defineAuth({ password: { minLength: 7 } }),
+    /password\.minLength must be at least 8/u,
+  );
+});
+
 test("auth issues hardened cookies, hashes credentials, and protects state-changing requests", async () => {
   const fixture = await createFixture();
   try {

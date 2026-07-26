@@ -199,7 +199,7 @@ export function defineAuth<const ProfileShape extends SchemaShape>(
     ? s.object(options.profile)
     : s.object({ name: s.optional(s.string({ max: 120 })) });
   const password = {
-    minLength: options.password?.minLength ?? 12,
+    minLength: options.password?.minLength ?? 8,
     maxBytes: options.password?.maxBytes ?? 1_024,
     cost: options.password?.cost ?? 2 ** 17,
     blockSize: options.password?.blockSize ?? 8,
@@ -1329,7 +1329,7 @@ export function AuthForm(props: { auth: AuthClient<DefaultAuthProfile> }): Rende
               h("label", { class: "block text-sm font-medium text-slate-700" }, "Email",
                 h("input", { class: `${field} mt-1`, type: "email", autocomplete: "email", required: true, "bind:value": email, agentId: "auth-email", agentLabel: "Email" })),
               h("label", { class: "block text-sm font-medium text-slate-700" }, "Password",
-                h("input", { class: `${field} mt-1`, type: "password", autocomplete: () => mode.value === "login" ? "current-password" : "new-password", minlength: 12, required: true, "bind:value": password, agentId: "auth-password", agentLabel: "Password" })),
+                h("input", { class: `${field} mt-1`, type: "password", autocomplete: () => mode.value === "login" ? "current-password" : "new-password", minlength: 8, required: true, "bind:value": password, agentId: "auth-password", agentLabel: "Password" })),
             ],
         h("p", { class: "min-h-5 text-sm text-rose-600", role: "alert" }, () => props.auth.error.value instanceof Error ? props.auth.error.value.message : ""),
         h("button", {

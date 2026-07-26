@@ -191,7 +191,7 @@ const auth = defineAuth({
     sameSite: "Strict",
   },
   password: {
-    minLength: 12,
+    minLength: 8,
     pepper: process.env.CLANK_AUTH_PEPPER,
   },
   rateLimit: {
@@ -201,7 +201,7 @@ const auth = defineAuth({
 });
 ```
 
-Defaults use scrypt with `N=2^17`, `r=8`, and `p=1`, a random 128-bit salt, a 64-byte derived key, constant-time comparison, and bounded concurrent hashing. A pepper is optional and must remain server-only. Changing or losing it invalidates existing password hashes unless the application implements an explicit migration.
+The default and lowest supported password length is eight characters. Defaults use scrypt with `N=2^17`, `r=8`, and `p=1`, a random 128-bit salt, a 64-byte derived key, constant-time comparison, and bounded concurrent hashing. A pepper is optional and must remain server-only. Changing or losing it invalidates existing password hashes unless the application implements an explicit migration.
 
 Authentication attempts are rate-limited in process memory by normalized email and the trusted client identity supplied out of band by Clank's Node adapter. Caller headers cannot select this identity. A custom adapter may provide `rateLimit.clientKey(request)` from adapter-authenticated metadata; a multi-instance deployment also needs a shared `rateLimit.store`.
 
