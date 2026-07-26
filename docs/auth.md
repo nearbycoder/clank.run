@@ -237,4 +237,4 @@ Built-in auth provides email/password registration, sessions, CSRF protection, r
 
 OAuth/social identity, enterprise federation, hardware-attestation policy, risk scoring, account-linking policy, and provider-specific bot challenges remain integrations. Organization membership and CLI project authority belong to the deployment platform rather than application auth.
 
-See [Security](security.md) for deployment requirements and [the authenticated Todo](../examples/auth-todo/backend.ts) for the complete working example.
+Continue with [Advanced authentication](authentication.md) for delivery hooks, MFA, passkeys, bot protection, distributed rate limits, and origin troubleshooting. See [Security](security.md) for deployment requirements and [the authenticated Todo](../examples/auth-todo/backend.ts) for the complete working example.
