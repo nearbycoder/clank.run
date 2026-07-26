@@ -217,6 +217,7 @@ Device/public:
 
 - `POST /api/device/start`
 - `POST /api/device/token`
+- `POST /__clank/auth/invited-register` — invitation-bound account creation without public signup
 - `GET /livez` — process liveness
 - `GET /healthz` or `GET /readyz` — storage-backed control-plane readiness
 

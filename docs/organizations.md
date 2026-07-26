@@ -37,7 +37,7 @@ Invitation tokens are hashed at rest, expire after seven days by default, are bo
 
 Reissuing an invitation for the same workspace and normalized email atomically revokes every older active token. Existing members cannot be reinvited; change their role directly instead. A workspace can retain at most 100 active invitations, and owners or administrators can revoke one before it is accepted. These mutations are recorded in workspace activity.
 
-The browser console exposes the complete flow under **People**. An account below its owned-workspace quota can create and immediately select a workspace there. A signed-in recipient can paste a token into **Join another workspace**; the server requires the token's normalized email to match that account. The page also shows the current role and site usage, lets authorized users update roles or remove members, and reveals a newly created token only in the current page state. Member removal immediately revokes the removed account's organization- and project-scoped tokens. The last owner cannot leave or be demoted, and an administrator cannot grant, change, or remove an owner.
+The browser console exposes the complete flow under **People**. An account below its owned-workspace quota can create and immediately select a workspace there. A signed-in recipient can paste a token into **Join another workspace**; the server requires the token's normalized email to match that account. A recipient without an account chooses **Use invitation** on the sign-in screen and supplies the invited email, a new password, and the token. Clank creates the account, consumes the invitation, and joins the workspace in one flow even when public signup is closed. The page also shows the current role and site usage, lets authorized users update roles or remove members, and reveals a newly created token only in the current page state. Member removal immediately revokes the removed account's organization- and project-scoped tokens. The last owner cannot leave or be demoted, and an administrator cannot grant, change, or remove an owner.
 
 ## Organization API
 
@@ -48,8 +48,9 @@ The browser console exposes the complete flow under **People**. An account below
 - `PATCH /api/organizations/:id/members/:userId` changes a role with `{ "role": "admin" }`.
 - `DELETE /api/organizations/:id/members/:userId` lets a member leave or an administrator remove them, then revokes workspace-scoped credentials.
 - `POST /api/invitations/accept` accepts a single-use token for the currently authenticated account.
+- `POST /__clank/auth/invited-register` creates the invitation-bound account and accepts its membership without opening public registration.
 
-All browser mutations require the session CSRF token. Project-scoped tokens cannot call organization endpoints.
+Authenticated browser mutations require the session CSRF token. Invitation-assisted registration requires an allowed request origin, the exact invited email, and the single-use secret. Project-scoped tokens cannot call organization endpoints.
 
 ## Project-scoped tokens
 

@@ -28,6 +28,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- Workspace invitations can now create their email-bound account and accept membership in one browser flow even when public registration is disabled or the one-time bootstrap is complete.
+- First-account bootstrap is now protected by an expiring SQLite claim across control-plane runtimes, preventing concurrent processes from creating multiple initial accounts.
+- Platform signup policy now evaluates the same normalized auth operation as the low-level router, closing repeated-slash registration bypasses.
+- Sign-out and expired-session transitions now reload the deployment console at the identity boundary, clearing prior-account dashboard DOM and recomputing bootstrap availability before another account signs in.
 - CLI profile and project-link state is now bounded, structurally validated, URL-canonicalized, privately and atomically replaced, and never reflected in parse errors.
 - CLI control-plane responses are streaming-bounded, decoded as strict UTF-8/JSON, and protected by finite request and deployment timeouts.
 - Platform signal handling now closes both the HTTP listener and control-plane state, reports shutdown failures, and enforces a 30-second termination deadline.

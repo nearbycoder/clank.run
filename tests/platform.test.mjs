@@ -1988,14 +1988,26 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       },
     }));
     assert.equal(first.status, 201);
-    const signedInCookie = first.headers.get("set-cookie").split(";", 1)[0]
-      .replace("clank-id", "proact-id");
+    const firstBody = await first.json();
+    const firstCookie = first.headers.get("set-cookie").split(";", 1)[0];
+    const signedInCookie = firstCookie.replace("clank-id", "proact-id");
     const signedInConsole = await platform.handle(jsonRequest("/", { cookie: signedInCookie }));
     assert.equal(signedInConsole.status, 200);
     const signedInHtml = await signedInConsole.text();
     assert.match(signedInHtml, /"authenticated":true/);
     assert.match(signedInHtml, /<section class="app-shell" id="app-view" hidden>/);
     assert.match(signedInHtml, /Ship fast\./);
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", { cookie: firstCookie }));
+    const organizationId = dashboard.organizations[0].id;
+    const invitation = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        cookie: firstCookie,
+        csrf: firstBody.csrfToken,
+        body: { email: "second@example.com", role: "developer" },
+      },
+    ), 201);
     const second = await platform.handle(jsonRequest("/__clank/auth/register", {
       method: "POST",
       body: {
@@ -2006,12 +2018,252 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     }));
     assert.equal(second.status, 403);
     assert.equal((await second.json()).error.code, "SIGNUP_DISABLED");
+    for (const [path, email] of [
+      ["/__clank/auth//register", "slash-bypass@example.com"],
+      ["/__proact/auth///register", "legacy-slash-bypass@example.com"],
+    ]) {
+      const bypass = await platform.handle(jsonRequest(path, {
+        method: "POST",
+        body: {
+          email,
+          password: "correct horse battery staple",
+          profile: { name: "bypass" },
+        },
+      }));
+      assert.equal(bypass.status, 403);
+      assert.equal((await bypass.json()).error.code, "SIGNUP_DISABLED");
+    }
+    const crossOrigin = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      origin: "https://evil.example",
+      body: {
+        token: invitation.invitation.token,
+        email: "second@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "second" },
+      },
+    }));
+    assert.equal(crossOrigin.status, 403);
+    assert.equal((await crossOrigin.json()).error.code, "ORIGIN_MISMATCH");
+    const invalidInvitation = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: "clnki_invalid_invitation_token_value",
+        email: "second@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "second" },
+      },
+    }));
+    assert.equal(invalidInvitation.status, 400);
+    assert.equal((await invalidInvitation.json()).error.code, "INVALID_INVITATION");
+    const wrongEmail = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: invitation.invitation.token,
+        email: "wrong@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "wrong" },
+      },
+    }));
+    assert.equal(wrongEmail.status, 400);
+    assert.equal((await wrongEmail.json()).error.code, "INVALID_INVITATION");
+    const invited = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: invitation.invitation.token,
+        email: "second@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "second" },
+      },
+    }));
+    assert.equal(invited.status, 201);
+    const invitedBody = await invited.json();
+    assert.equal(invitedBody.organizationId, organizationId);
+    assert.equal(invitedBody.role, "developer");
+    assert.equal(invitedBody.user.email, "second@example.com");
+    const invitedCookie = invited.headers.get("set-cookie").split(";", 1)[0];
+    const invitedDashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      cookie: invitedCookie,
+    }));
+    assert.equal(
+      invitedDashboard.organizations.find((organization) => organization.id === organizationId).role,
+      "developer",
+    );
+    const replay = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: invitation.invitation.token,
+        email: "second@example.com",
+        password: "another correct horse battery staple",
+        profile: { name: "second replay" },
+      },
+    }));
+    assert.equal(replay.status, 400);
+    assert.equal((await replay.json()).error.code, "INVALID_INVITATION");
     await platform.close();
     const closed = await platform.handle(jsonRequest("/healthz"));
     assert.equal(closed.status, 503);
     assert.equal((await closed.json()).error.code, "PLATFORM_CLOSED");
   } finally {
     await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("closed platform signup still permits an unexpired invitation to create its bound account", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-invited-signup-"));
+  let platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4532,
+    appPortEnd: 4533,
+    signup: true,
+    backups: { intervalMs: false },
+  });
+  try {
+    const owner = await authorizeCli(platform, "closed-owner@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      cookie: owner.cookie,
+    }));
+    const organizationId = dashboard.organizations[0].id;
+    const expiredInvitation = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        cookie: owner.cookie,
+        csrf: owner.csrfToken,
+        body: { email: "expired@example.com", role: "viewer" },
+      },
+    ), 201);
+    const invitation = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        cookie: owner.cookie,
+        csrf: owner.csrfToken,
+        body: { email: "closed-member@example.com", role: "admin" },
+      },
+    ), 201);
+    await platform.close();
+
+    const control = new DatabaseSync(join(root, "control.sqlite"));
+    control.prepare(
+      "UPDATE clank_platform_invitations SET expires_at = ? WHERE id = ?",
+    ).run(Date.now() - 1, expiredInvitation.invitation.id);
+    control.close();
+
+    platform = await openPlatform({
+      dataDirectory: root,
+      publicUrl: "http://127.0.0.1:4200",
+      appPortStart: 4532,
+      appPortEnd: 4533,
+      signup: false,
+      backups: { intervalMs: false },
+    });
+    const direct = await platform.handle(jsonRequest("/__clank/auth/register", {
+      method: "POST",
+      body: {
+        email: "closed-member@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "closed member" },
+      },
+    }));
+    assert.equal(direct.status, 403);
+    assert.equal((await direct.json()).error.code, "SIGNUP_DISABLED");
+    const normalizedBypass = await platform.handle(jsonRequest("/__clank/auth//register", {
+      method: "POST",
+      body: {
+        email: "disabled-slash-bypass@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "disabled bypass" },
+      },
+    }));
+    assert.equal(normalizedBypass.status, 403);
+    assert.equal((await normalizedBypass.json()).error.code, "SIGNUP_DISABLED");
+
+    const expired = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: expiredInvitation.invitation.token,
+        email: "expired@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "expired" },
+      },
+    }));
+    assert.equal(expired.status, 400);
+    assert.equal((await expired.json()).error.code, "INVALID_INVITATION");
+
+    const invited = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: invitation.invitation.token,
+        email: "closed-member@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "closed member" },
+      },
+    }));
+    assert.equal(invited.status, 201);
+    const result = await invited.json();
+    assert.equal(result.organizationId, organizationId);
+    assert.equal(result.role, "admin");
+    assert.equal(result.user.email, "closed-member@example.com");
+
+    const database = new DatabaseSync(join(root, "control.sqlite"), { readOnly: true });
+    const users = database.prepare(
+      "SELECT email FROM clank_auth_users WHERE email IN (?, ?) ORDER BY email",
+    ).all("closed-member@example.com", "expired@example.com");
+    database.close();
+    assert.deepEqual(users.map((row) => row.email), ["closed-member@example.com"]);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap registration is claimed transactionally across control-plane runtimes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-bootstrap-claim-"));
+  const options = {
+    dataDirectory: root,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4534,
+    appPortEnd: 4535,
+    backups: { intervalMs: false },
+  };
+  const firstPlatform = await openPlatform(options);
+  const secondPlatform = await openPlatform(options);
+  try {
+    const registrations = await Promise.all([
+      firstPlatform.handle(jsonRequest("/__clank/auth/register", {
+        method: "POST",
+        body: {
+          email: "bootstrap-a@example.com",
+          password: "correct horse battery staple",
+          profile: { name: "bootstrap a" },
+        },
+      })),
+      secondPlatform.handle(jsonRequest("/__clank/auth/register", {
+        method: "POST",
+        body: {
+          email: "bootstrap-b@example.com",
+          password: "correct horse battery staple",
+          profile: { name: "bootstrap b" },
+        },
+      })),
+    ]);
+    assert.deepEqual(registrations.map((response) => response.status).sort(), [201, 409]);
+    const rejected = registrations.find((response) => response.status === 409);
+    assert.equal((await rejected.json()).error.code, "SIGNUP_IN_PROGRESS");
+
+    const database = new DatabaseSync(join(root, "control.sqlite"), { readOnly: true });
+    const userCount = database.prepare("SELECT count(*) AS count FROM clank_auth_users").get().count;
+    const claimCount = database.prepare(
+      "SELECT count(*) AS count FROM clank_platform_bootstrap_claim",
+    ).get().count;
+    database.close();
+    assert.equal(userCount, 1);
+    assert.equal(claimCount, 0);
+  } finally {
+    await Promise.all([firstPlatform.close(), secondPlatform.close()]);
     await rm(root, { recursive: true, force: true });
   }
 });
