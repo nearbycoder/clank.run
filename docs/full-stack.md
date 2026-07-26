@@ -220,6 +220,19 @@ Pass a fresh `nonce` to apply a CSP nonce to the generated state and module-scri
 
 Hydration attaches bindings, listeners, refs, directives, lifecycle callbacks, and keyed reconciliation to the existing DOM. A mismatch warns and remounts safely. Inspect `root.dataset.clankHydration` for `attached` or `remounted` during diagnostics.
 
+When browser code imports the package name, the document import map must use that exact specifier:
+
+```tsx
+<script
+  type="importmap"
+  dangerouslySetInnerHTML={{
+    __html: JSON.stringify({ imports: { "clank.run": "/dist/index.js" } }),
+  }}
+/>
+```
+
+An import-map key such as `clank` does not resolve `import ... from "clank.run"`; if it is mismatched, the browser never loads the client entry and hydration cannot begin.
+
 ## Run on Node
 
 ```ts

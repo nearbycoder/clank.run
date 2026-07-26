@@ -787,6 +787,25 @@ test("public compiler builds update shared output atomically", async () => {
   }
 });
 
+test("SSR reference apps map the bare module specifier emitted by their shared views", async () => {
+  for (const example of ["fullstack", "auth-todo"]) {
+    const serverSource = await readFile(
+      fileURLToPath(new URL(`examples/${example}/server.tsx`, repository)),
+      "utf8",
+    );
+    const sharedView = await readFile(
+      fileURLToPath(new URL(`examples/${example}/view.js`, repository)),
+      "utf8",
+    );
+    assert.match(sharedView, /from "clank\.run"/, `${example} should exercise the package-style browser import`);
+    assert.match(
+      serverSource,
+      /imports:\s*\{\s*"clank\.run":\s*"\/dist\/index\.js"\s*\}/,
+      `${example} must resolve the same package-style import in its browser import map`,
+    );
+  }
+});
+
 test("development server resolves documented trailing-slash example URLs", async () => {
   const probe = createServer();
   await new Promise((resolve, reject) => {
