@@ -594,6 +594,7 @@ a { color: inherit; }
   .header-inner { grid-template-columns: auto auto minmax(0, 1fr); gap: 10px; padding: 0 14px; }
   .nav-toggle { display: inline-grid; place-items: center; }
   .header-links { display: none; }
+  .search-box { height: 44px; }
   .docs-shell { display: block; padding: 0 16px; }
   .sidebar {
     position: fixed;
@@ -612,6 +613,13 @@ a { color: inherit; }
     transition: transform .2s ease, visibility 0s linear .2s;
   }
   .nav-group > a { display: flex; align-items: center; min-height: 44px; }
+  .breadcrumbs a, .doc-formats a, .site-footer a {
+    display: inline-flex;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .doc-formats a { justify-content: center; }
   body[data-nav-open] .sidebar { transform: none; visibility: visible; transition-delay: 0s; }
   .nav-scrim {
     position: fixed;
