@@ -1,3 +1,5 @@
+import { highlightCode } from "./highlight.ts";
+
 export interface TableOfContentsEntry {
   id: string;
   title: string;
@@ -137,8 +139,9 @@ export function renderMarkdown(markdown: string): RenderedMarkdown {
       index++;
       while (index < lines.length && !/^```\s*$/u.test(lines[index])) code.push(lines[index++]);
       if (index < lines.length) index++;
+      const source = code.join("\n");
       html.push(
-        `<figure class="code-block"><figcaption><span>${escapeHtml(language)}</span><button type="button" data-copy-code aria-label="Copy ${escapeHtml(language)} code">Copy</button></figcaption><pre><code class="language-${escapeHtml(language)}">${escapeHtml(code.join("\n"))}</code></pre></figure>`,
+        `<figure class="code-block"><figcaption><span>${escapeHtml(language)}</span><button type="button" data-copy-code aria-label="Copy ${escapeHtml(language)} code">Copy</button></figcaption><pre><code class="language-${escapeHtml(language)}">${highlightCode(source, language)}</code></pre></figure>`,
       );
       continue;
     }

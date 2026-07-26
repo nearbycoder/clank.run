@@ -113,6 +113,8 @@ test("documentation site serves every human and agent contract securely", async 
   assert.match(gettingStarted, /This is the structure of the app created from npm/u);
   assert.match(gettingStarted, /src\/backend\.ts/u);
   assert.match(gettingStarted, /npm run deploy:check/u);
+  assert.match(gettingStarted, /class="tok-keyword"/u);
+  assert.match(gettingStarted, /class="tok-string"/u);
 
   const redirect = await fetch(`${origin}/docs`, { redirect: "manual" });
   assert.equal(redirect.status, 308);
@@ -198,4 +200,62 @@ test("documentation Markdown allows only explicit safe link protocols", async ()
   assert.match(rendered.html, /href="mailto:hello@clank\.run"/u);
   assert.match(rendered.html, /href="\/docs\/security"/u);
   assert.equal(rendered.toc[0].id, "scriptunsafe-headingscript");
+});
+
+test("documentation code fences highlight supported languages without changing or trusting code", async () => {
+  const { renderMarkdown } = await import("../docs-site/dist/markdown.js");
+  const { highlightCode } = await import("../docs-site/dist/highlight.js");
+  const rendered = renderMarkdown([
+    "```tsx",
+    "const greeting: string = \"<hello>\";",
+    "// rendered as text, never markup",
+    "function App() { return <button disabled>{greeting}</button>; }",
+    "```",
+    "",
+    "```json",
+    "{\"enabled\": true, \"retries\": 3}",
+    "```",
+    "",
+    "```sh",
+    "clank deploy --server \"$CLANK_SERVER\"",
+    "```",
+    "",
+    "```sql",
+    "SELECT id FROM todos WHERE completed = false;",
+    "```",
+    "",
+    "```html",
+    "<script data-value=\"unsafe\">alert(1)</script>",
+    "```",
+    "",
+    "```unknown",
+    "</code><script>globalThis.compromised = true</script>",
+    "```",
+  ].join("\n"));
+
+  assert.match(rendered.html, /class="tok-keyword">const<\/span>/u);
+  assert.match(rendered.html, /class="tok-type">string<\/span>/u);
+  assert.match(rendered.html, /class="tok-string">&quot;&lt;hello&gt;&quot;<\/span>/u);
+  assert.match(rendered.html, /class="tok-comment">\/\/ rendered as text, never markup<\/span>/u);
+  assert.match(rendered.html, /class="tok-function">App<\/span>/u);
+  assert.match(rendered.html, /class="tok-tag">button<\/span>/u);
+  assert.match(rendered.html, /class="tok-property">&quot;enabled&quot;<\/span>|class="tok-property">enabled<\/span>/u);
+  assert.match(rendered.html, /class="tok-literal">true<\/span>/u);
+  assert.match(rendered.html, /class="tok-function">clank<\/span>/u);
+  assert.match(rendered.html, /class="tok-attribute">--server<\/span>/u);
+  assert.match(rendered.html, /class="tok-variable">\$CLANK_SERVER<\/span>/u);
+  assert.match(rendered.html, /class="tok-keyword">SELECT<\/span>/u);
+  assert.match(rendered.html, /class="tok-tag">script<\/span>/u);
+  assert.match(rendered.html, /&lt;\/code&gt;&lt;script&gt;globalThis\.compromised/u);
+  assert.doesNotMatch(rendered.html, /<script>/u);
+
+  assert.match(highlightCode("color: var(--accent);", "css"), /tok-property">color/u);
+  assert.match(highlightCode("const delta = left-right;", "ts"), /tok-operator">-<\/span>/u);
+  assert.match(highlightCode("enabled: true # safe note", "yaml"), /tok-comment"># safe note/u);
+  assert.match(highlightCode("flowchart TD\n%% safe note", "mermaid"), /tok-keyword">flowchart/u);
+  assert.match(highlightCode("/* unfinished <script>", "js"), /&lt;script&gt;/u);
+  assert.equal(
+    highlightCode("</code><script>alert(1)</script>", "text"),
+    "&lt;/code&gt;&lt;script&gt;alert(1)&lt;/script&gt;",
+  );
 });
