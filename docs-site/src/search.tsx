@@ -54,7 +54,10 @@ export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string
         aria-label="Search documentation"
         aria-controls="quick-search-results"
         aria-expanded={expanded.value}
-        onInput={(event) => { query.value = event.currentTarget.value; }}
+        onInput={(event) => {
+          query.value = event.currentTarget.value;
+          focused.value = true;
+        }}
         onFocus={() => { focused.value = true; }}
         onBlur={() => { setTimeout(() => { focused.value = false; }, 160); }}
         onKeyDown={(event) => {
