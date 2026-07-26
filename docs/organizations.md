@@ -21,7 +21,10 @@ clank org create "Acme Engineering" --slug acme
 clank org invite <org-id> person@example.com --role developer
 clank org accept <single-use-token>
 clank org members <org-id>
+clank org invitations <org-id>
+clank org role <org-id> <user-id> <owner|admin|developer|viewer>
 clank org remove <org-id> <user-id>
+clank org revoke-invite <org-id> <invitation-id>
 
 clank project create "Todo" --org <org-id>
 clank project delete <project-id> --confirm="delete-site todo" --acknowledge-data-loss
@@ -30,7 +33,22 @@ clank token list
 clank token revoke <token-id>
 ```
 
-Invitation tokens are hashed at rest, expire, are bound to the invited email address, and can be accepted once. The token is returned once so a self-hosted operator can deliver it through their chosen email service.
+Invitation tokens are hashed at rest, expire after seven days by default, are bound to the invited email address, and can be accepted once. The token is returned only by the create response, so copy it immediately and deliver it through the operator's trusted channel. Listing pending invitations never returns a token or hash, and only owners and administrators receive pending-invitation metadata. Historical invitation events remain auditable, but developer activity feeds redact recipient email fields.
+
+Reissuing an invitation for the same workspace and normalized email atomically revokes every older active token. Existing members cannot be reinvited; change their role directly instead. A workspace can retain at most 100 active invitations, and owners or administrators can revoke one before it is accepted. These mutations are recorded in workspace activity.
+
+The browser console exposes the complete flow under **People**. A signed-in recipient can paste a token into **Join another workspace**; the server requires the token's normalized email to match that account. The page also shows the current role and site usage, lets authorized users update roles or remove members, and reveals a newly created token only in the current page state. Member removal immediately revokes the removed account's organization- and project-scoped tokens. The last owner cannot leave or be demoted, and an administrator cannot grant, change, or remove an owner.
+
+## Organization API
+
+- `GET /api/organizations/:id` returns the organization, access capabilities, members, active invitation limit, and active invitations when the caller may administer them.
+- `POST /api/organizations/:id/invitations` creates or replaces an email-bound invitation with `{ "email": "...", "role": "developer" }`.
+- `DELETE /api/organizations/:id/invitations/:invitationId` revokes an active invitation.
+- `PATCH /api/organizations/:id/members/:userId` changes a role with `{ "role": "admin" }`.
+- `DELETE /api/organizations/:id/members/:userId` lets a member leave or an administrator remove them, then revokes workspace-scoped credentials.
+- `POST /api/invitations/accept` accepts a single-use token for the currently authenticated account.
+
+All browser mutations require the session CSRF token. Project-scoped tokens cannot call organization endpoints.
 
 ## Project-scoped tokens
 

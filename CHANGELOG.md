@@ -23,6 +23,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Enforced per-project release count/byte quotas plus rollback-scoped dashboard and CLI cleanup for inactive runtime artifacts and pre-deploy snapshots.
 - Owner/admin-only permanent site deletion in the dashboard, API, and CLI with exact confirmation, explicit data-loss acknowledgement, scoped-token denial, path-safe storage removal, token revocation, and retained audit evidence.
 - A role-filtered, cursor-paginated workspace activity feed in the dashboard, API, and CLI that retains deleted-site history and upgrades existing audit rows with organization attribution.
+- Workspace people administration in the dashboard and CLI, including browser acceptance, member role changes, immediate removal, safe pending-invitation listing, one-time token copy, replacement, and revocation.
 
 ### Fixed
 
@@ -36,6 +37,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Site quotas can now be reclaimed without operator-side SQLite or filesystem edits.
 - Managed ingress now fixes the upstream origin before applying a request path and streaming-bounds bodies without `Content-Length`, closing scheme-relative SSRF and unbounded-buffer paths.
 - Pending custom-domain assignments can no longer be moved between projects; platform-owned DNS namespaces are reserved.
+- Reissuing an invitation now revokes every older active token for that workspace/email, existing members cannot be reinvited, and active invitations are capped at 100 per workspace.
 - Refreshed dashboard sessions now render one consistent authentication state and return to sign-in when a session expires.
 - Failed distributed-lease acquisition now releases the local project queue.
 - Managed ingress strips `Connection`-nominated headers and retries safe requests after transient upstream 5xx responses.

@@ -238,6 +238,7 @@ const DEFAULT_BACKUP_MAX_DATABASE_BYTES = 10 * 1024 * 1024 * 1024;
 const BACKUP_CONCURRENCY = 2;
 const DEFAULT_RELEASES_PER_PROJECT = 50;
 const DEFAULT_RELEASE_STORAGE_BYTES = 20 * 1024 * 1024 * 1024;
+const MAX_PENDING_INVITATIONS_PER_ORGANIZATION = 100;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -1573,9 +1574,30 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           const members = storage.internal.prepare(`SELECT u.id, u.email, m.role, m.created_at, m.updated_at
             FROM clank_platform_memberships m JOIN clank_auth_users u ON u.id = m.user_id
             WHERE m.organization_id = ? ORDER BY m.created_at`).all(organizationId);
+          const canManageMembers = membership.role === "owner" || membership.role === "admin";
+          const ownerCount = members.filter((row) => row.role === "owner").length;
+          const invitations = canManageMembers
+            ? storage.internal.prepare(`SELECT i.id, i.email, i.role, i.expires_at, i.created_at,
+                u.id AS invited_by_id, u.email AS invited_by_email
+              FROM clank_platform_invitations i
+              JOIN clank_auth_users u ON u.id = i.invited_by
+              WHERE i.organization_id = ? AND i.accepted_at IS NULL
+                AND i.revoked_at IS NULL AND i.expires_at > ?
+              ORDER BY i.created_at DESC`).all(organizationId, Date.now())
+            : [];
           return api({
             ok: true,
-            organization: { id: organizationId, name: membership.name, slug: membership.slug, role: membership.role },
+            organization: {
+              id: organizationId,
+              name: membership.name,
+              slug: membership.slug,
+              role: membership.role,
+              access: {
+                canManageMembers,
+                canGrantOwner: membership.role === "owner",
+                canLeave: membership.role !== "owner" || ownerCount > 1,
+              },
+            },
             members: members.map((row) => ({
               id: String(row.id),
               email: String(row.email),
@@ -1583,6 +1605,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               createdAt: Number(row.created_at),
               updatedAt: Number(row.updated_at),
             })),
+            invitations: invitations.map((row) => ({
+              id: String(row.id),
+              email: String(row.email),
+              role: String(row.role),
+              invitedBy: {
+                id: String(row.invited_by_id),
+                email: String(row.invited_by_email),
+              },
+              expiresAt: Number(row.expires_at),
+              createdAt: Number(row.created_at),
+            })),
+            limits: {
+              pendingInvitations: MAX_PENDING_INVITATIONS_PER_ORGANIZATION,
+            },
           });
         }
         if (operation === "invitations" && request.method === "POST") {
@@ -1597,22 +1633,76 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           const token = `clnki_${await randomToken(32)}`;
           const id = await randomId(18);
           const expiresAt = Date.now() + expiresIn * 1_000;
-          storage.internal.prepare(`INSERT INTO clank_platform_invitations
-            (id, token_hash, organization_id, email, role, invited_by, expires_at, accepted_at, revoked_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`)
-            .run(id, syncHash(token), organizationId, email, role, principal.userId, expiresAt, Date.now());
+          const now = Date.now();
+          let replacedInvitationId: string | null = null;
+          storage.internal.transaction((changes) => {
+            const existingMember = storage.internal.prepare(`SELECT 1 AS present
+              FROM clank_platform_memberships m
+              JOIN clank_auth_users u ON u.id = m.user_id
+              WHERE m.organization_id = ? AND u.email = ?`).get(organizationId, email);
+            if (existingMember) {
+              throw new PlatformError(409, "ALREADY_MEMBER", "That account is already a workspace member.");
+            }
+            const existingInvitation = storage.internal.prepare(`SELECT id
+              FROM clank_platform_invitations
+              WHERE organization_id = ? AND email = ? AND accepted_at IS NULL
+                AND revoked_at IS NULL AND expires_at > ?
+              ORDER BY created_at DESC LIMIT 1`).get(organizationId, email, now);
+            replacedInvitationId = existingInvitation ? String(existingInvitation.id) : null;
+            const pendingCount = Number(storage.internal.prepare(`SELECT count(*) AS count
+              FROM clank_platform_invitations
+              WHERE organization_id = ? AND accepted_at IS NULL
+                AND revoked_at IS NULL AND expires_at > ?`).get(organizationId, now)?.count ?? 0);
+            if (!replacedInvitationId && pendingCount >= MAX_PENDING_INVITATIONS_PER_ORGANIZATION) {
+              throw new PlatformError(
+                409,
+                "INVITATION_LIMIT_REACHED",
+                `This workspace has reached its ${MAX_PENDING_INVITATIONS_PER_ORGANIZATION}-invitation limit.`,
+              );
+            }
+            storage.internal.prepare(`UPDATE clank_platform_invitations SET revoked_at = ?
+              WHERE organization_id = ? AND email = ? AND accepted_at IS NULL
+                AND revoked_at IS NULL AND expires_at > ?`).run(now, organizationId, email, now);
+            storage.internal.prepare(`INSERT INTO clank_platform_invitations
+              (id, token_hash, organization_id, email, role, invited_by, expires_at, accepted_at, revoked_at, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`)
+              .run(id, syncHash(token), organizationId, email, role, principal.userId, expiresAt, now);
+            changes.record("__platform", organizationId);
+          });
           audit(storage.internal, principal.userId, principal.tokenId, null, "invitation.create", {
             organizationId,
             invitationId: id,
             email,
             role,
+            replacedInvitationId,
           });
           return api({ ok: true, invitation: { id, token, email, role, expiresAt } }, 201);
         }
+        const invitationMatch = /^invitations\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
+        if (invitationMatch && request.method === "DELETE") {
+          requireOrganizationAdministration(membership.role);
+          const invitationId = invitationMatch[1]!;
+          const now = Date.now();
+          storage.internal.transaction((changes) => {
+            const result = storage.internal.prepare(`UPDATE clank_platform_invitations SET revoked_at = ?
+              WHERE id = ? AND organization_id = ? AND accepted_at IS NULL
+                AND revoked_at IS NULL AND expires_at > ?`).run(now, invitationId, organizationId, now);
+            if (Number(result.changes) !== 1) {
+              throw new PlatformError(404, "INVITATION_NOT_FOUND", "Active workspace invitation not found.");
+            }
+            changes.record("__platform", organizationId);
+          });
+          audit(storage.internal, principal.userId, principal.tokenId, null, "invitation.revoke", {
+            organizationId,
+            invitationId,
+          });
+          return api({ ok: true, invitationId, revoked: true });
+        }
         const memberMatch = /^members\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
         if (memberMatch && (request.method === "PATCH" || request.method === "DELETE")) {
-          requireOrganizationAdministration(membership.role);
           const memberId = memberMatch[1]!;
+          const selfRemoval = request.method === "DELETE" && memberId === principal.userId;
+          if (!selfRemoval) requireOrganizationAdministration(membership.role);
           const target = storage.internal.prepare(`SELECT role FROM clank_platform_memberships
             WHERE organization_id = ? AND user_id = ?`).get(organizationId, memberId);
           if (!target) throw new PlatformError(404, "MEMBER_NOT_FOUND", "Organization member not found.");
@@ -3296,6 +3386,7 @@ function workspaceAuditEvents(
     accessibleProject(internal, principal.projectId, principal, "audit");
     rows = internal.prepare(`SELECT a.id, a.organization_id, a.project_id, a.action, a.metadata,
       a.created_at, a.actor_user_id, a.actor_token_id, u.email AS actor_email,
+        NULL AS reader_role,
         o.name AS organization_name, o.slug AS organization_slug,
         p.id AS live_project_id,
         COALESCE(p.name, (
@@ -3322,6 +3413,7 @@ function workspaceAuditEvents(
   } else {
     rows = internal.prepare(`SELECT a.id, a.organization_id, a.project_id, a.action, a.metadata,
       a.created_at, a.actor_user_id, a.actor_token_id, u.email AS actor_email,
+        m.role AS reader_role,
         o.name AS organization_name, o.slug AS organization_slug,
         p.id AS live_project_id,
         COALESCE(p.name, (
@@ -3352,6 +3444,10 @@ function workspaceAuditEvents(
   }
   const events = rows.map((row) => {
     const metadata = JSON.parse(String(row.metadata)) as Record<string, unknown>;
+    const action = String(row.action);
+    if (row.reader_role === "developer" && action.startsWith("invitation.")) {
+      delete metadata.email;
+    }
     const projectId = row.project_id === null ? null : String(row.project_id);
     const projectName = row.project_name === null || row.project_name === undefined
       ? typeof metadata.name === "string"
@@ -3375,7 +3471,7 @@ function workspaceAuditEvents(
           : String(row.project_slug),
         deleted: row.live_project_id === null || row.live_project_id === undefined,
       },
-      action: String(row.action),
+      action,
       metadata,
       createdAt: Number(row.created_at),
       actor: {

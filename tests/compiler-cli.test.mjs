@@ -410,6 +410,101 @@ test("activity CLI validates cursors and emits the workspace audit feed as struc
   }
 });
 
+test("organization CLI lists and administers roles and invitations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-organization-access-"));
+  const home = join(root, "home");
+  const observed = [];
+  const expiresAt = 1_900_000_000_000;
+  const server = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    observed.push({
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+      body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined,
+    });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(request.method === "GET" ? {
+      ok: true,
+      invitations: [{
+        id: "invitation_cli_test",
+        email: "developer@example.com",
+        role: "developer",
+        expiresAt,
+      }],
+    } : { ok: true }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}/`;
+  const env = { ...process.env, CLANK_HOME: home };
+  try {
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_organization_access_test_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    const listed = await runCliResult([
+      "org",
+      "invitations",
+      "organization_cli_test",
+    ], repository, env);
+    assert.equal(listed.code, 0, listed.stderr);
+    assert.match(listed.stdout, /invitation_cli_test  developer@example\.com  developer/);
+    assert.match(listed.stdout, new RegExp(new Date(expiresAt).toISOString()));
+
+    const changed = await runCliResult([
+      "org",
+      "role",
+      "organization_cli_test",
+      "user_cli_test",
+      "admin",
+    ], repository, env);
+    assert.equal(changed.code, 0, changed.stderr);
+    assert.match(changed.stdout, /Changed user_cli_test to admin/);
+
+    const revoked = await runCliResult([
+      "org",
+      "revoke-invite",
+      "organization_cli_test",
+      "invitation_cli_test",
+    ], repository, env);
+    assert.equal(revoked.code, 0, revoked.stderr);
+    assert.match(revoked.stdout, /Revoked invitation invitation_cli_test/);
+    assert.deepEqual(observed, [{
+      method: "GET",
+      url: "/api/organizations/organization_cli_test",
+      authorization: "Bearer clnk_organization_access_test_token",
+      body: undefined,
+    }, {
+      method: "PATCH",
+      url: "/api/organizations/organization_cli_test/members/user_cli_test",
+      authorization: "Bearer clnk_organization_access_test_token",
+      body: { role: "admin" },
+    }, {
+      method: "DELETE",
+      url: "/api/organizations/organization_cli_test/invitations/invitation_cli_test",
+      authorization: "Bearer clnk_organization_access_test_token",
+      body: undefined,
+    }]);
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("create scaffolds a named, buildable authenticated application", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-create-"));
   const target = join(root, "team-tasks");

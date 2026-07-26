@@ -57,3 +57,7 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Added organization attribution and old-schema backfill without weakening role, membership, project-token, pagination, or input boundaries.
 - [x] Re-certified all 140 tests at 82.38% line, 69.30% branch, and 82.26% function coverage, plus packed conformance and repository/history security scans.
 - [x] Browser-verified deleted-site activity, expandable metadata, authenticated refresh, console health, and desktop/mobile layout without overflow.
+- [x] Added complete workspace people administration in the browser and CLI: email-bound invitation creation/acceptance/replacement/revocation, member role changes, administrator removal, and member self-leave.
+- [x] Preserved last-owner and owner-only role boundaries, capped active invitations at 100, rejected existing-member reinvites, and redacted invitation-recipient emails from developer activity.
+- [x] Re-certified all 141 tests at 82.53% line, 69.52% branch, and 82.36% function coverage, plus 45-file documentation/declaration audit, packed conformance, and repository/history security scans.
+- [x] Browser-verified two-account invitation acceptance, role promotion, removal/self-leave, replacement/revocation, persistent auth, console health, and desktop/mobile People layouts without overflow.

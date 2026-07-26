@@ -18,6 +18,8 @@ Browser accounts inherit Clank's scrypt passwords, hardened cookies, CSRF, gener
 
 Registration defaults to a race-guarded first-account bootstrap. Public signup must be enabled explicitly. Organizations include owner/admin/developer/viewer roles, invitations, last-owner protection, and project-scoped CLI tokens whose permissions are intersected with current membership on every request.
 
+Invitation tokens are email-bound, single-use, expiring, hashed at rest, and returned only by the create response. Reissuing for one workspace/email atomically revokes older active tokens, existing members must use the explicit role-change path, and each workspace is capped at 100 active invitations. Pending addresses are returned only to owners and administrators; developer audit responses also redact invitation-recipient email fields, including for older stored events. Revocation, acceptance, role changes, and removals are audited; removal also revokes organization/project-scoped credentials.
+
 CLI flow follows [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628/): hashed high-entropy device codes, short expiry, rate limiting, visible client identity/code, same-origin CSRF approval, throttled polling, and single use.
 
 Bearer tokens are returned once and hashed at rest. Follow [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750): TLS, no tokens in URLs/logs, revocation, and rotation. Account tokens can create or administer organizations according to membership; project tokens are restricted to one project and explicit `read`, `deploy`, `rollback`, `secrets`, `tokens`, and `audit` permissions.

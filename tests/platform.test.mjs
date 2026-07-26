@@ -779,14 +779,60 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
     const organizationId = first.project.organizationId;
     assert.equal(second.project.organizationId, organizationId);
 
+    const invitationWithoutCsrf = await platform.handle(jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        cookie: owner.cookie,
+        body: { email: "org-admin@example.com", role: "admin" },
+      },
+    ));
+    assert.equal(invitationWithoutCsrf.status, 403);
+    const supersededInvitation = await payload(platform, jsonRequest(`/api/organizations/${organizationId}/invitations`, {
+      method: "POST",
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
+      body: { email: "org-admin@example.com", role: "admin" },
+    }), 201);
     const invitation = await payload(platform, jsonRequest(`/api/organizations/${organizationId}/invitations`, {
       method: "POST",
       token: owner.accessToken,
       body: { email: "org-admin@example.com", role: "admin" },
     }), 201);
-    await payload(platform, jsonRequest("/api/invitations/accept", {
+    const organizationBeforeAcceptance = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(organizationBeforeAcceptance.organization.access, {
+      canManageMembers: true,
+      canGrantOwner: true,
+      canLeave: false,
+    });
+    assert.equal(organizationBeforeAcceptance.limits.pendingInvitations, 100);
+    assert.equal(organizationBeforeAcceptance.invitations.length, 1);
+    assert.deepEqual(
+      Object.keys(organizationBeforeAcceptance.invitations[0]).sort(),
+      ["createdAt", "email", "expiresAt", "id", "invitedBy", "role"],
+    );
+    assert.equal(organizationBeforeAcceptance.invitations[0].id, invitation.invitation.id);
+    assert.equal(organizationBeforeAcceptance.invitations[0].invitedBy.email, "org-owner@example.com");
+    const superseded = await platform.handle(jsonRequest("/api/invitations/accept", {
       method: "POST",
       token: admin.accessToken,
+      body: { token: supersededInvitation.invitation.token },
+    }));
+    assert.equal(superseded.status, 400);
+    const wrongAccount = await platform.handle(jsonRequest("/api/invitations/accept", {
+      method: "POST",
+      token: outsider.accessToken,
+      body: { token: invitation.invitation.token },
+    }));
+    assert.equal(wrongAccount.status, 400);
+    assert.equal((await wrongAccount.json()).error.code, "INVALID_INVITATION");
+    await payload(platform, jsonRequest("/api/invitations/accept", {
+      method: "POST",
+      cookie: admin.cookie,
+      csrf: admin.csrfToken,
       body: { token: invitation.invitation.token },
     }));
     const replay = await platform.handle(jsonRequest("/api/invitations/accept", {
@@ -795,6 +841,65 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
       body: { token: invitation.invitation.token },
     }));
     assert.equal(replay.status, 400);
+    const organizationAfterAcceptance = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}`,
+      { token: admin.accessToken },
+    ));
+    assert.deepEqual(organizationAfterAcceptance.organization.access, {
+      canManageMembers: true,
+      canGrantOwner: false,
+      canLeave: true,
+    });
+    assert.equal(organizationAfterAcceptance.invitations.length, 0);
+    await payload(platform, jsonRequest(`/api/organizations/${organizationId}/members/${admin.user.id}`, {
+      method: "PATCH",
+      token: owner.accessToken,
+      body: { role: "owner" },
+    }));
+    const sharedOwnership = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(sharedOwnership.organization.access.canLeave, true);
+    await payload(platform, jsonRequest(`/api/organizations/${organizationId}/members/${admin.user.id}`, {
+      method: "PATCH",
+      token: owner.accessToken,
+      body: { role: "admin" },
+    }));
+
+    const alreadyMember = await platform.handle(jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        token: admin.accessToken,
+        body: { email: "org-owner@example.com", role: "viewer" },
+      },
+    ));
+    assert.equal(alreadyMember.status, 409);
+    assert.equal((await alreadyMember.json()).error.code, "ALREADY_MEMBER");
+    const revocableInvitation = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        token: admin.accessToken,
+        body: { email: "outsider@example.com", role: "viewer" },
+      },
+    ), 201);
+    await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/invitations/${revocableInvitation.invitation.id}`,
+      { method: "DELETE", token: admin.accessToken, body: {} },
+    ));
+    const revokedInvitation = await platform.handle(jsonRequest("/api/invitations/accept", {
+      method: "POST",
+      token: outsider.accessToken,
+      body: { token: revocableInvitation.invitation.token },
+    }));
+    assert.equal(revokedInvitation.status, 400);
+    const revokeReplay = await platform.handle(jsonRequest(
+      `/api/organizations/${organizationId}/invitations/${revocableInvitation.invitation.id}`,
+      { method: "DELETE", token: admin.accessToken, body: {} },
+    ));
+    assert.equal(revokeReplay.status, 404);
 
     const visible = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
       token: admin.accessToken,
@@ -832,6 +937,52 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
     assert.equal(scopedSecrets.status, 403);
     assert.equal((await scopedSecrets.json()).error.code, "TOKEN_SCOPE_DENIED");
 
+    for (let index = 0; index < 100; index++) {
+      await payload(platform, jsonRequest(`/api/organizations/${organizationId}/invitations`, {
+        method: "POST",
+        token: owner.accessToken,
+        body: { email: `pending-${index}@example.com`, role: "developer" },
+      }), 201);
+    }
+    const invitationLimit = await platform.handle(jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { email: "pending-overflow@example.com", role: "viewer" },
+      },
+    ));
+    assert.equal(invitationLimit.status, 409);
+    assert.equal((await invitationLimit.json()).error.code, "INVITATION_LIMIT_REACHED");
+    await payload(platform, jsonRequest(`/api/organizations/${organizationId}/invitations`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { email: "pending-0@example.com", role: "viewer" },
+    }), 201);
+    const ownerAudit = await payload(platform, jsonRequest(
+      `/api/audit?organizationId=${organizationId}&limit=200`,
+      { token: owner.accessToken },
+    ));
+    assert.ok(ownerAudit.events.some(
+      (event) => event.action === "invitation.create"
+        && event.metadata.email === "pending-0@example.com",
+    ));
+    await payload(platform, jsonRequest(`/api/organizations/${organizationId}/members/${admin.user.id}`, {
+      method: "PATCH",
+      token: owner.accessToken,
+      body: { role: "viewer" },
+    }));
+    const viewerOrganization = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}`,
+      { token: admin.accessToken },
+    ));
+    assert.deepEqual(viewerOrganization.organization.access, {
+      canManageMembers: false,
+      canGrantOwner: false,
+      canLeave: true,
+    });
+    assert.deepEqual(viewerOrganization.invitations, []);
+
     const adminCannotRemoveOwner = await platform.handle(jsonRequest(
       `/api/organizations/${organizationId}/members/${owner.user.id}`,
       { method: "DELETE", token: admin.accessToken, body: {} },
@@ -839,7 +990,7 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
     assert.equal(adminCannotRemoveOwner.status, 403);
     await payload(platform, jsonRequest(`/api/organizations/${organizationId}/members/${admin.user.id}`, {
       method: "DELETE",
-      token: owner.accessToken,
+      token: admin.accessToken,
       body: {},
     }));
     const revokedScoped = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
@@ -947,6 +1098,11 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     ));
     assert.ok(developerAudit.events.length > 0);
     assert.ok(developerAudit.events.every((event) => event.organization.id === organizationId));
+    const developerInvitationEvent = developerAudit.events.find(
+      (event) => event.action === "invitation.create",
+    );
+    assert.ok(developerInvitationEvent);
+    assert.equal("email" in developerInvitationEvent.metadata, false);
     await payload(platform, jsonRequest(
       `/api/organizations/${organizationId}/members/${developer.user.id}`,
       {
