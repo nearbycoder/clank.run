@@ -89,7 +89,7 @@ a { color: inherit; }
 }
 .wordmark {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
   min-height: 44px;
   min-width: 44px;
@@ -100,14 +100,7 @@ a { color: inherit; }
   font-weight: 800;
   letter-spacing: -.04em;
 }
-.wordmark::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 18px rgba(155,239,107,.4);
-}
+.wordmark img { display: block; width: 24px; height: 24px; border-radius: 5px; }
 .wordmark-docs { color: var(--faint); font-weight: 540; }
 .header-links { display: flex; justify-content: flex-end; gap: 22px; }
 .header-links a {

@@ -86,6 +86,13 @@ const searchEntries: SearchEntry[] = docs.map(({ slug, title, description, group
 const appFiles = staticFiles(distRoot, { cacheControl: "public, max-age=31536000, immutable" });
 const vendorFiles = staticFiles(vendorRoot, { prefix: "/vendor", cacheControl: "public, max-age=31536000, immutable" });
 
+function brandedAsset(request: Request, filename: string): Response | Promise<Response> {
+  const url = new URL(request.url);
+  url.pathname = `/brand/${filename}`;
+  url.search = "";
+  return appFiles.handle(new Request(url, { headers: request.headers }));
+}
+
 function versionedAsset(request: Request, filename: string): Response | Promise<Response> {
   const expected = new Map([
     [`app.${manifest.assetVersion}.js`, "app.js"],
@@ -168,6 +175,7 @@ function SiteChrome(props: {
         <div class="header-inner">
           <button id="nav-toggle" class="nav-toggle" type="button" aria-label="Open documentation navigation" aria-controls="docs-sidebar" aria-expanded="false">☰</button>
           <a class="wordmark" href="/" agentLabel="Clank documentation home">
+            <img src="/brand/clank-mark-64.png" width="24" height="24" alt="" />
             <span>clank</span><span class="wordmark-docs">docs</span>
           </a>
           <div id="docs-search" class="header-search">
@@ -657,6 +665,9 @@ async function page(view: unknown, options: PageOptions): Promise<Response> {
           <meta name="description" content={options.description} />
           <meta name="theme-color" content="#0a0a0a" />
           <meta name="robots" content={options.status === 404 ? "noindex" : "index,follow"} />
+          <link rel="icon" href={`/brand/favicon.ico?v=${manifest.assetVersion}`} sizes="any" />
+          <link rel="icon" href={`/brand/clank-mark-32.png?v=${manifest.assetVersion}`} type="image/png" sizes="32x32" />
+          <link rel="apple-touch-icon" href={`/brand/apple-touch-icon.png?v=${manifest.assetVersion}`} sizes="180x180" />
           <link rel="canonical" href={canonical} />
           <link rel="alternate" type="text/plain" href="/llms.txt" title="Agent documentation map" />
           <meta property="og:title" content={options.title} />
@@ -819,6 +830,10 @@ const app = createApp({
     },
   }))
   .route("*", "/__clank/mcp", ({ request }) => docsMcp.handle(request))
+  .route("HEAD", "/favicon.ico", ({ request }) => brandedAsset(request, "favicon.ico"))
+  .get("/favicon.ico", ({ request }) => brandedAsset(request, "favicon.ico"))
+  .route("HEAD", "/apple-touch-icon.png", ({ request }) => brandedAsset(request, "apple-touch-icon.png"))
+  .get("/apple-touch-icon.png", ({ request }) => brandedAsset(request, "apple-touch-icon.png"))
   .get("/", () => page(<HomePage />, {
     title: "Clank Documentation",
     description: "Build, understand, secure, and deploy applications with the AI-first Clank TypeScript framework.",
@@ -921,6 +936,7 @@ const app = createApp({
     });
   })
   .get("/assets/:filename", ({ request, params }) => versionedAsset(request, params.filename))
+  .route("*", "/brand/*", ({ request }) => appFiles.handle(request))
   .get("/vendor/*", ({ request }) => vendorFiles.handle(request))
   .route("*", "*", ({ url }) => {
     if (url.pathname.length > 1 && url.pathname.endsWith("/")) {

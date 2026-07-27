@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import {
   AuthError,
   defineAuth,
@@ -298,6 +299,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   // The platform is a dedicated control-plane process. A private umask keeps
   // SQLite journals, backups, logs, and generated launchers owner-readable only.
   (globalThis as any).process.umask?.(0o077);
+  const platformBrandAssets = new Map<string, { bytes: Uint8Array; contentType: string }>(await Promise.all([
+    ["/favicon.ico", "../brand/favicon.ico", "image/x-icon"],
+    ["/apple-touch-icon.png", "../brand/apple-touch-icon.png", "image/png"],
+    ["/brand/clank-mark-32.png", "../brand/clank-mark-32.png", "image/png"],
+    ["/brand/clank-mark-64.png", "../brand/clank-mark-64.png", "image/png"],
+  ].map(async ([path, source, contentType]) => [
+    path,
+    { bytes: await readFile(new URL(source, import.meta.url)), contentType },
+  ] as const)));
   const publicUrl = normalizePublicUrl(options.publicUrl);
   const publicUrlObject = new URL(publicUrl);
   const publicHostname = normalizeHostname(publicUrlObject.hostname);
@@ -1514,11 +1524,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (url.pathname === "/livez" && request.method === "GET") {
         return api({ ok: true, status: "alive" });
       }
-      if (url.pathname === "/favicon.ico" && request.method === "GET") {
-        return new Response(null, {
-          status: 204,
+      const brandAsset = request.method === "GET" || request.method === "HEAD"
+        ? platformBrandAssets.get(url.pathname)
+        : undefined;
+      if (brandAsset) {
+        return new Response(request.method === "HEAD" ? null : brandAsset.bytes, {
           headers: {
-            "cache-control": "public, max-age=86400",
+            "cache-control": "public, max-age=3600, must-revalidate",
+            "content-type": brandAsset.contentType,
             "x-content-type-options": "nosniff",
           },
         });

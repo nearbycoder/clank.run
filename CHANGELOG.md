@@ -9,6 +9,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - The documentation now includes a practical per-app MCP guide covering automatic query and
   mutation tools, application-specific auth and data isolation, Codex connection, and contract
   freshness as UI actions change.
+- Clank now ships a shared three-color brand mark with favicon, compact UI, and Apple touch
+  variants. The deployment control plane and documentation site both publish and display the
+  same generated identity.
 
 ### Fixed
 
