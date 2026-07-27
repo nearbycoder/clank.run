@@ -158,24 +158,32 @@ test("managed ingress routes by verified host, strips hop headers, bounds bodies
   const unknown = await ingress.handle(new Request("https://other.example.com/"));
   assert.equal(unknown.status, 404);
 
+  let failingUpstream = "http://127.0.0.1:4501";
   const failing = createManagedIngress({
     routes: () => [{
       id: "route_0002",
       projectId: "project_0002",
       hosts: ["down.example.com"],
-      upstream: "http://127.0.0.1:4501",
+      upstream: failingUpstream,
       active: true,
     }],
     retries: 0,
     circuitFailures: 2,
     circuitResetMs: 10_000,
-    fetch: async () => { throw new Error("connection refused"); },
+    fetch: async (url) => {
+      if (String(url).startsWith("http://127.0.0.1:4502/")) return new Response("recovered");
+      throw new Error("connection refused");
+    },
   });
   assert.equal((await failing.handle(new Request("https://down.example.com/"))).status, 502);
   assert.equal((await failing.handle(new Request("https://down.example.com/"))).status, 502);
   const opened = await failing.handle(new Request("https://down.example.com/"));
   assert.equal(opened.status, 503);
   assert.equal((await opened.json()).error.code, "UPSTREAM_UNAVAILABLE");
+  failingUpstream = "http://127.0.0.1:4502";
+  const switched = await failing.handle(new Request("https://down.example.com/"));
+  assert.equal(switched.status, 200);
+  assert.equal(await switched.text(), "recovered");
 
   let attempts = 0;
   const retrying = createManagedIngress({

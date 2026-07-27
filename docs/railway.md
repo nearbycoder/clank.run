@@ -116,6 +116,11 @@ Each project receives a separate directory and SQLite database under `/data/proj
 Database migrations are planned and applied by Clank during deployment; a failed health check or
 migration leaves the active release unchanged.
 
+Code-only application deployments are rolling inside the Railway container. Clank starts the
+candidate on a spare loopback port, waits for its health check, switches managed ingress, and then
+drains the prior release. Pending SQLite migrations retain a short exclusive maintenance window;
+use an external database with expand/contract migrations when the schema must change without one.
+
 Managed application processes receive reserved runtime values, including
 `TRUST_PROXY=1`, an empty `ALLOWED_HOSTS`, and `CLANK_MANAGED_INGRESS=1`.
 Together they let the Node adapter reconstruct each canonical or verified
@@ -136,6 +141,14 @@ railway logs --service clank --lines 100
 
 Also verify browser session refresh, CLI device authorization, a disposable deployment, its
 wildcard application URL, backup creation, rollback, and permanent deletion.
+
+Railway does not overlap deployments that mount the same volume, even when a health check is
+configured. The production entry point therefore binds the control-plane listener without waiting
+for every project runtime to recover, starts those runtimes concurrently in the background, and
+drains HTTP, live streams, applications, backups, and storage concurrently on `SIGTERM`. This
+minimizes the unavoidable volume handoff. A truly zero-downtime control-plane image rollout
+requires moving control data, release artifacts, application data, and runners off the mounted
+local volume so the Railway service can run multiple stateless replicas.
 
 The Railway deployment uses Clank's `process` runner because hosted Railway containers do not expose
 a Docker daemon. This runner is intentionally for trusted deployers: application code runs with the

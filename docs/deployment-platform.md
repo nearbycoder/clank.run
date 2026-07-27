@@ -124,16 +124,22 @@ Deployment runs in this order:
 2. Enforce request, gzip, file-count, file-size, and aggregate limits.
 3. Verify config, paths, modes, file hashes, and artifact digest.
 4. Extract into a non-active release directory.
-5. Stop the active process to quiesce SQLite writes.
-6. Create a consistent SQLite backup.
-7. Verify migration history and apply pending SQL in one `BEGIN IMMEDIATE`.
-8. Start the candidate with persistent data and decrypted runtime secrets.
-9. Poll the configured health route.
-10. Mark it active only after health succeeds.
+5. Verify migration history and create a consistent SQLite backup while the active release continues serving.
+6. If no migrations are pending, launch the candidate on a reserved spare port.
+7. Poll the candidate's configured health route without exposing it to public traffic.
+8. Atomically switch managed ingress and active-release metadata to the healthy candidate.
+9. Drain the prior release only after the route switch.
 
-If backup, migration, startup, or health fails, Clank stops the candidate, restores the snapshot, restarts the prior release, marks the candidate failed, and records an audit event.
+A code-only candidate that fails startup or health never receives traffic and never stops the prior
+release. Automatic crash recovery uses the same durable project lock as deploy, rollback, backup,
+and deletion, so it cannot race a user deployment for the project's runtime ports.
 
-This creates a short SQLite write outage. Continuously writable multi-instance systems need an external database and another deployment driver.
+Pending SQLite migrations use the safer exclusive path: Clank stops the prior release, applies all
+pending SQL in one `BEGIN IMMEDIATE`, starts and checks the candidate, and restores the verified
+snapshot plus prior release if anything fails. This creates a short maintenance window because
+arbitrary local schema changes cannot safely run beside unknown old application code.
+Continuously writable multi-instance systems and zero-downtime schema changes need an external
+database plus expand/contract migrations.
 
 Before creating a release directory, Clank checks the site's retained-artifact count and the uncompressed bundle plus current SQLite/WAL footprint under the durable project lock. After taking a pre-deploy snapshot, it records the exact snapshot size. This bounds cumulative deployment storage rather than only bounding each upload.
 

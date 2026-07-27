@@ -148,7 +148,10 @@ Backup and restore:
 5. atomically replace the destination;
 6. remove stale WAL/SHM sidecars.
 
-The deployment platform stops the application before migration or restore. A failed migration, startup, or health check restores the verified pre-release snapshot.
+Code-only deployments keep the current application online while a candidate starts and passes its
+health check, then switch ingress before draining the prior process. The deployment platform stops
+the application before a pending migration or restore. A failed migration, startup, or health
+check on that exclusive path restores the verified pre-release snapshot.
 
 ## Important options
 

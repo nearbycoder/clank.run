@@ -64,12 +64,13 @@ async function authorizeCli(platform, email) {
   return { accessToken: token.accessToken, user: session.user, cookie, csrfToken: session.csrfToken };
 }
 
-async function appArtifact(root, label, migrations, allowUnsafeMigrations = false) {
+async function appArtifact(root, label, migrations, allowUnsafeMigrations = false, options = {}) {
   await rm(root, { recursive: true, force: true });
   await mkdir(join(root, "dist"), { recursive: true });
   await mkdir(join(root, "migrations"), { recursive: true });
   await writeFile(join(root, "dist", "server.js"), `
     import { createServer } from "node:http";
+    await new Promise((resolve) => setTimeout(resolve, ${Number(options.startupDelayMs ?? 0)}));
     const server = createServer((request, response) => {
       if (request.url === "/_runtime-environment") {
         response.writeHead(200, { "content-type": "application/json" });
@@ -303,6 +304,152 @@ test("deployed framework auth receives its exact managed public origin", async (
     assert.equal(compared.comparison.previous.methods.POST, 1);
     assert.equal(compared.comparison.previous.lastRequestAt, previousAt);
     assert.equal(compared.comparison.change.requestsPercent, 1);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("code-only deployments keep serving until a healthy candidate takes traffic", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-rolling-"));
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4610,
+    appPortEnd: 4611,
+    ingress: {
+      enabled: true,
+      baseDomain: "apps.example.test",
+      domainRecheckIntervalMs: false,
+    },
+    backups: { intervalMs: false },
+  });
+  try {
+    const owner = await authorizeCli(platform, "rolling@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Rolling app", slug: "rolling-app" },
+    }), 201);
+    const projectId = created.project.id;
+    const migrations = [
+      ["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"],
+    ];
+    const firstArtifact = await appArtifact(join(root, "first"), "release-one", migrations);
+    const first = await deploy(platform, projectId, owner.accessToken, firstArtifact, "rolling-release-0001");
+    assert.equal(first.response.status, 201, JSON.stringify(first.body));
+
+    const secondArtifact = await appArtifact(
+      join(root, "second"),
+      "release-two",
+      migrations,
+      false,
+      { startupDelayMs: 400 },
+    );
+    let completed = false;
+    const deploying = deploy(
+      platform,
+      projectId,
+      owner.accessToken,
+      secondArtifact,
+      "rolling-release-0002",
+    );
+    void deploying.then(
+      () => { completed = true; },
+      () => { completed = true; },
+    );
+    const observations = [];
+    while (!completed) {
+      const response = await platform.handle(new Request("https://rolling-app.apps.example.test/"));
+      observations.push({ status: response.status, body: await response.text() });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const second = await deploying;
+    assert.equal(second.response.status, 201, JSON.stringify(second.body));
+    assert.ok(observations.length >= 10, `expected rollout observations, received ${observations.length}`);
+    assert.equal(observations.every((entry) => entry.status === 200), true);
+    assert.equal(observations.every((entry) => ["release-one", "release-two"].includes(entry.body)), true);
+    assert.equal(
+      await platform.handle(new Request("https://rolling-app.apps.example.test/")).then((response) => response.text()),
+      "release-two",
+    );
+    assert.equal(await fetch(second.body.release.directUrl).then((response) => response.text()), "release-two");
+
+    const logs = await payload(platform, jsonRequest(`/api/projects/${projectId}/logs`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(logs.logs.some((entry) => entry.message.includes("switched managed ingress")), true);
+    assert.equal(logs.logs.some((entry) => entry.message.includes("Drained the prior release")), true);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("background startup recovery exposes the control plane before slow applications finish", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-background-recovery-"));
+  const dataDirectory = join(root, "platform");
+  const errors = [];
+  const options = {
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4620,
+    appPortEnd: 4621,
+    ingress: {
+      enabled: true,
+      baseDomain: "apps.example.test",
+      domainRecheckIntervalMs: false,
+    },
+    backups: { intervalMs: false },
+    onError: (error) => errors.push(error instanceof Error ? error.message : String(error)),
+  };
+  let platform = await openPlatform(options);
+  try {
+    const owner = await authorizeCli(platform, "background-recovery@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Slow recovery", slug: "slow-recovery" },
+    }), 201);
+    const artifact = await appArtifact(
+      join(root, "source"),
+      "recovered",
+      [["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"]],
+      false,
+      { startupDelayMs: 500 },
+    );
+    const deployed = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      artifact,
+      "background-recovery-0001",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    await platform.close();
+
+    const startedAt = performance.now();
+    platform = await openPlatform({ ...options, startupRecovery: "background" });
+    const elapsed = performance.now() - startedAt;
+    assert.ok(elapsed < 400, `background recovery blocked openPlatform for ${elapsed.toFixed(1)}ms`);
+    assert.equal((await platform.handle(new Request(
+      "https://healthcheck.railway.app/_clank/readyz",
+    ))).status, 200);
+    let lastRecoveryResponse = "none";
+    try {
+      await waitFor(async () => {
+        const response = await platform.handle(new Request("https://slow-recovery.apps.example.test/"));
+        const body = await response.text();
+        lastRecoveryResponse = `${response.status} ${body}`;
+        return body === "recovered";
+      });
+    } catch (error) {
+      assert.fail(
+        `${error.message} Last response: ${lastRecoveryResponse}. Recovery errors: ${errors.join(" | ") || "none"}`,
+      );
+    }
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
