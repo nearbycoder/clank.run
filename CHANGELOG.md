@@ -2,6 +2,14 @@
 
 Clank follows semantic versioning. Entries describe user-visible framework, CLI, protocol, storage, security, and deployment changes.
 
+## Unreleased
+
+### Fixed
+
+- The protected-main documentation workflow now removes one oldest inactive artifact only when
+  the docs project reaches its release limit, preserving uninterrupted automatic deployments
+  without deleting the active release or bypassing immediate rollback protection.
+
 ## 0.9.3 - 2026-07-27
 
 ### Added
