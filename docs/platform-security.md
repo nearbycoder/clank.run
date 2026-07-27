@@ -37,6 +37,12 @@ Linux PSS when available to avoid double-counting shared pages, with RSS as a po
 Docker-runner entries describe the wrapper process and must not be treated as complete container
 isolation telemetry.
 
+The storage-diagnostics API uses the same boundary and returns only aggregate byte and entry
+counters plus existing project identity metadata. It never returns host paths, filenames, file
+contents, database rows, backup manifests, or secret material. The scan is entry- and depth-bounded,
+deduplicates hard-linked file allocation, does not descend through symbolic-link entries, and
+reports truncation and read errors instead of silently presenting partial data as complete.
+
 Support impersonation is deliberately narrower than administrator access. Starting it requires the
 operator's same-origin browser session, CSRF token, a session created within the last 30 minutes, an
 8–500 character audit reason, and exact target-email confirmation. An operator cannot target

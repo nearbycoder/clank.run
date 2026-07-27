@@ -10,6 +10,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Documentation code fences now use dependency-free, server-rendered syntax highlighting for TypeScript, TSX, JavaScript, shell, JSON, SQL, HTML, CSS, configuration, and Mermaid examples.
 - Code-only application deployments now launch and health-check candidates on spare ports, atomically switch managed ingress, drain requests already assigned to the prior upstream, and stop the prior release only after the route change.
 - Platform administrators can now attribute live container memory across the control plane, each hosted application process, V8 heap, file cache, kernel memory, swap, and per-process peaks from the responsive admin console.
+- Platform administrators can now reconcile mounted-volume usage with the control database, isolated project databases, releases, migration snapshots, encrypted recovery backups, orphaned directories, and filesystem overhead without exposing paths or file contents.
 
 ### Fixed
 

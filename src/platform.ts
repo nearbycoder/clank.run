@@ -29,6 +29,10 @@ import {
   type PlatformBackupPolicy,
 } from "./platform-backups.ts";
 import {
+  inspectPlatformStorage,
+  type StorageDiagnosticProject,
+} from "./platform-storage.ts";
+import {
   createDomainManager,
   createManagedIngress,
   inspectDomainRouting,
@@ -432,6 +436,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const starting = new Set<ActiveProcess>();
   const reservedRolloutPorts = new Set<number>();
   const locks = new Map<string, Promise<unknown>>();
+  let storageDiagnosticsCache: { expiresAt: number; value: Record<string, unknown> } | undefined;
+  let storageDiagnosticsFlight: Promise<Record<string, unknown>> | undefined;
   const restartState = new Map<string, {
     count: number;
     windowStartedAt: number;
@@ -440,6 +446,41 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   }>();
   let bootstrapRegistrationActive = false;
   let closed = false;
+
+  const storageDiagnostics = async (): Promise<Record<string, unknown>> => {
+    const now = Date.now();
+    if (storageDiagnosticsCache && storageDiagnosticsCache.expiresAt > now) {
+      return storageDiagnosticsCache.value;
+    }
+    if (storageDiagnosticsFlight) return storageDiagnosticsFlight;
+    const flight = (async () => {
+      const projects = storage.internal.prepare(
+        `SELECT id, name, slug, database_path
+         FROM clank_platform_projects ORDER BY id`,
+      ).all().map((row): StorageDiagnosticProject => ({
+        id: String(row.id),
+        name: String(row.name),
+        slug: String(row.slug),
+        databasePath: row.database_path === null ? null : String(row.database_path),
+      }));
+      const value = await inspectPlatformStorage(paths.root, projects, {
+        releasesPerProject: limits.releasesPerProject,
+        releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
+        backupEnabled: backupPolicy.enabled,
+        backupIntervalMs: backupPolicy.intervalMs,
+        backupMaxCount: backupPolicy.maxBackups,
+        backupMaxAgeMs: backupPolicy.maxAgeMs,
+      });
+      storageDiagnosticsCache = { expiresAt: Date.now() + 15_000, value };
+      return value;
+    })();
+    storageDiagnosticsFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      if (storageDiagnosticsFlight === flight) storageDiagnosticsFlight = undefined;
+    }
+  };
 
   const domainStore: DomainChallengeStore = {
     save(challenge) {
@@ -1796,6 +1837,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             active,
             options.runner?.kind ?? "process",
           ),
+        });
+      }
+      if (url.pathname === "/api/admin/diagnostics/storage" && request.method === "GET") {
+        await requirePlatformAdmin(storage, request);
+        return api({
+          ok: true,
+          ...await storageDiagnostics(),
         });
       }
 

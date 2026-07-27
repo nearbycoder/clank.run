@@ -76,6 +76,14 @@ counting the same page once per process. The panel is a current snapshot; Railwa
 the historical container-level series. Process and cgroup files are sampled close together but not
 atomically, so their totals can differ slightly while memory is changing.
 
+The storage-attribution panel compares the mounted filesystem's used blocks with a bounded,
+link-safe scan of Clank's data root. It separates the control database and WAL, each project's
+database, retained release artifacts, migration rollback snapshots, encrypted recovery backups,
+orphaned project directories, and other filesystem allocation. The scan reports both completeness
+and any unaccounted filesystem space, so an operator can distinguish application growth from
+filesystem metadata or data outside Clank's known layout. Railway's volume metric remains the
+historical source for the overall growth curve.
+
 ## Domains
 
 Attach both `clank.run` and `*.apps.clank.run` to the Railway service. Publish every routing, ACME,
@@ -147,6 +155,8 @@ curl --fail https://clank.run/_clank/readyz
 railway logs --service clank --lines 100
 railway metrics --service clank --since 1h --cpu --memory
 railway metrics --service clank --since 24h --memory --raw --json
+railway metrics --service clank --since 7d --volume
+railway metrics --service clank --since 7d --volume --raw --json
 ```
 
 Also verify browser session refresh, CLI device authorization, a disposable deployment, its
