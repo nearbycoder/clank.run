@@ -134,7 +134,7 @@ try {
   const applicationUrl = captureValue(firstDeploy.stdout, /URL: (https?:\/\/\S+)/);
   await waitFor(async () => (await fetch(`${applicationUrl}/healthz`)).ok);
 
-  console.log("6/9 Verifying login, isolation, and live synchronization between two sessions...");
+  console.log("6/9 Verifying browser auth, agent OAuth, isolation, and live synchronization...");
   const firstBrowser = await auth(applicationUrl, "register", {
     email: "person@conformance.test",
     password,
@@ -168,6 +168,7 @@ try {
     profile: { name: "Isolated person" },
   });
   assert.deepEqual(await query(applicationUrl, isolated, "tasks.list", {}), []);
+  await verifyAgentProtocol(applicationUrl, firstBrowser);
   await live.close();
   liveAbort.abort();
 
@@ -255,7 +256,7 @@ CREATE TABLE conformance_markers (
   );
   database.close();
 
-  console.log("Clank conformance passed: packed consumer, auth, live sync, isolation, deploy, migration, failed activation, rollback, and data restore.");
+  console.log("Clank conformance passed: packed consumer, browser and agent auth, MCP actions, live sync, isolation, deploy, migration, failed activation, rollback, and data restore.");
 } finally {
   if (platformProcess) await stop(platformProcess);
   await rm(root, { recursive: true, force: true });
@@ -408,6 +409,118 @@ async function query(origin, session, name, input) {
     body: input,
   });
   return payload.value;
+}
+
+async function verifyAgentProtocol(origin, session) {
+  const resource = `${origin}/__clank/mcp`;
+  const discoveryResponse = await fetch(`${origin}/.well-known/clank`);
+  const discovery = await discoveryResponse.json();
+  assert.equal(discoveryResponse.ok, true);
+  assert.equal(discovery.mcp.endpoint, resource);
+  assert.equal(discovery.mcp.authentication, "oauth2");
+
+  const redirectUri = `http://127.0.0.1:${await freePort()}/callback`;
+  const registrationResponse = await fetch(`${origin}/__clank/oauth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_name: "Clank packaged conformance",
+      redirect_uris: [redirectUri],
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+    }),
+  });
+  const client = await registrationResponse.json();
+  assert.equal(registrationResponse.status, 201, JSON.stringify(client));
+
+  const verifier = "clank-conformance-pkce-verifier-012345678901234567890123";
+  const challengeBytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  const parameters = {
+    client_id: client.client_id,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    state: "packaged-conformance-state",
+    code_challenge: Buffer.from(challengeBytes).toString("base64url"),
+    code_challenge_method: "S256",
+    scope: "agent:read agent:write",
+    resource,
+  };
+  const consent = await fetch(`${origin}/__clank/oauth/authorize?${new URLSearchParams(parameters)}`, {
+    headers: { cookie: session.cookie },
+  });
+  assert.equal(consent.status, 200);
+  assert.match(await consent.text(), /Approve access/);
+
+  const approval = await fetch(`${origin}/__clank/oauth/authorize`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      cookie: session.cookie,
+      origin,
+    },
+    body: new URLSearchParams({
+      ...parameters,
+      csrf_token: session.csrf,
+      decision: "approve",
+    }),
+    redirect: "manual",
+  });
+  assert.equal(approval.status, 303);
+  const callback = new URL(approval.headers.get("location"));
+  assert.equal(callback.searchParams.get("state"), "packaged-conformance-state");
+  const code = callback.searchParams.get("code");
+  assert.ok(code);
+
+  const tokenResponse = await fetch(`${origin}/__clank/oauth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: client.client_id,
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: verifier,
+      resource,
+    }),
+  });
+  const tokens = await tokenResponse.json();
+  assert.equal(tokenResponse.ok, true, JSON.stringify(tokens));
+
+  let id = 0;
+  const mcp = async (method, params = {}) => {
+    const response = await fetch(resource, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.access_token}`,
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
+    });
+    const payload = await response.json();
+    assert.equal(response.ok, true, JSON.stringify(payload));
+    assert.equal(payload.error, undefined, JSON.stringify(payload));
+    return payload.result;
+  };
+  const tools = await mcp("tools/list");
+  assert.ok(tools.tools.some((tool) => tool.name === "tasks.list"));
+  assert.ok(tools.tools.some((tool) =>
+    tool.name === "tasks.remove" && tool.annotations.destructiveHint === true));
+
+  const created = await mcp("tools/call", {
+    name: "tasks.create",
+    arguments: { title: "Agent protocol round trip" },
+  });
+  assert.equal(created.isError, false);
+  const listed = await mcp("tools/call", { name: "tasks.list", arguments: {} });
+  const task = listed.structuredContent.value.find((entry) => entry.title === "Agent protocol round trip");
+  assert.ok(task);
+  const removed = await mcp("tools/call", {
+    name: "tasks.remove",
+    arguments: { id: task._id, version: task._version },
+  });
+  assert.equal(removed.isError, false);
 }
 
 function sse(response) {

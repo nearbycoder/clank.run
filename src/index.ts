@@ -2,6 +2,7 @@ export * from "./core.ts";
 export * from "./dom.ts";
 export * from "./router.ts";
 export * from "./ai.ts";
+export * from "./mcp.ts";
 export * from "./blueprint.ts";
 export * from "./webauthn.ts";
 export * from "./services.ts";

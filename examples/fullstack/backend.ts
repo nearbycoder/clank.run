@@ -19,15 +19,20 @@ const documentVersion = s.number({ integer: true, min: 1 });
 export const backend = defineBackend({ schema: databaseSchema }).functions(({ query, mutation }) => ({
   todos: {
     list: query({
+      description: "List all todos.",
       args: {},
       handler: ({ db }) => db.table("todos").query().orderBy("_creationTime", "asc").collect(),
     }),
     add: mutation({
-      args: { title: s.string({ min: 1, max: 160 }) },
+      description: "Create a todo.",
+      args: { title: s.string({ min: 1, max: 160, description: "Todo title" }) },
+      agent: { destructive: false },
       handler: ({ db }, { title }) => db.table("todos").insert({ title, done: false }),
     }),
     toggle: mutation({
+      description: "Toggle the completion state of one todo.",
       args: { id: s.id("todos"), version: documentVersion },
+      agent: { destructive: false },
       handler: ({ db }, { id, version }) => {
         const todo = db.table("todos").get(id);
         return todo
@@ -36,12 +41,16 @@ export const backend = defineBackend({ schema: databaseSchema }).functions(({ qu
       },
     }),
     remove: mutation({
+      description: "Permanently remove one todo.",
       args: { id: s.id("todos"), version: documentVersion },
+      agent: { destructive: true },
       handler: ({ db }, { id, version }) =>
         db.table("todos").delete(id, { ifVersion: version }),
     }),
     clearCompleted: mutation({
+      description: "Permanently remove every completed todo.",
       args: {},
+      agent: { destructive: true },
       handler: ({ db }) => {
         const completed = db.table("todos").query().where("done", true).collect();
         for (const todo of completed) {

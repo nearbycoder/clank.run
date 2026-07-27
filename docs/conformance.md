@@ -11,11 +11,13 @@ The runner does not import framework source from the repository. It:
 5. creates a browser account and completes the real CLI device-authorization flow;
 6. deploys the generated application through the packaged CLI;
 7. creates two independent authenticated sessions and proves live SSE synchronization;
-8. proves a separate account cannot read the first account's owned rows;
-9. deploys an immutable second migration and verifies the resulting SQLite history;
-10. forces a failed health activation and proves the prior application and data remain available;
-11. rolls back code and restores the pre-migration snapshot; and
-12. verifies both application rows and migration schema returned to the expected state.
+8. discovers deployed MCP, dynamically registers a client, completes OAuth PKCE with user consent,
+   and performs a create/list/remove action round trip;
+9. proves a separate account cannot read the first account's owned rows;
+10. deploys an immutable second migration and verifies the resulting SQLite history;
+11. forces a failed health activation and proves the prior application and data remain available;
+12. rolls back code and restores the pre-migration snapshot; and
+13. verifies both application rows and migration schema returned to the expected state.
 
 The test uses loopback HTTP, temporary owner-only directories, isolated CLI credentials, a one-port application range, and no registry downloads beyond the local tarball.
 

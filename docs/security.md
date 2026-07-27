@@ -170,6 +170,13 @@ tailscale serve --https=8446 http://127.0.0.1:4180
 Before release, verify:
 
 - anonymous requests cannot call required queries or mutations;
+- unauthenticated MCP requests receive an OAuth resource challenge;
+- read-only agent grants cannot discover or invoke mutations;
+- OAuth codes are single-use, PKCE-bound, and reject redirect or resource mismatches;
+- replaying a rotated refresh token revokes its token family;
+- MCP bearer tokens cannot authenticate ordinary browser or backend RPC endpoints;
+- internal-only backend functions use `agent: false`;
+- destructive mutations are explicitly annotated for agent clients;
 - two accounts cannot read or mutate each other's owned rows;
 - missing/wrong CSRF tokens fail;
 - cross-origin writes fail;

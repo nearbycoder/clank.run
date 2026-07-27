@@ -2,6 +2,10 @@
 
 Clank separates model providers from application contracts. It does not dictate which model or SDK to use. Instead, it makes capabilities discoverable, inputs deterministic, side effects explicit, and the rendered interface machine-readable.
 
+For deployed applications, every `defineBackend()` query and mutation is also available through
+the framework's authenticated [MCP agent protocol](agent-protocol.md). The lower-level
+`defineAction()` bridge remains useful for actions that do not belong to a Clank backend.
+
 ## Runtime schemas
 
 ```ts
@@ -78,6 +82,11 @@ await fetch("/actions/tasks.create", {
 ```
 
 Success is `{ ok: true, output }`. Failures have `{ ok: false, error: { code, message, details? } }` and appropriate 4xx or 500 status codes. Requests require JSON content type, are size-bounded, may be restricted to exact origins, and redact validation input values. Since the bridge consumes and returns Web `Request`/`Response`, it can be mounted in Node, edge, worker, Bun, or compatible server environments.
+
+For new full-stack applications, prefer the automatic backend MCP endpoint instead of mounting
+this Clank-specific bridge. It supplies standard Streamable HTTP, OAuth discovery, PKCE,
+resource-bound agent tokens, read/write scopes, MCP tool annotations, and authenticated action
+documentation without application glue.
 
 ## Action UI state
 

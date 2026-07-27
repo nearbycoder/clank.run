@@ -25,6 +25,11 @@ This is a Clank full-stack application. Keep the safe path short, the generated 
 
 - Preserve user ownership on every todo query and mutation.
 - Treat browser and agent input as untrusted; validate at the backend boundary.
+- Give every backend function a precise `description`; mark additive writes with
+  `agent: { destructive: false }`, destructive writes explicitly, and internal functions with
+  `agent: false`.
+- Preserve the default `/__clank/mcp` endpoint and OAuth flow unless an integration requires a
+  documented path change.
 - Never edit, rename, or remove an applied migration. Add the next numbered migration.
 - Keep secrets out of source, deployment config, logs, labels, and agent metadata. Use `clank secrets set`.
 - Keep stable `agentId` and useful `agentLabel` values on important controls.
@@ -33,4 +38,4 @@ This is a Clank full-stack application. Keep the safe path short, the generated 
 
 ## Definition of done
 
-Run `npm run build`, `npm run doctor`, and `npm run deploy:check`. For UI changes, verify registration/login and todo creation in a browser. For data changes, verify both a fresh database and an existing migrated database.
+Run `npm run build`, `npm run doctor`, and `npm run deploy:check`. For UI changes, verify registration/login and todo creation in a browser. For data changes, verify both a fresh database and an existing migrated database. For backend changes, connect to `/__clank/mcp`, inspect `tools/list`, and verify the narrowest OAuth scope that can perform the action.

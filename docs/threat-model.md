@@ -4,7 +4,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 
 ## Assets
 
-- account credentials, sessions, passkeys, recovery tokens, and CLI tokens;
+- account credentials, sessions, passkeys, recovery tokens, agent OAuth grants, and CLI tokens;
 - organization membership, project permissions, audit history, and deployment authority;
 - application source/artifacts, migrations, secrets, databases, files, email, jobs, and webhooks;
 - control-plane master keys, encrypted backups, release history, and signing/provenance data;
@@ -14,6 +14,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 
 - anonymous browser or agent;
 - authenticated application user;
+- registered public MCP client acting through a user-approved, scoped OAuth grant;
 - organization owner, admin, developer, or viewer;
 - allowlisted control-plane platform administrator;
 - browser account approving a CLI device;
@@ -25,7 +26,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 
 ## Trust boundaries
 
-1. Browser/agent to application HTTP and live-stream APIs.
+1. Browser/agent to application HTTP, MCP, OAuth, and live-stream APIs.
 2. Browser to auth, recovery, MFA, and passkey ceremonies.
 3. CLI to browser-approved device flow and control-plane bearer API.
 4. Artifact bytes to extraction, migration, candidate startup, and activation.
@@ -42,6 +43,8 @@ This model covers the Clank framework, generated authenticated applications, CLI
 | --- | --- | --- | --- |
 | Account takeover | Credential stuffing, reset replay, stolen session, cloned authenticator | Scrypt, generic login errors, shared HMAC-keyed control-plane rate limits, single-use recovery, MFA, WebAuthn verification/counters, revocation | Upstream abuse controls, bot defense, email security, user/device risk policy |
 | Cross-site action | CSRF, forged Origin, cross-site device approval | Strict cookies, CSRF token, Fetch Metadata/origin checks | Correct proxy scheme/host configuration and CSP |
+| Agent credential abuse | Malicious dynamic client, authorization-code interception, refresh replay, token confused with another API or tenant | Exact HTTPS/loopback redirects, PKCE S256, explicit consent, resource indicators and audience checks, short access lifetime, hashed tokens, refresh rotation/family revocation, read/write scopes, MCP-only bearer resolution | User review of client/scopes, endpoint TLS, agent-host security, edge registration limits, and future grant-management UI |
+| Agent action abuse | Prompt injection or compromised client invokes hidden/destructive tools, guesses a write tool with a read token, or submits adversarial arguments | Authenticated tool discovery, mutation scope enforcement before dispatch, `agent: false`, destructive annotations, shared runtime schemas/authorization/ownership/transactions, bounded messages, generic failures | Domain authorization and confirmation inside handlers; annotations guide clients but are not security controls |
 | Tenant escape | Guess project/user IDs, reuse scoped token, stale membership | Owned SQL, membership/role checks, project/scope checks on every request, revocation | Domain-specific row/resource authorization |
 | Privilege escalation | Admin grants excess scopes, removes last owner, uses viewer token to deploy | Role matrix, scope intersection, last-owner protection, audit | Periodic access review and separation of duties |
 | Platform-admin abuse | Workspace admin assumes global authority, stolen CLI token lists tenants, stale allowlist retains access | Separate operator role, exact startup reconciliation, browser-only global APIs, same-origin sessions, bounded redacted directory | Protect operator email accounts, require strong authenticators, review the allowlist and global audit trail |
@@ -65,6 +68,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 - The operating-system administrator and master-key holder are trusted.
 - The process runner executes trusted applications. Use Docker or stronger isolation for mutually untrusted deployers.
 - TypeScript and TSX files are trusted executable application source. The compiler is not a sanitizer for attacker-controlled data.
+- OAuth authenticates the approving user and client grant; it does not make model-generated tool arguments trustworthy.
 - TLS termination, certificate/key custody, ACME issuer policy, DDoS protection, WAF rules, and public network policy are external to the core package. Clank only decides hostname eligibility.
 - An application process can read its own decrypted environment and database.
 - SQLite is a strong single-node transactional default, not a globally replicated database.

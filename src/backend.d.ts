@@ -145,6 +145,14 @@ export interface MutationContext<DB extends DatabaseSchema<any>> {
 export type BackendAccess = "public" | "required";
 type AuthProfileOf<Auth> = Auth extends AuthDefinition<infer Profile> ? Profile : DefaultAuthProfile;
 type DefaultAccessOf<Auth> = Auth extends AuthDefinition<any> ? "required" : "public";
+export interface BackendAgentOptions {
+    enabled?: boolean;
+    title?: string;
+    description?: string;
+    destructive?: boolean;
+    idempotent?: boolean;
+    openWorld?: boolean;
+}
 export type BackendContext<Kind extends "query" | "mutation", DB extends DatabaseSchema<any>, Auth extends AuthDefinition<any> | undefined, Access extends BackendAccess> = (Kind extends "query" ? QueryContext<DB> : MutationContext<DB>) & (Auth extends AuthDefinition<any> ? {
     auth: AuthRequest<AuthProfileOf<Auth>>;
     user: Access extends "required" ? AuthUser<AuthProfileOf<Auth>> : AuthUser<AuthProfileOf<Auth>> | null;
@@ -154,6 +162,8 @@ export interface BackendFunction<Kind extends "query" | "mutation", Input, Outpu
     readonly access: Access;
     readonly args: Schema<Input>;
     readonly returns?: Schema<Output>;
+    readonly description?: string;
+    readonly agent: false | Readonly<BackendAgentOptions>;
     readonly handler: (context: BackendContext<Kind, DB, Auth, Access>, args: Input) => Output;
 }
 export type AnyBackendFunction = BackendFunction<"query" | "mutation", any, any, any, any, any>;
@@ -163,22 +173,30 @@ export type FunctionTree = {
 export interface FunctionBuilders<DB extends DatabaseSchema<any>, Auth extends AuthDefinition<any> | undefined = undefined> {
     query<const Args extends FunctionArgs, Output>(definition: {
         args: Args;
+        description?: string;
         returns?: Schema<Output>;
+        agent?: false | BackendAgentOptions;
         handler: (context: BackendContext<"query", DB, Auth, DefaultAccessOf<Auth>>, args: InferFunctionArgs<Args>) => Output;
     }): BackendFunction<"query", InferFunctionArgs<Args>, Output, DB, DefaultAccessOf<Auth>, Auth>;
     mutation<const Args extends FunctionArgs, Output>(definition: {
         args: Args;
+        description?: string;
         returns?: Schema<Output>;
+        agent?: false | BackendAgentOptions;
         handler: (context: BackendContext<"mutation", DB, Auth, DefaultAccessOf<Auth>>, args: InferFunctionArgs<Args>) => Output;
     }): BackendFunction<"mutation", InferFunctionArgs<Args>, Output, DB, DefaultAccessOf<Auth>, Auth>;
     publicQuery<const Args extends FunctionArgs, Output>(definition: {
         args: Args;
+        description?: string;
         returns?: Schema<Output>;
+        agent?: false | BackendAgentOptions;
         handler: (context: BackendContext<"query", DB, Auth, "public">, args: InferFunctionArgs<Args>) => Output;
     }): BackendFunction<"query", InferFunctionArgs<Args>, Output, DB, "public", Auth>;
     publicMutation<const Args extends FunctionArgs, Output>(definition: {
         args: Args;
+        description?: string;
         returns?: Schema<Output>;
+        agent?: false | BackendAgentOptions;
         handler: (context: BackendContext<"mutation", DB, Auth, "public">, args: InferFunctionArgs<Args>) => Output;
     }): BackendFunction<"mutation", InferFunctionArgs<Args>, Output, DB, "public", Auth>;
 }
@@ -324,6 +342,15 @@ export interface OpenBackendOptions extends SQLiteOptions {
     maxLiveConnections?: number;
     maxCacheEntries?: number;
     onError?: (error: unknown) => void;
+    agent?: false | {
+        name?: string;
+        title?: string;
+        version?: string;
+        description?: string;
+        instructions?: string;
+        mcpPath?: string;
+        oauthPrefix?: string;
+    };
 }
 export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined>(definition: BackendDefinition<Schema, Functions, Auth>, options?: OpenBackendOptions): Promise<BackendRuntime<Schema, Functions, Auth>>;
 export declare function functionKey(path: string, args: unknown): string;

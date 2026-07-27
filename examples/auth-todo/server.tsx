@@ -23,7 +23,14 @@ const distRoot = decodeURIComponent(new URL("../../dist/", import.meta.url).path
 const databasePath = environment?.CLANK_DATABASE
   ?? environment?.PROACT_DATABASE
   ?? decodeURIComponent(new URL("./auth-todo.sqlite", import.meta.url).pathname);
-const runtime = await openBackend(backend, { path: databasePath });
+const runtime = await openBackend(backend, {
+  path: databasePath,
+  agent: {
+    name: "clank-private-todo",
+    title: "Clank Private Todo",
+    description: "Manage private todos through authenticated, documented MCP actions.",
+  },
+});
 const api = createApi<typeof backend>();
 const examples = staticFiles(exampleRoot);
 const framework = staticFiles(distRoot, { prefix: "/dist", cacheControl: "no-cache" });
