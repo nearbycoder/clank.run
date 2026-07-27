@@ -45,8 +45,9 @@ export const groups = [
   {
     id: "agents",
     title: "Agents and generation",
-    description: "Deterministic blueprints and contracts that make applications legible to coding agents.",
+    description: "Deterministic blueprints, authenticated application actions, and contracts that make applications legible to agents.",
     entries: [
+      ["agent-protocol", "docs/agent-protocol.md"],
       ["blueprints", "docs/blueprints.md"]
     ]
   },

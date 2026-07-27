@@ -31,6 +31,13 @@ import {
   SQLITE_INTERNAL,
   type SQLiteInternal,
 } from "./sqlite-internal.ts";
+import {
+  createMcpServer,
+  McpToolError,
+  MCP_PROTOCOL_VERSION,
+  type McpTool,
+} from "./mcp.ts";
+import { createProjectOAuth } from "./oauth.ts";
 
 /** A nominal document ID. At runtime this is a compact random string. */
 export type Id<Table extends string> = DocumentId<Table>;
@@ -826,6 +833,27 @@ export type BackendAccess = "public" | "required";
 type AuthProfileOf<Auth> = Auth extends AuthDefinition<infer Profile> ? Profile : DefaultAuthProfile;
 type DefaultAccessOf<Auth> = Auth extends AuthDefinition<any> ? "required" : "public";
 
+export interface BackendAgentOptions {
+  /** Set false to keep an internal function out of all agent protocol surfaces. */
+  enabled?: boolean;
+  /** Human-readable tool title. */
+  title?: string;
+  /** Override the function description specifically for agents. */
+  description?: string;
+  /** Mark a mutation as destructive. Defaults to true for conservative client behavior. */
+  destructive?: boolean;
+  /** Whether repeating the exact call has no additional effect. */
+  idempotent?: boolean;
+  /** Whether the action can communicate with systems outside this application. */
+  openWorld?: boolean;
+}
+
+interface BackendFunctionOptions<Output> {
+  description?: string;
+  returns?: Schema<Output>;
+  agent?: false | BackendAgentOptions;
+}
+
 export type BackendContext<
   Kind extends "query" | "mutation",
   DB extends DatabaseSchema<any>,
@@ -853,6 +881,8 @@ export interface BackendFunction<
   readonly access: Access;
   readonly args: Schema<Input>;
   readonly returns?: Schema<Output>;
+  readonly description?: string;
+  readonly agent: false | Readonly<BackendAgentOptions>;
   readonly handler: (context: BackendContext<Kind, DB, Auth, Access>, args: Input) => Output;
 }
 
@@ -863,24 +893,20 @@ export interface FunctionBuilders<
   DB extends DatabaseSchema<any>,
   Auth extends AuthDefinition<any> | undefined = undefined,
 > {
-  query<const Args extends FunctionArgs, Output>(definition: {
+  query<const Args extends FunctionArgs, Output>(definition: BackendFunctionOptions<Output> & {
     args: Args;
-    returns?: Schema<Output>;
     handler: (context: BackendContext<"query", DB, Auth, DefaultAccessOf<Auth>>, args: InferFunctionArgs<Args>) => Output;
   }): BackendFunction<"query", InferFunctionArgs<Args>, Output, DB, DefaultAccessOf<Auth>, Auth>;
-  mutation<const Args extends FunctionArgs, Output>(definition: {
+  mutation<const Args extends FunctionArgs, Output>(definition: BackendFunctionOptions<Output> & {
     args: Args;
-    returns?: Schema<Output>;
     handler: (context: BackendContext<"mutation", DB, Auth, DefaultAccessOf<Auth>>, args: InferFunctionArgs<Args>) => Output;
   }): BackendFunction<"mutation", InferFunctionArgs<Args>, Output, DB, DefaultAccessOf<Auth>, Auth>;
-  publicQuery<const Args extends FunctionArgs, Output>(definition: {
+  publicQuery<const Args extends FunctionArgs, Output>(definition: BackendFunctionOptions<Output> & {
     args: Args;
-    returns?: Schema<Output>;
     handler: (context: BackendContext<"query", DB, Auth, "public">, args: InferFunctionArgs<Args>) => Output;
   }): BackendFunction<"query", InferFunctionArgs<Args>, Output, DB, "public", Auth>;
-  publicMutation<const Args extends FunctionArgs, Output>(definition: {
+  publicMutation<const Args extends FunctionArgs, Output>(definition: BackendFunctionOptions<Output> & {
     args: Args;
-    returns?: Schema<Output>;
     handler: (context: BackendContext<"mutation", DB, Auth, "public">, args: InferFunctionArgs<Args>) => Output;
   }): BackendFunction<"mutation", InferFunctionArgs<Args>, Output, DB, "public", Auth>;
 }
@@ -930,15 +956,35 @@ export function defineBackend<
 
 function createBackendFunction(kind: "query" | "mutation", access: BackendAccess, definition: {
   args: FunctionArgs;
+  description?: string;
   returns?: Schema<any>;
+  agent?: false | BackendAgentOptions;
   handler: (context: any, args: any) => any;
 }): AnyBackendFunction {
   if (typeof definition.handler !== "function") throw new TypeError(`${kind} requires a handler.`);
+  if (definition.description !== undefined) {
+    backendAgentText(definition.description, `${kind} description`, 16 * 1024);
+  }
+  if (definition.agent !== false && definition.agent) {
+    if (definition.agent.title !== undefined) {
+      backendAgentText(definition.agent.title, `${kind} agent title`, 256);
+    }
+    if (definition.agent.description !== undefined) {
+      backendAgentText(definition.agent.description, `${kind} agent description`, 16 * 1024);
+    }
+    for (const property of ["enabled", "destructive", "idempotent", "openWorld"] as const) {
+      if (definition.agent[property] !== undefined && typeof definition.agent[property] !== "boolean") {
+        throw new TypeError(`${kind} agent ${property} must be boolean.`);
+      }
+    }
+  }
   return Object.freeze({
     kind,
     access,
     args: toSchema(definition.args),
     returns: definition.returns,
+    ...(definition.description ? { description: definition.description.trim() } : {}),
+    agent: definition.agent === false ? false : Object.freeze({ ...(definition.agent ?? {}) }),
     handler: definition.handler,
   }) as AnyBackendFunction;
 }
@@ -1206,6 +1252,19 @@ export interface OpenBackendOptions extends SQLiteOptions {
   maxLiveConnections?: number;
   maxCacheEntries?: number;
   onError?: (error: unknown) => void;
+  /**
+   * Every backend function is exposed as an MCP tool by default. Set false to
+   * disable the protocol, or customize its public identity and endpoint paths.
+   */
+  agent?: false | {
+    name?: string;
+    title?: string;
+    version?: string;
+    description?: string;
+    instructions?: string;
+    mcpPath?: string;
+    oauthPrefix?: string;
+  };
 }
 
 export async function openBackend<
@@ -1223,6 +1282,30 @@ export async function openBackend<
   const maxLivePayloadBytes = positiveIntegerOption(options.maxLivePayloadBytes ?? 4 * 1024 * 1024, "maxLivePayloadBytes");
   const maxLiveConnections = positiveIntegerOption(options.maxLiveConnections ?? 1_000, "maxLiveConnections");
   const maxCacheEntries = positiveIntegerOption(options.maxCacheEntries ?? 1_000, "maxCacheEntries");
+  const prefix = `/${trimBoundarySlashes(options.prefix ?? "__clank")}`;
+  const agentOptions = options.agent === false ? null : options.agent ?? {};
+  const mcpPath = agentOptions
+    ? backendAgentPath(agentOptions.mcpPath ?? `${prefix}/mcp`, "agent.mcpPath")
+    : `${prefix}/mcp`;
+  const oauthPrefix = agentOptions
+    ? backendAgentPath(agentOptions.oauthPrefix ?? `${prefix}/oauth`, "agent.oauthPrefix")
+    : `${prefix}/oauth`;
+  if (agentOptions && mcpPath === oauthPrefix) {
+    throw new TypeError("agent.mcpPath and agent.oauthPrefix must be different paths.");
+  }
+  const agentName = agentOptions?.name ?? "clank-app";
+  const agentTitle = agentOptions?.title ?? "Clank application";
+  const agentDescription = agentOptions?.description
+    ?? "Typed application actions generated from the Clank backend contract.";
+  if (agentOptions) validateBackendAgentMetadata(agentName, agentTitle, agentDescription, agentOptions);
+  const registry = flattenFunctions(definition.functions);
+  if (agentOptions) {
+    for (const [path, fn] of registry) {
+      if (fn.agent !== false && fn.agent.enabled !== false && !/^[a-z0-9][a-z0-9._-]{0,127}$/iu.test(path)) {
+        throw new TypeError(`Backend function path ${path} is not a valid MCP tool name.`);
+      }
+    }
+  }
   const database = options.database as SQLiteDatabase<Schema> | undefined
     ?? await openSQLite(definition.schema, options);
   let authRuntime: AuthRuntime<AuthProfileOf<Auth>> | undefined;
@@ -1237,11 +1320,9 @@ export async function openBackend<
     if (!options.database) database.close();
     throw error;
   }
-  const registry = flattenFunctions(definition.functions);
   const cache = new Map<string, CacheEntry>();
   const subscribers = new Map<string, SubscriberEntry>();
   const liveDisconnects = new Set<Cleanup>();
-  const prefix = `/${trimBoundarySlashes(options.prefix ?? "__clank")}`;
   let closed = false;
   let liveConnections = 0;
   const reportError = (error: unknown) => {
@@ -1253,7 +1334,8 @@ export async function openBackend<
   };
 
   const anonymous = definition.auth ? anonymousBackendAuth<AuthProfileOf<Auth>>() : null;
-  const partition = (auth: AuthRequest<any> | null) => auth?.session?.id ?? (definition.auth ? "anonymous" : "server");
+  const partition = (auth: AuthRequest<any> | null) => auth?.session?.id
+    ?? (auth?.user ? `user:${auth.user.id}` : definition.auth ? "anonymous" : "server");
   const cacheKey = (path: string, args: unknown, auth: AuthRequest<any> | null) =>
     `${partition(auth)}\n${functionKey(path, args)}`;
   const scopeFor = (auth: AuthRequest<any> | null): DatabaseScope | undefined =>
@@ -1410,6 +1492,161 @@ export async function openBackend<
     } as BackendCaller<any>;
   };
 
+  const oauth = agentOptions && authRuntime
+    ? createProjectOAuth({
+        database,
+        auth: authRuntime,
+        mcpPath,
+        oauthPrefix,
+        applicationName: agentTitle,
+      })
+    : undefined;
+  const mcpTools: McpTool<AuthRequest<any> | null>[] = agentOptions
+    ? [...registry]
+      .filter(([, fn]) => fn.agent !== false && fn.agent.enabled !== false)
+      .map(([path, fn]) => {
+        const agent = fn.agent === false ? {} : fn.agent;
+        const title = agent.title ?? humanizeFunctionPath(path);
+        const description = agent.description
+          ?? fn.description
+          ?? `${fn.kind === "query" ? "Read" : "Run"} ${humanizeFunctionPath(path).toLocaleLowerCase()}.`;
+        return {
+          name: path,
+          title,
+          description,
+          inputSchema: fn.args.toJSONSchema(),
+          outputSchema: {
+            type: "object",
+            properties: {
+              value: fn.returns?.toJSONSchema() ?? {},
+              version: {
+                type: "integer",
+                minimum: 0,
+                description: "Committed Clank database revision observed after this action.",
+              },
+            },
+            required: fn.returns ? ["value", "version"] : ["version"],
+            additionalProperties: false,
+          },
+          requiredScope: fn.kind === "query" ? "agent:read" : "agent:write",
+          annotations: {
+            title,
+            readOnlyHint: fn.kind === "query",
+            destructiveHint: fn.kind === "mutation" ? agent.destructive ?? true : false,
+            idempotentHint: fn.kind === "query" ? true : agent.idempotent ?? false,
+            openWorldHint: agent.openWorld ?? false,
+          },
+          async invoke(input, auth) {
+            try {
+              return fn.kind === "query"
+                ? invokeQuery(path, input, auth)
+                : invokeMutation(path, input, auth);
+            } catch (error) {
+              if (error instanceof ValidationError) {
+                throw new McpToolError("INVALID_INPUT", error.message, publicValidationIssues(error.issues));
+              }
+              if (error instanceof AuthError) throw new McpToolError(error.code, error.message);
+              if (error instanceof DatabaseConflictError) {
+                throw new McpToolError(error.code, error.message, {
+                  table: error.table,
+                  id: error.id,
+                  expectedVersion: error.expectedVersion,
+                  actualVersion: error.actualVersion,
+                });
+              }
+              if (error instanceof BackendInvocationError) throw new McpToolError(error.code, error.message);
+              if (error instanceof BackendOutputError) reportError(error.cause);
+              else reportError(error);
+              throw new McpToolError("BACKEND_ERROR", "The backend operation failed.");
+            }
+          },
+        } satisfies McpTool<AuthRequest<any> | null>;
+      })
+    : [];
+  const mcp = agentOptions
+    ? createMcpServer<AuthRequest<any> | null>({
+        name: agentName,
+        title: agentTitle,
+        version: agentOptions.version ?? "1.0.0",
+        description: agentDescription,
+        instructions: agentOptions.instructions,
+        tools: mcpTools,
+        allowedOrigins: options.allowedOrigins,
+        maxRequestBytes,
+        maxResponseBytes,
+        ...(oauth
+          ? {
+              authenticate: (request: Request) => oauth.authenticate(request),
+              unauthorized: (request: Request, scope: "agent:read" | "agent:write") => oauth.challenge(request, scope),
+              forbidden: (request: Request, scope: "agent:read" | "agent:write") => oauth.forbidden(request, scope),
+            }
+          : {}),
+      })
+    : undefined;
+
+  const agentDiscovery = (request: Request): Response => {
+    const origin = new URL(request.url).origin;
+    return Response.json({
+      protocol: "clank-agent/2",
+      name: agentName,
+      title: agentTitle,
+      description: agentDescription,
+      mcp: {
+        transport: "streamable-http",
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        endpoint: `${origin}${mcpPath}`,
+        authentication: oauth ? "oauth2" : "none",
+      },
+      documentation: {
+        actions: "Connect with MCP and call tools/list or read clank://actions.",
+      },
+    }, {
+      headers: {
+        "access-control-allow-origin": "*",
+        "cache-control": "public, max-age=300",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  };
+
+  const mcpServerCard = (request: Request): Response => {
+    const origin = new URL(request.url).origin;
+    return Response.json({
+      "$schema": "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json",
+      version: "1.0",
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      serverInfo: {
+        name: agentName,
+        title: agentTitle,
+        version: agentOptions?.version ?? "1.0.0",
+      },
+      description: agentDescription,
+      documentationUrl: `${origin}/.well-known/clank`,
+      transport: {
+        type: "streamable-http",
+        endpoint: mcpPath,
+      },
+      capabilities: {
+        tools: { listChanged: false },
+        resources: { subscribe: false, listChanged: false },
+      },
+      authentication: {
+        required: Boolean(oauth),
+        schemes: oauth ? ["bearer", "oauth2"] : [],
+      },
+      instructions: agentOptions?.instructions
+        ?? "Connect to the MCP endpoint, authenticate when prompted, then use tools/list.",
+      resources: ["dynamic"],
+      tools: ["dynamic"],
+    }, {
+      headers: {
+        "access-control-allow-origin": "*",
+        "cache-control": "public, max-age=300",
+        "x-content-type-options": "nosniff",
+      },
+    });
+  };
+
   const runtime: BackendRuntime<Schema, Functions, Auth> = {
     definition,
     database,
@@ -1432,6 +1669,14 @@ export async function openBackend<
     async handle(request) {
       ensureOpen();
       const url = new URL(request.url);
+      if (oauth?.handles(request)) return oauth.handle(request);
+      if (mcp && url.pathname === mcpPath) return mcp.handle(request);
+      if (mcp && request.method === "GET" && url.pathname === "/.well-known/clank") {
+        return agentDiscovery(request);
+      }
+      if (mcp && request.method === "GET" && url.pathname === "/.well-known/mcp/server-card.json") {
+        return mcpServerCard(request);
+      }
       if (!url.pathname.startsWith(`${prefix}/`) && url.pathname !== prefix) return problem(404, "NOT_FOUND", "Backend endpoint not found.");
       if (authRuntime && (url.pathname === `${prefix}/auth` || url.pathname.startsWith(`${prefix}/auth/`))) {
         return authRuntime.handle(request, `${prefix}/auth`);
@@ -1459,6 +1704,8 @@ export async function openBackend<
               name,
               kind: fn.kind,
               access: fn.access,
+              ...(fn.description ? { description: fn.description } : {}),
+              agent: fn.agent !== false && fn.agent.enabled !== false,
               args: fn.args.toJSONSchema(),
               ...(fn.returns ? { returns: fn.returns.toJSONSchema() } : {}),
             })),
@@ -1556,6 +1803,52 @@ function trimBoundarySlashes(value: string): string {
   while (start < end && value.charCodeAt(start) === 47) start++;
   while (end > start && value.charCodeAt(end - 1) === 47) end--;
   return value.slice(start, end);
+}
+
+function backendAgentPath(value: string, name: string): string {
+  if (
+    !/^\/[A-Za-z0-9._~/-]+$/u.test(value)
+    || value.startsWith("//")
+    || value.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    throw new TypeError(`${name} must be a safe absolute URL path.`);
+  }
+  return value.length > 1 ? value.replace(/\/+$/u, "") : value;
+}
+
+function validateBackendAgentMetadata(
+  name: string,
+  title: string,
+  description: string,
+  options: Exclude<OpenBackendOptions["agent"], false | undefined>,
+): void {
+  if (!/^[a-z0-9][a-z0-9._-]{0,127}$/iu.test(name)) {
+    throw new TypeError("agent.name must be a bounded programmatic identifier.");
+  }
+  backendAgentText(title, "agent.title", 256);
+  backendAgentText(description, "agent.description", 16 * 1024);
+  if (options.version !== undefined) backendAgentText(options.version, "agent.version", 128);
+  if (options.instructions !== undefined) backendAgentText(options.instructions, "agent.instructions", 16 * 1024);
+}
+
+function backendAgentText(value: string, name: string, maxLength: number): void {
+  if (
+    typeof value !== "string"
+    || value.trim().length === 0
+    || value.length > maxLength
+    || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
+  ) {
+    throw new TypeError(`${name} must be non-empty, bounded text without control characters.`);
+  }
+}
+
+function humanizeFunctionPath(path: string): string {
+  return path
+    .split(/[._-]+/u)
+    .filter(Boolean)
+    .map((segment) => segment.replace(/([a-z0-9])([A-Z])/gu, "$1 $2"))
+    .join(" ")
+    .replace(/^./u, (character) => character.toUpperCase());
 }
 
 function liveResponse(

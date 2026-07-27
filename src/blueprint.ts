@@ -400,6 +400,8 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 
 - Preserve ownership and authorization on every private ${Object.keys(app.entities).join(", ")} operation.
 - Treat all browser, agent, webhook, and model input as untrusted and validate it at the boundary.
+- Give every backend function a precise \`description\`; mark additive writes with \`agent: { destructive: false }\`, destructive writes explicitly, and internal functions with \`agent: false\`.
+- Preserve the default MCP endpoint and OAuth flow unless the application has a documented integration reason to change them.
 - Never edit, rename, or remove an applied migration; add the next numbered migration.
 - Keep secrets out of source, \`clank.deploy.json\`, labels, logs, plans, and agent metadata. Use \`clank secrets set\`.
 - Add stable \`agentId\` and useful \`agentLabel\` values to important controls without exposing secret values.
@@ -408,7 +410,7 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 
 ## Definition of done
 
-Run \`npm run build\`, \`npm run doctor\`, and \`npm run deploy:check\`. For UI changes, verify registration/login and the main interaction in a browser. For data changes, verify a fresh database and an existing migrated database.
+Run \`npm run build\`, \`npm run doctor\`, and \`npm run deploy:check\`. For UI changes, verify registration/login and the main interaction in a browser. For data changes, verify a fresh database and an existing migrated database. For backend changes, connect to \`/__clank/mcp\`, inspect \`tools/list\`, and verify the narrowest OAuth scope that can perform the action.
 `;
 }
 
@@ -736,6 +738,8 @@ ${groups}
 }
 
 function entityFunctions(name: string, entity: AppEntityDefinition): string {
+  const label = humanize(name);
+  const singular = humanize(name.replace(/s$/u, ""));
   const createFields = Object.entries(entity.fields).map(([fieldName, field]) =>
     `        ${property(fieldName)}: ${createSchemaSource(field)},`).join("\n");
   const insertFields = Object.entries(entity.fields).map(([fieldName]) =>
@@ -744,28 +748,34 @@ function entityFunctions(name: string, entity: AppEntityDefinition): string {
     `          ${property(fieldName)}: s.optional(${schemaSource({ ...field, required: true, default: undefined }, false)}),`).join("\n");
   const toggle = entity.completionField ? `,
     toggle: mutation({
+      description: ${JSON.stringify(`Change the completion state of one ${singular.toLowerCase()}.`)},
       args: {
         id: s.id(${JSON.stringify(name)}),
         value: s.boolean(),
         version: documentVersion,
       },
+      agent: { destructive: false, idempotent: true },
       handler: ({ db }, { id, value, version }) =>
         db.table(${JSON.stringify(name)}).patch(id, { ${property(entity.completionField)}: value }, { ifVersion: version }),
     })` : "";
   return `  ${property(name)}: {
     list: query({
+      description: ${JSON.stringify(`List ${label.toLowerCase()} visible to the current user.`)},
       args: {},
       handler: ({ db }) => db.table(${JSON.stringify(name)}).query().orderBy("_creationTime", "asc").collect(),
     }),
     create: mutation({
+      description: ${JSON.stringify(`Create one ${singular.toLowerCase()}.`)},
       args: {
 ${createFields}
       },
+      agent: { destructive: false },
       handler: ({ db }, input) => db.table(${JSON.stringify(name)}).insert({
 ${insertFields}
       }),
     }),
     update: mutation({
+      description: ${JSON.stringify(`Update fields on one ${singular.toLowerCase()}.`)},
       args: {
         id: s.id(${JSON.stringify(name)}),
         version: documentVersion,
@@ -773,11 +783,14 @@ ${insertFields}
 ${updateFields}
         }),
       },
+      agent: { destructive: false },
       handler: ({ db }, { id, version, changes }) =>
         db.table(${JSON.stringify(name)}).patch(id, changes, { ifVersion: version }),
     }),
     remove: mutation({
+      description: ${JSON.stringify(`Permanently remove one ${singular.toLowerCase()}.`)},
       args: { id: s.id(${JSON.stringify(name)}), version: documentVersion },
+      agent: { destructive: true },
       handler: ({ db }, { id, version }) =>
         db.table(${JSON.stringify(name)}).delete(id, { ifVersion: version }),
     })${toggle},
@@ -945,7 +958,14 @@ const environment = (globalThis as unknown as { process?: { env?: Record<string,
 const root = decodeURIComponent(new URL("./", import.meta.url).pathname);
 const frameworkRoot = decodeURIComponent(new URL("../node_modules/@clank.run/framework/dist/", import.meta.url).pathname);
 const databasePath = environment?.CLANK_DATABASE_PATH ?? environment?.CLANK_DATABASE ?? "app.sqlite";
-const runtime = await openBackend(backend, { path: databasePath });
+const runtime = await openBackend(backend, {
+  path: databasePath,
+  agent: {
+    name: ${JSON.stringify(app.slug)},
+    title: ${JSON.stringify(app.name)},
+    description: ${JSON.stringify(`${app.description} Its documented server actions are available to authenticated MCP clients.`)},
+  },
+});
 const observability = createObservability({
   serviceName: ${JSON.stringify(app.slug)},
   environment: environment?.NODE_ENV ?? "development",

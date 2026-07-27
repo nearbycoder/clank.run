@@ -2,6 +2,17 @@
 
 Clank auth is built into the same zero-dependency SQLite, Fetch, SSR, and live-query layer as the rest of the framework. An authenticated application needs one auth definition, owned tables for private data, and the auth-first browser client.
 
+Authenticated backends also act as OAuth authorization servers for their
+[MCP agent endpoint](agent-protocol.md). Browser authentication remains an `HttpOnly`, same-site
+cookie plus CSRF verification; MCP uses separate resource-bound bearer tokens. The browser session
+only identifies the user on the consent page, and an MCP token cannot authenticate normal query,
+mutation, or auth endpoints.
+
+Clank publishes RFC 9728 and RFC 8414 metadata, supports bounded RFC 7591 registration for public
+PKCE clients, issues one-hour access tokens, and rotates 30-day refresh tokens. OAuth scopes are
+`agent:read` and `agent:write`. Application roles, email verification, owned rows, and
+handler-level authorization continue to apply.
+
 ## Minimal setup
 
 ```ts

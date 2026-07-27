@@ -1,11 +1,11 @@
 # Clank
 
-Clank is a dependency-free, AI-first full-stack TypeScript framework and open-source deployment platform. It combines fine-grained reactivity, direct DOM rendering, SSR with node-preserving hydration, inference-first server functions, built-in auth, user-owned SQLite documents, live queries, deterministic artifacts, database migrations, and atomic deployment.
+Clank is a dependency-free, AI-first full-stack TypeScript framework and open-source deployment platform. It combines fine-grained reactivity, direct DOM rendering, SSR with node-preserving hydration, inference-first server functions, built-in auth, user-owned SQLite documents, live queries, automatic authenticated MCP tools, deterministic artifacts, database migrations, and atomic deployment.
 
 “AI-first” does not mean putting a chat box on every page. In Clank, the same application has two first-class interfaces:
 
 - Humans receive accessible HTML, responsive state, forms, navigation, and Tailwind styling.
-- Agents receive named actions with JSON Schema, explicit side-effect and confirmation metadata, and a compact semantic view of the interactive UI.
+- Agents receive authenticated MCP tools with JSON Schema, explicit side-effect metadata, OAuth discovery, and a compact semantic view of the interactive UI.
 
 The framework itself has no dependencies, dev dependencies, peer dependencies, virtual DOM, runtime compiler, or bundler. Clank's build-time TSX compiler is included; Node 22.16+ supplies the final TypeScript-to-JavaScript transform and consistent built-in SQLite backups.
 
@@ -16,7 +16,7 @@ The framework itself has no dependencies, dev dependencies, peer dependencies, v
 | Reactivity | Signals, lazy computed values, effects with cleanup, batching, rollback transactions, untracked reads, owned roots, deep proxy stores, snapshots, async resources, stream reduction |
 | UI | Typed compiler-powered TSX, automatic reactive expressions and props, keyed lists, stable text nodes, lifecycle/context, forms, dialogs, tabs, disclosures, pagination, directives, `Show`, `For`, `Switch`, lazy components |
 | Forms | Schema validation, typed fields, accessible control/error props, touched/dirty state, cross-field rules, cancellation, server errors, invalid-focus behavior, reset, agent-readable manifests |
-| AI | Web-focused runtime schemas, JSON Schema output, typed actions, authorization, side-effect/confirmation policy, action runners, semantic views, native-label-aware inspect/activate/input surface with secret-value redaction |
+| AI | Web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface with secret-value redaction |
 | Routing | Parameters, optional segments, wildcards, repeated query values, async loaders, aborts, guards, redirects, titles, links, history navigation |
 | Full stack | Inferred schemas/documents/arguments/results, branded IDs, query and mutation functions, zero-codegen typed API references |
 | Auth | Email/password sessions, scrypt hashing, secure cookies, CSRF, roles, revocation, default auth UI, SSR boot state |
@@ -120,6 +120,7 @@ render(document.querySelector("#app")!, <App />);
 - [Headless UI behavior](docs/ui.md)
 - [Performance model](docs/performance.md)
 - [AI-first contracts](docs/ai-first.md)
+- [MCP agent protocol and OAuth](docs/agent-protocol.md)
 - [AI application blueprints](docs/blueprints.md)
 - [Authentication, MFA, passkeys, and recovery](docs/authentication.md)
 - [Organizations, RBAC, invitations, and scoped tokens](docs/organizations.md)

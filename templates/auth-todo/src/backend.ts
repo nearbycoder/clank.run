@@ -29,23 +29,30 @@ const documentVersion = s.number({ integer: true, min: 1 });
 export const backend = defineBackend({ schema, auth }).functions(({ query, mutation }) => ({
   todos: {
     list: query({
+      description: "List the signed-in user's todos.",
       args: {},
       handler: ({ db }) => db.table("todos").query().orderBy("_creationTime", "asc").collect(),
     }),
     add: mutation({
-      args: { title: s.string({ min: 1, max: 160 }) },
+      description: "Create a todo for the signed-in user.",
+      args: { title: s.string({ min: 1, max: 160, description: "Todo title" }) },
+      agent: { destructive: false },
       handler: ({ db }, { title }) => db.table("todos").insert({
         title: title.trim(),
         done: false,
       }),
     }),
     setDone: mutation({
+      description: "Mark one todo complete or incomplete.",
       args: { id: s.id("todos"), done: s.boolean(), version: documentVersion },
+      agent: { destructive: false, idempotent: true },
       handler: ({ db }, { id, done, version }) =>
         db.table("todos").patch(id, { done }, { ifVersion: version }),
     }),
     remove: mutation({
+      description: "Permanently remove one todo.",
       args: { id: s.id("todos"), version: documentVersion },
+      agent: { destructive: true },
       handler: ({ db }, { id, version }) =>
         db.table("todos").delete(id, { ifVersion: version }),
     }),

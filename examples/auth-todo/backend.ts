@@ -51,6 +51,7 @@ export const backend = defineBackend({
 }).functions(({ query, mutation }) => ({
   profile: {
     get: query({
+      description: "Read the signed-in user's profile.",
       args: {},
       handler: ({ db }) => db.table("profiles")
         .query()
@@ -59,10 +60,12 @@ export const backend = defineBackend({
     }),
 
     update: mutation({
+      description: "Create or update the signed-in user's display name.",
       args: {
         displayName: nonEmptyDisplayName,
         version: s.nullable(documentVersion),
       },
+      agent: { destructive: false },
       handler: ({ db }, { displayName, version }) => {
         const value = displayName.trim();
         const profile = db.table("profiles")
@@ -89,6 +92,7 @@ export const backend = defineBackend({
 
   todos: {
     list: query({
+      description: "List the signed-in user's todos.",
       args: {},
       handler: ({ db }) => db.table("todos")
         .query()
@@ -97,7 +101,9 @@ export const backend = defineBackend({
     }),
 
     add: mutation({
+      description: "Create a todo for the signed-in user.",
       args: { title: nonEmptyTitle },
+      agent: { destructive: false },
       handler: ({ db }, { title }) => db.table("todos").insert({
         title: title.trim(),
         done: false,
@@ -105,11 +111,13 @@ export const backend = defineBackend({
     }),
 
     setDone: mutation({
+      description: "Mark one todo complete or incomplete.",
       args: {
         id: s.id("todos"),
         done: s.boolean(),
         version: documentVersion,
       },
+      agent: { destructive: false, idempotent: true },
       handler: ({ db }, { id, done, version }) => db.table("todos").patch(
         id,
         { done },
@@ -118,11 +126,13 @@ export const backend = defineBackend({
     }),
 
     rename: mutation({
+      description: "Rename one todo.",
       args: {
         id: s.id("todos"),
         title: nonEmptyTitle,
         version: documentVersion,
       },
+      agent: { destructive: false },
       handler: ({ db }, { id, title, version }) => db.table("todos").patch(
         id,
         { title: title.trim() },
@@ -131,10 +141,12 @@ export const backend = defineBackend({
     }),
 
     remove: mutation({
+      description: "Permanently remove one todo.",
       args: {
         id: s.id("todos"),
         version: documentVersion,
       },
+      agent: { destructive: true },
       handler: ({ db }, { id, version }) => db.table("todos").delete(
         id,
         { ifVersion: version },
@@ -142,7 +154,9 @@ export const backend = defineBackend({
     }),
 
     clearCompleted: mutation({
+      description: "Permanently remove every completed todo.",
       args: {},
+      agent: { destructive: true },
       handler: ({ db }) => {
         const completed = db.table("todos").query().where("done", true).collect();
         for (const todo of completed) {

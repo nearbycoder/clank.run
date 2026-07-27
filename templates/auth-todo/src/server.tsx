@@ -25,7 +25,14 @@ const databasePath = environment?.CLANK_DATABASE_PATH
   ?? environment?.PROACT_DATABASE_PATH
   ?? environment?.PROACT_DATABASE
   ?? "app.sqlite";
-const runtime = await openBackend(backend, { path: databasePath });
+const runtime = await openBackend(backend, {
+  path: databasePath,
+  agent: {
+    name: "clank-private-todo",
+    title: "Clank Private Todo",
+    description: "Manage private todos through authenticated, documented MCP actions.",
+  },
+});
 const api = createApi<typeof backend>();
 const appFiles = staticFiles(root);
 const frameworkFiles = staticFiles(frameworkRoot, { prefix: "/_clank", cacheControl: "public, max-age=31536000, immutable" });
