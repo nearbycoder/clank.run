@@ -285,10 +285,6 @@ const DEFAULT_RELEASES_PER_PROJECT = 50;
 const DEFAULT_RELEASE_STORAGE_BYTES = 20 * 1024 * 1024 * 1024;
 const MAX_PENDING_INVITATIONS_PER_ORGANIZATION = 100;
 const BOOTSTRAP_CLAIM_MS = 5 * 60_000;
-const OAUTH_RELAY_LIFETIME_MS = 10 * 60_000;
-const OAUTH_RELAY_CALLBACK_PREFIX = "/api/agent/oauth/callback/";
-const OAUTH_RELAY_MAX_QUERY_BYTES = 8 * 1024;
-const MAX_PENDING_OAUTH_RELAYS = 20_000;
 const MAX_PLATFORM_RATE_LIMIT_KEYS = 20_000;
 const PLATFORM_RATE_LIMIT_PRUNE_TARGET = 18_000;
 const PLATFORM_ADMIN_ROLE = "platform_admin";
@@ -1529,15 +1525,6 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       if ((url.pathname === "/healthz" || url.pathname === "/readyz") && request.method === "GET") {
         return readiness();
-      }
-      if (url.pathname === "/api/agent/oauth/relay/start" && request.method === "POST") {
-        return await startOAuthRelay(storage, request, publicUrl);
-      }
-      if (url.pathname.startsWith(OAUTH_RELAY_CALLBACK_PREFIX) && request.method === "GET") {
-        return await completeOAuthRelay(storage, request, url, masterKey);
-      }
-      if (url.pathname === "/api/agent/oauth/relay/poll" && request.method === "POST") {
-        return await pollOAuthRelay(storage, request, masterKey);
       }
       const consolePath = request.method === "GET"
         ? canonicalPlatformConsolePath(url.pathname)
@@ -2961,20 +2948,6 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     last_poll_at INTEGER NOT NULL,
     consumed_at INTEGER
   )`);
-  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_oauth_relays (
-    relay_hash TEXT PRIMARY KEY,
-    poll_hash TEXT NOT NULL UNIQUE,
-    client_name TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'ready', 'consumed')),
-    callback_path TEXT,
-    response_encrypted TEXT,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    last_poll_at INTEGER NOT NULL,
-    consumed_at INTEGER
-  )`);
-  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_oauth_relays_expiry
-    ON clank_platform_oauth_relays (expires_at)`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_organizations (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -3210,7 +3183,6 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_audit_organization ON clank_platform_audit (organization_id, id DESC)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_audit_project ON clank_platform_audit (project_id, id DESC)");
   internal.prepare("DELETE FROM clank_platform_device_codes WHERE expires_at <= ?").run(Date.now());
-  internal.prepare("DELETE FROM clank_platform_oauth_relays WHERE expires_at <= ?").run(Date.now());
   internal.prepare("DELETE FROM clank_platform_tokens WHERE expires_at <= ?").run(Date.now());
   internal.prepare("DELETE FROM clank_platform_invitations WHERE expires_at <= ? OR revoked_at IS NOT NULL").run(Date.now());
   const legacyOwners = internal.prepare(`SELECT DISTINCT p.owner_id, u.email
@@ -5093,206 +5065,6 @@ function problem(status: number, code: string, message: string, retryAfter?: num
   return api({ ok: false, error: { code, message, ...(retryAfter ? { retryAfter } : {}) } }, status);
 }
 
-async function startOAuthRelay(
-  storage: PlatformDatabase,
-  request: Request,
-  publicUrl: string,
-): Promise<Response> {
-  await enforceOAuthRelayRateLimit(storage.rateLimits, request, "start", 20);
-  const input = plainObject(await readJsonRequest(request, 8 * 1024));
-  exact(input, ["clientName"]);
-  const clientName = boundedString(input.clientName, "clientName", 1, 100);
-  const relayId = await randomToken(24);
-  const pollToken = await randomToken(32);
-  const now = Date.now();
-  const expiresAt = now + OAUTH_RELAY_LIFETIME_MS;
-  storage.internal.transaction(() => {
-    storage.internal.prepare("DELETE FROM clank_platform_oauth_relays WHERE expires_at <= ?").run(now);
-    const active = Number(storage.internal.prepare(
-      "SELECT count(*) AS count FROM clank_platform_oauth_relays",
-    ).get()?.count ?? 0);
-    if (active >= MAX_PENDING_OAUTH_RELAYS) {
-      throw new PlatformError(503, "RELAY_CAPACITY_REACHED", "OAuth relay capacity is temporarily unavailable.");
-    }
-    storage.internal.prepare(`INSERT INTO clank_platform_oauth_relays
-      (relay_hash, poll_hash, client_name, status, callback_path, response_encrypted,
-       created_at, expires_at, last_poll_at, consumed_at)
-      VALUES (?, ?, ?, 'pending', NULL, NULL, ?, ?, 0, NULL)`)
-      .run(syncHash(relayId), syncHash(pollToken), clientName, now, expiresAt);
-  });
-  return api({
-    ok: true,
-    relayId,
-    pollToken,
-    callbackUrl: `${publicUrl}${OAUTH_RELAY_CALLBACK_PREFIX}${relayId}`,
-    expiresIn: Math.floor(OAUTH_RELAY_LIFETIME_MS / 1_000),
-    interval: 2,
-  }, 201);
-}
-
-async function completeOAuthRelay(
-  storage: PlatformDatabase,
-  request: Request,
-  url: URL,
-  masterKey: Uint8Array,
-): Promise<Response> {
-  await enforceOAuthRelayRateLimit(storage.rateLimits, request, "callback", 120);
-  const relativePath = url.pathname.slice(OAUTH_RELAY_CALLBACK_PREFIX.length);
-  const pathParts = relativePath.split("/");
-  const relayId = pathParts[0] ?? "";
-  const callbackId = pathParts[1] ?? "";
-  if (
-    pathParts.length !== 2
-    || !/^[A-Za-z0-9_-]{32}$/u.test(relayId)
-    || !/^[A-Za-z0-9_-]{6,128}$/u.test(callbackId)
-    || url.pathname.length > 512
-  ) {
-    return oauthRelayPage("invalid", 404);
-  }
-  if (new TextEncoder().encode(url.search).byteLength > OAUTH_RELAY_MAX_QUERY_BYTES) {
-    return oauthRelayPage("invalid", 400);
-  }
-  const allowedParameters = new Set([
-    "code",
-    "state",
-    "error",
-    "error_description",
-    "error_uri",
-    "iss",
-    "scope",
-  ]);
-  for (const [name, value] of url.searchParams) {
-    if (
-      !allowedParameters.has(name)
-      || url.searchParams.getAll(name).length !== 1
-      || value.length > 4_096
-      || /[\u0000-\u001f\u007f]/u.test(value)
-    ) {
-      return oauthRelayPage("invalid", 400);
-    }
-  }
-  const state = url.searchParams.get("state");
-  const code = url.searchParams.get("code");
-  const oauthError = url.searchParams.get("error");
-  if (
-    !state
-    || state.length > 2_048
-    || Boolean(code) === Boolean(oauthError)
-    || (oauthError !== null && !/^[A-Za-z0-9_.-]{1,128}$/u.test(oauthError))
-  ) {
-    return oauthRelayPage("invalid", 400);
-  }
-
-  const now = Date.now();
-  const relayHash = syncHash(relayId);
-  const responseEncrypted = encryptSecret(JSON.stringify({
-    path: url.pathname,
-    query: `?${url.searchParams.toString()}`,
-  }), masterKey);
-  const result = storage.internal.transaction(() => {
-    const row = storage.internal.prepare(
-      "SELECT status, expires_at FROM clank_platform_oauth_relays WHERE relay_hash = ?",
-    ).get(relayHash);
-    if (!row || Number(row.expires_at) <= now) {
-      storage.internal.prepare("DELETE FROM clank_platform_oauth_relays WHERE relay_hash = ?")
-        .run(relayHash);
-      return "expired";
-    }
-    if (row.status !== "pending") return "received";
-    const updated = storage.internal.prepare(`UPDATE clank_platform_oauth_relays
-      SET status = 'ready', callback_path = ?, response_encrypted = ?
-      WHERE relay_hash = ? AND status = 'pending' AND expires_at > ?`)
-      .run(url.pathname, responseEncrypted, relayHash, now);
-    return Number(updated.changes) === 1 ? "received" : "expired";
-  });
-  return result === "received"
-    ? oauthRelayPage("received")
-    : oauthRelayPage("expired", 410);
-}
-
-async function pollOAuthRelay(
-  storage: PlatformDatabase,
-  request: Request,
-  masterKey: Uint8Array,
-): Promise<Response> {
-  await enforceOAuthRelayRateLimit(storage.rateLimits, request, "poll", 120);
-  const input = plainObject(await readJsonRequest(request, 8 * 1024));
-  exact(input, ["relayId", "pollToken"]);
-  const relayId = boundedString(input.relayId, "relayId", 20, 200);
-  const pollToken = boundedString(input.pollToken, "pollToken", 20, 200);
-  const relayHash = syncHash(relayId);
-  const pollHash = syncHash(pollToken);
-  const now = Date.now();
-  const row = storage.internal.prepare(`SELECT status, response_encrypted, expires_at, last_poll_at, consumed_at
-    FROM clank_platform_oauth_relays WHERE relay_hash = ? AND poll_hash = ?`)
-    .get(relayHash, pollHash);
-  if (!row || Number(row.expires_at) <= now || row.consumed_at !== null) {
-    throw new PlatformError(400, "EXPIRED_TOKEN", "OAuth relay expired or was already consumed.");
-  }
-  if (row.status === "pending") {
-    const lastPoll = Number(row.last_poll_at);
-    if (lastPoll && now - lastPoll < 1_500) {
-      throw new PlatformError(429, "SLOW_DOWN", "Poll less frequently.", 2);
-    }
-    storage.internal.prepare(
-      "UPDATE clank_platform_oauth_relays SET last_poll_at = ? WHERE relay_hash = ? AND poll_hash = ?",
-    ).run(now, relayHash, pollHash);
-    throw new PlatformError(428, "AUTHORIZATION_PENDING", "Authorization is still pending.", 2);
-  }
-  if (row.status !== "ready" || typeof row.response_encrypted !== "string") {
-    throw new PlatformError(400, "EXPIRED_TOKEN", "OAuth relay expired or was already consumed.");
-  }
-  const consumed = storage.internal.prepare(`UPDATE clank_platform_oauth_relays
-    SET status = 'consumed', consumed_at = ?, response_encrypted = NULL
-    WHERE relay_hash = ? AND poll_hash = ? AND status = 'ready' AND consumed_at IS NULL`)
-    .run(now, relayHash, pollHash);
-  if (Number(consumed.changes) !== 1) {
-    throw new PlatformError(409, "RELAY_CONSUMED", "OAuth relay was already consumed.");
-  }
-  const decoded = plainObject(JSON.parse(decryptSecret(String(row.response_encrypted), masterKey)));
-  const path = boundedString(decoded.path, "path", 1, 512);
-  const query = boundedString(decoded.query, "query", 2, OAUTH_RELAY_MAX_QUERY_BYTES);
-  if (
-    !path.startsWith(OAUTH_RELAY_CALLBACK_PREFIX)
-    || path.includes("?")
-    || path.includes("#")
-    || !query.startsWith("?")
-  ) {
-    throw new Error("Stored OAuth relay response is invalid.");
-  }
-  return api({ ok: true, path, query });
-}
-
-function oauthRelayPage(state: "received" | "expired" | "invalid", status = 200): Response {
-  const received = state === "received";
-  const title = received
-    ? "Authorization received"
-    : state === "expired"
-      ? "Authorization expired"
-      : "Invalid authorization response";
-  const detail = received
-    ? "Clank sent the one-time response to the waiting CLI. You may close this page."
-    : state === "expired"
-      ? "Return to the terminal and start a new Clank MCP login."
-      : "The authorization response could not be accepted. Return to the terminal and try again.";
-  return new Response(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title} · Clank</title><style>
-:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#080b12;color:#e8eefb;font:16px/1.55 ui-sans-serif,system-ui,sans-serif}.card{width:min(34rem,calc(100% - 2rem));padding:2rem;border:1px solid #273247;border-radius:1rem;background:#111827}h1{margin:0 0 .75rem;font-size:clamp(1.7rem,5vw,2.4rem)}p{margin:0;color:#aebbd0}.mark{display:inline-grid;place-items:center;width:2.2rem;height:2.2rem;margin-bottom:1rem;border-radius:999px;background:${received ? "#6ee7c7" : "#f7c873"};color:#08110e;font-weight:800}
-</style></head><body><main class="card"><div class="mark">${received ? "✓" : "!"}</div><h1>${title}</h1><p>${detail}</p></main></body></html>`, {
-    status,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-      "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=()",
-      "referrer-policy": "no-referrer",
-      "x-content-type-options": "nosniff",
-      "x-frame-options": "DENY",
-    },
-  });
-}
-
 async function prepareDirectories(directory: string): Promise<{
   root: string;
   projects: string;
@@ -6445,24 +6217,6 @@ async function enforceDeviceRateLimit(
       429,
       "RATE_LIMITED",
       "Too many device authorization attempts.",
-      retryAfter,
-    );
-  }
-}
-
-async function enforceOAuthRelayRateLimit(
-  limiter: AuthRateLimitStore,
-  request: Request,
-  operation: "start" | "callback" | "poll",
-  limit: number,
-): Promise<void> {
-  const key = trustedClientAddress(request) ?? "unknown";
-  const retryAfter = await limiter.consume(`oauth-relay-${operation}\n${key}`, limit, 60_000);
-  if (retryAfter !== undefined) {
-    throw new PlatformError(
-      429,
-      "RATE_LIMITED",
-      "Too many OAuth relay attempts.",
       retryAfter,
     );
   }

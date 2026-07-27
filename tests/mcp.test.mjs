@@ -461,7 +461,7 @@ test("backend functions become deterministic MCP tools with public discovery", a
   runtime.close();
 });
 
-test("OAuth PKCE authenticates MCP tools, scopes writes, rotates refresh tokens, and isolates normal RPC", async () => {
+test("standard public-client OAuth works without the Clank CLI or control plane", async () => {
   const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
   const session = await registerUser(runtime);
   const client = await registerClient(runtime);
