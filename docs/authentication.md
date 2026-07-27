@@ -89,6 +89,13 @@ match the origin reconstructed by the application server, or Fetch Metadata
 identified a cross-site request. Do not disable this check or rewrite the
 browser's `Origin`; both would weaken CSRF protection.
 
+OAuth consent is the one narrow compatibility case: a browser or extension can
+retain `Sec-Fetch-Site: cross-site` from the authorization redirect while the
+consent form supplies the application's exact, browser-controlled `Origin`.
+Clank allows that request to continue only to its session-bound CSRF check.
+A foreign `Origin`, a cross-site request without `Origin`, or an invalid CSRF
+token is still rejected.
+
 For an app deployed by Clank, open the canonical URL reported by `clank status`
 and reload it before retrying. Managed ingress configures the generated runtime
 automatically and is covered by an end-to-end auth regression. The platform

@@ -9,6 +9,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - `docs.clank.run` now exposes a public, read-only MCP server with bounded list, search, and
   canonical Markdown retrieval tools plus stable Clank and MCP Server Card discovery.
 
+### Fixed
+
+- MCP OAuth consent now tolerates browser and extension authorization flows that retain cross-site
+  Fetch Metadata while supplying the application's exact Origin. Foreign origins, missing
+  cross-site origins, and invalid session-bound CSRF tokens remain blocked.
+
 ## 0.9.0 - 2026-07-26
 
 ### Added

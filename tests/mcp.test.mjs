@@ -183,6 +183,68 @@ async function authorize(runtime, session, client, scopes = "agent:read agent:wr
   return { ...(await token.json()), code, verifier };
 }
 
+test("OAuth consent accepts exact Origin across inherited Fetch Metadata but rejects foreign requests", async () => {
+  const runtime = await openBackend(authenticatedBackend(), {
+    path: ":memory:",
+    agent: {
+      name: "private-todo",
+      title: "Private Todo",
+      version: "1.0.0",
+      description: "Manage private todos.",
+    },
+  });
+  const session = await registerUser(runtime);
+  const client = await registerClient(runtime);
+  const verifier = "clank-fetch-metadata-pkce-verifier-012345678901234567890";
+  const requestParameters = {
+    client_id: client.client_id,
+    redirect_uri: client.redirect_uris[0],
+    response_type: "code",
+    state: "fetch-metadata-state",
+    code_challenge: await pkce(verifier),
+    code_challenge_method: "S256",
+    scope: "agent:read agent:write",
+    resource,
+    csrf_token: session.csrf,
+    decision: "approve",
+  };
+
+  const inheritedCrossSite = await runtime.handle(formRequest("/__clank/oauth/authorize", requestParameters, {
+    cookie: session.cookie,
+    origin,
+    "sec-fetch-site": "cross-site",
+  }));
+  assert.equal(inheritedCrossSite.status, 303);
+  assert.ok(new URL(inheritedCrossSite.headers.get("location")).searchParams.get("code"));
+
+  const foreignOrigin = await runtime.handle(formRequest("/__clank/oauth/authorize", requestParameters, {
+    cookie: session.cookie,
+    origin: "https://evil.test",
+    "sec-fetch-site": "cross-site",
+  }));
+  assert.equal(foreignOrigin.status, 403);
+  assert.equal((await foreignOrigin.json()).error, "invalid_request");
+
+  const missingOrigin = await runtime.handle(formRequest("/__clank/oauth/authorize", requestParameters, {
+    cookie: session.cookie,
+    "sec-fetch-site": "cross-site",
+  }));
+  assert.equal(missingOrigin.status, 403);
+  assert.equal((await missingOrigin.json()).error, "invalid_request");
+
+  const invalidCsrf = await runtime.handle(formRequest("/__clank/oauth/authorize", {
+    ...requestParameters,
+    csrf_token: "invalid-csrf-token",
+  }, {
+    cookie: session.cookie,
+    origin,
+    "sec-fetch-site": "cross-site",
+  }));
+  assert.equal(invalidCsrf.status, 403);
+  assert.equal((await invalidCsrf.json()).error, "invalid_request");
+  runtime.close();
+});
+
 test("backend functions become deterministic MCP tools with public discovery", async () => {
   const runtime = await openBackend(authenticatedBackend(), {
     path: ":memory:",
