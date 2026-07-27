@@ -214,6 +214,86 @@ async function authorize(runtime, session, client, scopes = "agent:read agent:wr
   return { ...(await token.json()), code, verifier };
 }
 
+test("OAuth sign-in form returns to consent without a separate application tab", async () => {
+  const runtime = await openBackend(authenticatedBackend(), {
+    path: ":memory:",
+    agent: {
+      name: "private-todo",
+      title: "Private Todo",
+      version: "1.0.0",
+      description: "Manage private todos.",
+    },
+  });
+  await registerUser(runtime);
+  const client = await registerClient(runtime);
+  const requestParameters = {
+    client_id: client.client_id,
+    redirect_uri: client.redirect_uris[0],
+    response_type: "code",
+    state: "inline-login-state",
+    code_challenge: await pkce("clank-inline-login-verifier-0123456789012345678901234567"),
+    code_challenge_method: "S256",
+    scope: "agent:read agent:write",
+    resource,
+  };
+  const authorizeUrl = `/__clank/oauth/authorize?${new URLSearchParams(requestParameters)}`;
+  const signIn = await runtime.handle(new Request(`${origin}${authorizeUrl}`));
+  assert.equal(signIn.status, 200);
+  const signInHtml = await signIn.text();
+  assert.match(signInHtml, /Sign in and continue/u);
+  assert.match(signInHtml, /action="\/__clank\/auth\/login"/u);
+  assert.doesNotMatch(signInHtml, /I’m signed in — continue/u);
+  const returnTo = hiddenInput(signInHtml, "return_to");
+  assert.equal(returnTo, authorizeUrl.replaceAll("&", "&amp;"));
+  const decodedReturnTo = returnTo.replaceAll("&amp;", "&");
+
+  const crossOrigin = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+  }, { origin: "https://attacker.test", "sec-fetch-site": "cross-site" }));
+  assert.equal(crossOrigin.status, 403);
+  assert.equal(crossOrigin.headers.get("set-cookie"), null);
+
+  const openRedirect = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: "https://attacker.test/callback",
+  }, { origin }));
+  assert.equal(openRedirect.status, 422);
+  assert.equal(openRedirect.headers.get("set-cookie"), null);
+
+  const rejected = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "wrong password",
+    return_to: decodedReturnTo,
+  }, { origin }));
+  assert.equal(rejected.status, 303);
+  assert.equal(rejected.headers.get("set-cookie"), null);
+  const rejectedLocation = new URL(rejected.headers.get("location"));
+  assert.equal(rejectedLocation.origin, origin);
+  assert.equal(rejectedLocation.searchParams.get("auth_error"), "invalid_credentials");
+  const rejectedPage = await runtime.handle(new Request(rejectedLocation));
+  assert.equal(rejectedPage.status, 200);
+  assert.match(await rejectedPage.text(), /Email or password is incorrect\./u);
+
+  const accepted = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+  }, { origin }));
+  assert.equal(accepted.status, 303);
+  assert.equal(accepted.headers.get("location"), `${origin}${authorizeUrl}`);
+  const cookie = accepted.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.ok(cookie);
+  const consent = await runtime.handle(new Request(accepted.headers.get("location"), {
+    headers: { cookie },
+  }));
+  assert.equal(consent.status, 200);
+  assert.match(await consent.text(), /Connect Test MCP client/u);
+  runtime.close();
+});
+
 test("OAuth consent proofs tolerate opaque browser headers and reject forgery, mutation, and replay", async () => {
   const runtime = await openBackend(authenticatedBackend(), {
     path: ":memory:",

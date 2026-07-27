@@ -157,9 +157,37 @@ authorization-code flow:
 6. Clank returns a short-lived, resource-bound bearer token and a rotating refresh token.
 7. The client sends the bearer token in the `Authorization` header on every MCP request.
 
-If the authorization page opens while signed out, open the application from that page, sign in
-normally, return to the authorization tab, and continue. The agent never receives the password,
-browser cookie, CSRF token, or application session.
+If the authorization page opens while signed out, applications using ordinary password login show
+the same-origin sign-in form directly on the OAuth page and advance to consent automatically.
+Applications that require MFA or custom bot protection link to their full sign-in experience and
+then recheck the session. In both cases credentials go only to the application's normal auth
+endpoint. The agent never receives the password, browser cookie, CSRF token, or application
+session.
+
+### Remote Codex callback
+
+Codex normally listens on a random loopback port while OAuth redirects the browser back to the
+client. When Codex runs on a remote devbox, `127.0.0.1` in the user's browser is not that devbox.
+Configure a reachable HTTPS callback and a fixed private listener port in Codex's top-level
+`config.toml`:
+
+```toml
+mcp_oauth_callback_port = 18641
+mcp_oauth_callback_url = "https://devbox.example.com/mcp-oauth"
+```
+
+Codex appends a random server-specific callback path. Route the public HTTPS URL, including all
+descendant paths, to `127.0.0.1:18641` on the devbox, restart Codex, and run:
+
+```sh
+codex mcp login my-clank-app
+```
+
+A private Tailscale Serve URL works when the approving browser belongs to the same tailnet. Use a
+single-purpose public ingress or Tailscale Funnel when it does not. Do not expose an unrelated
+development service on the callback listener. Clank dynamically registers the exact derived
+redirect URI; OAuth `state`, PKCE, the random callback path, and single-use authorization codes
+still protect the handoff.
 
 OAuth access tokens work only at the exact MCP resource that issued them. They do not authenticate
 ordinary `__clank/query`, `__clank/mutation`, browser-auth, or another domain's endpoints.
@@ -218,6 +246,9 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
 - Consent forms carry a one-time, five-minute proof bound to the authenticated session and exact
   authorization request. The proof is stored only as a digest and consumed atomically, so opaque
   extension origins cannot break consent and cross-site forgery cannot replay it.
+- Signed-out password users can authenticate through a same-origin form that accepts only a
+  bounded relative return path. The existing Origin and Fetch Metadata checks, credential rate
+  limits, secure session cookie, and generic credential failures remain in force.
 - Redirect URIs must be exact registered HTTPS URLs or HTTP loopback URLs; fragments and embedded
   credentials are rejected.
 - Access tokens are stored only as SHA-256 digests, expire after one hour, and are bound to the

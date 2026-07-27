@@ -99,6 +99,13 @@ atomically, and rejects expiry, replay, parameter changes, or another session.
 This preserves CSRF protection when an OAuth client supplies an opaque or
 missing `Origin`.
 
+When an MCP authorization page is signed out, ordinary password applications
+render a same-origin login form and return directly to consent after successful
+authentication. Form login uses the normal credential verifier and rate
+limits, retains strict Origin and Fetch Metadata checks, and accepts only a
+bounded relative return path. MFA or bot-protected applications keep their
+full application sign-in flow because those policies require additional UI.
+
 For an app deployed by Clank, open the canonical URL reported by `clank status`
 and reload it before retrying. Managed ingress configures the generated runtime
 automatically and is covered by an end-to-end auth regression. The platform
