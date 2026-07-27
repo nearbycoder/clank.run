@@ -128,7 +128,8 @@ Deployment runs in this order:
 6. If no migrations are pending, launch the candidate on a reserved spare port.
 7. Poll the candidate's configured health route without exposing it to public traffic.
 8. Atomically switch managed ingress and active-release metadata to the healthy candidate.
-9. Drain the prior release only after the route switch.
+9. Let requests already assigned to the prior upstream finish, with a bounded two-second drain for
+   long-lived streams, then stop the prior release.
 
 A code-only candidate that fails startup or health never receives traffic and never stops the prior
 release. Automatic crash recovery uses the same durable project lock as deploy, rollback, backup,

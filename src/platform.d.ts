@@ -41,6 +41,8 @@ export interface PlatformBackupOptions {
 export interface ClankPlatformOptions {
     dataDirectory: string;
     publicUrl: string;
+    /** Recover active application processes before returning, or concurrently after startup. Defaults to "blocking". */
+    startupRecovery?: "blocking" | "background";
     /** Exact control-plane account emails granted operator-level administration. */
     platformAdminEmails?: readonly string[];
     appHostname?: string;

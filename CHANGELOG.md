@@ -8,7 +8,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 - Successful protected-main CI revisions now automatically build, validate, and deploy `docs.clank.run` through a dedicated GitHub environment and a least-privilege project token.
 - Documentation code fences now use dependency-free, server-rendered syntax highlighting for TypeScript, TSX, JavaScript, shell, JSON, SQL, HTML, CSS, configuration, and Mermaid examples.
-- Code-only application deployments now launch and health-check candidates on spare ports, atomically switch managed ingress, and drain the prior release only after the route change.
+- Code-only application deployments now launch and health-check candidates on spare ports, atomically switch managed ingress, drain requests already assigned to the prior upstream, and stop the prior release only after the route change.
 
 ### Fixed
 

@@ -16,6 +16,8 @@ export interface IngressRouteStore {
 export interface ManagedIngress {
   handle(request: Request): Promise<Response>;
   health(): Promise<Record<string, { ok: boolean; status?: number; error?: string }>>;
+  /** Waits for requests already assigned to an upstream to finish before its process is stopped. */
+  drain(upstream: string, timeoutMs?: number): Promise<boolean>;
 }
 
 export interface IngressRequestMetric {
@@ -49,9 +51,29 @@ export function createManagedIngress(options: {
   const circuitFailures = integerRange(options.circuitFailures ?? 5, "circuitFailures", 1, 100);
   const circuitResetMs = integerRange(options.circuitResetMs ?? 30_000, "circuitResetMs", 100, 60 * 60_000);
   const circuits = new Map<string, { failures: number; openedAt: number; upstream: string }>();
+  const inFlight = new Map<string, {
+    leases: Set<symbol>;
+    waiters: Set<() => void>;
+  }>();
   const routeSource = typeof options.routes === "function"
     ? options.routes
     : () => options.routes.routes();
+
+  const retain = (upstream: string): (() => void) => {
+    const state = inFlight.get(upstream) ?? {
+      leases: new Set<symbol>(),
+      waiters: new Set<() => void>(),
+    };
+    inFlight.set(upstream, state);
+    const lease = Symbol(upstream);
+    state.leases.add(lease);
+    return () => {
+      if (!state.leases.delete(lease) || state.leases.size) return;
+      if (inFlight.get(upstream) === state) inFlight.delete(upstream);
+      for (const resolve of state.waiters) resolve();
+      state.waiters.clear();
+    };
+  };
 
   const loadRoutes = async (): Promise<IngressRoute[]> => {
     const routes = [...await routeSource()];
@@ -78,6 +100,43 @@ export function createManagedIngress(options: {
       const host = domainName(url.hostname);
       const route = (await loadRoutes()).find((entry) => entry.active && entry.hosts.includes(host));
       if (!route) return ingressProblem(404, "ROUTE_NOT_FOUND", "No application is assigned to this host.");
+      const release = retain(route.upstream);
+      const finish = (response: Response, trackBody = false): Response => {
+        if (!trackBody || !response.body) {
+          release();
+          return response;
+        }
+        const reader = response.body.getReader();
+        const body = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            try {
+              const chunk = await reader.read();
+              if (chunk.done) {
+                release();
+                controller.close();
+              } else {
+                controller.enqueue(chunk.value);
+              }
+            } catch (error) {
+              release();
+              controller.error(error);
+            }
+          },
+          async cancel(reason) {
+            try {
+              await reader.cancel(reason);
+            } finally {
+              release();
+            }
+          },
+        });
+        return new Response(body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+      };
+      try {
       const startedAt = performance.now();
       let requestBytes = 0;
       const observed = (response: Response): Response => {
@@ -110,21 +169,21 @@ export function createManagedIngress(options: {
         circuit = undefined;
       }
       if (circuit && circuit.failures >= circuitFailures && Date.now() - circuit.openedAt < circuitResetMs) {
-        return observed(ingressProblem(503, "UPSTREAM_UNAVAILABLE", "Application is temporarily unavailable.", {
+        return finish(observed(ingressProblem(503, "UPSTREAM_UNAVAILABLE", "Application is temporarily unavailable.", {
           "retry-after": String(Math.max(1, Math.ceil((circuitResetMs - (Date.now() - circuit.openedAt)) / 1_000))),
-        }));
+        })));
       }
       const declared = Number(request.headers.get("content-length"));
       if (Number.isFinite(declared) && declared > maxBodyBytes) {
         requestBytes = Math.max(0, declared);
-        return observed(ingressProblem(413, "REQUEST_TOO_LARGE", `Request exceeds ${maxBodyBytes} bytes.`));
+        return finish(observed(ingressProblem(413, "REQUEST_TOO_LARGE", `Request exceeds ${maxBodyBytes} bytes.`)));
       }
       let body: Uint8Array | undefined;
       if (request.body && !["GET", "HEAD"].includes(request.method)) {
         const read = await readBoundedBody(request.body, maxBodyBytes);
         requestBytes = read.size;
         if (read.tooLarge) {
-          return observed(ingressProblem(413, "REQUEST_TOO_LARGE", `Request exceeds ${maxBodyBytes} bytes.`));
+          return finish(observed(ingressProblem(413, "REQUEST_TOO_LARGE", `Request exceeds ${maxBodyBytes} bytes.`)));
         }
         body = read.body;
       }
@@ -162,11 +221,11 @@ export function createManagedIngress(options: {
           } else {
             circuits.delete(route.id);
           }
-          return observed(new Response(response.body, {
+          return finish(observed(new Response(response.body, {
             status: response.status,
             statusText: response.statusText,
             headers: proxyResponseHeaders(response.headers, route.id),
-          }));
+          })), true);
         } catch (error) {
           lastError = error;
           if (request.signal.aborted) break;
@@ -180,7 +239,11 @@ export function createManagedIngress(options: {
         }
       }
       void lastError;
-      return observed(ingressProblem(502, "UPSTREAM_FAILED", "Application upstream could not be reached."));
+      return finish(observed(ingressProblem(502, "UPSTREAM_FAILED", "Application upstream could not be reached.")));
+      } catch (error) {
+        release();
+        throw error;
+      }
     },
     async health() {
       const output: Record<string, { ok: boolean; status?: number; error?: string }> = {};
@@ -201,6 +264,33 @@ export function createManagedIngress(options: {
         }
       }));
       return output;
+    },
+    async drain(input, timeout = 2_000) {
+      const upstream = upstreamUrl(input, options.allowedUpstreamHosts);
+      const timeoutMs = integerRange(timeout, "drain timeout", 100, 30_000);
+      // Let requests that already loaded the prior route resume and retain
+      // their upstream before deciding that there is nothing to drain.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const state = inFlight.get(upstream);
+      if (!state?.leases.size) return true;
+      let resolveDrained!: () => void;
+      const drained = new Promise<void>((resolve) => { resolveDrained = resolve; });
+      state.waiters.add(resolveDrained);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const result = await Promise.race([
+        drained.then(() => true),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+      if (!result) {
+        state.waiters.delete(resolveDrained);
+        // Detach timed-out leases so a later release reusing this loopback
+        // port starts with an independent generation.
+        if (inFlight.get(upstream) === state) inFlight.delete(upstream);
+      }
+      return result;
     },
   };
   return ingress;
