@@ -62,6 +62,7 @@ const platform = await openPlatform({
   appUrlTemplate: environment("CLANK_APP_URL_TEMPLATE", "PROACT_APP_URL_TEMPLATE"),
   appPortStart: number(environment("CLANK_APP_PORT_START", "PROACT_APP_PORT_START"), 4300),
   appPortEnd: number(environment("CLANK_APP_PORT_END", "PROACT_APP_PORT_END"), 4999),
+  reservedAppPorts: [port],
   maxArtifactBytes: number(environment("CLANK_MAX_ARTIFACT_BYTES", "PROACT_MAX_ARTIFACT_BYTES"), 100 * 1024 * 1024),
   allowUnsafeMigrations: environment("CLANK_ALLOW_UNSAFE_MIGRATIONS", "PROACT_ALLOW_UNSAFE_MIGRATIONS") === "1",
   limits: {

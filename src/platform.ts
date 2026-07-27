@@ -110,6 +110,8 @@ export interface ClankPlatformOptions {
   appUrlTemplate?: string;
   appPortStart?: number;
   appPortEnd?: number;
+  /** Listener or infrastructure ports that application runtimes must never use. */
+  reservedAppPorts?: readonly number[];
   runner?: PlatformRunnerOptions;
   /** Defaults to "bootstrap": only the first platform account may self-register. */
   signup?: boolean | "bootstrap";
@@ -421,10 +423,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         ? `https://{slug}.${baseDomain}`
         : `http://${options.appHostname ?? "127.0.0.1"}:{port}`),
   );
+  const appPortStart = integerInRange(options.appPortStart ?? 4300, "appPortStart", 1024, 65535);
+  const appPortEnd = integerInRange(options.appPortEnd ?? 4999, "appPortEnd", 1024, 65535);
+  if (appPortStart > appPortEnd) throw new TypeError("appPortStart cannot exceed appPortEnd.");
+  const reservedAppPorts = normalizeReservedAppPorts(options.reservedAppPorts);
   const paths = await prepareDirectories(options.dataDirectory);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
+  reconcileReservedProjectPorts(storage.internal, appPortStart, appPortEnd, reservedAppPorts);
   reconcilePlatformAdminRoles(storage, platformAdminEmails);
   const finalizePlatformRegistration = (response: Response): Response => {
     if (response.status === 201) reconcilePlatformAdminRoles(storage, platformAdminEmails);
@@ -843,19 +850,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
 
   const reserveRolloutPort = async (project: ProjectRow): Promise<number> => {
-    const start = options.appPortStart ?? 4300;
-    const end = options.appPortEnd ?? 4999;
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1024 || end > 65535 || start > end) {
-      throw new Error("Invalid application port range.");
-    }
     const unavailable = new Set<number>([
       ...storage.internal.prepare("SELECT id, port FROM clank_platform_projects").all()
         .filter((row) => String(row.id) !== project.id)
         .map((row) => Number(row.port)),
       ...[...active.values()].map((running) => running.port),
       ...reservedRolloutPorts,
+      ...reservedAppPorts,
     ]);
-    for (let port = start; port <= end; port++) {
+    for (let port = appPortStart; port <= appPortEnd; port++) {
       if (unavailable.has(port)) continue;
       reservedRolloutPorts.add(port);
       try {
@@ -2285,7 +2288,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 `This organization has reached its ${limits.projectsPerOrganization}-site limit.`,
               );
             }
-            port = allocatePort(storage.internal, options.appPortStart ?? 4300, options.appPortEnd ?? 4999);
+            port = allocatePort(storage.internal, appPortStart, appPortEnd, reservedAppPorts);
             storage.internal.prepare(`INSERT INTO clank_platform_projects
               (id, owner_id, organization_id, name, slug, port, active_release_id, database_path, created_at, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`)
@@ -5696,12 +5699,57 @@ async function removeDatabaseFiles(path: string): Promise<void> {
   await Promise.all([path, `${path}-wal`, `${path}-shm`].map((target) => fs.rm(target, { force: true })));
 }
 
-function allocatePort(internal: SQLiteInternal, start: number, end: number): number {
+const NO_RESERVED_PORTS: ReadonlySet<number> = new Set();
+
+function normalizeReservedAppPorts(input: readonly number[] | undefined): ReadonlySet<number> {
+  if (input === undefined) return NO_RESERVED_PORTS;
+  if (!Array.isArray(input) || input.length > 1_024) {
+    throw new TypeError("reservedAppPorts must be an array containing at most 1024 ports.");
+  }
+  const ports = new Set<number>();
+  for (const port of input) {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new TypeError("reservedAppPorts must contain valid TCP ports.");
+    }
+    ports.add(port);
+  }
+  return ports;
+}
+
+function reconcileReservedProjectPorts(
+  internal: SQLiteInternal,
+  start: number,
+  end: number,
+  reserved: ReadonlySet<number>,
+): void {
+  if (reserved.size === 0) return;
+  internal.transaction((changes) => {
+    const conflicts = internal.prepare(
+      "SELECT id, port FROM clank_platform_projects ORDER BY created_at, id",
+    ).all().filter((row) => reserved.has(Number(row.port)));
+    for (const row of conflicts) {
+      const id = String(row.id);
+      const port = allocatePort(internal, start, end, reserved);
+      internal.prepare("UPDATE clank_platform_projects SET port = ?, updated_at = ? WHERE id = ?")
+        .run(port, Date.now(), id);
+      changes.record("__platform", id);
+    }
+  });
+}
+
+function allocatePort(
+  internal: SQLiteInternal,
+  start: number,
+  end: number,
+  reserved: ReadonlySet<number> = NO_RESERVED_PORTS,
+): number {
   if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1024 || end > 65535 || start > end) {
     throw new Error("Invalid application port range.");
   }
   const used = new Set(internal.prepare("SELECT port FROM clank_platform_projects").all().map((row) => Number(row.port)));
-  for (let port = start; port <= end; port++) if (!used.has(port)) return port;
+  for (let port = start; port <= end; port++) {
+    if (!used.has(port) && !reserved.has(port)) return port;
+  }
   throw new PlatformError(503, "PORT_CAPACITY", "No application ports are available.");
 }
 

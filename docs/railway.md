@@ -16,6 +16,10 @@ approved custom domains ┘                    ├─ app :4300 ─ projects/<id
 Railway volume mounted at /data
 ```
 
+The production entry point automatically reserves Railway's assigned `$PORT` from the application
+allocator. If a prior configuration persisted that listener port on a project, startup moves the
+project to the first free application port before recovering its active release.
+
 Use exactly one replica. Clank's control database and each application database use SQLite, and the
 included application supervisor is single-leader. Horizontal replicas need the external storage,
 leader, and remote-runner integrations described in [Self-hosting](self-hosting.md).
