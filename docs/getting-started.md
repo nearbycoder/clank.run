@@ -177,6 +177,30 @@ migrations/0002_add_due_dates.sql
 
 Never edit or reorder an applied migration. Clank checks migration history before activation and backs up the database before production migrations. See [SQLite migrations](migrations.md).
 
+## Use the app's built-in MCP server
+
+Every generated app exposes its agent-enabled backend queries and mutations through its own MCP
+endpoint:
+
+```text
+https://<project>.apps.clank.run/__clank/mcp
+```
+
+The browser UI and an MCP client call the same functions from `src/backend.ts`, so validation,
+authentication, `.owned()` data isolation, transactions, and live updates behave identically.
+Connect from Codex with:
+
+```sh
+codex mcp add my-app \
+  --url https://my-app.apps.clank.run/__clank/mcp
+codex mcp login my-app
+```
+
+The user signs into the application and approves access in the browser. They do not need the
+Clank CLI, deployment-account access, or a manual callback copy. See
+[The MCP server built into every app](per-app-mcp.md) for the query/mutation mapping, OAuth model,
+and contract-freshness checklist.
+
 ## Use Tailwind
 
 The starter is already configured for Tailwind utility classes, so you can edit `class` values in TSX immediately. Clank does not wrap or reinterpret Tailwind; classes are emitted as normal HTML attributes. For a compiled production stylesheet, follow [Tailwind CSS](tailwind.md).
@@ -243,5 +267,6 @@ Imports do not mutate global state. The package ships its TypeScript declaration
 - [Rendering and components](rendering.md): understand TSX, keyed lists, SSR, and hydration.
 - [Routing](routing.md): add URL-driven pages, parameters, loaders, guards, and navigation.
 - [Authentication](auth.md): customize profiles, sessions, authorization, and the default auth UI.
+- [Per-app MCP servers](per-app-mcp.md): connect agents directly to application queries and mutations.
 - [Deployment CLI](cli.md): ship and operate the application.
 - [Contributing to Clank](../CONTRIBUTING.md): clone the framework repository only when you want to change Clank itself.

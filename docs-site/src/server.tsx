@@ -239,6 +239,7 @@ function HomePage() {
               <li><span aria-hidden="true">✓</span> SSR, hydration, and live updates</li>
               <li><span aria-hidden="true">✓</span> Tailwind utility styling</li>
               <li><span aria-hidden="true">✓</span> Migrations and deployment config</li>
+              <li><span aria-hidden="true">✓</span> Per-app MCP query and mutation tools</li>
               <li><span aria-hidden="true">✓</span> Human and agent instructions</li>
             </ul>
             <a href="/docs/getting-started">Follow the complete walkthrough <span>→</span></a>
@@ -273,7 +274,7 @@ function HomePage() {
           <a href="/docs/rendering"><span>Build the UI</span><strong>Components and reactivity</strong><p>Edit typed TSX, add signals and forms, preserve SSR, and style with Tailwind.</p><i>Open the framework guide →</i></a>
           <a href="/docs/full-stack"><span>Add product data</span><strong>Backend, auth, and SQLite</strong><p>Declare validated functions and user-owned tables with inferred client types and live queries.</p><i>Open the full-stack guide →</i></a>
           <a href="/docs/cli"><span>Deploy</span><strong>Ship from the terminal</strong><p>Login, projects, secrets, migrations, verified artifacts, logs, backups, and rollback.</p><i>Read the guide →</i></a>
-          <a href="/docs/ai-first"><span>Use an agent</span><strong>Describe the product</strong><p>Keep important controls semantic, actions explicit, generation deterministic, and verification executable.</p><i>Open the agent guide →</i></a>
+          <a href="/docs/per-app-mcp"><span>Connect an agent</span><strong>Use the app's queries and mutations</strong><p>Every backend is its own authenticated MCP server, with typed tools that stay aligned with the UI.</p><i>Open the MCP guide →</i></a>
         </div>
       </section>
 

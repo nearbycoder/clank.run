@@ -4,6 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+### Added
+
+- The documentation now includes a practical per-app MCP guide covering automatic query and
+  mutation tools, application-specific auth and data isolation, Codex connection, and contract
+  freshness as UI actions change.
+
 ### Fixed
 
 - The protected-main documentation workflow now removes one oldest inactive artifact only when
