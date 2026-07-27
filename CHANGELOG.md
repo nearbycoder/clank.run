@@ -15,6 +15,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- The control-plane sidebar now keeps the Clank mark and name together in one compact lockup
+  while preserving the descriptor alignment.
 - The protected-main documentation workflow now removes one oldest inactive artifact only when
   the docs project reaches its release limit, preserving uninterrupted automatic deployments
   without deleting the active release or bypassing immediate rollback protection.
