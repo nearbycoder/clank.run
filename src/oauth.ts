@@ -127,6 +127,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
           applicationName,
           resource: resourceFor(request),
           codeLifetimeMs: authorizationCodeLifetimeMs,
+          authorizePath: `${oauthPrefix}/authorize`,
         });
       }
       if (url.pathname === `${oauthPrefix}/token`) {
@@ -278,6 +279,7 @@ async function authorize<Profile extends object>(
     applicationName: string;
     resource: string;
     codeLifetimeMs: number;
+    authorizePath: string;
   },
 ): Promise<Response> {
   if (request.method !== "GET" && request.method !== "POST") return methodNotAllowed("GET, POST");
@@ -289,7 +291,14 @@ async function authorize<Profile extends object>(
     const auth = await authRuntime.resolve(request);
     if (!auth.user) {
       if (request.method === "POST") throw new OAuthRequestError("access_denied", "Sign in before approving agent access.", 401);
-      return authorizationHtml(signInPage(parameters, options.applicationName));
+      const authError = typeof input.auth_error === "string" ? input.auth_error : undefined;
+      return authorizationHtml(signInPage(
+        parameters,
+        options.applicationName,
+        options.authorizePath,
+        authRuntime.definition.mfa.required || Boolean(authRuntime.definition.botProtection),
+        authError,
+      ));
     }
     if (authRuntime.definition.emailVerification.required) auth.requireVerified();
     if (request.method === "GET") {
@@ -599,16 +608,45 @@ function authorizationRedirect(
   return Response.redirect(target, 303);
 }
 
-function signInPage(parameters: AuthorizationParameters, applicationName: string): string {
-  const retry = authorizationRequestUrl(parameters);
+function signInPage(
+  parameters: AuthorizationParameters,
+  applicationName: string,
+  authorizePath: string,
+  advancedLoginRequired: boolean,
+  authError?: string,
+): string {
+  const retry = `${authorizePath}${authorizationRequestUrl(parameters)}`;
+  const error = authError === "invalid_credentials"
+    ? "Email or password is incorrect."
+    : authError === "rate_limited"
+      ? "Too many sign-in attempts. Wait a moment and try again."
+      : authError
+        ? "Sign-in could not be completed. Try again."
+        : "";
   return pageShell(
     `Sign in to ${escapeHtml(applicationName)}`,
     `<p>Your agent requested access through <strong>${escapeHtml(parameters.clientName)}</strong>.</p>
-    <p>Open the application, sign in normally, then return here to approve access.</p>
-    <div class="actions">
-      <a class="button primary" href="/" target="_blank" rel="noopener">Open application sign in</a>
-      <a class="button" href="${escapeAttribute(retry)}">I’m signed in — continue</a>
-    </div>
+    ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
+    ${advancedLoginRequired
+      ? `<p>This application requires its full sign-in flow. Sign in there, then return to this page.</p>
+        <div class="actions">
+          <a class="button primary" href="/" target="_blank" rel="noopener">Open application sign in</a>
+          <a class="button" href="${escapeAttribute(retry)}">Recheck signed-in session</a>
+        </div>`
+      : `<p>Sign in here to review and approve the requested permissions.</p>
+        <form method="post" action="/__clank/auth/login">
+          <input type="hidden" name="return_to" value="${escapeAttribute(retry)}">
+          <label class="field">Email
+            <input name="email" type="email" autocomplete="username" maxlength="254" required>
+          </label>
+          <label class="field">Password
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <div class="actions">
+            <button class="button primary" type="submit">Sign in and continue</button>
+            <a class="button" href="/" target="_blank" rel="noopener">Other sign-in options</a>
+          </div>
+        </form>`}
     <p class="meta">Requested permissions: ${parameters.scopes.map(scopeLabel).join(", ")}</p>`,
   );
 }
@@ -689,6 +727,8 @@ function pageShell(title: string, body: string): string {
   body{margin:0;background:#080b12;color:#e8edf7;min-height:100vh;display:grid;place-items:center}
   main{width:min(38rem,calc(100% - 2rem));box-sizing:border-box;padding:2rem;border:1px solid #273249;border-radius:1rem;background:#101724}
   h1{font-size:1.6rem;margin:0 0 1rem}.meta{color:#a8b4ca}.actions{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:1.5rem}
+  .field{display:grid;gap:.4rem;margin-top:1rem;font-weight:650}.field input{box-sizing:border-box;width:100%;border:1px solid #50617d;border-radius:.65rem;background:#080d18;color:#fff;padding:.75rem;font:inherit}
+  .error{border:1px solid #ef6d7a;border-radius:.65rem;background:#35151c;color:#ffd9dd;padding:.75rem}
   .button{appearance:none;border:1px solid #50617d;border-radius:.65rem;background:#182238;color:#fff;padding:.7rem 1rem;text-decoration:none;font:inherit;cursor:pointer}
   .primary{background:#6ee7c7;color:#07110f;border-color:#6ee7c7;font-weight:700}li+li{margin-top:.5rem}
   </style></head><body><main><h1>${title}</h1>${body}</main></body></html>`;

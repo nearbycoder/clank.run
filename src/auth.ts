@@ -11,6 +11,7 @@ import type { DatabaseSchema, SQLiteDatabase } from "./backend.ts";
 import {
   RequestInputError,
   readJsonRequest,
+  readRequestBytes,
   requestOriginAllowed,
   trustedClientAddress,
 } from "./security.ts";
@@ -650,6 +651,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
         return authProblem(404, "NOT_FOUND", "Auth endpoint not found.");
       }
       const operation = trimLeadingSlashes(url.pathname.slice(normalizedPrefix.length));
+      let browserLoginReturn: URL | undefined;
       try {
         if (request.method === "GET" && operation === "session") {
           const auth = await resolve(request);
@@ -675,8 +677,30 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           return sessionResponse(definition, request, result.rawToken, result.auth, 201);
         }
         if (operation === "login") {
-          const result = await login(await readJsonRequest(request, 16 * 1024), request);
+          const browserForm = request.headers.get("content-type")
+            ?.split(";", 1)[0]
+            ?.trim()
+            .toLowerCase() === "application/x-www-form-urlencoded";
+          const input = browserForm
+            ? await readAuthFormRequest(request, 16 * 1024)
+            : await readJsonRequest(request, 16 * 1024);
+          if (browserForm) {
+            browserLoginReturn = validateBrowserLoginReturn(
+              (input as Record<string, unknown>).return_to,
+              request,
+            );
+          }
+          const result = await login(input, request);
           if ("mfa" in result) return authJson({ ok: true, mfa: result.mfa }, { status: 202 });
+          if (browserLoginReturn) {
+            return sessionRedirectResponse(
+              definition,
+              request,
+              result.session.rawToken,
+              result.session.auth,
+              browserLoginReturn,
+            );
+          }
           return sessionResponse(definition, request, result.session.rawToken, result.session.auth);
         }
         if (operation === "mfa/verify") {
@@ -945,6 +969,9 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
         }
         return authProblem(404, "NOT_FOUND", "Auth endpoint not found.");
       } catch (error) {
+        if (browserLoginReturn && error instanceof AuthError) {
+          return browserLoginErrorRedirect(browserLoginReturn, error);
+        }
         if (error instanceof RequestInputError) return authProblem(error.status, error.code, error.message);
         if (error instanceof AuthError) {
           return authProblem(error.status, error.code, error.message, error.retryAfter);
@@ -1858,6 +1885,30 @@ function sessionResponse<Profile extends object>(
   }, { status, headers });
 }
 
+function sessionRedirectResponse<Profile extends object>(
+  definition: AuthDefinition<Profile>,
+  request: Request,
+  rawToken: string,
+  auth: StoredSession<Profile>,
+  target: URL,
+): Response {
+  const headers = authHeaders({ location: target.href });
+  headers.append("set-cookie", serializeSessionCookie(definition, request, rawToken, auth.session!.expiresAt));
+  return new Response(null, { status: 303, headers });
+}
+
+function browserLoginErrorRedirect(target: URL, error: AuthError): Response {
+  const redirected = new URL(target);
+  redirected.searchParams.set("auth_error", error.code === "INVALID_CREDENTIALS"
+    ? "invalid_credentials"
+    : error.code === "RATE_LIMITED"
+      ? "rate_limited"
+      : "sign_in_failed");
+  const headers = authHeaders({ location: redirected.href });
+  if (error.retryAfter !== undefined) headers.set("retry-after", String(error.retryAfter));
+  return new Response(null, { status: 303, headers });
+}
+
 function clearSessionResponse(definition: AuthDefinition<any>, request: Request): Response {
   const headers = authHeaders();
   headers.append("set-cookie", serializeSessionCookie(definition, request, "", 0));
@@ -1897,6 +1948,39 @@ function authHeaders(input?: HeadersInit): Headers {
   headers.set("x-content-type-options", "nosniff");
   headers.set("referrer-policy", "no-referrer");
   return headers;
+}
+
+async function readAuthFormRequest(request: Request, maxBytes: number): Promise<Record<string, string>> {
+  const bytes = await readRequestBytes(request, maxBytes);
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new RequestInputError(400, "INVALID_ENCODING", "Request body must be valid UTF-8.");
+  }
+  const result: Record<string, string> = {};
+  for (const [key, value] of new URLSearchParams(text)) {
+    if (Object.hasOwn(result, key)) {
+      throw new RequestInputError(400, "INVALID_FORM", `Duplicate form field: ${key}`);
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+function validateBrowserLoginReturn(value: unknown, request: Request): URL {
+  if (typeof value !== "string" || value.length === 0 || value.length > 16 * 1024) {
+    throw new AuthError("INVALID_INPUT", "The sign-in return path is invalid.", 422);
+  }
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
+    throw new AuthError("INVALID_INPUT", "The sign-in return path is invalid.", 422);
+  }
+  const requestUrl = new URL(request.url);
+  const target = new URL(value, requestUrl.origin);
+  if (target.origin !== requestUrl.origin || target.username || target.password || target.hash) {
+    throw new AuthError("INVALID_INPUT", "The sign-in return path is invalid.", 422);
+  }
+  return target;
 }
 
 function serializeSessionCookie(

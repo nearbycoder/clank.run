@@ -14,6 +14,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - MCP OAuth consent no longer depends on extension or embedded-browser Origin behavior. Consent
   pages now receive a one-time, expiring proof bound to the authenticated session and exact OAuth
   request; approval consumes it atomically alongside the existing session CSRF check.
+- Signed-out MCP OAuth now offers a same-origin password form that advances directly to consent,
+  while retaining strict Origin checks, credential throttling, secure cookies, generic failures,
+  and same-origin-only return paths. Remote Codex callbacks are documented for reachable HTTPS
+  devbox listeners so successful approval completes without pasting a callback URL.
 
 ## 0.9.0 - 2026-07-26
 
