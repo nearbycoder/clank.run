@@ -450,7 +450,10 @@ async function verifyAgentProtocol(origin, session) {
     headers: { cookie: session.cookie },
   });
   assert.equal(consent.status, 200);
-  assert.match(await consent.text(), /Approve access/);
+  const consentHtml = await consent.text();
+  assert.match(consentHtml, /Approve access/);
+  const consentToken = /name="consent_token" value="([^"]+)"/u.exec(consentHtml)?.[1];
+  assert.ok(consentToken);
 
   const approval = await fetch(`${origin}/__clank/oauth/authorize`, {
     method: "POST",
@@ -462,6 +465,7 @@ async function verifyAgentProtocol(origin, session) {
     body: new URLSearchParams({
       ...parameters,
       csrf_token: session.csrf,
+      consent_token: consentToken,
       decision: "approve",
     }),
     redirect: "manual",

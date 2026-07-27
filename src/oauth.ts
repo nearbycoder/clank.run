@@ -11,7 +11,6 @@ import type { McpAuthentication, McpScope } from "./mcp.ts";
 import {
   RequestInputError,
   readRequestBytes,
-  requestOriginAllowed,
 } from "./security.ts";
 import {
   SQLITE_INTERNAL,
@@ -283,9 +282,6 @@ async function authorize<Profile extends object>(
 ): Promise<Response> {
   if (request.method !== "GET" && request.method !== "POST") return methodNotAllowed("GET, POST");
   try {
-    if (request.method === "POST" && !authorizationRequestOriginAllowed(request)) {
-      throw new OAuthRequestError("invalid_request", "Cross-origin authorization request rejected.", 403);
-    }
     const input = request.method === "GET"
       ? Object.fromEntries(new URL(request.url).searchParams)
       : await readBoundedForm(request, 32 * 1024);
@@ -297,9 +293,22 @@ async function authorize<Profile extends object>(
     }
     if (authRuntime.definition.emailVerification.required) auth.requireVerified();
     if (request.method === "GET") {
-      return authorizationHtml(consentPage(parameters, auth, options.applicationName));
+      if (!auth.session) throw new OAuthRequestError("access_denied", "Sign in before approving agent access.", 401);
+      const consentToken = await issueConsentProof(
+        internal,
+        auth.session.id,
+        parameters,
+        options.codeLifetimeMs,
+      );
+      return authorizationHtml(consentPage(parameters, auth, options.applicationName, consentToken));
     }
     if (!auth.csrfToken || !constantTimeEqual(String(input.csrf_token ?? ""), auth.csrfToken)) {
+      throw new OAuthRequestError("invalid_request", "The authorization request could not be verified.", 403);
+    }
+    if (
+      !auth.session
+      || !await consumeConsentProof(internal, auth.session.id, parameters, input.consent_token)
+    ) {
       throw new OAuthRequestError("invalid_request", "The authorization request could not be verified.", 403);
     }
     if (input.decision !== "approve") {
@@ -331,20 +340,6 @@ async function authorize<Profile extends object>(
       ? authorizationHtml(errorPage(error), error instanceof OAuthRequestError ? error.status : 400)
       : oauthError(error);
   }
-}
-
-/**
- * OAuth clients can open the authorization page through a cross-site redirect
- * or extension context. Some user agents retain that context in
- * `Sec-Fetch-Site` for the consent POST even though the form itself supplies
- * the application's exact, browser-controlled Origin. Accept that narrow
- * case and continue to the session-bound CSRF check below. A foreign Origin,
- * or a cross-site request without an Origin, remains rejected.
- */
-function authorizationRequestOriginAllowed(request: Request): boolean {
-  const origin = request.headers.get("origin");
-  if (!origin) return requestOriginAllowed(request);
-  return origin === new URL(request.url).origin;
 }
 
 async function exchangeToken(
@@ -622,6 +617,7 @@ function consentPage<Profile extends object>(
   parameters: AuthorizationParameters,
   auth: AuthRequest<Profile>,
   applicationName: string,
+  consentToken: string,
 ): string {
   return pageShell(
     `Connect ${escapeHtml(parameters.clientName)}`,
@@ -636,6 +632,7 @@ function consentPage<Profile extends object>(
     <form method="post">
       ${authorizationHiddenFields(parameters)}
       <input type="hidden" name="csrf_token" value="${escapeAttribute(auth.csrfToken ?? "")}">
+      <input type="hidden" name="consent_token" value="${escapeAttribute(consentToken)}">
       <div class="actions">
         <button class="button primary" name="decision" value="approve" type="submit">Approve access</button>
         <button class="button" name="decision" value="deny" type="submit">Deny</button>
@@ -761,6 +758,15 @@ function createOAuthTables(internal: SQLiteInternal): void {
     consumed_at INTEGER,
     created_at INTEGER NOT NULL
   ) WITHOUT ROWID`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_oauth_consents (
+    token_hash TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES clank_auth_sessions(id) ON DELETE CASCADE,
+    client_id TEXT NOT NULL REFERENCES clank_oauth_clients(client_id) ON DELETE CASCADE,
+    request_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    consumed_at INTEGER,
+    created_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_oauth_tokens (
     token_hash TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('access', 'refresh')),
@@ -775,6 +781,8 @@ function createOAuthTables(internal: SQLiteInternal): void {
     last_used_at INTEGER
   ) WITHOUT ROWID`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_codes_expiry ON clank_oauth_codes (expires_at)");
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_consents_expiry ON clank_oauth_consents (expires_at)");
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_consents_session ON clank_oauth_consents (session_id, created_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_tokens_expiry ON clank_oauth_tokens (expires_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_tokens_user ON clank_oauth_tokens (user_id)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_tokens_family ON clank_oauth_tokens (family_id)");
@@ -783,9 +791,79 @@ function createOAuthTables(internal: SQLiteInternal): void {
 function pruneOAuthState(internal: SQLiteInternal): void {
   const now = Date.now();
   internal.prepare("DELETE FROM clank_oauth_codes WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(now);
+  internal.prepare("DELETE FROM clank_oauth_consents WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(now);
   // Retain rotated refresh-token digests until their original expiry. Reuse can
   // then revoke the active family for the full lifetime of the old credential.
   internal.prepare("DELETE FROM clank_oauth_tokens WHERE expires_at <= ?").run(now);
+}
+
+const MAX_PENDING_CONSENTS = 5_000;
+const MAX_SESSION_PENDING_CONSENTS = 20;
+
+async function issueConsentProof(
+  internal: SQLiteInternal,
+  sessionId: string,
+  parameters: AuthorizationParameters,
+  lifetimeMs: number,
+): Promise<string> {
+  const token = `clank_consent_${randomToken(24)}`;
+  const tokenHash = await digest(token);
+  const requestHash = await digest(authorizationRequestBinding(parameters));
+  const now = Date.now();
+  internal.transaction(() => {
+    internal.prepare("DELETE FROM clank_oauth_consents WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(now);
+    internal.prepare(`DELETE FROM clank_oauth_consents WHERE token_hash IN (
+      SELECT token_hash FROM clank_oauth_consents
+      WHERE session_id = ?
+      ORDER BY created_at DESC
+      LIMIT -1 OFFSET ?
+    )`).run(sessionId, MAX_SESSION_PENDING_CONSENTS - 1);
+    const count = Number(internal.prepare("SELECT COUNT(*) AS count FROM clank_oauth_consents").get()?.count ?? 0);
+    if (count >= MAX_PENDING_CONSENTS) {
+      internal.prepare(`DELETE FROM clank_oauth_consents WHERE token_hash IN (
+        SELECT token_hash FROM clank_oauth_consents
+        ORDER BY created_at ASC
+        LIMIT ?
+      )`).run(count - MAX_PENDING_CONSENTS + 1);
+    }
+    internal.prepare(`INSERT INTO clank_oauth_consents
+      (token_hash, session_id, client_id, request_hash, expires_at, consumed_at, created_at)
+      VALUES (?, ?, ?, ?, ?, NULL, ?)`)
+      .run(tokenHash, sessionId, parameters.clientId, requestHash, now + lifetimeMs, now);
+  });
+  return token;
+}
+
+async function consumeConsentProof(
+  internal: SQLiteInternal,
+  sessionId: string,
+  parameters: AuthorizationParameters,
+  value: unknown,
+): Promise<boolean> {
+  if (typeof value !== "string" || !/^clank_consent_[A-Za-z0-9_-]{32}$/u.test(value)) return false;
+  const tokenHash = await digest(value);
+  const requestHash = await digest(authorizationRequestBinding(parameters));
+  const now = Date.now();
+  const result = internal.prepare(`UPDATE clank_oauth_consents SET consumed_at = ?
+    WHERE token_hash = ?
+      AND session_id = ?
+      AND client_id = ?
+      AND request_hash = ?
+      AND expires_at > ?
+      AND consumed_at IS NULL`)
+    .run(now, tokenHash, sessionId, parameters.clientId, requestHash, now);
+  return Number(result.changes) === 1;
+}
+
+function authorizationRequestBinding(parameters: AuthorizationParameters): string {
+  return JSON.stringify([
+    parameters.clientId,
+    parameters.redirectUri,
+    parameters.state ?? "",
+    parameters.codeChallenge,
+    parameters.scope,
+    parameters.resource,
+  ]);
 }
 
 function validateRedirectUris(value: unknown): string[] {
