@@ -4,6 +4,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.9.2 - 2026-07-27
+
+### Fixed
+
+- MCP OAuth consent pages now permit form navigation to the exact validated callback origin.
+  This prevents Chromium from blocking the successful `303` loopback redirect after consuming
+  the one-time consent proof, while retaining same-origin form restrictions everywhere else.
+
 ## 0.9.1 - 2026-07-27
 
 ### Added

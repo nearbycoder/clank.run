@@ -99,6 +99,13 @@ atomically, and rejects expiry, replay, parameter changes, or another session.
 This preserves CSRF protection when an OAuth client supplies an opaque or
 missing `Origin`.
 
+The consent page also includes the exact validated callback origin in its
+`form-action` Content Security Policy. Without that source Chromium blocks the
+successful cross-origin `303` loopback navigation after the proof has already
+been consumed. Clank never uses a wildcard callback source: redirect
+registration, PKCE, state validation, and exact callback matching remain
+required.
+
 When an MCP authorization page is signed out, ordinary password applications
 render a same-origin login form and return directly to consent after successful
 authentication. Form login uses the normal credential verifier and rate

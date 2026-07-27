@@ -183,6 +183,9 @@ copied back to the terminal or agent.
 Graphical MCP clients can present the same operation as an **Authorize** link or button. The
 callback belongs to that MCP client: a desktop client normally uses a loopback listener, while a
 hosted client supplies its own HTTPS callback. Clank dynamically registers either exact URI.
+The consent page's Content Security Policy permits form navigation only to itself and the exact
+validated callback origin. This allows Chromium to follow the successful `303` callback without
+opening form submissions to any other origin.
 Running the browser on a different machine from a command-line client is a client-hosting concern;
 it does not introduce a Clank-specific relay or installation requirement.
 
@@ -248,6 +251,8 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
   limits, secure session cookie, and generic credential failures remain in force.
 - Redirect URIs must be exact registered HTTPS URLs or HTTP loopback URLs; fragments and embedded
   credentials are rejected.
+- Consent-page form navigation is restricted to the application and the exact validated callback
+  origin; wildcard form destinations are never allowed.
 - Access tokens are stored only as SHA-256 digests, expire after one hour, and are bound to the
   exact MCP resource.
 - Refresh tokens rotate, expire after 30 days, and reuse revokes the entire token family.
