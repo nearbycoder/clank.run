@@ -70,10 +70,6 @@ const COMMANDS = Object.freeze({
     usage: "clank login [--server <https-url>]",
     summary: "Authorize the CLI in a browser; defaults to https://clank.run.",
   },
-  mcp: {
-    usage: "clank mcp login <codex-server-name> [--server <https-url>] [--codex <path>] [--port <port>] [--scopes <scope,scope>]",
-    summary: "Authorize a Codex MCP server through Clank's hosted callback relay.",
-  },
   logout: {
     usage: "clank logout [--server <url>] [--local]",
     summary: "Revoke and remove the active CLI token.",
@@ -153,7 +149,6 @@ const VALUE_OPTIONS = Object.freeze({
   explain: ["blueprint"],
   generate: ["blueprint", "framework"],
   login: ["server"],
-  mcp: ["server", "codex", "port", "scopes"],
   logout: ["server"],
   org: ["slug", "role"],
   organization: ["slug", "role"],
@@ -194,7 +189,6 @@ export async function run(command, args) {
       case "explain": return await explainBlueprint(args);
       case "doctor": return await doctor(args);
       case "login": return await login(args);
-      case "mcp": return await mcpCommand(args);
       case "logout": return await logout(args);
       case "whoami": return await whoami(args);
       case "org":
@@ -369,7 +363,6 @@ Build and agents:
 Platform:
   clank login                          Authorize with https://clank.run
   clank login --server <url>           Use a self-hosted Clank platform
-  clank mcp login <codex-server-name>  Authorize Codex through the hosted callback relay
   clank logout [--server <url>]        Revoke and remove the CLI token
   clank whoami                          Show the active platform account
   clank org list                        List organizations and roles
@@ -705,221 +698,6 @@ async function login(args) {
     }
   }
   throw new CliError("Device authorization expired.");
-}
-
-async function mcpCommand(args) {
-  const [subcommand, name, ...rest] = positionals(args);
-  if (subcommand !== "login" || !name || rest.length) {
-    throw new CliError(
-      "Usage: clank mcp login <codex-server-name> [--server <url>] [--codex <path>] [--port <port>] [--scopes <scope,scope>]",
-      "INVALID_COMMAND",
-    );
-  }
-  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(name)) {
-    throw new CliError("Codex MCP server name must use letters, numbers, dots, underscores, or hyphens.");
-  }
-  const server = normalizeServer(option(args, "server") ?? DEFAULT_PLATFORM_SERVER);
-  const codexExecutable = option(args, "codex") ?? "codex";
-  if (!codexExecutable || codexExecutable.length > 1_024 || codexExecutable.includes("\0")) {
-    throw new CliError("--codex must be a valid executable path.");
-  }
-  const configuredPort = option(args, "port");
-  const port = configuredPort === undefined
-    ? await availableLoopbackPort()
-    : strictInteger(configuredPort, "--port", 1_024, 65_535);
-  const scopes = option(args, "scopes");
-  if (scopes !== undefined && (
-    scopes.length < 1
-    || scopes.length > 1_024
-    || !/^[A-Za-z0-9:._/-]+(?:,[A-Za-z0-9:._/-]+)*$/u.test(scopes)
-  )) {
-    throw new CliError("--scopes must be a comma-separated list of OAuth scope names.");
-  }
-
-  const started = await platformRequest(server, "/api/agent/oauth/relay/start", {
-    method: "POST",
-    body: { clientName: `${hostname()} · ${operatingSystem()} Codex` },
-    authenticate: false,
-  });
-  const relayId = typeof started.relayId === "string" ? started.relayId : "";
-  const pollToken = typeof started.pollToken === "string" ? started.pollToken : "";
-  const callbackUrl = typeof started.callbackUrl === "string" ? started.callbackUrl : "";
-  const callback = safeUrl(callbackUrl);
-  const expectedOrigin = new URL(server).origin;
-  if (
-    !/^[A-Za-z0-9_-]{32}$/u.test(relayId)
-    || !/^[A-Za-z0-9_-]{43}$/u.test(pollToken)
-    || !callback
-    || callback.origin !== expectedOrigin
-    || callback.search
-    || callback.hash
-    || callback.pathname !== `/api/agent/oauth/callback/${relayId}`
-    || !Number.isSafeInteger(started.expiresIn)
-    || started.expiresIn < 1
-    || started.expiresIn > 15 * 60
-  ) {
-    throw new CliError("Platform returned an invalid OAuth relay response.");
-  }
-  let interval = Number.isSafeInteger(started.interval)
-    ? Math.min(10, Math.max(2, Number(started.interval)))
-    : 2;
-  const deadline = Date.now() + Number(started.expiresIn) * 1_000;
-  const codexArguments = [
-    "-c",
-    `mcp_oauth_callback_port=${port}`,
-    "-c",
-    `mcp_oauth_callback_url=${JSON.stringify(callbackUrl)}`,
-    "mcp",
-    "login",
-    name,
-    ...(scopes ? ["--scopes", scopes] : []),
-  ];
-  console.log(`Starting secure hosted authorization for Codex MCP server ${name}.`);
-  console.log("Approve the browser request once; Clank will return it to this terminal automatically.");
-  const child = spawn(codexExecutable, codexArguments, {
-    stdio: ["ignore", "pipe", "pipe"],
-    shell: false,
-  });
-  child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
-  child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
-  const childDone = childOutcome(child);
-  let completed = false;
-  try {
-    while (Date.now() < deadline) {
-      const event = await Promise.race([
-        delay(interval * 1_000).then(() => null),
-        childDone,
-      ]);
-      if (event) {
-        if (event.error) throw new CliError(`Could not start Codex: ${event.error.message}`);
-        if (event.code === 0) {
-          completed = true;
-          return;
-        }
-        throw new CliError(`Codex MCP login exited with ${event.code ?? event.signal ?? "an error"}.`);
-      }
-      let relay;
-      try {
-        relay = await platformRequest(server, "/api/agent/oauth/relay/poll", {
-          method: "POST",
-          body: { relayId, pollToken },
-          authenticate: false,
-        });
-      } catch (error) {
-        if (error instanceof ApiError && error.code === "AUTHORIZATION_PENDING") continue;
-        if (error instanceof ApiError && error.code === "SLOW_DOWN") {
-          interval = Math.max(interval + 1, Number(error.retryAfter) || 2);
-          continue;
-        }
-        throw error;
-      }
-      await forwardRelayToCodex(relay, callback.pathname, port);
-      const outcome = await Promise.race([
-        childDone,
-        delay(30_000).then(() => ({ timeout: true })),
-      ]);
-      if (outcome.timeout) throw new CliError("Codex did not finish after receiving the OAuth response.");
-      if (outcome.error) throw new CliError(`Codex failed after authorization: ${outcome.error.message}`);
-      if (outcome.code !== 0) {
-        throw new CliError(`Codex MCP login exited with ${outcome.code ?? outcome.signal ?? "an error"}.`);
-      }
-      completed = true;
-      console.log("Codex MCP authorization completed.");
-      return;
-    }
-    throw new CliError("Hosted OAuth relay expired. Run the command again for a fresh request.");
-  } finally {
-    if (!completed && child.exitCode === null && !child.killed) child.kill("SIGTERM");
-  }
-}
-
-async function availableLoopbackPort() {
-  const { createServer } = await import("node:net");
-  const server = createServer();
-  const port = await new Promise((resolvePromise, reject) => {
-    server.once("error", reject);
-    server.listen(0, "0.0.0.0", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new CliError("Could not allocate a local OAuth callback port."));
-        return;
-      }
-      resolvePromise(address.port);
-    });
-  });
-  await new Promise((resolvePromise, reject) =>
-    server.close((error) => error ? reject(error) : resolvePromise()));
-  return port;
-}
-
-function childOutcome(child) {
-  return new Promise((resolvePromise) => {
-    let resolved = false;
-    const finish = (value) => {
-      if (resolved) return;
-      resolved = true;
-      resolvePromise(value);
-    };
-    child.once("error", (error) => finish({ error }));
-    child.once("exit", (code, signal) => finish({ code, signal }));
-  });
-}
-
-async function forwardRelayToCodex(relay, callbackBasePath, port) {
-  if (!plainRecord(relay)
-    || typeof relay.path !== "string"
-    || typeof relay.query !== "string"
-    || relay.path.length > 512
-    || relay.query.length > 8 * 1_024
-    || !relay.path.startsWith(`${callbackBasePath}/`)
-    || relay.path.slice(callbackBasePath.length + 1).includes("/")
-    || !/^[A-Za-z0-9_/?&=.%:+~-]+$/u.test(`${relay.path}${relay.query}`)
-    || !relay.query.startsWith("?")) {
-    throw new CliError("Platform returned an invalid OAuth callback.");
-  }
-  const target = new URL(`http://127.0.0.1:${port}${relay.path}${relay.query}`);
-  if (target.origin !== `http://127.0.0.1:${port}`) {
-    throw new CliError("Platform returned an unsafe OAuth callback.");
-  }
-  const deadline = Date.now() + 10_000;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(target, {
-        method: "GET",
-        redirect: "manual",
-        signal: AbortSignal.timeout(2_000),
-      });
-      await response.body?.cancel();
-      if (response.status >= 200 && response.status < 400) return;
-      lastError = new Error(`local callback returned ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await delay(200);
-  }
-  throw new CliError(
-    `Could not deliver the OAuth response to Codex's local listener: ${errorMessage(lastError)}`,
-  );
-}
-
-function strictInteger(value, name, minimum, maximum) {
-  if (!/^(?:0|[1-9][0-9]*)$/u.test(value)) {
-    throw new CliError(`${name} must be an integer from ${minimum} to ${maximum}.`);
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw new CliError(`${name} must be an integer from ${minimum} to ${maximum}.`);
-  }
-  return parsed;
-}
-
-function safeUrl(value) {
-  try {
-    return new URL(value);
-  } catch {
-    return null;
-  }
 }
 
 async function logout(args) {

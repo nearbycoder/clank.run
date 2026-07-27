@@ -164,44 +164,27 @@ then recheck the session. In both cases credentials go only to the application's
 endpoint. The agent never receives the password, browser cookie, CSRF token, or application
 session.
 
-### Hosted Codex callback relay
+### Connect from Codex
 
-Codex normally sends OAuth back to a loopback listener. That fails when Codex runs on a remote
-machine because `127.0.0.1` in the approving browser refers to the browser's machine, not the
-remote Codex host. Clank solves this without public ingress, Tailscale, callback copying, an
-application rebuild, or a framework-package update:
+The deployed application is a standard remote MCP server. A user needs Codex, but does not need
+the Clank CLI, a Clank source checkout, or access to the Clank deployment account:
 
 ```sh
-clank mcp login my-clank-app
+codex mcp add my-app --url https://your-app.example.com/__clank/mcp
+codex mcp login my-app
 ```
 
-`my-clank-app` is the MCP server name already configured in Codex. While working from this
-repository without publishing a new CLI package, run the same command from source:
+Codex discovers the OAuth endpoints, registers its exact callback URI, opens the application's
+authorization page, and waits for the redirect. The user signs in and selects **Approve access**.
+The browser then returns the short-lived code to Codex, which validates `state`, redeems the code
+with its private PKCE verifier, and stores the resulting application-scoped token. Nothing is
+copied back to the terminal or agent.
 
-```sh
-node /path/to/clank/scripts/clank.mjs mcp login my-clank-app
-```
-
-The command:
-
-1. creates a ten-minute, one-time relay at `https://clank.run`;
-2. starts `codex mcp login` with a per-attempt hosted callback and random local listener port;
-3. waits while the application performs its existing sign-in and consent flow;
-4. polls Clank with a separate secret that never appears in the browser URL;
-5. forwards the captured response to the exact Codex loopback path; and
-6. lets Codex verify OAuth `state`, redeem the code with its private PKCE verifier, and store the
-   resulting resource-bound token.
-
-The deployed application is unchanged. Its existing dynamic client-registration endpoint accepts
-the exact per-attempt HTTPS redirect URI. The relay stores the bounded callback response with
-AES-256-GCM, hashes the relay and poll capabilities, permits only one browser write and one CLI
-read, clears the encrypted response when consumed, and expires the row automatically. Reopening
-the callback page is harmless and cannot replace the first response.
-
-The platform never receives the application password, browser session, PKCE verifier, OAuth access
-token, or refresh token. It briefly holds only the encrypted authorization response. The local
-bridge validates the callback origin and path and can forward only to the random loopback port it
-gave Codex.
+Graphical MCP clients can present the same operation as an **Authorize** link or button. The
+callback belongs to that MCP client: a desktop client normally uses a loopback listener, while a
+hosted client supplies its own HTTPS callback. Clank dynamically registers either exact URI.
+Running the browser on a different machine from a command-line client is a client-hosting concern;
+it does not introduce a Clank-specific relay or installation requirement.
 
 OAuth access tokens work only at the exact MCP resource that issued them. They do not authenticate
 ordinary `__clank/query`, `__clank/mutation`, browser-auth, or another domain's endpoints.

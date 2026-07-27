@@ -8,9 +8,6 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 - `docs.clank.run` now exposes a public, read-only MCP server with bounded list, search, and
   canonical Markdown retrieval tools plus stable Clank and MCP Server Card discovery.
-- `clank mcp login <codex-server-name>` now uses an encrypted, one-time callback relay hosted by
-  the Clank control plane, allowing a remote Codex process to complete browser OAuth without
-  callback copying, inbound devbox networking, an application redeploy, or an npm release.
 
 ### Fixed
 
@@ -20,6 +17,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Signed-out MCP OAuth now offers a same-origin password form that advances directly to consent,
   while retaining strict Origin checks, credential throttling, secure cookies, generic failures,
   and same-origin-only return paths.
+- MCP authorization remains a direct, standards-based exchange between the application and the
+  MCP client. Connecting an agent never requires the Clank deployment CLI, the Clank control
+  plane, a callback relay, Tailscale, or copying an authorization response.
 
 ## 0.9.0 - 2026-07-26
 
