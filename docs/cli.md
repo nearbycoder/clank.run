@@ -74,6 +74,30 @@ Existing Proact profiles and project links are imported automatically on first u
 
 Credential profiles and project links are size-bounded, structurally validated, canonicalized to one server URL, written with owner-only permissions, and replaced atomically. Invalid local state fails closed without echoing token contents. Ordinary platform requests time out after 30 seconds; deployment uploads and health-gated activation time out after five minutes. JSON responses are UTF-8 validated and capped at 4 MiB before parsing.
 
+## Authorize Codex MCP
+
+When Codex runs somewhere other than the approving browser, use Clank's hosted callback relay:
+
+```sh
+clank mcp login my-clank-app
+```
+
+The final argument is the MCP server name from `codex mcp list`. Clank invokes `codex mcp login`,
+prints its normal authorization link, waits for one browser approval, and completes the local
+callback automatically. No `config.toml` callback override, public devbox port, Tailscale route, or
+copied response URL is required.
+
+The hosted relay is a control-plane feature and does not require redeploying the target app. From
+a Clank source checkout, use it before the next CLI package release without publishing anything:
+
+```sh
+node /path/to/clank/scripts/clank.mjs mcp login my-clank-app
+```
+
+Use `--server` for a self-hosted Clank control plane, `--codex` for a non-default Codex executable,
+`--port` only when local policy requires a fixed callback port, and `--scopes` to override the
+OAuth scopes requested by Codex.
+
 ## Projects
 
 ```sh
