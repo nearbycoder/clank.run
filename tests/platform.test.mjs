@@ -2975,8 +2975,17 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       status: "alive",
     });
     const favicon = await platform.handle(jsonRequest("/favicon.ico"));
-    assert.equal(favicon.status, 204);
-    assert.equal(await favicon.text(), "");
+    assert.equal(favicon.status, 200);
+    assert.equal(favicon.headers.get("content-type"), "image/x-icon");
+    assert.ok((await favicon.arrayBuffer()).byteLength > 1_000);
+    const mark = await platform.handle(jsonRequest("/brand/clank-mark-64.png"));
+    assert.equal(mark.status, 200);
+    assert.equal(mark.headers.get("content-type"), "image/png");
+    assert.ok((await mark.arrayBuffer()).byteLength > 1_000);
+    const faviconHead = await platform.handle(jsonRequest("/favicon.ico", { method: "HEAD" }));
+    assert.equal(faviconHead.status, 200);
+    assert.equal(faviconHead.headers.get("content-type"), "image/x-icon");
+    assert.equal((await faviconHead.arrayBuffer()).byteLength, 0);
     const ready = await payload(platform, jsonRequest("/healthz"));
     assert.deepEqual(ready, {
       ok: true,

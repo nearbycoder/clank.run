@@ -98,6 +98,7 @@ for (const path of await filesUnder(sourceRoot)) {
   }
 }
 
+await cp(join(projectRoot, "brand"), join(outputRoot, "brand"), { recursive: true });
 await cp(join(projectRoot, "dist"), vendorRoot, { recursive: true });
 await Promise.all([
   cp(join(projectRoot, "package.json"), join(vendorRoot, "package.json")),

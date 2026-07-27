@@ -75,6 +75,8 @@ test("documentation site serves every human and agent contract securely", async 
   assert.match(home, /Running in four commands/u);
   assert.match(home, /Registration and secure sessions/u);
   assert.match(home, /Machine-readable by default/u);
+  assert.match(home, /rel="icon" href="\/brand\/favicon\.ico\?v=[a-f0-9]{16}" sizes="any"/u);
+  assert.match(home, /src="\/brand\/clank-mark-64\.png"/u);
   assert.match(home, /<link rel="canonical" href="https:\/\/docs\.clank\.run\/"/u);
 
   const stylesheet = home.match(/href="(\/assets\/styles\.[a-f0-9]{16}\.css)"/u)?.[1];
@@ -93,6 +95,24 @@ test("documentation site serves every human and agent contract securely", async 
   assert.match(moduleResponse.headers.get("cache-control") ?? "", /immutable/u);
   assert.match(moduleSource, new RegExp(`search\\.${manifest.assetVersion}\\.js`, "u"));
   assert.equal((await fetch(`${origin}/assets/app.outdated.js`)).status, 404);
+  const [favicon, mark, touchIcon] = await Promise.all([
+    fetch(`${origin}/favicon.ico`),
+    fetch(`${origin}/brand/clank-mark-64.png`),
+    fetch(`${origin}/apple-touch-icon.png`),
+  ]);
+  assert.equal(favicon.status, 200);
+  assert.equal(favicon.headers.get("content-type"), "image/x-icon");
+  assert.ok((await favicon.arrayBuffer()).byteLength > 1_000);
+  assert.equal(mark.status, 200);
+  assert.equal(mark.headers.get("content-type"), "image/png");
+  assert.ok((await mark.arrayBuffer()).byteLength > 1_000);
+  assert.equal(touchIcon.status, 200);
+  assert.equal(touchIcon.headers.get("content-type"), "image/png");
+  assert.ok((await touchIcon.arrayBuffer()).byteLength > 1_000);
+  const faviconHead = await fetch(`${origin}/favicon.ico`, { method: "HEAD" });
+  assert.equal(faviconHead.status, 200);
+  assert.equal(faviconHead.headers.get("content-type"), "image/x-icon");
+  assert.equal((await faviconHead.arrayBuffer()).byteLength, 0);
 
   const guideResponses = await Promise.all(manifest.docs.map((doc) => fetch(`${origin}/docs/${doc.slug}`)));
   assert.equal(guideResponses.length, 48);
