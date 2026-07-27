@@ -16,6 +16,8 @@ export interface ManagedIngress {
         status?: number;
         error?: string;
     }>>;
+    /** Waits for requests already assigned to an upstream to finish before its process is stopped. */
+    drain(upstream: string, timeoutMs?: number): Promise<boolean>;
 }
 export interface IngressRequestMetric {
     projectId: string;

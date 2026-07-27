@@ -1008,15 +1008,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
       }
       const requiresExclusiveDatabase = !databaseExisted || migrationPlan.pending.length > 0;
-      if (previousRuntime && !requiresExclusiveDatabase) rolloutPort = await reserveRolloutPort(project);
-      if (requiresExclusiveDatabase && previousRuntime) {
+      const rolling = Boolean(previousRuntime && ingress && !requiresExclusiveDatabase);
+      if (rolling) rolloutPort = await reserveRolloutPort(project);
+      if (previousRuntime && !rolling) {
         await stopRunning(previousRuntime);
         previousWasStopped = true;
         recordLog(
           project.id,
           releaseId,
           "platform",
-          `Stopped the prior release for ${migrationPlan.pending.length} pending database migration(s).`,
+          requiresExclusiveDatabase
+            ? `Stopped the prior release for ${migrationPlan.pending.length} pending database migration(s).`
+            : "Stopped the prior release because managed ingress is disabled.",
         );
       }
       databaseChanged = requiresExclusiveDatabase;
@@ -1028,7 +1031,6 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const refreshedProject = { ...project, databasePath: bundle.config.database.path };
       const release = releaseById(storage.internal, releaseId)!;
       const secrets = decryptProjectSecrets(storage.internal, project.id, masterKey);
-      const rolling = Boolean(previousRuntime && !previousWasStopped);
       rolloutPort ??= project.port;
       try {
         candidateRuntime = await launchRelease(refreshedProject, release, secrets, rolloutPort);
@@ -1067,8 +1069,27 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         candidateRuntime.port,
       );
       if (rolling && previousRuntime) {
-        await stopRunning(previousRuntime);
-        recordLog(project.id, releaseId, "platform", "Drained the prior release after the ingress switch.");
+        try {
+          const drained = await ingress!.drain(`http://127.0.0.1:${previousRuntime.port}`);
+          if (!drained) {
+            recordLog(
+              project.id,
+              releaseId,
+              "platform",
+              "Prior release drain reached its two-second limit; terminating remaining streams.",
+            );
+          }
+          await stopRunning(previousRuntime);
+          recordLog(project.id, releaseId, "platform", "Drained the prior release after the ingress switch.");
+        } catch (drainError) {
+          options.onError?.(drainError);
+          recordLog(
+            project.id,
+            releaseId,
+            "platform",
+            `Prior release cleanup failed after activation: ${safeError(drainError)}`,
+          );
+        }
       }
       audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.activate", {
         releaseId,

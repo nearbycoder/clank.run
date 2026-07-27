@@ -71,7 +71,10 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
   await writeFile(join(root, "dist", "server.js"), `
     import { createServer } from "node:http";
     await new Promise((resolve) => setTimeout(resolve, ${Number(options.startupDelayMs ?? 0)}));
-    const server = createServer((request, response) => {
+    const server = createServer(async (request, response) => {
+      if (request.url === "/_clank-rollout-slow") {
+        await new Promise((resolve) => setTimeout(resolve, ${Number(options.responseDelayMs ?? 0)}));
+      }
       if (request.url === "/_runtime-environment") {
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({
@@ -336,7 +339,13 @@ test("code-only deployments keep serving until a healthy candidate takes traffic
     const migrations = [
       ["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"],
     ];
-    const firstArtifact = await appArtifact(join(root, "first"), "release-one", migrations);
+    const firstArtifact = await appArtifact(
+      join(root, "first"),
+      "release-one",
+      migrations,
+      false,
+      { responseDelayMs: 2_000 },
+    );
     const first = await deploy(platform, projectId, owner.accessToken, firstArtifact, "rolling-release-0001");
     assert.equal(first.response.status, 201, JSON.stringify(first.body));
 
@@ -347,6 +356,10 @@ test("code-only deployments keep serving until a healthy candidate takes traffic
       false,
       { startupDelayMs: 400 },
     );
+    const inFlightOldRequest = platform.handle(
+      new Request("https://rolling-app.apps.example.test/_clank-rollout-slow"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
     let completed = false;
     const deploying = deploy(
       platform,
@@ -367,6 +380,9 @@ test("code-only deployments keep serving until a healthy candidate takes traffic
     }
     const second = await deploying;
     assert.equal(second.response.status, 201, JSON.stringify(second.body));
+    const inFlightOldResponse = await inFlightOldRequest;
+    assert.equal(inFlightOldResponse.status, 200);
+    assert.equal(await inFlightOldResponse.text(), "release-one");
     assert.ok(observations.length >= 10, `expected rollout observations, received ${observations.length}`);
     assert.equal(observations.every((entry) => entry.status === 200), true);
     assert.equal(observations.every((entry) => ["release-one", "release-two"].includes(entry.body)), true);

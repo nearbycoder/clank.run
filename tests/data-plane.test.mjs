@@ -234,6 +234,44 @@ test("managed ingress routes by verified host, strips hop headers, bounds bodies
   assert.equal(upstreamSignal.aborted, true);
 });
 
+test("managed ingress drains requests already assigned to a replaced upstream", async () => {
+  let upstream = "http://127.0.0.1:4510";
+  let oldBody;
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_drain",
+      projectId: "project_drain",
+      hosts: ["drain.example.com"],
+      upstream,
+      active: true,
+    }],
+    fetch: async (url) => {
+      if (String(url).startsWith("http://127.0.0.1:4511/")) return new Response("new");
+      return new Response(new ReadableStream({
+        start(controller) {
+          oldBody = controller;
+          controller.enqueue(new TextEncoder().encode("old"));
+        },
+      }));
+    },
+  });
+  const oldResponse = await ingress.handle(new Request("https://drain.example.com/"));
+  upstream = "http://127.0.0.1:4511";
+  let drained = false;
+  const draining = ingress.drain("http://127.0.0.1:4510", 500).then((result) => {
+    drained = true;
+    return result;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(drained, false);
+  oldBody.close();
+  assert.equal(await oldResponse.text(), "old");
+  assert.equal(await draining, true);
+  const newResponse = await ingress.handle(new Request("https://drain.example.com/"));
+  assert.equal(newResponse.status, 200);
+  assert.equal(await newResponse.text(), "new");
+});
+
 test("custom-domain routing accepts the configured CNAME or edge addresses and reports mismatches", async () => {
   const records = new Map([
     ["tasks.customer.test:CNAME", ["edge.clank.test."]],
