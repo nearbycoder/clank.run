@@ -82,7 +82,11 @@ database, retained release artifacts, migration rollback snapshots, encrypted re
 orphaned project directories, and other filesystem allocation. The scan reports both completeness
 and any unaccounted filesystem space, so an operator can distinguish application growth from
 filesystem metadata or data outside Clank's known layout. Railway's volume metric remains the
-historical source for the overall growth curve.
+historical source for the overall growth curve. The two totals are intentionally not expected to
+match: [Railway reserves approximately 2–3% of every volume for filesystem
+metadata](https://docs.railway.com/volumes/reference), which appears in Railway's block-level
+metric but is outside the mounted filesystem usage Clank can inspect. A 50 GB volume can therefore
+start with roughly 1–1.5 GB reported by Railway even when application files are nearly empty.
 
 ## Domains
 

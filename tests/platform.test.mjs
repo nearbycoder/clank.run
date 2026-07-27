@@ -753,6 +753,7 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.match(operatorHtml, /id="admin-memory-projects"/);
     assert.match(operatorHtml, /id="admin-storage-projects"/);
     assert.match(operatorHtml, />Storage attribution</);
+    assert.match(operatorHtml, /Provider dashboards can include block-device metadata/);
     assert.match(operatorHtml, />Unattributed</);
     assert.match(operatorHtml, /reads are close but not atomic/);
     assert.match(operatorHtml, /id="impersonation-dialog"/);
