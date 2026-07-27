@@ -4,7 +4,8 @@ This model covers the Clank framework, generated authenticated applications, CLI
 
 ## Assets
 
-- account credentials, sessions, passkeys, recovery tokens, agent OAuth grants, and CLI tokens;
+- account credentials, sessions, passkeys, recovery tokens, agent OAuth grants, hosted callback
+  relay responses, and CLI tokens;
 - organization membership, project permissions, audit history, and deployment authority;
 - application source/artifacts, migrations, secrets, databases, files, email, jobs, and webhooks;
 - control-plane master keys, encrypted backups, release history, and signing/provenance data;
@@ -18,6 +19,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 - organization owner, admin, developer, or viewer;
 - allowlisted control-plane platform administrator;
 - browser account approving a CLI device;
+- local Clank bridge returning a hosted OAuth response to Codex;
 - account-wide or project-scoped CLI token;
 - deployment control-plane process;
 - authenticated deployment worker;
@@ -28,7 +30,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 
 1. Browser/agent to application HTTP, MCP, OAuth, and live-stream APIs.
 2. Browser to auth, recovery, MFA, and passkey ceremonies.
-3. CLI to browser-approved device flow and control-plane bearer API.
+3. CLI to browser-approved device flow, hosted OAuth relay, and control-plane bearer API.
 4. Artifact bytes to extraction, migration, candidate startup, and activation.
 5. Control plane to application process/container and project filesystem.
 6. Managed ingress to host routing and application upstream.
@@ -43,7 +45,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 | --- | --- | --- | --- |
 | Account takeover | Credential stuffing, reset replay, stolen session, cloned authenticator | Scrypt, generic login errors, shared HMAC-keyed control-plane rate limits, single-use recovery, MFA, WebAuthn verification/counters, revocation | Upstream abuse controls, bot defense, email security, user/device risk policy |
 | Cross-site action | CSRF, forged Origin, cross-site device approval | Strict cookies, CSRF token, Fetch Metadata/origin checks | Correct proxy scheme/host configuration and CSP |
-| Agent credential abuse | Malicious dynamic client, authorization-code interception, refresh replay, token confused with another API or tenant | Exact HTTPS/loopback redirects, PKCE S256, explicit consent, resource indicators and audience checks, short access lifetime, hashed tokens, refresh rotation/family revocation, read/write scopes, MCP-only bearer resolution | User review of client/scopes, endpoint TLS, agent-host security, edge registration limits, and future grant-management UI |
+| Agent credential abuse | Malicious dynamic client, authorization-code interception, callback-relay overwrite/read, refresh replay, token confused with another API or tenant | Exact HTTPS/loopback redirects, PKCE S256, explicit consent, resource indicators and audience checks, short access lifetime, hashed tokens, refresh rotation/family revocation, read/write scopes, MCP-only bearer resolution, independent hashed relay capabilities, encrypted write-once/read-once callback payloads, strict callback/path bounds | User review of client/scopes, endpoint TLS, agent-host security, control-plane trust, edge registration limits, and future grant-management UI |
 | Agent action abuse | Prompt injection or compromised client invokes hidden/destructive tools, guesses a write tool with a read token, or submits adversarial arguments | Authenticated tool discovery, mutation scope enforcement before dispatch, `agent: false`, destructive annotations, shared runtime schemas/authorization/ownership/transactions, bounded messages, generic failures | Domain authorization and confirmation inside handlers; annotations guide clients but are not security controls |
 | Tenant escape | Guess project/user IDs, reuse scoped token, stale membership | Owned SQL, membership/role checks, project/scope checks on every request, revocation | Domain-specific row/resource authorization |
 | Privilege escalation | Admin grants excess scopes, removes last owner, uses viewer token to deploy | Role matrix, scope intersection, last-owner protection, audit | Periodic access review and separation of duties |
@@ -61,7 +63,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 | Audit repudiation or tenant disclosure | Hide a destructive event, read another workspace, reuse stale elevated scope | Non-cascading organization attribution, current membership/role joins, project-token intersection, bounded cursor pagination, no audit mutation API, deleted-target retention | Trusted SQLite admins can alter local rows; replicate or sign events independently when operator tampering is in scope |
 | Supply-chain compromise | Mutable CI action, leaked npm token, package includes local state | Commit-pinned actions, least privilege, OIDC trusted publishing, attestation, package allowlist, zero dependencies | GitHub/npm account security and protected release environment |
 | Compiler boundary confusion | Treat attacker-controlled data as TSX source or assume generated code is sandboxed | Compiler accepts project source only, performs no build-time evaluation, and emits reviewable modules | Never compile request/database values; isolate mutually untrusted app execution |
-| Denial of service | Chunked oversized request, CBOR/artifact bomb, repeated retained releases, scrypt/device-code exhaustion, high-cardinality limiter keys, failing upstream, unbounded metric labels, site/domain exhaustion | Streaming byte/count/time bounds, CBOR depth/collection limits, per-project artifact count/byte ceilings, password queue, bounded durable rate-limit state, circuits, transactional quotas, fixed-cardinality metrics, leases/retries | Edge rate limits, whole-volume monitoring, compute quotas, autoscaling, capacity planning |
+| Denial of service | Chunked oversized request, CBOR/artifact bomb, repeated retained releases, scrypt/device-code or callback-relay exhaustion, high-cardinality limiter keys, failing upstream, unbounded metric labels, site/domain exhaustion | Streaming byte/count/time bounds, CBOR depth/collection limits, per-project artifact count/byte ceilings, password queue, bounded durable rate-limit state, relay expiry and per-IP limits, circuits, transactional quotas, fixed-cardinality metrics, leases/retries | Edge rate limits, whole-volume monitoring, compute quotas, autoscaling, capacity planning |
 
 ## Explicit assumptions
 

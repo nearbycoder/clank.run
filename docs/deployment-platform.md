@@ -233,6 +233,9 @@ Device/public:
 
 - `POST /api/device/start`
 - `POST /api/device/token`
+- `POST /api/agent/oauth/relay/start` — create a short-lived hosted callback and private poll capability
+- `GET /api/agent/oauth/callback/:relay-id/:client-id` — receive one bounded OAuth response
+- `POST /api/agent/oauth/relay/poll` — consume the encrypted response once from the waiting CLI
 - `POST /__clank/auth/invited-register` — invitation-bound account creation without public signup
 - `GET /livez` — process liveness
 - `GET /healthz`, `GET /readyz`, or `GET /_clank/readyz` — storage-backed control-plane readiness;

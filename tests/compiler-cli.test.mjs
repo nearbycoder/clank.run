@@ -200,6 +200,100 @@ test("CLI help is command-aware, agent-readable, and never executes the target c
   }
 });
 
+test("Clank MCP login relays a hosted OAuth callback into Codex without copying a URL", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-mcp-relay-cli-"));
+  const relayId = "a".repeat(32);
+  const pollToken = "b".repeat(43);
+  const fakeCodex = join(root, "fake-codex");
+  await writeFile(fakeCodex, `#!/usr/bin/env node
+import { createServer } from "node:http";
+const configs = process.argv.flatMap((value, index, values) => value === "-c" ? [values[index + 1]] : []);
+const portValue = configs.find((value) => value?.startsWith("mcp_oauth_callback_port="));
+const callbackValue = configs.find((value) => value?.startsWith("mcp_oauth_callback_url="));
+if (!portValue || !callbackValue) process.exit(2);
+const port = Number(portValue.slice(portValue.indexOf("=") + 1));
+const callbackUrl = JSON.parse(callbackValue.slice(callbackValue.indexOf("=") + 1));
+const expectedPath = new URL(callbackUrl).pathname + "/fake-server-id";
+const timeout = setTimeout(() => process.exit(3), 10000);
+const server = createServer((request, response) => {
+  const url = new URL(request.url, "http://127.0.0.1");
+  if (url.pathname !== expectedPath || url.searchParams.get("code") !== "test-code" || url.searchParams.get("state") !== "test-state") {
+    response.writeHead(400).end();
+    return;
+  }
+  response.writeHead(200, { "content-type": "text/plain" });
+  response.end("Authentication complete.");
+  clearTimeout(timeout);
+  server.close(() => process.exit(0));
+});
+server.listen(port, "0.0.0.0", () => console.log("Authorize in the browser."));
+`, { mode: 0o700 });
+
+  let origin = "";
+  let pollRequests = 0;
+  const relayServer = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+    response.setHeader("content-type", "application/json");
+    response.setHeader("cache-control", "no-store");
+    if (request.url === "/api/agent/oauth/relay/start" && request.method === "POST") {
+      assert.match(body.clientName, /Codex/u);
+      response.writeHead(201).end(JSON.stringify({
+        ok: true,
+        relayId,
+        pollToken,
+        callbackUrl: `${origin}/api/agent/oauth/callback/${relayId}`,
+        expiresIn: 30,
+        interval: 2,
+      }));
+      return;
+    }
+    if (request.url === "/api/agent/oauth/relay/poll" && request.method === "POST") {
+      pollRequests++;
+      assert.deepEqual(body, { relayId, pollToken });
+      response.writeHead(200).end(JSON.stringify({
+        ok: true,
+        path: `/api/agent/oauth/callback/${relayId}/fake-server-id`,
+        query: "?code=test-code&state=test-state",
+      }));
+      return;
+    }
+    response.writeHead(404).end(JSON.stringify({ ok: false }));
+  });
+  await new Promise((resolve, reject) => {
+    relayServer.once("error", reject);
+    relayServer.listen(0, "127.0.0.1", resolve);
+  });
+  const address = relayServer.address();
+  assert(address && typeof address === "object");
+  origin = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const result = await runCliResult([
+      "mcp",
+      "login",
+      "example-app",
+      `--server=${origin}`,
+      `--codex=${fakeCodex}`,
+    ], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Starting secure hosted authorization/u);
+    assert.match(result.stdout, /Authorize in the browser/u);
+    assert.match(result.stdout, /Codex MCP authorization completed/u);
+    assert.doesNotMatch(result.stdout, new RegExp(pollToken));
+    assert.doesNotMatch(result.stderr, new RegExp(pollToken));
+    assert.equal(pollRequests, 1);
+  } finally {
+    await new Promise((resolve, reject) =>
+      relayServer.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("deployment CLI rejects malformed credential state without exposing it", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-config-"));
   const canary = "credential-canary-must-stay-private";

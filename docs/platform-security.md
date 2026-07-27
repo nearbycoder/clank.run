@@ -64,6 +64,15 @@ Reissuing for one workspace/email atomically revokes older active tokens, existi
 
 CLI flow follows [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628/): hashed high-entropy device codes, short expiry, rate limiting, visible client identity/code, same-origin CSRF approval, throttled polling, and single use.
 
+Remote Codex authorization uses a separate hosted callback relay because Codex currently completes
+MCP authentication through an authorization-code loopback callback. The public callback capability
+and private polling capability are generated independently and stored only as hashes. Callback
+parameters are allowlisted, duplicate-rejected, byte-bounded, encrypted with the platform master
+key, written once, read once, cleared on consumption, and expired after ten minutes. Start and
+callback requests are rate limited. The local CLI accepts only the expected relay path and forwards
+only to its random loopback port. OAuth `state` and PKCE remain validated by Codex; the platform
+never receives the verifier or resulting token.
+
 Bearer tokens are returned once and hashed at rest. Follow [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750): TLS, no tokens in URLs/logs, revocation, and rotation. Account tokens can create or administer organizations according to membership; project tokens are restricted to one project and explicit `read`, `deploy`, `rollback`, `secrets`, `tokens`, and `audit` permissions.
 
 ## Artifact intake

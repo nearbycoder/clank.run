@@ -3359,6 +3359,106 @@ test("bootstrap registration is claimed transactionally across control-plane run
   }
 });
 
+test("hosted OAuth relay completes remote Codex callbacks once without exposing the response", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-oauth-relay-"));
+  const platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4534,
+    appPortEnd: 4535,
+    signup: true,
+    backups: { intervalMs: false },
+  });
+  try {
+    const started = await payload(platform, jsonRequest("/api/agent/oauth/relay/start", {
+      method: "POST",
+      body: { clientName: "remote Codex test" },
+    }), 201);
+    assert.match(started.relayId, /^[A-Za-z0-9_-]{32}$/u);
+    assert.match(started.pollToken, /^[A-Za-z0-9_-]{43}$/u);
+    assert.equal(
+      started.callbackUrl,
+      `http://127.0.0.1:4200/api/agent/oauth/callback/${started.relayId}`,
+    );
+    assert.equal(started.interval, 2);
+
+    const pending = await platform.handle(jsonRequest("/api/agent/oauth/relay/poll", {
+      method: "POST",
+      body: { relayId: started.relayId, pollToken: started.pollToken },
+    }));
+    assert.equal(pending.status, 428);
+    assert.equal((await pending.json()).error.code, "AUTHORIZATION_PENDING");
+
+    const code = "authorization-code-must-stay-encrypted";
+    const state = "opaque-client-state";
+    const callbackPath = `/api/agent/oauth/callback/${started.relayId}/codex-server-id`;
+    const callbackUrl = `http://127.0.0.1:4200${callbackPath}?${new URLSearchParams({ code, state })}`;
+    const completed = await platform.handle(new Request(callbackUrl));
+    assert.equal(completed.status, 200);
+    assert.match(completed.headers.get("content-type"), /text\/html/u);
+    assert.equal(completed.headers.get("cache-control"), "no-store");
+    assert.match(completed.headers.get("content-security-policy"), /frame-ancestors 'none'/u);
+    const completedHtml = await completed.text();
+    assert.match(completedHtml, /Authorization received/u);
+    assert.doesNotMatch(completedHtml, new RegExp(code));
+    assert.doesNotMatch(completedHtml, new RegExp(state));
+
+    const replay = await platform.handle(new Request(
+      `http://127.0.0.1:4200${callbackPath}?${new URLSearchParams({
+        code: "replacement-code",
+        state,
+      })}`,
+    ));
+    assert.equal(replay.status, 200);
+    assert.match(await replay.text(), /Authorization received/u);
+
+    const database = new DatabaseSync(join(root, "control.sqlite"), { readOnly: true });
+    const stored = database.prepare(
+      "SELECT relay_hash, poll_hash, response_encrypted FROM clank_platform_oauth_relays",
+    ).get();
+    database.close();
+    assert.notEqual(stored.relay_hash, started.relayId);
+    assert.notEqual(stored.poll_hash, started.pollToken);
+    assert.doesNotMatch(stored.response_encrypted, new RegExp(code));
+    assert.doesNotMatch(stored.response_encrypted, new RegExp(state));
+
+    const wrongSecret = await platform.handle(jsonRequest("/api/agent/oauth/relay/poll", {
+      method: "POST",
+      body: { relayId: started.relayId, pollToken: "x".repeat(43) },
+    }));
+    assert.equal(wrongSecret.status, 400);
+    assert.equal((await wrongSecret.json()).error.code, "EXPIRED_TOKEN");
+
+    const relayed = await payload(platform, jsonRequest("/api/agent/oauth/relay/poll", {
+      method: "POST",
+      body: { relayId: started.relayId, pollToken: started.pollToken },
+    }));
+    assert.equal(relayed.path, callbackPath);
+    assert.equal(new URLSearchParams(relayed.query).get("code"), code);
+    assert.equal(new URLSearchParams(relayed.query).get("state"), state);
+
+    const consumed = await platform.handle(jsonRequest("/api/agent/oauth/relay/poll", {
+      method: "POST",
+      body: { relayId: started.relayId, pollToken: started.pollToken },
+    }));
+    assert.equal(consumed.status, 400);
+    assert.equal((await consumed.json()).error.code, "EXPIRED_TOKEN");
+
+    const second = await payload(platform, jsonRequest("/api/agent/oauth/relay/start", {
+      method: "POST",
+      body: { clientName: "invalid callback test" },
+    }), 201);
+    const invalid = await platform.handle(new Request(
+      `${second.callbackUrl}/codex-server-id?code=missing-state`,
+    ));
+    assert.equal(invalid.status, 400);
+    assert.match(await invalid.text(), /Invalid authorization response/u);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("platform auth and device rate limits survive control-plane changes without storing raw identities", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-rate-limits-"));
   const options = {
