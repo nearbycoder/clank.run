@@ -1228,6 +1228,8 @@ export interface BackendRuntime<
   readonly database: SQLiteDatabase<Schema>;
   readonly auth: Auth extends AuthDefinition<infer Profile> ? AuthRuntime<Profile> : undefined;
   readonly version: number;
+  /** Deterministic revision of the MCP-visible backend action contract. */
+  readonly contractRevision: string | null;
   query<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): { value: OutputOf<Reference>; version: number };
   query(path: string, input: unknown): { value: unknown; version: number };
   mutation<Reference extends FunctionReference<"mutation", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): { value: OutputOf<Reference>; version: number };
@@ -1583,17 +1585,20 @@ export async function openBackend<
           : {}),
       })
     : undefined;
+  const mcpManifest = mcp?.manifest();
 
   const agentDiscovery = (request: Request): Response => {
     const origin = new URL(request.url).origin;
     return Response.json({
       protocol: "clank-agent/2",
+      contractRevision: mcp!.revision,
       name: agentName,
       title: agentTitle,
       description: agentDescription,
       mcp: {
         transport: "streamable-http",
         protocolVersion: MCP_PROTOCOL_VERSION,
+        serverVersion: mcpManifest!.server.version,
         endpoint: `${origin}${mcpPath}`,
         authentication: oauth ? "oauth2" : "none",
       },
@@ -1603,7 +1608,9 @@ export async function openBackend<
     }, {
       headers: {
         "access-control-allow-origin": "*",
-        "cache-control": "public, max-age=300",
+        "cache-control": "public, max-age=0, must-revalidate",
+        "etag": `"${mcp!.revision}"`,
+        "x-clank-contract-revision": mcp!.revision,
         "x-content-type-options": "nosniff",
       },
     });
@@ -1615,10 +1622,11 @@ export async function openBackend<
       "$schema": "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json",
       version: "1.0",
       protocolVersion: MCP_PROTOCOL_VERSION,
+      contractRevision: mcp!.revision,
       serverInfo: {
         name: agentName,
         title: agentTitle,
-        version: agentOptions?.version ?? "1.0.0",
+        version: mcpManifest!.server.version,
       },
       description: agentDescription,
       documentationUrl: `${origin}/.well-known/clank`,
@@ -1627,7 +1635,7 @@ export async function openBackend<
         endpoint: mcpPath,
       },
       capabilities: {
-        tools: { listChanged: false },
+        tools: { listChanged: mcp!.supportsToolListChanged },
         resources: { subscribe: false, listChanged: false },
       },
       authentication: {
@@ -1641,7 +1649,9 @@ export async function openBackend<
     }, {
       headers: {
         "access-control-allow-origin": "*",
-        "cache-control": "public, max-age=300",
+        "cache-control": "public, max-age=0, must-revalidate",
+        "etag": `"${mcp!.revision}"`,
+        "x-clank-contract-revision": mcp!.revision,
         "x-content-type-options": "nosniff",
       },
     });
@@ -1652,6 +1662,7 @@ export async function openBackend<
     database,
     auth: authRuntime as BackendRuntime<Schema, Functions, Auth>["auth"],
     get version() { return database.version; },
+    contractRevision: mcp?.revision ?? null,
     query(pathOrReference: string | FunctionReference<"query", any, any>, input: unknown = {}) {
       return callerFor(anonymous).query(pathOrReference as any, input);
     },
@@ -1699,6 +1710,7 @@ export async function openBackend<
         if (request.method === "GET" && operation === "manifest") {
           return Response.json({
             protocol: "clank-live/1",
+            contractRevision: mcp?.revision ?? null,
             auth: Boolean(authRuntime),
             functions: [...registry].map(([name, fn]) => ({
               name,
@@ -1709,6 +1721,11 @@ export async function openBackend<
               args: fn.args.toJSONSchema(),
               ...(fn.returns ? { returns: fn.returns.toJSONSchema() } : {}),
             })),
+          }, {
+            headers: {
+              "cache-control": "no-store",
+              ...(mcp ? { "x-clank-contract-revision": mcp.revision } : {}),
+            },
           });
         }
         const auth = authRuntime ? await authRuntime.resolve(request) : null;
@@ -1790,6 +1807,7 @@ export async function openBackend<
       stopChanges();
       subscribers.clear();
       cache.clear();
+      mcp?.close();
       authRuntime?.close();
       database.close();
     },

@@ -29,6 +29,12 @@ export interface McpServerOptions<Context = unknown> {
     description?: string;
     instructions?: string;
     tools: readonly McpTool<Context>[];
+    sessions?: false | {
+        idleTimeoutMs?: number;
+        heartbeatMs?: number;
+        maxSessions?: number;
+        maxStreamsPerSession?: number;
+    };
     allowedOrigins?: readonly string[];
     requireOrigin?: boolean;
     maxRequestBytes?: number;
@@ -39,13 +45,17 @@ export interface McpServerOptions<Context = unknown> {
 }
 export interface McpServer<Context = unknown> {
     readonly tools: ReadonlyMap<string, McpTool<Context>>;
+    readonly revision: string;
+    readonly supportsToolListChanged: boolean;
     manifest(scopes?: ReadonlySet<string>): {
         protocol: "mcp";
         protocolVersion: typeof MCP_PROTOCOL_VERSION;
+        revision: string;
         server: {
             name: string;
             title?: string;
             version: string;
+            baseVersion: string;
             description?: string;
         };
         tools: Array<{
@@ -58,7 +68,9 @@ export interface McpServer<Context = unknown> {
             requiredScope: McpScope;
         }>;
     };
+    notifyToolsChanged(): void;
     handle(request: Request): Promise<Response>;
+    close(): void;
 }
 export declare class McpToolError extends Error {
     readonly code: string;

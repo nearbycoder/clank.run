@@ -63,7 +63,7 @@ The generated `package.json` has one application dependency:
 ```json
 {
   "dependencies": {
-    "@clank.run/framework": "^0.9.2"
+    "@clank.run/framework": "^0.9.3"
   }
 }
 ```

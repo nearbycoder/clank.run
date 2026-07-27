@@ -492,6 +492,7 @@ async function verifyAgentProtocol(origin, session) {
   assert.equal(tokenResponse.ok, true, JSON.stringify(tokens));
 
   let id = 0;
+  let mcpSession;
   const mcp = async (method, params = {}) => {
     const response = await fetch(resource, {
       method: "POST",
@@ -499,14 +500,23 @@ async function verifyAgentProtocol(origin, session) {
         authorization: `Bearer ${tokens.access_token}`,
         "content-type": "application/json",
         "mcp-protocol-version": "2025-11-25",
+        ...(mcpSession ? { "mcp-session-id": mcpSession } : {}),
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
     });
+    if (method === "initialize") mcpSession = response.headers.get("mcp-session-id");
     const payload = await response.json();
     assert.equal(response.ok, true, JSON.stringify(payload));
     assert.equal(payload.error, undefined, JSON.stringify(payload));
     return payload.result;
   };
+  const initialized = await mcp("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: {},
+    clientInfo: { name: "clank-conformance", version: "1.0.0" },
+  });
+  assert.ok(initialized.serverInfo.version.includes("+clank."));
+  assert.ok(mcpSession);
   const tools = await mcp("tools/list");
   assert.ok(tools.tools.some((tool) => tool.name === "tasks.list"));
   assert.ok(tools.tools.some((tool) =>

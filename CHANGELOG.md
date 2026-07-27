@@ -2,7 +2,26 @@
 
 Clank follows semantic versioning. Entries describe user-visible framework, CLI, protocol, storage, security, and deployment changes.
 
-## Unreleased
+## 0.9.3 - 2026-07-27
+
+### Added
+
+- MCP-visible backend contracts now receive deterministic revisions derived from server identity,
+  tool names, schemas, descriptions, scopes, and annotations. Revisions are exposed through
+  runtime manifests, discovery documents, Server Cards, response headers, list-result metadata,
+  and deployment-sensitive `serverInfo.version` values.
+- Bounded MCP Streamable HTTP sessions and authenticated SSE notification streams now support
+  `notifications/tools/list_changed`. A new application process rejects a prior release's session
+  so compliant clients automatically reinitialize and rediscover actions after rolling deploys.
+
+### Changed
+
+- `tools/list`, `resources/list`, and `resources/read` now publish `ttlMs: 0` and private cache
+  scope, while public discovery requires revalidation. Unknown tool errors include a structured
+  refresh hint instead of leaving clients with an unexplained stale call.
+- Generated agent guides now require every UI operation that reads or persists server state to use
+  the same typed backend query or mutation exposed through MCP, with manifest/tool parity included
+  in the definition of done.
 
 ## 0.9.2 - 2026-07-27
 

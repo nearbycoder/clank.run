@@ -152,7 +152,11 @@ Every backend function is also exposed as a typed MCP tool at `/__clank/mcp`. Au
 backends automatically add OAuth discovery, PKCE consent, resource-bound bearer tokens, and
 read/write scopes; public backends expose the same already-public functions without OAuth. Add
 `description` and `agent` metadata to each query or mutation so agents receive precise behavior
-and side-effect guidance. See [Agent protocol](agent-protocol.md).
+and side-effect guidance. Browser interactions that persist or read server state must call these
+shared function references rather than creating a separate UI-only action path. Clank fingerprints
+the complete agent-visible contract, exposes the revision in discovery and manifests, and
+invalidates MCP sessions after deployment so connected clients rediscover changed tools. See
+[Agent protocol](agent-protocol.md).
 
 The live transport uses standard SSE framing, sends the persisted revision as the event ID, disables buffering, bounds payloads, and emits a configurable heartbeat. Slow consumers are disconnected and EventSource reconnects with a complete current snapshot.
 
