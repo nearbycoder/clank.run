@@ -18,6 +18,8 @@ import {
 import {
   applyMigrations,
   backupSQLite,
+  loadMigrations,
+  planMigrations,
   restoreSQLiteBackup,
 } from "./migrations.ts";
 import { openBackupManager, type BackupManifest } from "./recovery.ts";
@@ -95,6 +97,8 @@ export interface PlatformBackupOptions {
 export interface ClankPlatformOptions {
   dataDirectory: string;
   publicUrl: string;
+  /** Recover active application processes before returning, or concurrently after startup. Defaults to "blocking". */
+  startupRecovery?: "blocking" | "background";
   /** Exact control-plane account emails granted operator-level administration. */
   platformAdminEmails?: readonly string[];
   appHostname?: string;
@@ -425,6 +429,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const orchestrator = openDeploymentOrchestrator(storage.database);
   const leaseOwner = `control-${(globalThis as any).process?.pid ?? 0}-${crypto.randomUUID()}`;
   const active = new Map<string, ActiveProcess>();
+  const starting = new Set<ActiveProcess>();
+  const reservedRolloutPorts = new Set<number>();
   const locks = new Map<string, Promise<unknown>>();
   const restartState = new Map<string, {
     count: number;
@@ -523,7 +529,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const ingressEnabled = options.ingress?.enabled === true || Boolean(baseDomain);
   const ingress = ingressEnabled
     ? createManagedIngress({
-        routes: () => ingressRoutes(storage.internal, baseDomain),
+        routes: () => ingressRoutes(storage.internal, baseDomain, active),
         timeoutMs: options.ingress?.timeoutMs,
         maxBodyBytes: options.ingress?.maxBodyBytes,
         onRequest: recordIngressMetric,
@@ -679,12 +685,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     onError: options.onError,
   });
 
+  const stopRunning = async (running: ActiveProcess): Promise<void> => {
+    running.expectedStop = true;
+    if (active.get(running.projectId) === running) active.delete(running.projectId);
+    await stopChild(running.child);
+  };
+
   const stopProject = async (projectId: string): Promise<void> => {
     const running = active.get(projectId);
-    if (!running) return;
-    running.expectedStop = true;
-    active.delete(projectId);
-    await stopChild(running.child);
+    if (running) await stopRunning(running);
   };
 
   const cancelRestart = (projectId: string) => {
@@ -706,20 +715,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       )`).run(projectId, projectId);
   };
 
-  const startRelease = async (
+  const launchRelease = async (
     project: ProjectRow,
     release: ReleaseRow,
     secrets: Record<string, string>,
+    port: number,
   ): Promise<ActiveProcess> => {
-    const current = active.get(project.id);
-    if (current) await stopProject(project.id);
     const dataRoot = await projectDataDirectory(paths.projects, project.id);
     const databaseHostPath = await safeProjectDataPath(dataRoot, release.config.database.path);
     const environment = {
       ...release.config.env,
       ...secrets,
       NODE_ENV: "production",
-      PORT: String(project.port),
+      PORT: String(port),
       CLANK_DATABASE_PATH: databaseHostPath,
       CLANK_DATABASE: databaseHostPath,
       PROACT_DATABASE_PATH: databaseHostPath,
@@ -735,38 +743,92 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       CLANK_MANAGED_INGRESS: ingressEnabled ? "1" : "0",
       TRUST_PROXY: ingressEnabled ? "1" : "0",
     };
-    await assertPortAvailable(project.port);
+    await assertPortAvailable(port);
     const child = await spawnRelease(
       options.runner ?? { kind: "process" },
       release,
       dataRoot,
-      project.port,
+      port,
       environment,
     );
     const running: ActiveProcess = {
       projectId: project.id,
       releaseId: release.id,
-      port: project.port,
+      port,
       child,
       expectedStop: false,
     };
-    active.set(project.id, running);
+    starting.add(running);
     captureOutput(child.stdout, (line) => recordLog(project.id, release.id, "stdout", redact(line, secrets)));
     captureOutput(child.stderr, (line) => recordLog(project.id, release.id, "stderr", redact(line, secrets)));
     child.once("error", (error) => {
       recordLog(project.id, release.id, "platform", `Process error: ${safeError(error)}`);
     });
     child.once("exit", (code, signal) => {
-      if (active.get(project.id) === running) active.delete(project.id);
+      const wasActive = active.get(project.id) === running;
+      if (wasActive) active.delete(project.id);
       recordLog(project.id, release.id, "platform", `Process exited (${String(code ?? signal ?? "unknown")}).`);
-      if (!running.expectedStop && !closed) {
+      if (wasActive && !running.expectedStop && !closed) {
         storage.internal.prepare("UPDATE clank_platform_releases SET status = 'crashed', failure = ? WHERE id = ?")
           .run(`Process exited (${String(code ?? signal ?? "unknown")}).`, release.id);
         scheduleRestart(project.id, release.id);
       }
     });
-    await waitForHealth(project.port, release.config.health.path, release.config.health.timeoutMs, child);
+    try {
+      await waitForHealth(port, release.config.health.path, release.config.health.timeoutMs, child);
+      if (child.exitCode !== null && child.exitCode !== undefined) {
+        throw new Error("Application exited immediately after its health check passed.");
+      }
+      if (closed) throw new Error("Platform closed while the application was starting.");
+      return running;
+    } catch (error) {
+      await stopRunning(running);
+      throw error;
+    } finally {
+      starting.delete(running);
+    }
+  };
+
+  const startRelease = async (
+    project: ProjectRow,
+    release: ReleaseRow,
+    secrets: Record<string, string>,
+  ): Promise<ActiveProcess> => {
+    const current = active.get(project.id);
+    if (current) await stopRunning(current);
+    const running = await launchRelease(project, release, secrets, project.port);
+    active.set(project.id, running);
     return running;
+  };
+
+  const reserveRolloutPort = async (project: ProjectRow): Promise<number> => {
+    const start = options.appPortStart ?? 4300;
+    const end = options.appPortEnd ?? 4999;
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1024 || end > 65535 || start > end) {
+      throw new Error("Invalid application port range.");
+    }
+    const unavailable = new Set<number>([
+      ...storage.internal.prepare("SELECT id, port FROM clank_platform_projects").all()
+        .filter((row) => String(row.id) !== project.id)
+        .map((row) => Number(row.port)),
+      ...[...active.values()].map((running) => running.port),
+      ...reservedRolloutPorts,
+    ]);
+    for (let port = start; port <= end; port++) {
+      if (unavailable.has(port)) continue;
+      reservedRolloutPorts.add(port);
+      try {
+        await assertPortAvailable(port);
+        return port;
+      } catch {
+        reservedRolloutPorts.delete(port);
+      }
+    }
+    throw new PlatformError(
+      503,
+      "ROLLOUT_PORT_CAPACITY",
+      "No spare application port is available for a zero-downtime rollout.",
+    );
   };
 
   const scheduleRestart = (projectId: string, releaseId: string): void => {
@@ -788,7 +850,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const delay = Math.min(10_000, 250 * 2 ** (state.count - 1));
     state.timer = setTimeout(() => {
       state!.timer = undefined;
-      void (async () => {
+      void withProjectLock(projectId, async () => {
         if (closed || state!.cancelled) return;
         const project = projectById(storage.internal, projectId);
         if (!project || project.activeReleaseId !== releaseId) return;
@@ -807,7 +869,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           recordLog(project.id, release.id, "platform", `Automatic restart failed: ${safeError(error)}`);
           if (!state!.cancelled) scheduleRestart(project.id, release.id);
         }
-      })();
+      }).catch((error) => {
+        if (state!.cancelled || closed) return;
+        options.onError?.(error);
+        recordLog(projectId, releaseId, "platform", `Automatic restart coordination failed: ${safeError(error)}`);
+        scheduleRestart(projectId, releaseId);
+      });
     }, delay);
   };
 
@@ -826,7 +893,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     ).get(project.id, idempotencyKey);
     if (existing) {
       const release = releaseById(storage.internal, String(existing.id));
-      return releasePayload(project, release!, appUrlTemplate);
+      return releasePayload(project, release!, appUrlTemplate, active.get(project.id)?.port);
     }
     let bundle: DeploymentBundle;
     try {
@@ -898,13 +965,24 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       );
     let backupPath: string | null = null;
     let databaseExisted = false;
+    let databaseChanged = false;
     let preMigrationCapacityRejection: PlatformError | null = null;
+    const previousRuntime = active.get(project.id);
+    let previousWasStopped = false;
+    let candidateRuntime: ActiveProcess | undefined;
+    let rolloutPort: number | undefined;
+    let activationCommitted = false;
+    let activatedResult: Record<string, unknown> | undefined;
     try {
       await extractDeploymentBundle(bundle, releaseDirectory);
       const dataRoot = await projectDataDirectory(paths.projects, project.id);
-      await stopProject(project.id);
       const databasePath = await safeProjectDataPath(dataRoot, bundle.config.database.path);
       databaseExisted = await fileExists(databasePath);
+      const migrationDirectory = await safeReleasePath(releaseDirectory, bundle.config.database.migrations);
+      const migrations = await loadMigrations(migrationDirectory);
+      const migrationPlan = databaseExisted
+        ? await planMigrations(databasePath, migrations)
+        : { applied: [], pending: migrations };
       if (databaseExisted) {
         backupPath = await releaseBackupPath(paths.projects, project.id, releaseId);
         await backupSQLite(databasePath, backupPath);
@@ -929,7 +1007,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw error;
         }
       }
-      const migrationDirectory = await safeReleasePath(releaseDirectory, bundle.config.database.migrations);
+      const requiresExclusiveDatabase = !databaseExisted || migrationPlan.pending.length > 0;
+      if (previousRuntime && !requiresExclusiveDatabase) rolloutPort = await reserveRolloutPort(project);
+      if (requiresExclusiveDatabase && previousRuntime) {
+        await stopRunning(previousRuntime);
+        previousWasStopped = true;
+        recordLog(
+          project.id,
+          releaseId,
+          "platform",
+          `Stopped the prior release for ${migrationPlan.pending.length} pending database migration(s).`,
+        );
+      }
+      databaseChanged = requiresExclusiveDatabase;
       await applyMigrations({
         path: databasePath,
         directory: migrationDirectory,
@@ -938,7 +1028,22 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const refreshedProject = { ...project, databasePath: bundle.config.database.path };
       const release = releaseById(storage.internal, releaseId)!;
       const secrets = decryptProjectSecrets(storage.internal, project.id, masterKey);
-      await startRelease(refreshedProject, release, secrets);
+      const rolling = Boolean(previousRuntime && !previousWasStopped);
+      rolloutPort ??= project.port;
+      try {
+        candidateRuntime = await launchRelease(refreshedProject, release, secrets, rolloutPort);
+      } finally {
+        if (rolling) reservedRolloutPorts.delete(rolloutPort);
+      }
+      active.set(project.id, candidateRuntime);
+      if (rolling) {
+        recordLog(
+          project.id,
+          releaseId,
+          "platform",
+          `Candidate passed health checks on port ${rolloutPort}; switched managed ingress.`,
+        );
+      }
       const activatedAt = Date.now();
       storage.internal.transaction((changes) => {
         storage.internal.prepare(
@@ -954,23 +1059,44 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         ).run(releaseId, bundle.config.database.path, activatedAt, project.id);
         changes.record("__platform", project.id);
       });
+      activationCommitted = true;
+      activatedResult = releasePayload(
+        { ...refreshedProject, activeReleaseId: releaseId, updatedAt: activatedAt },
+        { ...release, status: "active", activatedAt, backupPath },
+        appUrlTemplate,
+        candidateRuntime.port,
+      );
+      if (rolling && previousRuntime) {
+        await stopRunning(previousRuntime);
+        recordLog(project.id, releaseId, "platform", "Drained the prior release after the ingress switch.");
+      }
       audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.activate", {
         releaseId,
         digest,
         previousReleaseId,
       });
       backupScheduler.registerProject(project.id);
-      return releasePayload(
-        { ...refreshedProject, activeReleaseId: releaseId, updatedAt: activatedAt },
-        { ...release, status: "active", activatedAt, backupPath },
-        appUrlTemplate,
-      );
+      return activatedResult;
     } catch (error) {
       options.onError?.(error);
-      await stopProject(project.id);
+      if (activationCommitted && activatedResult) return activatedResult;
+      if (rolloutPort !== undefined) reservedRolloutPorts.delete(rolloutPort);
+      if (candidateRuntime) {
+        try {
+          await stopRunning(candidateRuntime);
+        } catch (stopError) {
+          options.onError?.(stopError);
+        }
+      }
+      if (
+        previousRuntime
+        && !previousWasStopped
+        && previousRuntime.child.exitCode === null
+      ) {
+        active.set(project.id, previousRuntime);
+      }
       if (error === preMigrationCapacityRejection) {
         let cleanupSucceeded = true;
-        let restartSucceeded = true;
         try {
           await deleteReleaseStorage(paths.projects, project.id, releaseId);
           storage.internal.prepare(
@@ -983,37 +1109,28 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             "UPDATE clank_platform_releases SET status = 'failed', failure = ? WHERE id = ?",
           ).run("Release storage rejection cleanup failed.", releaseId);
         }
-        if (previousReleaseId) {
-          const previous = releaseById(storage.internal, previousReleaseId);
-          if (previous) {
-            try {
-              await startRelease(project, previous, decryptProjectSecrets(storage.internal, project.id, masterKey));
-            } catch (restartError) {
-              restartSucceeded = false;
-              options.onError?.(restartError);
-            }
-          }
-        }
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.reject", {
           releaseId,
           digest,
           code: preMigrationCapacityRejection.code,
           cleanupSucceeded,
-          restartSucceeded,
+          restartSucceeded: true,
         });
-        if (cleanupSucceeded && restartSucceeded) throw preMigrationCapacityRejection;
+        if (cleanupSucceeded) throw preMigrationCapacityRejection;
         throw new PlatformError(
           422,
           "DEPLOYMENT_RECOVERY_FAILED",
-          "The deployment was rejected, but automatic release cleanup or restart failed.",
+          "The deployment was rejected, but automatic release cleanup failed.",
         );
       }
       try {
-        const dataRoot = await projectDataDirectory(paths.projects, project.id);
-        const databasePath = await safeProjectDataPath(dataRoot, bundle.config.database.path);
-        if (backupPath) await restoreSQLiteBackup(backupPath, databasePath);
-        else if (!databaseExisted) await removeDatabaseFiles(databasePath);
-        if (previousReleaseId) {
+        if (databaseChanged) {
+          const dataRoot = await projectDataDirectory(paths.projects, project.id);
+          const databasePath = await safeProjectDataPath(dataRoot, bundle.config.database.path);
+          if (backupPath) await restoreSQLiteBackup(backupPath, databasePath);
+          else if (!databaseExisted) await removeDatabaseFiles(databasePath);
+        }
+        if (previousWasStopped && previousReleaseId) {
           const previous = releaseById(storage.internal, previousReleaseId);
           if (previous) {
             await startRelease(project, previous, decryptProjectSecrets(storage.internal, project.id, masterKey));
@@ -2161,8 +2278,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ok: true,
           project: {
             ...projectPayload(project),
-            url: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
-            directUrl: `http://127.0.0.1:${project.port}`,
+            url: appUrlTemplate.replaceAll("{slug}", project.slug)
+              .replaceAll("{port}", String(active.get(project.id)?.port ?? project.port)),
+            directUrl: `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`,
             runtimeStatus: active.has(project.id) ? "online" : release ? "degraded" : "not_deployed",
           },
           activeRelease: release ? publicRelease(release) : null,
@@ -2612,17 +2730,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const projects = storage.internal.prepare(
     "SELECT * FROM clank_platform_projects WHERE active_release_id IS NOT NULL",
   ).all().map(projectRow);
-  for (const project of projects) {
+  const startupRecovery = Promise.all(projects.map(async (project) => {
     const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
-    if (!release) continue;
+    if (!release) return;
     try {
       await startRelease(project, release, decryptProjectSecrets(storage.internal, project.id, masterKey));
     } catch (error) {
+      if (closed) return;
       options.onError?.(error);
       storage.internal.prepare("UPDATE clank_platform_releases SET status = 'crashed', failure = ? WHERE id = ?")
         .run(`Startup recovery failed: ${safeError(error)}`, release.id);
     }
-  }
+  }));
+  if (options.startupRecovery !== "background") await startupRecovery;
+  else void startupRecovery.catch((error) => options.onError?.(error));
   scheduleDomainReconciliation();
   backupScheduler.start();
 
@@ -2642,6 +2763,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (state.timer) clearTimeout(state.timer);
       }
       restartState.clear();
+      await Promise.all([...starting].map(stopRunning));
+      await startupRecovery.catch(() => undefined);
       await Promise.all([...active.keys()].map(stopProject));
       storage.auth.close();
       orchestrator.close();
@@ -3341,7 +3464,11 @@ function domainChallengeFromRow(row: Record<string, unknown>): DomainChallenge {
   };
 }
 
-function ingressRoutes(internal: SQLiteInternal, baseDomain?: string) {
+function ingressRoutes(
+  internal: SQLiteInternal,
+  baseDomain: string | undefined,
+  active: ReadonlyMap<string, ActiveProcess>,
+) {
   const projects = internal.prepare(`SELECT id, slug, port FROM clank_platform_projects
     WHERE active_release_id IS NOT NULL ORDER BY id`).all();
   return projects.map((project) => {
@@ -3353,8 +3480,8 @@ function ingressRoutes(internal: SQLiteInternal, baseDomain?: string) {
       id: `route_${String(project.id)}`,
       projectId: String(project.id),
       hosts,
-      upstream: `http://127.0.0.1:${Number(project.port)}`,
-      active: hosts.length > 0,
+      upstream: `http://127.0.0.1:${active.get(String(project.id))?.port ?? Number(project.port)}`,
+      active: hosts.length > 0 && active.has(String(project.id)),
     };
   });
 }
@@ -4222,8 +4349,9 @@ function dashboardPayload(
     const metrics = metricSeries(internal, project.id, "24h").summary as Record<string, number>;
     return {
       ...projectPayload(project),
-      url: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
-      directUrl: `http://127.0.0.1:${project.port}`,
+      url: appUrlTemplate.replaceAll("{slug}", project.slug)
+        .replaceAll("{port}", String(active.get(project.id)?.port ?? project.port)),
+      directUrl: `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`,
       runtimeStatus: active.has(project.id) ? "online" : release ? "degraded" : "not_deployed",
       activeRelease: release ? publicRelease(release) : null,
       domains: { count: Number(domainUsage?.count ?? 0), ready: Number(domainUsage?.ready ?? 0), limit: limits.domainsPerProject },
@@ -4313,12 +4441,13 @@ function releasePayload(
   project: ProjectRow,
   release: ReleaseRow,
   appUrlTemplate: string,
+  directPort = project.port,
 ): Record<string, unknown> {
   return {
     ...publicRelease(release),
     project: projectPayload(project),
-    url: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
-    directUrl: `http://127.0.0.1:${project.port}`,
+    url: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(directPort)),
+    directUrl: `http://127.0.0.1:${directPort}`,
   };
 }
 

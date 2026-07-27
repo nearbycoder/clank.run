@@ -53,6 +53,7 @@ const ingress = ingressEnabled ? {
 const platform = await openPlatform({
   dataDirectory,
   publicUrl,
+  startupRecovery: "background",
   platformAdminEmails: list(process.env.CLANK_PLATFORM_ADMIN_EMAILS),
   runner,
   signup,
@@ -111,19 +112,12 @@ let closing;
 const close = async () => {
   if (closing) return closing;
   closing = (async () => {
-    let serverError;
-    try {
-      await server.close();
-    } catch (error) {
-      serverError = error;
-    }
-    try {
-      await platform.close();
-    } catch (error) {
-      if (serverError) throw new AggregateError([serverError, error], "HTTP and platform shutdown both failed.");
-      throw error;
-    }
-    if (serverError) throw serverError;
+    const results = await Promise.allSettled([server.close(), platform.close()]);
+    const failures = results
+      .filter((result) => result.status === "rejected")
+      .map((result) => result.reason);
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "HTTP and platform shutdown both failed.");
   })();
   return closing;
 };
@@ -133,9 +127,9 @@ process.once("SIGTERM", () => shutdown("SIGTERM"));
 function shutdown(signal) {
   console.log(`Received ${signal}; shutting down.`);
   const deadline = setTimeout(() => {
-    console.error("Platform shutdown exceeded 30 seconds.");
+    console.error("Platform shutdown exceeded 25 seconds.");
     process.exit(1);
-  }, 30_000);
+  }, 25_000);
   void close().then(
     () => process.exit(0),
     (error) => {

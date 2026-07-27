@@ -48,7 +48,7 @@ export function createManagedIngress(options: {
   const retries = integerRange(options.retries ?? 1, "retries", 0, 3);
   const circuitFailures = integerRange(options.circuitFailures ?? 5, "circuitFailures", 1, 100);
   const circuitResetMs = integerRange(options.circuitResetMs ?? 30_000, "circuitResetMs", 100, 60 * 60_000);
-  const circuits = new Map<string, { failures: number; openedAt: number }>();
+  const circuits = new Map<string, { failures: number; openedAt: number; upstream: string }>();
   const routeSource = typeof options.routes === "function"
     ? options.routes
     : () => options.routes.routes();
@@ -104,7 +104,11 @@ export function createManagedIngress(options: {
         }
         return response;
       };
-      const circuit = circuits.get(route.id);
+      let circuit = circuits.get(route.id);
+      if (circuit && circuit.upstream !== route.upstream) {
+        circuits.delete(route.id);
+        circuit = undefined;
+      }
       if (circuit && circuit.failures >= circuitFailures && Date.now() - circuit.openedAt < circuitResetMs) {
         return observed(ingressProblem(503, "UPSTREAM_UNAVAILABLE", "Application is temporarily unavailable.", {
           "retry-after": String(Math.max(1, Math.ceil((circuitResetMs - (Date.now() - circuit.openedAt)) / 1_000))),
@@ -146,7 +150,7 @@ export function createManagedIngress(options: {
             redirect: "manual",
           });
           if (response.status >= 500) {
-            const current = circuits.get(route.id) ?? { failures: 0, openedAt: 0 };
+            const current = circuits.get(route.id) ?? { failures: 0, openedAt: 0, upstream: route.upstream };
             current.failures++;
             if (current.failures >= circuitFailures) current.openedAt = Date.now();
             circuits.set(route.id, current);
@@ -166,7 +170,7 @@ export function createManagedIngress(options: {
         } catch (error) {
           lastError = error;
           if (request.signal.aborted) break;
-          const current = circuits.get(route.id) ?? { failures: 0, openedAt: 0 };
+          const current = circuits.get(route.id) ?? { failures: 0, openedAt: 0, upstream: route.upstream };
           current.failures++;
           if (current.failures >= circuitFailures) current.openedAt = Date.now();
           circuits.set(route.id, current);
