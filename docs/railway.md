@@ -73,7 +73,8 @@ each supervised process, ranks hosted applications by proportional set size (PSS
 fallback), and reports the control-plane V8 heap, process peaks, swap, page cache, kernel memory,
 and memory that cannot be attributed to a tracked process. PSS apportions shared pages instead of
 counting the same page once per process. The panel is a current snapshot; Railway's metrics retain
-the historical container-level series.
+the historical container-level series. Process and cgroup files are sampled close together but not
+atomically, so their totals can differ slightly while memory is changing.
 
 ## Domains
 

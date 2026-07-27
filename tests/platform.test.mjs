@@ -705,6 +705,8 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.match(operatorHtml, /\/api\/admin\/analytics/);
     assert.match(operatorHtml, /\/api\/admin\/diagnostics\/memory/);
     assert.match(operatorHtml, /id="admin-memory-projects"/);
+    assert.match(operatorHtml, />Unattributed</);
+    assert.match(operatorHtml, /reads are close but not atomic/);
     assert.match(operatorHtml, /id="impersonation-dialog"/);
 
     await platform.close();
