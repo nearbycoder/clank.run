@@ -26,6 +26,25 @@ long-running tasks through Agent Cards. A Clank application may add A2A later wh
 itself behaves as an autonomous agent, but A2A is not a replacement for its typed query and
 mutation API.
 
+## Clank documentation MCP
+
+The canonical documentation site is itself an MCP server:
+
+```text
+https://docs.clank.run/__clank/mcp
+```
+
+It exposes three public, read-only tools:
+
+- `docs.list` lists the canonical guide catalog, optionally by documentation group;
+- `docs.search` searches guide titles, headings, and text with a bounded result count;
+- `docs.read` returns one canonical guide as Markdown with its navigation metadata.
+
+Start at `https://docs.clank.run/.well-known/clank` when a client supports discovery. Documentation
+is public, so this particular server does not require OAuth. Its tools are annotated read-only,
+non-destructive, idempotent, and closed-world. Authenticated application backends still use the
+OAuth flow described below.
+
 ## Define agent-ready actions
 
 Backend functions are exposed by default:

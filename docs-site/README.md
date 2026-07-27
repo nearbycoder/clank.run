@@ -38,3 +38,5 @@ Publish the DNS records returned by the control plane, then run `clank domain ve
 - `/api/docs.json` — structured guide index
 - `/api/docs/<slug>.json` — one guide with metadata and Markdown
 - `/raw/<slug>.md` — canonical raw Markdown
+- `/.well-known/clank` — agent discovery with the canonical MCP endpoint
+- `/__clank/mcp` — public, read-only MCP tools for listing, searching, and reading guides

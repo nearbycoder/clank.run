@@ -137,6 +137,7 @@ test("documentation site serves every human and agent contract securely", async 
   assert.equal(index.protocol, "clank-docs/1");
   assert.equal(index.docs.length, manifest.docs.length);
   assert.equal(index.agentEndpoints.full, "https://docs.clank.run/llms-full.txt");
+  assert.equal(index.agentEndpoints.mcp, "https://docs.clank.run/__clank/mcp");
 
   const document = await (await fetch(`${origin}/api/docs/cli.json`)).json();
   assert.equal(document.protocol, "clank-doc/1");
@@ -157,6 +158,80 @@ test("documentation site serves every human and agent contract securely", async 
   assert.equal((sitemap.match(/<url>/gu) ?? []).length, manifest.docs.length + 1);
   assert.match(robots, /https:\/\/docs\.clank\.run\/sitemap\.xml/u);
   assert.deepEqual(health, { ok: true, service: "clank-docs", version: manifest.frameworkVersion });
+
+  const discoveryResponse = await fetch(`${origin}/.well-known/clank`);
+  const discovery = await discoveryResponse.json();
+  assert.equal(discoveryResponse.status, 200);
+  assert.equal(discovery.mcp.endpoint, "https://docs.clank.run/__clank/mcp");
+  assert.equal(discovery.mcp.authentication, "none");
+  assert.equal(discovery.mcp.protocolVersion, "2025-11-25");
+
+  const serverCard = await (await fetch(`${origin}/.well-known/mcp/server-card.json`)).json();
+  assert.equal(serverCard.serverInfo.name, "clank-docs");
+  assert.equal(serverCard.authentication.required, false);
+  assert.deepEqual(serverCard.tools, ["dynamic"]);
+
+  let rpcId = 0;
+  const mcp = async (method, params = {}) => {
+    const mcpResponse = await fetch(`${origin}/__clank/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-11-25",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
+    });
+    const payload = await mcpResponse.json();
+    assert.equal(mcpResponse.status, 200, JSON.stringify(payload));
+    assert.equal(payload.error, undefined, JSON.stringify(payload));
+    return payload.result;
+  };
+  const initialized = await mcp("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: {},
+    clientInfo: { name: "docs-site-test", version: "1.0.0" },
+  });
+  assert.equal(initialized.serverInfo.name, "clank-docs");
+  assert.equal(initialized.protocolVersion, "2025-11-25");
+  const toolList = await mcp("tools/list");
+  assert.deepEqual(
+    toolList.tools.map((tool) => tool.name),
+    ["docs.list", "docs.read", "docs.search"],
+  );
+  assert.ok(toolList.tools.every((tool) =>
+    tool.annotations.readOnlyHint === true
+    && tool.annotations.destructiveHint === false
+    && tool.annotations.openWorldHint === false));
+
+  const listed = await mcp("tools/call", { name: "docs.list", arguments: {} });
+  assert.equal(listed.isError, false);
+  assert.equal(listed.structuredContent.documents.length, manifest.docs.length);
+  const searched = await mcp("tools/call", {
+    name: "docs.search",
+    arguments: { query: "authenticated MCP", limit: 5 },
+  });
+  assert.equal(searched.isError, false);
+  assert.ok(searched.structuredContent.results.some((entry) => entry.slug === "agent-protocol"));
+  const read = await mcp("tools/call", {
+    name: "docs.read",
+    arguments: { slug: "agent-protocol" },
+  });
+  assert.equal(read.isError, false);
+  assert.match(read.structuredContent.markdown, /^# Agent protocol/mu);
+  assert.match(read.structuredContent.markdown, /OAuth/u);
+  const actionManifest = await mcp("resources/read", { uri: "clank://actions" });
+  assert.match(actionManifest.contents[0].text, /docs\.search/u);
+
+  const rejectedOrigin = await fetch(`${origin}/__clank/mcp`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "https://attacker.example",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list", params: {} }),
+  });
+  assert.equal(rejectedOrigin.status, 403);
+  assert.equal((await fetch(`${origin}/__clank/mcp`)).status, 405);
 
   const missing = await fetch(`${origin}/not-a-real-page`);
   assert.equal(missing.status, 404);

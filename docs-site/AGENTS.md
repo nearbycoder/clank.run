@@ -22,8 +22,12 @@ This is the canonical documentation application for Clank. It is itself a zero-d
 
 ## Agent surfaces
 
-Keep `/llms.txt`, `/llms-full.txt`, `/api/docs.json`, `/api/docs/:slug.json`, and `/raw/:slug.md` stable, complete, and discoverable from every page.
+Keep `/.well-known/clank`, `/__clank/mcp`, `/llms.txt`, `/llms-full.txt`, `/api/docs.json`,
+`/api/docs/:slug.json`, and `/raw/:slug.md` stable, complete, and discoverable. The public docs
+MCP server is read-only; preserve strict input bounds and side-effect annotations on every tool.
 
 ## Definition of done
 
-Run `npm run build`, `npm run doctor`, and `npm run deploy:check`. Verify home, search, a long guide, raw Markdown, JSON, and both LLM text endpoints at desktop and phone widths. The full repository check must remain green.
+Run `npm run build`, `npm run doctor`, and `npm run deploy:check`. Verify home, search, a long guide,
+raw Markdown, JSON, both LLM text endpoints, MCP discovery, `tools/list`, `docs.search`, and
+`docs.read` at desktop and phone widths. The full repository check must remain green.
