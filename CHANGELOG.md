@@ -20,6 +20,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Signed-out MCP OAuth now offers a same-origin password form that advances directly to consent,
   while retaining strict Origin checks, credential throttling, secure cookies, generic failures,
   and same-origin-only return paths.
+- Hosted MCP login retries temporary gateway and transport failures, so a Railway rolling cutover
+  cannot discard an otherwise valid browser authorization attempt.
 
 ## 0.9.0 - 2026-07-26
 

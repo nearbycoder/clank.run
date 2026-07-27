@@ -736,11 +736,12 @@ async function mcpCommand(args) {
     throw new CliError("--scopes must be a comma-separated list of OAuth scope names.");
   }
 
-  const started = await platformRequest(server, "/api/agent/oauth/relay/start", {
-    method: "POST",
-    body: { clientName: `${hostname()} · ${operatingSystem()} Codex` },
-    authenticate: false,
-  });
+  const started = await retryTransientPlatformRequest(() =>
+    platformRequest(server, "/api/agent/oauth/relay/start", {
+      method: "POST",
+      body: { clientName: `${hostname()} · ${operatingSystem()} Codex` },
+      authenticate: false,
+    }), Date.now() + 30_000);
   const relayId = typeof started.relayId === "string" ? started.relayId : "";
   const pollToken = typeof started.pollToken === "string" ? started.pollToken : "";
   const callbackUrl = typeof started.callbackUrl === "string" ? started.callbackUrl : "";
@@ -811,6 +812,7 @@ async function mcpCommand(args) {
           interval = Math.max(interval + 1, Number(error.retryAfter) || 2);
           continue;
         }
+        if (transientPlatformError(error)) continue;
         throw error;
       }
       await forwardRelayToCodex(relay, callback.pathname, port);
@@ -863,6 +865,24 @@ function childOutcome(child) {
     child.once("error", (error) => finish({ error }));
     child.once("exit", (code, signal) => finish({ code, signal }));
   });
+}
+
+async function retryTransientPlatformRequest(operation, deadline) {
+  let delayMs = 250;
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!transientPlatformError(error) || Date.now() + delayMs >= deadline) throw error;
+      await delay(delayMs);
+      delayMs = Math.min(2_000, delayMs * 2);
+    }
+  }
+}
+
+function transientPlatformError(error) {
+  return (error instanceof ApiError && [502, 503, 504].includes(error.status))
+    || (error instanceof CliError && error.code === "PLATFORM_UNAVAILABLE");
 }
 
 async function forwardRelayToCodex(relay, callbackBasePath, port) {
@@ -1621,9 +1641,15 @@ async function fetchPlatformJson(url, init, timeoutMs) {
     });
   } catch (error) {
     if (signal.aborted || error?.name === "TimeoutError" || error?.name === "AbortError") {
-      throw new CliError(`Platform request timed out after ${Math.ceil(timeoutMs / 1_000)} seconds.`);
+      throw new CliError(
+        `Platform request timed out after ${Math.ceil(timeoutMs / 1_000)} seconds.`,
+        "PLATFORM_UNAVAILABLE",
+      );
     }
-    throw new CliError(`Could not reach the platform: ${error instanceof Error ? error.message : String(error)}`);
+    throw new CliError(
+      `Could not reach the platform: ${error instanceof Error ? error.message : String(error)}`,
+      "PLATFORM_UNAVAILABLE",
+    );
   }
 
   let bytes;
@@ -1634,9 +1660,16 @@ async function fetchPlatformJson(url, init, timeoutMs) {
       throw new CliError(`Platform response exceeds ${MAX_PLATFORM_RESPONSE_BYTES} bytes.`);
     }
     if (signal.aborted || error?.name === "TimeoutError" || error?.name === "AbortError") {
-      throw new CliError(`Platform response timed out after ${Math.ceil(timeoutMs / 1_000)} seconds.`);
+      throw new CliError(
+        `Platform response timed out after ${Math.ceil(timeoutMs / 1_000)} seconds.`,
+        "PLATFORM_UNAVAILABLE",
+      );
     }
     throw error;
+  }
+
+  if ([502, 503, 504].includes(response.status)) {
+    throw new ApiError("Platform is temporarily unavailable.", "PLATFORM_UNAVAILABLE", response.status);
   }
 
   let text;

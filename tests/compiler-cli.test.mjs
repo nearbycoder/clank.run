@@ -252,6 +252,11 @@ server.listen(port, "0.0.0.0", () => console.log("Authorize in the browser."));
     if (request.url === "/api/agent/oauth/relay/poll" && request.method === "POST") {
       pollRequests++;
       assert.deepEqual(body, { relayId, pollToken });
+      if (pollRequests === 1) {
+        response.setHeader("content-type", "text/plain");
+        response.writeHead(502).end("temporary rolling-deploy gateway response");
+        return;
+      }
       response.writeHead(200).end(JSON.stringify({
         ok: true,
         path: `/api/agent/oauth/callback/${relayId}/fake-server-id`,
@@ -286,7 +291,7 @@ server.listen(port, "0.0.0.0", () => console.log("Authorize in the browser."));
     assert.match(result.stdout, /Codex MCP authorization completed/u);
     assert.doesNotMatch(result.stdout, new RegExp(pollToken));
     assert.doesNotMatch(result.stderr, new RegExp(pollToken));
-    assert.equal(pollRequests, 1);
+    assert.equal(pollRequests, 2);
   } finally {
     await new Promise((resolve, reject) =>
       relayServer.close((error) => error ? reject(error) : resolve()));
