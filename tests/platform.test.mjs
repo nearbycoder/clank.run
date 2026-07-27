@@ -579,6 +579,19 @@ test("operator allowlist grants browser-only global administration and revokes i
       "admin-memory-0001",
     );
     assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    const recoveryDirectory = join(
+      dataDirectory,
+      "projects",
+      project.project.id,
+      "recovery",
+      "bk_manual_storage_diagnostic",
+    );
+    await mkdir(recoveryDirectory, { recursive: true });
+    await writeFile(join(recoveryDirectory, "database.enc"), new Uint8Array(8192));
+    const outsideStorage = join(root, "outside-storage");
+    await mkdir(outsideStorage);
+    await writeFile(join(outsideStorage, "must-not-be-followed"), new Uint8Array(1024 * 1024));
+    await symlink(outsideStorage, join(recoveryDirectory, "outside-link"));
     const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
     control.prepare(`INSERT INTO clank_platform_metrics
       (project_id, bucket_started_at, request_count, error_count, status_2xx, status_5xx,
@@ -671,6 +684,28 @@ test("operator allowlist grants browser-only global administration and revokes i
       assert.equal(memory.container.events.oomKill >= 0, true);
     }
 
+    const storage = await payload(platform, jsonRequest("/api/admin/diagnostics/storage", {
+      cookie: admin.cookie,
+    }));
+    assert.equal(storage.sampledAt > 0, true);
+    assert.equal(storage.scan.complete, true);
+    assert.equal(storage.scan.truncated, false);
+    assert.equal(storage.scan.entries > 0, true);
+    assert.equal(storage.controlDatabase.allocatedBytes > 0, true);
+    assert.equal(storage.controlDatabase.sqlite.mainBytes > 0, true);
+    assert.equal(storage.totals.accountedAllocatedBytes > 0, true);
+    assert.equal(storage.retention.backupEnabled, false);
+    const projectStorage = storage.projects.find((entry) => entry.id === project.project.id);
+    assert.ok(projectStorage);
+    assert.equal(projectStorage.registered, true);
+    assert.equal(projectStorage.database.sqlite.mainBytes > 0, true);
+    assert.equal(projectStorage.releases.allocatedBytes > 0, true);
+    assert.equal(projectStorage.recoveryBackups.allocatedBytes >= 8192, true);
+    assert.equal(projectStorage.recoveryBackups.allocatedBytes < 1024 * 1024, true);
+    assert.equal(projectStorage.recoveryBackups.symlinks, 1);
+    assert.equal(JSON.stringify(storage).includes(dataDirectory), false);
+    assert.equal(JSON.stringify(storage).includes("must-not-be-followed"), false);
+
     const ordinaryDenied = await platform.handle(jsonRequest("/api/admin/users", {
       cookie: user.cookie,
     }));
@@ -681,6 +716,11 @@ test("operator allowlist grants browser-only global administration and revokes i
     }));
     assert.equal(ordinaryMemoryDenied.status, 403);
     assert.equal((await ordinaryMemoryDenied.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
+    const ordinaryStorageDenied = await platform.handle(jsonRequest("/api/admin/diagnostics/storage", {
+      cookie: user.cookie,
+    }));
+    assert.equal(ordinaryStorageDenied.status, 403);
+    assert.equal((await ordinaryStorageDenied.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
 
     const tokenDenied = await platform.handle(jsonRequest("/api/admin/analytics", {
       token: admin.accessToken,
@@ -692,6 +732,11 @@ test("operator allowlist grants browser-only global administration and revokes i
     }));
     assert.equal(tokenMemoryDenied.status, 403);
     assert.equal((await tokenMemoryDenied.json()).error.code, "BROWSER_ADMIN_REQUIRED");
+    const tokenStorageDenied = await platform.handle(jsonRequest("/api/admin/diagnostics/storage", {
+      token: admin.accessToken,
+    }));
+    assert.equal(tokenStorageDenied.status, 403);
+    assert.equal((await tokenStorageDenied.json()).error.code, "BROWSER_ADMIN_REQUIRED");
 
     const account = await payload(platform, jsonRequest("/api/account", { cookie: admin.cookie }));
     assert.equal(account.account.platformRole, "platform_admin");
@@ -704,7 +749,10 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.match(operatorHtml, /id="admin-page"/);
     assert.match(operatorHtml, /\/api\/admin\/analytics/);
     assert.match(operatorHtml, /\/api\/admin\/diagnostics\/memory/);
+    assert.match(operatorHtml, /\/api\/admin\/diagnostics\/storage/);
     assert.match(operatorHtml, /id="admin-memory-projects"/);
+    assert.match(operatorHtml, /id="admin-storage-projects"/);
+    assert.match(operatorHtml, />Storage attribution</);
     assert.match(operatorHtml, />Unattributed</);
     assert.match(operatorHtml, /reads are close but not atomic/);
     assert.match(operatorHtml, /id="impersonation-dialog"/);
