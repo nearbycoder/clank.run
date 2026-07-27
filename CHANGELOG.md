@@ -2,7 +2,7 @@
 
 Clank follows semantic versioning. Entries describe user-visible framework, CLI, protocol, storage, security, and deployment changes.
 
-## Unreleased
+## 0.9.0 - 2026-07-26
 
 ### Added
 
