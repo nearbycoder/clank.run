@@ -604,6 +604,7 @@ const docsMcp = createMcpServer({
     },
   ],
 });
+const docsMcpManifest = docsMcp.manifest();
 
 function SearchPage(props: { query: string }) {
   const results = props.query ? searchDocumentation(props.query) : [];
@@ -763,12 +764,14 @@ const app = createApp({
   }))
   .get("/.well-known/clank", () => json({
     protocol: "clank-agent/2",
+    contractRevision: docsMcp.revision,
     name: "clank-docs",
     title: "Clank Documentation",
     description: "Search and read the canonical Clank framework and deployment documentation.",
     mcp: {
       transport: "streamable-http",
       protocolVersion: MCP_PROTOCOL_VERSION,
+      serverVersion: docsMcpManifest.server.version,
       endpoint: `${canonicalOrigin}/__clank/mcp`,
       authentication: "none",
     },
@@ -780,23 +783,26 @@ const app = createApp({
   }, {
     headers: {
       "access-control-allow-origin": "*",
-      "cache-control": "public, max-age=300",
+      "cache-control": "public, max-age=0, must-revalidate",
+      "etag": `"${docsMcp.revision}"`,
+      "x-clank-contract-revision": docsMcp.revision,
     },
   }))
   .get("/.well-known/mcp/server-card.json", () => json({
     "$schema": "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json",
     version: "1.0",
     protocolVersion: MCP_PROTOCOL_VERSION,
+    contractRevision: docsMcp.revision,
     serverInfo: {
       name: "clank-docs",
       title: "Clank Documentation",
-      version: manifest.frameworkVersion,
+      version: docsMcpManifest.server.version,
     },
     description: "Search and read the canonical Clank framework and deployment documentation.",
     documentationUrl: `${canonicalOrigin}/.well-known/clank`,
     transport: { type: "streamable-http", endpoint: "/__clank/mcp" },
     capabilities: {
-      tools: { listChanged: false },
+      tools: { listChanged: docsMcp.supportsToolListChanged },
       resources: { subscribe: false, listChanged: false },
     },
     authentication: { required: false, schemes: [] },
@@ -806,7 +812,9 @@ const app = createApp({
   }, {
     headers: {
       "access-control-allow-origin": "*",
-      "cache-control": "public, max-age=300",
+      "cache-control": "public, max-age=0, must-revalidate",
+      "etag": `"${docsMcp.revision}"`,
+      "x-clank-contract-revision": docsMcp.revision,
     },
   }))
   .route("*", "/__clank/mcp", ({ request }) => docsMcp.handle(request))

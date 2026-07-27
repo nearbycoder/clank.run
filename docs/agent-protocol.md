@@ -92,6 +92,13 @@ Clank derives MCP tool names from function paths: `todos.list`, `todos.add`, and
 The normal runtime schemas become JSON Schema 2020-12 tool contracts. Query results and mutation
 results include the committed Clank database revision.
 
+The backend function tree is the single source of truth for both interfaces. Browser code calls
+the same typed query and mutation references that MCP exposes. A UI operation that changes server
+state must therefore be a backend mutation; do not implement a second UI-only persistence path.
+When changing UI behavior, update the backend function name, schema, `description`, and `agent`
+metadata in the same change. `GET /__clank/manifest` and authenticated `tools/list` enumerate the
+same agent-enabled function paths.
+
 The optional `agent` contract supports:
 
 - `title`: human-readable tool name;
@@ -123,6 +130,11 @@ const runtime = await openBackend(backend, {
 });
 ```
 
+The displayed MCP `serverInfo.version` combines this application version with a deterministic
+contract revision. Adding, removing, renaming, or changing the schema, description, scope, or
+annotations of a tool changes that effective version automatically; application authors do not
+manually increment a second MCP version.
+
 Set `agent: false` on `openBackend()` only when the entire application must not expose an agent
 protocol. Endpoint paths can be changed with `mcpPath` and `oauthPrefix`.
 
@@ -142,7 +154,9 @@ as the authenticated `clank://actions` MCP resource. The public documents do not
 arguments, user data, credentials, private routes, or implementation paths.
 
 The Server Card endpoint follows the current MCP Server Card proposal. Stable clients can ignore
-it and connect directly to `/__clank/mcp`.
+it and connect directly to `/__clank/mcp`. Both discovery documents include
+`contractRevision`, an `ETag`, and a deployment-sensitive MCP server version; they require
+revalidation instead of remaining fresh across an application deployment.
 
 ## Authentication
 
@@ -209,10 +223,30 @@ boundaries apply identically to browser and MCP calls.
 
 ## Transport behavior
 
-Clank uses stateless JSON responses over MCP Streamable HTTP. It supports `initialize`, `ping`,
-`tools/list`, `tools/call`, `resources/list`, `resources/read`, and standard notifications. It
-does not open a server-initiated SSE stream, so `GET` on the MCP endpoint returns `405` as permitted
-by the protocol.
+Clank uses JSON responses plus bounded stateful sessions over MCP Streamable HTTP for protocol
+revisions through `2025-11-25`. It supports `initialize`, `ping`, `tools/list`, `tools/call`,
+`resources/list`, `resources/read`, standard notifications, session deletion, and an authenticated
+GET SSE stream for server notifications.
+
+Initialization returns a cryptographically random `MCP-Session-Id`. A compliant client sends it
+on every later request. A missing session gets an explicit reinitialize response rather than
+silently using a possibly stale contract. A rolling deployment activates a new process whose
+session registry cannot accept the old ID, so the next request receives `404`; MCP then requires
+the client to initialize again and rediscover tools. This prevents a long-lived client from
+silently retaining a prior release's action list. Within a live process, Clank advertises
+`tools.listChanged: true` and can send `notifications/tools/list_changed` over the session stream.
+
+Every `tools/list` response is deterministic and carries:
+
+- `ttlMs: 0`, so clients supporting MCP list TTLs treat it as immediately stale;
+- `cacheScope: "private"`, because OAuth scope filtering can change the visible list;
+- `_meta["clank/contractRevision"]` and the `X-Clank-Contract-Revision` response header.
+
+Unknown tool calls return a structured `TOOLS_CHANGED` hint directing the client to refresh
+`tools/list`. Session counts, streams per session, idle lifetime, heartbeat frequency, request
+bytes, response bytes, and authentication remain bounded. Clients first connected to a
+pre-session Clank release should reconnect once after upgrading; subsequent deployments
+invalidate their sessions automatically.
 
 Tool results include both MCP text content and structured content:
 

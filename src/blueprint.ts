@@ -400,6 +400,8 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 
 - Preserve ownership and authorization on every private ${Object.keys(app.entities).join(", ")} operation.
 - Treat all browser, agent, webhook, and model input as untrusted and validate it at the boundary.
+- Model every UI operation that reads or persists server state as a \`src/backend.ts\` query or mutation, then call that same typed function from \`src/app.tsx\`; never create a UI-only server action that MCP cannot discover.
+- When UI behavior changes, update the shared backend function name, schema, \`description\`, and \`agent\` metadata in the same change. The agent-enabled paths in \`GET /__clank/manifest\` and authenticated MCP \`tools/list\` must remain identical.
 - Give every backend function a precise \`description\`; mark additive writes with \`agent: { destructive: false }\`, destructive writes explicitly, and internal functions with \`agent: false\`.
 - Preserve the default MCP endpoint and OAuth flow unless the application has a documented integration reason to change them.
 - Never edit, rename, or remove an applied migration; add the next numbered migration.
@@ -410,7 +412,7 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 
 ## Definition of done
 
-Run \`npm run build\`, \`npm run doctor\`, and \`npm run deploy:check\`. For UI changes, verify registration/login and the main interaction in a browser. For data changes, verify a fresh database and an existing migrated database. For backend changes, connect to \`/__clank/mcp\`, inspect \`tools/list\`, and verify the narrowest OAuth scope that can perform the action.
+Run \`npm run build\`, \`npm run doctor\`, and \`npm run deploy:check\`. For UI changes, verify registration/login and the main interaction in a browser. For data changes, verify a fresh database and an existing migrated database. For backend changes, compare agent-enabled \`GET /__clank/manifest\` paths with authenticated \`tools/list\`, verify the contract revision changed, reconnect an existing MCP session, and verify the narrowest OAuth scope that can perform the action.
 `;
 }
 

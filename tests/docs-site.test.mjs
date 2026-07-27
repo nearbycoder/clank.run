@@ -169,21 +169,26 @@ test("documentation site serves every human and agent contract securely", async 
   const serverCard = await (await fetch(`${origin}/.well-known/mcp/server-card.json`)).json();
   assert.equal(serverCard.serverInfo.name, "clank-docs");
   assert.equal(serverCard.authentication.required, false);
+  assert.equal(serverCard.capabilities.tools.listChanged, true);
+  assert.equal(serverCard.contractRevision, discovery.contractRevision);
   assert.deepEqual(serverCard.tools, ["dynamic"]);
 
   let rpcId = 0;
+  let mcpSession;
   const mcp = async (method, params = {}) => {
     const mcpResponse = await fetch(`${origin}/__clank/mcp`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "mcp-protocol-version": "2025-11-25",
+        ...(mcpSession ? { "mcp-session-id": mcpSession } : {}),
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
     });
     const payload = await mcpResponse.json();
     assert.equal(mcpResponse.status, 200, JSON.stringify(payload));
     assert.equal(payload.error, undefined, JSON.stringify(payload));
+    if (method === "initialize") mcpSession = mcpResponse.headers.get("mcp-session-id");
     return payload.result;
   };
   const initialized = await mcp("initialize", {
@@ -191,9 +196,14 @@ test("documentation site serves every human and agent contract securely", async 
     capabilities: {},
     clientInfo: { name: "docs-site-test", version: "1.0.0" },
   });
+  assert.ok(mcpSession);
   assert.equal(initialized.serverInfo.name, "clank-docs");
   assert.equal(initialized.protocolVersion, "2025-11-25");
+  assert.equal(initialized.capabilities.tools.listChanged, true);
   const toolList = await mcp("tools/list");
+  assert.equal(toolList.ttlMs, 0);
+  assert.equal(toolList.cacheScope, "private");
+  assert.equal(toolList._meta["clank/contractRevision"], discovery.contractRevision);
   assert.deepEqual(
     toolList.tools.map((tool) => tool.name),
     ["docs.list", "docs.read", "docs.search"],
@@ -231,7 +241,19 @@ test("documentation site serves every human and agent contract securely", async 
     body: JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list", params: {} }),
   });
   assert.equal(rejectedOrigin.status, 403);
-  assert.equal((await fetch(`${origin}/__clank/mcp`)).status, 405);
+  assert.equal((await fetch(`${origin}/__clank/mcp`)).status, 400);
+  const eventStream = await fetch(`${origin}/__clank/mcp`, {
+    headers: {
+      accept: "text/event-stream",
+      "mcp-protocol-version": "2025-11-25",
+      "mcp-session-id": mcpSession,
+    },
+  });
+  assert.equal(eventStream.status, 200);
+  assert.match(eventStream.headers.get("content-type"), /^text\/event-stream/u);
+  const eventReader = eventStream.body.getReader();
+  assert.match(new TextDecoder().decode((await eventReader.read()).value), /clank contract/u);
+  await eventReader.cancel();
 
   const missing = await fetch(`${origin}/not-a-real-page`);
   assert.equal(missing.status, 404);

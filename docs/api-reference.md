@@ -125,6 +125,10 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 ## MCP
 
 - `createMcpServer(options)`: zero-dependency MCP Streamable HTTP server for custom typed tools.
+- `McpServer.revision`: deterministic identity of server metadata and the complete visible tool
+  contract.
+- `McpServer.notifyToolsChanged()`: sends `notifications/tools/list_changed` to initialized
+  stateful clients; `close()` terminates bounded sessions and streams.
 - `MCP_PROTOCOL_VERSION`: current stable protocol revision (`2025-11-25`).
 - `MCP_SUPPORTED_PROTOCOL_VERSIONS`: compatible stable revisions accepted by the transport.
 - `McpToolError`: public, redacted application-level tool failure.
@@ -132,7 +136,8 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   `McpAuthentication`, and `McpScope`.
 - `defineBackend()` functions accept `description` and `agent` metadata.
 - `openBackend()` exposes eligible functions at `/__clank/mcp` by default and installs OAuth
-  discovery automatically when the backend uses Clank auth.
+  discovery automatically when the backend uses Clank auth. `BackendRuntime.contractRevision`
+  is the same revision published by MCP discovery and `GET /__clank/manifest`.
 
 See [Agent protocol](agent-protocol.md) for connection, OAuth, scope, discovery, and security
 details.

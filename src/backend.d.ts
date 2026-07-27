@@ -307,6 +307,7 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     readonly database: SQLiteDatabase<Schema>;
     readonly auth: Auth extends AuthDefinition<infer Profile> ? AuthRuntime<Profile> : undefined;
     readonly version: number;
+    readonly contractRevision: string | null;
     query<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): {
         value: OutputOf<Reference>;
         version: number;

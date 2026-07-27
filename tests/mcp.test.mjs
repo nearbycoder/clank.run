@@ -5,6 +5,7 @@ import {
   defineBackend,
   defineDatabase,
   defineTable,
+  createMcpServer,
   openBackend,
   s,
 } from "../dist/index.js";
@@ -52,6 +53,24 @@ function mcpRequest(payload, token, headers = {}) {
 async function pkce(verifier) {
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
   return Buffer.from(bytes).toString("base64url");
+}
+
+function testTool(name, overrides = {}) {
+  return {
+    name,
+    description: `Run ${name}.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        value: { type: "string" },
+      },
+      required: ["value"],
+      additionalProperties: false,
+    },
+    requiredScope: "agent:read",
+    invoke: ({ value }) => ({ value }),
+    ...overrides,
+  };
 }
 
 function authenticatedBackend() {
@@ -420,6 +439,177 @@ test("OAuth consent proofs tolerate opaque browser headers and reject forgery, m
   runtime.close();
 });
 
+test("MCP contract revisions change for action and metadata changes but remain deterministic", () => {
+  const first = createMcpServer({
+    name: "contract-test",
+    version: "2.0.0",
+    tools: [testTool("cards.list"), testTool("cards.move")],
+  });
+  const equivalent = createMcpServer({
+    name: "contract-test",
+    version: "2.0.0",
+    tools: [testTool("cards.move"), testTool("cards.list")],
+  });
+  const renamed = createMcpServer({
+    name: "contract-test",
+    version: "2.0.0",
+    tools: [testTool("cards.list"), testTool("cards.reorder")],
+  });
+  const added = createMcpServer({
+    name: "contract-test",
+    version: "2.0.0",
+    tools: [testTool("cards.list"), testTool("cards.move"), testTool("columns.rename")],
+  });
+  const metadataChanged = createMcpServer({
+    name: "contract-test",
+    version: "2.0.0",
+    tools: [
+      testTool("cards.list"),
+      testTool("cards.move", { description: "Move a card to a user-defined column." }),
+    ],
+  });
+
+  assert.match(first.revision, /^mcp-[a-f0-9]{32}$/u);
+  assert.equal(first.revision, equivalent.revision);
+  assert.notEqual(first.revision, renamed.revision);
+  assert.notEqual(first.revision, added.revision);
+  assert.notEqual(first.revision, metadataChanged.revision);
+  assert.equal(first.manifest().revision, first.revision);
+  assert.match(first.manifest().server.version, /^2\.0\.0\+clank\.[a-f0-9]{16}$/u);
+
+  first.close();
+  equivalent.close();
+  renamed.close();
+  added.close();
+  metadataChanged.close();
+});
+
+test("MCP sessions invalidate cached tools across deployments and stream list change notifications", async () => {
+  const oldServer = createMcpServer({
+    name: "changing-app",
+    version: "1.0.0",
+    tools: [
+      testTool("todos.list"),
+      testTool("todos.add"),
+      testTool("todos.setDone"),
+      testTool("todos.remove"),
+    ],
+  });
+  const initialize = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "stale-client-test", version: "1.0.0" },
+    },
+  };
+  const initialized = await oldServer.handle(mcpRequest(initialize));
+  assert.equal(initialized.status, 200);
+  const oldSession = initialized.headers.get("mcp-session-id");
+  assert.ok(oldSession);
+  assert.equal(initialized.headers.get("x-clank-contract-revision"), oldServer.revision);
+  const initializedPayload = await initialized.json();
+  assert.equal(initializedPayload.result.capabilities.tools.listChanged, true);
+  assert.match(initializedPayload.result.serverInfo.version, /\+clank\.[a-f0-9]{16}$/u);
+
+  const ready = await oldServer.handle(mcpRequest({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+  }, undefined, { "mcp-session-id": oldSession }));
+  assert.equal(ready.status, 202);
+
+  const stream = await oldServer.handle(new Request(resource, {
+    headers: {
+      accept: "text/event-stream",
+      "mcp-protocol-version": "2025-11-25",
+      "mcp-session-id": oldSession,
+    },
+  }));
+  assert.equal(stream.status, 200);
+  assert.match(stream.headers.get("content-type"), /^text\/event-stream/u);
+  const reader = stream.body.getReader();
+  const decoder = new TextDecoder();
+  assert.match(decoder.decode((await reader.read()).value), /clank contract/u);
+  oldServer.notifyToolsChanged();
+  const changedEvent = decoder.decode((await reader.read()).value);
+  assert.match(changedEvent, /notifications\/tools\/list_changed/u);
+  assert.match(changedEvent, new RegExp(oldServer.revision, "u"));
+  await reader.cancel();
+
+  const oldList = await oldServer.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: {},
+  }, undefined, { "mcp-session-id": oldSession }));
+  const oldListPayload = await oldList.json();
+  assert.equal(oldListPayload.result.ttlMs, 0);
+  assert.equal(oldListPayload.result.cacheScope, "private");
+  assert.equal(oldListPayload.result._meta["clank/contractRevision"], oldServer.revision);
+  assert.deepEqual(oldListPayload.result.tools.map((tool) => tool.name), [
+    "todos.add",
+    "todos.list",
+    "todos.remove",
+    "todos.setDone",
+  ]);
+
+  const newServer = createMcpServer({
+    name: "changing-app",
+    version: "1.0.0",
+    tools: [
+      testTool("cards.list"),
+      testTool("cards.add"),
+      testTool("cards.move"),
+      testTool("cards.remove"),
+      testTool("columns.list"),
+      testTool("columns.add"),
+      testTool("columns.rename"),
+    ],
+  });
+  assert.notEqual(newServer.revision, oldServer.revision);
+
+  const staleRequest = await newServer.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/list",
+    params: {},
+  }, undefined, { "mcp-session-id": oldSession }));
+  assert.equal(staleRequest.status, 404);
+  assert.equal((await staleRequest.json()).error.message, "MCP session is no longer active.");
+
+  const reinitialized = await newServer.handle(mcpRequest({ ...initialize, id: 4 }));
+  assert.equal(reinitialized.status, 200);
+  const newSession = reinitialized.headers.get("mcp-session-id");
+  assert.ok(newSession);
+  assert.notEqual(newSession, oldSession);
+  const reinitializedPayload = await reinitialized.json();
+  assert.notEqual(
+    reinitializedPayload.result.serverInfo.version,
+    initializedPayload.result.serverInfo.version,
+  );
+
+  const refreshed = await newServer.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 5,
+    method: "tools/list",
+    params: {},
+  }, undefined, { "mcp-session-id": newSession }));
+  assert.deepEqual((await refreshed.json()).result.tools.map((tool) => tool.name), [
+    "cards.add",
+    "cards.list",
+    "cards.move",
+    "cards.remove",
+    "columns.add",
+    "columns.list",
+    "columns.rename",
+  ]);
+
+  oldServer.close();
+  newServer.close();
+});
+
 test("backend functions become deterministic MCP tools with public discovery", async () => {
   const runtime = await openBackend(authenticatedBackend(), {
     path: ":memory:",
@@ -434,11 +624,17 @@ test("backend functions become deterministic MCP tools with public discovery", a
   const manifest = await discovery.json();
   assert.equal(manifest.mcp.endpoint, resource);
   assert.equal(manifest.mcp.authentication, "oauth2");
+  assert.equal(manifest.contractRevision, runtime.contractRevision);
+  assert.equal(discovery.headers.get("x-clank-contract-revision"), runtime.contractRevision);
   assert.equal(JSON.stringify(manifest).includes("todos.add"), false);
 
   const serverCard = await runtime.handle(new Request(`${origin}/.well-known/mcp/server-card.json`));
   assert.equal(serverCard.status, 200);
-  assert.equal((await serverCard.json()).tools[0], "dynamic");
+  const serverCardPayload = await serverCard.json();
+  assert.equal(serverCardPayload.tools[0], "dynamic");
+  assert.equal(serverCardPayload.contractRevision, runtime.contractRevision);
+  assert.equal(serverCardPayload.capabilities.tools.listChanged, true);
+  assert.match(serverCardPayload.serverInfo.version, /\+clank\.[a-f0-9]{16}$/u);
 
   const protectedMetadata = await runtime.handle(new Request(
     `${origin}/.well-known/oauth-protected-resource/__clank/mcp`,
@@ -484,35 +680,52 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
     },
   }, tokens.access_token));
   assert.equal(initialized.status, 200);
+  const mcpSession = initialized.headers.get("mcp-session-id");
+  assert.match(mcpSession, /^clank_session_[a-f0-9]{48}$/u);
   assert.equal((await initialized.json()).result.serverInfo.name, "clank-app");
 
-  const listed = await runtime.handle(mcpRequest({
+  const staleStatelessList = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 2,
     method: "tools/list",
     params: {},
   }, tokens.access_token));
+  assert.equal(staleStatelessList.status, 400);
+  assert.equal((await staleStatelessList.json()).error.data.reason, "SESSION_REQUIRED");
+
+  const listed = await runtime.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/list",
+    params: {},
+  }, tokens.access_token, { "mcp-session-id": mcpSession }));
   const tools = (await listed.json()).result.tools;
   assert.deepEqual(tools.map((tool) => tool.name), ["todos.add", "todos.list", "todos.removeAll"]);
+  const backendManifest = await runtime.handle(new Request(`${origin}/__clank/manifest`));
+  const backendFunctions = (await backendManifest.json()).functions
+    .filter((fn) => fn.agent)
+    .map((fn) => fn.name)
+    .sort();
+  assert.deepEqual(tools.map((tool) => tool.name), backendFunctions);
   assert.equal(tools.find((tool) => tool.name === "todos.add").annotations.destructiveHint, false);
   assert.equal(tools.find((tool) => tool.name === "todos.removeAll").annotations.destructiveHint, true);
   assert.equal(tools.find((tool) => tool.name === "todos.list").annotations.readOnlyHint, true);
 
   const added = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
-    id: 3,
+    id: 4,
     method: "tools/call",
     params: { name: "todos.add", arguments: { title: "Created by an agent" } },
-  }, tokens.access_token));
+  }, tokens.access_token, { "mcp-session-id": mcpSession }));
   assert.equal(added.status, 200);
   assert.equal((await added.json()).result.isError, false);
 
   const listedTodos = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
-    id: 4,
+    id: 5,
     method: "tools/call",
     params: { name: "todos.list", arguments: {} },
-  }, tokens.access_token));
+  }, tokens.access_token, { "mcp-session-id": mcpSession }));
   const listPayload = await listedTodos.json();
   assert.equal(listPayload.result.structuredContent.value[0].title, "Created by an agent");
 
@@ -591,19 +804,31 @@ test("read-only OAuth grants hide and reject mutation tools", async () => {
   const session = await registerUser(runtime);
   const client = await registerClient(runtime);
   const tokens = await authorize(runtime, session, client, "agent:read");
-  const listed = await runtime.handle(mcpRequest({
+  const initialized = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "read-only-test-client", version: "1.0.0" },
+    },
+  }, tokens.access_token));
+  const mcpSession = initialized.headers.get("mcp-session-id");
+  assert.match(mcpSession, /^clank_session_[a-f0-9]{48}$/u);
+  const listed = await runtime.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 2,
     method: "tools/list",
     params: {},
-  }, tokens.access_token));
+  }, tokens.access_token, { "mcp-session-id": mcpSession }));
   assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["todos.list"]);
   const write = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
-    id: 2,
+    id: 3,
     method: "tools/call",
     params: { name: "todos.add", arguments: { title: "No" } },
-  }, tokens.access_token));
+  }, tokens.access_token, { "mcp-session-id": mcpSession }));
   assert.equal(write.status, 403);
   assert.equal((await write.json()).error, "insufficient_scope");
   runtime.close();
@@ -687,20 +912,32 @@ test("projects without browser auth expose the same typed actions as a public MC
     },
   }));
   const runtime = await openBackend(backend, { path: ":memory:" });
-  const listed = await runtime.handle(mcpRequest({
+  const initialized = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "public-test-client", version: "1.0.0" },
+    },
+  }));
+  const mcpSession = initialized.headers.get("mcp-session-id");
+  assert.match(mcpSession, /^clank_session_[a-f0-9]{48}$/u);
+  const listed = await runtime.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 2,
     method: "tools/list",
     params: {},
-  }));
+  }, undefined, { "mcp-session-id": mcpSession }));
   assert.equal(listed.status, 200);
   assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["notes.add", "notes.list"]);
   const added = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
-    id: 2,
+    id: 3,
     method: "tools/call",
     params: { name: "notes.add", arguments: { title: "Public MCP" } },
-  }));
+  }, undefined, { "mcp-session-id": mcpSession }));
   assert.equal((await added.json()).result.isError, false);
   assert.equal(runtime.query("notes.list", {}).value[0].title, "Public MCP");
   runtime.close();
