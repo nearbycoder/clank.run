@@ -108,6 +108,25 @@ jobs:
           npm run doctor
           npm run deploy:check
 
+      - name: Preserve release capacity
+        working-directory: docs-site
+        run: |
+          RELEASES="$(node ../scripts/clank.mjs releases)"
+          echo "$RELEASES"
+          if [[ "$RELEASES" =~ Usage:\ ([0-9]+)/([0-9]+)\ artifacts ]] &&
+             [[ "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ]]; then
+            OLDEST_INACTIVE="$(
+              awk '$2 == "inactive" && $3 ~ /^[0-9]+$/ { candidate = $1 } END { print candidate }' \
+                <<< "$RELEASES"
+            )"
+            if [[ -z "$OLDEST_INACTIVE" ]]; then
+              echo "Release capacity is full, but no inactive artifact can be removed safely." >&2
+              exit 1
+            fi
+            node ../scripts/clank.mjs releases delete "$OLDEST_INACTIVE" \
+              --confirm="delete-release clank-docs $OLDEST_INACTIVE"
+          fi
+
       - name: Deploy documentation
         working-directory: docs-site
         run: node ../scripts/clank.mjs deploy . --json
