@@ -197,6 +197,52 @@ async function deploy(platform, projectId, token, artifact, key) {
   return { response, body: await response.json() };
 }
 
+test("reserved listener ports are never assigned and existing conflicts reconcile at startup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-reserved-ports-"));
+  const dataDirectory = join(root, "platform");
+  let platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4630,
+    appPortEnd: 4632,
+    backups: { intervalMs: false },
+  });
+  try {
+    const owner = await authorizeCli(platform, "reserved-port@example.com");
+    const first = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "First project", slug: "first-reserved-port" },
+    }), 201);
+    assert.equal(first.project.port, 4630);
+    await platform.close();
+
+    platform = await openPlatform({
+      dataDirectory,
+      publicUrl: "http://127.0.0.1:4200",
+      signup: true,
+      appPortStart: 4630,
+      appPortEnd: 4632,
+      reservedAppPorts: [4630],
+      backups: { intervalMs: false },
+    });
+    const projects = await payload(platform, jsonRequest("/api/projects", {
+      token: owner.accessToken,
+    }));
+    assert.equal(projects.projects.find((project) => project.id === first.project.id).port, 4631);
+    const second = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Second project", slug: "second-reserved-port" },
+    }), 201);
+    assert.equal(second.project.port, 4632);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("deployed framework auth receives its exact managed public origin", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-managed-auth-"));
   const platform = await openPlatform({

@@ -50,6 +50,8 @@ export interface ClankPlatformOptions {
     appUrlTemplate?: string;
     appPortStart?: number;
     appPortEnd?: number;
+    /** Listener or infrastructure ports that application runtimes must never use. */
+    reservedAppPorts?: readonly number[];
     runner?: PlatformRunnerOptions;
     /** Defaults to "bootstrap": only the first platform account may self-register. */
     signup?: boolean | "bootstrap";

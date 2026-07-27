@@ -54,6 +54,11 @@ Clank Deploy is one Node control-plane process plus one supervised process or co
 | `ALLOWED_HOSTS` | loopback | Exact host allowlist |
 | `TRUST_PROXY` | `0` | Trust forwarded client/protocol |
 
+`clank-platform` always reserves its own `PORT` from the application range. Persisted projects
+that conflict with that listener are assigned the first free application port during startup.
+Embedders calling `openPlatform()` directly should pass infrastructure listeners through
+`reservedAppPorts`.
+
 `bootstrap` permits one initial account and then closes ordinary registration. Its SQLite claim is shared by control-plane processes using the same data directory. `disabled` blocks ordinary registration immediately. In both modes, an owner/admin-issued invitation can still create only its bound email account through **Use invitation**; revoke outstanding invitations before disabling all intended onboarding.
 
 ## Production start

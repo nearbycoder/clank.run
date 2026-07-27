@@ -18,6 +18,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- The deployment platform now reserves its own HTTP listener from the application port allocator
+  and deterministically reassigns persisted project conflicts during startup.
 - Deployment artifact collection now ignores the compiler's atomic temporary files, preventing a concurrent framework build from producing a transient file or `ENOENT` failure in an otherwise deterministic bundle.
 - Deployment packaging now retries a complete, metadata-verified source snapshot when files or directory entries change during collection, preventing concurrent cleanup or replacement from producing partial artifacts.
 - Railway startup recovers project runtimes concurrently without delaying the public listener, shutdown drains HTTP and platform resources together, and automatic crash recovery can no longer race a user deployment.
