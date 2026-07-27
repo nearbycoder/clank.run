@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.9.1 - 2026-07-27
+
 ### Added
 
 - `docs.clank.run` now exposes a public, read-only MCP server with bounded list, search, and
