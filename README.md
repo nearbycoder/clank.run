@@ -120,6 +120,7 @@ render(document.querySelector("#app")!, <App />);
 - [Headless UI behavior](docs/ui.md)
 - [Performance model](docs/performance.md)
 - [AI-first contracts](docs/ai-first.md)
+- [Per-app MCP servers for queries and mutations](docs/per-app-mcp.md)
 - [MCP agent protocol and OAuth](docs/agent-protocol.md)
 - [AI application blueprints](docs/blueprints.md)
 - [Authentication, MFA, passkeys, and recovery](docs/authentication.md)

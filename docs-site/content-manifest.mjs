@@ -47,6 +47,7 @@ export const groups = [
     title: "Agents and generation",
     description: "Deterministic blueprints, authenticated application actions, and contracts that make applications legible to agents.",
     entries: [
+      ["per-app-mcp", "docs/per-app-mcp.md"],
       ["agent-protocol", "docs/agent-protocol.md"],
       ["blueprints", "docs/blueprints.md"]
     ]
