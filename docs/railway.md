@@ -68,6 +68,13 @@ installation-wide analytics and the redacted account directory. Read-only suppor
 short-lived, recent-auth gated, reason-bound, visibly labeled, and audited; it is not a substitute
 for limiting and protecting the operator allowlist.
 
+The same `/admin` page includes a live memory-attribution panel. It samples the Linux cgroup and
+each supervised process, ranks hosted applications by proportional set size (PSS, with RSS as a
+fallback), and reports the control-plane V8 heap, process peaks, swap, page cache, kernel memory,
+and memory that cannot be attributed to a tracked process. PSS apportions shared pages instead of
+counting the same page once per process. The panel is a current snapshot; Railway's metrics retain
+the historical container-level series.
+
 ## Domains
 
 Attach both `clank.run` and `*.apps.clank.run` to the Railway service. Publish every routing, ACME,
@@ -137,10 +144,19 @@ curl --fail https://clank.run/livez
 curl --fail https://clank.run/readyz
 curl --fail https://clank.run/_clank/readyz
 railway logs --service clank --lines 100
+railway metrics --service clank --since 1h --cpu --memory
+railway metrics --service clank --since 24h --memory --raw --json
 ```
 
 Also verify browser session refresh, CLI device authorization, a disposable deployment, its
 wildcard application URL, backup creation, rollback, and permanent deletion.
+
+Railway's memory metric covers the complete service cgroup: the Clank supervisor, hosted
+application processes, native SQLite allocations, filesystem cache, and kernel bookkeeping. Use
+the `/admin` memory panel to explain the current total and the Railway series to identify growth
+across deploys. A process-runner application has direct per-process attribution. In Docker-runner
+installations, the listed child can be the Docker client wrapper, so container-runtime metrics
+remain the authoritative per-application source.
 
 Railway does not overlap deployments that mount the same volume, even when a health check is
 configured. The production entry point therefore binds the control-plane listener without waiting

@@ -566,6 +566,19 @@ test("operator allowlist grants browser-only global administration and revokes i
         organizationId: dashboard.organizations[0].id,
       },
     }), 201);
+    const artifact = await appArtifact(
+      join(root, "admin-app"),
+      "admin-memory",
+      [["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"]],
+    );
+    const deployed = await deploy(
+      platform,
+      project.project.id,
+      admin.accessToken,
+      artifact,
+      "admin-memory-0001",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
     const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
     control.prepare(`INSERT INTO clank_platform_metrics
       (project_id, bucket_started_at, request_count, error_count, status_2xx, status_5xx,
@@ -631,17 +644,54 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.equal(analytics.topProjects[0].id, project.project.id);
     assert.equal(analytics.topProjects[0].requests, 3);
 
+    const memory = await payload(platform, jsonRequest("/api/admin/diagnostics/memory", {
+      cookie: admin.cookie,
+    }));
+    assert.equal(memory.sampledAt > 0, true);
+    assert.equal(memory.controlPlane.available, true);
+    assert.equal(memory.controlPlane.rssBytes > 0, true);
+    assert.equal(memory.controlPlane.heapUsedBytes > 0, true);
+    assert.equal(memory.controlPlane.v8HeapLimitBytes > 0, true);
+    assert.equal(memory.totals.onlineProjects, 1);
+    assert.equal(
+      ["proportional_set_size", "resident_set_size_fallback"].includes(memory.totals.attribution),
+      true,
+    );
+    const projectMemory = memory.projects.find((entry) => entry.id === project.project.id);
+    assert.ok(projectMemory);
+    assert.equal(projectMemory.scope, "application");
+    assert.equal(projectMemory.available, true);
+    assert.equal(projectMemory.rssBytes > 0, true);
+    assert.equal(projectMemory.releaseId, deployed.body.release.id);
+    assert.equal(Object.hasOwn(projectMemory, "directory"), false);
+    assert.equal(Object.hasOwn(projectMemory, "environment"), false);
+    if (memory.container.available) {
+      assert.equal(memory.container.source, "cgroup_v2");
+      assert.equal(memory.container.currentBytes > 0, true);
+      assert.equal(memory.container.events.oomKill >= 0, true);
+    }
+
     const ordinaryDenied = await platform.handle(jsonRequest("/api/admin/users", {
       cookie: user.cookie,
     }));
     assert.equal(ordinaryDenied.status, 403);
     assert.equal((await ordinaryDenied.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
+    const ordinaryMemoryDenied = await platform.handle(jsonRequest("/api/admin/diagnostics/memory", {
+      cookie: user.cookie,
+    }));
+    assert.equal(ordinaryMemoryDenied.status, 403);
+    assert.equal((await ordinaryMemoryDenied.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
 
     const tokenDenied = await platform.handle(jsonRequest("/api/admin/analytics", {
       token: admin.accessToken,
     }));
     assert.equal(tokenDenied.status, 403);
     assert.equal((await tokenDenied.json()).error.code, "BROWSER_ADMIN_REQUIRED");
+    const tokenMemoryDenied = await platform.handle(jsonRequest("/api/admin/diagnostics/memory", {
+      token: admin.accessToken,
+    }));
+    assert.equal(tokenMemoryDenied.status, 403);
+    assert.equal((await tokenMemoryDenied.json()).error.code, "BROWSER_ADMIN_REQUIRED");
 
     const account = await payload(platform, jsonRequest("/api/account", { cookie: admin.cookie }));
     assert.equal(account.account.platformRole, "platform_admin");
@@ -653,6 +703,8 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.match(operatorHtml, /id="operator-navigation"/);
     assert.match(operatorHtml, /id="admin-page"/);
     assert.match(operatorHtml, /\/api\/admin\/analytics/);
+    assert.match(operatorHtml, /\/api\/admin\/diagnostics\/memory/);
+    assert.match(operatorHtml, /id="admin-memory-projects"/);
     assert.match(operatorHtml, /id="impersonation-dialog"/);
 
     await platform.close();

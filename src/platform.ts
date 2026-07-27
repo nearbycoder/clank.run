@@ -1787,6 +1787,17 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ),
         });
       }
+      if (url.pathname === "/api/admin/diagnostics/memory" && request.method === "GET") {
+        await requirePlatformAdmin(storage, request);
+        return api({
+          ok: true,
+          ...await platformMemoryDiagnostics(
+            storage.internal,
+            active,
+            options.runner?.kind ?? "process",
+          ),
+        });
+      }
 
       const principal = await requirePlatformPrincipal(storage, request);
       if (url.pathname === "/api/audit" && request.method === "GET") {
@@ -3963,6 +3974,259 @@ function platformAdminAnalytics(
       ...summarizeMetricRows([row], range.durationMs),
     })),
   };
+}
+
+async function platformMemoryDiagnostics(
+  internal: SQLiteInternal,
+  active: ReadonlyMap<string, ActiveProcess>,
+  runnerKind: "process" | "docker",
+): Promise<Record<string, unknown>> {
+  const processRuntime = (globalThis as any).process;
+  const pid = Number(processRuntime?.pid);
+  const memoryUsage = typeof processRuntime?.memoryUsage === "function"
+    ? processRuntime.memoryUsage()
+    : {};
+  const fsName = "node:fs/promises";
+  const fs = await import(fsName) as unknown as {
+    readFile(path: string, encoding: "utf8"): Promise<string>;
+  };
+  const read = async (path: string): Promise<string | null> => {
+    try {
+      return await fs.readFile(path, "utf8");
+    } catch {
+      return null;
+    }
+  };
+  const controlPlane = Number.isSafeInteger(pid) && pid > 0
+    ? await linuxProcessMemory(pid, read)
+    : emptyProcessMemory(null);
+  const projectProcesses = await Promise.all(
+    [...active.values()].slice(0, 250).map(async (running) => {
+      const project = internal.prepare(
+        "SELECT id, name, slug FROM clank_platform_projects WHERE id = ?",
+      ).get(running.projectId);
+      const childPid = Number(running.child.pid);
+      const memory = Number.isSafeInteger(childPid) && childPid > 0
+        ? await linuxProcessMemory(childPid, read)
+        : emptyProcessMemory(null);
+      return {
+        id: running.projectId,
+        name: String(project?.name ?? "Unknown project"),
+        slug: String(project?.slug ?? running.projectId),
+        releaseId: running.releaseId,
+        port: running.port,
+        scope: runnerKind === "docker" ? "docker_runner" : "application",
+        ...memory,
+      };
+    }),
+  );
+  projectProcesses.sort((left, right) =>
+    Number(right.pssBytes ?? right.rssBytes ?? 0) - Number(left.pssBytes ?? left.rssBytes ?? 0));
+  const cgroup = await linuxCgroupMemory(read);
+  let v8HeapLimitBytes: number | null = null;
+  let v8AvailableBytes: number | null = null;
+  try {
+    const v8Name = "node:v8";
+    const v8 = await import(v8Name) as unknown as {
+      getHeapStatistics(): { heap_size_limit: number; total_available_size: number };
+    };
+    const heap = v8.getHeapStatistics();
+    v8HeapLimitBytes = safeMemoryBytes(heap.heap_size_limit);
+    v8AvailableBytes = safeMemoryBytes(heap.total_available_size);
+  } catch {
+    // V8 detail is optional; RSS and cgroup values remain available.
+  }
+  const controlAttribution = controlPlane.pssBytes ?? controlPlane.rssBytes ?? 0;
+  const projectAttributionBytes = projectProcesses.reduce(
+    (total, project) => total + Number(project.pssBytes ?? project.rssBytes ?? 0),
+    0,
+  );
+  const trackedProcessBytes = controlAttribution + projectAttributionBytes;
+  const currentBytes = cgroup.currentBytes;
+  return {
+    sampledAt: Date.now(),
+    container: cgroup,
+    controlPlane: {
+      ...controlPlane,
+      uptimeSeconds: typeof processRuntime?.uptime === "function"
+        ? Math.max(0, Number(processRuntime.uptime()) || 0)
+        : null,
+      heapUsedBytes: safeMemoryBytes(memoryUsage.heapUsed),
+      heapTotalBytes: safeMemoryBytes(memoryUsage.heapTotal),
+      externalBytes: safeMemoryBytes(memoryUsage.external),
+      arrayBuffersBytes: safeMemoryBytes(memoryUsage.arrayBuffers),
+      v8HeapLimitBytes,
+      v8AvailableBytes,
+    },
+    projects: projectProcesses,
+    totals: {
+      onlineProjects: active.size,
+      projectAttributedBytes: projectAttributionBytes,
+      trackedProcessBytes,
+      unattributedBytes: currentBytes === null
+        ? null
+        : Math.max(0, currentBytes - trackedProcessBytes),
+      attribution: [
+        controlPlane,
+        ...projectProcesses,
+      ].every((entry) => entry.pssBytes !== null)
+        ? "proportional_set_size"
+        : "resident_set_size_fallback",
+    },
+  };
+}
+
+interface LinuxProcessMemory {
+  available: boolean;
+  pid: number | null;
+  rssBytes: number | null;
+  peakRssBytes: number | null;
+  pssBytes: number | null;
+  privateBytes: number | null;
+  sharedBytes: number | null;
+  anonymousBytes: number | null;
+  fileBytes: number | null;
+  sharedMemoryBytes: number | null;
+  swapBytes: number | null;
+  threads: number | null;
+}
+
+function emptyProcessMemory(pid: number | null): LinuxProcessMemory {
+  return {
+    available: false,
+    pid,
+    rssBytes: null,
+    peakRssBytes: null,
+    pssBytes: null,
+    privateBytes: null,
+    sharedBytes: null,
+    anonymousBytes: null,
+    fileBytes: null,
+    sharedMemoryBytes: null,
+    swapBytes: null,
+    threads: null,
+  };
+}
+
+async function linuxProcessMemory(
+  pid: number,
+  read: (path: string) => Promise<string | null>,
+): Promise<LinuxProcessMemory> {
+  const [status, rollup] = await Promise.all([
+    read(`/proc/${pid}/status`),
+    read(`/proc/${pid}/smaps_rollup`),
+  ]);
+  if (!status) return emptyProcessMemory(pid);
+  const privateBytes = sumMemoryValues(
+    linuxKilobytes(rollup, "Private_Clean"),
+    linuxKilobytes(rollup, "Private_Dirty"),
+  );
+  const sharedBytes = sumMemoryValues(
+    linuxKilobytes(rollup, "Shared_Clean"),
+    linuxKilobytes(rollup, "Shared_Dirty"),
+  );
+  return {
+    available: true,
+    pid,
+    rssBytes: linuxKilobytes(status, "VmRSS"),
+    peakRssBytes: linuxKilobytes(status, "VmHWM"),
+    pssBytes: linuxKilobytes(rollup, "Pss"),
+    privateBytes,
+    sharedBytes,
+    anonymousBytes: linuxKilobytes(status, "RssAnon"),
+    fileBytes: linuxKilobytes(status, "RssFile"),
+    sharedMemoryBytes: linuxKilobytes(status, "RssShmem"),
+    swapBytes: linuxKilobytes(status, "VmSwap"),
+    threads: linuxInteger(status, "Threads"),
+  };
+}
+
+async function linuxCgroupMemory(
+  read: (path: string) => Promise<string | null>,
+): Promise<Record<string, unknown>> {
+  const membership = await read("/proc/self/cgroup");
+  const matched = membership?.split("\n").find((line) => line.startsWith("0::"))?.slice(3) ?? "/";
+  const safePath = matched.startsWith("/")
+    && !matched.split("/").includes("..")
+    && /^\/[A-Za-z0-9_./-]*$/u.test(matched)
+    ? matched.replace(/\/+$/u, "")
+    : "";
+  const root = `/sys/fs/cgroup${safePath}`;
+  const [current, peak, limit, statText, eventsText] = await Promise.all([
+    read(`${root}/memory.current`),
+    read(`${root}/memory.peak`),
+    read(`${root}/memory.max`),
+    read(`${root}/memory.stat`),
+    read(`${root}/memory.events`),
+  ]);
+  const stats = linuxKeyValues(statText);
+  const events = linuxKeyValues(eventsText);
+  const currentBytes = linuxByteValue(current);
+  const limitBytes = limit?.trim() === "max" ? null : linuxByteValue(limit);
+  return {
+    available: currentBytes !== null,
+    source: currentBytes === null ? "unavailable" : "cgroup_v2",
+    currentBytes,
+    peakBytes: linuxByteValue(peak),
+    limitBytes,
+    utilization: currentBytes !== null && limitBytes
+      ? currentBytes / limitBytes
+      : null,
+    anonymousBytes: safeMemoryBytes(stats.anon),
+    fileCacheBytes: safeMemoryBytes(stats.file),
+    kernelBytes: safeMemoryBytes(stats.kernel),
+    slabBytes: safeMemoryBytes(stats.slab),
+    socketBytes: safeMemoryBytes(stats.sock),
+    sharedMemoryBytes: safeMemoryBytes(stats.shmem),
+    pageTablesBytes: safeMemoryBytes(stats.pagetables),
+    events: {
+      low: Number(events.low ?? 0),
+      high: Number(events.high ?? 0),
+      max: Number(events.max ?? 0),
+      oom: Number(events.oom ?? 0),
+      oomKill: Number(events.oom_kill ?? 0),
+    },
+  };
+}
+
+function linuxKilobytes(input: string | null, key: string): number | null {
+  if (!input) return null;
+  const match = new RegExp(`^${key}:\\s+(\\d+)\\s+kB$`, "mu").exec(input);
+  return match ? safeMemoryBytes(Number(match[1]) * 1024) : null;
+}
+
+function linuxInteger(input: string | null, key: string): number | null {
+  if (!input) return null;
+  const match = new RegExp(`^${key}:\\s+(\\d+)$`, "mu").exec(input);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function linuxByteValue(input: string | null): number | null {
+  if (!input) return null;
+  return safeMemoryBytes(Number(input.trim()));
+}
+
+function linuxKeyValues(input: string | null): Record<string, number> {
+  const output: Record<string, number> = {};
+  for (const line of input?.split("\n") ?? []) {
+    const match = /^([a-zA-Z0-9_]+)\s+(\d+)$/u.exec(line.trim());
+    if (!match) continue;
+    const value = Number(match[2]);
+    if (Number.isSafeInteger(value) && value >= 0) output[match[1]!] = value;
+  }
+  return output;
+}
+
+function safeMemoryBytes(input: unknown): number | null {
+  const value = Number(input);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function sumMemoryValues(...values: Array<number | null>): number | null {
+  const present = values.filter((value): value is number => value !== null);
+  return present.length ? present.reduce((total, value) => total + value, 0) : null;
 }
 
 function publicMetricPoint(row: Record<string, unknown>): Record<string, unknown> {

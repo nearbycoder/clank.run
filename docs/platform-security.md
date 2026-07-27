@@ -29,6 +29,14 @@ denied even when they belong to an operator. The user directory returns identity
 membership, project, and aggregate storage metadata but never password hashes, session/CSRF
 secrets, token hashes, raw tokens, recovery material, passkeys, or application-database users.
 
+The memory-diagnostics API follows the same browser-only platform-administrator boundary. It
+returns bounded cgroup and process counters, project/release identifiers, and process IDs, but
+never command arguments, environment variables, secrets, or filesystem paths. CLI bearer tokens,
+ordinary accounts, and support impersonation cannot access it. Process-runner attribution uses
+Linux PSS when available to avoid double-counting shared pages, with RSS as a portable fallback;
+Docker-runner entries describe the wrapper process and must not be treated as complete container
+isolation telemetry.
+
 Support impersonation is deliberately narrower than administrator access. Starting it requires the
 operator's same-origin browser session, CSRF token, a session created within the last 30 minutes, an
 8–500 character audit reason, and exact target-email confirmation. An operator cannot target
