@@ -2,7 +2,10 @@
 import { readFile } from "node:fs/promises";
 import {
   For,
+  MCP_PROTOCOL_VERSION,
+  McpToolError,
   createApp,
+  createMcpServer,
   html,
   json,
   renderDocument,
@@ -374,12 +377,236 @@ function searchSnippet(doc: DocumentationPage, query: string): string {
   return `${start > 0 ? "…" : ""}${doc.text.slice(start, end).trim()}${end < doc.text.length ? "…" : ""}`;
 }
 
+function searchDocumentation(query: string) {
+  return docs.map((doc) => ({ doc, score: scoreSearch(doc, query) }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.doc.title.localeCompare(right.doc.title));
+}
+
+function mcpInput(value: unknown, allowed: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new McpToolError("INVALID_INPUT", "Tool arguments must be an object.");
+  }
+  const input = value as Record<string, unknown>;
+  const unexpected = Object.keys(input).filter((key) => !allowed.includes(key));
+  if (unexpected.length) {
+    throw new McpToolError("INVALID_INPUT", `Unexpected argument: ${unexpected[0]}.`);
+  }
+  return input;
+}
+
+function documentSummary(doc: DocumentationPage) {
+  return {
+    slug: doc.slug,
+    title: doc.title,
+    description: doc.description,
+    group: { id: doc.groupId, title: doc.groupTitle },
+    headings: doc.headings,
+    words: doc.words,
+    readingMinutes: doc.readingMinutes,
+    url: `${canonicalOrigin}/docs/${doc.slug}`,
+    raw: `${canonicalOrigin}/raw/${doc.slug}.md`,
+  };
+}
+
+const docsMcp = createMcpServer({
+  name: "clank-docs",
+  title: "Clank Documentation",
+  version: manifest.frameworkVersion,
+  description: "Search and read the canonical Clank framework and deployment documentation.",
+  instructions: "Use docs.search to locate a guide, then docs.read to retrieve its canonical Markdown. All tools are public and read-only.",
+  allowedOrigins: [canonicalOrigin],
+  tools: [
+    {
+      name: "docs.list",
+      title: "List documentation",
+      description: "List every canonical Clank guide, optionally limited to one documentation group.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          group: {
+            type: "string",
+            minLength: 1,
+            maxLength: 64,
+            description: "Optional group identifier such as framework, full-stack, or deploy.",
+          },
+        },
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          frameworkVersion: { type: "string" },
+          groups: { type: "array", items: { type: "object" } },
+          documents: { type: "array", items: { type: "object" } },
+        },
+        required: ["frameworkVersion", "groups", "documents"],
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "List documentation",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      invoke(value) {
+        const input = mcpInput(value, ["group"]);
+        if (input.group !== undefined && (
+          typeof input.group !== "string"
+          || input.group.length < 1
+          || input.group.length > 64
+        )) {
+          throw new McpToolError("INVALID_INPUT", "group must be a bounded documentation group identifier.");
+        }
+        const group = input.group === undefined
+          ? undefined
+          : manifest.groups.find((entry) => entry.id === input.group);
+        if (input.group !== undefined && !group) {
+          throw new McpToolError("GROUP_NOT_FOUND", "The requested documentation group does not exist.");
+        }
+        const selected = group
+          ? group.slugs.map((slug) => docsBySlug.get(slug)!)
+          : docs;
+        return {
+          frameworkVersion: manifest.frameworkVersion,
+          groups: manifest.groups,
+          documents: selected.map(documentSummary),
+        };
+      },
+    },
+    {
+      name: "docs.search",
+      title: "Search documentation",
+      description: "Search guide titles, headings, and canonical documentation text.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            minLength: 2,
+            maxLength: 120,
+            description: "Framework concept, command, API, or operational task to find.",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 20,
+            default: 8,
+            description: "Maximum number of ranked guide matches.",
+          },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          total: { type: "integer" },
+          results: { type: "array", items: { type: "object" } },
+        },
+        required: ["query", "total", "results"],
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "Search documentation",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      invoke(value) {
+        const input = mcpInput(value, ["query", "limit"]);
+        if (
+          typeof input.query !== "string"
+          || input.query.trim().length < 2
+          || input.query.length > 120
+        ) {
+          throw new McpToolError("INVALID_INPUT", "query must contain between 2 and 120 characters.");
+        }
+        if (
+          input.limit !== undefined
+          && (!Number.isInteger(input.limit) || Number(input.limit) < 1 || Number(input.limit) > 20)
+        ) {
+          throw new McpToolError("INVALID_INPUT", "limit must be an integer from 1 through 20.");
+        }
+        const query = input.query.trim();
+        const limit = input.limit === undefined ? 8 : Number(input.limit);
+        const ranked = searchDocumentation(query);
+        return {
+          query,
+          total: ranked.length,
+          results: ranked.slice(0, limit).map(({ doc }) => ({
+            ...documentSummary(doc),
+            snippet: searchSnippet(doc, query),
+          })),
+        };
+      },
+    },
+    {
+      name: "docs.read",
+      title: "Read documentation",
+      description: "Read one canonical Clank guide as Markdown with its navigation metadata.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          slug: {
+            type: "string",
+            pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            maxLength: 80,
+            description: "Canonical guide slug returned by docs.list or docs.search.",
+          },
+        },
+        required: ["slug"],
+        additionalProperties: false,
+      },
+      outputSchema: {
+        type: "object",
+        properties: {
+          protocol: { const: "clank-doc/1" },
+          frameworkVersion: { type: "string" },
+          document: { type: "object" },
+          markdown: { type: "string" },
+        },
+        required: ["protocol", "frameworkVersion", "document", "markdown"],
+        additionalProperties: false,
+      },
+      annotations: {
+        title: "Read documentation",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      invoke(value) {
+        const input = mcpInput(value, ["slug"]);
+        if (
+          typeof input.slug !== "string"
+          || input.slug.length > 80
+          || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(input.slug)
+        ) {
+          throw new McpToolError("INVALID_INPUT", "slug must be a canonical documentation identifier.");
+        }
+        const doc = docsBySlug.get(input.slug);
+        if (!doc) throw new McpToolError("DOC_NOT_FOUND", "The requested documentation guide does not exist.");
+        return {
+          protocol: "clank-doc/1",
+          frameworkVersion: manifest.frameworkVersion,
+          document: {
+            ...documentSummary(doc),
+            source: doc.source,
+            tableOfContents: doc.toc,
+          },
+          markdown: doc.markdown,
+        };
+      },
+    },
+  ],
+});
+
 function SearchPage(props: { query: string }) {
-  const results = props.query
-    ? docs.map((doc) => ({ doc, score: scoreSearch(doc, props.query) }))
-      .filter((entry) => entry.score > 0)
-      .sort((left, right) => right.score - left.score || left.doc.title.localeCompare(right.doc.title))
-    : [];
+  const results = props.query ? searchDocumentation(props.query) : [];
   return (
     <section class="search-page">
       <div class="breadcrumbs"><a href="/">Docs</a><span>/</span><span>Search</span></div>
@@ -478,6 +705,7 @@ function llmsIndex(): string {
     "",
     `- [Complete documentation corpus](${canonicalOrigin}/llms-full.txt)`,
     `- [Structured documentation index](${canonicalOrigin}/api/docs.json)`,
+    `- [MCP discovery](${canonicalOrigin}/.well-known/clank)`,
     `- [Getting started](${canonicalOrigin}/docs/getting-started)`,
     `- [Deployment CLI](${canonicalOrigin}/docs/cli)`,
     `- [API reference](${canonicalOrigin}/docs/api-reference)`,
@@ -496,6 +724,7 @@ function llmsIndex(): string {
     "",
     "- `clank help --json` returns the stable machine-readable command manifest.",
     "- `clank doctor --json` returns structured project-readiness diagnostics.",
+    `- Connect an MCP client to \`${canonicalOrigin}/__clank/mcp\` for typed list, search, and read tools.`,
     "- Prefer raw Markdown or JSON endpoints when exact commands and contracts matter.",
     "",
   );
@@ -532,6 +761,55 @@ const app = createApp({
   .get("/healthz", () => json({ ok: true, service: "clank-docs", version: manifest.frameworkVersion }, {
     headers: { "cache-control": "no-store" },
   }))
+  .get("/.well-known/clank", () => json({
+    protocol: "clank-agent/2",
+    name: "clank-docs",
+    title: "Clank Documentation",
+    description: "Search and read the canonical Clank framework and deployment documentation.",
+    mcp: {
+      transport: "streamable-http",
+      protocolVersion: MCP_PROTOCOL_VERSION,
+      endpoint: `${canonicalOrigin}/__clank/mcp`,
+      authentication: "none",
+    },
+    documentation: {
+      actions: "Connect with MCP and call docs.search, docs.read, or docs.list.",
+      compact: `${canonicalOrigin}/llms.txt`,
+      full: `${canonicalOrigin}/llms-full.txt`,
+    },
+  }, {
+    headers: {
+      "access-control-allow-origin": "*",
+      "cache-control": "public, max-age=300",
+    },
+  }))
+  .get("/.well-known/mcp/server-card.json", () => json({
+    "$schema": "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json",
+    version: "1.0",
+    protocolVersion: MCP_PROTOCOL_VERSION,
+    serverInfo: {
+      name: "clank-docs",
+      title: "Clank Documentation",
+      version: manifest.frameworkVersion,
+    },
+    description: "Search and read the canonical Clank framework and deployment documentation.",
+    documentationUrl: `${canonicalOrigin}/.well-known/clank`,
+    transport: { type: "streamable-http", endpoint: "/__clank/mcp" },
+    capabilities: {
+      tools: { listChanged: false },
+      resources: { subscribe: false, listChanged: false },
+    },
+    authentication: { required: false, schemes: [] },
+    instructions: "Connect to the MCP endpoint and use tools/list. Every tool is public and read-only.",
+    resources: ["dynamic"],
+    tools: ["dynamic"],
+  }, {
+    headers: {
+      "access-control-allow-origin": "*",
+      "cache-control": "public, max-age=300",
+    },
+  }))
+  .route("*", "/__clank/mcp", ({ request }) => docsMcp.handle(request))
   .get("/", () => page(<HomePage />, {
     title: "Clank Documentation",
     description: "Build, understand, secure, and deploy applications with the AI-first Clank TypeScript framework.",
@@ -588,6 +866,8 @@ const app = createApp({
     frameworkVersion: manifest.frameworkVersion,
     canonicalOrigin,
     agentEndpoints: {
+      discovery: `${canonicalOrigin}/.well-known/clank`,
+      mcp: `${canonicalOrigin}/__clank/mcp`,
       compact: `${canonicalOrigin}/llms.txt`,
       full: `${canonicalOrigin}/llms-full.txt`,
       rawPattern: `${canonicalOrigin}/raw/{slug}.md`,
