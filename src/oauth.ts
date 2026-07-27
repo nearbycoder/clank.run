@@ -283,7 +283,7 @@ async function authorize<Profile extends object>(
 ): Promise<Response> {
   if (request.method !== "GET" && request.method !== "POST") return methodNotAllowed("GET, POST");
   try {
-    if (request.method === "POST" && !requestOriginAllowed(request)) {
+    if (request.method === "POST" && !authorizationRequestOriginAllowed(request)) {
       throw new OAuthRequestError("invalid_request", "Cross-origin authorization request rejected.", 403);
     }
     const input = request.method === "GET"
@@ -331,6 +331,20 @@ async function authorize<Profile extends object>(
       ? authorizationHtml(errorPage(error), error instanceof OAuthRequestError ? error.status : 400)
       : oauthError(error);
   }
+}
+
+/**
+ * OAuth clients can open the authorization page through a cross-site redirect
+ * or extension context. Some user agents retain that context in
+ * `Sec-Fetch-Site` for the consent POST even though the form itself supplies
+ * the application's exact, browser-controlled Origin. Accept that narrow
+ * case and continue to the session-bound CSRF check below. A foreign Origin,
+ * or a cross-site request without an Origin, remains rejected.
+ */
+function authorizationRequestOriginAllowed(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) return requestOriginAllowed(request);
+  return origin === new URL(request.url).origin;
 }
 
 async function exchangeToken(
