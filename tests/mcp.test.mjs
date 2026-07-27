@@ -167,6 +167,7 @@ async function requestConsent(runtime, session, requestParameters) {
   return {
     html,
     consentToken: hiddenInput(html, "consent_token"),
+    contentSecurityPolicy: response.headers.get("content-security-policy"),
   };
 }
 
@@ -185,6 +186,11 @@ async function authorize(runtime, session, client, scopes = "agent:read agent:wr
   };
   const consent = await requestConsent(runtime, session, requestParameters);
   assert.match(consent.html, /Connect Test MCP client/);
+  assert.match(
+    consent.contentSecurityPolicy,
+    /form-action 'self' http:\/\/127\.0\.0\.1:43123(?:;|$)/u,
+  );
+  assert.doesNotMatch(consent.contentSecurityPolicy, /form-action[^;]*\*/u);
 
   const approval = await runtime.handle(formRequest("/__clank/oauth/authorize", {
     ...requestParameters,

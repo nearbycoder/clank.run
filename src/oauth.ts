@@ -309,7 +309,11 @@ async function authorize<Profile extends object>(
         parameters,
         options.codeLifetimeMs,
       );
-      return authorizationHtml(consentPage(parameters, auth, options.applicationName, consentToken));
+      return authorizationHtml(
+        consentPage(parameters, auth, options.applicationName, consentToken),
+        200,
+        new URL(parameters.redirectUri).origin,
+      );
     }
     if (!auth.csrfToken || !constantTimeEqual(String(input.csrf_token ?? ""), auth.csrfToken)) {
       throw new OAuthRequestError("invalid_request", "The authorization request could not be verified.", 403);
@@ -734,13 +738,14 @@ function pageShell(title: string, body: string): string {
   </style></head><body><main><h1>${title}</h1>${body}</main></body></html>`;
 }
 
-function authorizationHtml(value: string, status = 200): Response {
+function authorizationHtml(value: string, status = 200, callbackOrigin?: string): Response {
+  const formAction = callbackOrigin ? `'self' ${callbackOrigin}` : "'self'";
   return new Response(value, {
     status,
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
       "x-frame-options": "DENY",
