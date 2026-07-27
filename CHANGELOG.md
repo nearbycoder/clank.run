@@ -15,6 +15,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- Sidebar navigation now uses one consistently sized SVG icon system instead of font glyphs with
+  mismatched baselines and visual bounds.
 - The control-plane sidebar now keeps the Clank mark and name together in one compact lockup
   while preserving the descriptor alignment.
 - The protected-main documentation workflow now removes one oldest inactive artifact only when
