@@ -11,9 +11,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
-- MCP OAuth consent now tolerates browser and extension authorization flows that retain cross-site
-  Fetch Metadata while supplying the application's exact Origin. Foreign origins, missing
-  cross-site origins, and invalid session-bound CSRF tokens remain blocked.
+- MCP OAuth consent no longer depends on extension or embedded-browser Origin behavior. Consent
+  pages now receive a one-time, expiring proof bound to the authenticated session and exact OAuth
+  request; approval consumes it atomically alongside the existing session CSRF check.
 
 ## 0.9.0 - 2026-07-26
 

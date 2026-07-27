@@ -215,6 +215,9 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
 - Request and response bodies are bounded before execution.
 - Tool input and backend output use the same runtime schemas as the application.
 - Authorization codes are single-use, expire after five minutes, and require PKCE `S256`.
+- Consent forms carry a one-time, five-minute proof bound to the authenticated session and exact
+  authorization request. The proof is stored only as a digest and consumed atomically, so opaque
+  extension origins cannot break consent and cross-site forgery cannot replay it.
 - Redirect URIs must be exact registered HTTPS URLs or HTTP loopback URLs; fragments and embedded
   credentials are rejected.
 - Access tokens are stored only as SHA-256 digests, expire after one hour, and are bound to the

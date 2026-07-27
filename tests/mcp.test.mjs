@@ -124,6 +124,20 @@ async function registerUser(runtime) {
   };
 }
 
+async function loginUser(runtime) {
+  const response = await runtime.handle(jsonRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+  }));
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  return {
+    cookie: response.headers.get("set-cookie").split(";", 1)[0],
+    csrf: payload.csrfToken,
+    user: payload.user,
+  };
+}
+
 async function registerClient(runtime) {
   const response = await runtime.handle(jsonRequest("/__clank/oauth/register", {
     client_name: "Test MCP client",
@@ -134,6 +148,26 @@ async function registerClient(runtime) {
   }, { origin: undefined }));
   assert.equal(response.status, 201);
   return response.json();
+}
+
+function hiddenInput(html, name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const matched = new RegExp(`name="${escapedName}" value="([^"]+)"`, "u").exec(html);
+  assert.ok(matched, `Expected hidden OAuth field ${name}.`);
+  return matched[1];
+}
+
+async function requestConsent(runtime, session, requestParameters) {
+  const response = await runtime.handle(new Request(
+    `${origin}/__clank/oauth/authorize?${new URLSearchParams(requestParameters)}`,
+    { headers: { cookie: session.cookie } },
+  ));
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  return {
+    html,
+    consentToken: hiddenInput(html, "consent_token"),
+  };
 }
 
 async function authorize(runtime, session, client, scopes = "agent:read agent:write") {
@@ -149,16 +183,13 @@ async function authorize(runtime, session, client, scopes = "agent:read agent:wr
     scope: scopes,
     resource,
   };
-  const consent = await runtime.handle(new Request(
-    `${origin}/__clank/oauth/authorize?${new URLSearchParams(requestParameters)}`,
-    { headers: { cookie: session.cookie } },
-  ));
-  assert.equal(consent.status, 200);
-  assert.match(await consent.text(), /Connect Test MCP client/);
+  const consent = await requestConsent(runtime, session, requestParameters);
+  assert.match(consent.html, /Connect Test MCP client/);
 
   const approval = await runtime.handle(formRequest("/__clank/oauth/authorize", {
     ...requestParameters,
     csrf_token: session.csrf,
+    consent_token: consent.consentToken,
     decision: "approve",
   }, {
     cookie: session.cookie,
@@ -183,7 +214,7 @@ async function authorize(runtime, session, client, scopes = "agent:read agent:wr
   return { ...(await token.json()), code, verifier };
 }
 
-test("OAuth consent accepts exact Origin across inherited Fetch Metadata but rejects foreign requests", async () => {
+test("OAuth consent proofs tolerate opaque browser headers and reject forgery, mutation, and replay", async () => {
   const runtime = await openBackend(authenticatedBackend(), {
     path: ":memory:",
     agent: {
@@ -196,7 +227,7 @@ test("OAuth consent accepts exact Origin across inherited Fetch Metadata but rej
   const session = await registerUser(runtime);
   const client = await registerClient(runtime);
   const verifier = "clank-fetch-metadata-pkce-verifier-012345678901234567890";
-  const requestParameters = {
+  const baseParameters = {
     client_id: client.client_id,
     redirect_uri: client.redirect_uris[0],
     response_type: "code",
@@ -205,43 +236,101 @@ test("OAuth consent accepts exact Origin across inherited Fetch Metadata but rej
     code_challenge_method: "S256",
     scope: "agent:read agent:write",
     resource,
-    csrf_token: session.csrf,
-    decision: "approve",
   };
+  const post = (requestParameters, consentToken, headers = {}) => runtime.handle(formRequest(
+    "/__clank/oauth/authorize",
+    {
+      ...requestParameters,
+      csrf_token: session.csrf,
+      consent_token: consentToken,
+      decision: "approve",
+    },
+    {
+      cookie: session.cookie,
+      ...headers,
+    },
+  ));
 
-  const inheritedCrossSite = await runtime.handle(formRequest("/__clank/oauth/authorize", requestParameters, {
-    cookie: session.cookie,
-    origin,
+  const opaqueConsent = await requestConsent(runtime, session, baseParameters);
+  const opaqueOrigin = await post(baseParameters, opaqueConsent.consentToken, {
+    origin: "null",
     "sec-fetch-site": "cross-site",
-  }));
-  assert.equal(inheritedCrossSite.status, 303);
-  assert.ok(new URL(inheritedCrossSite.headers.get("location")).searchParams.get("code"));
+  });
+  assert.equal(opaqueOrigin.status, 303);
+  assert.ok(new URL(opaqueOrigin.headers.get("location")).searchParams.get("code"));
 
-  const foreignOrigin = await runtime.handle(formRequest("/__clank/oauth/authorize", requestParameters, {
-    cookie: session.cookie,
+  const missingOriginConsent = await requestConsent(runtime, session, baseParameters);
+  const missingOrigin = await post(baseParameters, missingOriginConsent.consentToken, {
+    "sec-fetch-site": "cross-site",
+  });
+  assert.equal(missingOrigin.status, 303);
+
+  const replay = await post(baseParameters, opaqueConsent.consentToken, {
+    origin: "null",
+    "sec-fetch-site": "cross-site",
+  });
+  assert.equal(replay.status, 403);
+  assert.equal((await replay.json()).error, "invalid_request");
+
+  const forged = await post(baseParameters, `clank_consent_${"A".repeat(32)}`, {
     origin: "https://evil.test",
     "sec-fetch-site": "cross-site",
-  }));
-  assert.equal(foreignOrigin.status, 403);
-  assert.equal((await foreignOrigin.json()).error, "invalid_request");
+  });
+  assert.equal(forged.status, 403);
+  assert.equal((await forged.json()).error, "invalid_request");
 
-  const missingOrigin = await runtime.handle(formRequest("/__clank/oauth/authorize", requestParameters, {
-    cookie: session.cookie,
+  const changedConsent = await requestConsent(runtime, session, baseParameters);
+  const changedParameters = {
+    ...baseParameters,
+    scope: "agent:read",
+  };
+  const changed = await post(changedParameters, changedConsent.consentToken, {
+    origin: "https://evil.test",
+    "sec-fetch-site": "cross-site",
+  });
+  assert.equal(changed.status, 403);
+  assert.equal((await changed.json()).error, "invalid_request");
+
+  const otherSession = await loginUser(runtime);
+  const sessionBoundConsent = await requestConsent(runtime, session, baseParameters);
+  const crossSession = await runtime.handle(formRequest("/__clank/oauth/authorize", {
+    ...baseParameters,
+    csrf_token: otherSession.csrf,
+    consent_token: sessionBoundConsent.consentToken,
+    decision: "approve",
+  }, {
+    cookie: otherSession.cookie,
+    origin: "null",
     "sec-fetch-site": "cross-site",
   }));
-  assert.equal(missingOrigin.status, 403);
-  assert.equal((await missingOrigin.json()).error, "invalid_request");
+  assert.equal(crossSession.status, 403);
+  assert.equal((await crossSession.json()).error, "invalid_request");
 
+  const invalidCsrfConsent = await requestConsent(runtime, session, baseParameters);
   const invalidCsrf = await runtime.handle(formRequest("/__clank/oauth/authorize", {
-    ...requestParameters,
+    ...baseParameters,
     csrf_token: "invalid-csrf-token",
+    consent_token: invalidCsrfConsent.consentToken,
+    decision: "approve",
   }, {
     cookie: session.cookie,
-    origin,
+    origin: "null",
     "sec-fetch-site": "cross-site",
   }));
   assert.equal(invalidCsrf.status, 403);
   assert.equal((await invalidCsrf.json()).error, "invalid_request");
+
+  const noProof = await runtime.handle(formRequest("/__clank/oauth/authorize", {
+    ...baseParameters,
+    csrf_token: session.csrf,
+    decision: "approve",
+  }, {
+    cookie: session.cookie,
+    origin: "https://evil.test",
+    "sec-fetch-site": "cross-site",
+  }));
+  assert.equal(noProof.status, 403);
+  assert.equal((await noProof.json()).error, "invalid_request");
   runtime.close();
 });
 

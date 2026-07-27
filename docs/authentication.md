@@ -84,17 +84,20 @@ Passkeys registered by releases before 0.7 used `residentKey: "preferred"`. Most
 
 ## Troubleshooting origin rejection
 
-`Cross-origin auth request rejected.` means the browser's exact `Origin` did not
-match the origin reconstructed by the application server, or Fetch Metadata
-identified a cross-site request. Do not disable this check or rewrite the
-browser's `Origin`; both would weaken CSRF protection.
+`Cross-origin auth request rejected.` on an ordinary login, registration, or
+account mutation means the browser's exact `Origin` did not match the origin
+reconstructed by the application server, or Fetch Metadata identified a
+cross-site request. Do not disable this check or rewrite the browser's
+`Origin`; both would weaken CSRF protection.
 
-OAuth consent is the one narrow compatibility case: a browser or extension can
-retain `Sec-Fetch-Site: cross-site` from the authorization redirect while the
-consent form supplies the application's exact, browser-controlled `Origin`.
-Clank allows that request to continue only to its session-bound CSRF check.
-A foreign `Origin`, a cross-site request without `Origin`, or an invalid CSRF
-token is still rejected.
+MCP OAuth consent does not depend on extension or embedded-browser `Origin`
+behavior. Each rendered consent page receives a random, one-time proof stored
+only as a digest and bound to the authenticated session, registered client,
+exact redirect URI, PKCE challenge, scopes, state, and MCP resource. Approval
+requires that proof plus the session's CSRF token, consumes the proof
+atomically, and rejects expiry, replay, parameter changes, or another session.
+This preserves CSRF protection when an OAuth client supplies an opaque or
+missing `Origin`.
 
 For an app deployed by Clank, open the canonical URL reported by `clank status`
 and reload it before retrying. Managed ingress configures the generated runtime
