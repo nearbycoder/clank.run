@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.9.4 - 2026-07-28
+
 ### Added
 
 - Typed durable jobs now support transactional mutation enqueue, owner-scoped handlers, queue and
