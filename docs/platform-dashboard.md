@@ -4,7 +4,7 @@ Clank includes a dependency-free browser console for operating projects, traffic
 
 ## Dashboard
 
-Open the configured `CLANK_PLATFORM_URL` and sign in with a platform account. A valid browser session opens the dashboard directly after a refresh. Expired sessions return to the sign-in view, and every authenticated browser mutation requires the session CSRF token. The first installation account uses the one-time bootstrap unless the operator explicitly enables public registration. Later invitees can choose **Use invitation** to create only the email-bound invited account and join its workspace without reopening public signup.
+Open the configured `CLANK_PLATFORM_URL` and sign in with a platform account. A valid browser session opens the dashboard directly after a refresh. Expired sessions return to the sign-in view, and every authenticated browser mutation requires the session CSRF token. The first installation account uses the one-time bootstrap unless the operator explicitly enables public registration. Later invitees can choose **Use invitation** to create the email-bound account without reopening public signup. The invitation explicitly determines whether the account receives only its own personal workspace or also joins an existing workspace.
 
 The control plane resolves the browser session and requested console route before it returns HTML.
 The first response therefore contains the correct visible account-access or application shell,
@@ -56,7 +56,7 @@ backups, and logs.
 
 The workspace Activity view shows append-only API history across every organization where the current owner, administrator, or developer role permits audit access. Events identify their action, target, actor, timestamp, and expandable safe metadata. Pagination uses a descending event-ID cursor, so concurrent new events do not duplicate or skip older pages. Deleted projects remain named and visibly marked as deleted.
 
-The **People** view creates and switches between the account's workspaces, then shows the current role, members, pending invitations, and project usage. The creation control reflects the transactionally enforced owned-workspace quota and selects the new workspace immediately. A signed-in recipient can paste an email-bound token to join without using the CLI. Owners and administrators can invite by email, copy the single-use token once, revoke pending invitations, change roles, remove collaborators, or leave when last-owner protection permits. Pending invitation addresses are hidden from developers and viewers, including email redaction in developer activity metadata; disabled controls reflect server capabilities, but every operation is authorized again by the API.
+The **People** view creates and switches between the account's workspaces, then shows the current role, members, pending invitations, and project usage. The creation control reflects the transactionally enforced owned-workspace quota and selects the new workspace immediately. A signed-in recipient can paste an email-bound workspace token to join without using the CLI. Owners and administrators can invite by email, copy the single-use token once, revoke pending invitations, change roles, remove collaborators, or leave when last-owner protection permits. Allowlisted platform administrators get an additional **Personal workspace only** choice that onboards the recipient without granting access to any inviter workspace. The pending list labels both access scopes explicitly. Pending invitation addresses are hidden from unauthorized workspace members, including email redaction in developer activity metadata; disabled controls reflect server capabilities, but every operation is authorized again by the API.
 
 Allowlisted platform operators see a separate **Control plane** view. Its range-selectable global
 traffic histogram, capacity totals, account growth, and top-project table aggregate the complete
@@ -238,7 +238,9 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `POST /api/organizations` — create an owned workspace under the account quota.
 - `GET /api/organizations/:id` — workspace capabilities, member roster, and administrator-only active invitation metadata.
 - `POST /api/organizations/:id/invitations` — create or replace an email-bound, single-use invitation.
-- `POST /__clank/auth/invited-register` — create an invitation-bound account and consume its workspace membership in one flow.
+- `GET|POST /api/admin/invitations` — list or create platform-admin-only personal signup invitations.
+- `DELETE /api/admin/invitations/:invitationId` — revoke an active personal signup invitation.
+- `POST /__clank/auth/invited-register` — create an invitation-bound account and atomically apply its personal or workspace scope.
 - `DELETE /api/organizations/:id/invitations/:invitationId` — revoke an active invitation.
 - `PATCH /api/organizations/:id/members/:userId` — change a member role with last-owner and owner-only protections.
 - `DELETE /api/organizations/:id/members/:userId` — leave or administratively remove membership and revoke workspace-scoped credentials.

@@ -335,6 +335,7 @@ const BACKUP_CONCURRENCY = 2;
 const DEFAULT_RELEASES_PER_PROJECT = 50;
 const DEFAULT_RELEASE_STORAGE_BYTES = 20 * 1024 * 1024 * 1024;
 const MAX_PENDING_INVITATIONS_PER_ORGANIZATION = 100;
+const MAX_PENDING_PERSONAL_INVITATIONS = 100;
 const BOOTSTRAP_CLAIM_MS = 5 * 60_000;
 const MAX_PLATFORM_RATE_LIMIT_KEYS = 20_000;
 const PLATFORM_RATE_LIMIT_PRUNE_TARGET = 18_000;
@@ -1883,6 +1884,110 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         await storage.auth.verifyCsrf(request, auth);
         return stopPlatformImpersonation(storage.internal, request, auth);
       }
+      if (url.pathname === "/api/admin/invitations" && request.method === "GET") {
+        await requirePlatformAdmin(storage, request);
+        const invitations = storage.internal.prepare(`SELECT i.id, i.email, i.expires_at, i.created_at,
+            u.id AS invited_by_id, u.email AS invited_by_email
+          FROM clank_platform_personal_invitations i
+          JOIN clank_auth_users u ON u.id = i.invited_by
+          WHERE i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ?
+          ORDER BY i.created_at DESC`).all(Date.now());
+        return api({
+          ok: true,
+          invitations: invitations.map((row) => ({
+            id: String(row.id),
+            email: String(row.email),
+            scope: "personal",
+            invitedBy: {
+              id: String(row.invited_by_id),
+              email: String(row.invited_by_email),
+            },
+            expiresAt: Number(row.expires_at),
+            createdAt: Number(row.created_at),
+          })),
+          limit: MAX_PENDING_PERSONAL_INVITATIONS,
+        });
+      }
+      if (url.pathname === "/api/admin/invitations" && request.method === "POST") {
+        const auth = await requirePlatformAdmin(storage, request, true);
+        const input = plainObject(await readJsonRequest(request, 16 * 1024));
+        exact(input, ["email", "expiresIn"]);
+        const email = normalizeEmail(input.email);
+        const expiresIn = input.expiresIn === undefined
+          ? 7 * 24 * 60 * 60
+          : integerInRange(input.expiresIn, "expiresIn", 300, 30 * 24 * 60 * 60);
+        const token = `clnkp_${await randomToken(32)}`;
+        const id = await randomId(18);
+        const now = Date.now();
+        const expiresAt = now + expiresIn * 1_000;
+        let replacedInvitationId: string | null = null;
+        storage.internal.transaction((changes) => {
+          const existingAccount = storage.internal.prepare(
+            "SELECT 1 AS present FROM clank_auth_users WHERE email = ?",
+          ).get(email);
+          if (existingAccount) {
+            throw new PlatformError(
+              409,
+              "ACCOUNT_EXISTS",
+              "That email already has an account and does not need a personal invitation.",
+            );
+          }
+          const existingInvitation = storage.internal.prepare(`SELECT id
+            FROM clank_platform_personal_invitations
+            WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+            ORDER BY created_at DESC LIMIT 1`).get(email, now);
+          replacedInvitationId = existingInvitation ? String(existingInvitation.id) : null;
+          const pendingCount = Number(storage.internal.prepare(`SELECT count(*) AS count
+            FROM clank_platform_personal_invitations
+            WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).get(now)?.count ?? 0);
+          if (!replacedInvitationId && pendingCount >= MAX_PENDING_PERSONAL_INVITATIONS) {
+            throw new PlatformError(
+              409,
+              "INVITATION_LIMIT_REACHED",
+              `This platform has reached its ${MAX_PENDING_PERSONAL_INVITATIONS}-invitation limit.`,
+            );
+          }
+          storage.internal.prepare(`UPDATE clank_platform_personal_invitations SET revoked_at = ?
+            WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+            .run(now, email, now);
+          storage.internal.prepare(`INSERT INTO clank_platform_personal_invitations
+            (id, token_hash, email, invited_by, expires_at, accepted_at, revoked_at, created_at)
+            VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)`)
+            .run(id, syncHash(token), email, auth.user!.id, expiresAt, now);
+          audit(storage.internal, auth.user!.id, null, null, "personal_invitation.create", {
+            invitationId: id,
+            email,
+            expiresAt,
+            replacedInvitationId,
+          });
+          changes.record("__platform", auth.user!.id);
+        });
+        return api({
+          ok: true,
+          invitation: { id, token, email, scope: "personal", expiresAt },
+        }, 201);
+      }
+      const adminInvitationMatch = /^\/api\/admin\/invitations\/([A-Za-z0-9_-]{8,128})$/
+        .exec(url.pathname);
+      if (adminInvitationMatch && request.method === "DELETE") {
+        const auth = await requirePlatformAdmin(storage, request, true);
+        const invitationId = adminInvitationMatch[1]!;
+        const now = Date.now();
+        storage.internal.transaction((changes) => {
+          const result = storage.internal.prepare(`UPDATE clank_platform_personal_invitations
+            SET revoked_at = ?
+            WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+            .run(now, invitationId, now);
+          if (Number(result.changes) !== 1) {
+            throw new PlatformError(404, "INVITATION_NOT_FOUND", "Active personal invitation not found.");
+          }
+          audit(storage.internal, auth.user!.id, null, null, "personal_invitation.revoke", {
+            invitationId,
+          });
+          changes.record("__platform", auth.user!.id);
+        });
+        return api({ ok: true, invitationId, revoked: true });
+      }
       if (url.pathname === "/api/admin/users" && request.method === "GET") {
         await requirePlatformAdmin(storage, request);
         const limit = queryInteger(url.searchParams.get("limit"), "limit", 50, 1, 200);
@@ -3152,6 +3257,18 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     created_at INTEGER NOT NULL
   )`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_invitations_org ON clank_platform_invitations (organization_id, created_at)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_personal_invitations (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL,
+    invited_by TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL,
+    accepted_at INTEGER,
+    revoked_at INTEGER,
+    created_at INTEGER NOT NULL
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_personal_invitations_email
+    ON clank_platform_personal_invitations (email, created_at)`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_projects (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
@@ -3359,6 +3476,9 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   internal.prepare("DELETE FROM clank_platform_device_codes WHERE expires_at <= ?").run(Date.now());
   internal.prepare("DELETE FROM clank_platform_tokens WHERE expires_at <= ?").run(Date.now());
   internal.prepare("DELETE FROM clank_platform_invitations WHERE expires_at <= ? OR revoked_at IS NOT NULL").run(Date.now());
+  internal.prepare(
+    "DELETE FROM clank_platform_personal_invitations WHERE expires_at <= ? OR revoked_at IS NOT NULL",
+  ).run(Date.now());
   const legacyOwners = internal.prepare(`SELECT DISTINCT p.owner_id, u.email
     FROM clank_platform_projects p
     JOIN clank_auth_users u ON u.id = p.owner_id
@@ -5331,14 +5451,24 @@ async function registerWithInvitation(
   const token = boundedString(input.token, "token", 20, 300);
   const email = normalizeEmail(input.email);
   const now = Date.now();
-  const invitation = storage.internal.prepare(`SELECT id, organization_id, email, role
+  const workspaceInvitation = storage.internal.prepare(`SELECT id, organization_id, email, role
     FROM clank_platform_invitations
     WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
     .get(syncHash(token), now);
+  const personalInvitation = workspaceInvitation
+    ? undefined
+    : storage.internal.prepare(`SELECT id, email
+        FROM clank_platform_personal_invitations
+        WHERE token_hash = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+      .get(syncHash(token), now);
+  const invitation = workspaceInvitation ?? personalInvitation;
   if (!invitation || String(invitation.email).toLowerCase() !== email) {
     throw new PlatformError(400, "INVALID_INVITATION", "Invitation is invalid or expired.");
   }
-  const role = validateOrganizationRole(String(invitation.role), false);
+  const invitationScope = workspaceInvitation ? "workspace" : "personal";
+  const role = workspaceInvitation
+    ? validateOrganizationRole(String(workspaceInvitation.role), false)
+    : null;
   const headers = new Headers(request.headers);
   headers.delete("content-length");
   headers.set("content-type", "application/json");
@@ -5364,29 +5494,47 @@ async function registerWithInvitation(
   }
   try {
     storage.internal.transaction((changes) => {
-      const accepted = storage.internal.prepare(`UPDATE clank_platform_invitations SET accepted_at = ?
-        WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
-        .run(Date.now(), invitation.id, Date.now());
+      const accepted = workspaceInvitation
+        ? storage.internal.prepare(`UPDATE clank_platform_invitations SET accepted_at = ?
+            WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+          .run(Date.now(), workspaceInvitation.id, Date.now())
+        : storage.internal.prepare(`UPDATE clank_platform_personal_invitations SET accepted_at = ?
+            WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
+          .run(Date.now(), personalInvitation!.id, Date.now());
       if (Number(accepted.changes) !== 1) {
         throw new PlatformError(409, "INVITATION_USED", "Invitation was already handled.");
       }
-      storage.internal.prepare(`INSERT INTO clank_platform_memberships
-        (organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
-        .run(invitation.organization_id, userId, role, now, now);
-      changes.record("__platform", String(invitation.organization_id));
+      if (workspaceInvitation) {
+        storage.internal.prepare(`INSERT INTO clank_platform_memberships
+          (organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
+          .run(workspaceInvitation.organization_id, userId, role, now, now);
+        changes.record("__platform", String(workspaceInvitation.organization_id));
+      } else {
+        changes.record("__platform", userId);
+      }
     });
   } catch (error) {
     removeNewPlatformAccount(storage, userId);
     if (error instanceof PlatformError) return problem(error.status, error.code, error.message);
     throw error;
   }
-  audit(storage.internal, userId, null, null, "invitation.accept", {
-    organizationId: String(invitation.organization_id),
-    invitationId: String(invitation.id),
-  });
+  audit(
+    storage.internal,
+    userId,
+    null,
+    null,
+    workspaceInvitation ? "invitation.accept" : "personal_invitation.accept",
+    {
+      ...(workspaceInvitation
+        ? { organizationId: String(workspaceInvitation.organization_id) }
+        : { scope: "personal" }),
+      invitationId: String(invitation.id),
+    },
+  );
   return new Response(JSON.stringify({
     ...payload,
-    organizationId: String(invitation.organization_id),
+    invitationScope,
+    organizationId: workspaceInvitation ? String(workspaceInvitation.organization_id) : null,
     role,
   }), {
     status: 201,

@@ -233,7 +233,7 @@ Device/public:
 
 - `POST /api/device/start`
 - `POST /api/device/token`
-- `POST /__clank/auth/invited-register` — invitation-bound account creation without public signup
+- `POST /__clank/auth/invited-register` — personal- or workspace-scoped invitation account creation without public signup
 - `GET /livez` — process liveness
 - `GET /healthz`, `GET /readyz`, or `GET /_clank/readyz` — storage-backed control-plane readiness;
   the reserved path is evaluated before application-host ingress for hosted load balancers
@@ -241,6 +241,7 @@ Device/public:
 Browser session:
 
 - `GET /api/dashboard`
+- `GET|POST /api/admin/invitations` and `DELETE /api/admin/invitations/:id` — browser-only platform administrator control of personal signup invitations;
 - `GET /api/audit?limit=100&before=<event-id>&organizationId=<id>` — role-filtered workspace history that survives project deletion;
 - project status, metrics, releases, logs, and domains;
 - project and domain creation/removal with CSRF;

@@ -33,11 +33,18 @@ clank token list
 clank token revoke <token-id>
 ```
 
-Invitation tokens are hashed at rest, expire after seven days by default, are bound to the invited email address, and can be accepted once. The token is returned only by the create response, so copy it immediately and deliver it through the operator's trusted channel. Listing pending invitations never returns a token or hash, and only owners and administrators receive pending-invitation metadata. Historical invitation events remain auditable, but developer activity feeds redact recipient email fields.
+Invitation tokens are hashed at rest, expire after seven days by default, are bound to the invited email address, and can be accepted once. The token is returned only by the create response, so copy it immediately and deliver it through the operator's trusted channel. Listing pending invitations never returns a token or hash, and only authorized administrators receive pending-invitation metadata. Historical invitation events remain auditable, but developer activity feeds redact recipient email fields.
+
+Clank has two invitation scopes:
+
+| Invitation | Result |
+| --- | --- |
+| **Join this workspace** | Creates the account when necessary and adds it to the selected existing workspace with the chosen `admin`, `developer`, or `viewer` role. |
+| **Personal workspace only** | Creates an isolated account and its automatically provisioned personal workspace. It grants no membership or project access in any inviter workspace. Only an allowlisted platform administrator can issue or revoke this scope. |
 
 Reissuing an invitation for the same workspace and normalized email atomically revokes every older active token. Existing members cannot be reinvited; change their role directly instead. A workspace can retain at most 100 active invitations, and owners or administrators can revoke one before it is accepted. These mutations are recorded in workspace activity.
 
-The browser console exposes the complete flow under **People**. An account below its owned-workspace quota can create and immediately select a workspace there. A signed-in recipient can paste a token into **Join another workspace**; the server requires the token's normalized email to match that account. A recipient without an account chooses **Use invitation** on the sign-in screen and supplies the invited email, a new password, and the token. Clank creates the account, consumes the invitation, and joins the workspace in one flow even when public signup is closed. The page also shows the current role and site usage, lets authorized users update roles or remove members, and reveals a newly created token only in the current page state. Member removal immediately revokes the removed account's organization- and project-scoped tokens. The last owner cannot leave or be demoted, and an administrator cannot grant, change, or remove an owner.
+The browser console exposes the complete flow under **People**. An account below its owned-workspace quota can create and immediately select a workspace there. Workspace owners and administrators issue workspace invitations; allowlisted platform administrators also see **Personal workspace only** in the access selector. A signed-in recipient can paste a workspace token into **Join another workspace**; personal invitations are only for new-account registration. A recipient without an account chooses **Use invitation** on the sign-in screen and supplies the invited email, a new password, and the token. Clank creates the account and atomically applies exactly the invitation's selected scope even when public signup is closed. The page shows workspace and personal pending invitations separately by access, and reveals a newly created token only in the current page state. Member removal immediately revokes the removed account's organization- and project-scoped tokens. The last owner cannot leave or be demoted, and an administrator cannot grant, change, or remove an owner.
 
 ## Organization API
 
@@ -48,9 +55,12 @@ The browser console exposes the complete flow under **People**. An account below
 - `PATCH /api/organizations/:id/members/:userId` changes a role with `{ "role": "admin" }`.
 - `DELETE /api/organizations/:id/members/:userId` lets a member leave or an administrator remove them, then revokes workspace-scoped credentials.
 - `POST /api/invitations/accept` accepts a single-use token for the currently authenticated account.
-- `POST /__clank/auth/invited-register` creates the invitation-bound account and accepts its membership without opening public registration.
+- `GET /api/admin/invitations` lists active personal-only invitations without token material.
+- `POST /api/admin/invitations` creates or replaces a personal-only invitation with `{ "email": "..." }`.
+- `DELETE /api/admin/invitations/:invitationId` revokes an active personal-only invitation.
+- `POST /__clank/auth/invited-register` creates the invitation-bound account and applies either personal-only or workspace membership access without opening public registration.
 
-Authenticated browser mutations require the session CSRF token. Invitation-assisted registration requires an allowed request origin, the exact invited email, and the single-use secret. Project-scoped tokens cannot call organization endpoints.
+Authenticated browser mutations require the session CSRF token. Personal-invitation administration additionally requires an allowlisted, non-impersonating platform administrator using a browser session; bearer tokens are rejected. Invitation-assisted registration requires an allowed request origin, the exact invited email, and the single-use secret. Project-scoped tokens cannot call organization endpoints.
 
 ## Project-scoped tokens
 

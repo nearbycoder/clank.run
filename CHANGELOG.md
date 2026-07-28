@@ -6,6 +6,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- Platform administrators can issue personal-only signup invitations as an explicit alternative to
+  workspace invitations. Personal invitations create an isolated account and its own workspace
+  without granting membership in an operator workspace; both types remain email-bound,
+  single-use, expiring, hashed at rest, revocable, and auditable.
 - Platform administrators can now set durable, audited account and workspace quota overrides from
   the Control plane. Workspace capacity inherits from its owning account and then installation
   defaults; projects, domains, release count/storage, and encrypted-backup retention all enforce
