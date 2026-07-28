@@ -62,6 +62,10 @@ const COMMANDS = Object.freeze({
     usage: "clank watch [input=src] [output=dist] [--jsx-import-source=@clank.run/framework]",
     summary: "Rebuild when source files change.",
   },
+  jobs: {
+    usage: "clank jobs <worker|scheduler> [directory] [--concurrency <count>] [--queues <queue,...>]",
+    summary: "Run a provider-neutral background worker or cron scheduler.",
+  },
   doctor: {
     usage: "clank doctor [directory] [--json]",
     summary: "Check whether an app is ready to build and deploy.",
@@ -157,6 +161,7 @@ const VALUE_OPTIONS = Object.freeze({
   audit: ["org", "limit", "before"],
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "output"],
+  jobs: ["concurrency", "queues"],
   releases: ["confirm"],
   logs: ["limit"],
   rollback: ["confirm"],
@@ -188,6 +193,7 @@ export async function run(command, args) {
       case "generate": return await generateProject(args);
       case "explain": return await explainBlueprint(args);
       case "doctor": return await doctor(args);
+      case "jobs": return await jobsCommand(args);
       case "login": return await login(args);
       case "logout": return await logout(args);
       case "whoami": return await whoami(args);
@@ -359,6 +365,8 @@ Build and agents:
   clank generate [directory]           Generate from clank.app.ts without executing it
   clank build [src] [dist]             Compile TypeScript and TSX
   clank watch [src] [dist]             Rebuild when source files change
+  clank jobs worker [directory]        Run durable jobs outside the web process
+  clank jobs scheduler [directory]     Run the leased cron scheduler
 
 Platform:
   clank login                          Authorize with https://clank.run
@@ -575,6 +583,30 @@ async function doctor(args) {
         );
       }
     }
+    if (config.jobs) {
+      try {
+        const jobsEntry = await lstat(resolve(root, config.jobs.entry));
+        if (!jobsEntry.isFile() || jobsEntry.isSymbolicLink()) {
+          throw new Error("the configured jobs entry is not a real regular file");
+        }
+        check(
+          "jobs",
+          "pass",
+          `${config.jobs.entry} is built for ${config.jobs.workers} worker process`
+            + `${config.jobs.workers === 1 ? "" : "es"}`
+            + `${config.jobs.scheduler ? " and one scheduler" : ""}.`,
+        );
+      } catch {
+        check(
+          "jobs",
+          config.build ? "warn" : "fail",
+          `${config.jobs.entry} is not built yet.`,
+          config.build
+            ? "Deploy or run npm run build before starting a local worker."
+            : "Build jobs.entry or add build.command to clank.deploy.json.",
+        );
+      }
+    }
 
     try {
       const migrations = await loadMigrations(resolve(root, config.database.migrations));
@@ -662,6 +694,76 @@ async function doctor(args) {
     console.log(`${summary.pass} passed, ${summary.warn} warnings, ${summary.fail} failed.`);
   }
   if (!report.ok) process.exitCode = 1;
+}
+
+async function jobsCommand(args) {
+  const [role, directory = ".", ...extra] = positionals(args);
+  if (role !== "worker" && role !== "scheduler") {
+    throw new CliError("Usage: clank jobs <worker|scheduler> [directory]");
+  }
+  if (extra.length > 0) {
+    throw new CliError("clank jobs accepts at most a role and directory.");
+  }
+  if (role === "scheduler" && (option(args, "concurrency") || option(args, "queues"))) {
+    throw new CliError("--concurrency and --queues apply only to clank jobs worker.");
+  }
+  const root = resolve(directory);
+  const config = await readDeploymentConfig(root);
+  if (!config.jobs) {
+    throw new CliError("clank.deploy.json does not define jobs.entry.");
+  }
+  if (config.build) await runBuild(config.build.command, root);
+  const entry = resolve(root, config.jobs.entry);
+  if (!inside(root, entry)) throw new CliError("jobs.entry escapes the project directory.");
+  const entryStats = await lstat(entry).catch((error) => {
+    if (error?.code === "ENOENT") {
+      throw new CliError(`${config.jobs.entry} is not built. Run clank build or configure build.command.`);
+    }
+    throw error;
+  });
+  if (!entryStats.isFile() || entryStats.isSymbolicLink()) {
+    throw new CliError("jobs.entry must be a regular file, not a symbolic link.");
+  }
+  const concurrency = role === "worker"
+    ? positiveIntegerOption(args, "concurrency", config.jobs.concurrency, 64)
+    : 1;
+  const queueValue = role === "worker" ? option(args, "queues") : undefined;
+  const queues = queueValue === undefined ? config.jobs.queues.join(",") : queueValue;
+  if (queues.includes("\0") || queues.length > 8_256) {
+    throw new CliError("--queues must be a comma-separated list no longer than 8 KiB.");
+  }
+  console.log(
+    role === "worker"
+      ? `Starting worker · concurrency ${concurrency}${queues ? ` · queues ${queues}` : " · all queues"}`
+      : "Starting cron scheduler",
+  );
+  const signal = await new Promise((resolvePromise, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["--disable-warning=ExperimentalWarning", entry],
+      {
+        cwd: root,
+        stdio: "inherit",
+        shell: false,
+        env: {
+          ...process.env,
+          CLANK_PROCESS_ROLE: role,
+          ...(role === "worker"
+            ? {
+                CLANK_WORKER_CONCURRENCY: String(concurrency),
+                CLANK_WORKER_QUEUES: queues,
+              }
+            : {}),
+        },
+      },
+    );
+    child.once("error", reject);
+    child.once("exit", (code, exitSignal) => {
+      if (code === 0) resolvePromise(null);
+      else reject(new CliError(`${role} exited with ${code ?? exitSignal}.`));
+    });
+  });
+  return signal;
 }
 
 async function login(args) {

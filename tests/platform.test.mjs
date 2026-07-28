@@ -92,6 +92,39 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
     server.listen(Number(process.env.PORT), process.env.HOST);
     process.on("SIGTERM", () => server.close(() => process.exit(0)));
   `);
+  if (options.jobs) {
+    await writeFile(join(root, "dist", "jobs.js"), `
+      import { DatabaseSync } from "node:sqlite";
+      const database = new DatabaseSync(process.env.CLANK_DATABASE_PATH, { timeout: 5_000 });
+      database.exec("PRAGMA busy_timeout = 5000");
+      database.exec(\`CREATE TABLE IF NOT EXISTS background_processes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        role TEXT NOT NULL,
+        concurrency TEXT,
+        queues TEXT,
+        release TEXT NOT NULL,
+        stopped_at INTEGER
+      )\`);
+      const inserted = database.prepare(
+        "INSERT INTO background_processes (role, concurrency, queues, release) VALUES (?, ?, ?, ?)",
+      ).run(
+        process.env.CLANK_PROCESS_ROLE,
+        process.env.CLANK_WORKER_CONCURRENCY ?? null,
+        process.env.CLANK_WORKER_QUEUES ?? null,
+        ${JSON.stringify(label)},
+      );
+      console.log("background-ready:" + process.env.CLANK_PROCESS_ROLE);
+      const keepAlive = setInterval(() => {}, 60_000);
+      await new Promise((resolve) => {
+        process.once("SIGTERM", resolve);
+        process.once("SIGINT", resolve);
+      });
+      clearInterval(keepAlive);
+      database.prepare("UPDATE background_processes SET stopped_at = ? WHERE id = ?")
+        .run(Date.now(), inserted.lastInsertRowid);
+      database.close();
+    `);
+  }
   for (const [name, sql] of migrations) await writeFile(join(root, "migrations", name), sql);
   const config = parseDeploymentConfig({
     version: 1,
@@ -100,6 +133,17 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
     database: { path: "app.sqlite", migrations: "migrations", allowUnsafeMigrations },
     health: { path: "/healthz", timeoutMs: 5_000 },
     env: {},
+    ...(options.jobs
+      ? {
+          jobs: {
+            entry: "dist/jobs.js",
+            workers: options.jobs.workers ?? 1,
+            concurrency: options.jobs.concurrency ?? 1,
+            queues: options.jobs.queues ?? [],
+            scheduler: options.jobs.scheduler ?? true,
+          },
+        }
+      : {}),
   });
   return createDeploymentBundle(root, config, {
     frameworkVersion: "0.5.0",
@@ -443,6 +487,148 @@ test("code-only deployments keep serving until a healthy candidate takes traffic
     }));
     assert.equal(logs.logs.some((entry) => entry.message.includes("switched managed ingress")), true);
     assert.equal(logs.logs.some((entry) => entry.message.includes("Drained the prior release")), true);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("deployments supervise independent worker and scheduler processes beside the responsive web process", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-jobs-"));
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    platformAdminEmails: ["background-jobs@example.com"],
+    appPortStart: 4590,
+    appPortEnd: 4593,
+    ingress: {
+      enabled: true,
+      baseDomain: "apps.example.test",
+      domainRecheckIntervalMs: false,
+    },
+    backups: { intervalMs: false },
+  });
+  try {
+    const owner = await authorizeCli(platform, "background-jobs@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Background jobs", slug: "background-jobs" },
+    }), 201);
+    const projectId = created.project.id;
+    const artifact = await appArtifact(
+      join(root, "source"),
+      "jobs-release",
+      [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]],
+      false,
+      {
+        jobs: {
+          workers: 2,
+          concurrency: 3,
+          queues: ["email", "reports"],
+          scheduler: true,
+        },
+      },
+    );
+    const deployed = await deploy(
+      platform,
+      projectId,
+      owner.accessToken,
+      artifact,
+      "background-jobs-release-0001",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    assert.equal(
+      await fetch(deployed.body.release.directUrl).then((response) => response.text()),
+      "jobs-release",
+    );
+
+    const databasePath = join(root, "platform", "projects", projectId, "data", "app.sqlite");
+    await waitFor(() => {
+      try {
+        const database = new DatabaseSync(databasePath, { readOnly: true });
+        const count = Number(database.prepare(
+          "SELECT count(*) AS count FROM background_processes",
+        ).get().count);
+        database.close();
+        return count === 3;
+      } catch {
+        return false;
+      }
+    });
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    const roles = database.prepare(
+      "SELECT role, concurrency, queues FROM background_processes ORDER BY id",
+    ).all();
+    database.close();
+    assert.deepEqual(roles.map((row) => row.role).sort(), ["scheduler", "worker", "worker"]);
+    assert.deepEqual(
+      roles.filter((row) => row.role === "worker").map((row) => ({
+        concurrency: row.concurrency,
+        queues: row.queues,
+      })),
+      [
+        { concurrency: "3", queues: "email,reports" },
+        { concurrency: "3", queues: "email,reports" },
+      ],
+    );
+    const logs = await payload(platform, jsonRequest(`/api/projects/${projectId}/logs`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(logs.logs.some((entry) => entry.stream === "worker[1]:stdout"), true);
+    assert.equal(logs.logs.some((entry) => entry.stream === "worker[2]:stdout"), true);
+    assert.equal(logs.logs.some((entry) => entry.stream === "scheduler:stdout"), true);
+    const memory = await payload(platform, jsonRequest("/api/admin/diagnostics/memory", {
+      cookie: owner.cookie,
+    }));
+    assert.equal(memory.totals.trackedApplicationProcesses, 4);
+    assert.deepEqual(
+      memory.projects.filter((entry) => entry.id === projectId).map((entry) => entry.role).sort(),
+      ["scheduler", "web", "worker", "worker"],
+    );
+
+    const replacementArtifact = await appArtifact(
+      join(root, "replacement"),
+      "jobs-release-two",
+      [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]],
+      false,
+      {
+        jobs: {
+          workers: 1,
+          concurrency: 2,
+          queues: ["email"],
+          scheduler: true,
+        },
+      },
+    );
+    const replacement = await deploy(
+      platform,
+      projectId,
+      owner.accessToken,
+      replacementArtifact,
+      "background-jobs-release-0002",
+    );
+    assert.equal(replacement.response.status, 201, JSON.stringify(replacement.body));
+    await waitFor(() => {
+      const current = new DatabaseSync(databasePath, { readOnly: true });
+      const oldActive = Number(current.prepare(
+        "SELECT count(*) AS count FROM background_processes WHERE release = 'jobs-release' AND stopped_at IS NULL",
+      ).get().count);
+      const newActive = Number(current.prepare(
+        "SELECT count(*) AS count FROM background_processes WHERE release = 'jobs-release-two' AND stopped_at IS NULL",
+      ).get().count);
+      current.close();
+      return oldActive === 0 && newActive === 2;
+    });
+    const replacementLogs = await payload(platform, jsonRequest(`/api/projects/${projectId}/logs`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(
+      replacementLogs.logs.some((entry) =>
+        entry.message.includes("Quiesced prior worker and scheduler processes")),
+      true,
+    );
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });

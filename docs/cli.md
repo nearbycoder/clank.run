@@ -16,7 +16,7 @@ The templates are:
 
 | Template | Direct command | Includes |
 | --- | --- | --- |
-| Authenticated Todo | `clank create my-app --template=auth-todo` | Auth, private SQLite data, SSR, hydration, Tailwind, migrations, and live sync |
+| Authenticated Todo | `clank create my-app --template=auth-todo` | Auth, private SQLite data, durable jobs, SSR, hydration, Tailwind, migrations, and live sync |
 | Minimal full-stack | `clank create my-app --template=minimal` | SSR, hydration, reactive TypeScript, Tailwind, health checks, and deployment |
 
 `auth-todo` remains the default when `--template` is omitted. In a non-interactive terminal, bare `clank` prints the complete help instead of waiting for input. Agents and scripts should continue to use explicit commands and `--json` surfaces.
@@ -32,7 +32,11 @@ npm install
 npm run dev
 ```
 
-The generated app includes auth, an owned Todo table, SSR, hydration, live updates, Tailwind, a health route, deployment configuration, its first migration, a human `README.md`, and an agent-oriented `AGENTS.md`. Its only dependency is the official `@clank.run/framework` package, which has no transitive dependencies. The exact CLI runtime is still embedded into deployment artifacts, so the platform never runs an install hook.
+The generated app includes auth, an owned Todo table, a transactional background job, SSR,
+hydration, live updates, Tailwind, a health route, deployment configuration, its first migration, a
+human `README.md`, and an agent-oriented `AGENTS.md`. Its only dependency is the official
+`@clank.run/framework` package, which has no transitive dependencies. The exact CLI runtime is
+still embedded into deployment artifacts, so the platform never runs an install hook.
 
 Until a Clank version is published, or while changing the framework and an app together, point the scaffold at the current checkout:
 
@@ -57,6 +61,25 @@ clank doctor --json
 Every command supports focused `--help` without authenticating or executing the command. Unknown commands and long options fail non-zero and suggest a close known spelling instead of being ignored.
 
 `doctor` validates the Node version, deployment configuration, compiled entry state, migration names and checksums, package scripts, CLI login, and local project link. Missing login or a first-deploy link is a warning, not a local-build failure. Its `clank-doctor/1` JSON report and the `clank-cli-help/1` command manifest are stable agent surfaces.
+
+When `jobs` is configured, doctor also validates the compiled background entry and reports the
+configured worker/scheduler topology.
+
+## Local workers and cron
+
+```sh
+clank jobs worker
+clank jobs worker --concurrency=4 --queues=email,reports
+clank jobs scheduler
+```
+
+These commands read `clank.deploy.json`, run the configured build without a shell, and launch its
+compiled `jobs.entry` with the same environment contract used by cloud processes. The worker and
+scheduler stay outside the web process; run them in separate terminals during development. Hosted
+deployments start the configured topology automatically.
+
+See [Durable jobs and cron](jobs-and-cron.md) for definition, enqueue, delivery, and deployment
+semantics.
 
 ## Authenticate
 

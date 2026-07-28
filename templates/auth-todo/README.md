@@ -1,6 +1,8 @@
 # __PROJECT_TITLE__
 
-A full-stack Clank app with built-in authentication, private per-user todos, SQLite migrations, server rendering, hydration, Tailwind styling, and live synchronization across browsers.
+A full-stack Clank app with built-in authentication, private per-user todos, durable background
+jobs, SQLite migrations, server rendering, hydration, Tailwind styling, and live synchronization
+across browsers.
 
 ## Start
 
@@ -10,6 +12,16 @@ npm run dev
 ```
 
 Open http://127.0.0.1:3000. Register the first account, then open a second browser to see committed changes synchronize live.
+
+Todo creation also enqueues an `events` job in the same database transaction. Run a local worker
+in a second terminal to process it without blocking requests:
+
+```sh
+npm run jobs:worker
+```
+
+Use `npm run jobs:scheduler` when you add cron schedules. A Clank deployment starts the configured
+web, worker, and scheduler processes automatically.
 
 ## Check and deploy
 

@@ -6,6 +6,19 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- Typed durable jobs now support transactional mutation enqueue, owner-scoped handlers, queue and
+  group routing, priorities, delays, idempotency keys, renewable visibility leases, heartbeats,
+  cooperative timeout/cancellation, fenced settlement, bounded exponential retry, dead letters,
+  event history, retention cleanup, and operator retry/purge controls.
+- Time-zone-aware five-field cron schedules now provide deterministic occurrence keys, deadlines,
+  bounded catch-up, suspension, and allow/forbid/replace concurrency through an independently
+  leased scheduler.
+- Deployment config can declare independent worker processes and a scheduler. The platform
+  supervises and restarts the process group, quiesces background code across rolling releases,
+  resumes the prior set after candidate failure, attributes per-role memory, and exposes tagged
+  logs. `clank jobs worker|scheduler` runs the same process contract on any provider.
+- The authenticated starter now includes an atomic background job, standalone process entry,
+  deployment topology, local scripts, and human/agent guidance.
 - Platform administrators can issue personal-only signup invitations as an explicit alternative to
   workspace invitations. Personal invitations create an isolated account and its own workspace
   without granting membership in an operator workspace; both types remain email-bound,
@@ -23,6 +36,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- The legacy `openJobQueue` service now uses an isolated compatibility table and migrates its old
+  table name, allowing it to coexist with the typed job runtime without a schema collision.
+- Running cancellation now fences a handler that returns before its next heartbeat, and a
+  cancelled job left by a crashed worker becomes cancelled rather than an unclaimable retry.
 - Sidebar navigation now uses one consistently sized SVG icon system instead of font glyphs with
   mismatched baselines and visual bounds.
 - The control-plane sidebar now keeps the Clank mark and name together in one compact lockup

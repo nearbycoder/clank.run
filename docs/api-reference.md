@@ -198,6 +198,30 @@ details.
 - `functionPath`, `functionKey`, `stableStringify`: reference and canonical argument helpers.
 - Types: `DatabaseSchema`, `TableDefinition`, `DocumentWriteOptions`, `DatabaseChange`, `SQLiteOptions`, `QueryBuilder`, `ReadDatabase`, `WriteDatabase`, `BackendFunction`, `BackendDefinition`, `FunctionReference`, `ApiOf`, `BackendRuntime`.
 
+## Durable jobs and cron
+
+- `defineJobs({ schema }).jobs(builders)`: inference-first nested job tree sharing an application
+  database schema.
+- `job({ args, returns?, queue?, priority?, timeoutMs?, retry?, schedules?, handler })`: validated
+  async handler definition with agent/operator metadata.
+- Mutation `context.jobs.enqueue(definition, args, options?)`: transactional, owner-scoped enqueue.
+- `openJobs(definition, { database, ...options })`: low-level durable runtime for an already-open
+  Clank SQLite database.
+- `runJobProcess(runtime, options?)`: provider-neutral worker/scheduler entry with environment role
+  selection and graceful signals.
+- `normalizeCron(expression)` / `nextCronOccurrence(expression, after, timezone?)`: strict
+  five-field cron parser and IANA-zone occurrence calculation.
+- `jobPath(definition)` / `jobManifest(system)`: stable definition identity and agent-readable
+  metadata.
+- `JobRuntime`: `.enqueue`, `.publisher`, `.get`, `.list`, `.events`, `.stats`, `.cancel`, `.retry`,
+  `.purge`, `.workOnce`, `.scheduleOnce`, `.startWorker`, `.startScheduler`, `.close`.
+- Types: `JobDefinition`, `JobHandlerContext`, `JobPublisher`, `JobHandle`, `StoredJob`, `JobEvent`,
+  `JobStats`, `JobRetryOptions`, `CronDefinition`, `JobWorkerOptions`, `JobSchedulerOptions`,
+  `JobRetentionOptions`.
+
+See [Durable jobs and cron](jobs-and-cron.md) for transaction, lease, retry, scheduling, process,
+deployment, and at-least-once semantics.
+
 ## SSR
 
 - `renderToString(view, options?)`: escaped async HTML rendering with hydration markers by default.

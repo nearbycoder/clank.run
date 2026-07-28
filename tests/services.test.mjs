@@ -9,14 +9,17 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   createHttpEmailService,
   createServiceRegistry,
   createWebhookSender,
   defineDatabase,
+  defineJobs,
   defineServiceDriver,
   openFileEmailService,
   openJobQueue,
+  openJobs,
   openLocalFileStore,
   openSQLite,
   signWebhook,
@@ -185,7 +188,8 @@ test("file and HTTP email drivers validate envelopes and preserve idempotency", 
 
 test("durable jobs provide idempotent enqueue, leases, retries, completion, and dead letters", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-jobs-"));
-  const database = await openSQLite(defineDatabase({}), {
+  const schema = defineDatabase({});
+  const database = await openSQLite(schema, {
     path: join(root, "jobs.sqlite"),
     wal: false,
   });
@@ -216,8 +220,70 @@ test("durable jobs provide idempotent enqueue, leases, retries, completion, and 
     assert.equal(queue.inspect(dead.id).status, "dead");
     assert.equal(queue.retry(dead.id), true);
     assert.equal(queue.inspect(dead.id).status, "retry");
+
+    const definitions = defineJobs({ schema }).jobs(({ job }) => ({
+      modern: job({
+        args: {},
+        handler: () => "complete",
+      }),
+    }));
+    const modern = openJobs(definitions, { database });
+    const handle = modern.enqueue(definitions.jobs.modern, {});
+    await modern.workOnce({ workerId: "modern-worker" });
+    assert.equal(modern.get(handle.id).state, "succeeded");
+    assert.equal(queue.inspect(first.id).status, "completed");
+    modern.close();
   } finally {
     queue.close();
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("typed jobs migrate the legacy service queue table without losing retained work", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-legacy-service-jobs-"));
+  const path = join(root, "jobs.sqlite");
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`CREATE TABLE clank_jobs (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL,
+    max_attempts INTEGER NOT NULL,
+    run_at INTEGER NOT NULL,
+    lease_owner TEXT,
+    lease_expires_at INTEGER,
+    unique_key TEXT,
+    last_error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    completed_at INTEGER
+  )`);
+  legacy.prepare(`INSERT INTO clank_jobs
+    (id, type, payload, status, attempts, max_attempts, run_at,
+     created_at, updated_at)
+    VALUES ('legacy-1', 'deliver', '{}', 'queued', 0, 5, 0, 0, 0)`).run();
+  legacy.close();
+
+  const schema = defineDatabase({});
+  const database = await openSQLite(schema, { path });
+  const definitions = defineJobs({ schema }).jobs(({ job }) => ({
+    current: job({ args: {}, handler: () => "ok" }),
+  }));
+  const jobs = openJobs(definitions, { database });
+  try {
+    const inspected = new DatabaseSync(path, { readOnly: true });
+    assert.equal(
+      inspected.prepare("SELECT type FROM clank_service_jobs WHERE id = 'legacy-1'").get().type,
+      "deliver",
+    );
+    assert.ok(inspected.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'clank_jobs'",
+    ).get());
+    inspected.close();
+  } finally {
+    jobs.close();
     database.close();
     await rm(root, { recursive: true, force: true });
   }

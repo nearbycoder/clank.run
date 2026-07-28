@@ -38,6 +38,14 @@ import {
   type McpTool,
 } from "./mcp.ts";
 import { createProjectOAuth } from "./oauth.ts";
+import {
+  jobManifest,
+  openJobs,
+  type OpenJobsOptions,
+  type JobPublisher,
+  type JobRuntime,
+  type JobSystemDefinition,
+} from "./jobs.ts";
 
 /** A nominal document ID. At runtime this is a compact random string. */
 export type Id<Table extends string> = DocumentId<Table>;
@@ -129,6 +137,9 @@ const RESERVED_TABLE_NAMES = new Set([
   "migrations",
   "auth_users",
   "auth_sessions",
+  "jobs",
+  "job_events",
+  "job_schedules",
 ]);
 
 export type TableName<Schema extends DatabaseSchema<any>> = keyof Schema["tables"] & string;
@@ -825,9 +836,17 @@ export interface QueryContext<DB extends DatabaseSchema<any>> {
   db: ReadDatabase<DB>;
 }
 
-export interface MutationContext<DB extends DatabaseSchema<any>> {
+export interface MutationContext<
+  DB extends DatabaseSchema<any>,
+  Jobs extends JobSystemDefinition<DB, any> | undefined = undefined,
+> {
   db: WriteDatabase<DB>;
 }
+
+type MutationJobsContext<
+  DB extends DatabaseSchema<any>,
+  Jobs extends JobSystemDefinition<DB, any> | undefined,
+> = Jobs extends JobSystemDefinition<DB, any> ? { jobs: JobPublisher<Jobs> } : {};
 
 export type BackendAccess = "public" | "required";
 type AuthProfileOf<Auth> = Auth extends AuthDefinition<infer Profile> ? Profile : DefaultAuthProfile;
@@ -859,7 +878,8 @@ export type BackendContext<
   DB extends DatabaseSchema<any>,
   Auth extends AuthDefinition<any> | undefined,
   Access extends BackendAccess,
-> = (Kind extends "query" ? QueryContext<DB> : MutationContext<DB>)
+  Jobs extends JobSystemDefinition<DB, any> | undefined = undefined,
+> = (Kind extends "query" ? QueryContext<DB> : MutationContext<DB, Jobs> & MutationJobsContext<DB, Jobs>)
   & (Auth extends AuthDefinition<any>
     ? {
         auth: AuthRequest<AuthProfileOf<Auth>>;
@@ -876,6 +896,7 @@ export interface BackendFunction<
   DB extends DatabaseSchema<any>,
   Access extends BackendAccess = "public",
   Auth extends AuthDefinition<any> | undefined = undefined,
+  Jobs extends JobSystemDefinition<DB, any> | undefined = undefined,
 > {
   readonly kind: Kind;
   readonly access: Access;
@@ -883,59 +904,64 @@ export interface BackendFunction<
   readonly returns?: Schema<Output>;
   readonly description?: string;
   readonly agent: false | Readonly<BackendAgentOptions>;
-  readonly handler: (context: BackendContext<Kind, DB, Auth, Access>, args: Input) => Output;
+  readonly handler: (context: BackendContext<Kind, DB, Auth, Access, Jobs>, args: Input) => Output;
 }
 
-export type AnyBackendFunction = BackendFunction<"query" | "mutation", any, any, any, any, any>;
+export type AnyBackendFunction = BackendFunction<"query" | "mutation", any, any, any, any, any, any>;
 export type FunctionTree = { readonly [key: string]: AnyBackendFunction | FunctionTree };
 
 export interface FunctionBuilders<
   DB extends DatabaseSchema<any>,
   Auth extends AuthDefinition<any> | undefined = undefined,
+  Jobs extends JobSystemDefinition<DB, any> | undefined = undefined,
 > {
   query<const Args extends FunctionArgs, Output>(definition: BackendFunctionOptions<Output> & {
     args: Args;
-    handler: (context: BackendContext<"query", DB, Auth, DefaultAccessOf<Auth>>, args: InferFunctionArgs<Args>) => Output;
-  }): BackendFunction<"query", InferFunctionArgs<Args>, Output, DB, DefaultAccessOf<Auth>, Auth>;
+    handler: (context: BackendContext<"query", DB, Auth, DefaultAccessOf<Auth>, Jobs>, args: InferFunctionArgs<Args>) => Output;
+  }): BackendFunction<"query", InferFunctionArgs<Args>, Output, DB, DefaultAccessOf<Auth>, Auth, Jobs>;
   mutation<const Args extends FunctionArgs, Output>(definition: BackendFunctionOptions<Output> & {
     args: Args;
-    handler: (context: BackendContext<"mutation", DB, Auth, DefaultAccessOf<Auth>>, args: InferFunctionArgs<Args>) => Output;
-  }): BackendFunction<"mutation", InferFunctionArgs<Args>, Output, DB, DefaultAccessOf<Auth>, Auth>;
+    handler: (context: BackendContext<"mutation", DB, Auth, DefaultAccessOf<Auth>, Jobs>, args: InferFunctionArgs<Args>) => Output;
+  }): BackendFunction<"mutation", InferFunctionArgs<Args>, Output, DB, DefaultAccessOf<Auth>, Auth, Jobs>;
   publicQuery<const Args extends FunctionArgs, Output>(definition: BackendFunctionOptions<Output> & {
     args: Args;
-    handler: (context: BackendContext<"query", DB, Auth, "public">, args: InferFunctionArgs<Args>) => Output;
-  }): BackendFunction<"query", InferFunctionArgs<Args>, Output, DB, "public", Auth>;
+    handler: (context: BackendContext<"query", DB, Auth, "public", Jobs>, args: InferFunctionArgs<Args>) => Output;
+  }): BackendFunction<"query", InferFunctionArgs<Args>, Output, DB, "public", Auth, Jobs>;
   publicMutation<const Args extends FunctionArgs, Output>(definition: BackendFunctionOptions<Output> & {
     args: Args;
-    handler: (context: BackendContext<"mutation", DB, Auth, "public">, args: InferFunctionArgs<Args>) => Output;
-  }): BackendFunction<"mutation", InferFunctionArgs<Args>, Output, DB, "public", Auth>;
+    handler: (context: BackendContext<"mutation", DB, Auth, "public", Jobs>, args: InferFunctionArgs<Args>) => Output;
+  }): BackendFunction<"mutation", InferFunctionArgs<Args>, Output, DB, "public", Auth, Jobs>;
 }
 
 export interface BackendDefinition<
   Schema extends DatabaseSchema<any>,
   Functions extends FunctionTree,
   Auth extends AuthDefinition<any> | undefined = undefined,
+  Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
 > {
   readonly schema: Schema;
   readonly functions: Functions;
   readonly auth: Auth;
+  readonly jobs: Jobs;
 }
 
 export interface BackendBuilder<
   Schema extends DatabaseSchema<any>,
   Auth extends AuthDefinition<any> | undefined = undefined,
+  Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
 > {
   functions<const Functions extends FunctionTree>(
-    define: (builders: FunctionBuilders<Schema, Auth>) => Functions,
-  ): BackendDefinition<Schema, Functions, Auth>;
+    define: (builders: FunctionBuilders<Schema, Auth, Jobs>) => Functions,
+  ): BackendDefinition<Schema, Functions, Auth, Jobs>;
 }
 
 export function defineBackend<
   Schema extends DatabaseSchema<any>,
   Auth extends AuthDefinition<any> | undefined = undefined,
->(options: { schema: Schema; auth?: Auth }): BackendBuilder<Schema, Auth> {
+  Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
+>(options: { schema: Schema; auth?: Auth; jobs?: Jobs }): BackendBuilder<Schema, Auth, Jobs> {
   const defaultAccess = options.auth ? "required" : "public";
-  const builders: FunctionBuilders<Schema, Auth> = {
+  const builders: FunctionBuilders<Schema, Auth, Jobs> = {
     query: (definition) => createBackendFunction("query", defaultAccess, definition) as any,
     mutation: (definition) => createBackendFunction("mutation", defaultAccess, definition) as any,
     publicQuery: (definition) => createBackendFunction("query", "public", definition) as any,
@@ -949,6 +975,7 @@ export function defineBackend<
         schema: options.schema,
         functions: freezeFunctionTree(functions) as typeof functions,
         auth: options.auth as Auth,
+        jobs: options.jobs as Jobs,
       });
     },
   };
@@ -1015,7 +1042,7 @@ export function functionPath(reference: FunctionReference<any, any, any>): strin
 /** Creates a zero-codegen typed API proxy. Pass a server function tree as its type argument. */
 type FunctionsFrom<Source> = Source extends { readonly functions: infer Functions extends FunctionTree } ? Functions : Source;
 
-export function createApi<Source extends FunctionTree | BackendDefinition<any, any, any>>(): ApiOf<FunctionsFrom<Source>> {
+export function createApi<Source extends FunctionTree | BackendDefinition<any, any, any, any>>(): ApiOf<FunctionsFrom<Source>> {
   const reference = (segments: string[]): unknown => new Proxy({}, {
     get(_target, key) {
       if (key === REFERENCE) return segments.join(".");
@@ -1152,7 +1179,7 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
   };
 }
 
-type AuthDefinitionOf<Source> = Source extends BackendDefinition<any, any, infer Auth> ? Auth : undefined;
+type AuthDefinitionOf<Source> = Source extends BackendDefinition<any, any, infer Auth, any> ? Auth : undefined;
 
 export interface ClankClientOptions<Profile extends object = DefaultAuthProfile>
   extends Omit<SyncClientOptions, "auth"> {
@@ -1161,7 +1188,7 @@ export interface ClankClientOptions<Profile extends object = DefaultAuthProfile>
   loadAuth?: boolean;
 }
 
-export type ClankClient<Source extends BackendDefinition<any, any, AuthDefinition<any>>> = SyncClient & {
+export type ClankClient<Source extends BackendDefinition<any, any, AuthDefinition<any>, any>> = SyncClient & {
   readonly api: ApiOf<FunctionsFrom<Source>>;
   readonly auth: AuthClient<AuthProfileOf<AuthDefinitionOf<Source>>>;
 };
@@ -1170,7 +1197,7 @@ export type ClankClient<Source extends BackendDefinition<any, any, AuthDefinitio
  * Creates the complete browser client for a backend definition: typed API
  * references, auth state, CSRF-aware mutations, cache seeding, and live queries.
  */
-export function createClient<Source extends BackendDefinition<any, any, AuthDefinition<any>>>(
+export function createClient<Source extends BackendDefinition<any, any, AuthDefinition<any>, any>>(
   options: ClankClientOptions<AuthProfileOf<AuthDefinitionOf<Source>>> = {},
 ): ClankClient<Source> {
   const auth = createAuthClient({
@@ -1223,10 +1250,12 @@ export interface BackendRuntime<
   Schema extends DatabaseSchema<any>,
   Functions extends FunctionTree,
   Auth extends AuthDefinition<any> | undefined = undefined,
+  Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
 > {
-  readonly definition: BackendDefinition<Schema, Functions, Auth>;
+  readonly definition: BackendDefinition<Schema, Functions, Auth, Jobs>;
   readonly database: SQLiteDatabase<Schema>;
   readonly auth: Auth extends AuthDefinition<infer Profile> ? AuthRuntime<Profile> : undefined;
+  readonly jobs: Jobs extends JobSystemDefinition<Schema, any> ? JobRuntime<Jobs> : undefined;
   readonly version: number;
   /** Deterministic revision of the MCP-visible backend action contract. */
   readonly contractRevision: string | null;
@@ -1254,6 +1283,8 @@ export interface OpenBackendOptions extends SQLiteOptions {
   maxLiveConnections?: number;
   maxCacheEntries?: number;
   onError?: (error: unknown) => void;
+  /** Queue limits, retention, clock hooks, and job-specific error reporting. */
+  jobs?: Omit<OpenJobsOptions, "database">;
   /**
    * Every backend function is exposed as an MCP tool by default. Set false to
    * disable the protocol, or customize its public identity and endpoint paths.
@@ -1273,10 +1304,11 @@ export async function openBackend<
   Schema extends DatabaseSchema<any>,
   Functions extends FunctionTree,
   Auth extends AuthDefinition<any> | undefined = undefined,
+  Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
 >(
-  definition: BackendDefinition<Schema, Functions, Auth>,
+  definition: BackendDefinition<Schema, Functions, Auth, Jobs>,
   options: OpenBackendOptions = {},
-): Promise<BackendRuntime<Schema, Functions, Auth>> {
+): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>> {
   const heartbeatMs = positiveIntegerOption(options.heartbeat ?? 20_000, "heartbeat");
   const maxRequestBytes = positiveIntegerOption(options.maxRequestBytes ?? 64 * 1024, "maxRequestBytes");
   const maxResponseBytes = positiveIntegerOption(options.maxResponseBytes ?? 4 * 1024 * 1024, "maxResponseBytes");
@@ -1310,6 +1342,16 @@ export async function openBackend<
   }
   const database = options.database as SQLiteDatabase<Schema> | undefined
     ?? await openSQLite(definition.schema, options);
+  const jobsRuntime = definition.jobs
+    ? openJobs(definition.jobs, {
+        ...options.jobs,
+        database,
+        onError(error, job) {
+          options.jobs?.onError?.(error, job);
+          options.onError?.(error);
+        },
+      })
+    : undefined;
   let authRuntime: AuthRuntime<AuthProfileOf<Auth>> | undefined;
   try {
     authRuntime = definition.auth
@@ -1319,6 +1361,7 @@ export async function openBackend<
         }) as AuthRuntime<AuthProfileOf<Auth>>
       : undefined;
   } catch (error) {
+    jobsRuntime?.close();
     if (!options.database) database.close();
     throw error;
   }
@@ -1342,8 +1385,16 @@ export async function openBackend<
     `${partition(auth)}\n${functionKey(path, args)}`;
   const scopeFor = (auth: AuthRequest<any> | null): DatabaseScope | undefined =>
     definition.auth ? { userId: auth?.user?.id ?? null } : undefined;
-  const handlerContext = (db: ReadDatabase<Schema> | WriteDatabase<Schema>, auth: AuthRequest<any> | null) =>
-    definition.auth ? { db, auth, user: auth?.user ?? null } : { db };
+  const handlerContext = (
+    db: ReadDatabase<Schema> | WriteDatabase<Schema>,
+    auth: AuthRequest<any> | null,
+    kind: "query" | "mutation",
+  ) => {
+    const base = definition.auth ? { db, auth, user: auth?.user ?? null } : { db };
+    return kind === "mutation" && jobsRuntime
+      ? { ...base, jobs: jobsRuntime.publisher(scopeFor(auth)) }
+      : base;
+  };
 
   const authorize = (fn: AnyBackendFunction, auth: AuthRequest<any> | null) => {
     if (fn.access !== "required") return;
@@ -1373,7 +1424,7 @@ export async function openBackend<
       cache.set(key, cached);
       return { value: cached.value, version: cached.version };
     }
-    const tracked = database.tracked((db) => fn.handler(handlerContext(db, auth) as any, args), scopeFor(auth));
+    const tracked = database.tracked((db) => fn.handler(handlerContext(db, auth, "query") as any, args), scopeFor(auth));
     assertSynchronous(tracked.value, "query");
     const value = finalizeBackendOutput(fn, tracked.value, maxResponseBytes);
     const dependencies = auth?.user
@@ -1390,7 +1441,7 @@ export async function openBackend<
     const args = fn.args.parse(input ?? {});
     const value = database.transaction(
       (db) => {
-        const output = fn.handler(handlerContext(db, auth) as any, args);
+        const output = fn.handler(handlerContext(db, auth, "mutation") as any, args);
         assertSynchronous(output, "mutation");
         return finalizeBackendOutput(fn, output, maxResponseBytes);
       },
@@ -1657,10 +1708,11 @@ export async function openBackend<
     });
   };
 
-  const runtime: BackendRuntime<Schema, Functions, Auth> = {
+  const runtime: BackendRuntime<Schema, Functions, Auth, Jobs> = {
     definition,
     database,
-    auth: authRuntime as BackendRuntime<Schema, Functions, Auth>["auth"],
+    auth: authRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["auth"],
+    jobs: jobsRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["jobs"],
     get version() { return database.version; },
     contractRevision: mcp?.revision ?? null,
     query(pathOrReference: string | FunctionReference<"query", any, any>, input: unknown = {}) {
@@ -1721,6 +1773,7 @@ export async function openBackend<
               args: fn.args.toJSONSchema(),
               ...(fn.returns ? { returns: fn.returns.toJSONSchema() } : {}),
             })),
+            jobs: definition.jobs ? jobManifest(definition.jobs) : [],
           }, {
             headers: {
               "cache-control": "no-store",
@@ -1808,6 +1861,7 @@ export async function openBackend<
       subscribers.clear();
       cache.clear();
       mcp?.close();
+      jobsRuntime?.close();
       authRuntime?.close();
       database.close();
     },

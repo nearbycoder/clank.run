@@ -486,7 +486,7 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
         ? null
         : boundedText(enqueueOptions.uniqueKey, "uniqueKey", 1, 200);
       if (uniqueKey) {
-        const existing = internal.prepare("SELECT id FROM clank_jobs WHERE type = ? AND unique_key = ?")
+        const existing = internal.prepare("SELECT id FROM clank_service_jobs WHERE type = ? AND unique_key = ?")
           .get(type, uniqueKey);
         if (existing) return { id: String(existing.id), existing: true };
       }
@@ -496,7 +496,7 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
       const maxAttempts = integerRange(enqueueOptions.maxAttempts ?? 5, "maxAttempts", 1, 100);
       try {
         internal.transaction((changes) => {
-          internal.prepare(`INSERT INTO clank_jobs
+          internal.prepare(`INSERT INTO clank_service_jobs
             (id, type, payload, status, attempts, max_attempts, run_at, lease_owner, lease_expires_at,
              unique_key, last_error, created_at, updated_at, completed_at)
             VALUES (?, ?, ?, 'queued', 0, ?, ?, NULL, NULL, ?, NULL, ?, ?, NULL)`)
@@ -505,7 +505,7 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
         });
       } catch (error) {
         if (uniqueKey && safeError(error).toLowerCase().includes("unique")) {
-          const existing = internal.prepare("SELECT id FROM clank_jobs WHERE type = ? AND unique_key = ?")
+          const existing = internal.prepare("SELECT id FROM clank_service_jobs WHERE type = ? AND unique_key = ?")
             .get(type, uniqueKey);
           if (existing) return { id: String(existing.id), existing: true };
         }
@@ -519,7 +519,7 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
       let claimed: Array<Record<string, unknown>> = [];
       const now = Date.now();
       internal.transaction((changes) => {
-        const candidates = internal.prepare(`SELECT * FROM clank_jobs
+        const candidates = internal.prepare(`SELECT * FROM clank_service_jobs
           WHERE (
             status IN ('queued', 'retry') AND run_at <= ?
           ) OR (
@@ -527,7 +527,7 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
           )
           ORDER BY run_at, created_at LIMIT ?`).all(now, now, count);
         for (const candidate of candidates) {
-          const updated = internal.prepare(`UPDATE clank_jobs
+          const updated = internal.prepare(`UPDATE clank_service_jobs
             SET status = 'running', attempts = attempts + 1, lease_owner = ?, lease_expires_at = ?,
                 updated_at = ?
             WHERE id = ? AND (
@@ -535,7 +535,7 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
               OR (status = 'running' AND lease_expires_at <= ?)
             )`).run(workerId, now + leaseMs, now, candidate.id, now, now);
           if (Number(updated.changes) === 1) {
-            const row = internal.prepare("SELECT * FROM clank_jobs WHERE id = ?").get(candidate.id);
+            const row = internal.prepare("SELECT * FROM clank_service_jobs WHERE id = ?").get(candidate.id);
             if (row) claimed.push(row);
             changes.record("__jobs", String(candidate.id));
           }
@@ -562,7 +562,7 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
             }),
           ]);
           internal.transaction((changes) => {
-            internal.prepare(`UPDATE clank_jobs
+            internal.prepare(`UPDATE clank_service_jobs
               SET status = 'completed', lease_owner = NULL, lease_expires_at = NULL,
                   last_error = NULL, completed_at = ?, updated_at = ?
               WHERE id = ? AND lease_owner = ?`)
@@ -574,7 +574,7 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
           const dead = record.attempts >= record.maxAttempts;
           const runAt = Date.now() + Math.min(60 * 60 * 1_000, retryBaseMs * 2 ** Math.max(0, record.attempts - 1));
           internal.transaction((changes) => {
-            internal.prepare(`UPDATE clank_jobs
+            internal.prepare(`UPDATE clank_service_jobs
               SET status = ?, run_at = ?, lease_owner = NULL, lease_expires_at = NULL,
                   last_error = ?, updated_at = ?
               WHERE id = ? AND lease_owner = ?`)
@@ -590,11 +590,11 @@ export function openJobQueue<DB extends DatabaseSchema<any>>(
       return claimed.length;
     },
     inspect(id) {
-      const row = internal.prepare("SELECT * FROM clank_jobs WHERE id = ?").get(id);
+      const row = internal.prepare("SELECT * FROM clank_service_jobs WHERE id = ?").get(id);
       return row ? jobRecord(row) : null;
     },
     retry(id, runAt = Date.now()) {
-      const result = internal.prepare(`UPDATE clank_jobs
+      const result = internal.prepare(`UPDATE clank_service_jobs
         SET status = 'retry', run_at = ?, attempts = 0, lease_owner = NULL,
             lease_expires_at = NULL, last_error = NULL, completed_at = NULL, updated_at = ?
         WHERE id = ? AND status = 'dead'`).run(runAt, Date.now(), id);
@@ -718,7 +718,8 @@ export function createWebhookSender(options: {
 }
 
 function createJobTables(internal: SQLiteInternal): void {
-  internal.exec(`CREATE TABLE IF NOT EXISTS clank_jobs (
+  migrateLegacyServiceJobs(internal);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_service_jobs (
     id TEXT PRIMARY KEY,
     type TEXT NOT NULL,
     payload TEXT NOT NULL CHECK (json_valid(payload)),
@@ -734,8 +735,27 @@ function createJobTables(internal: SQLiteInternal): void {
     updated_at INTEGER NOT NULL,
     completed_at INTEGER
   )`);
-  internal.exec("CREATE UNIQUE INDEX IF NOT EXISTS clank_jobs_unique ON clank_jobs (type, unique_key) WHERE unique_key IS NOT NULL");
-  internal.exec("CREATE INDEX IF NOT EXISTS clank_jobs_ready ON clank_jobs (status, run_at)");
+  internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_service_jobs_unique
+    ON clank_service_jobs (type, unique_key) WHERE unique_key IS NOT NULL`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_service_jobs_ready ON clank_service_jobs (status, run_at)");
+}
+
+function migrateLegacyServiceJobs(internal: SQLiteInternal): void {
+  const legacy = internal.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'clank_jobs'",
+  ).get();
+  if (!legacy) return;
+  const columns = new Set(
+    internal.prepare("PRAGMA table_info(clank_jobs)").all().map((column) => String(column.name)),
+  );
+  if (!columns.has("type") || columns.has("name")) return;
+  const target = internal.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'clank_service_jobs'",
+  ).get();
+  if (target) {
+    throw new Error("Both legacy and current service job tables exist; migrate them before startup.");
+  }
+  internal.exec("ALTER TABLE clank_jobs RENAME TO clank_service_jobs");
 }
 
 function jobRecord(row: Record<string, unknown>): JobRecord {

@@ -13,6 +13,19 @@ export interface DeployBuildConfig {
   command: readonly string[];
 }
 
+export interface DeployJobsConfig {
+  /** Compiled module that opens the backend and calls runJobProcess(). */
+  entry: string;
+  /** Independent worker process count. Defaults to 1. */
+  workers: number;
+  /** Concurrent handlers in each worker process. Defaults to 1. */
+  concurrency: number;
+  /** Optional queue allowlist. Empty means every queue. */
+  queues: readonly string[];
+  /** Run one independently leased cron scheduler process. Defaults to true. */
+  scheduler: boolean;
+}
+
 export interface DeploymentConfig {
   version: 1;
   entry: string;
@@ -21,6 +34,7 @@ export interface DeploymentConfig {
   database: DeployDatabaseConfig;
   health: DeployHealthConfig;
   env: Record<string, string>;
+  jobs?: DeployJobsConfig;
 }
 
 export interface DeploymentFile {
@@ -116,7 +130,7 @@ export async function readDeploymentConfig(
 
 export function parseDeploymentConfig(value: unknown): DeploymentConfig {
   const source = object(value, "Deployment config");
-  exactKeys(source, ["version", "entry", "include", "build", "database", "health", "env"], "Deployment config");
+  exactKeys(source, ["version", "entry", "include", "build", "database", "health", "env", "jobs"], "Deployment config");
   if (source.version !== 1) throw new Error("Deployment config version must be 1.");
   const entry = safeRelativePath(string(source.entry, "entry"), "entry");
   if (!entry.endsWith(".js") && !entry.endsWith(".mjs")) {
@@ -176,6 +190,36 @@ export function parseDeploymentConfig(value: unknown): DeploymentConfig {
     if (value.length > 16_384 || value.includes("\0")) throw new Error(`Environment value ${name} is too large or invalid.`);
     env[name] = value;
   }
+  let jobs: DeployJobsConfig | undefined;
+  if (source.jobs !== undefined) {
+    const raw = object(source.jobs, "jobs");
+    exactKeys(raw, ["entry", "workers", "concurrency", "queues", "scheduler"], "jobs");
+    const jobsEntry = safeRelativePath(string(raw.entry, "jobs.entry"), "jobs.entry");
+    if (!jobsEntry.endsWith(".js") && !jobsEntry.endsWith(".mjs")) {
+      throw new Error("jobs.entry must be a compiled .js or .mjs module.");
+    }
+    if (!include.some((path) => jobsEntry === path || jobsEntry.startsWith(`${path}/`))) {
+      throw new Error("jobs.entry must be contained by an include path.");
+    }
+    const workers = integer(raw.workers ?? 1, "jobs.workers", 0, 32);
+    const concurrency = integer(raw.concurrency ?? 1, "jobs.concurrency", 1, 64);
+    const scheduler = raw.scheduler === undefined ? true : boolean(raw.scheduler, "jobs.scheduler");
+    if (workers === 0 && !scheduler) {
+      throw new Error("jobs must enable at least one worker or the scheduler.");
+    }
+    const queues = raw.queues === undefined
+      ? []
+      : array(raw.queues, "jobs.queues").map((item, index) =>
+          jobQueue(string(item, `jobs.queues[${index}]`), `jobs.queues[${index}]`));
+    if (queues.length > 64) throw new Error("jobs.queues cannot contain more than 64 queues.");
+    jobs = Object.freeze({
+      entry: jobsEntry,
+      workers,
+      concurrency,
+      queues: Object.freeze([...new Set(queues)]),
+      scheduler,
+    });
+  }
   return Object.freeze({
     version: 1,
     entry,
@@ -184,6 +228,7 @@ export function parseDeploymentConfig(value: unknown): DeploymentConfig {
     database: Object.freeze(database),
     health: Object.freeze(health),
     env: Object.freeze(env),
+    ...(jobs ? { jobs } : {}),
   });
 }
 
@@ -537,6 +582,18 @@ function integer(value: unknown, label: string, minimum: number, maximum: number
     throw new Error(`${label} must be an integer from ${minimum} to ${maximum}.`);
   }
   return Number(value);
+}
+
+function boolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${label} must be a boolean.`);
+  return value;
+}
+
+function jobQueue(value: string, label: string): string {
+  if (!/^[a-z0-9][a-z0-9._-]{0,127}$/iu.test(value)) {
+    throw new Error(`${label} must be a valid queue name.`);
+  }
+  return value;
 }
 
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {

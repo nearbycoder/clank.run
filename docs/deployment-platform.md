@@ -82,6 +82,13 @@ Every app has `clank.deploy.json`:
   },
   "env": {
     "FEATURE_SET": "stable"
+  },
+  "jobs": {
+    "entry": "dist/jobs.js",
+    "workers": 2,
+    "concurrency": 4,
+    "queues": [],
+    "scheduler": true
   }
 }
 ```
@@ -96,6 +103,10 @@ Rules:
 - `PORT`, `HOST`, `NODE_OPTIONS`, and `CLANK_*` variables are reserved.
 - `database.path` is persistent project data outside release directories.
 - Changing `database.path` during deployment is rejected to prevent silently forking production data.
+- `jobs.entry` is one compiled provider-neutral worker/scheduler module inside an included path.
+- `jobs.workers` controls independent processes; `jobs.concurrency` controls handlers per worker.
+- `jobs.queues` is an optional allowlist and `jobs.scheduler` enables one independently leased
+  cron scheduler.
 
 ## Artifact protocol
 
@@ -125,15 +136,22 @@ Deployment runs in this order:
 3. Verify config, paths, modes, file hashes, and artifact digest.
 4. Extract into a non-active release directory.
 5. Verify migration history and create a consistent SQLite backup while the active release continues serving.
-6. If no migrations are pending, launch the candidate on a reserved spare port.
-7. Poll the candidate's configured health route without exposing it to public traffic.
-8. Atomically switch managed ingress and active-release metadata to the healthy candidate.
-9. Let requests already assigned to the prior upstream finish, with a bounded two-second drain for
+6. If no migrations are pending, gracefully quiesce prior workers/scheduler while its web process
+   continues serving, then launch the candidate web, workers, and scheduler.
+7. Poll the candidate's configured health route and verify background-process startup without
+   exposing it to public traffic.
+8. Atomically switch managed ingress and active-release metadata to the healthy candidate. Resume
+   the prior background set instead if the candidate fails.
+9. Let requests already assigned to the prior web upstream finish, with a bounded two-second drain for
    long-lived streams, then stop the prior release.
 
 A code-only candidate that fails startup or health never receives traffic and never stops the prior
 release. Automatic crash recovery uses the same durable project lock as deploy, rollback, backup,
 and deletion, so it cannot race a user deployment for the project's runtime ports.
+
+An unexpected worker or scheduler exit crashes and restarts the complete release group instead of
+leaving a healthy-looking web process with stale background work. Read
+[Durable jobs and cron](jobs-and-cron.md) for queue correctness and process-provider requirements.
 
 Pending SQLite migrations use the safer exclusive path: Clank stops the prior release, applies all
 pending SQL in one `BEGIN IMMEDIATE`, starts and checks the candidate, and restores the verified

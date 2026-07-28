@@ -77,8 +77,9 @@ each supervised process, ranks hosted applications by proportional set size (PSS
 fallback), and reports the control-plane V8 heap, process peaks, swap, page cache, kernel memory,
 and memory that cannot be attributed to a tracked process. PSS apportions shared pages instead of
 counting the same page once per process. The panel is a current snapshot; Railway's metrics retain
-the historical container-level series. Process and cgroup files are sampled close together but not
-atomically, so their totals can differ slightly while memory is changing.
+the historical container-level series. Application rows identify web, worker, and scheduler roles
+and worker instance numbers. Process and cgroup files are sampled close together but not atomically,
+so their totals can differ slightly while memory is changing.
 
 The storage-attribution panel compares the mounted filesystem's used blocks with a bounded,
 link-safe scan of Clank's data root. It separates the control database and WAL, each project's
@@ -171,7 +172,7 @@ Also verify browser session refresh, CLI device authorization, a disposable depl
 wildcard application URL, backup creation, rollback, and permanent deletion.
 
 Railway's memory metric covers the complete service cgroup: the Clank supervisor, hosted
-application processes, native SQLite allocations, filesystem cache, and kernel bookkeeping. Use
+application web/worker/scheduler processes, native SQLite allocations, filesystem cache, and kernel bookkeeping. Use
 the `/admin` memory panel to explain the current total and the Railway series to identify growth
 across deploys. A process-runner application has direct per-process attribution. In Docker-runner
 installations, the listed child can be the Docker client wrapper, so container-runtime metrics

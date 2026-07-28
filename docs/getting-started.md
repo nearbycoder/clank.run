@@ -87,7 +87,8 @@ This is the structure of the app created from npm, not the structure of the Clan
 ```text
 my-app/
 ├── src/
-│   ├── backend.ts       auth, database schema, queries, and mutations
+│   ├── backend.ts       auth, schema, queries, mutations, and durable jobs
+│   ├── jobs.ts          independent worker/scheduler process entry
 │   ├── view.tsx         accessible server/client UI
 │   ├── app.tsx          hydration, live data, and browser interactions
 │   └── server.tsx       routes, SSR, security headers, and static files
@@ -95,7 +96,7 @@ my-app/
 │   └── 0001_app_metadata.sql
 ├── AGENTS.md            app map, invariants, and definition of done
 ├── README.md            human setup and deployment instructions
-├── clank.deploy.json    build, database, health, and artifact contract
+├── clank.deploy.json    build, database, health, jobs, and artifact contract
 ├── package.json         scripts and the Clank package dependency
 └── tsconfig.json
 ```
@@ -108,6 +109,8 @@ The generated npm scripts keep the normal workflow short:
 
 ```sh
 npm run dev           # build and start the local server
+npm run jobs:worker   # build and start a worker in a second terminal
+npm run jobs:scheduler # run cron after adding schedules
 npm run build         # compile src/ into dist/
 npm run doctor        # check Node, config, migrations, login, and project link
 npm run deploy:check  # build and verify an offline deployment artifact
@@ -119,6 +122,8 @@ You can call the package CLI directly when you need more control:
 ```sh
 clank build src dist
 clank watch src dist
+clank jobs worker --concurrency=4
+clank jobs scheduler
 clank doctor --json
 clank help --json
 ```
@@ -176,6 +181,17 @@ migrations/0002_add_due_dates.sql
 ```
 
 Never edit or reorder an applied migration. Clank checks migration history before activation and backs up the database before production migrations. See [SQLite migrations](migrations.md).
+
+## Move slow work out of requests
+
+The authenticated starter shows the complete path: `defineJobs` declares a validated handler,
+`defineBackend({ jobs })` gives mutations a transaction-scoped publisher, and `src/jobs.ts` runs an
+independent worker or scheduler. Todo creation and its queue record commit atomically.
+
+Run `npm run jobs:worker` in a second terminal while developing. A production deploy reads the
+`jobs` section in `clank.deploy.json` and supervises the configured processes automatically. Job
+delivery is at least once, so make external effects idempotent and honor the handler abort signal.
+See [Durable jobs and cron](jobs-and-cron.md).
 
 ## Use the app's built-in MCP server
 
@@ -254,6 +270,7 @@ import { createRouter } from "@clank.run/framework/router";
 import { createForm } from "@clank.run/framework/forms";
 import { defineAuth } from "@clank.run/framework/auth";
 import { defineBackend } from "@clank.run/framework/backend";
+import { defineJobs, runJobProcess } from "@clank.run/framework/jobs";
 import { createApp } from "@clank.run/framework/server";
 import { serve } from "@clank.run/framework/node";
 ```
@@ -267,6 +284,8 @@ Imports do not mutate global state. The package ships its TypeScript declaration
 - [Rendering and components](rendering.md): understand TSX, keyed lists, SSR, and hydration.
 - [Routing](routing.md): add URL-driven pages, parameters, loaders, guards, and navigation.
 - [Authentication](auth.md): customize profiles, sessions, authorization, and the default auth UI.
+- [Durable jobs and cron](jobs-and-cron.md): add transactional queues, worker processes, retries,
+  dead letters, and time-zone-aware schedules.
 - [Per-app MCP servers](per-app-mcp.md): connect agents directly to application queries and mutations.
 - [Deployment CLI](cli.md): ship and operate the application.
 - [Contributing to Clank](../CONTRIBUTING.md): clone the framework repository only when you want to change Clank itself.

@@ -22,5 +22,12 @@
     "path": "/healthz",
     "timeoutMs": 15000
   },
-  "env": {}
+  "env": {},
+  "jobs": {
+    "entry": "dist/jobs.js",
+    "workers": 1,
+    "concurrency": 2,
+    "queues": [],
+    "scheduler": true
+  }
 }
