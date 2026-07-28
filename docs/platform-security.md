@@ -97,6 +97,11 @@ The generated local key is onboarding convenience, not protection from a comprom
 - Deploy migrations stop the app and take a pre-change snapshot; scheduled recovery points use SQLite's consistent online backup API and are encrypted and verified before publication.
 - Scheduled backup work uses expiring durable claims across control planes, and public metadata omits the host database path.
 - Per-project release count and byte quotas include extracted runtime files and pre-deploy snapshots; cleanup is contained to derived project/release paths.
+- Per-account and per-workspace quota overrides are validated against a fixed key/range registry,
+  require a real browser administrator session plus CSRF, and are written with an append-only audit
+  event. Workspace values override their owning account, which overrides installation defaults;
+  lowering capacity never implicitly deletes application resources. Backup retention reconciles
+  oldest restore points during the next successful backup, as stated in the operator UI.
 - Active artifacts cannot be removed; cleanup requires rollback scope, and deleting the immediate rollback target requires a separate rollback-loss decision that also prunes its now-unusable matching data snapshot.
 - Permanent site deletion requires an owner/admin account principal, exact slug-bound confirmation, a separate data-loss acknowledgement, and the durable project lock. Project-scoped tokens cannot invoke it.
 - Site storage removal derives the directory from the validated project ID, rejects symbolic-link parents/roots, and occurs before metadata removal. Active project tokens and distributed orchestration rows are cleared, while the deletion audit event survives the project cascade.
