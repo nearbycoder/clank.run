@@ -3100,7 +3100,16 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInProjectHtml, /<title>Project · Clank<\/title>/);
     assert.match(signedInProjectHtml, /id="project-navigation">/);
     assert.match(signedInProjectHtml, /<section id="overview-page" hidden>/);
-    assert.match(signedInProjectHtml, /<section id="project-page">/);
+    assert.match(signedInProjectHtml, /<section id="project-page" aria-busy="true">/);
+    assert.match(signedInProjectHtml, /<div class="project-loading" id="project-loading"><\/div>/);
+    assert.match(signedInProjectHtml, /<div class="project-resolved">/);
+    assert.match(
+      signedInProjectHtml,
+      /#project-page\[aria-busy="true"\] \.project-resolved\{visibility:hidden;pointer-events:none\}/,
+    );
+    assert.match(signedInProjectHtml, /prepareRoute\(route\);if\(!state\.dashboard\)\{await loadDashboard/);
+    assert.match(signedInProjectHtml, /const generation=\+\+state\.routeGeneration/);
+    assert.match(signedInProjectHtml, /generation!==state\.routeGeneration\|\|!state\.dashboard/);
     const canonical = await platform.handle(jsonRequest(
       "/projects/my-todo/domains/?range=7d",
       { cookie: signedInCookie },
