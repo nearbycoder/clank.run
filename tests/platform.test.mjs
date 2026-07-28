@@ -796,6 +796,9 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.match(operatorHtml, /\/api\/admin\/analytics/);
     assert.match(operatorHtml, /\/api\/admin\/diagnostics\/memory/);
     assert.match(operatorHtml, /\/api\/admin\/diagnostics\/storage/);
+    assert.match(operatorHtml, /\/api\/admin\/invitations/);
+    assert.match(operatorHtml, /id="invite-personal-option" value="personal">Personal workspace only<\/option>/);
+    assert.match(operatorHtml, /id="invite-scope"/);
     assert.match(operatorHtml, /id="admin-memory-projects"/);
     assert.match(operatorHtml, /id="admin-storage-projects"/);
     assert.match(operatorHtml, />Storage attribution</);
@@ -3187,7 +3190,8 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signupHtml, /autocomplete="new-password"/);
     const invitationConsole = await platform.handle(jsonRequest("/invite"));
     const invitationHtml = await invitationConsole.text();
-    assert.match(invitationHtml, /<title>Join your workspace · Clank<\/title>/);
+    assert.match(invitationHtml, /<title>Accept your invitation · Clank<\/title>/);
+    assert.match(invitationHtml, /<h2 id="auth-title">Accept your invitation<\/h2>/);
     assert.match(invitationHtml, /id="registration-invitation-field">/);
     assert.match(invitationHtml, /id="registration-invitation"[^>]+ required>/);
     const first = await platform.handle(jsonRequest("/__clank/auth/register", {
@@ -3207,6 +3211,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     const signedInHtml = await signedInConsole.text();
     assert.match(signedInHtml, /"authenticated":true/);
     assert.match(signedInHtml, /id="password"[^>]+minlength="8"/);
+    assert.match(signedInHtml, /id="invite-personal-option" value="personal" hidden disabled/);
     assert.match(signedInHtml, /<title>Overview · Clank<\/title>/);
     assert.match(signedInHtml, /<section class="auth-layout" id="auth-view" hidden>/);
     assert.match(signedInHtml, /<section class="app-shell" id="app-view">/);
@@ -3545,6 +3550,207 @@ test("closed platform signup still permits an unexpired invitation to create its
     ).all("closed-member@example.com", "expired@example.com");
     database.close();
     assert.deepEqual(users.map((row) => row.email), ["closed-member@example.com"]);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("platform administrators can invite a personal-only account without granting workspace access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-personal-invitation-"));
+  const dataDirectory = join(root, "platform");
+  const baseOptions = {
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    platformAdminEmails: ["personal-admin@example.com"],
+    backups: { intervalMs: false },
+  };
+  let platform = await openPlatform({ ...baseOptions, signup: true });
+  try {
+    const admin = await authorizeCli(platform, "personal-admin@example.com");
+    const ordinary = await authorizeCli(platform, "existing-person@example.com");
+    const adminDashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      cookie: admin.cookie,
+    }));
+    const adminWorkspaceId = adminDashboard.organizations[0].id;
+
+    const ordinaryDenied = await platform.handle(jsonRequest("/api/admin/invitations", {
+      cookie: ordinary.cookie,
+    }));
+    assert.equal(ordinaryDenied.status, 403);
+    assert.equal((await ordinaryDenied.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
+    const bearerDenied = await platform.handle(jsonRequest("/api/admin/invitations", {
+      token: admin.accessToken,
+    }));
+    assert.equal(bearerDenied.status, 403);
+    assert.equal((await bearerDenied.json()).error.code, "BROWSER_ADMIN_REQUIRED");
+    const missingCsrf = await platform.handle(jsonRequest("/api/admin/invitations", {
+      method: "POST",
+      cookie: admin.cookie,
+      body: { email: "personal-only@example.com" },
+    }));
+    assert.equal(missingCsrf.status, 403);
+    const crossOrigin = await platform.handle(jsonRequest("/api/admin/invitations", {
+      method: "POST",
+      cookie: admin.cookie,
+      csrf: admin.csrfToken,
+      origin: "https://evil.example",
+      body: { email: "personal-only@example.com" },
+    }));
+    assert.equal(crossOrigin.status, 403);
+    assert.equal((await crossOrigin.json()).error.code, "ORIGIN_MISMATCH");
+    const existingAccount = await platform.handle(jsonRequest("/api/admin/invitations", {
+      method: "POST",
+      cookie: admin.cookie,
+      csrf: admin.csrfToken,
+      body: { email: ordinary.user.email },
+    }));
+    assert.equal(existingAccount.status, 409);
+    assert.equal((await existingAccount.json()).error.code, "ACCOUNT_EXISTS");
+
+    const superseded = await payload(platform, jsonRequest("/api/admin/invitations", {
+      method: "POST",
+      cookie: admin.cookie,
+      csrf: admin.csrfToken,
+      body: { email: "personal-only@example.com" },
+    }), 201);
+    assert.match(superseded.invitation.token, /^clnkp_/);
+    const invitation = await payload(platform, jsonRequest("/api/admin/invitations", {
+      method: "POST",
+      cookie: admin.cookie,
+      csrf: admin.csrfToken,
+      body: { email: "personal-only@example.com" },
+    }), 201);
+    assert.equal(invitation.invitation.scope, "personal");
+    const active = await payload(platform, jsonRequest("/api/admin/invitations", {
+      cookie: admin.cookie,
+    }));
+    assert.equal(active.limit, 100);
+    assert.equal(active.invitations.length, 1);
+    assert.equal(active.invitations[0].id, invitation.invitation.id);
+    assert.equal(active.invitations[0].scope, "personal");
+    assert.equal(Object.hasOwn(active.invitations[0], "token"), false);
+    assert.equal(JSON.stringify(active).includes("token_hash"), false);
+
+    const supersededUse = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: superseded.invitation.token,
+        email: "personal-only@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "personal only" },
+      },
+    }));
+    assert.equal(supersededUse.status, 400);
+    assert.equal((await supersededUse.json()).error.code, "INVALID_INVITATION");
+    const wrongEmail = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: invitation.invitation.token,
+        email: "wrong-person@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "wrong person" },
+      },
+    }));
+    assert.equal(wrongEmail.status, 400);
+    assert.equal((await wrongEmail.json()).error.code, "INVALID_INVITATION");
+
+    await platform.close();
+    platform = await openPlatform({ ...baseOptions, signup: false });
+    const persisted = await payload(platform, jsonRequest("/api/admin/invitations", {
+      cookie: admin.cookie,
+    }));
+    assert.equal(persisted.invitations.length, 1);
+    assert.equal(persisted.invitations[0].id, invitation.invitation.id);
+    const direct = await platform.handle(jsonRequest("/__clank/auth/register", {
+      method: "POST",
+      body: {
+        email: "personal-only@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "personal only" },
+      },
+    }));
+    assert.equal(direct.status, 403);
+    assert.equal((await direct.json()).error.code, "SIGNUP_DISABLED");
+
+    const invited = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: invitation.invitation.token,
+        email: "personal-only@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "personal only" },
+      },
+    }));
+    assert.equal(invited.status, 201);
+    const invitedBody = await invited.json();
+    assert.equal(invitedBody.invitationScope, "personal");
+    assert.equal(invitedBody.organizationId, null);
+    assert.equal(invitedBody.role, null);
+    const invitedCookie = invited.headers.get("set-cookie").split(";", 1)[0];
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      cookie: invitedCookie,
+    }));
+    assert.equal(dashboard.organizations.length, 1);
+    assert.equal(dashboard.organizations[0].role, "owner");
+    assert.notEqual(dashboard.organizations[0].id, adminWorkspaceId);
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
+    const memberships = control.prepare(`SELECT m.organization_id, m.role, o.created_by
+      FROM clank_platform_memberships m
+      JOIN clank_platform_organizations o ON o.id = m.organization_id
+      WHERE m.user_id = ?`).all(invitedBody.user.id).map((row) => ({ ...row }));
+    assert.deepEqual(memberships, [{
+      organization_id: dashboard.organizations[0].id,
+      role: "owner",
+      created_by: invitedBody.user.id,
+    }]);
+    assert.equal(control.prepare(`SELECT count(*) AS count FROM clank_platform_memberships
+      WHERE user_id = ? AND organization_id = ?`).get(invitedBody.user.id, adminWorkspaceId).count, 0);
+    const auditActions = control.prepare(`SELECT action FROM clank_platform_audit
+      WHERE action LIKE 'personal_invitation.%' ORDER BY id`).all().map((row) => row.action);
+    control.close();
+    assert.deepEqual(auditActions, [
+      "personal_invitation.create",
+      "personal_invitation.create",
+      "personal_invitation.accept",
+    ]);
+    const replay = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: invitation.invitation.token,
+        email: "personal-only@example.com",
+        password: "another correct horse battery staple",
+        profile: { name: "replay" },
+      },
+    }));
+    assert.equal(replay.status, 400);
+    assert.equal((await replay.json()).error.code, "INVALID_INVITATION");
+
+    const revocable = await payload(platform, jsonRequest("/api/admin/invitations", {
+      method: "POST",
+      cookie: admin.cookie,
+      csrf: admin.csrfToken,
+      body: { email: "revoked-personal@example.com" },
+    }), 201);
+    await payload(platform, jsonRequest(
+      `/api/admin/invitations/${revocable.invitation.id}`,
+      {
+        method: "DELETE",
+        cookie: admin.cookie,
+        csrf: admin.csrfToken,
+      },
+    ));
+    const revoked = await platform.handle(jsonRequest("/__clank/auth/invited-register", {
+      method: "POST",
+      body: {
+        token: revocable.invitation.token,
+        email: "revoked-personal@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "revoked" },
+      },
+    }));
+    assert.equal(revoked.status, 400);
+    assert.equal((await revoked.json()).error.code, "INVALID_INVITATION");
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
