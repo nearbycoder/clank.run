@@ -1637,6 +1637,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               readOnly: true,
             } : null,
           },
+          consolePath,
         );
       }
       if (url.pathname === "/api/device/start" && request.method === "POST") {

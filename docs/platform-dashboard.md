@@ -6,6 +6,12 @@ Clank includes a dependency-free browser console for operating projects, traffic
 
 Open the configured `CLANK_PLATFORM_URL` and sign in with a platform account. A valid browser session opens the dashboard directly after a refresh. Expired sessions return to the sign-in view, and every authenticated browser mutation requires the session CSRF token. The first installation account uses the one-time bootstrap unless the operator explicitly enables public registration. Later invitees can choose **Use invitation** to create only the email-bound invited account and join its workspace without reopening public signup.
 
+The control plane resolves the browser session and requested console route before it returns HTML.
+The first response therefore contains the correct visible account-access or application shell,
+route title, navigation state, and escaped account identity. Client JavaScript attaches interactions
+and revalidates live dashboard data after that first server render; it does not reveal or hide the
+authenticated shell as a post-load correction.
+
 The console uses normal, refresh-safe URLs rather than keeping navigation only in page memory:
 
 | URL | View |

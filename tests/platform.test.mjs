@@ -2995,6 +2995,23 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       },
     });
     assert.deepEqual(await payload(platform, jsonRequest("/readyz")), ready);
+    const signedOutConsole = await platform.handle(jsonRequest("/"));
+    assert.equal(signedOutConsole.status, 200);
+    const signedOutHtml = await signedOutConsole.text();
+    assert.match(signedOutHtml, /<title>Sign in · Clank<\/title>/);
+    assert.match(signedOutHtml, /<section class="auth-layout" id="auth-view">/);
+    assert.match(signedOutHtml, /<section class="app-shell" id="app-view" hidden>/);
+    const signupConsole = await platform.handle(jsonRequest("/signup"));
+    const signupHtml = await signupConsole.text();
+    assert.match(signupHtml, /<title>Create your account · Clank<\/title>/);
+    assert.match(signupHtml, /<h2 id="auth-title">Create your account<\/h2>/);
+    assert.match(signupHtml, /<div class="field" id="name-field">/);
+    assert.match(signupHtml, /autocomplete="new-password"/);
+    const invitationConsole = await platform.handle(jsonRequest("/invite"));
+    const invitationHtml = await invitationConsole.text();
+    assert.match(invitationHtml, /<title>Join your workspace · Clank<\/title>/);
+    assert.match(invitationHtml, /id="registration-invitation-field">/);
+    assert.match(invitationHtml, /id="registration-invitation"[^>]+ required>/);
     const first = await platform.handle(jsonRequest("/__clank/auth/register", {
       method: "POST",
       body: {
@@ -3012,7 +3029,10 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     const signedInHtml = await signedInConsole.text();
     assert.match(signedInHtml, /"authenticated":true/);
     assert.match(signedInHtml, /id="password"[^>]+minlength="8"/);
-    assert.match(signedInHtml, /<section class="app-shell" id="app-view" hidden>/);
+    assert.match(signedInHtml, /<title>Overview · Clank<\/title>/);
+    assert.match(signedInHtml, /<section class="auth-layout" id="auth-view" hidden>/);
+    assert.match(signedInHtml, /<section class="app-shell" id="app-view">/);
+    assert.match(signedInHtml, /<strong id="account-name">first<\/strong><span id="account-email">first@example\.com<\/span>/);
     assert.match(signedInHtml, /class="brand-lockup"><img class="brand-mark"[^>]*><span>Clank<\/span><\/span>/);
     assert.match(signedInHtml, /\.brand-lockup\{display:inline-flex;align-items:center;gap:9px;/);
     assert.match(signedInHtml, /class="icon-sprite"[^>]*><defs>\s*<symbol id="nav-icon-overview"/);
@@ -3062,7 +3082,25 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     }
     const signedOutDeepLink = await platform.handle(jsonRequest("/projects/private-site/domains"));
     assert.equal(signedOutDeepLink.status, 200);
-    assert.match(await signedOutDeepLink.text(), /"authenticated":false/);
+    const signedOutDeepLinkHtml = await signedOutDeepLink.text();
+    assert.match(signedOutDeepLinkHtml, /"authenticated":false/);
+    assert.match(signedOutDeepLinkHtml, /<section class="auth-layout" id="auth-view">/);
+    assert.match(signedOutDeepLinkHtml, /<section class="app-shell" id="app-view" hidden>/);
+    const signedInActivity = await platform.handle(jsonRequest("/activity", { cookie: signedInCookie }));
+    const signedInActivityHtml = await signedInActivity.text();
+    assert.match(signedInActivityHtml, /<title>Activity · Clank<\/title>/);
+    assert.match(signedInActivityHtml, /<section id="overview-page" hidden>/);
+    assert.match(signedInActivityHtml, /<section id="activity-page">/);
+    assert.match(signedInActivityHtml, /id="nav-activity"[^>]+aria-current="page"/);
+    const signedInProject = await platform.handle(jsonRequest(
+      "/projects/my-todo/domains",
+      { cookie: signedInCookie },
+    ));
+    const signedInProjectHtml = await signedInProject.text();
+    assert.match(signedInProjectHtml, /<title>Project · Clank<\/title>/);
+    assert.match(signedInProjectHtml, /id="project-navigation">/);
+    assert.match(signedInProjectHtml, /<section id="overview-page" hidden>/);
+    assert.match(signedInProjectHtml, /<section id="project-page">/);
     const canonical = await platform.handle(jsonRequest(
       "/projects/my-todo/domains/?range=7d",
       { cookie: signedInCookie },
