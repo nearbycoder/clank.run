@@ -1227,6 +1227,184 @@ test("browser project management enforces organization and custom-domain quotas 
   }
 });
 
+test("administrator quota overrides are durable, scoped, inherited, and audited", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-admin-quotas-"));
+  const dataDirectory = join(root, "platform");
+  const options = {
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    platformAdminEmails: ["admin-quotas@example.com"],
+    backups: { intervalMs: false, maxBackups: 9 },
+    limits: {
+      organizationsPerAccount: 4,
+      projectsPerAccount: 5,
+      projectsPerOrganization: 3,
+      domainsPerProject: 4,
+      releasesPerProject: 6,
+      releaseStorageBytesPerProject: 8 * 1024 * 1024,
+    },
+  };
+  let platform = await openPlatform(options);
+  try {
+    const admin = await authorizeCli(platform, "admin-quotas@example.com");
+    const customer = await authorizeCli(platform, "customer-quotas@example.com");
+    const customerDashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      cookie: customer.cookie,
+    }));
+    const workspaceId = customerDashboard.organizations[0].id;
+
+    const ordinaryDenied = await platform.handle(jsonRequest(
+      `/api/admin/quotas/account/${customer.user.id}`,
+      { cookie: customer.cookie },
+    ));
+    assert.equal(ordinaryDenied.status, 403);
+    assert.equal((await ordinaryDenied.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
+    const tokenDenied = await platform.handle(jsonRequest(
+      `/api/admin/quotas/account/${customer.user.id}`,
+      { token: admin.accessToken },
+    ));
+    assert.equal(tokenDenied.status, 403);
+    assert.equal((await tokenDenied.json()).error.code, "BROWSER_ADMIN_REQUIRED");
+
+    const initial = await payload(platform, jsonRequest(
+      `/api/admin/quotas/account/${customer.user.id}`,
+      { cookie: admin.cookie },
+    ));
+    assert.equal(initial.defaults.projectsPerAccount, 5);
+    assert.equal(initial.defaults.backupsPerProject, 9);
+    assert.deepEqual(initial.overrides, {});
+    assert.equal(initial.workspaces[0].id, workspaceId);
+    assert.equal(initial.workspaces[0].effective.projectsPerOrganization, 3);
+
+    const missingCsrf = await platform.handle(jsonRequest(
+      `/api/admin/quotas/account/${customer.user.id}`,
+      {
+        method: "PUT",
+        cookie: admin.cookie,
+        body: { overrides: { projectsPerAccount: 2 } },
+      },
+    ));
+    assert.equal(missingCsrf.status, 403);
+
+    const account = await payload(platform, jsonRequest(
+      `/api/admin/quotas/account/${customer.user.id}`,
+      {
+        method: "PUT",
+        cookie: admin.cookie,
+        csrf: admin.csrfToken,
+        body: {
+          overrides: {
+            organizationsPerAccount: 2,
+            projectsPerAccount: 2,
+            backupsPerProject: 4,
+          },
+        },
+      },
+    ));
+    assert.equal(account.effective.projectsPerAccount, 2);
+    assert.equal(account.effective.backupsPerProject, 4);
+    assert.equal(account.workspaces[0].effective.backupsPerProject, 4);
+
+    const invalidWorkspaceKey = await platform.handle(jsonRequest(
+      `/api/admin/quotas/workspace/${workspaceId}`,
+      {
+        method: "PUT",
+        cookie: admin.cookie,
+        csrf: admin.csrfToken,
+        body: { overrides: { projectsPerAccount: 20 } },
+      },
+    ));
+    assert.equal(invalidWorkspaceKey.status, 422);
+    assert.equal((await invalidWorkspaceKey.json()).error.code, "INVALID_INPUT");
+
+    const workspace = await payload(platform, jsonRequest(
+      `/api/admin/quotas/workspace/${workspaceId}`,
+      {
+        method: "PUT",
+        cookie: admin.cookie,
+        csrf: admin.csrfToken,
+        body: {
+          overrides: {
+            projectsPerOrganization: 1,
+            domainsPerProject: 2,
+            releasesPerProject: 2,
+            releaseStorageBytesPerProject: 4 * 1024 * 1024,
+          },
+        },
+      },
+    ));
+    assert.equal(workspace.inherited.backupsPerProject, 4);
+    assert.equal(workspace.effective.projectsPerOrganization, 1);
+    assert.equal(workspace.effective.domainsPerProject, 2);
+
+    const effectiveDashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      cookie: customer.cookie,
+    }));
+    assert.equal(effectiveDashboard.limits.organizationsPerAccount, 2);
+    assert.equal(effectiveDashboard.limits.projectsPerAccount, 2);
+    assert.equal(effectiveDashboard.limits.backupsPerProject, 4);
+    assert.equal(effectiveDashboard.organizations[0].usage.limit, 1);
+    const project = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      cookie: customer.cookie,
+      csrf: customer.csrfToken,
+      body: {
+        name: "Quota customer",
+        slug: "quota-customer",
+        organizationId: workspaceId,
+      },
+    }), 201);
+    const overWorkspace = await platform.handle(jsonRequest("/api/projects", {
+      method: "POST",
+      cookie: customer.cookie,
+      csrf: customer.csrfToken,
+      body: {
+        name: "Quota overflow",
+        slug: "quota-overflow",
+        organizationId: workspaceId,
+      },
+    }));
+    assert.equal(overWorkspace.status, 409);
+    assert.equal((await overWorkspace.json()).error.code, "PROJECT_LIMIT_REACHED");
+    const detail = await payload(platform, jsonRequest(`/api/projects/${project.project.id}`, {
+      cookie: customer.cookie,
+    }));
+    assert.equal(detail.limits.domainsPerProject, 2);
+    assert.equal(detail.limits.releasesPerProject, 2);
+    assert.equal(detail.limits.backupsPerProject, 4);
+    const backups = await payload(platform, jsonRequest(`/api/projects/${project.project.id}/backups`, {
+      cookie: customer.cookie,
+    }));
+    assert.equal(backups.automation.maxBackups, 4);
+
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
+    assert.equal(control.prepare(
+      "SELECT count(*) AS count FROM clank_platform_quota_overrides WHERE scope_id IN (?, ?)",
+    ).get(customer.user.id, workspaceId).count, 7);
+    const audits = control.prepare(
+      "SELECT metadata FROM clank_platform_audit WHERE action = 'quota.update' ORDER BY id",
+    ).all();
+    assert.equal(audits.length, 2);
+    assert.equal(JSON.parse(audits[0].metadata).scopeType, "account");
+    assert.equal(JSON.parse(audits[1].metadata).scopeType, "workspace");
+    control.close();
+
+    await platform.close();
+    platform = await openPlatform(options);
+    const persisted = await payload(platform, jsonRequest(
+      `/api/admin/quotas/account/${customer.user.id}`,
+      { cookie: admin.cookie },
+    ));
+    assert.equal(persisted.effective.projectsPerAccount, 2);
+    assert.equal(persisted.workspaces[0].effective.projectsPerOrganization, 1);
+    assert.equal(persisted.workspaces[0].effective.backupsPerProject, 4);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("custom-domain routing is reconciled automatically with durable bounded claims", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-domain-recheck-"));
   let routeReady = false;

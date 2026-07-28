@@ -79,7 +79,11 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 - Migration, startup, or health failure restores the prior database and process.
 - Code rollback is health-gated; data rollback is narrowly scoped and confirmed.
 - Organization membership, role, project token scope, and project ownership are checked for every release, log, secret, token, domain, backup, audit, and rollback.
-- Account, organization-site, and project-domain quotas are enforced transactionally with their inserts.
+- Account, workspace, project-domain, release-storage, and backup-retention quotas resolve from
+  audited administrator overrides before enforcement. Account/workspace/domain inserts remain
+  transactional, releases are checked under the project lease, and backup retention is resolved
+  whenever its manager opens. Quota administration is browser-admin-only, same-origin, CSRF
+  protected, schema bounded, and unavailable during support impersonation.
 - Encrypted backup manifests and ciphertext are authenticated and verified before restore.
 - Managed ingress uses exact unique hosts, constrained upstreams, bounded bodies/timeouts, hop-header stripping, safe retries, and circuits.
 - Client disconnects abort proxied upstream work and cancel streamed Node responses.

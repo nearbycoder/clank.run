@@ -99,6 +99,56 @@ export interface PlatformBackupOptions {
   maxDatabaseBytes?: number;
 }
 
+type PlatformQuotaKey =
+  | "organizationsPerAccount"
+  | "projectsPerAccount"
+  | "projectsPerOrganization"
+  | "domainsPerProject"
+  | "releasesPerProject"
+  | "releaseStorageBytesPerProject"
+  | "backupsPerProject";
+
+type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
+type PlatformQuotaScope = "account" | "workspace";
+
+const PLATFORM_QUOTA_KEYS = Object.freeze([
+  "organizationsPerAccount",
+  "projectsPerAccount",
+  "projectsPerOrganization",
+  "domainsPerProject",
+  "releasesPerProject",
+  "releaseStorageBytesPerProject",
+  "backupsPerProject",
+] as const satisfies readonly PlatformQuotaKey[]);
+
+const WORKSPACE_QUOTA_KEYS = Object.freeze([
+  "projectsPerOrganization",
+  "domainsPerProject",
+  "releasesPerProject",
+  "releaseStorageBytesPerProject",
+  "backupsPerProject",
+] as const satisfies readonly PlatformQuotaKey[]);
+
+const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
+  organizationsPerAccount: { minimum: 1, maximum: 10_000, unit: "workspaces", label: "Workspaces per account" },
+  projectsPerAccount: { minimum: 1, maximum: 100_000, unit: "projects", label: "Projects per account" },
+  projectsPerOrganization: { minimum: 1, maximum: 10_000, unit: "projects", label: "Projects per workspace" },
+  domainsPerProject: { minimum: 1, maximum: 1_000, unit: "domains", label: "Custom domains per project" },
+  releasesPerProject: { minimum: 2, maximum: 100, unit: "releases", label: "Retained releases per project" },
+  releaseStorageBytesPerProject: {
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    unit: "bytes",
+    label: "Release storage per project",
+  },
+  backupsPerProject: { minimum: 1, maximum: 10_000, unit: "backups", label: "Retained backups per project" },
+} as const satisfies Record<PlatformQuotaKey, {
+  minimum: number;
+  maximum: number;
+  unit: string;
+  label: string;
+}>);
+
 export interface ClankPlatformOptions {
   dataDirectory: string;
   publicUrl: string;
@@ -423,6 +473,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       Number.MAX_SAFE_INTEGER,
     ),
   });
+  const quotaDefaults: PlatformQuotaValues = Object.freeze({
+    organizationsPerAccount: limits.organizationsPerAccount,
+    projectsPerAccount: limits.projectsPerAccount,
+    projectsPerOrganization: limits.projectsPerOrganization,
+    domainsPerProject: limits.domainsPerProject,
+    releasesPerProject: limits.releasesPerProject,
+    releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
+    backupsPerProject: backupPolicy.maxBackups,
+  });
   const tlsAskToken = options.ingress?.tlsAskToken === undefined
     ? undefined
     : boundedString(options.ingress.tlsAskToken, "ingress.tlsAskToken", 16, 512);
@@ -506,14 +565,17 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           "SELECT id, project_id FROM clank_platform_domains WHERE hostname = ?",
         ).get(challenge.hostname);
         if (!existing) {
+          const project = projectById(storage.internal, challenge.projectId);
+          if (!project) throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
+          const effective = projectQuotas(storage.internal, project, quotaDefaults);
           const count = Number(storage.internal.prepare(
             "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
           ).get(challenge.projectId)?.count ?? 0);
-          if (count >= limits.domainsPerProject) {
+          if (count >= effective.domainsPerProject) {
             throw new PlatformError(
               409,
               "DOMAIN_LIMIT_REACHED",
-              `This site has reached its ${limits.domainsPerProject}-domain limit.`,
+              `This site has reached its ${effective.domainsPerProject}-domain limit.`,
             );
           }
         }
@@ -732,7 +794,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       return withProjectLock(projectId, async () => {
         const project = projectById(storage.internal, projectId);
         if (!project?.databasePath) throw new Error("Scheduled backup database is unavailable.");
-        const manager = await projectBackupManager(paths.projects, project, masterKey, backupPolicy);
+        const effective = projectQuotas(storage.internal, project, quotaDefaults);
+        const manager = await projectBackupManager(paths.projects, project, masterKey, {
+          ...backupPolicy,
+          maxBackups: effective.backupsPerProject,
+        });
         try {
           return await manager.create({ reason: "automatic scheduled backup" });
         } finally {
@@ -991,7 +1057,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       storage.internal,
       project.id,
       bundleStorageBytes + databaseStorageBytes,
-      limits,
+      projectQuotas(storage.internal, project, quotaDefaults),
     );
     const releaseId = await randomId(18);
     const releaseDirectory = await newReleaseDirectory(paths.projects, project.id, releaseId);
@@ -1051,7 +1117,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             storage.internal,
             project.id,
             bundleStorageBytes + actualBackupBytes,
-            limits,
+            projectQuotas(storage.internal, project, quotaDefaults),
             releaseId,
           );
         } catch (error) {
@@ -1834,6 +1900,43 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ...platformAdminUsers(storage.internal, limit, before, search),
         });
       }
+      const adminQuotaMatch = /^\/api\/admin\/quotas\/(account|workspace)\/([A-Za-z0-9_-]{8,128})$/
+        .exec(url.pathname);
+      if (adminQuotaMatch && request.method === "GET") {
+        await requirePlatformAdmin(storage, request);
+        return api({
+          ok: true,
+          ...platformAdminQuotaScope(
+            storage.internal,
+            adminQuotaMatch[1] as PlatformQuotaScope,
+            adminQuotaMatch[2]!,
+            quotaDefaults,
+          ),
+        });
+      }
+      if (adminQuotaMatch && request.method === "PUT") {
+        const auth = await requirePlatformAdmin(storage, request, true);
+        const input = plainObject(await readJsonRequest(request, 32 * 1024));
+        exact(input, ["overrides"]);
+        const overrides = plainObject(input.overrides);
+        updatePlatformQuotaScope(
+          storage.internal,
+          adminQuotaMatch[1] as PlatformQuotaScope,
+          adminQuotaMatch[2]!,
+          overrides,
+          auth.user!.id,
+          quotaDefaults,
+        );
+        return api({
+          ok: true,
+          ...platformAdminQuotaScope(
+            storage.internal,
+            adminQuotaMatch[1] as PlatformQuotaScope,
+            adminQuotaMatch[2]!,
+            quotaDefaults,
+          ),
+        });
+      }
       if (url.pathname === "/api/admin/analytics" && request.method === "GET") {
         await requirePlatformAdmin(storage, request);
         return api({
@@ -1895,14 +1998,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metrics.");
         }
         if (!principal.projectId && !principal.impersonation) {
-          await ensurePersonalOrganization(storage.internal, principal, limits.organizationsPerAccount);
+          await ensurePersonalOrganization(storage.internal, principal, quotaDefaults);
         }
         return api(dashboardPayload(
           storage.internal,
           principal,
           active,
           appUrlTemplate,
-          limits,
+          quotaDefaults,
+          limits.metricRetentionDays,
           options.maxArtifactBytes,
           customDomainTarget,
           customDomainAddresses,
@@ -2014,7 +2118,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           principal.userId,
           name,
           slug,
-          limits.organizationsPerAccount,
+          quotaDefaults,
         );
         audit(storage.internal, principal.userId, principal.tokenId, null, "organization.create", {
           organizationId: organization.id,
@@ -2262,7 +2366,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         return api({
           ok: true,
           projects: rows.map((row) => projectPayload(projectRow(row))),
-          limits: publicLimits(limits, options.maxArtifactBytes),
+          limits: publicLimits(
+            accountQuotas(storage.internal, principal.userId, quotaDefaults),
+            options.maxArtifactBytes,
+            limits.metricRetentionDays,
+          ),
           usage: Object.fromEntries(usageRows.map((row) => [String(row.organization_id), Number(row.count)])),
         });
       }
@@ -2273,7 +2381,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const name = boundedString(input.name, "name", 1, 100);
         const slug = normalizeSlug(input.slug === undefined ? name : boundedString(input.slug, "slug", 1, 50));
         const organizationId = input.organizationId === undefined
-          ? await ensurePersonalOrganization(storage.internal, principal, limits.organizationsPerAccount)
+          ? await ensurePersonalOrganization(storage.internal, principal, quotaDefaults)
           : boundedString(input.organizationId, "organizationId", 8, 128);
         const membership = organizationMembership(storage.internal, organizationId, principal.userId);
         requireOrganizationAdministration(membership.role);
@@ -2282,24 +2390,26 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const now = Date.now();
         try {
           storage.internal.transaction((changes) => {
+            const accountLimits = accountQuotas(storage.internal, principal.userId, quotaDefaults);
+            const organizationLimits = workspaceQuotas(storage.internal, organizationId, quotaDefaults);
             const accountCount = Number(storage.internal.prepare(
               "SELECT count(*) AS count FROM clank_platform_projects WHERE owner_id = ?",
             ).get(principal.userId)?.count ?? 0);
-            if (accountCount >= limits.projectsPerAccount) {
+            if (accountCount >= accountLimits.projectsPerAccount) {
               throw new PlatformError(
                 409,
                 "ACCOUNT_PROJECT_LIMIT_REACHED",
-                `This account has reached its ${limits.projectsPerAccount}-site limit.`,
+                `This account has reached its ${accountLimits.projectsPerAccount}-site limit.`,
               );
             }
             const count = Number(storage.internal.prepare(
               "SELECT count(*) AS count FROM clank_platform_projects WHERE organization_id = ?",
             ).get(organizationId)?.count ?? 0);
-            if (count >= limits.projectsPerOrganization) {
+            if (count >= organizationLimits.projectsPerOrganization) {
               throw new PlatformError(
                 409,
                 "PROJECT_LIMIT_REACHED",
-                `This organization has reached its ${limits.projectsPerOrganization}-site limit.`,
+                `This organization has reached its ${organizationLimits.projectsPerOrganization}-site limit.`,
               );
             }
             port = allocatePort(storage.internal, appPortStart, appPortEnd, reservedAppPorts);
@@ -2366,6 +2476,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         });
       }
       if (!operation && request.method === "GET") {
+        const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
         const domainCount = Number(storage.internal.prepare(
           "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
@@ -2385,11 +2496,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             role: access.role,
             canDelete: principal.projectId === null && (access.role === "owner" || access.role === "admin"),
           },
-          limits: publicLimits(limits, options.maxArtifactBytes),
+          limits: publicLimits(effective, options.maxArtifactBytes, limits.metricRetentionDays),
           usage: { domains: domainCount, ...releaseUsage },
         });
       }
       if (operation === "releases" && request.method === "GET") {
+        const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const availableRows = storage.internal.prepare(
           `SELECT * FROM clank_platform_releases
             WHERE project_id = ? AND artifact_available = 1
@@ -2418,8 +2530,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           }),
           usage: releaseStorageUsage(storage.internal, project.id),
           limits: {
-            releases: limits.releasesPerProject,
-            storageBytes: limits.releaseStorageBytesPerProject,
+            releases: effective.releasesPerProject,
+            storageBytes: effective.releaseStorageBytesPerProject,
           },
         });
       }
@@ -2441,6 +2553,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         });
       }
       if (operation === "releases" && request.method === "POST") {
+        const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const contentType = request.headers.get("content-type")?.split(";", 1)[0];
         if (contentType !== "application/vnd.clank.deploy+gzip"
           && contentType !== "application/vnd.proact.deploy+gzip") {
@@ -2458,11 +2571,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           "SELECT 1 AS present FROM clank_platform_releases WHERE project_id = ? AND idempotency_key = ?",
         ).get(project.id, idempotencyKey);
         if (!existingRelease
-          && releaseStorageUsage(storage.internal, project.id).releases >= limits.releasesPerProject) {
+          && releaseStorageUsage(storage.internal, project.id).releases >= effective.releasesPerProject) {
           throw new PlatformError(
             409,
             "RELEASE_LIMIT_REACHED",
-            `This site has reached its ${limits.releasesPerProject}-release artifact limit. Remove an inactive release before deploying again.`,
+            `This site has reached its ${effective.releasesPerProject}-release artifact limit. Remove an inactive release before deploying again.`,
           );
         }
         const max = options.maxArtifactBytes ?? 100 * 1024 * 1024;
@@ -2487,9 +2600,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         return api({ ok: true, release: await rollback(principal, project, releaseId, restoreData, confirmation) });
       }
       if (operation === "backups" && request.method === "GET") {
-        const automation = backupScheduler.status(project.id, Boolean(project.databasePath));
+        const effective = projectQuotas(storage.internal, project, quotaDefaults);
+        const automation = {
+          ...backupScheduler.status(project.id, Boolean(project.databasePath)),
+          maxBackups: effective.backupsPerProject,
+        };
         if (!project.databasePath) return api({ ok: true, backups: [], automation });
-        const manager = await projectBackupManager(paths.projects, project, masterKey, backupPolicy);
+        const manager = await projectBackupManager(paths.projects, project, masterKey, {
+          ...backupPolicy,
+          maxBackups: effective.backupsPerProject,
+        });
         try {
           return api({
             ok: true,
@@ -2509,7 +2629,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const backup = await withProjectLock(project.id, async () => {
           const current = projectById(storage.internal, project.id);
           if (!current) throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
-          const manager = await projectBackupManager(paths.projects, current, masterKey, backupPolicy);
+          const effective = projectQuotas(storage.internal, current, quotaDefaults);
+          const manager = await projectBackupManager(paths.projects, current, masterKey, {
+            ...backupPolicy,
+            maxBackups: effective.backupsPerProject,
+          });
           try {
             return await manager.create({ reason });
           } finally {
@@ -2526,7 +2650,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       const backupMatch = /^backups\/(bk_[A-Za-z0-9_-]{16,128})\/(verify|restore)$/.exec(operation);
       if (backupMatch && request.method === "POST") {
-        const manager = await projectBackupManager(paths.projects, project, masterKey, backupPolicy);
+        const effective = projectQuotas(storage.internal, project, quotaDefaults);
+        const manager = await projectBackupManager(paths.projects, project, masterKey, {
+          ...backupPolicy,
+          maxBackups: effective.backupsPerProject,
+        });
         try {
           if (backupMatch[2] === "verify") {
             const verification = await manager.verify(backupMatch[1]!);
@@ -2626,12 +2754,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }, 201);
       }
       if (operation === "domains" && request.method === "GET") {
+        const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const rows = storage.internal.prepare(`SELECT *
           FROM clank_platform_domains WHERE project_id = ? ORDER BY created_at`).all(project.id);
         return api({
           ok: true,
           domains: rows.map((row) => publicDomain(row, customDomainTarget, customDomainAddresses)),
-          limit: limits.domainsPerProject,
+          limit: effective.domainsPerProject,
           automation: {
             ...domainReconciliation,
             pending: Number(storage.internal.prepare(`SELECT count(*) AS count
@@ -2970,6 +3099,37 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_quota_overrides (
+    scope_type TEXT NOT NULL CHECK (scope_type IN ('account', 'workspace')),
+    scope_id TEXT NOT NULL,
+    quota_key TEXT NOT NULL CHECK (quota_key IN (
+      'organizationsPerAccount',
+      'projectsPerAccount',
+      'projectsPerOrganization',
+      'domainsPerProject',
+      'releasesPerProject',
+      'releaseStorageBytesPerProject',
+      'backupsPerProject'
+    )),
+    quota_value INTEGER NOT NULL CHECK (quota_value > 0),
+    updated_by TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (scope_type, scope_id, quota_key)
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_quota_overrides_scope
+    ON clank_platform_quota_overrides (scope_type, scope_id)`);
+  internal.exec(`CREATE TRIGGER IF NOT EXISTS clank_platform_quota_overrides_account_cleanup
+    AFTER DELETE ON clank_auth_users
+    BEGIN
+      DELETE FROM clank_platform_quota_overrides
+      WHERE scope_type = 'account' AND scope_id = old.id;
+    END`);
+  internal.exec(`CREATE TRIGGER IF NOT EXISTS clank_platform_quota_overrides_workspace_cleanup
+    AFTER DELETE ON clank_platform_organizations
+    BEGIN
+      DELETE FROM clank_platform_quota_overrides
+      WHERE scope_type = 'workspace' AND scope_id = old.id;
+    END`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_memberships (
     organization_id TEXT NOT NULL REFERENCES clank_platform_organizations(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
@@ -3862,6 +4022,150 @@ function platformAdminUsers(
   };
 }
 
+function platformAdminQuotaScope(
+  internal: SQLiteInternal,
+  scopeType: PlatformQuotaScope,
+  scopeId: string,
+  defaults: PlatformQuotaValues,
+): Record<string, unknown> {
+  if (scopeType === "account") {
+    const account = internal.prepare(`SELECT id, email, json_extract(profile, '$.name') AS name
+      FROM clank_auth_users WHERE id = ?`).get(scopeId);
+    if (!account) throw new PlatformError(404, "USER_NOT_FOUND", "The target account is unavailable.");
+    const overrides = quotaOverrides(internal, "account", scopeId);
+    const workspaces = internal.prepare(`SELECT id, name, slug,
+        (SELECT count(*) FROM clank_platform_projects p WHERE p.organization_id = o.id) AS projects
+      FROM clank_platform_organizations o
+      WHERE created_by = ? ORDER BY created_at`).all(scopeId).map((row) => ({
+        id: String(row.id),
+        name: String(row.name),
+        slug: String(row.slug),
+        usage: { projects: Number(row.projects ?? 0) },
+        overrides: quotaOverrides(internal, "workspace", String(row.id)),
+        effective: workspaceQuotas(internal, String(row.id), defaults),
+      }));
+    const usage = internal.prepare(`SELECT
+        (SELECT count(*) FROM clank_platform_organizations WHERE created_by = ?) AS organizations,
+        (SELECT count(*) FROM clank_platform_projects WHERE owner_id = ?) AS projects`)
+      .get(scopeId, scopeId);
+    return {
+      scope: {
+        type: scopeType,
+        id: String(account.id),
+        email: String(account.email),
+        name: account.name === null || account.name === undefined ? null : String(account.name),
+      },
+      definitions: publicQuotaDefinitions(),
+      defaults,
+      overrides,
+      effective: { ...defaults, ...overrides },
+      usage: {
+        organizations: Number(usage?.organizations ?? 0),
+        projects: Number(usage?.projects ?? 0),
+      },
+      workspaces,
+    };
+  }
+
+  const workspace = internal.prepare(`SELECT o.id, o.name, o.slug, o.created_by,
+      u.email AS owner_email,
+      (SELECT count(*) FROM clank_platform_projects p WHERE p.organization_id = o.id) AS projects
+    FROM clank_platform_organizations o
+    JOIN clank_auth_users u ON u.id = o.created_by
+    WHERE o.id = ?`).get(scopeId);
+  if (!workspace) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "Workspace not found.");
+  const inherited = accountQuotas(internal, String(workspace.created_by), defaults);
+  const overrides = quotaOverrides(internal, "workspace", scopeId);
+  return {
+    scope: {
+      type: scopeType,
+      id: String(workspace.id),
+      name: String(workspace.name),
+      slug: String(workspace.slug),
+      ownerId: String(workspace.created_by),
+      ownerEmail: String(workspace.owner_email),
+    },
+    definitions: publicQuotaDefinitions().filter((definition) =>
+      (definition.scopes as string[]).includes("workspace")),
+    defaults,
+    inherited,
+    overrides,
+    effective: { ...inherited, ...overrides },
+    usage: { projects: Number(workspace.projects ?? 0) },
+  };
+}
+
+function updatePlatformQuotaScope(
+  internal: SQLiteInternal,
+  scopeType: PlatformQuotaScope,
+  scopeId: string,
+  input: Record<string, unknown>,
+  actorUserId: string,
+  defaults: PlatformQuotaValues,
+): void {
+  const target = scopeType === "account"
+    ? internal.prepare("SELECT id FROM clank_auth_users WHERE id = ?").get(scopeId)
+    : internal.prepare("SELECT id FROM clank_platform_organizations WHERE id = ?").get(scopeId);
+  if (!target) {
+    throw new PlatformError(
+      404,
+      scopeType === "account" ? "USER_NOT_FOUND" : "ORGANIZATION_NOT_FOUND",
+      scopeType === "account" ? "The target account is unavailable." : "Workspace not found.",
+    );
+  }
+  const allowed = scopeType === "account" ? PLATFORM_QUOTA_KEYS : WORKSPACE_QUOTA_KEYS;
+  exact(input, [...allowed]);
+  const updates = Object.entries(input) as [PlatformQuotaKey, unknown][];
+  const normalized = updates.map(([key, value]) => {
+    if (value === null) return [key, null] as const;
+    const definition = PLATFORM_QUOTA_DEFINITIONS[key];
+    if (typeof value !== "number" || !Number.isSafeInteger(value)
+      || value < definition.minimum || value > definition.maximum) {
+      throw new PlatformError(
+        422,
+        "INVALID_QUOTA",
+        `${definition.label} must be a whole number from ${definition.minimum} through ${definition.maximum}.`,
+      );
+    }
+    return [key, value] as const;
+  });
+  const previous = quotaOverrides(internal, scopeType, scopeId);
+  const changes: Record<string, { from: number | null; to: number | null }> = {};
+  const now = Date.now();
+  internal.transaction((changeLog) => {
+    for (const [key, value] of normalized) {
+      const from = previous[key] ?? null;
+      if (from === value) continue;
+      if (value === null) {
+        internal.prepare(`DELETE FROM clank_platform_quota_overrides
+          WHERE scope_type = ? AND scope_id = ? AND quota_key = ?`)
+          .run(scopeType, scopeId, key);
+      } else {
+        internal.prepare(`INSERT INTO clank_platform_quota_overrides
+          (scope_type, scope_id, quota_key, quota_value, updated_by, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(scope_type, scope_id, quota_key) DO UPDATE SET
+            quota_value = excluded.quota_value,
+            updated_by = excluded.updated_by,
+            updated_at = excluded.updated_at`)
+          .run(scopeType, scopeId, key, value, actorUserId, now);
+      }
+      changes[key] = { from, to: value };
+    }
+    if (!Object.keys(changes).length) return;
+    audit(internal, actorUserId, null, null, "quota.update", {
+      ...(scopeType === "workspace" ? { organizationId: scopeId } : {}),
+      scopeType,
+      scopeId,
+      changes,
+      effective: scopeType === "account"
+        ? accountQuotas(internal, scopeId, defaults)
+        : workspaceQuotas(internal, scopeId, defaults),
+    });
+    changeLog.record("__platform", scopeId);
+  });
+}
+
 function platformAdminAnalytics(
   internal: SQLiteInternal,
   active: ReadonlyMap<string, ActiveProcess>,
@@ -4627,15 +4931,86 @@ function publicDomain(
   };
 }
 
-function publicLimits(limits: Required<PlatformLimits>, maxArtifactBytes?: number): Record<string, number> {
+function quotaOverrides(
+  internal: SQLiteInternal,
+  scopeType: PlatformQuotaScope,
+  scopeId: string,
+): Partial<PlatformQuotaValues> {
+  const result: Partial<PlatformQuotaValues> = {};
+  const rows = internal.prepare(`SELECT quota_key, quota_value
+    FROM clank_platform_quota_overrides
+    WHERE scope_type = ? AND scope_id = ?`).all(scopeType, scopeId);
+  for (const row of rows) {
+    const key = String(row.quota_key) as PlatformQuotaKey;
+    if (!PLATFORM_QUOTA_KEYS.includes(key)) continue;
+    const value = Number(row.quota_value);
+    const definition = PLATFORM_QUOTA_DEFINITIONS[key];
+    if (Number.isSafeInteger(value)
+      && value >= definition.minimum
+      && value <= definition.maximum) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function accountQuotas(
+  internal: SQLiteInternal,
+  accountId: string,
+  defaults: PlatformQuotaValues,
+): PlatformQuotaValues {
+  return { ...defaults, ...quotaOverrides(internal, "account", accountId) };
+}
+
+function workspaceQuotas(
+  internal: SQLiteInternal,
+  workspaceId: string,
+  defaults: PlatformQuotaValues,
+): PlatformQuotaValues {
+  const workspace = internal.prepare(
+    "SELECT created_by FROM clank_platform_organizations WHERE id = ?",
+  ).get(workspaceId);
+  if (!workspace) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "Workspace not found.");
+  return {
+    ...accountQuotas(internal, String(workspace.created_by), defaults),
+    ...quotaOverrides(internal, "workspace", workspaceId),
+  };
+}
+
+function projectQuotas(
+  internal: SQLiteInternal,
+  project: ProjectRow,
+  defaults: PlatformQuotaValues,
+): PlatformQuotaValues {
+  return project.organizationId
+    ? workspaceQuotas(internal, project.organizationId, defaults)
+    : accountQuotas(internal, project.ownerId, defaults);
+}
+
+function publicQuotaDefinitions(): Record<string, unknown>[] {
+  return PLATFORM_QUOTA_KEYS.map((key) => ({
+    key,
+    ...PLATFORM_QUOTA_DEFINITIONS[key],
+    scopes: WORKSPACE_QUOTA_KEYS.includes(key as typeof WORKSPACE_QUOTA_KEYS[number])
+      ? ["account", "workspace"]
+      : ["account"],
+  }));
+}
+
+function publicLimits(
+  limits: PlatformQuotaValues,
+  maxArtifactBytes?: number,
+  metricRetentionDays?: number,
+): Record<string, number> {
   return {
     organizationsPerAccount: limits.organizationsPerAccount,
     projectsPerAccount: limits.projectsPerAccount,
     projectsPerOrganization: limits.projectsPerOrganization,
     domainsPerProject: limits.domainsPerProject,
-    metricRetentionDays: limits.metricRetentionDays,
+    metricRetentionDays: metricRetentionDays ?? 30,
     releasesPerProject: limits.releasesPerProject,
     releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
+    backupsPerProject: limits.backupsPerProject,
     maxArtifactBytes: maxArtifactBytes ?? 100 * 1024 * 1024,
   };
 }
@@ -4645,7 +5020,8 @@ function dashboardPayload(
   principal: TokenPrincipal,
   active: ReadonlyMap<string, ActiveProcess>,
   appUrlTemplate: string,
-  limits: Required<PlatformLimits>,
+  defaults: PlatformQuotaValues,
+  metricRetentionDays: number,
   maxArtifactBytes: number | undefined,
   customDomainTarget: string | undefined,
   customDomainAddresses: readonly string[],
@@ -4661,6 +5037,7 @@ function dashboardPayload(
     lastFailed: number;
   }>,
 ): Record<string, unknown> {
+  const accountLimits = accountQuotas(internal, principal.userId, defaults);
   const organizationRows = principal.organizationId
     ? internal.prepare(`SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, m.role,
         (SELECT count(*) FROM clank_platform_projects p WHERE p.organization_id = o.id) AS project_count
@@ -4672,15 +5049,18 @@ function dashboardPayload(
       FROM clank_platform_organizations o
       JOIN clank_platform_memberships m ON m.organization_id = o.id
       WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
-  const organizations = organizationRows.map((row) => ({
+  const organizations = organizationRows.map((row) => {
+    const effective = workspaceQuotas(internal, String(row.id), defaults);
+    return {
       id: String(row.id),
       name: String(row.name),
       slug: String(row.slug),
       role: String(row.role),
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
-      usage: { projects: Number(row.project_count), limit: limits.projectsPerOrganization },
-    }));
+      usage: { projects: Number(row.project_count), limit: effective.projectsPerOrganization },
+    };
+  });
   const projectRows = principal.projectId
     ? internal.prepare(`SELECT p.* FROM clank_platform_projects p
         JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
@@ -4691,6 +5071,7 @@ function dashboardPayload(
         WHERE m.user_id IS NOT NULL OR p.owner_id = ? ORDER BY p.created_at`).all(principal.userId, principal.userId);
   const projects = projectRows.map((source) => {
     const project = projectRow(source);
+    const effective = projectQuotas(internal, project, defaults);
     const release = project.activeReleaseId ? releaseById(internal, project.activeReleaseId) : null;
     const domainUsage = internal.prepare(`SELECT count(*) AS count,
       sum(CASE WHEN status = 'verified' AND routing_status = 'ready' THEN 1 ELSE 0 END) AS ready
@@ -4704,11 +5085,11 @@ function dashboardPayload(
       directUrl: `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`,
       runtimeStatus: active.has(project.id) ? "online" : release ? "degraded" : "not_deployed",
       activeRelease: release ? publicRelease(release) : null,
-      domains: { count: Number(domainUsage?.count ?? 0), ready: Number(domainUsage?.ready ?? 0), limit: limits.domainsPerProject },
+      domains: { count: Number(domainUsage?.count ?? 0), ready: Number(domainUsage?.ready ?? 0), limit: effective.domainsPerProject },
       releases: {
         ...releases,
-        limit: limits.releasesPerProject,
-        storageLimitBytes: limits.releaseStorageBytesPerProject,
+        limit: effective.releasesPerProject,
+        storageLimitBytes: effective.releaseStorageBytesPerProject,
       },
       metrics,
     };
@@ -4749,7 +5130,7 @@ function dashboardPayload(
         projects: Number(ownedUsage?.projects ?? 0),
       },
     },
-    limits: publicLimits(limits, maxArtifactBytes),
+    limits: publicLimits(accountLimits, maxArtifactBytes, metricRetentionDays),
     organizations,
     projects,
     totals: {
@@ -5427,7 +5808,7 @@ function assertReleaseCapacity(
   internal: SQLiteInternal,
   projectId: string,
   nextStorageBytes: number,
-  limits: Required<PlatformLimits>,
+  limits: Pick<PlatformQuotaValues, "releasesPerProject" | "releaseStorageBytesPerProject">,
   excludeReleaseId?: string,
 ): void {
   const usage = releaseStorageUsage(internal, projectId, excludeReleaseId);
@@ -6000,12 +6381,17 @@ async function createOrganization(
   userId: string,
   name: string,
   slug: string,
-  organizationsPerAccount: number,
+  defaults: PlatformQuotaValues,
 ): Promise<Record<string, unknown>> {
   const id = await randomId(18);
   const now = Date.now();
   try {
     internal.transaction((changes) => {
+      const organizationsPerAccount = accountQuotas(
+        internal,
+        userId,
+        defaults,
+      ).organizationsPerAccount;
       const count = Number(internal.prepare(
         "SELECT count(*) AS count FROM clank_platform_organizations WHERE created_by = ?",
       ).get(userId)?.count ?? 0);
@@ -6036,7 +6422,7 @@ async function createOrganization(
 async function ensurePersonalOrganization(
   internal: SQLiteInternal,
   principal: TokenPrincipal,
-  organizationsPerAccount: number,
+  defaults: PlatformQuotaValues,
 ): Promise<string> {
   const existing = internal.prepare(`SELECT o.id
     FROM clank_platform_organizations o
@@ -6047,7 +6433,7 @@ async function ensurePersonalOrganization(
   const id = await randomId(18);
   const baseName = principal.email.split("@")[0]?.replace(/[^A-Za-z0-9 ]+/g, " ").trim() || "Personal";
   const slug = normalizeSlug(`personal-${id.slice(0, 10)}`);
-  await createOrganization(internal, principal.userId, `${baseName}'s workspace`, slug, organizationsPerAccount);
+  await createOrganization(internal, principal.userId, `${baseName}'s workspace`, slug, defaults);
   const created = internal.prepare("SELECT id FROM clank_platform_organizations WHERE slug = ?").get(slug);
   return String(created!.id);
 }

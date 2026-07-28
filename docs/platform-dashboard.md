@@ -63,6 +63,16 @@ traffic histogram, capacity totals, account growth, and top-project table aggreg
 installation. The cursor-paginated account directory exposes only operational identity and usage
 metadata and supports bounded email/name search. CLI bearer tokens cannot open these APIs.
 
+The **Limits…** action on every account opens the durable capacity editor. Operators can set
+account-wide workspace and project capacity, then select any workspace owned by that account to
+override its project, domain, release, release-storage, or backup retention limits. A blank field
+removes the explicit override and restores inheritance. The editor always shows the effective value
+and current usage. Saving a lower value never removes application resources; it blocks new capacity
+until usage returns below the limit. Backup retention is the explicit exception: the next successful
+backup reconciles the oldest encrypted restore points to the newly selected count. Every changed
+value, its prior value, target scope, operator, and resulting effective limits are recorded in the
+append-only audit log.
+
 An operator may start a 15-minute read-only support session from an eligible account row after
 entering a reason and the exact target email. The target's authorized dashboard becomes visible,
 but every server-side mutation, identity control, device approval, and operator API is denied. A
@@ -87,13 +97,34 @@ Limits are operator configuration, not cosmetic dashboard values:
 | `CLANK_MAX_PROJECTS_PER_ACCOUNT` | `10` | Account-owned project count and insert in one SQLite transaction |
 | `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Project count and insert in one SQLite transaction |
 | `CLANK_MAX_DOMAINS_PER_PROJECT` | `5` | Domain assignment and count in one SQLite transaction |
-| `CLANK_METRICS_RETENTION_DAYS` | `30` | Minute ingress-metric retention |
 | `CLANK_MAX_RELEASES_PER_PROJECT` | `50` | Available release-artifact count (valid range 2–100) checked under the distributed project lock |
 | `CLANK_MAX_RELEASE_STORAGE_BYTES_PER_PROJECT` | `21474836480` | Uncompressed release files and pre-deploy snapshots checked under the same lock |
+| `CLANK_BACKUP_MAX_COUNT` | `30` | Retained encrypted restore points per project |
+| `CLANK_METRICS_RETENTION_DAYS` | `30` | Installation-wide minute ingress-metric retention; not customer-adjustable |
 
 The API returns `ORGANIZATION_LIMIT_REACHED`, `ACCOUNT_PROJECT_LIMIT_REACHED`, `PROJECT_LIMIT_REACHED`, or `DOMAIN_LIMIT_REACHED` with HTTP `409` when capacity is exhausted. Account limits count organizations created by the account and projects owned by the account; joining someone else's organization does not consume the invitee's creator quota. A pending or verified hostname belongs to exactly one project; another project cannot replace its challenge. The console hostname, custom-domain target, base domain, and the base-domain application namespace are reserved.
 
-These are fixed installation-wide ceilings today. Account and organization limits are checked in the same SQLite write transactions as their inserts. Release limits are rechecked while holding the project's durable cross-control-plane lease, so concurrent deploys cannot bypass capacity. A hosted service can later resolve plan-specific limits before entering those transactions; billing state must never be the only enforcement layer.
+Environment values are installation defaults, not immutable ceilings. A platform administrator can
+store an explicit override for an account or workspace from the Control plane. Resolution is
+deterministic:
+
+1. a workspace override wins for resources inside that workspace;
+2. otherwise the workspace inherits the account that owns it; and
+3. otherwise the installation environment default applies.
+
+The account's own override governs its total owned workspaces and projects. Workspace overrides are
+available only for limits that naturally belong inside a workspace. Backup cadence, maximum source
+database size, maximum backup age, upload size, and metric retention remain operator-wide safety
+policies rather than tenant overrides.
+
+Overrides live in the control SQLite database as one validated row per scope and quota key. The
+admin API accepts only known keys and safe integer bounds, requires a same-origin browser
+administrator session plus CSRF, rejects bearer tokens and active support impersonation, and writes
+the override and audit event in one transaction. Account and organization limits are checked in the
+same SQLite write transactions as their inserts. Domain checks remain in the hostname assignment
+transaction. Release limits are rechecked while holding the project's durable cross-control-plane
+lease, and backup retention is resolved each time a backup manager opens, so concurrent work and
+long-running control planes cannot keep stale capacity.
 
 A successful permanent project deletion immediately releases the account/organization project count, slug, application port, and custom-domain assignments. The deletion path uses the same durable per-project lock as deployment and backup work, then removes platform-managed storage and control metadata. Exact confirmation and explicit data-loss acknowledgement are required; only an owner/admin account session or account-wide token can perform it.
 
@@ -197,6 +228,10 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `GET /api/dashboard` — account, organizations, enforced limits, projects, 24-hour summaries, and domain-edge configuration.
 - `GET /api/admin/analytics?range=24h` — browser-platform-admin-only global capacity, traffic, account growth, and top-project summaries.
 - `GET /api/admin/users?limit=50&before=<cursor>&query=<text>` — browser-platform-admin-only redacted account directory.
+- `GET /api/admin/quotas/account/:accountId` — administrator-only account defaults, overrides, effective limits, usage, and owned workspace limits.
+- `GET /api/admin/quotas/workspace/:workspaceId` — administrator-only workspace inheritance, overrides, effective limits, and usage.
+- `PUT /api/admin/quotas/account/:accountId` — CSRF-protected `{ "overrides": { "<key>": number | null } }`; `null` removes an override.
+- `PUT /api/admin/quotas/workspace/:workspaceId` — the same update contract for workspace-compatible keys.
 - `POST /api/admin/impersonation` — recent-auth platform administrator starts a reason-bound read-only support session after exact email confirmation.
 - `DELETE /api/admin/impersonation` — revoke the current browser-session-bound support session.
 - `GET /api/audit?limit=100&before=<event-id>&organizationId=<id>` — role-filtered, cursor-paginated workspace activity including deleted projects.
