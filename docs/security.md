@@ -44,7 +44,26 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 - Disabling users, role changes, and revoking sessions close associated live streams across same-host processes.
 - Document `ifVersion` checks reject stale writes instead of silently overwriting newer edits.
 - Mutation writes, output validation, revision updates, and journal records share one transaction.
+- Mutation application writes and durable job enqueue share that transaction when using the
+  mutation-scoped publisher.
 - Query snapshots and change metadata are immutable at runtime.
+
+### Durable jobs
+
+- Job arguments and optional results are schema validated and size bounded.
+- App schemas and safe migrations cannot shadow or modify queue, event, or schedule tables.
+- Claims use random renewable visibility tokens; completion compares token and worker identity.
+- Expired workers are fenced and work is retried with bounded exponential backoff.
+- Exhausted work is retained as an explicit dead letter; cancellation fences later success.
+- Owner scope follows authenticated enqueue and applies to handler database reads/writes.
+- Cron occurrences use deterministic idempotency keys and independently leased schedulers.
+- Worker queues and concurrency are bounded in both config and environment parsing.
+- Rolling deployments quiesce old background code before starting the candidate and resume it on
+  candidate failure.
+
+Delivery remains at least once. A handler can complete an external side effect before losing its
+lease, so the application must make that side effect idempotent. Abort signals are cooperative and
+do not sandbox handler code. See [Durable jobs and cron](jobs-and-cron.md#handler-security-checklist).
 
 ### Node and files
 
@@ -128,6 +147,9 @@ Also:
 - log internal exceptions through `onError` without returning them to clients;
 - keep Node and Clank patched and back up the database.
 - run one active built-in process supervisor per project/data directory until a remote worker/leader topology is configured;
+- keep every app's web, worker, and scheduler roles on the same durable SQLite volume, or provide a
+  reviewed transactional shared-store implementation;
+- alert on dead letters, oldest-due age, lease expiry, and background restart loops;
 - use Docker or stronger isolation for mutually untrusted deployers;
 - supply the platform master key from external secret management;
 - export scheduled backups and pre-release snapshots off-host.

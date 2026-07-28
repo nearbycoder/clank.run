@@ -36,6 +36,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 8. Live database to encrypted backup repository and restore target.
 9. Git source to CI, attestation, GitHub release, and npm publication.
 10. Trusted application source through the TSX compiler to generated executable modules.
+11. Web mutation to durable queue and leased worker/scheduler to external side effects.
 
 ## Primary abuse cases
 
@@ -56,6 +57,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 | SSRF/proxy confusion | Attacker-chosen upstream, scheme-relative path, duplicate host, hop-header smuggling | Loopback/allowlist upstreams, target origin assigned before path, exact unique hosts, `Connection`-nominated header stripping, manual redirects | Network egress policy and trusted DNS/TLS edge |
 | Domain/certificate takeover | Reassign pending hostname, spoof TXT, route elsewhere, trigger certificates for arbitrary SNI | Exact random TXT proof, immutable cross-project assignment, separate routing state, reserved namespaces, indexed TLS allow check restricted to deployed sites | Private edge link, CAA/ACME policy, certificate storage and CA monitoring |
 | Worker split brain | Expired worker completes after reassignment | Authenticated leases, monotonic fences, idempotent durable operations | Highly available backing store and supervisor integration |
+| Application job duplication | Worker performs a remote effect, then times out or crashes before recording success | Transactional enqueue, renewable random-token leases, stale-settlement fencing, bounded retry/dead letter, deterministic cron keys, rollout quiescing | Idempotent handlers/provider keys, cooperative aborts, shared durable volume, queue monitoring |
 | Backup tampering or omission | Ciphertext/manifest alteration, duplicate schedulers, missed recovery point, restore wrong copy | AES-GCM envelope, manifest HMAC/AAD, digest/integrity checks, durable leased scheduling, bounded retention, explicit confirmation | Monitoring, separate key custody, off-host replication, restore drills |
 | Destructive project action | Stolen scoped token, developer error, path substitution, partial site deletion | Owner/admin account principal, scoped-token denial, CSRF, exact slug confirmation, separate data-loss acknowledgement, durable lock, derived symlink-safe paths, token revocation, retained audit event | Account-token protection, off-platform copy deletion, legal retention policy, deletion drills |
 | Audit repudiation or tenant disclosure | Hide a destructive event, read another workspace, reuse stale elevated scope | Non-cascading organization attribution, current membership/role joins, project-token intersection, bounded cursor pagination, no audit mutation API, deleted-target retention | Trusted SQLite admins can alter local rows; replicate or sign events independently when operator tampering is in scope |

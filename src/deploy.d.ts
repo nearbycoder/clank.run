@@ -10,6 +10,13 @@ export interface DeployDatabaseConfig {
 export interface DeployBuildConfig {
     command: readonly string[];
 }
+export interface DeployJobsConfig {
+    entry: string;
+    workers: number;
+    concurrency: number;
+    queues: readonly string[];
+    scheduler: boolean;
+}
 export interface DeploymentConfig {
     version: 1;
     entry: string;
@@ -18,6 +25,7 @@ export interface DeploymentConfig {
     database: DeployDatabaseConfig;
     health: DeployHealthConfig;
     env: Record<string, string>;
+    jobs?: DeployJobsConfig;
 }
 export interface DeploymentFile {
     readonly path: string;

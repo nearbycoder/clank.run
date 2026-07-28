@@ -221,6 +221,15 @@ interface ActiveProcess {
   releaseId: string;
   port: number;
   child: NativeChild;
+  background: ActiveBackgroundProcess[];
+  expectedStop: boolean;
+  backgroundFailure?: string;
+}
+
+interface ActiveBackgroundProcess {
+  role: "worker" | "scheduler";
+  instance: number;
+  child: NativeChild;
   expectedStop: boolean;
 }
 
@@ -810,10 +819,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     onError: options.onError,
   });
 
+  const stopBackgroundProcesses = async (running: ActiveProcess): Promise<void> => {
+    const processes = running.background.splice(0);
+    for (const process of processes) process.expectedStop = true;
+    await Promise.allSettled(processes.map((process) => stopChild(process.child)));
+  };
+
   const stopRunning = async (running: ActiveProcess): Promise<void> => {
     running.expectedStop = true;
     if (active.get(running.projectId) === running) active.delete(running.projectId);
-    await stopChild(running.child);
+    await Promise.allSettled([
+      stopBackgroundProcesses(running),
+      stopChild(running.child),
+    ]);
   };
 
   const stopProject = async (projectId: string): Promise<void> => {
@@ -840,34 +858,133 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       )`).run(projectId, projectId);
   };
 
+  const launchBackgroundProcesses = async (
+    running: ActiveProcess,
+    release: ReleaseRow,
+    dataRoot: string,
+    port: number,
+    environment: Record<string, string>,
+    secrets: Record<string, string>,
+  ): Promise<void> => {
+    const jobs = release.config.jobs;
+    if (!jobs) return;
+    running.backgroundFailure = undefined;
+    const launches: Array<{ role: "worker" | "scheduler"; instance: number }> = [
+      ...Array.from({ length: jobs.workers }, (_, instance) => ({
+        role: "worker" as const,
+        instance,
+      })),
+      ...(jobs.scheduler ? [{ role: "scheduler" as const, instance: 0 }] : []),
+    ];
+    for (const launch of launches) {
+      const backgroundEnvironment = {
+        ...environment,
+        CLANK_PROCESS_ROLE: launch.role,
+        ...(launch.role === "worker"
+          ? {
+              CLANK_WORKER_CONCURRENCY: String(jobs.concurrency),
+              CLANK_WORKER_QUEUES: jobs.queues.join(","),
+            }
+          : {}),
+      };
+      const child = await spawnRelease(
+        options.runner ?? { kind: "process" },
+        release,
+        dataRoot,
+        port,
+        backgroundEnvironment,
+        {
+          entry: jobs.entry,
+          role: launch.role,
+          instance: launch.instance,
+          exposePort: false,
+        },
+      );
+      const background: ActiveBackgroundProcess = {
+        role: launch.role,
+        instance: launch.instance,
+        child,
+        expectedStop: false,
+      };
+      running.background.push(background);
+      const stream = `${launch.role}${launch.role === "worker" ? `[${launch.instance + 1}]` : ""}`;
+      captureOutput(
+        child.stdout,
+        (line) => recordLog(running.projectId, release.id, `${stream}:stdout`, redact(line, secrets)),
+      );
+      captureOutput(
+        child.stderr,
+        (line) => recordLog(running.projectId, release.id, `${stream}:stderr`, redact(line, secrets)),
+      );
+      child.once("error", (error) => {
+        recordLog(running.projectId, release.id, "platform", `${stream} process error: ${safeError(error)}`);
+      });
+      child.once("exit", (code, signal) => {
+        const failure = `${stream} process exited (${String(code ?? signal ?? "unknown")}).`;
+        recordLog(running.projectId, release.id, "platform", failure);
+        if (background.expectedStop || running.expectedStop || closed) return;
+        running.backgroundFailure = failure;
+        if (active.get(running.projectId) === running) {
+          storage.internal.prepare("UPDATE clank_platform_releases SET status = 'crashed', failure = ? WHERE id = ?")
+            .run(failure, release.id);
+          scheduleRestart(running.projectId, release.id);
+        }
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (running.backgroundFailure || running.background.some((process) =>
+      process.child.exitCode !== null && process.child.exitCode !== undefined)) {
+      throw new Error(running.backgroundFailure ?? "A background process exited during startup.");
+    }
+    recordLog(
+      running.projectId,
+      release.id,
+      "platform",
+      `Started ${jobs.workers} worker process(es) at concurrency ${jobs.concurrency}`
+        + `${jobs.scheduler ? " and one scheduler" : ""}.`,
+    );
+  };
+
+  const releaseLaunchContext = async (
+    project: ProjectRow,
+    release: ReleaseRow,
+    secrets: Record<string, string>,
+    port: number,
+  ): Promise<{ dataRoot: string; environment: Record<string, string> }> => {
+    const dataRoot = await projectDataDirectory(paths.projects, project.id);
+    const databaseHostPath = await safeProjectDataPath(dataRoot, release.config.database.path);
+    return {
+      dataRoot,
+      environment: {
+        ...release.config.env,
+        ...secrets,
+        NODE_ENV: "production",
+        PORT: String(port),
+        CLANK_DATABASE_PATH: databaseHostPath,
+        CLANK_DATABASE: databaseHostPath,
+        PROACT_DATABASE_PATH: databaseHostPath,
+        PROACT_DATABASE: databaseHostPath,
+        // Managed applications are reachable only through the loopback-bound
+        // ingress. Trust its overwritten forwarding headers so auth, secure
+        // cookies, passkeys, and generated URLs see the verified public origin.
+        // Host admission remains at the ingress because verified custom domains
+        // can be attached without restarting the application process.
+        ALLOWED_HOSTS: ingressEnabled
+          ? ""
+          : `localhost,127.0.0.1,${options.appHostname ?? "127.0.0.1"}`,
+        CLANK_MANAGED_INGRESS: ingressEnabled ? "1" : "0",
+        TRUST_PROXY: ingressEnabled ? "1" : "0",
+      },
+    };
+  };
+
   const launchRelease = async (
     project: ProjectRow,
     release: ReleaseRow,
     secrets: Record<string, string>,
     port: number,
   ): Promise<ActiveProcess> => {
-    const dataRoot = await projectDataDirectory(paths.projects, project.id);
-    const databaseHostPath = await safeProjectDataPath(dataRoot, release.config.database.path);
-    const environment = {
-      ...release.config.env,
-      ...secrets,
-      NODE_ENV: "production",
-      PORT: String(port),
-      CLANK_DATABASE_PATH: databaseHostPath,
-      CLANK_DATABASE: databaseHostPath,
-      PROACT_DATABASE_PATH: databaseHostPath,
-      PROACT_DATABASE: databaseHostPath,
-      // Managed applications are reachable only through the loopback-bound
-      // ingress. Trust its overwritten forwarding headers so auth, secure
-      // cookies, passkeys, and generated URLs see the verified public origin.
-      // Host admission remains at the ingress because verified custom domains
-      // can be attached without restarting the application process.
-      ALLOWED_HOSTS: ingressEnabled
-        ? ""
-        : `localhost,127.0.0.1,${options.appHostname ?? "127.0.0.1"}`,
-      CLANK_MANAGED_INGRESS: ingressEnabled ? "1" : "0",
-      TRUST_PROXY: ingressEnabled ? "1" : "0",
-    };
+    const { dataRoot, environment } = await releaseLaunchContext(project, release, secrets, port);
     await assertPortAvailable(port);
     const child = await spawnRelease(
       options.runner ?? { kind: "process" },
@@ -875,12 +992,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       dataRoot,
       port,
       environment,
+      {
+        entry: release.config.entry,
+        role: "web",
+        instance: 0,
+        exposePort: true,
+      },
     );
     const running: ActiveProcess = {
       projectId: project.id,
       releaseId: release.id,
       port,
       child,
+      background: [],
       expectedStop: false,
     };
     starting.add(running);
@@ -905,6 +1029,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         throw new Error("Application exited immediately after its health check passed.");
       }
       if (closed) throw new Error("Platform closed while the application was starting.");
+      await launchBackgroundProcesses(running, release, dataRoot, port, environment, secrets);
       return running;
     } catch (error) {
       await stopRunning(running);
@@ -1090,6 +1215,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     let preMigrationCapacityRejection: PlatformError | null = null;
     const previousRuntime = active.get(project.id);
     let previousWasStopped = false;
+    let previousBackgroundStopped = false;
     let candidateRuntime: ActiveProcess | undefined;
     let rolloutPort: number | undefined;
     let activationCommitted = false;
@@ -1153,6 +1279,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const release = releaseById(storage.internal, releaseId)!;
       const secrets = decryptProjectSecrets(storage.internal, project.id, masterKey);
       rolloutPort ??= project.port;
+      if (rolling && previousRuntime && previousRuntime.background.length > 0) {
+        await stopBackgroundProcesses(previousRuntime);
+        previousBackgroundStopped = true;
+        recordLog(
+          project.id,
+          releaseId,
+          "platform",
+          "Quiesced prior worker and scheduler processes before starting the candidate release.",
+        );
+      }
       try {
         candidateRuntime = await launchRelease(refreshedProject, release, secrets, rolloutPort);
       } finally {
@@ -1236,6 +1372,43 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         && previousRuntime.child.exitCode === null
       ) {
         active.set(project.id, previousRuntime);
+        if (previousBackgroundStopped && previousReleaseId) {
+          try {
+            const previous = releaseById(storage.internal, previousReleaseId);
+            if (previous) {
+              const previousSecrets = decryptProjectSecrets(storage.internal, project.id, masterKey);
+              const { dataRoot, environment } = await releaseLaunchContext(
+                project,
+                previous,
+                previousSecrets,
+                previousRuntime.port,
+              );
+              await launchBackgroundProcesses(
+                previousRuntime,
+                previous,
+                dataRoot,
+                previousRuntime.port,
+                environment,
+                previousSecrets,
+              );
+              recordLog(
+                project.id,
+                previous.id,
+                "platform",
+                "Resumed prior worker and scheduler processes after candidate failure.",
+              );
+            }
+          } catch (resumeError) {
+            options.onError?.(resumeError);
+            recordLog(
+              project.id,
+              previousReleaseId,
+              "platform",
+              `Could not resume prior background processes: ${safeError(resumeError)}`,
+            );
+            scheduleRestart(project.id, previousReleaseId);
+          }
+        }
       }
       if (error === preMigrationCapacityRejection) {
         let cleanupSucceeded = true;
@@ -4489,12 +4662,26 @@ async function platformMemoryDiagnostics(
   const controlPlane = Number.isSafeInteger(pid) && pid > 0
     ? await linuxProcessMemory(pid, read)
     : emptyProcessMemory(null);
+  const trackedApplications = [...active.values()].slice(0, 250).flatMap((running) => [
+    {
+      running,
+      child: running.child,
+      role: "web" as const,
+      instance: 0,
+    },
+    ...running.background.map((background) => ({
+      running,
+      child: background.child,
+      role: background.role,
+      instance: background.instance,
+    })),
+  ]);
   const projectProcesses = await Promise.all(
-    [...active.values()].slice(0, 250).map(async (running) => {
+    trackedApplications.slice(0, 1_000).map(async ({ running, child, role, instance }) => {
       const project = internal.prepare(
         "SELECT id, name, slug FROM clank_platform_projects WHERE id = ?",
       ).get(running.projectId);
-      const childPid = Number(running.child.pid);
+      const childPid = Number(child.pid);
       const memory = Number.isSafeInteger(childPid) && childPid > 0
         ? await linuxProcessMemory(childPid, read)
         : emptyProcessMemory(null);
@@ -4505,6 +4692,8 @@ async function platformMemoryDiagnostics(
         releaseId: running.releaseId,
         port: running.port,
         scope: runnerKind === "docker" ? "docker_runner" : "application",
+        role,
+        instance: role === "worker" ? instance + 1 : null,
         ...memory,
       };
     }),
@@ -4550,6 +4739,7 @@ async function platformMemoryDiagnostics(
     projects: projectProcesses,
     totals: {
       onlineProjects: active.size,
+      trackedApplicationProcesses: projectProcesses.length,
       projectAttributedBytes: projectAttributionBytes,
       trackedProcessBytes,
       unattributedBytes: currentBytes === null
@@ -5725,6 +5915,12 @@ async function spawnRelease(
   dataRoot: string,
   port: number,
   environment: Record<string, string>,
+  launch: {
+    entry: string;
+    role: "web" | "worker" | "scheduler";
+    instance: number;
+    exposePort: boolean;
+  },
 ): Promise<NativeChild> {
   const childName = "node:child_process";
   const { spawn } = await import(childName) as unknown as {
@@ -5744,7 +5940,7 @@ async function spawnRelease(
     };
     const args = [
       "run", "--rm",
-      "--name", `clank-${release.projectId.slice(0, 12)}-${release.id.slice(0, 8)}`,
+      "--name", `clank-${release.projectId.slice(0, 12)}-${release.id.slice(0, 8)}-${launch.role}-${launch.instance}`,
       "--read-only",
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
@@ -5753,13 +5949,13 @@ async function spawnRelease(
       "--cpus", runner.cpus ?? "1",
       "--user", `${String((globalThis as any).process.getuid?.() ?? 65532)}:${String((globalThis as any).process.getgid?.() ?? 65532)}`,
       "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
-      "-p", `127.0.0.1:${port}:${port}`,
+      ...(launch.exposePort ? ["-p", `127.0.0.1:${port}:${port}`] : []),
       "-v", `${path.resolve(release.directory)}:/app:ro`,
       "-v", `${path.resolve(dataRoot)}:/data:rw`,
       "-w", "/app",
       ...Object.keys(dockerEnvironment).flatMap((name) => ["-e", name]),
       runner.image ?? "node:22-bookworm-slim",
-      "node", "--disable-warning=ExperimentalWarning", release.config.entry,
+      "node", "--disable-warning=ExperimentalWarning", launch.entry,
     ];
     return spawn(runner.executable ?? "docker", args, {
       env: {
@@ -5770,7 +5966,11 @@ async function spawnRelease(
       stdio: ["ignore", "pipe", "pipe"],
     });
   }
-  const launcher = await writeReleaseLauncher(release.directory, release.config.entry);
+  const launcher = await writeReleaseLauncher(
+    release.directory,
+    launch.entry,
+    `${launch.role}-${launch.instance}`,
+  );
   return spawn(
     (globalThis as any).process.execPath,
     ["--disable-warning=ExperimentalWarning", launcher],
@@ -5787,14 +5987,14 @@ async function spawnRelease(
   );
 }
 
-async function writeReleaseLauncher(directory: string, entry: string): Promise<string> {
+async function writeReleaseLauncher(directory: string, entry: string, suffix = "web-0"): Promise<string> {
   const fsName = "node:fs/promises";
   const pathName = "node:path";
   const fs = await import(fsName) as unknown as {
     writeFile(path: string, value: string, options: { mode: number }): Promise<void>;
   };
   const path = await import(pathName) as unknown as { join(...segments: string[]): string };
-  const launcher = path.join(directory, ".clank-launch.mjs");
+  const launcher = path.join(directory, `.clank-launch-${suffix}.mjs`);
   await fs.writeFile(
     launcher,
     `process.umask(0o077);\nawait import(${JSON.stringify(`./${entry}`)});\n`,

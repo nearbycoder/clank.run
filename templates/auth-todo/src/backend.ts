@@ -2,6 +2,7 @@ import {
   defineAuth,
   defineBackend,
   defineDatabase,
+  defineJobs,
   defineTable,
   s,
   type DocumentFor,
@@ -26,7 +27,24 @@ export const schema = defineDatabase({
 export type Todo = DocumentFor<typeof schema, "todos">;
 const documentVersion = s.number({ integer: true, min: 1 });
 
-export const backend = defineBackend({ schema, auth }).functions(({ query, mutation }) => ({
+export const background = defineJobs({ schema }).jobs(({ job }) => ({
+  todos: {
+    created: job({
+      args: { id: s.id("todos") },
+      queue: "events",
+      description: "Process committed todo creation outside the request path.",
+      retry: { maxAttempts: 5, initialDelayMs: 1_000 },
+      handler: ({ db, job: metadata }, { id }) => {
+        const todo = db.read((read) => read.table("todos").get(id));
+        if (!todo) return { found: false };
+        console.log(`Processed todo ${id} in ${metadata.id}.`);
+        return { found: true };
+      },
+    }),
+  },
+}));
+
+export const backend = defineBackend({ schema, auth, jobs: background }).functions(({ query, mutation }) => ({
   todos: {
     list: query({
       description: "List the signed-in user's todos.",
@@ -37,10 +55,14 @@ export const backend = defineBackend({ schema, auth }).functions(({ query, mutat
       description: "Create a todo for the signed-in user.",
       args: { title: s.string({ min: 1, max: 160, description: "Todo title" }) },
       agent: { destructive: false },
-      handler: ({ db }, { title }) => db.table("todos").insert({
-        title: title.trim(),
-        done: false,
-      }),
+      handler: ({ db, jobs }, { title }) => {
+        const id = db.table("todos").insert({
+          title: title.trim(),
+          done: false,
+        });
+        jobs.enqueue(background.jobs.todos.created, { id });
+        return id;
+      },
     }),
     setDone: mutation({
       description: "Mark one todo complete or incomplete.",

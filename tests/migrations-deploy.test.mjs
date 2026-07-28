@@ -92,6 +92,58 @@ test("deployment bundles are deterministic, checksummed, bounded, and traversal-
   }
 });
 
+test("deployment config strictly validates provider-neutral worker and scheduler processes", () => {
+  const withJobs = parseDeploymentConfig({
+    ...config,
+    jobs: {
+      entry: "dist/jobs.js",
+      workers: 2,
+      concurrency: 4,
+      queues: ["email", "email", "reports"],
+      scheduler: true,
+    },
+  });
+  assert.deepEqual(withJobs.jobs, {
+    entry: "dist/jobs.js",
+    workers: 2,
+    concurrency: 4,
+    queues: ["email", "reports"],
+    scheduler: true,
+  });
+  assert.throws(() => parseDeploymentConfig({
+    ...config,
+    jobs: {
+      entry: "private/jobs.js",
+      workers: 1,
+      scheduler: false,
+    },
+  }), /jobs\.entry must be contained/);
+  assert.throws(() => parseDeploymentConfig({
+    ...config,
+    jobs: {
+      entry: "dist/jobs.ts",
+      workers: 1,
+      scheduler: false,
+    },
+  }), /compiled \.js or \.mjs/);
+  assert.throws(() => parseDeploymentConfig({
+    ...config,
+    jobs: {
+      entry: "dist/jobs.js",
+      workers: 0,
+      scheduler: false,
+    },
+  }), /at least one worker or the scheduler/);
+  assert.throws(() => parseDeploymentConfig({
+    ...config,
+    jobs: {
+      entry: "dist/jobs.js",
+      workers: 1,
+      queues: ["has whitespace"],
+    },
+  }), /valid queue name/);
+});
+
 test("migration planning upgrades the legacy Proact ledger without replaying history", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-legacy-ledger-"));
   const directory = join(root, "migrations");

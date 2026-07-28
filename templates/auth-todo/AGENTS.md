@@ -5,6 +5,8 @@ This is a Clank full-stack application. Keep the safe path short, the generated 
 ## Working commands
 
 - `npm run dev` builds and starts the app at http://127.0.0.1:3000.
+- `npm run jobs:worker` builds and starts a durable background worker.
+- `npm run jobs:scheduler` builds and starts the cron scheduler.
 - `npm run build` compiles `src/` into `dist/`.
 - `npm run doctor` performs local readiness diagnostics.
 - `npm run deploy:check` builds and verifies a deterministic artifact without login or upload.
@@ -13,17 +15,22 @@ This is a Clank full-stack application. Keep the safe path short, the generated 
 
 ## File map
 
-- `src/backend.ts`: auth, schemas, owned data, queries, mutations, and authorization.
+- `src/backend.ts`: auth, schemas, owned data, queries, mutations, durable jobs, and authorization.
+- `src/jobs.ts`: provider-neutral worker/scheduler process entry.
 - `src/view.tsx`: accessible UI and stable agent-addressable controls.
 - `src/app.tsx`: hydration, auth client, live query, and browser interactions.
 - `src/server.tsx`: routes, SSR, CSP, static files, and API wiring.
 - `migrations/`: immutable ordered SQL history.
-- `clank.deploy.json`: build, artifact, database, health, and public environment contract.
+- `clank.deploy.json`: build, artifact, database, health, jobs, and public environment contract.
 - `.clank/`: local artifacts and project link; never commit it.
 
 ## Invariants
 
 - Preserve user ownership on every todo query and mutation.
+- Enqueue follow-up work through mutation `jobs` so application writes and job delivery commit
+  atomically. Keep handlers idempotent because delivery is at least once.
+- Honor `context.signal`, bound external calls, and put permanent failures in the dead-letter state
+  for explicit inspection or retry.
 - Treat browser and agent input as untrusted; validate at the backend boundary.
 - Give every backend function a precise `description`; mark additive writes with
   `agent: { destructive: false }`, destructive writes explicitly, and internal functions with

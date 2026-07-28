@@ -6,6 +6,8 @@
     "build": "clank build src dist",
     "dev": "clank build src dist && node --disable-warning=ExperimentalWarning dist/server.js",
     "start": "node --disable-warning=ExperimentalWarning dist/server.js",
+    "jobs:worker": "clank jobs worker",
+    "jobs:scheduler": "clank jobs scheduler",
     "doctor": "clank doctor",
     "deploy:check": "clank deploy --dry-run",
     "deploy": "clank deploy"

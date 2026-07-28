@@ -1,6 +1,7 @@
 # Self-hosting Clank Deploy
 
-Clank Deploy is one Node control-plane process plus one supervised process or container per active project.
+Clank Deploy is one Node control-plane process plus a supervised web process/container and any
+configured worker/scheduler processes for each active project.
 
 ## Requirements
 

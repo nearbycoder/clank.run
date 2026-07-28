@@ -13,6 +13,7 @@ ui.ts       disclosure, dialog, tabs, pagination, browser directives
 server.ts   Fetch request router and middleware
 auth.ts     password/session service, cookies, CSRF, roles, auth UI/client
 backend.ts  inferred schema/functions, SQLite documents, RPC, live queries
+jobs.ts     typed durable jobs, fenced workers, retries, retention, cron scheduling
 deploy.ts   deterministic artifact config, packaging, verification, extraction
 migrations.ts immutable SQL ledger, backup, restore, transactional application
 platform.ts device auth, projects, secrets, audit, releases, supervision
@@ -80,6 +81,17 @@ The deployment config is normalized before its build runs. The CLI executes the 
 
 The control plane hashes device and access credentials, intersects organization role with project-token scope on every request, stores encrypted secrets and audit metadata in its own SQLite database, and allocates a persistent project data directory. Release directories are immutable after extraction except for a platform-generated launcher.
 
-A deployment takes the project lock, verifies and extracts a staged artifact, quiesces the previous process, snapshots SQLite, applies immutable migrations, starts a candidate, and waits for health. Activation is the final state transition. Any earlier failure restores the snapshot and previous process.
+A deployment takes the project lock, verifies and extracts a staged artifact, snapshots SQLite,
+applies immutable migrations, starts a candidate process group, and waits for health. Code-only
+rolling updates keep the previous web process serving while its background processes quiesce;
+candidate failure resumes them. Activation is the final state transition. Any earlier exclusive
+migration failure restores the snapshot and previous release.
+
+The queue is a transactional outbox inside the same per-app SQLite database. A mutation and its
+enqueue commit under one `BEGIN IMMEDIATE`. Workers claim through renewable visibility leases,
+heartbeat while handling, and settle only with the matching random token and worker identity.
+Expired work is retried with bounded backoff; stale workers are fenced; cron schedulers use a
+separate durable lease and deterministic occurrence keys. Web, worker, and scheduler are separate
+OS processes even when one Clank supervisor manages all three.
 
 Project mutations also acquire durable distributed leases. Authenticated deployment nodes, desired generations, idempotent durable operations, lease expiry, retries, draining, capacity placement, and monotonic fences reject stale workers. The included child-process supervisor still owns processes in memory and therefore runs as one active leader per project/data directory; remote agents can implement the durable orchestration contract. Child processes support trusted operation, while Docker adds a constrained container boundary for mutually untrusted applications.

@@ -51,18 +51,17 @@ Email validation rejects header injection and reserved transport headers. Verifi
 
 ## Durable jobs and cron
 
-`openJobQueue(database, handlers)` stores jobs in SQLite and implements:
+Use `defineJobs`, mutation-scoped `jobs.enqueue`, and `runJobProcess` for new applications. They add
+inferred argument types, transactional enqueue with application writes, fenced renewable leases,
+owner scope, queues and groups, result validation, explicit cancellation, bounded retention,
+time-zone-aware cron, and independently supervised worker/scheduler processes.
 
-- JSON payload validation;
-- unique idempotency keys;
-- scheduled `runAt` execution;
-- transactional worker leases and expired-lease recovery;
-- handler timeouts and abort signals;
-- exponential bounded retries;
-- dead-letter state and explicit retry; and
-- multiple cooperating workers against the same database.
+The older `openJobQueue(database, handlers)` service API remains available for compatibility. Its
+storage is isolated under `clank_service_jobs`, so it can coexist during a gradual migration, but it
+does not gain the typed backend and deployment integration of the current job system.
 
-Cron schedules should enqueue jobs with stable unique keys such as `daily-report:2026-07-16`. The queue owns delivery state; business handlers remain ordinary async functions.
+Read [Durable jobs and cron](jobs-and-cron.md) for the complete API, delivery guarantees, cloud
+process contract, deployment configuration, failure behavior, and operations guide.
 
 ## Webhooks
 
@@ -70,4 +69,7 @@ Cron schedules should enqueue jobs with stable unique keys such as `daily-report
 
 ## Production boundaries
 
-Local files and a single SQLite job database are appropriate for a single-node deployment. Horizontal deployments must bind compatible remote object storage and a shared job/database topology. Service capabilities are part of the blueprint so the deployment platform can refuse an incomplete production plan instead of silently degrading.
+Local files and a SQLite job database are appropriate when every role shares one durable host
+volume. Independent nodes with private disks need compatible remote object storage and a shared
+transactional job/database topology. Service capabilities are part of the blueprint so the
+deployment platform can refuse an incomplete production plan instead of silently degrading.

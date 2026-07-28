@@ -78,6 +78,24 @@ Clank Deploy separately records per-project traffic that passes through managed 
 
 Ingress latency ends when upstream response headers arrive; it is not streamed-response completion time. Response size is known only when `Content-Length` is present. See [Deployment dashboard, quotas, and domains](platform-dashboard.md) for exact semantics and retention.
 
+### Jobs and cron
+
+`runtime.jobs.stats()` returns bounded queue-state counts, due work, and oldest-due time. Per-job
+history is available through `events(id)`, while release logs identify `worker[n]` and `scheduler`
+streams. Platform memory diagnostics report web, worker, and scheduler processes separately.
+
+Use stable job name, queue, state, and attempt fields in logs and traces. Do not use job IDs,
+arguments, user IDs, error messages, group keys, or idempotency keys as metric labels. Alert on:
+
+- dead jobs greater than zero;
+- oldest-due age beyond the queue's objective;
+- repeated lease expiry or timeout events;
+- background process restart loops; and
+- scheduler last-error or a future occurrence that stops advancing.
+
+Read [Durable jobs and cron](jobs-and-cron.md) for inspection, retention, and OpenTelemetry
+interoperability guidance.
+
 ## Readiness
 
 Critical checks determine the HTTP status. Optional dependencies remain visible without taking the service out of rotation:

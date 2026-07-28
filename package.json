@@ -1,7 +1,7 @@
 {
   "name": "@clank.run/framework",
   "version": "0.9.3",
-  "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, and deployment.",
+  "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, durable jobs, cron, and deployment.",
   "homepage": "https://docs.clank.run",
   "bugs": {
     "url": "https://github.com/nearbycoder/clank.run/issues"
@@ -43,6 +43,7 @@
     "./backend": { "types": "./dist/backend.d.ts", "import": "./dist/backend.js" },
     "./deploy": { "types": "./dist/deploy.d.ts", "import": "./dist/deploy.js" },
     "./migrations": { "types": "./dist/migrations.d.ts", "import": "./dist/migrations.js" },
+    "./jobs": { "types": "./dist/jobs.d.ts", "import": "./dist/jobs.js" },
     "./platform": { "types": "./dist/platform.d.ts", "import": "./dist/platform.js" },
     "./ssr": { "types": "./dist/ssr.d.ts", "import": "./dist/ssr.js" },
     "./node": { "types": "./dist/node.d.ts", "import": "./dist/node.js" },
@@ -108,6 +109,9 @@
     "ssr",
     "sqlite",
     "realtime",
+    "jobs",
+    "queue",
+    "cron",
     "deployment",
     "platform",
     "fine-grained",

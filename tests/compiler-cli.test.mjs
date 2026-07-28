@@ -200,6 +200,69 @@ test("CLI help is command-aware, agent-readable, and never executes the target c
   }
 });
 
+test("clank jobs launches the configured provider-neutral process with bounded worker settings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-jobs-"));
+  const resultPath = join(root, "worker-environment.json");
+  try {
+    await mkdir(join(root, "dist"), { recursive: true });
+    await mkdir(join(root, "migrations"), { recursive: true });
+    await writeFile(join(root, "dist", "server.js"), "");
+    await writeFile(join(root, "dist", "jobs.js"), `
+      import { writeFile } from "node:fs/promises";
+      await writeFile(process.env.CLANK_TEST_JOB_RESULT, JSON.stringify({
+        role: process.env.CLANK_PROCESS_ROLE,
+        concurrency: process.env.CLANK_WORKER_CONCURRENCY,
+        queues: process.env.CLANK_WORKER_QUEUES,
+      }));
+    `);
+    await writeFile(join(root, "clank.deploy.json"), JSON.stringify({
+      version: 1,
+      entry: "dist/server.js",
+      include: ["dist", "migrations"],
+      database: {
+        path: "app.sqlite",
+        migrations: "migrations",
+        allowUnsafeMigrations: false,
+      },
+      health: { path: "/healthz", timeoutMs: 5_000 },
+      env: {},
+      jobs: {
+        entry: "dist/jobs.js",
+        workers: 1,
+        concurrency: 2,
+        queues: ["default"],
+        scheduler: true,
+      },
+    }));
+    const result = await runCliResult([
+      "jobs",
+      "worker",
+      "--concurrency=3",
+      "--queues=email,reports",
+    ], root, {
+      ...process.env,
+      CLANK_TEST_JOB_RESULT: resultPath,
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Starting worker · concurrency 3 · queues email,reports/);
+    assert.deepEqual(JSON.parse(await readFile(resultPath, "utf8")), {
+      role: "worker",
+      concurrency: "3",
+      queues: "email,reports",
+    });
+
+    const invalid = await runCliResult([
+      "jobs",
+      "scheduler",
+      "--concurrency=2",
+    ], root);
+    assert.equal(invalid.code, 1);
+    assert.match(invalid.stderr, /apply only to clank jobs worker/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("deployment CLI rejects malformed credential state without exposing it", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-config-"));
   const canary = "credential-canary-must-stay-private";
@@ -611,6 +674,7 @@ test("create scaffolds a named, buildable authenticated application", async () =
 
     const packageJson = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
     const server = await readFile(join(target, "src", "server.tsx"), "utf8");
+    const jobs = await readFile(join(target, "src", "jobs.ts"), "utf8");
     const view = await readFile(join(target, "src", "view.tsx"), "utf8");
     const tsconfig = JSON.parse(await readFile(join(target, "tsconfig.json"), "utf8"));
     const gitignore = await readFile(join(target, ".gitignore"), "utf8");
@@ -620,11 +684,14 @@ test("create scaffolds a named, buildable authenticated application", async () =
     assert.equal(packageJson.dependencies["@clank.run/framework"], `^${frameworkVersion}`);
     assert.match(packageJson.scripts.dev, /dist\/server\.js/);
     assert.equal(packageJson.scripts.doctor, "clank doctor");
+    assert.equal(packageJson.scripts["jobs:worker"], "clank jobs worker");
+    assert.equal(packageJson.scripts["jobs:scheduler"], "clank jobs scheduler");
     assert.equal(packageJson.scripts["deploy:check"], "clank deploy --dry-run");
     assert.doesNotMatch(server, /__PROJECT_TITLE__/);
     assert.doesNotMatch(view, /__PROJECT_TITLE__/);
     assert.doesNotMatch(JSON.stringify(packageJson), /__CLANK_VERSION__/);
     assert.match(server, /title: "Team Tasks"/);
+    assert.match(jobs, /runJobProcess/);
     assert.match(server, /imports: \{ "@clank\.run\/framework": "\/_clank\/index\.js" \}/);
     assert.match(view, />Team Tasks</);
     assert.match(view, /<For each=\{props\.todos\} by="_id"/);
@@ -635,6 +702,7 @@ test("create scaffolds a named, buildable authenticated application", async () =
 
     await runCli(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "server.js"), "utf8"), /Team Tasks/);
+    assert.match(await readFile(join(target, "dist", "jobs.js"), "utf8"), /runJobProcess/);
     assert.match(await readFile(join(target, "dist", "view.js"), "utf8"), /Team Tasks/);
   } finally {
     await rm(root, { recursive: true, force: true });
