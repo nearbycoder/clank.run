@@ -208,7 +208,7 @@ capsules, durable operation/generation/fence intent, drain-before-stop, deferred
 activation, retry-after-commit recovery, and fail-closed shutdown. See
 [Complete deployment provider service](provider-service.md).
 
-## What is and is not portable yet
+## Built-in control-plane integration
 
 The provider contract, reconcile/rollback/delete HTTP bridge, runner command, release and runtime
 transport, object storage, leases, credentials, fencing, provider data lifecycle, isolated Docker
@@ -216,17 +216,28 @@ launcher, provider-private runtime ingress, and complete Docker provider composi
 implemented and package-supported. They remove provider SDKs from Clank and give Docker, VM,
 microVM, Nomad, Kubernetes, or hosted adapters the same narrow surface.
 
-The built-in control plane still activates its ordinary hosted projects through its local
-supervisor. Enabling enrollment or starting `clank-runner` does not silently relocate existing
-projects. A fully remote installation must deliberately connect desired-state/runtime-capsule
-creation and stateful node placement to the packaged provider service, TLS/edge routing, log and
-metric collection, and independent backup policy. The capsule is not
-selected by the built-in platform until ingress activation and the complete cross-node recovery
-path are integrated and tested. Clank refuses to pretend those data and security boundaries are
-solved by uploading code alone.
+The built-in control plane can now opt a project into this provider stack. It freezes and encrypts
+one final runtime environment per generation, creates `clank-runtime/1` only for an authenticated
+current lease, requests stateful endpoint/label placement, and publishes an allowlisted provider
+origin only after the exact release and generation are observed. Deploy retry, code rollback,
+fenced immediate-predecessor data rollback, restart-safe routing, preview inheritance, and
+provider-confirmed deletion use the same contract.
 
-See [Remote runtime placement](runtime-placement.md) for the exact body and trust boundary, then
-[Provider data lifecycle](provider-data-lifecycle.md) for its safe local consumption. The eventual
-provider integration should consume [Complete deployment provider service](provider-service.md)
-rather than reimplementing ordering in application code or the control database. Use [Provider
-Docker runtime](provider-docker-runtime.md) as the reference process boundary.
+This remains explicit. Enabling enrollment or starting `clank-runner` does not relocate existing
+projects. Configure `deploymentAgents.placement` (or
+`CLANK_PROVIDER_DEFAULT_PLACEMENT=local|provider`) and create the project with provider placement.
+The value `local` enables per-project selection while retaining the safe default.
+
+Provider backup/restore transport, application-log forwarding, provider disk/memory telemetry, and
+automatic failover from node-local SQLite are not implemented. A stateful project stays pinned and
+unavailable when its node is unavailable. Backup mutations fail closed with
+`PROVIDER_BACKUP_PENDING`; operators must not treat release-object retention as a database backup.
+See [Remote runtime placement](runtime-placement.md#current-support-boundary) for the precise
+boundary.
+
+See [Remote runtime placement](runtime-placement.md) for operator configuration, exact body, and
+trust boundary, then [Provider data lifecycle](provider-data-lifecycle.md) for its safe
+consumption. Integrations should consume [Complete deployment provider
+service](provider-service.md) rather than reimplementing ordering in application code or the
+control database. Use [Provider Docker runtime](provider-docker-runtime.md) as the reference
+process boundary.

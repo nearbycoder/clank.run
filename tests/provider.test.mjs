@@ -894,6 +894,27 @@ test("packaged runner has useful non-secret help and rejects arguments before ne
   assert.equal(checked.stdout.includes(providerToken), false);
 });
 
+test("packaged provider documents its private trust boundary before requiring configuration", async () => {
+  const script = new URL("../scripts/clank-provider.mjs", import.meta.url);
+  const help = await execFileAsync(process.execPath, [script.pathname, "--help"], {
+    env: {},
+  });
+  assert.match(help.stdout, /Usage: clank-provider/u);
+  assert.match(help.stdout, /CLANK_PROVIDER_TOKEN/u);
+  assert.match(help.stdout, /CLANK_PROVIDER_IMAGE/u);
+  assert.match(help.stdout, /CLANK_PROVIDER_MAX_ARTIFACT_BYTES/u);
+  assert.match(help.stdout, /CLANK_PROVIDER_HTTP_REQUEST_TIMEOUT_MS/u);
+  assert.match(help.stdout, /private network/u);
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [script.pathname, "unexpected"], {
+      env: {},
+    }),
+    (error) => error.code === 1
+      && /accepts only --help/u.test(error.stderr),
+  );
+});
+
 async function releaseFixture() {
   const root = await mkdtemp(join(tmpdir(), "clank-provider-release-"));
   await mkdir(join(root, "dist"), { recursive: true });

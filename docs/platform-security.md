@@ -86,16 +86,26 @@ failure bodies, independently verifies artifact or capsule bytes, and exposes on
 provider failures. Secret values stay out of headers. Its exact retries are safe only when
 provider code persists the operation/fence idempotency rule.
 
-The built-in control plane does not activate remote runtime placement yet. Provider-side
-snapshot/restore/delete, migration, rollback, fencing, crash recovery, isolated Docker launch,
-private candidate health, exact-owner orphan cleanup, restart fail-closure, exact private ingress,
-generation overlap, revocation, and draining are package-supported. The complete provider service
-rehashes a capsule before advancing owner-only operation/generation/fence intent, drains before
-writer shutdown, recovers data only after quiescence, defers workers/schedulers until data commit,
-and activates ingress last. Stateful node pinning, independent recovery replication, and
-control-plane ingress switching still require end-to-end integration. See [Complete deployment
-provider service](provider-service.md), [Provider data lifecycle](provider-data-lifecycle.md),
-[Provider Docker runtime](provider-docker-runtime.md), [Provider runtime
+The built-in control plane can activate only explicitly created provider projects. It encrypts a
+frozen environment per generation, produces the capsule only for a current reconcile lease,
+requires stateful endpoint/label placement, validates the provider endpoint against an exact HTTPS
+hostname allowlist, and publishes only when desired and observed project/release/generation/node
+all match. The public route overwrites every provider-binding header and derives its private token
+from the master key, project, and generation without storing it.
+
+Provider rollback and deletion are separately fenced operations pinned to the exact active node.
+Deletion removes control metadata only after provider confirmation. Pending deploys retain staging
+state and their CLI idempotency key. A stale, unavailable, or mismatched provider fails closed
+without falling into the local supervisor or moving node-local SQLite.
+
+Independent provider recovery replication is still missing. Local backup scheduling excludes
+provider projects and their backup mutations return `PROVIDER_BACKUP_PENDING`; operators must
+establish a separate tested backup until Clank's encrypted provider transport lands. Provider
+hosts remain trusted compute and require private TLS, non-root isolated runtime execution, a
+protected Docker socket, disk/network policy, monitoring, and secret rotation after compromise.
+See [Complete deployment provider service](provider-service.md), [Provider data
+lifecycle](provider-data-lifecycle.md), [Provider Docker
+runtime](provider-docker-runtime.md), [Provider runtime
 ingress](provider-runtime-ingress.md), and [Remote runtime placement](runtime-placement.md).
 
 ## Authentication

@@ -187,6 +187,11 @@ npm run dev:auth       # http://127.0.0.1:4181
 To develop the open-source control plane, run `npm run dev:platform`. Local platform work can use
 `clank login --server=http://127.0.0.1:4200`; normal hosted use never needs the server flag.
 
+For opt-in remote stateful projects, the package also ships `clank-runner` and
+`clank-provider`. The control plane stays local-by-default; operators explicitly enable provider
+placement, enroll a node, and select `--placement=provider` at project creation. See [Remote
+runtime placement](docs/runtime-placement.md) before using it with production data.
+
 ## Documentation
 
 The [documentation site](https://docs.clank.run) is searchable, responsive, and published as HTML,

@@ -61,6 +61,35 @@ export function resolveRunnerArtifactStorage(environment) {
   });
 }
 
+/**
+ * Provider placement is deliberately opt-in. Setting the default to `local`
+ * enables explicit per-project provider selection without moving existing or
+ * newly created projects unless the caller requests it.
+ */
+export function resolveProviderPlacement(environment) {
+  const defaultPlacement = environment.CLANK_PROVIDER_DEFAULT_PLACEMENT;
+  if (defaultPlacement === undefined || defaultPlacement === "") return null;
+  if (defaultPlacement !== "local" && defaultPlacement !== "provider") {
+    throw new Error("CLANK_PROVIDER_DEFAULT_PLACEMENT must be local or provider.");
+  }
+  return Object.freeze({
+    default: defaultPlacement,
+    ...(environment.CLANK_PROVIDER_REGION
+      ? { region: environment.CLANK_PROVIDER_REGION }
+      : {}),
+    labels: exactLabels(environment.CLANK_PROVIDER_LABELS),
+    allowedProviderHosts: commaList(environment.CLANK_PROVIDER_ALLOWED_HOSTS),
+    activationTimeoutMs: positiveNumber(
+      environment.CLANK_PROVIDER_ACTIVATION_TIMEOUT_MS,
+      2 * 60_000,
+    ),
+    maxRuntimeBytes: positiveNumber(
+      environment.CLANK_RUNNER_MAX_RUNTIME_BYTES,
+      768 * 1024 * 1024,
+    ),
+  });
+}
+
 export function resolveBackupStorage(environment) {
   const mode = environment.CLANK_BACKUP_STORE ?? "local";
   if (mode === "local") return null;
@@ -119,6 +148,42 @@ function s3Options(environment, maxObjectBytes, purpose) {
     pathStyle: pathStyle === "1",
     maxObjectBytes,
   });
+}
+
+function exactLabels(input) {
+  const output = {};
+  if (!input) return output;
+  const entries = input.split(",").map((value) => value.trim()).filter(Boolean);
+  if (entries.length > 99) {
+    throw new Error("CLANK_PROVIDER_LABELS cannot contain more than 99 labels.");
+  }
+  for (const entry of entries) {
+    const separator = entry.indexOf("=");
+    if (separator < 1) {
+      throw new Error("CLANK_PROVIDER_LABELS must use key=value entries.");
+    }
+    const key = entry.slice(0, separator).trim();
+    const value = entry.slice(separator + 1).trim();
+    if (
+      !/^[A-Za-z0-9_-][A-Za-z0-9_.:-]{0,99}$/u.test(key)
+      || ["__proto__", "constructor", "prototype"].includes(key)
+      || !value
+      || value.length > 200
+      || value.includes("\0")
+    ) {
+      throw new Error(`Invalid CLANK_PROVIDER_LABELS entry: ${key}`);
+    }
+    if (Object.hasOwn(output, key)) {
+      throw new Error(`Duplicate CLANK_PROVIDER_LABELS entry: ${key}`);
+    }
+    output[key] = value;
+  }
+  return output;
+}
+
+function commaList(input) {
+  if (!input) return [];
+  return [...new Set(input.split(",").map((value) => value.trim()).filter(Boolean))];
 }
 
 function required(environment, primary, fallback, purpose) {

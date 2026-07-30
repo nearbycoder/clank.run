@@ -4,6 +4,7 @@ import { chmod, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, unlink, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import {
   createDeploymentCoordinatorClient,
@@ -12,6 +13,7 @@ import {
   DeploymentCoordinatorError,
   deploymentDigest,
   openDeploymentOrchestrator,
+  openProviderDeploymentAgent,
   openPlatform,
   openSQLite,
   parseDeploymentConfig,
@@ -1695,6 +1697,366 @@ test("managed runner enrollment is one-time, bound, durable, browser-admin-only,
     assert.equal(JSON.stringify(auditRows).includes(created.enrollment.token), false);
   } finally {
     await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("provider projects freeze runtime inputs, wait for exact observation, route remotely, and survive control-plane restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-provider-placement-"));
+  const dataDirectory = join(root, "platform");
+  const source = join(root, "source");
+  const providerRequests = [];
+  const providerServer = createServer((request, response) => {
+    providerRequests.push({
+      url: request.url,
+      projectId: request.headers["x-clank-project-id"],
+      protocol: request.headers["x-clank-runtime-protocol"],
+      generation: request.headers["x-clank-runtime-generation"],
+      token: request.headers["x-clank-runtime-ingress"],
+    });
+    response.writeHead(200, {
+      "content-length": "15",
+      "content-type": "text/plain",
+    });
+    response.end("remote response");
+  });
+  await new Promise((resolve, reject) => {
+    providerServer.once("error", reject);
+    providerServer.listen(0, "127.0.0.1", resolve);
+  });
+  const providerAddress = providerServer.address();
+  assert.ok(providerAddress && typeof providerAddress === "object");
+  const providerOrigin = `http://127.0.0.1:${providerAddress.port}`;
+  const registrationToken = `runner-registration-${"r".repeat(32)}`;
+  const options = {
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    platformAdminEmails: ["provider-owner@example.com"],
+    backups: { intervalMs: false },
+    deploymentAgents: {
+      registrationToken,
+      placement: {
+        default: "local",
+        activationTimeoutMs: 1_000,
+      },
+    },
+    ingress: {
+      baseDomain: "apps.example.test",
+    },
+  };
+  let platform = await openPlatform(options);
+  let agent;
+  try {
+    const client = createDeploymentCoordinatorClient({
+      baseUrl: "http://127.0.0.1:4200",
+      fetch: (url, init) => platform.handle(new Request(url, init)),
+    });
+    const reconciliations = [];
+    const rollbacks = [];
+    const deletions = [];
+    let resolveInitialReconcile;
+    const initialReconcileCompleted = new Promise((resolve) => {
+      resolveInitialReconcile = resolve;
+    });
+    agent = await openProviderDeploymentAgent({
+      client,
+      registrationToken,
+      node: {
+        id: "provider-placement-one",
+        region: "local",
+        endpoint: providerOrigin,
+        capacity: 2,
+      },
+      provider: {
+        kind: "http",
+        async reconcile(request) {
+          reconciliations.push(request);
+          if (reconciliations.length === 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1_200));
+            resolveInitialReconcile();
+          }
+        },
+        async rollback(request) {
+          rollbacks.push(request);
+        },
+        async delete(request) {
+          deletions.push(request);
+        },
+      },
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+    });
+    const owner = await authorizeCli(platform, "provider-owner@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Remote app",
+        slug: "remote-app",
+        placement: "provider",
+      },
+    }), 201);
+    assert.equal(created.project.placement, "provider");
+    await payload(platform, jsonRequest(`/api/projects/${created.project.id}/secrets`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { values: { PRIVATE_RUNTIME_SECRET: "provider-secret-canary" } },
+    }));
+    const artifact = await appArtifact(source, "remote", [
+      ["0001_remote.sql", "CREATE TABLE remote_items (id TEXT PRIMARY KEY);\n"],
+    ]);
+    const pending = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      artifact,
+      "provider-placement-release-01",
+    );
+    assert.equal(pending.response.status, 503, JSON.stringify(pending.body));
+    assert.equal(pending.body.error.code, "PROVIDER_DEPLOYMENT_PENDING");
+    const pendingReleases = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/releases`,
+      { token: owner.accessToken },
+    ));
+    const pendingRelease = pendingReleases.releases.find(
+      (release) => release.status === "staging",
+    );
+    assert.ok(pendingRelease);
+    const pendingCleanup = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}/releases/${pendingRelease.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: `delete-release remote-app ${pendingRelease.id}`,
+          allowRollbackLoss: false,
+        },
+      },
+    ));
+    assert.equal(pendingCleanup.status, 409);
+    assert.equal((await pendingCleanup.json()).error.code, "RELEASE_DEPLOYMENT_PENDING");
+    await initialReconcileCompleted;
+    const deployed = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      artifact,
+      "provider-placement-release-01",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    assert.equal(deployed.body.release.project.placement, "provider");
+    assert.equal(deployed.body.release.project.activeGeneration, 1);
+    assert.equal(deployed.body.release.providerGeneration, 1);
+    assert.equal(deployed.body.release.project.providerNodeId, "provider-placement-one");
+    assert.equal(deployed.body.release.directUrl, null);
+    assert.equal(reconciliations.length, 1);
+    assert.equal(
+      reconciliations[0].runtime.manifest.environment.PRIVATE_RUNTIME_SECRET,
+      "provider-secret-canary",
+    );
+    assert.equal(reconciliations[0].runtime.manifest.database.mode, "preserve");
+    assert.equal("leaseToken" in reconciliations[0].operation, false);
+
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    assert.deepEqual(dashboard.placements, {
+      local: { enabled: true },
+      provider: { enabled: true, default: "local" },
+    });
+    const backupBoundary = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/backups`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(backupBoundary.backups, []);
+    assert.equal(backupBoundary.automation.available, false);
+    assert.equal(backupBoundary.automation.providerPending, true);
+    assert.equal(backupBoundary.automation.storage, "provider_pending");
+    const backupDenied = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}/backups`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { reason: "must stay remote" },
+      },
+    ));
+    assert.equal(backupDenied.status, 409);
+    assert.equal((await backupDenied.json()).error.code, "PROVIDER_BACKUP_PENDING");
+    const remoteJobs = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/jobs`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(remoteJobs.available, false);
+    assert.equal(remoteJobs.compatibility, "remote_unavailable");
+    const remoteJobMutation = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}/jobs/job_${"a".repeat(32)}/cancel`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: {},
+      },
+    ));
+    assert.equal(remoteJobMutation.status, 409);
+    assert.equal((await remoteJobMutation.json()).error.code, "PROVIDER_JOBS_PENDING");
+    const consoleResponse = await platform.handle(jsonRequest("/overview", {
+      cookie: owner.cookie,
+    }));
+    assert.equal(consoleResponse.status, 200);
+    const consoleHtml = await consoleResponse.text();
+    assert.match(consoleHtml, /id="site-placement"/u);
+    assert.match(consoleHtml, /Stateful provider runner/u);
+
+    const remote = await platform.handle(
+      new Request("https://remote-app.apps.example.test/tasks?done=false"),
+    );
+    assert.equal(remote.status, 200);
+    assert.equal(await remote.text(), "remote response");
+    assert.equal(providerRequests.length, 1);
+    assert.equal(
+      providerRequests[0].url,
+      `/v1/clank/apps/${created.project.id}/tasks?done=false`,
+    );
+    assert.equal(providerRequests[0].projectId, created.project.id);
+    assert.equal(providerRequests[0].protocol, "clank-runtime/1");
+    assert.equal(providerRequests[0].generation, "1");
+    assert.match(providerRequests[0].token, /^clnki_/u);
+
+    await payload(platform, jsonRequest(
+      "/api/admin/runners/provider-placement-one/drain",
+      {
+        method: "PUT",
+        cookie: owner.cookie,
+        csrf: owner.csrfToken,
+        body: { draining: true },
+      },
+    ));
+    const drainedIngress = await platform.handle(
+      new Request("https://remote-app.apps.example.test/while-draining"),
+    );
+    assert.equal(drainedIngress.status, 404);
+    assert.equal(providerRequests.length, 1);
+    await payload(platform, jsonRequest(
+      "/api/admin/runners/provider-placement-one/drain",
+      {
+        method: "PUT",
+        cookie: owner.cookie,
+        csrf: owner.csrfToken,
+        body: { draining: false },
+      },
+    ));
+
+    const raw = await readFile(join(dataDirectory, "control.sqlite"));
+    assert.equal(raw.includes(Buffer.from("provider-secret-canary")), false);
+    assert.equal(raw.includes(Buffer.from(providerRequests[0].token)), false);
+
+    await platform.close();
+    platform = await openPlatform(options);
+    const afterRestart = await platform.handle(
+      new Request("https://remote-app.apps.example.test/after-restart"),
+    );
+    assert.equal(afterRestart.status, 200);
+    assert.equal(await afterRestart.text(), "remote response");
+    assert.equal(providerRequests.at(-1).generation, "1");
+
+    const secondArtifact = await appArtifact(join(root, "source-second"), "remote-second", [
+      ["0001_remote.sql", "CREATE TABLE remote_items (id TEXT PRIMARY KEY);\n"],
+      ["0002_remote.sql", "ALTER TABLE remote_items ADD COLUMN title TEXT;\n"],
+    ]);
+    const second = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      secondArtifact,
+      "provider-placement-release-02",
+    );
+    assert.equal(second.response.status, 201, JSON.stringify(second.body));
+    assert.equal(second.body.release.project.activeGeneration, 2);
+    assert.equal(second.body.release.providerGeneration, 2);
+    assert.equal(reconciliations.length, 2);
+
+    const rolledBack = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/rollback`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: {
+          releaseId: deployed.body.release.id,
+          restoreData: true,
+          confirmation: "restore remote-app",
+        },
+      },
+    ));
+    assert.equal(rollbacks.length, 1);
+    assert.equal(rollbacks[0].generation, 2);
+    assert.equal(
+      rollbacks[0].confirmation,
+      `rollback ${created.project.id} 2`,
+    );
+    assert.equal(rolledBack.release.project.activeGeneration, 3);
+    assert.equal(rolledBack.release.providerGeneration, 3);
+    assert.equal(rolledBack.release.id, deployed.body.release.id);
+    assert.equal(reconciliations.length, 3);
+    assert.equal(reconciliations[2].desired.releaseId, deployed.body.release.id);
+    assert.equal(reconciliations[2].desired.generation, 3);
+
+    const afterRollback = await platform.handle(
+      new Request("https://remote-app.apps.example.test/after-rollback"),
+    );
+    assert.equal(afterRollback.status, 200);
+    assert.equal(providerRequests.at(-1).generation, "3");
+
+    const cleanedSecond = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/releases/${second.body.release.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: `delete-release remote-app ${second.body.release.id}`,
+          allowRollbackLoss: false,
+        },
+      },
+    ));
+    assert.equal(cleanedSecond.release.providerGeneration, null);
+    const retained = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
+    assert.equal(Number(retained.prepare(`SELECT COUNT(*) AS count
+      FROM clank_platform_provider_generations
+      WHERE project_id = ? AND release_id = ?`).get(
+      created.project.id,
+      second.body.release.id,
+    ).count), 0);
+    assert.equal(Number(retained.prepare(`SELECT COUNT(*) AS count
+      FROM clank_platform_provider_generations
+      WHERE project_id = ? AND release_id = ?`).get(
+      created.project.id,
+      deployed.body.release.id,
+    ).count), 2);
+    retained.close();
+
+    const deleted = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: "delete-site remote-app",
+          acknowledgeDataLoss: true,
+        },
+      },
+    ));
+    assert.equal(deleted.project.id, created.project.id);
+    assert.equal(deletions.length, 1);
+    assert.equal(deletions[0].generation, 3);
+    assert.equal(deletions[0].confirmation, `delete ${created.project.id}`);
+    const missing = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(missing.status, 404);
+  } finally {
+    await agent?.close();
+    await platform.close();
+    await new Promise((resolve) => providerServer.close(resolve));
     await rm(root, { recursive: true, force: true });
   }
 });

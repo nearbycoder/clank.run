@@ -7,6 +7,7 @@ import { openPlatform } from "../dist/platform.js";
 import {
   resolveBackupStorage,
   resolvePlatformHosting,
+  resolveProviderPlacement,
   resolveRunnerArtifactStorage,
 } from "../scripts/platform-hosting.mjs";
 
@@ -123,6 +124,44 @@ test("runner artifact storage resolves explicit S3-compatible configuration with
       CLANK_OBJECT_PATH_STYLE: "yes",
     }),
     /CLANK_OBJECT_PATH_STYLE must be 0 or 1/u,
+  );
+});
+
+test("provider placement is explicit, bounded, and local-by-choice", () => {
+  assert.equal(resolveProviderPlacement({}), null);
+  assert.deepEqual(
+    resolveProviderPlacement({
+      CLANK_PROVIDER_DEFAULT_PLACEMENT: "local",
+      CLANK_PROVIDER_REGION: "us-central",
+      CLANK_PROVIDER_LABELS: "tier=stateful,disk=encrypted",
+      CLANK_PROVIDER_ALLOWED_HOSTS: "provider.internal, provider.internal",
+      CLANK_PROVIDER_ACTIVATION_TIMEOUT_MS: "45000",
+      CLANK_RUNNER_MAX_RUNTIME_BYTES: "1048576",
+    }),
+    {
+      default: "local",
+      region: "us-central",
+      labels: {
+        tier: "stateful",
+        disk: "encrypted",
+      },
+      allowedProviderHosts: ["provider.internal"],
+      activationTimeoutMs: 45_000,
+      maxRuntimeBytes: 1_048_576,
+    },
+  );
+  assert.throws(
+    () => resolveProviderPlacement({
+      CLANK_PROVIDER_DEFAULT_PLACEMENT: "automatic",
+    }),
+    /must be local or provider/u,
+  );
+  assert.throws(
+    () => resolveProviderPlacement({
+      CLANK_PROVIDER_DEFAULT_PLACEMENT: "local",
+      CLANK_PROVIDER_LABELS: "tier=one,tier=two",
+    }),
+    /Duplicate CLANK_PROVIDER_LABELS/u,
   );
 });
 

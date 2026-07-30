@@ -140,13 +140,18 @@ URLs, logs, application configuration, or the runner credential file.
 
 Keep the coordinator disabled for a cheap one-service deployment. Enabling it does not make the
 current process runner safe for mutually untrusted public users and does not improve isolation by
-itself. Provision an additional runner host and optional object storage only when the placement
-phase and provider adapter need them.
+itself. Add a provider runner only when a project actually needs remote placement.
 
-On the current Railway single-service profile, leave `CLANK_RUNNER_COORDINATOR` unset and do not add
-a service or bucket. A future runner can be another small service on a private network; an
-S3-compatible artifact store is optional and should be added only when artifacts must survive
-outside the control-plane volume.
+On the inexpensive Railway single-service profile, leave `CLANK_RUNNER_COORDINATOR` and
+`CLANK_PROVIDER_DEFAULT_PLACEMENT` unset and do not add a service or bucket. An opt-in provider
+runner can be another small service or host on a private network. An S3-compatible release store
+is strongly recommended when control and runtime live on different volumes, but add it only when
+that durability is needed.
+
+Provider placement is now implemented for explicit stateful projects. It does not relocate local
+projects, does not fail node-local SQLite over to another node, and does not yet provide remote
+database backups. See [Remote runtime placement](runtime-placement.md#enable-built-in-provider-placement)
+before enabling it.
 
 For the underlying authentication, leases, artifacts, fencing, and agent loop, see
 [Durable distributed deployment](distributed-deployment.md). For the infrastructure mutation

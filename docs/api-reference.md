@@ -112,7 +112,12 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - Runners: dependency-free process runner or constrained Docker runner.
 - Types: `ClankPlatformOptions`, `PlatformBackupOptions`, `PlatformJobOperationsOptions`,
   `PlatformLimits`, `PlatformHostingProfile`, `PlatformRunnerOptions`, `ProcessRunnerOptions`,
-  `DockerRunnerOptions`.
+  `DockerRunnerOptions`, `PlatformProjectPlacement`.
+- `openPlatform({ deploymentAgents: { placement } })`: enables immutable per-project
+  `local | provider` selection. Provider projects use stateful endpoint/label placement, an
+  encrypted frozen environment per generation, lease-scoped `clank-runtime/1`, exact observed
+  activation, allowlisted managed-ingress publication, fenced rollback/delete, and resumable
+  pending deploys. It requires managed ingress.
 
 ## Object storage
 

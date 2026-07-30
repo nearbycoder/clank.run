@@ -63,7 +63,8 @@
   "bin": {
     "clank": "scripts/clank.mjs",
     "clank-platform": "scripts/clank-platform.mjs",
-    "clank-runner": "scripts/clank-runner.mjs"
+    "clank-runner": "scripts/clank-runner.mjs",
+    "clank-provider": "scripts/clank-provider.mjs"
   },
   "files": [
     "brand",
@@ -79,6 +80,7 @@
     "scripts/cli-deploy.mjs",
     "scripts/clank-platform.mjs",
     "scripts/clank-runner.mjs",
+    "scripts/clank-provider.mjs",
     "scripts/platform-hosting.mjs",
     "scripts/conformance.mjs",
     "scripts/tsx.mjs",

@@ -87,7 +87,7 @@ const COMMANDS = Object.freeze({
     summary: "Manage workspaces, invitations, members, and roles.",
   },
   project: {
-    usage: "clank project <create|list|link|delete>",
+    usage: "clank project <create|list|link|delete> [--placement <local|provider>]",
     summary: "Manage and link deployment projects.",
   },
   activity: {
@@ -107,7 +107,7 @@ const COMMANDS = Object.freeze({
     summary: "Manage custom domains and DNS verification.",
   },
   deploy: {
-    usage: "clank deploy [directory] [--name <name>] [--slug <slug>] [--org <id>] [--dry-run] [--output <file>] [--json]",
+    usage: "clank deploy [directory] [--name <name>] [--slug <slug>] [--org <id>] [--placement <local|provider>] [--dry-run] [--output <file>] [--json]",
     summary: "Build, package, migrate, and atomically deploy in one command.",
   },
   preview: {
@@ -164,12 +164,12 @@ const VALUE_OPTIONS = Object.freeze({
   logout: ["server"],
   org: ["slug", "role"],
   organization: ["slug", "role"],
-  project: ["slug", "org", "confirm"],
+  project: ["slug", "org", "placement", "confirm"],
   activity: ["org", "limit", "before"],
   audit: ["org", "limit", "before"],
   usage: ["org", "month"],
   token: ["permissions", "expires-in", "name"],
-  deploy: ["name", "slug", "org", "output"],
+  deploy: ["name", "slug", "org", "placement", "output"],
   preview: ["ttl", "confirm"],
   jobs: ["concurrency", "queues", "state", "queue", "limit"],
   releases: ["confirm"],
@@ -402,7 +402,9 @@ Platform:
   clank org role <org> <user> <role>    Change a member role
   clank org remove <org> <user>         Remove a member and revoke scoped tokens
   clank org revoke-invite <org> <id>    Revoke an active invitation
-  clank project create <name>          Create and link a project
+  clank project create <name>          Create and link a local project
+  clank project create <name> --placement=provider
+                                        Create on configured provider capacity
   clank project list                   List projects
   clank project link <project-id>      Link this directory
   clank project delete [project-id] --confirm="delete-site <slug>" --acknowledge-data-loss
@@ -1099,12 +1101,16 @@ async function projectCommand(args) {
     const payload = await platformRequest(profile.server, "/api/projects", { token: profile.token });
     if (!payload.projects.length) return console.log("No projects.");
     for (const project of payload.projects) {
-      console.log(`${project.id}  ${project.slug}  ${project.activeReleaseId ?? "not deployed"}`);
+      console.log(
+        `${project.id}  ${project.slug}  ${project.placement ?? "local"}  `
+          + `${project.activeReleaseId ?? "not deployed"}`,
+      );
     }
     return;
   }
   if (subcommand === "create") {
     const name = positionals(args)[0] ?? basename(process.cwd());
+    const placement = placementOption(args);
     const payload = await platformRequest(profile.server, "/api/projects", {
       method: "POST",
       token: profile.token,
@@ -1112,10 +1118,14 @@ async function projectCommand(args) {
         name,
         ...(option(args, "slug") ? { slug: option(args, "slug") } : {}),
         ...(option(args, "org") ? { organizationId: option(args, "org") } : {}),
+        ...(placement ? { placement } : {}),
       },
     });
     await saveLink(process.cwd(), profile.server, payload.project.id);
-    console.log(`Created and linked ${payload.project.slug} (${payload.project.id})`);
+    console.log(
+      `Created and linked ${payload.project.slug} (${payload.project.id}) `
+        + `[${payload.project.placement ?? "local"}]`,
+    );
     return;
   }
   if (subcommand === "link") {
@@ -1416,6 +1426,7 @@ async function deploy(args) {
   let link = await readLink(root);
   if (!link) {
     const name = option(args, "name") ?? basename(root);
+    const placement = placementOption(args);
     const payload = await platformRequest(profile.server, "/api/projects", {
       method: "POST",
       token: profile.token,
@@ -1423,13 +1434,24 @@ async function deploy(args) {
         name,
         ...(option(args, "slug") ? { slug: option(args, "slug") } : {}),
         ...(option(args, "org") ? { organizationId: option(args, "org") } : {}),
+        ...(placement ? { placement } : {}),
       },
     });
     await saveLink(root, profile.server, payload.project.id);
     link = { version: 1, server: profile.server, projectId: payload.project.id };
     if (!json) console.log(`Created and linked project ${payload.project.slug}.`);
-  } else if ((option(args, "name") || option(args, "slug") || option(args, "org")) && !json) {
-    console.log("Project already linked; --name, --slug, and --org are only used on the first deploy.");
+  } else if (
+    (
+      option(args, "name")
+      || option(args, "slug")
+      || option(args, "org")
+      || option(args, "placement")
+    )
+    && !json
+  ) {
+    console.log(
+      "Project already linked; --name, --slug, --org, and --placement are only used on the first deploy.",
+    );
   }
   if (link.server !== profile.server) {
     throw new CliError(`This directory is linked to ${link.server}; log in there or relink it.`);
@@ -1455,13 +1477,23 @@ async function deploy(args) {
     },
     PLATFORM_DEPLOY_TIMEOUT_MS,
   );
+  if (!response.ok) {
+    const error = ApiError.from(payload, response.status);
+    if (!retryableDeploymentError(error)) {
+      await rm(deploymentAttemptPath(root), { force: true });
+    }
+    throw error;
+  }
   await rm(deploymentAttemptPath(root), { force: true });
-  if (!response.ok) throw ApiError.from(payload, response.status);
   const result = {
     protocol: "clank-deploy-result/1",
     ok: true,
     dryRun: false,
-    project: { id: link.projectId, server: profile.server },
+    project: {
+      id: link.projectId,
+      server: profile.server,
+      placement: payload.release.project?.placement ?? "local",
+    },
     release: {
       id: payload.release.id,
       digest: payload.release.digest,
@@ -1572,8 +1604,14 @@ async function previewCommand(args) {
       },
       PLATFORM_DEPLOY_TIMEOUT_MS,
     );
+    if (!response.ok) {
+      const error = ApiError.from(payload, response.status);
+      if (!retryableDeploymentError(error)) {
+        await rm(deploymentAttemptPath(root), { force: true });
+      }
+      throw error;
+    }
     await rm(deploymentAttemptPath(root), { force: true });
-    if (!response.ok) throw ApiError.from(payload, response.status);
     const result = {
       protocol: "clank-preview-result/1",
       ok: true,
@@ -2032,6 +2070,17 @@ function deploymentAttemptPath(root) {
   return join(root, ".clank", "deploy-attempt.json");
 }
 
+function retryableDeploymentError(error) {
+  return error.status === 429
+    || error.status >= 500
+    || [
+      "PROVIDER_DEPLOYMENT_PENDING",
+      "PROVIDER_DEPLOYMENT_IN_PROGRESS",
+      "PROVIDER_ENDPOINT_UNAVAILABLE",
+      "PLATFORM_CLOSING",
+    ].includes(error.code);
+}
+
 async function deploymentAttempt(root, expected) {
   const path = deploymentAttemptPath(root);
   try {
@@ -2128,6 +2177,18 @@ function option(args, name) {
   const exactIndex = args.indexOf(`--${name}`);
   if (exactIndex !== -1) return args[exactIndex + 1];
   return args.find((entry) => entry.startsWith(`--${name}=`))?.slice(name.length + 3);
+}
+
+function placementOption(args) {
+  const placement = option(args, "placement");
+  if (placement === undefined) return undefined;
+  if (placement !== "local" && placement !== "provider") {
+    throw new CliError(
+      '--placement must be "local" or "provider".',
+      "INVALID_PLACEMENT",
+    );
+  }
+  return placement;
 }
 
 function validateOptions(command, args) {

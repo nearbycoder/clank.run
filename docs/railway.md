@@ -135,6 +135,28 @@ variable references. New runner uploads then leave the mounted volume; existing 
 directories, databases, snapshots, backups unless separately configured, and legacy uploads remain
 local.
 
+Provider placement adds at least one provider service/volume and one runner process, so it is not
+part of the inexpensive single-service topology. When deliberately testing it, keep new projects
+local by default:
+
+```sh
+CLANK_PROVIDER_DEFAULT_PLACEMENT=local
+CLANK_PROVIDER_REGION=railway-private
+CLANK_PROVIDER_ALLOWED_HOSTS=<private TLS provider hostname>
+```
+
+Run `clank-provider` on the persistent provider volume and `clank-runner` with the same stable node
+identity, `CLANK_RUNNER_ENDPOINT`, and private provider origin. Railway private networking alone
+does not provide an HTTPS URL; put an authenticated TLS hop in front of any non-loopback endpoint
+or keep runner, provider, and control components on one host during development. Clank rejects
+non-loopback cleartext origins.
+
+Do not enable provider placement for production databases yet: the control plane deliberately
+rejects remote backup mutations until its encrypted provider backup transport is implemented.
+Railway volume snapshots or another independently tested provider-host backup remain the
+operator's responsibility in this phase. See [Remote runtime
+placement](runtime-placement.md#current-support-boundary).
+
 The same private bucket can hold encrypted database recovery points under a separate logical root:
 
 ```sh

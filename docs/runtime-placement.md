@@ -1,8 +1,9 @@
 # Remote runtime placement
 
-Clank has a versioned runtime-capsule contract for moving one verified application generation
-across the control-plane, deployment-runner, and infrastructure-provider boundaries. It is the
-transport foundation for remote placement; it does not enable remote placement by itself.
+Clank has an opt-in, versioned path for moving one verified application generation across the
+control-plane, deployment-runner, and infrastructure-provider boundaries. Local projects remain
+the zero-setup default. A provider project uses the same release artifact and CLI, but its runtime,
+SQLite database, and private ingress live on one statefully pinned provider node.
 
 The ordinary `clank-deploy/1` release remains a non-secret, immutable code archive. A
 `clank-runtime/1` capsule binds that release to the final process environment, SQLite placement
@@ -127,6 +128,111 @@ The provider receives:
 - the desired generation/state/release; and
 - an abort signal.
 
+## Enable built-in provider placement
+
+The packaged control plane keeps provider placement closed unless the operator configures the
+coordinator, managed ingress, and an explicit default. Use `local` as the default to expose
+per-project selection without moving new projects automatically:
+
+```sh
+export CLANK_RUNNER_COORDINATOR=1
+export CLANK_INGRESS_BASE_DOMAIN=apps.example.com
+export CLANK_PROVIDER_DEFAULT_PLACEMENT=local
+export CLANK_PROVIDER_REGION=us-central
+export CLANK_PROVIDER_ALLOWED_HOSTS=runtime.internal.example
+```
+
+`CLANK_PROVIDER_ALLOWED_HOSTS` is the comma-separated set of non-loopback node endpoint hostnames
+that the public managed ingress may contact. A remote provider endpoint must use HTTPS and match
+this list exactly. Loopback HTTP remains available for one-host development. Optional exact
+capability selection uses `CLANK_PROVIDER_LABELS=key=value,key=value`.
+
+The runner advertises the private provider-ingress endpoint separately:
+
+```sh
+export CLANK_CONTROL_URL=https://deploy.example.com
+export CLANK_RUNNER_NODE_ID=provider-us-central-01
+export CLANK_RUNNER_REGION=us-central
+export CLANK_RUNNER_ENDPOINT=https://runtime.internal.example
+export CLANK_PROVIDER_URL=https://runtime.internal.example
+export CLANK_PROVIDER_TOKEN="$(secret read provider-bridge-token)"
+export CLANK_RUNNER_CREDENTIALS=/var/lib/clank-runner/credentials.json
+clank-runner
+```
+
+The provider service at `CLANK_PROVIDER_URL` accepts the authenticated reconcile/rollback/delete
+bridge. `CLANK_RUNNER_ENDPOINT` is the origin that Clank's managed ingress uses after activation.
+They can be the same private origin, as in the example, but they are independent trust decisions.
+
+For production, store original runner uploads in the configured S3-compatible artifact repository
+so a control-plane volume loss or replacement does not remove the only deployable archive. This
+does not replace database backups.
+
+Create placement once, either from the CLI or the control-plane dialog:
+
+```sh
+clank project create my-app --placement=provider
+# Or let the first deploy create and link it:
+clank deploy --name=my-app --placement=provider
+```
+
+Placement is immutable for a project. Preview environments inherit their parent placement. A
+provider project receives an isolated provider data directory and SQLite database; it never uses a
+local control-plane application database.
+
+Programmatic embedders use the same explicit boundary:
+
+```ts
+await openPlatform({
+  // ...
+  deploymentAgents: {
+    managedEnrollment: true,
+    artifacts: {
+      namespace: "production-releases-v1",
+      store: releaseObjectStore,
+    },
+    placement: {
+      default: "local",
+      region: "us-central",
+      labels: { tier: "stateful" },
+      allowedProviderHosts: ["runtime.internal.example"],
+    },
+  },
+  ingress: { baseDomain: "apps.example.com" },
+});
+```
+
+## Deploy, retry, rollback, and delete
+
+For each provider generation, the control plane encrypts the final environment under its platform
+master key and retains the original content-addressed release. The environment is frozen before
+desired state changes, then decrypted only while producing the exact lease-scoped runtime capsule.
+Plaintext secrets and the generation-derived ingress token are not stored in the control database.
+
+Activation requires one exact tuple: project, release, desired generation, observed generation,
+observed state, assigned node, and allowlisted node endpoint. Only then does Clank commit the
+release and publish the managed-ingress route. A timeout returns
+`PROVIDER_DEPLOYMENT_PENDING` without marking the release failed. The CLI keeps the deploy-attempt
+idempotency key, so rerunning the same `clank deploy` resumes that generation instead of creating a
+second release.
+
+Code rollback creates a new generation from the selected immutable release while preserving the
+current database. `--restore-data` is limited to the active release's immediate predecessor,
+requires `--confirm="restore <slug>"`, first runs the provider's fenced rollback on the exact
+active generation, and then reconciles the selected code as a new generation. Repeated requests
+reuse the same destructive operation.
+
+Project deletion requires the ordinary typed confirmation and data-loss acknowledgement. Clank
+queues a fenced delete on the pinned node and waits for provider success before removing release
+objects, credentials, routes, or control metadata. Pending, stale, offline, and failed provider
+states preserve metadata and return a retryable or explicit error; they never silently orphan
+remote data.
+
+Inactive release cleanup removes both the retained artifact and every encrypted runtime-generation
+record for that release. Active releases and converging staging releases are protected. A cleanup
+that is repeated after interruption also scrubs any leftover provider-generation metadata before
+returning success.
+
 The authenticated HTTP provider bridge forwards the exact capsule bytes as its bounded request
 body. Only the protocol selector, content digest, and non-secret operation metadata are placed in
 headers. Environment values, SQLite bytes, and the ingress token are never placed in URLs,
@@ -152,41 +258,26 @@ Compromise of the trusted provider can expose every secret and database currentl
 Capsule authentication and integrity prevent an untrusted runner or network peer from selecting or
 altering another runtime; they do not make the destination host untrusted compute.
 
-## Activation status
+## Current support boundary
 
-The capsule codec, lease-scoped coordinator call, standard deployment-agent access, desired-state
-protocol selector, provider verification, authenticated HTTP forwarding, public declarations,
-packaged-runner limits, and generation-bound managed-ingress route contract are implemented and
-tested. The package-supported provider runtime registry validates that contract before forwarding
-to a loopback application, retains only the route-token digest, permits safe generation overlap,
-and revokes then drains exact generations. A remote ingress route fixes the allowlisted provider
-origin, provider-local path, `clank-runtime/1` protocol, desired generation, project, and private route token. Public requests
-cannot override those headers, health uses the same binding, and an old generation's circuit state
-does not carry into the next generation.
+The codec, authenticated transports, stateful pinning, complete Docker provider service, opt-in
+control-plane generation lifecycle, exact managed-ingress publication, restart-safe routing,
+deploy retry, code/data rollback, preview inheritance, and provider-confirmed deletion are
+implemented and tested end to end. Enabling the coordinator alone still moves nothing; only a
+project created with `placement: "provider"` uses provider capacity.
 
-The built-in control plane deliberately does **not** select `clank-runtime/1` for hosted projects
-yet. The package-supported [provider data lifecycle](provider-data-lifecycle.md) now stages code
-without persisting secrets; initializes, preserves, replaces, snapshots, rolls back, and deletes
-per-project SQLite data; applies immutable migrations; retains one rollback generation; and
-recovers interrupted apply and rollback journals.
+Provider-hosted encrypted backup/restore is not implemented yet. Scheduled local backups exclude
+provider projects, the Backups page reports the boundary, and mutating backup endpoints return
+`PROVIDER_BACKUP_PENDING` rather than reading a nonexistent local database. Do not use provider
+placement for production data until the provider host has an independent, tested backup policy.
+Control-plane job inspection likewise returns `remote_unavailable`, and job mutations return
+`PROVIDER_JOBS_PENDING`, until a bounded provider diagnostics transport exists. Provider
+application log streaming, per-runtime memory attribution, and provider disk telemetry also remain
+operator responsibilities; request/latency/transfer metrics at Clank's managed ingress continue to
+work.
 
-The package-supported [Provider Docker runtime](provider-docker-runtime.md) starts the exact
-verified web/job topology in bounded containers, health-checks it privately, keeps runtime secrets
-out of Docker configuration, removes scoped orphans, and forces desired-state replay after restart.
-
-The package-supported [complete deployment provider service](provider-service.md) now binds data,
-deferred background activation, private ingress, durable operation/generation/fence state,
-response-lost retry, stopped desired state, and restart reconciliation end to end on one assigned
-provider node.
-
-The coordinator now provides durable stateful node pinning. It deliberately keeps an unavailable
-placement on the same node identity instead of silently moving node-local SQLite data. Remote
-activation remains closed until the control plane opts projects into that service with atomic edge
-publish/revoke, encrypted recovery replication, and lease-loss/traffic-switch certification.
-
-Until those controls land, enabling a runner fleet does not move existing applications or their
-data. The current single-host deployment path stays unchanged and no additional Railway service,
-volume, database, or object store is required.
+An inexpensive single-host installation needs none of this configuration and incurs no additional
+runner, bucket, or volume cost. Existing local projects and their databases are never relocated.
 
 Continue with [Provider data lifecycle](provider-data-lifecycle.md), [Deployment provider
 adapters](provider-adapters.md), [Durable distributed deployment](distributed-deployment.md),

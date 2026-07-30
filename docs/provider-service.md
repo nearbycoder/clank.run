@@ -4,9 +4,55 @@
 launcher, and generation-bound private ingress into one restart-safe `DeploymentProvider`. It is
 the recommended provider implementation when self-hosting remote application compute.
 
-The service is still deliberately separate from control-plane placement. It makes one assigned
-provider node converge correctly; the next integration phase decides which node owns a project
-and when managed edge traffic switches to it.
+The service remains a separate trusted-compute process, while the built-in control plane can now
+assign explicit provider projects to it through a statefully pinned `clank-runner`. The control
+plane publishes managed edge traffic only after this service and the runner report the exact
+release generation as observed.
+
+## Run the packaged provider
+
+`clank-provider` exposes both the authenticated lifecycle bridge and generation-bound private
+runtime ingress, so the reference Docker stack needs no application glue:
+
+```sh
+export HOST=0.0.0.0
+export PORT=4600
+export ALLOWED_HOSTS=runtime.internal.example
+export CLANK_PROVIDER_DATA=/var/lib/clank-provider
+export CLANK_PROVIDER_OWNER=provider-us-central-01
+export CLANK_PROVIDER_IMAGE='registry.example/clank-node@sha256:<64-hex-digest>'
+export CLANK_PROVIDER_TOKEN="$(secret read clank-runtime-provider)"
+export CLANK_PROVIDER_MEMORY=512m
+export CLANK_PROVIDER_CPUS=1
+export CLANK_PROVIDER_PIDS=128
+clank-provider
+```
+
+The provider process must use a private persistent volume and a private/TLS network path. Run it
+as a dedicated non-root Unix account so the default container uid/gid can write only the provider
+files it owns. `clank-provider --help` lists capacity, port, database, capsule, Docker, and drain
+bounds. Mutable application image tags are rejected unless the operator explicitly enables the
+development-only escape hatch.
+
+Large capsule uploads have an independent request-receive deadline. Tune
+`CLANK_PROVIDER_HTTP_REQUEST_TIMEOUT_MS` for the slowest private link instead of weakening
+application timeouts. `CLANK_PROVIDER_MAX_ARTIFACT_BYTES` bounds legacy artifacts,
+`CLANK_PROVIDER_MAX_RUNTIME_BYTES` bounds sensitive runtime capsules, and
+`CLANK_PROVIDER_INGRESS_TIMEOUT_MS` separately limits application responses.
+
+Point the packaged runner at this origin with a different authority for control-plane enrollment:
+
+```sh
+export CLANK_CONTROL_URL=https://deploy.example.com
+export CLANK_RUNNER_NODE_ID=provider-us-central-01
+export CLANK_RUNNER_ENDPOINT=https://runtime.internal.example
+export CLANK_PROVIDER_URL=https://runtime.internal.example
+export CLANK_PROVIDER_TOKEN="$(secret read clank-runtime-provider)"
+clank-runner
+```
+
+The same provider token is shared only by this runner and provider bridge. It is not a Clank
+account, CLI, node, application, or platform-master credential.
 
 ## Open the complete stack
 

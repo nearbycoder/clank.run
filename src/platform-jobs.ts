@@ -112,7 +112,12 @@ export interface PlatformJobStats {
 export interface PlatformJobSnapshot {
   readonly available: boolean;
   readonly configured: boolean;
-  readonly compatibility: "ready" | "not_deployed" | "not_configured" | "upgrade_required";
+  readonly compatibility:
+    | "ready"
+    | "not_deployed"
+    | "not_configured"
+    | "upgrade_required"
+    | "remote_unavailable";
   readonly health: "healthy" | "attention" | "unavailable";
   readonly alertDueAfterMs: number;
   readonly stats: PlatformJobStats;
@@ -123,6 +128,8 @@ export interface PlatformJobSnapshot {
 
 export interface InspectPlatformJobsOptions {
   databasePath: string | null;
+  /** Prevents accidental local inspection when the database is provider-hosted. */
+  remote?: boolean;
   alertDueAfterMs: number;
   state?: JobState;
   queue?: string;
@@ -153,6 +160,9 @@ export async function inspectPlatformJobs(
     1_000,
     30 * 24 * 60 * 60_000,
   );
+  if (options.remote === true) {
+    return emptySnapshot("remote_unavailable", alertDueAfterMs);
+  }
   if (!options.databasePath) {
     return emptySnapshot("not_deployed", alertDueAfterMs);
   }
@@ -325,7 +335,7 @@ function emptySnapshot(
   alertDueAfterMs: number,
 ): PlatformJobSnapshot {
   return Object.freeze({
-    available: compatibility !== "not_deployed",
+    available: compatibility !== "not_deployed" && compatibility !== "remote_unavailable",
     configured: false,
     compatibility,
     health: "unavailable",

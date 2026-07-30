@@ -1147,7 +1147,7 @@ test("create can use this checkout without a published package and dry-run deplo
   }
 });
 
-test("deploy retries reuse a persisted idempotency key after an ambiguous network failure", async () => {
+test("deploy retries reuse a persisted idempotency key after network ambiguity and provider pending", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-retry-"));
   const home = join(root, "home");
   const target = join(root, "retry-app");
@@ -1162,6 +1162,29 @@ test("deploy retries reuse a persisted idempotency key after an ambiguous networ
       request.socket.destroy();
       return;
     }
+    if (requests === 2) {
+      response.writeHead(503, {
+        "content-type": "application/json",
+        "retry-after": "1",
+      });
+      response.end(JSON.stringify({
+        error: {
+          code: "PROVIDER_DEPLOYMENT_PENDING",
+          message: "The provider deployment is still pending. Retry this exact deploy.",
+        },
+      }));
+      return;
+    }
+    if (requests === 4) {
+      response.writeHead(422, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        error: {
+          code: "PROVIDER_DEPLOYMENT_FAILED",
+          message: "The provider rejected this deployment.",
+        },
+      }));
+      return;
+    }
     const digest = request.headers["x-clank-content-sha256"];
     response.writeHead(201, { "content-type": "application/json" });
     response.end(JSON.stringify({
@@ -1171,6 +1194,7 @@ test("deploy retries reuse a persisted idempotency key after an ambiguous networ
         digest,
         url: "https://retry-app.apps.example.test",
         directUrl: "http://127.0.0.1:9999",
+        project: { placement: "provider" },
       },
     }));
   });
@@ -1212,13 +1236,29 @@ test("deploy retries reuse a persisted idempotency key after an ambiguous networ
     await access(join(target, ".clank", "deploy-attempt.json"));
 
     const second = await runCliResult(["deploy", "--json"], target, environment);
-    assert.equal(second.code, 0, second.stderr);
-    const deployed = JSON.parse(second.stdout);
+    assert.equal(second.code, 1);
+    assert.match(second.stderr, /still pending/u);
+    await access(join(target, ".clank", "deploy-attempt.json"));
+
+    const third = await runCliResult(["deploy", "--json"], target, environment);
+    assert.equal(third.code, 0, third.stderr);
+    const deployed = JSON.parse(third.stdout);
     assert.equal(deployed.release.id, "release_retry_test");
     assert.equal(deployed.release.url, "https://retry-app.apps.example.test");
-    assert.equal(requests, 2);
+    assert.equal(deployed.project.placement, "provider");
+    assert.equal(requests, 3);
     assert.equal(keys[0], keys[1]);
+    assert.equal(keys[1], keys[2]);
     await assert.rejects(access(join(target, ".clank", "deploy-attempt.json")), (error) => error.code === "ENOENT");
+
+    const terminal = await runCliResult(["deploy", "--json"], target, environment);
+    assert.equal(terminal.code, 1);
+    assert.match(terminal.stderr, /provider rejected/u);
+    assert.notEqual(keys[3], keys[2]);
+    await assert.rejects(
+      access(join(target, ".clank", "deploy-attempt.json")),
+      (error) => error.code === "ENOENT",
+    );
   } finally {
     await new Promise((resolve, reject) =>
       server.close((error) => error ? reject(error) : resolve()));
