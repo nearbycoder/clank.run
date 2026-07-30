@@ -29,8 +29,24 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   exports, packed-release conformance, and package/current-tree/reachable-history credential scans.
 - [x] Inspected the dry-run npm package: `@clank.run/framework@0.10.0`, 208 files, 1,148,732-byte
   tarball, and 4,465,769 unpacked bytes under the enforced five-MiB ceiling.
-- [ ] Record GitHub CI/CodeQL, merge SHA, tag,
-  attestation, staged-publish approval, npm provenance, clean-consumer verification, and docs health.
+- [x] Recorded the release chain: [PR #105](https://github.com/nearbycoder/clank.run/pull/105)
+  passed Node 22.16, Node 24, packaged conformance, JavaScript/TypeScript analysis, and CodeQL;
+  merge `9919ef8f9e3412ec45302cdec2e745ffb56f69ec` passed post-merge CI, CodeQL, and docs
+  deployment; annotated tag `v0.10.0` points to that exact commit; and
+  [release run 30555610181](https://github.com/nearbycoder/clank.run/actions/runs/30555610181)
+  rebuilt, tested, packed, attested, attached, and staged the package through npm trusted
+  publishing.
+- [x] Verified and approved npm stage `52dfe47b-dcb0-47aa-8818-6f1ffe63fa84`: the staged
+  tarball's SHA-1 `a6d59fdf13e5342ba6716f3654c49e17071a7ebb` and SHA-256
+  `0bb635dd0f678f6e59c5a7cf8e619c6e8ca56451da17e23ac6f87728086c4c22` match the npm
+  registry and GitHub release asset. npm reports verified registry signature and SLSA provenance,
+  with `latest` resolving to `0.10.0`.
+- [x] Installed `@clank.run/framework@0.10.0` from the public registry into an empty directory,
+  generated the authenticated Todo starter through the packaged CLI, installed it without
+  vulnerabilities, verified registry signatures/attestations, built Tailwind and all TypeScript,
+  passed `clank doctor`, and served healthy SSR, hydration state, MCP discovery, and OAuth metadata.
+  `https://docs.clank.run/healthz` reported version `0.10.0`, while Railway served the exact merge
+  commit with healthy liveness and readiness checks.
 - [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 agent-first create phase
