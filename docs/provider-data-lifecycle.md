@@ -205,7 +205,8 @@ issue TLS certificates, replicate recovery backups, or move a stateful project b
 The built-in control plane still uses its local supervisor. Remote placement remains disabled
 until the next integration binds this lifecycle to:
 
-- an isolated runtime launcher and private health check;
+- an isolated runtime launcher and provider-side validation of the generation-bound private
+  health/traffic route;
 - atomic ingress publish/revoke with generation and token checks;
 - durable provider-node pinning and rolling-update behavior;
 - encrypted backup replication and restore drills; and

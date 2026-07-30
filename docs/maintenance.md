@@ -66,6 +66,25 @@ The final certification result and exact test counts belong in the pull request 
   coverage; 56 documentation files, 195 local links, 32 declaration files, and 30 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
+- [x] Merged PR #87 as `b8b7b7ccb180ca25d88d1ebe4bb0795aac0b4213` after Node 22/24,
+  packaged-release conformance, and CodeQL passed; post-merge CI, CodeQL, and docs deployment
+  completed successfully.
+- [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
+## 2026-07-30 generation-bound ingress phase
+
+- [x] Added a strict optional managed-ingress binding for an allowlisted provider origin,
+  provider-local path, `clank-runtime/1`, desired generation, project ID, and private route token.
+- [x] Removed public copies of every reserved binding header before setting trusted values, kept
+  request paths on the configured origin/path, and used the same binding for private health.
+- [x] Scoped circuit identity to the provider origin, protocol, path, and generation so a failed
+  old runtime cannot leave a new generation's route open.
+- [x] Kept route tokens out of URLs, metrics, responses, and health failures, and documented the
+  provider's responsibility to validate the complete committed binding.
+- [x] Re-certified all 281 tests at 86.05% line, 74.51% branch, and 85.88% function
+  coverage; 56 documentation files, 196 local links, 32 declaration files, and 30 package
+  exports; packed consumer conformance; and package, current-tree, and reachable-history security
+  scans.
 - [ ] Record GitHub CI, CodeQL, merge, and post-merge evidence after the phase PR passes.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 

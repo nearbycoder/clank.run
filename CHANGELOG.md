@@ -6,6 +6,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- Managed ingress can now bind an allowlisted remote provider origin to an exact
+  `clank-runtime/1` generation and provider-local path. It overwrites reserved
+  project/protocol/generation/ingress-token headers, binds health checks identically, keeps the
+  secret out of public failures and metrics, rejects encoded path traversal, and fences circuit
+  state from both generation changes and late replaced-generation responses.
 - A zero-dependency provider data lifecycle now consumes independently verified
   `clank-runtime/1` capsules, stages immutable releases, initializes/preserves/replaces
   project-isolated SQLite, applies immutable migrations, exports consistent snapshots, retains

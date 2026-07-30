@@ -12,6 +12,8 @@ The proxy:
 - allows loopback upstreams by default and requires an explicit allowlist for remote upstream hosts;
 - strips fixed hop-by-hop headers, `Connection`-nominated headers, and private server headers;
 - sets controlled forwarding and project headers;
+- optionally binds a remote provider origin, path, protocol, and generation with an
+  ingress-only credential that public requests cannot override;
 - bounds request bodies before forwarding;
 - applies timeouts and safe-method retries for network failure or transient upstream 5xx responses;
 - streams response bodies, including SSE;
@@ -33,6 +35,54 @@ await openPlatform({
 ```
 
 Projects are then available at `https://<slug>.apps.clank.example`. TLS should terminate at the edge proxy or load balancer in front of the Clank control/data-plane process.
+
+### Generation-bound provider routes
+
+Several projects or runtime generations can share one trusted provider origin without making the
+public request choose a provider path:
+
+```ts
+const ingress = createManagedIngress({
+  allowedUpstreamHosts: ["provider.internal.example"],
+  routes: () => [{
+    id: "route_tasks",
+    projectId: "project_tasks",
+    hosts: ["tasks.apps.clank.example"],
+    upstream: "https://provider.internal.example",
+    active: true,
+    runtime: {
+      protocol: "clank-runtime/1",
+      generation: 42,
+      path: "/v1/runtimes/project_tasks",
+      token: process.env.PROJECT_TASKS_INGRESS_TOKEN!,
+    },
+  }],
+});
+```
+
+For a public request to `/todos?done=false`, the example calls
+`https://provider.internal.example/v1/runtimes/project_tasks/todos?done=false`. The upstream
+remains an allowlisted origin and the provider path is strict trusted configuration: it must be an
+absolute, non-scheme-relative path made from URL path-safe ASCII characters, without percent
+encoding, backslashes, or an empty, dot, query, fragment, or null segment.
+
+Managed ingress removes client-supplied versions of all reserved binding headers and then sets:
+
+- `x-clank-project-id`;
+- `x-clank-runtime-protocol`;
+- `x-clank-runtime-generation`; and
+- `x-clank-runtime-ingress`, containing the private route token.
+
+The provider must compare every field with its committed runtime state before dispatching. It
+should return a generic unavailable response for a missing, invalid, stale, or stopped binding.
+The token is not an application bearer credential: keep it out of URLs, logs, metrics, errors,
+responses, and application code, and rotate it when replacing the provider route.
+
+Active-route health probes use the same fixed provider path and binding headers. Circuit state is
+also scoped to origin, protocol, provider path, and generation, so failures from an old generation
+cannot hold a newly activated generation open; late responses from the replaced generation also
+cannot change its replacement's circuit. This contract does not by itself publish a remote runtime;
+activation still requires a verified provider launcher and an atomic control-plane route switch.
 
 ### Admission policy
 

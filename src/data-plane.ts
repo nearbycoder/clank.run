@@ -1,12 +1,23 @@
 import type { Migration, MigrationPlan, MigrationRecord } from "./migrations.ts";
 import { readResponseBytes, ResponseBodyLimitError } from "./security.ts";
 
+export interface IngressRuntimeRoute {
+  readonly protocol: "clank-runtime/1";
+  readonly generation: number;
+  /** Provider-local path dedicated to this application runtime. */
+  readonly path: string;
+  /** Secret delivered only in a managed-ingress request header. */
+  readonly token: string;
+}
+
 export interface IngressRoute {
   id: string;
   projectId: string;
   hosts: readonly string[];
   upstream: string;
   active: boolean;
+  /** Binds a remote provider origin to one exact application generation. */
+  runtime?: IngressRuntimeRoute;
 }
 
 export interface IngressRouteStore {
@@ -78,7 +89,7 @@ export function createManagedIngress(options: {
   const retries = integerRange(options.retries ?? 1, "retries", 0, 3);
   const circuitFailures = integerRange(options.circuitFailures ?? 5, "circuitFailures", 1, 100);
   const circuitResetMs = integerRange(options.circuitResetMs ?? 30_000, "circuitResetMs", 100, 60 * 60_000);
-  const circuits = new Map<string, { failures: number; openedAt: number; upstream: string }>();
+  const circuits = new Map<string, { failures: number; openedAt: number; target: string }>();
   const inFlight = new Map<string, {
     leases: Set<symbol>;
     waiters: Set<() => void>;
@@ -86,6 +97,21 @@ export function createManagedIngress(options: {
   const routeSource = typeof options.routes === "function"
     ? options.routes
     : () => options.routes.routes();
+
+  const recordCircuitFailure = (routeId: string, target: string): void => {
+    const existing = circuits.get(routeId);
+    // A response from a drained generation must not mutate the circuit that
+    // already belongs to its replacement.
+    if (existing && existing.target !== target) return;
+    const current = existing ?? { failures: 0, openedAt: 0, target };
+    current.failures++;
+    if (current.failures >= circuitFailures) current.openedAt = Date.now();
+    circuits.set(routeId, current);
+  };
+
+  const clearCircuit = (routeId: string, target: string): void => {
+    if (circuits.get(routeId)?.target === target) circuits.delete(routeId);
+  };
 
   const retain = (upstream: string): (() => void) => {
     const state = inFlight.get(upstream) ?? {
@@ -113,6 +139,9 @@ export function createManagedIngress(options: {
         hosts: Object.freeze(route.hosts.map(domainName)),
         upstream: upstreamUrl(route.upstream, options.allowedUpstreamHosts),
         active: route.active === true,
+        ...(route.runtime === undefined
+          ? {}
+          : { runtime: normalizeIngressRuntimeRoute(route.runtime) }),
       };
       for (const host of normalized.hosts) {
         if (seen.has(host)) throw new Error(`Ingress host is assigned more than once: ${host}`);
@@ -128,6 +157,7 @@ export function createManagedIngress(options: {
       const host = domainName(url.hostname);
       const route = (await loadRoutes()).find((entry) => entry.active && entry.hosts.includes(host));
       if (!route) return ingressProblem(404, "ROUTE_NOT_FOUND", "No application is assigned to this host.");
+      const targetIdentity = ingressRouteIdentity(route);
       const release = retain(route.upstream);
       const finish = (response: Response, trackBody = false): Response => {
         if (!trackBody || !response.body) {
@@ -199,7 +229,7 @@ export function createManagedIngress(options: {
         return response;
       };
       let circuit = circuits.get(route.id);
-      if (circuit && circuit.upstream !== route.upstream) {
+      if (circuit && circuit.target !== targetIdentity) {
         circuits.delete(route.id);
         circuit = undefined;
       }
@@ -260,11 +290,10 @@ export function createManagedIngress(options: {
       // Assign the path after parsing the trusted origin. Passing a path such
       // as //attacker.example directly to new URL(path, base) would otherwise
       // turn it into a scheme-relative URL and let request input select a host.
-      const target = new URL(route.upstream);
-      target.pathname = url.pathname;
-      target.search = url.search;
+      const target = ingressTarget(route, url.pathname, url.search);
       const headers = proxyRequestHeaders(request, host, options.trustProxy === true);
       headers.set("x-clank-project-id", route.projectId);
+      setRuntimeIngressHeaders(headers, route.runtime);
       const attempts = ["GET", "HEAD"].includes(request.method) ? retries + 1 : 1;
       let lastError: unknown;
       for (let attempt = 0; attempt < attempts; attempt++) {
@@ -279,17 +308,14 @@ export function createManagedIngress(options: {
             redirect: "manual",
           });
           if (response.status >= 500) {
-            const current = circuits.get(route.id) ?? { failures: 0, openedAt: 0, upstream: route.upstream };
-            current.failures++;
-            if (current.failures >= circuitFailures) current.openedAt = Date.now();
-            circuits.set(route.id, current);
+            recordCircuitFailure(route.id, targetIdentity);
             if (attempt + 1 < attempts) {
               await response.body?.cancel().catch(() => undefined);
               await backoff(attempt);
               continue;
             }
           } else {
-            circuits.delete(route.id);
+            clearCircuit(route.id, targetIdentity);
           }
           return finish(observed(new Response(response.body, {
             status: response.status,
@@ -299,10 +325,7 @@ export function createManagedIngress(options: {
         } catch (error) {
           lastError = error;
           if (request.signal.aborted) break;
-          const current = circuits.get(route.id) ?? { failures: 0, openedAt: 0, upstream: route.upstream };
-          current.failures++;
-          if (current.failures >= circuitFailures) current.openedAt = Date.now();
-          circuits.set(route.id, current);
+          recordCircuitFailure(route.id, targetIdentity);
           if (attempt + 1 < attempts) await backoff(attempt);
         } finally {
           clearTimeout(timeout);
@@ -321,14 +344,22 @@ export function createManagedIngress(options: {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, 5_000));
         try {
-          const response = await fetcher(new URL("/healthz", `${route.upstream}/`), {
+          const headers = new Headers({
+            "x-clank-project-id": route.projectId,
+          });
+          setRuntimeIngressHeaders(headers, route.runtime);
+          const response = await fetcher(ingressTarget(route, "/healthz", ""), {
             method: "GET",
+            headers,
             signal: controller.signal,
             redirect: "manual",
           });
           output[route.id] = { ok: response.ok, status: response.status };
         } catch (error) {
-          output[route.id] = { ok: false, error: safeError(error) };
+          output[route.id] = {
+            ok: false,
+            error: route.runtime ? "Runtime health check failed." : safeError(error),
+          };
         } finally {
           clearTimeout(timeout);
         }
@@ -774,6 +805,7 @@ function proxyRequestHeaders(request: Request, host: string, trustProxy: boolean
   stripHopHeaders(headers);
   headers.delete("host");
   headers.delete("content-length");
+  for (const name of MANAGED_INGRESS_HEADERS) headers.delete(name);
   const remote = trustProxy
     ? request.headers.get("x-forwarded-for")?.split(",", 1)[0]?.trim()
     : undefined;
@@ -784,10 +816,96 @@ function proxyRequestHeaders(request: Request, host: string, trustProxy: boolean
   return headers;
 }
 
+const MANAGED_INGRESS_HEADERS = [
+  "x-clank-project-id",
+  "x-clank-runtime-protocol",
+  "x-clank-runtime-generation",
+  "x-clank-runtime-ingress",
+] as const;
+
+function setRuntimeIngressHeaders(headers: Headers, runtime?: IngressRuntimeRoute): void {
+  for (const name of MANAGED_INGRESS_HEADERS.slice(1)) headers.delete(name);
+  if (!runtime) return;
+  headers.set("x-clank-runtime-protocol", runtime.protocol);
+  headers.set("x-clank-runtime-generation", String(runtime.generation));
+  headers.set("x-clank-runtime-ingress", runtime.token);
+}
+
+function ingressTarget(route: IngressRoute, pathname: string, search: string): URL {
+  const target = new URL(route.upstream);
+  // Both parts are assigned as a pathname on the already-trusted origin.
+  // Even a request path beginning with // cannot select a different host.
+  target.pathname = route.runtime ? `${route.runtime.path}${pathname}` : pathname;
+  target.search = search;
+  return target;
+}
+
+function ingressRouteIdentity(route: IngressRoute): string {
+  if (!route.runtime) return route.upstream;
+  return [
+    route.upstream,
+    route.runtime.protocol,
+    String(route.runtime.generation),
+    route.runtime.path,
+  ].join("\n");
+}
+
+function normalizeIngressRuntimeRoute(input: unknown): IngressRuntimeRoute {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("Ingress runtime route must be an object.");
+  }
+  const prototype = Object.getPrototypeOf(input);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("Ingress runtime route must be a plain object.");
+  }
+  const value = input as Record<string, unknown>;
+  const fields = ["protocol", "generation", "path", "token"];
+  if (Object.keys(value).some((key) => !fields.includes(key))) {
+    throw new TypeError("Ingress runtime route contains an unknown field.");
+  }
+  if (fields.some((key) => !(key in value))) {
+    throw new TypeError("Ingress runtime route is missing a required field.");
+  }
+  if (value.protocol !== "clank-runtime/1") {
+    throw new TypeError("Ingress runtime protocol is unsupported.");
+  }
+  if (
+    typeof value.generation !== "number"
+    || !Number.isSafeInteger(value.generation)
+    || value.generation < 1
+  ) throw new TypeError("Ingress runtime generation is invalid.");
+  if (
+    typeof value.path !== "string"
+    || value.path.length < 2
+    || value.path.length > 512
+    || !value.path.startsWith("/")
+    || value.path.startsWith("//")
+    || value.path.includes("?")
+    || value.path.includes("#")
+    || value.path.includes("\0")
+    || !/^\/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$/u.test(value.path)
+    || value.path.split("/").some((segment, index) =>
+      index > 0 && (!segment || segment === "." || segment === ".."))
+  ) throw new TypeError("Ingress runtime path is invalid.");
+  if (
+    typeof value.token !== "string"
+    || value.token.length < 32
+    || value.token.length > 512
+    || /[\u0000-\u0020\u007f]/u.test(value.token)
+  ) throw new TypeError("Ingress runtime token is invalid.");
+  return Object.freeze({
+    protocol: "clank-runtime/1",
+    generation: value.generation,
+    path: value.path,
+    token: value.token,
+  });
+}
+
 function proxyResponseHeaders(input: Headers, routeId: string): Headers {
   const headers = new Headers(input);
   stripHopHeaders(headers);
   headers.delete("server");
+  for (const name of MANAGED_INGRESS_HEADERS) headers.delete(name);
   headers.set("x-clank-route-id", routeId);
   headers.set("x-content-type-options", "nosniff");
   return headers;

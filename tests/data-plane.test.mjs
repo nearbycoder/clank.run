@@ -234,6 +234,237 @@ test("managed ingress routes by verified host, strips hop headers, bounds bodies
   assert.equal(upstreamSignal.aborted, true);
 });
 
+test("managed ingress binds remote requests and health to one exact runtime generation", async () => {
+  const token = "runtime_ingress_token_0123456789abcdef";
+  const calls = [];
+  const metrics = [];
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_remote",
+      projectId: "project_remote",
+      hosts: ["remote.example.com"],
+      upstream: "https://provider.example.net",
+      active: true,
+      runtime: {
+        protocol: "clank-runtime/1",
+        generation: 42,
+        path: "/v1/runtimes/project_remote",
+        token,
+      },
+    }],
+    allowedUpstreamHosts: ["provider.example.net"],
+    onRequest: (metric) => metrics.push(metric),
+    fetch: async (url, init) => {
+      calls.push({ url: String(url), init });
+      if (String(url).endsWith("/healthz")) throw new Error(`provider leaked ${token}`);
+      return new Response("remote generation", {
+        headers: {
+          "content-length": "17",
+          "x-clank-project-id": "project_attacker",
+          "x-clank-runtime-generation": "999",
+          "x-clank-runtime-ingress": token,
+        },
+      });
+    },
+  });
+
+  const response = await ingress.handle(new Request(
+    "https://remote.example.com//attacker.example/tasks?done=false",
+    {
+      headers: {
+        "x-clank-project-id": "project_attacker",
+        "x-clank-runtime-protocol": "attacker-runtime/9",
+        "x-clank-runtime-generation": "999",
+        "x-clank-runtime-ingress": "attacker-controlled-token",
+      },
+    },
+  ));
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "remote generation");
+  assert.equal(response.headers.get("x-clank-project-id"), null);
+  assert.equal(response.headers.get("x-clank-runtime-generation"), null);
+  assert.equal(response.headers.get("x-clank-runtime-ingress"), null);
+  assert.equal(
+    calls[0].url,
+    "https://provider.example.net/v1/runtimes/project_remote//attacker.example/tasks?done=false",
+  );
+  assert.equal(calls[0].init.headers.get("x-clank-project-id"), "project_remote");
+  assert.equal(calls[0].init.headers.get("x-clank-runtime-protocol"), "clank-runtime/1");
+  assert.equal(calls[0].init.headers.get("x-clank-runtime-generation"), "42");
+  assert.equal(calls[0].init.headers.get("x-clank-runtime-ingress"), token);
+  assert.doesNotMatch(JSON.stringify(metrics), new RegExp(token));
+
+  const health = await ingress.health();
+  assert.equal(
+    calls[1].url,
+    "https://provider.example.net/v1/runtimes/project_remote/healthz",
+  );
+  assert.equal(calls[1].init.headers.get("x-clank-project-id"), "project_remote");
+  assert.equal(calls[1].init.headers.get("x-clank-runtime-generation"), "42");
+  assert.equal(calls[1].init.headers.get("x-clank-runtime-ingress"), token);
+  assert.deepEqual(health.route_remote, {
+    ok: false,
+    error: "Runtime health check failed.",
+  });
+  assert.doesNotMatch(JSON.stringify(health), new RegExp(token));
+});
+
+test("managed ingress resets a circuit when a remote runtime generation changes", async () => {
+  let generation = 1;
+  let calls = 0;
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_generation",
+      projectId: "project_generation",
+      hosts: ["generation.example.com"],
+      upstream: "https://provider.example.net",
+      active: true,
+      runtime: {
+        protocol: "clank-runtime/1",
+        generation,
+        path: "/v1/runtimes/project_generation",
+        token: "runtime_ingress_token_0123456789abcdef",
+      },
+    }],
+    allowedUpstreamHosts: ["provider.example.net"],
+    retries: 0,
+    circuitFailures: 1,
+    circuitResetMs: 10_000,
+    fetch: async () => {
+      calls++;
+      return generation === 1
+        ? new Response("unavailable", { status: 503 })
+        : new Response("generation two");
+    },
+  });
+
+  assert.equal((await ingress.handle(new Request("https://generation.example.com/"))).status, 503);
+  assert.equal((await ingress.handle(new Request("https://generation.example.com/"))).status, 503);
+  assert.equal(calls, 1, "the open circuit rejects the same generation");
+  generation = 2;
+  const switched = await ingress.handle(new Request("https://generation.example.com/"));
+  assert.equal(switched.status, 200);
+  assert.equal(await switched.text(), "generation two");
+  assert.equal(calls, 2, "a new generation gets a fresh circuit");
+});
+
+test("late remote generation responses cannot mutate the replacement circuit", async () => {
+  let generation = 1;
+  let oldResolve;
+  let generationTwoCalls = 0;
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_circuit_race",
+      projectId: "project_circuit_race",
+      hosts: ["circuit-race.example.com"],
+      upstream: "https://provider.example.net",
+      active: true,
+      runtime: {
+        protocol: "clank-runtime/1",
+        generation,
+        path: "/v1/runtimes/project_circuit_race",
+        token: "runtime_ingress_token_0123456789abcdef",
+      },
+    }],
+    allowedUpstreamHosts: ["provider.example.net"],
+    retries: 0,
+    circuitFailures: 1,
+    circuitResetMs: 10_000,
+    fetch: async (_url, init) => {
+      const requestGeneration = init.headers.get("x-clank-runtime-generation");
+      if (requestGeneration === "1") {
+        return await new Promise((resolve) => { oldResolve = resolve; });
+      }
+      generationTwoCalls++;
+      return new Response("generation two failed", { status: 503 });
+    },
+  });
+
+  const oldRequest = ingress.handle(new Request("https://circuit-race.example.com/"));
+  while (!oldResolve) await new Promise((resolve) => setTimeout(resolve, 0));
+  generation = 2;
+  assert.equal(
+    (await ingress.handle(new Request("https://circuit-race.example.com/"))).status,
+    503,
+  );
+  oldResolve(new Response("late generation one success"));
+  assert.equal((await oldRequest).status, 200);
+  assert.equal(
+    (await ingress.handle(new Request("https://circuit-race.example.com/"))).status,
+    503,
+  );
+  assert.equal(
+    generationTwoCalls,
+    1,
+    "a late success from generation one cannot clear generation two's open circuit",
+  );
+});
+
+test("managed ingress rejects malformed remote runtime bindings before proxying", async () => {
+  const invalidBindings = [
+    {
+      protocol: "clank-runtime/0",
+      generation: 1,
+      path: "/v1/runtimes/project_invalid",
+      token: "runtime_ingress_token_0123456789abcdef",
+    },
+    {
+      protocol: "clank-runtime/1",
+      generation: 0,
+      path: "/v1/runtimes/project_invalid",
+      token: "runtime_ingress_token_0123456789abcdef",
+    },
+    {
+      protocol: "clank-runtime/1",
+      generation: 1,
+      path: "//attacker.example/runtime",
+      token: "runtime_ingress_token_0123456789abcdef",
+    },
+    {
+      protocol: "clank-runtime/1",
+      generation: 1,
+      path: "/v1/%2e%2e/runtime",
+      token: "runtime_ingress_token_0123456789abcdef",
+    },
+    {
+      protocol: "clank-runtime/1",
+      generation: 1,
+      path: "/v1/runtimes/project_invalid",
+      token: "short",
+    },
+    {
+      protocol: "clank-runtime/1",
+      generation: 1,
+      path: "/v1/runtimes/project_invalid",
+      token: "runtime_ingress_token_0123456789abcdef",
+      unexpected: true,
+    },
+  ];
+  for (const runtime of invalidBindings) {
+    let calls = 0;
+    const ingress = createManagedIngress({
+      routes: () => [{
+        id: "route_invalid",
+        projectId: "project_invalid",
+        hosts: ["invalid.example.com"],
+        upstream: "https://provider.example.net",
+        active: true,
+        runtime,
+      }],
+      allowedUpstreamHosts: ["provider.example.net"],
+      fetch: async () => {
+        calls++;
+        return new Response();
+      },
+    });
+    await assert.rejects(
+      ingress.handle(new Request("https://invalid.example.com/")),
+      /Ingress runtime/u,
+    );
+    assert.equal(calls, 0);
+  }
+});
+
 test("managed ingress admission is metadata-minimal, fail-closed, and observable", async () => {
   const admissions = [];
   const metrics = [];
