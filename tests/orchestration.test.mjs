@@ -8,6 +8,7 @@ import {
   openDeploymentOrchestrator,
   openSQLite,
 } from "../dist/index.js";
+import { SQLITE_INTERNAL } from "../dist/sqlite-internal.js";
 
 async function fixture(options = {}) {
   const root = await mkdtemp(join(tmpdir(), "clank-orchestration-"));
@@ -51,7 +52,7 @@ test("distributed leases use authenticated tokens and monotonic fences", async (
 });
 
 test("operator drain and revoke controls fence credentials and recover running placements", async () => {
-  const test = await fixture({ operationLeaseMs: 100 });
+  const test = await fixture();
   try {
     const nodeA = await test.orchestrator.registerNode({
       id: "node-a",
@@ -84,7 +85,10 @@ test("operator drain and revoke controls fence credentials and recover running p
       /authentication failed/,
     );
     assert.equal((await test.orchestrator.claim("node-b", nodeB.token, 1)).length, 0);
-    await new Promise((resolve) => setTimeout(resolve, 110));
+    const internal = test.database[SQLITE_INTERNAL];
+    internal.prepare(`UPDATE clank_deployment_operations
+      SET lease_expires_at = 0 WHERE id = ? AND fence = ?`)
+      .run(staleLease.id, staleLease.fence);
     const [recovered] = await test.orchestrator.claim("node-b", nodeB.token, 1);
     assert.equal(recovered.id, staleLease.id);
     assert.equal(recovered.nodeId, "node-b");

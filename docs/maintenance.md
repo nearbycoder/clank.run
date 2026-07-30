@@ -85,6 +85,26 @@ The final certification result and exact test counts belong in the pull request 
   coverage; 56 documentation files, 196 local links, 32 declaration files, and 30 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
+- [x] Merged PR #88 as `097f3db4022e0d0cba68e4e575f25426d468c740` after Node 22/24,
+  packaged-release conformance, and CodeQL passed; post-merge CI, CodeQL, docs deployment, human
+  guide, and agent JSON completed successfully.
+- [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
+## 2026-07-30 provider runtime ingress phase
+
+- [x] Added a zero-dependency provider-private registry with strict generation bindings,
+  loopback-only upstreams, plaintext-token non-retention, and non-secret inspection.
+- [x] Validated the edge contract end to end, stripped reserved and hop-by-hop headers in both
+  directions, bounded URLs/bodies/time/capacity, preserved streaming, and returned one generic
+  unavailable result for unknown, forged, and stale bindings.
+- [x] Reserved requests before asynchronous token verification, supported safe old/new generation
+  overlap, fenced stale/conflicting activation, and revoked exact generations before draining.
+- [x] Kept process launch, sandboxing, SQLite mutation, control-plane routing, TLS, and restart
+  reconciliation explicit rather than implying that a proxy creates those guarantees.
+- [x] Re-certified all 290 tests at 86.15% line, 74.76% branch, and 86.00% function
+  coverage; 57 documentation files, 212 local links, 33 declaration files, and 31 package
+  exports; packed consumer conformance; and package, current-tree, and reachable-history security
+  scans.
 - [ ] Record GitHub CI, CodeQL, merge, and post-merge evidence after the phase PR passes.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 

@@ -143,4 +143,6 @@ outside the control-plane volume.
 
 For the underlying authentication, leases, artifacts, fencing, and agent loop, see
 [Durable distributed deployment](distributed-deployment.md). For the infrastructure mutation
-boundary and HTTP bridge, see [Deployment provider adapters](provider-adapters.md).
+boundary and HTTP bridge, see [Deployment provider adapters](provider-adapters.md). For the
+generation-bound private traffic hop, see [Provider runtime
+ingress](provider-runtime-ingress.md).
