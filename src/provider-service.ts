@@ -18,6 +18,7 @@ import {
 } from "./provider-runtime.ts";
 import {
   type DeploymentProvider,
+  type DeploymentProviderOperation,
   type DeploymentProviderRequest,
 } from "./provider.ts";
 import {
@@ -37,8 +38,23 @@ export interface DeploymentProviderServiceState {
   readonly state: "running" | "stopped";
   readonly releaseId: string | null;
   readonly capsuleSha256: string | null;
-  readonly phase: "reconciling" | "running" | "stopped";
+  readonly phase:
+    | "reconciling"
+    | "running"
+    | "stopped"
+    | "rolling-back"
+    | "rolled-back"
+    | "deleting";
   readonly updatedAt: number;
+}
+
+export interface DeploymentProviderServiceLifecycleRequest {
+  readonly operation: DeploymentProviderOperation;
+  /** Exact current provider-data generation being changed. */
+  readonly generation: number;
+  /** Exact human/operator confirmation required by the data boundary. */
+  readonly confirmation: string;
+  readonly signal: AbortSignal;
 }
 
 export interface DeploymentProviderServiceOptions {
@@ -81,6 +97,12 @@ export interface DeploymentProviderService extends DeploymentProvider {
   inspect(projectId: string): Promise<DeploymentProviderServiceState | null>;
   /** Creates a consistent provider-data snapshot for external encrypted backup. */
   snapshot(projectId: string): Promise<DeploymentProviderDataSnapshot | null>;
+  /** Drains every writer and restores the immediate provider-data predecessor. */
+  rollback(
+    request: DeploymentProviderServiceLifecycleRequest,
+  ): Promise<DeploymentProviderDataState | null>;
+  /** Drains every writer and permanently removes provider-owned project state. */
+  delete(request: DeploymentProviderServiceLifecycleRequest): Promise<boolean>;
   /** Revokes traffic, drains requests, stops runtimes, and closes the service. */
   close(): Promise<void>;
 }
@@ -173,6 +195,8 @@ export async function openDeploymentProviderService(
     "apply",
     "inspect",
     "snapshot",
+    "rollback",
+    "delete",
   ]);
   const runtimes = requiredComponent(options.runtimes, "runtimes", [
     "launch",
@@ -229,6 +253,11 @@ export async function openDeploymentProviderService(
 
   const writeProjectState = async (state: StoredServiceState): Promise<void> => {
     await atomicWriteJson(fs, path, statePath(state.projectId), state);
+  };
+
+  const removeProjectState = async (projectId: string): Promise<void> => {
+    await fs.rm(statePath(projectId), { force: true });
+    await syncDirectory(fs, serviceDirectory);
   };
 
   const quiesce = async (projectId: string): Promise<void> => {
@@ -419,15 +448,116 @@ export async function openDeploymentProviderService(
     },
 
     async inspect(projectIdInput) {
+      if (closed) throw new Error("Deployment provider service is closed.");
       const projectId = identifier(projectIdInput, "projectId");
       return exclusive(projectId, async () => {
+        if (closed) throw new Error("Deployment provider service is closed.");
         const state = await readProjectState(projectId);
         return state ? publicState(state) : null;
       });
     },
 
-    snapshot(projectId) {
-      return data.snapshot(identifier(projectId, "projectId"));
+    async snapshot(projectIdInput) {
+      if (closed) throw new Error("Deployment provider service is closed.");
+      const projectId = identifier(projectIdInput, "projectId");
+      return exclusive(projectId, async () => {
+        if (closed) throw new Error("Deployment provider service is closed.");
+        return data.snapshot(projectId);
+      });
+    },
+
+    async rollback(requestInput) {
+      if (closed) throw new Error("Deployment provider service is closed.");
+      const request = lifecycleRequest(requestInput, "rollback");
+      return exclusive(request.operation.projectId, async () => {
+        if (closed) throw new Error("Deployment provider service is closed.");
+        throwIfAborted(request.signal);
+        const prior = await readProjectState(request.operation.projectId);
+        const retry = lifecycleRetry(prior, request, "rolling-back", "rolled-back");
+        await quiesce(request.operation.projectId);
+        throwIfAborted(request.signal);
+        const current = await data.inspect(request.operation.projectId);
+        if (retry === "complete") {
+          if (current && current.generation >= request.generation) {
+            throw new Error("Completed provider rollback conflicts with provider data.");
+          }
+          if (current && current.fence !== request.operation.fence) {
+            throw new Error("Completed provider rollback has an invalid provider-data fence.");
+          }
+          return current;
+        }
+        if (retry === "intent") {
+          if (current && current.generation > request.generation) {
+            throw new Error("Provider rollback generation is stale.");
+          }
+          if (
+            current
+            && current.generation < request.generation
+            && current.fence !== request.operation.fence
+          ) {
+            throw new Error("Provider rollback result has an invalid provider-data fence.");
+          }
+        } else {
+          if (!current) {
+            if (prior) throw new Error("Provider service state has no matching provider data.");
+            return null;
+          }
+          if (current.generation !== request.generation) {
+            throw new Error("Provider rollback generation is stale.");
+          }
+          if (!current.rollbackAvailable) {
+            throw new Error("Provider rollback data is unavailable.");
+          }
+          if (request.operation.fence <= current.fence) {
+            throw new Error("Provider rollback fence is stale.");
+          }
+          await writeProjectState(lifecycleState(request, "rolling-back"));
+        }
+        throwIfAborted(request.signal);
+        const restored = current?.generation === request.generation
+          ? await data.rollback({
+              projectId: request.operation.projectId,
+              generation: request.generation,
+              confirmation: request.confirmation,
+              fence: request.operation.fence,
+            })
+          : current;
+        throwIfAborted(request.signal);
+        await writeProjectState(lifecycleState(request, "rolled-back"));
+        return restored;
+      });
+    },
+
+    async delete(requestInput) {
+      if (closed) throw new Error("Deployment provider service is closed.");
+      const request = lifecycleRequest(requestInput, "delete");
+      return exclusive(request.operation.projectId, async () => {
+        if (closed) throw new Error("Deployment provider service is closed.");
+        throwIfAborted(request.signal);
+        const prior = await readProjectState(request.operation.projectId);
+        const retry = lifecycleRetry(prior, request, "deleting");
+        await quiesce(request.operation.projectId);
+        throwIfAborted(request.signal);
+        const current = await data.inspect(request.operation.projectId);
+        if (current && current.generation !== request.generation) {
+          throw new Error("Provider deletion generation is stale.");
+        }
+        if (retry === "new") {
+          if (!prior && !current) return false;
+          if (current && request.operation.fence <= current.fence) {
+            throw new Error("Provider deletion fence is stale.");
+          }
+          await writeProjectState(lifecycleState(request, "deleting"));
+        }
+        throwIfAborted(request.signal);
+        const deleted = await data.delete({
+          projectId: request.operation.projectId,
+          confirmation: request.confirmation,
+        });
+        throwIfAborted(request.signal);
+        await removeProjectState(request.operation.projectId);
+        return deleted || retry === "intent";
+      });
     },
 
     async close() {
@@ -586,11 +716,71 @@ async function providerRequest(
   });
 }
 
+function lifecycleRequest(
+  input: DeploymentProviderServiceLifecycleRequest,
+  action: "rollback" | "delete",
+): DeploymentProviderServiceLifecycleRequest {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`Provider ${action} request is required.`);
+  }
+  const fields = Object.keys(input);
+  if (
+    fields.length !== 4
+    || !["operation", "generation", "confirmation", "signal"].every((field) =>
+      fields.includes(field))
+  ) {
+    throw new TypeError(`Provider ${action} request is invalid.`);
+  }
+  const operation = input.operation;
+  if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
+    throw new TypeError(`Provider ${action} operation is required.`);
+  }
+  const operationFields = Object.keys(operation);
+  if (
+    operationFields.length !== 5
+    || !["id", "projectId", "fence", "attempt", "maxAttempts"].every((field) =>
+      operationFields.includes(field))
+  ) {
+    throw new TypeError(`Provider ${action} operation is invalid.`);
+  }
+  const projectId = identifier(operation.projectId, "operation.projectId");
+  const normalizedOperation = Object.freeze({
+    id: identifier(operation.id, "operation.id"),
+    projectId,
+    fence: positiveInteger(operation.fence, "operation.fence"),
+    attempt: positiveInteger(operation.attempt, "operation.attempt"),
+    maxAttempts: positiveInteger(operation.maxAttempts, "operation.maxAttempts"),
+  });
+  if (normalizedOperation.attempt > normalizedOperation.maxAttempts) {
+    throw new TypeError(`Provider ${action} operation attempt exceeds maxAttempts.`);
+  }
+  const generation = positiveInteger(input.generation, "generation");
+  const confirmation = nonEmpty(input.confirmation, "confirmation");
+  const expected = action === "rollback"
+    ? `rollback ${projectId} ${generation}`
+    : `delete ${projectId}`;
+  if (confirmation !== expected) {
+    throw new TypeError(`confirmation must equal "${expected}".`);
+  }
+  if (!(input.signal instanceof AbortSignal)) {
+    throw new TypeError(`Provider ${action} signal must be an AbortSignal.`);
+  }
+  return Object.freeze({
+    operation: normalizedOperation,
+    generation,
+    confirmation,
+    signal: input.signal,
+  });
+}
+
 function assertAccepted(
   prior: StoredServiceState | null,
   request: DeploymentProviderRequest,
 ): void {
   if (!prior) return;
+  if (prior.phase === "rolling-back" || prior.phase === "deleting") {
+    throw new Error("Provider service lifecycle operation is incomplete.");
+  }
   const capsuleSha256 = request.runtime?.sha256 ?? null;
   const exact = prior.generation === request.desired.generation
     && prior.state === request.desired.state
@@ -613,6 +803,33 @@ function assertAccepted(
   }
 }
 
+function lifecycleRetry(
+  prior: StoredServiceState | null,
+  request: DeploymentProviderServiceLifecycleRequest,
+  intentPhase: "rolling-back" | "deleting",
+  completePhase?: "rolled-back",
+): "new" | "intent" | "complete" {
+  if (!prior) return "new";
+  const exact = prior.operationId === request.operation.id
+    && prior.fence === request.operation.fence
+    && prior.generation === request.generation;
+  if (prior.phase === intentPhase && exact) return "intent";
+  if (completePhase && prior.phase === completePhase && exact) return "complete";
+  if (prior.phase === "rolling-back" || prior.phase === "deleting") {
+    throw new Error("Another provider service lifecycle operation is incomplete.");
+  }
+  if (request.generation < prior.generation) {
+    throw new Error("Provider service lifecycle generation is stale.");
+  }
+  if (request.operation.fence < prior.fence) {
+    throw new Error("Provider service lifecycle fence is stale.");
+  }
+  if (request.operation.fence === prior.fence) {
+    throw new Error("Provider service lifecycle operation conflicts with its durable fence.");
+  }
+  return "new";
+}
+
 function assertAcceptedData(
   state: DeploymentProviderDataState | null,
   request: DeploymentProviderRequest,
@@ -633,6 +850,24 @@ function assertAcceptedData(
   if (request.operation.fence <= state.fence) {
     throw new Error("Provider service fence is stale against provider data.");
   }
+}
+
+function lifecycleState(
+  request: DeploymentProviderServiceLifecycleRequest,
+  phase: "rolling-back" | "rolled-back" | "deleting",
+): StoredServiceState {
+  return Object.freeze({
+    protocol: DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
+    projectId: request.operation.projectId,
+    operationId: request.operation.id,
+    fence: request.operation.fence,
+    generation: request.generation,
+    state: "stopped",
+    releaseId: null,
+    capsuleSha256: null,
+    phase,
+    updatedAt: Date.now(),
+  });
 }
 
 function stateFor(
@@ -709,9 +944,20 @@ function serviceState(
   const phase = input.phase;
   if (
     (state !== "running" && state !== "stopped")
-    || (phase !== "reconciling" && phase !== "running" && phase !== "stopped")
+    || (
+      phase !== "reconciling"
+      && phase !== "running"
+      && phase !== "stopped"
+      && phase !== "rolling-back"
+      && phase !== "rolled-back"
+      && phase !== "deleting"
+    )
     || (phase === "running" && state !== "running")
     || (phase === "stopped" && state !== "stopped")
+    || (
+      (phase === "rolling-back" || phase === "rolled-back" || phase === "deleting")
+      && state !== "stopped"
+    )
   ) {
     throw new Error("Provider service state phase is invalid.");
   }

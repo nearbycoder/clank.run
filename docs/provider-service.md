@@ -111,21 +111,64 @@ If data commits but background or ingress activation fails, the candidate is rem
 durable phase remains `reconciling`. An exact retry uses the already-committed release without
 replaying migrations and attempts activation again.
 
-## Inspection, backups, and shutdown
+## Inspection, rollback, deletion, backups, and shutdown
 
 `inspect(projectId)` returns the durable non-secret state above. `snapshot(projectId)` delegates
 to the provider data store's consistent SQLite backup and is intended to feed an independently
-encrypted recovery repository.
+encrypted recovery repository. Both calls serialize with lifecycle work for the project and reject
+new work after the service starts closing.
+
+Use `rollback(request)` and `delete(request)` rather than reaching into the provider data store
+beneath a live service:
+
+```ts
+const signal = new AbortController().signal;
+
+await service.rollback({
+  operation: {
+    id: "op_rollback_43",
+    projectId: "orbit_tasks",
+    fence: 87,
+    attempt: 1,
+    maxAttempts: 10,
+  },
+  generation: 42,
+  confirmation: "rollback orbit_tasks 42",
+  signal,
+});
+
+await service.delete({
+  operation: {
+    id: "op_delete_44",
+    projectId: "orbit_tasks",
+    fence: 88,
+    attempt: 1,
+    maxAttempts: 10,
+  },
+  generation: 43,
+  confirmation: "delete orbit_tasks",
+  signal,
+});
+```
+
+Both methods validate the exact current generation and a newer project-wide fence, revoke ingress,
+wait for assigned response streams, stop every web/worker/scheduler process, and only then mutate
+provider data. Rollback carries its fence into the restored generation. Destructive intent is
+written before the data commit: an exact retry resumes `rolling-back` or `deleting`, while normal
+reconciliation remains blocked until rollback reaches `rolled-back` or deletion removes the
+project state. This covers process exit after SQLite commit but before service metadata commit.
+Wrong confirmations, stale generations/fences, uncertain drains, and conflicting retries fail
+before destructive mutation.
 
 `close()` first prevents new reconcile work, revokes and drains private routes, closes and verifies
 the Docker runtime boundary, then waits for in-flight per-project reconciliation to settle. A
 failed drain or unproven container cleanup rejects shutdown and is sent only to the private
 diagnostic hook.
 
-Provider rollback and permanent deletion remain explicit operator/control-plane workflows. They
-must first quiesce through this same service boundary, update desired/observed placement, preserve
-encrypted recovery, and only then call the lower-level data operation. Do not call raw
-`rollback()` or `delete()` beneath a running service.
+These service methods are the provider-local safety boundary. The control plane must still preserve
+an encrypted recovery point, deactivate public managed ingress, allocate the lifecycle operation
+and fence, update desired/observed placement, and reconcile the selected release after rollback.
+Do not call raw provider-data `rollback()` or `delete()` beneath a running service.
 
 ## Trust and operating boundary
 
