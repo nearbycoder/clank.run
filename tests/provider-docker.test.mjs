@@ -153,6 +153,8 @@ test("provider Docker launcher starts bounded workers and scheduler without publ
     });
     const state = launcher.commit(candidate);
     assert.equal(state.containers, 4);
+    await waitUntil(async () =>
+      (await fixture.audit()).filter((entry) => entry.command === "start").length === 4);
     const starts = (await fixture.audit()).filter((entry) => entry.command === "start");
     assert.equal(starts.length, 4);
     assert.deepEqual(
@@ -601,7 +603,7 @@ async function dockerFixture(name, options = {}) {
 
 async function waitUntil(check) {
   const deadline = Date.now() + 2_000;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() >= deadline) throw new Error("condition did not become true");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
