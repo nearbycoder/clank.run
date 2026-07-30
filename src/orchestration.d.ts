@@ -59,6 +59,7 @@ export interface ClaimedDeploymentOperation extends DeploymentOperation {
     leaseToken: string;
     leaseExpiresAt: number;
 }
+export type DeploymentOperationLease = Omit<ClaimedDeploymentOperation, "leaseToken">;
 export interface DesiredDeployment {
     projectId: string;
     desiredReleaseId: string | null;
@@ -101,6 +102,8 @@ export interface DeploymentOrchestrator {
         existing: boolean;
     }>;
     claim(nodeId: string, token: string, limit?: number): Promise<ClaimedDeploymentOperation[]>;
+    /** Returns the canonical current lease without extending or settling it. */
+    authenticateOperation(operation: ClaimedDeploymentOperation): Promise<DeploymentOperationLease | null>;
     renewOperation(operation: ClaimedDeploymentOperation): Promise<ClaimedDeploymentOperation | null>;
     complete(operation: ClaimedDeploymentOperation, result?: unknown): Promise<boolean>;
     fail(operation: ClaimedDeploymentOperation, error: unknown): Promise<DeploymentOperation>;

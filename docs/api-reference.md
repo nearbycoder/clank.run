@@ -103,11 +103,12 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   deployment-node enrollment, heartbeat, draining, operation claims, renewal, settlement, and
   desired-state observation.
 - `createDeploymentCoordinatorClient(options)`: HTTPS/loopback-only, redirect-refusing, bounded
-  remote-node client.
+  remote-node client. `.artifact(...)` verifies the leased, content-addressed binary release before
+  returning it.
 - `openDeploymentAgent(options)`: provider-neutral enrollment, credential recovery, heartbeat,
   bounded claim/concurrency, lease-renewal, fenced settlement, and graceful-drain loop. The
-  provider-specific `execute` callback receives the current claim, an abort signal, and
-  generation-fenced `observe`.
+  provider-specific `execute` callback receives the current claim, an abort signal, verified
+  leased `artifact()`, and generation-fenced `observe`.
 - `fileDeploymentNodeCredentials(path)`: serialized, atomic, owner-only persistent node credential
   store with file type, mode, size, version, token, and symlink validation.
 - `memoryDeploymentNodeCredentials(initial?)`: ephemeral credential store for tests and temporary
@@ -116,8 +117,11 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `DeploymentCoordinatorError`: safe client error with HTTP `status` and stable `code`.
 - `DeploymentOrchestrator.authenticateNode(id, token)`: verifies the current node credential and
   heartbeat lease without extending it.
+- `DeploymentOrchestrator.authenticateOperation(operation)`: returns the canonical stored lease
+  only when the exact node/token/fence/expiry tuple is current, without extending or settling it.
 - Types: `DeploymentCoordinatorHandler`, `DeploymentCoordinatorHandlerOptions`,
   `DeploymentCoordinatorClient`, `DeploymentCoordinatorClientOptions`,
+  `DeploymentArtifact`, `DeploymentArtifactRequest`, `DeploymentArtifactProvider`,
   `DeploymentNodeCredentialStore`, `DeploymentExecutionContext`, `DeploymentAgentOptions`,
   `DeploymentAgentRuntime`.
 

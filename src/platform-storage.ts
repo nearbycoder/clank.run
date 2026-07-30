@@ -149,7 +149,9 @@ export async function inspectPlatformStorage(
               : "otherBytes",
       };
     }
-    if (section === "releases") return { footprint: project.releases, project };
+    if (section === "releases" || section === "artifacts") {
+      return { footprint: project.releases, project };
+    }
     if (section === "backups") return { footprint: project.migrationSnapshots, project };
     if (section === "recovery") return { footprint: project.recoveryBackups, project };
     return { footprint: project.other, project };

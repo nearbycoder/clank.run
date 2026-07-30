@@ -3,6 +3,7 @@ import type {
     DeploymentNode,
     DeploymentNodeInput,
     DeploymentOperation,
+    DeploymentOperationLease,
     DeploymentOrchestrator,
     NodeSession,
 } from "./orchestration.js";
@@ -12,6 +13,10 @@ export interface DeploymentCoordinatorHandlerOptions {
     registrationToken: string;
     /** Maximum JSON request body. Defaults to 128 KiB. */
     maxRequestBytes?: number;
+    /** Optional content-addressed release source, scoped to a current operation lease. */
+    artifact?: DeploymentArtifactProvider;
+    /** Maximum artifact returned by the provider. Defaults to 100 MiB. */
+    maxArtifactBytes?: number;
     /** Receives private unexpected failures. */
     onError?: (error: unknown) => void;
 }
@@ -27,6 +32,21 @@ export interface DeploymentCoordinatorClientOptions {
     timeoutMs?: number;
     /** Maximum JSON response body. Defaults to 1 MiB. */
     maxResponseBytes?: number;
+    /** Maximum deployment artifact body. Defaults to 100 MiB. */
+    maxArtifactBytes?: number;
+    /** Artifact-transfer deadline. Defaults to 60 seconds. */
+    artifactTimeoutMs?: number;
+}
+export interface DeploymentArtifact {
+    readonly bytes: Uint8Array;
+    readonly sha256: string;
+}
+export interface DeploymentArtifactRequest {
+    readonly operation: DeploymentOperationLease;
+    readonly signal: AbortSignal;
+}
+export interface DeploymentArtifactProvider {
+    load(request: DeploymentArtifactRequest): Promise<DeploymentArtifact | null>;
 }
 export interface DeploymentCoordinatorClient {
     register(registrationToken: string, input: DeploymentNodeInput): Promise<NodeSession>;
@@ -37,6 +57,7 @@ export interface DeploymentCoordinatorClient {
     }): Promise<DeploymentNode>;
     drain(nodeId: string, token: string, draining?: boolean): Promise<DeploymentNode>;
     claim(nodeId: string, token: string, limit?: number): Promise<ClaimedDeploymentOperation[]>;
+    artifact(nodeId: string, token: string, operation: ClaimedDeploymentOperation): Promise<DeploymentArtifact>;
     renew(nodeId: string, token: string, operation: ClaimedDeploymentOperation): Promise<ClaimedDeploymentOperation | null>;
     complete(nodeId: string, token: string, operation: ClaimedDeploymentOperation, result?: unknown): Promise<boolean>;
     fail(nodeId: string, token: string, operation: ClaimedDeploymentOperation, error: unknown): Promise<DeploymentOperation>;
@@ -57,6 +78,8 @@ export interface DeploymentExecutionContext {
     readonly operation: ClaimedDeploymentOperation;
     /** Aborts when shutdown wins or the operation lease is lost. */
     readonly signal: AbortSignal;
+    /** Downloads and verifies the content-addressed release for this current lease. */
+    artifact(): Promise<DeploymentArtifact>;
     /** Reports generation-fenced desired state for this operation's project. */
     observe(input: {
         generation: number;
