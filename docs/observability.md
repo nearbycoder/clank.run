@@ -80,6 +80,13 @@ Ingress latency ends when upstream response headers arrive; it is not streamed-r
 time. Response size is known only when `Content-Length` is present and a response can carry a body.
 Limit-denial responses remain visible in this operational series.
 
+For a provider-hosted project, the Performance view also requests a generation-bound private
+resource sample: Docker memory/limit, CPU, PIDs, cumulative network I/O, and cumulative block I/O
+across its web/worker/scheduler topology. These counters reset on a new generation and are not
+stored as time series. The Logs view merges a bounded provider-process memory tail with durable
+control-plane lifecycle events after configured project-secret redaction. No container identity,
+environment, path, or raw Docker failure crosses the provider boundary.
+
 A separate monthly ledger records only admitted requests, their request bytes, declared response
 bytes, and traffic-limit rejections. It has longer configurable retention and drives `/usage`,
 `GET /api/usage`, and `clank usage`; it is not a trace, total-egress estimate, or billing record.

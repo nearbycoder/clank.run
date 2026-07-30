@@ -161,6 +161,12 @@ SQLite is replaced and current migrations and health checks run. Keep Railway vo
 another independently tested operator path as defense in depth. See [Remote runtime
 placement](runtime-placement.md#current-support-boundary).
 
+The project Performance and Logs views also consume the exact active provider's private
+diagnostics route. Memory/limit, CPU, PIDs, and cumulative container network/block I/O help
+attribute a Railway provider service's current resource use without exposing container IDs,
+environment, or paths. These are point-in-time and per-generation counters; keep Railway metrics
+for historical service totals and Railway volume metrics for filesystem capacity.
+
 The same private bucket can hold encrypted database recovery points under a separate logical root:
 
 ```sh

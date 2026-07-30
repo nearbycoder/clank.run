@@ -287,11 +287,18 @@ returns `PROVIDER_RESTORE_PENDING`; retrying the same request resumes that gener
 duplicating the safety point. Restore intentionally pauses writes and still depends on the pinned
 node.
 
-Control-plane job inspection returns `remote_unavailable`, and job mutations return
-`PROVIDER_JOBS_PENDING`, until a bounded provider diagnostics transport exists. Provider
-application log streaming, per-runtime memory attribution, and provider disk telemetry also remain
-operator responsibilities; request/latency/transfer metrics at Clank's managed ingress continue to
-work.
+The exact active generation now provides a bounded live-output tail plus one-shot Docker
+memory/limit, CPU, PID, network-I/O, and block-I/O attribution. The control plane authenticates
+the generation-only diagnostics route, enforces response metadata and byte limits, validates all
+aggregates, rechecks placement after transfer, redacts configured project secrets, and displays
+the result beside managed-ingress traffic metrics. Provider network and block counters are
+cumulative only for the current runtime generation; they are operational signals, not billing
+records or filesystem-capacity measurements.
+
+Control-plane job inspection still returns `remote_unavailable`, and job mutations return
+`PROVIDER_JOBS_PENDING`, until the job-specific SQLite diagnostics/mutation contract is carried
+across this private boundary. Provider filesystem capacity and automatic failover from node-local
+SQLite remain operator responsibilities.
 
 An inexpensive single-host installation needs none of this configuration and incurs no additional
 runner, bucket, or volume cost. Existing local projects and their databases are never relocated.

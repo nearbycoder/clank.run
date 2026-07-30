@@ -126,7 +126,9 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   recovery repository used by local projects; create, schedule, list, verify, and fenced restore
   are supported. Restore verifies the selected point, creates a safety recovery point, and
   publishes a replacement generation only after provider data replacement, current migrations,
-  and health succeed. `placement.maxDatabaseBytes` bounds snapshot transfer, recovery reads, and
+  and health succeed. The same exact active generation supplies bounded logs and Docker
+  memory/CPU/PID/network/block-I/O diagnostics to the project UI; secret values are redacted at
+  the control plane. `placement.maxDatabaseBytes` bounds snapshot transfer, recovery reads, and
   runtime-capsule capacity. Provider placement requires managed ingress.
 
 ## Object storage
@@ -213,6 +215,9 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `activate(candidate, signal)`: starts a deferred candidate's workers/scheduler after provider
   data commits, verifies them, releases the memory-only activation plan, and marks it active.
 - `commit(candidate)`: marks the exact healthy candidate active after provider data commits.
+- `diagnostics(projectId, logLimit?, signal?)`: returns a bounded memory-only output tail and one
+  non-streaming per-role Docker resource sample, or `null` when no runtime is tracked. An optional
+  abort signal cancels the one-shot Docker command.
 - `inspect()`, `stop(projectId, generation?)`, `forget(projectId, generation)`, and `close()`:
   non-secret state, verified container removal, deletion cleanup, and fail-closed shutdown.
 - Types: `DockerDeploymentRuntimeLauncherOptions`, `DockerDeploymentRuntimeCandidate`,
@@ -232,13 +237,17 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   immediate predecessor, and resumes an interrupted post-commit attempt.
 - `delete(request)`: requires the same fenced lifecycle envelope plus exact project confirmation,
   then drains all writers and removes provider data and service state idempotently.
-- `handle(request)`: generation-bound private application ingress plus the separately authenticated
-  active-generation snapshot control boundary.
+- `handle(request)`: generation-bound private application ingress plus separately authenticated
+  active-generation snapshot and diagnostics control boundaries.
 - `deploymentProviderSnapshotPath(projectId)`: exact provider-private path for the consistent
   SQLite snapshot endpoint. It requires the memory-only control token carried by the active
   runtime capsule and returns `DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE`.
-- `inspect(projectId)`, `snapshot(projectId)`, and `close()`: serialized non-secret durable
-  progress, consistent backup input, and revoke/drain/verified-stop shutdown.
+- `deploymentProviderDiagnosticsPath(projectId)`: exact provider-private path for current
+  generation logs and resource attribution. It uses the separate memory-only control token and
+  returns `DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE`.
+- `inspect(projectId)`, `snapshot(projectId)`, `diagnostics(projectId, logLimit?)`, and `close()`:
+  serialized non-secret durable progress, consistent backup input, bounded runtime visibility, and
+  revoke/drain/verified-stop shutdown.
 - `DeploymentProviderDataStore.apply(input, validate, discard?)`: optional cleanup hook runs before
   uncommitted SQLite rollback; failed cleanup leaves the journal intact.
 - Types: `DeploymentProviderService`, `DeploymentProviderServiceLifecycleRequest`,

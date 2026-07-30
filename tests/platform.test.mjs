@@ -1719,6 +1719,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
   let activeProviderReleaseId = null;
   let activeProviderGeneration = null;
   let providerSnapshotFault = null;
+  let providerDiagnosticsFault = null;
   const providerServer = createServer((request, response) => {
     if (request.url?.startsWith("/v1/clank/control/")) {
       const authorized = /^Bearer clnkc_[A-Za-z0-9_-]{32,}$/u.test(
@@ -1740,6 +1741,66 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
           "content-type": "application/json",
         });
         response.end('{"error":{"code":"CONTROL_NOT_FOUND"}}');
+        return;
+      }
+      if (request.url.includes("/diagnostics?")) {
+        const requested = new URL(
+          request.url,
+          "http://provider.invalid",
+        ).searchParams.get("logs");
+        const diagnostics = {
+          protocol: "clank-provider-docker-diagnostics/1",
+          projectId: request.url.split("/")[4],
+          releaseId: activeProviderReleaseId,
+          generation: activeProviderGeneration,
+          sampledAt: 1_750_000_000_000,
+          statisticsAvailable: true,
+          containers: [{
+            role: "web",
+            instance: 0,
+            running: true,
+            memoryBytes: 64 * 1024 * 1024,
+            memoryLimitBytes: 512 * 1024 * 1024,
+            cpuPercent: 1.5,
+            networkReceiveBytes: 1_500,
+            networkTransmitBytes: 2_500,
+            blockReadBytes: 4_096,
+            blockWriteBytes: 8_192,
+            pids: 7,
+          }],
+          totals: {
+            memoryBytes: 64 * 1024 * 1024,
+            memoryLimitBytes: 512 * 1024 * 1024,
+            cpuPercent: 1.5,
+            networkReceiveBytes: 1_500,
+            networkTransmitBytes: 2_500,
+            blockReadBytes: 4_096,
+            blockWriteBytes: 8_192,
+            pids: 7,
+          },
+          logs: requested === "0" ? [] : [{
+            sequence: 1,
+            createdAt: 1_750_000_000_000,
+            role: "web",
+            instance: 0,
+            stream: "stdout",
+            message: "provider log provider-secret-canary",
+          }],
+          retainedLogBytes: 35,
+          logsTruncated: false,
+        };
+        if (providerDiagnosticsFault === "totals") {
+          diagnostics.totals.memoryBytes = 1;
+        }
+        const body = JSON.stringify(diagnostics);
+        response.writeHead(200, {
+          "cache-control": "private, no-store",
+          "content-length": String(Buffer.byteLength(body)),
+          "content-type": "application/vnd.clank.provider-diagnostics+json",
+          "x-clank-release-id": activeProviderReleaseId,
+          "x-clank-runtime-generation": String(activeProviderGeneration),
+        });
+        response.end(body);
         return;
       }
       response.writeHead(200, {
@@ -1987,6 +2048,66 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       accept: "application/vnd.clank.provider-snapshot",
       acceptEncoding: "identity",
     }]);
+    const providerMetrics = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/metrics?range=15m`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(providerMetrics.runtime.available, true);
+    assert.equal(providerMetrics.runtime.generation, 1);
+    assert.equal(providerMetrics.runtime.logs.length, 0);
+    assert.deepEqual(providerMetrics.runtime.totals, {
+      memoryBytes: 64 * 1024 * 1024,
+      memoryLimitBytes: 512 * 1024 * 1024,
+      cpuPercent: 1.5,
+      networkReceiveBytes: 1_500,
+      networkTransmitBytes: 2_500,
+      blockReadBytes: 4_096,
+      blockWriteBytes: 8_192,
+      pids: 7,
+    });
+    const providerLogs = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/logs?limit=100`,
+      { token: owner.accessToken },
+    ));
+    const remoteLog = providerLogs.logs.find((entry) =>
+      entry.source === "provider");
+    assert.ok(remoteLog);
+    assert.equal(remoteLog.releaseId, deployed.body.release.id);
+    assert.equal(remoteLog.stream, "web:stdout");
+    assert.equal(remoteLog.message, "provider log [REDACTED]");
+    assert.equal(providerLogs.runtime.generation, 1);
+    assert.equal(providerLogs.runtime.retainedLogBytes, 35);
+    assert.deepEqual(
+      providerControlRequests.slice(1).map((request) => ({
+        url: request.url,
+        accept: request.accept,
+        acceptEncoding: request.acceptEncoding,
+        authorized: request.authorized,
+      })),
+      [{
+        url: `/v1/clank/control/${created.project.id}/diagnostics?logs=0`,
+        accept: "application/vnd.clank.provider-diagnostics+json",
+        acceptEncoding: "identity",
+        authorized: true,
+      }, {
+        url: `/v1/clank/control/${created.project.id}/diagnostics?logs=100`,
+        accept: "application/vnd.clank.provider-diagnostics+json",
+        acceptEncoding: "identity",
+        authorized: true,
+      }],
+    );
+    providerDiagnosticsFault = "totals";
+    const unavailableProviderMetrics = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/metrics?range=15m`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(unavailableProviderMetrics.runtime, {
+      available: false,
+      reason: "unavailable",
+    });
+    providerDiagnosticsFault = null;
+    assert.ok(observedProviderErrors.some((error) =>
+      error.message === "Provider diagnostics transport failed."));
     const encryptedProviderBackup = await readFile(join(
       dataDirectory,
       "projects",
@@ -2113,7 +2234,16 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       `automatic safety copy before restoring ${remoteBackup.backup.id}`,
     );
     assert.equal(safetyBackup.databaseSha256, safetySnapshotSha256);
-    assert.equal(providerControlRequests.length, 3);
+    assert.equal(
+      providerControlRequests.filter((request) =>
+        request.url.endsWith("/snapshot")).length,
+      3,
+    );
+    assert.equal(
+      providerControlRequests.filter((request) =>
+        request.url.includes("/diagnostics?")).length,
+      3,
+    );
     const remoteJobs = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/jobs`,
       { token: owner.accessToken },

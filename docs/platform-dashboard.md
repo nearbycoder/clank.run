@@ -122,6 +122,14 @@ a confirmation-gated way to permanently delete the project and reclaim its quota
 without a first deployment reports that its isolated database will be provisioned on first deploy
 instead of failing the whole screen.
 
+For provider-hosted projects, Performance adds a current-generation resource panel with
+memory/limit, CPU, PID, network-I/O, and block-I/O attribution across web, workers, and scheduler.
+The counters reset on deployment or restore and are explicitly separate from managed-ingress
+traffic accounting. Logs merges the provider's bounded memory-only output tail with durable
+control-plane lifecycle entries after project-secret redaction. If the private diagnostics sample
+is unavailable, traffic charts and stored lifecycle logs still render; the panel reports the
+degraded sample without taking the application out of service.
+
 The dashboard uses the same organization membership and project-permission checks as the CLI. API values are inserted with DOM `textContent` or attributes rather than HTML parsing. The page has a nonce-bound script, restrictive CSP, no-store responses, framing denial, and no third-party assets.
 
 ## Enforced capacity

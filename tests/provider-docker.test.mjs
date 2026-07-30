@@ -87,6 +87,52 @@ test("provider Docker launcher keeps application secrets outside the Docker clie
     assert.equal(committed.status, "active");
     assert.equal(committed.containers, 1);
     assert.deepEqual(launcher.inspect(), [committed]);
+    let diagnostics;
+    await waitUntil(async () => {
+      diagnostics = await launcher.diagnostics(prepared.projectId, 20);
+      return diagnostics.logs.some((entry) =>
+        entry.message === "web runtime ready");
+    });
+    assert.equal(
+      diagnostics.protocol,
+      "clank-provider-docker-diagnostics/1",
+    );
+    assert.equal(diagnostics.projectId, prepared.projectId);
+    assert.equal(diagnostics.releaseId, prepared.releaseId);
+    assert.equal(diagnostics.generation, 1);
+    assert.equal(diagnostics.statisticsAvailable, true);
+    assert.deepEqual(diagnostics.totals, {
+      memoryBytes: 64 * 1024 * 1024,
+      memoryLimitBytes: 512 * 1024 * 1024,
+      cpuPercent: 1.5,
+      networkReceiveBytes: 1_500,
+      networkTransmitBytes: 2_500,
+      blockReadBytes: 4 * 1024,
+      blockWriteBytes: 8 * 1024,
+      pids: 7,
+    });
+    assert.deepEqual(diagnostics.containers.map((container) => ({
+      role: container.role,
+      instance: container.instance,
+      running: container.running,
+    })), [{ role: "web", instance: 0, running: true }]);
+    assert.equal(diagnostics.logs.at(-1).stream, "stdout");
+    assert.equal(diagnostics.retainedLogBytes > 0, true);
+    assert.equal(await launcher.diagnostics("unknown_project", 20), null);
+    await assert.rejects(
+      launcher.diagnostics(prepared.projectId, 1_001),
+      /logLimit/iu,
+    );
+    const cancelledDiagnostics = new AbortController();
+    cancelledDiagnostics.abort(new Error("diagnostic requester disconnected"));
+    await assert.rejects(
+      launcher.diagnostics(
+        prepared.projectId,
+        20,
+        cancelledDiagnostics.signal,
+      ),
+      /diagnostic requester disconnected/iu,
+    );
     assert.equal(await launcher.launch({
       prepared,
       signal: controller.signal,
@@ -171,6 +217,72 @@ test("provider Docker launcher starts bounded workers and scheduler without publ
     const creates = (await fixture.audit()).filter((entry) => entry.command === "create");
     assert.equal(creates.length, 4);
     assert.equal(creates.filter((entry) => entry.arguments.includes("--publish")).length, 1);
+    await launcher.close();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("provider diagnostics bound output and fail a malformed resource sample closed", async () => {
+  const fixture = await dockerFixture("diagnostics-failure", {
+    malformedStats: true,
+  });
+  const errors = [];
+  try {
+    const launcher = await fixture.open({
+      portStart: 45_106,
+      portEnd: 45_109,
+      onError(error) {
+        errors.push(error);
+      },
+    });
+    const prepared = await fixture.prepared({
+      environment: { LOG_BURST: "1" },
+    });
+    const candidate = await launcher.launch({
+      prepared,
+      signal: new AbortController().signal,
+    });
+    launcher.commit(candidate);
+    let diagnostics;
+    await waitUntil(async () => {
+      diagnostics = await launcher.diagnostics(prepared.projectId, 1_000);
+      return diagnostics.logsTruncated;
+    });
+    assert.equal(diagnostics.statisticsAvailable, false);
+    assert.equal(diagnostics.retainedLogBytes <= 128 * 1024, true);
+    assert.equal(diagnostics.logs.length <= 1_000, true);
+    assert.equal(
+      diagnostics.logs.reduce(
+        (bytes, entry) => bytes + Buffer.byteLength(entry.message),
+        0,
+      ) <= 128 * 1024,
+      true,
+    );
+    assert.deepEqual(diagnostics.totals, {
+      memoryBytes: null,
+      memoryLimitBytes: null,
+      cpuPercent: null,
+      networkReceiveBytes: null,
+      networkTransmitBytes: null,
+      blockReadBytes: null,
+      blockWriteBytes: null,
+      pids: null,
+    });
+    assert.equal(
+      diagnostics.containers.every((container) =>
+        container.memoryBytes === null
+        && container.networkTransmitBytes === null
+        && container.pids === null),
+      true,
+    );
+    assert.equal(launcher.inspect()[0].status, "active");
+    assert.ok(errors.some((error) =>
+      error.message.includes("resource diagnostics failed")));
+    assert.equal(
+      errors.some((error) => error.message.includes("burst-")),
+      false,
+    );
     await launcher.close();
   } finally {
     await fixture.close();
@@ -564,6 +676,9 @@ async function dockerFixture(name, options = {}) {
           ...(options.failRemoveOnce
             ? { CLANK_TEST_DOCKER_FAIL_REMOVE_ONCE: "1" }
             : {}),
+          ...(options.malformedStats
+            ? { CLANK_TEST_DOCKER_MALFORMED_STATS: "1" }
+            : {}),
         },
         commandTimeoutMs: 5_000,
         stopTimeoutMs: 1_000,
@@ -633,6 +748,12 @@ const server = createServer((request, response) => {
   response.end();
 });
 server.listen(Number(process.env.PORT), process.env.HOST);
+console.log("web runtime ready");
+if (process.env.LOG_BURST === "1") {
+  for (let index = 0; index < 256; index++) {
+    console.log("burst-" + index + "-" + "x".repeat(1024));
+  }
+}
 process.once("SIGTERM", () => server.close(() => process.exit(0)));
 `.trim();
 
@@ -724,6 +845,28 @@ if (operation === "create") {
     process.exit(42);
   }
   process.stdout.write(id + "\\n");
+  process.exit(0);
+}
+
+if (operation === "stats") {
+  if (process.env.CLANK_TEST_DOCKER_MALFORMED_STATS === "1") {
+    process.stdout.write('{"ID":"wrong","MemUsage":"unbounded"}\\n');
+    await append({ command: "stats", arguments: args, malformed: true });
+    process.exit(0);
+  }
+  const formatIndex = args.indexOf("--format");
+  const ids = args.slice(formatIndex + 2);
+  for (const id of ids) {
+    process.stdout.write(JSON.stringify({
+      ID: id.slice(0, 12),
+      MemUsage: "64MiB / 512MiB",
+      CPUPerc: "1.50%",
+      NetIO: "1.5kB / 2.5kB",
+      BlockIO: "4KiB / 8KiB",
+      PIDs: "7",
+    }) + "\\n");
+  }
+  await append({ command: "stats", arguments: args });
   process.exit(0);
 }
 

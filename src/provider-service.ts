@@ -6,7 +6,9 @@ import {
   type PreparedDeploymentRuntimeData,
 } from "./provider-data.ts";
 import {
+  DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL,
   openDockerDeploymentRuntimeLauncher,
+  type DockerDeploymentRuntimeDiagnostics,
   type DockerDeploymentRuntimeCandidate,
   type DockerDeploymentRuntimeLauncher,
   type DockerDeploymentRuntimeLauncherOptions,
@@ -31,6 +33,8 @@ export const DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL = "clank-provider-service/1";
 export const DEPLOYMENT_PROVIDER_CONTROL_PREFIX = "/v1/clank/control";
 export const DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE =
   "application/vnd.clank.provider-snapshot";
+export const DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE =
+  "application/vnd.clank.provider-diagnostics+json";
 
 export interface DeploymentProviderServiceState {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
@@ -88,12 +92,17 @@ export interface DockerDeploymentProviderServiceOptions {
 
 export interface DeploymentProviderService extends DeploymentProvider {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
-  /** Handles only the provider-private generation-bound runtime route. */
+  /** Handles provider-private runtime ingress plus authenticated control routes. */
   handle(request: Request): Promise<Response>;
   /** Reads durable, non-secret desired-state progress for one project. */
   inspect(projectId: string): Promise<DeploymentProviderServiceState | null>;
   /** Creates a consistent provider-data snapshot for external encrypted backup. */
   snapshot(projectId: string): Promise<DeploymentProviderDataSnapshot | null>;
+  /** Returns bounded live output and resource attribution for one runtime. */
+  diagnostics(
+    projectId: string,
+    logLimit?: number,
+  ): Promise<DockerDeploymentRuntimeDiagnostics | null>;
   /** Drains every writer and restores the immediate provider-data predecessor. */
   rollback(
     request: DeploymentProviderServiceLifecycleRequest,
@@ -206,6 +215,7 @@ export async function openDeploymentProviderService(
     "launch",
     "activate",
     "inspect",
+    "diagnostics",
     "stop",
     "close",
   ]);
@@ -463,11 +473,29 @@ export async function openDeploymentProviderService(
     async handle(request) {
       const url = new URL(request.url);
       const control = new RegExp(
-        `^${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/([A-Za-z0-9_-]{1,128})/snapshot$`,
+        `^${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/([A-Za-z0-9_-]{1,128})/(snapshot|diagnostics)$`,
         "u",
       ).exec(url.pathname);
       if (!control) return ingress.handle(request);
-      if (request.method !== "GET" || url.search) {
+      const operation = control[2]!;
+      let logLimit = 200;
+      if (operation === "diagnostics") {
+        if (
+          [...url.searchParams.keys()].some((key) => key !== "logs")
+          || url.searchParams.getAll("logs").length > 1
+        ) {
+          return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
+        }
+        const requested = url.searchParams.get("logs");
+        if (requested !== null && !/^(?:0|[1-9][0-9]{0,2}|1000)$/u.test(requested)) {
+          return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
+        }
+        if (requested !== null) logLimit = Number(requested);
+      }
+      if (
+        request.method !== "GET"
+        || (operation === "snapshot" && url.search)
+      ) {
         return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
       }
       const projectId = control[1]!;
@@ -483,7 +511,13 @@ export async function openDeploymentProviderService(
       return exclusive(projectId, async () => {
         try {
           if (closed) {
-            return controlProblem(503, "PROVIDER_UNAVAILABLE", "Provider snapshot is unavailable.");
+            return controlProblem(
+              503,
+              "PROVIDER_UNAVAILABLE",
+              operation === "diagnostics"
+                ? "Provider diagnostics are unavailable."
+                : "Provider snapshot is unavailable.",
+            );
           }
           const current = controls.get(projectId);
           const state = await readProjectState(projectId);
@@ -496,6 +530,43 @@ export async function openDeploymentProviderService(
             || state.generation !== binding.generation
           ) {
             return controlProblem(409, "PROVIDER_GENERATION_STALE", "Provider generation is not current.");
+          }
+          if (operation === "diagnostics") {
+            const diagnostics = await runtimes.diagnostics(
+              projectId,
+              logLimit,
+              request.signal,
+            );
+            if (
+              !diagnostics
+              || diagnostics.protocol
+                !== DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL
+              || diagnostics.projectId !== projectId
+              || diagnostics.releaseId !== binding.releaseId
+              || diagnostics.generation !== binding.generation
+            ) {
+              return controlProblem(
+                409,
+                "PROVIDER_GENERATION_STALE",
+                "Provider generation is not current.",
+              );
+            }
+            const body = JSON.stringify(diagnostics);
+            const bodyBytes = new TextEncoder().encode(body).byteLength;
+            if (bodyBytes > 512 * 1024) {
+              throw new Error("Provider diagnostics response exceeded its bound.");
+            }
+            return new Response(body, {
+              status: 200,
+              headers: {
+                "cache-control": "private, no-store",
+                "content-length": String(bodyBytes),
+                "content-type": DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE,
+                "x-clank-release-id": diagnostics.releaseId,
+                "x-clank-runtime-generation": String(diagnostics.generation),
+                "x-content-type-options": "nosniff",
+              },
+            });
           }
           const snapshot = await data.snapshot(projectId);
           if (
@@ -521,7 +592,13 @@ export async function openDeploymentProviderService(
           });
         } catch (error) {
           report(error);
-          return controlProblem(503, "PROVIDER_UNAVAILABLE", "Provider snapshot is unavailable.");
+          return controlProblem(
+            503,
+            "PROVIDER_UNAVAILABLE",
+            operation === "diagnostics"
+              ? "Provider diagnostics are unavailable."
+              : "Provider snapshot is unavailable.",
+          );
         }
       });
     },
@@ -542,6 +619,16 @@ export async function openDeploymentProviderService(
       return exclusive(projectId, async () => {
         if (closed) throw new Error("Deployment provider service is closed.");
         return data.snapshot(projectId);
+      });
+    },
+
+    async diagnostics(projectIdInput, logLimitInput = 200) {
+      if (closed) throw new Error("Deployment provider service is closed.");
+      const projectId = identifier(projectIdInput, "projectId");
+      const logLimit = integer(logLimitInput, "logLimit", 0, 1_000);
+      return exclusive(projectId, async () => {
+        if (closed) throw new Error("Deployment provider service is closed.");
+        return runtimes.diagnostics(projectId, logLimit);
       });
     },
 
@@ -1073,6 +1160,10 @@ function publicState(state: StoredServiceState): DeploymentProviderServiceState 
 
 export function deploymentProviderSnapshotPath(projectId: string): string {
   return `${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/${identifier(projectId, "projectId")}/snapshot`;
+}
+
+export function deploymentProviderDiagnosticsPath(projectId: string): string {
+  return `${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/${identifier(projectId, "projectId")}/diagnostics`;
 }
 
 function bearerCredential(value: string | null): string | null {
