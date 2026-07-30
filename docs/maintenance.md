@@ -99,7 +99,7 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Added a server-rendered Usage view with responsive project/resource reporting; verified
   populated desktop and 390px layouts, mobile navigation, authenticated refresh, accessibility
   semantics, no horizontal page overflow, and no Clank page console errors.
-- [x] Re-certified all 260 tests at 86.02% line, 74.12% branch, and 85.32% function coverage;
+- [x] Re-certified all 260 tests at 86.02% line, 74.09% branch, and 85.32% function coverage;
   53 documentation files, 160 local links, 30 declaration files, and 28 package exports; packed
   consumer conformance; and package, current-tree, and reachable-history credential scans.
 - [x] Kept the current Railway topology unchanged and did not publish an npm package.

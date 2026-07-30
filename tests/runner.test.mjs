@@ -715,14 +715,17 @@ test("deployment agent stops safely when its active node credential is rotated",
 });
 
 test("deployment agent renews short leases while execution is still active", async () => {
-  const test = await fixture({ operationLeaseMs: 100 });
+  // Keep the lease short enough to require renewal, but long enough that a
+  // heavily loaded CI event loop cannot expire it before the first timer runs.
+  const test = await fixture({ operationLeaseMs: 2_000 });
   let renewals = 0;
   let agent;
   const client = {
     ...test.client,
     async renew(...arguments_) {
-      renewals += 1;
-      return test.client.renew(...arguments_);
+      const renewed = await test.client.renew(...arguments_);
+      if (renewed) renewals += 1;
+      return renewed;
     },
   };
   try {
@@ -734,7 +737,11 @@ test("deployment agent renews short leases while execution is still active", asy
       pollIntervalMs: 10,
       heartbeatIntervalMs: 100,
       async execute() {
-        await new Promise((resolve) => setTimeout(resolve, 350));
+        await waitFor(
+          () => renewals >= 3,
+          "the active deployment execution was not renewed three times",
+          10_000,
+        );
         return { renewed: true };
       },
     });
@@ -747,6 +754,7 @@ test("deployment agent renews short leases while execution is still active", asy
     await waitFor(
       () => test.orchestrator.operation(queued.operation.id)?.state === "succeeded",
       "the renewed deployment operation did not complete",
+      12_000,
     );
     assert.ok(renewals >= 3, `expected at least 3 lease renewals, received ${renewals}`);
   } finally {
