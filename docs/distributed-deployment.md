@@ -81,6 +81,7 @@ already leased work expire for safe reclamation.
 | `heartbeat` | Lease renewal plus bounded capacity/label changes |
 | `drain` | Stop new placement while preserving current work |
 | `claim` | Bounded ready-operation claim with a fresh token and increasing fence |
+| `artifact` | Download the exact content-addressed release bound to a current operation lease |
 | `renew` | Extend one still-current operation lease |
 | `complete` | Commit a bounded JSON result only for the current node/token/fence |
 | `fail` | Store a bounded safe error and schedule retry or terminal failure |
@@ -94,6 +95,50 @@ The registration token is more powerful than a node token because it can rotate 
 Use a dedicated secret—not the platform master key, account token, project token, or application
 secret. Put edge rate limiting in front of enrollment, restrict it to a private network when
 possible, and rotate it after provisioning-system exposure.
+
+## Content-addressed release transfer
+
+When an artifact provider is configured, the coordinator exposes a binary `artifact` call under the
+same versioned prefix. It requires all three authorities at once:
+
+1. the current node bearer credential;
+2. an unexpired operation lease token whose node and monotonic fence match; and
+3. a provider result for that operation's project and release.
+
+The provider receives a frozen operation snapshot without its lease token. Both sides enforce an
+independent byte ceiling. The coordinator verifies the provider's SHA-256 digest before sending,
+and the client requires the exact media type, content length, and digest before returning bytes.
+The response is private, no-store, non-sniffable, HTTPS-only outside loopback, and redirect
+refusing.
+
+Artifact selection uses the canonical operation payload read back from the transactional
+coordinator after lease authentication. A compromised node cannot keep a valid operation token
+while substituting another release ID in the echoed request. The coordinator rechecks the lease
+after provider I/O and digest verification, so work reclaimed during a slow read receives no
+artifact response.
+
+```ts
+const artifact = await coordinator.artifact(
+  session.node.id,
+  session.token,
+  operation,
+);
+
+const bundle = await decodeDeploymentBundle(artifact.bytes);
+await extractDeploymentBundle(bundle, stagingDirectory);
+```
+
+`clank-platform` automatically retains the original compressed, content-addressed upload for new
+releases when remote-node enrollment is enabled. The archive is stored separately from the runtime
+directory, owner-only, inode-checked, digest-checked on every read, included in release storage
+quota accounting, and removed with release cleanup. No extra copy is retained while remote
+enrollment is disabled, so the default single-host topology keeps its existing disk cost. Releases
+created before enrollment was enabled need a redeploy before a remote node can fetch them.
+
+The artifact contains deployable code and declared non-secret configuration. Platform-managed
+secrets and application databases are not added to it. Delivering those to another host requires
+the separately authenticated secret and data-plane contracts; never place them in an operation
+payload or release archive.
 
 ## Platform behavior
 
@@ -112,6 +157,10 @@ import {
   fileDeploymentNodeCredentials,
   openDeploymentAgent,
 } from "@clank.run/framework/runner";
+import {
+  decodeDeploymentBundle,
+  extractDeploymentBundle,
+} from "@clank.run/framework/deploy";
 
 const client = createDeploymentCoordinatorClient({
   baseUrl: "https://deploy.example.com",
@@ -133,6 +182,10 @@ const agent = await openDeploymentAgent({
   ),
   concurrency: 4,
   async execute(operation, context) {
+    const artifact = await context.artifact();
+    const bundle = await decodeDeploymentBundle(artifact.bytes);
+    await extractDeploymentBundle(bundle, stagingDirectoryFor(operation.id));
+
     // The provider adapter must make each runtime mutation idempotent under
     // context.operation.fence and stop when context.signal aborts.
     const result = await reconcileRuntime(operation, {

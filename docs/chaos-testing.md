@@ -8,6 +8,8 @@ Clank tests failures as state-machine behavior, not only happy-path output. The 
 | --- | --- | --- |
 | Deployment worker disappears after claiming work | Expired work is reclaimed with a higher fence; the stale worker cannot commit | `tests/chaos.test.mjs`, orchestration tests |
 | Remote agent restarts, loses a lease, or drains mid-claim | Saved credentials resume without enrollment; lost work is aborted without stale settlement; drained nodes claim nothing new | Runner and orchestration tests |
+| Node tampers with a leased artifact request or the lease expires during storage I/O | The coordinator selects the canonical stored release and rechecks the lease before returning bytes | Runner and platform tests |
+| Retained artifact permissions, size, or digest are changed | No release bytes leave the control plane; only a generic failure crosses the protocol boundary | Runner and platform tests |
 | Completion response is lost | A possibly committed success is not converted into an explicit failure/retry | Runner tests |
 | Encrypted backup is corrupted | Authentication fails before replacement; the live database remains unchanged | Chaos and recovery tests |
 | Application upstream becomes unreachable | Requests fail generically, the circuit opens, and a later probe recovers | Chaos and data-plane tests |
@@ -43,8 +45,12 @@ Before public beta and at least quarterly:
    lease, cannot settle, and the replacement agent reclaims with a higher fence.
 8. Drop only the completion response after the coordinator commits it; verify the agent does not
    send `fail` and the runtime mutation remains idempotent when reconciliation resumes.
-9. Rotate a project secret and scoped CLI token; verify the prior values stop working and audit records remain readable.
-10. Simulate disk-full and read-only filesystem conditions in an isolated environment; verify no partial release is activated.
+9. Hold an artifact read past its operation-lease expiry, then substitute a different release ID
+   in the node's echoed payload; verify neither attempt returns attacker-selected bytes.
+10. Change a retained artifact's mode, contents, size, and path type one at a time; verify each
+    attempt fails closed without exposing a storage path or private exception.
+11. Rotate a project secret and scoped CLI token; verify the prior values stop working and audit records remain readable.
+12. Simulate disk-full and read-only filesystem conditions in an isolated environment; verify no partial release is activated.
 
 ## Safety rules
 

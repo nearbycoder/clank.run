@@ -3,6 +3,7 @@ import type {
   DeploymentNode,
   DeploymentNodeInput,
   DeploymentOperation,
+  DeploymentOperationLease,
   DeploymentOrchestrator,
   NodeSession,
 } from "./orchestration.ts";
@@ -14,6 +15,10 @@ export interface DeploymentCoordinatorHandlerOptions {
   registrationToken: string;
   /** Maximum JSON request body. Defaults to 128 KiB. */
   maxRequestBytes?: number;
+  /** Optional content-addressed release source, scoped to a current operation lease. */
+  artifact?: DeploymentArtifactProvider;
+  /** Maximum artifact returned by the provider. Defaults to 100 MiB. */
+  maxArtifactBytes?: number;
   /** Receives private unexpected failures. */
   onError?: (error: unknown) => void;
 }
@@ -31,6 +36,24 @@ export interface DeploymentCoordinatorClientOptions {
   timeoutMs?: number;
   /** Maximum JSON response body. Defaults to 1 MiB. */
   maxResponseBytes?: number;
+  /** Maximum deployment artifact body. Defaults to 100 MiB. */
+  maxArtifactBytes?: number;
+  /** Artifact-transfer deadline. Defaults to 60 seconds. */
+  artifactTimeoutMs?: number;
+}
+
+export interface DeploymentArtifact {
+  readonly bytes: Uint8Array;
+  readonly sha256: string;
+}
+
+export interface DeploymentArtifactRequest {
+  readonly operation: DeploymentOperationLease;
+  readonly signal: AbortSignal;
+}
+
+export interface DeploymentArtifactProvider {
+  load(request: DeploymentArtifactRequest): Promise<DeploymentArtifact | null>;
 }
 
 export interface DeploymentCoordinatorClient {
@@ -42,6 +65,11 @@ export interface DeploymentCoordinatorClient {
   }): Promise<DeploymentNode>;
   drain(nodeId: string, token: string, draining?: boolean): Promise<DeploymentNode>;
   claim(nodeId: string, token: string, limit?: number): Promise<ClaimedDeploymentOperation[]>;
+  artifact(
+    nodeId: string,
+    token: string,
+    operation: ClaimedDeploymentOperation,
+  ): Promise<DeploymentArtifact>;
   renew(
     nodeId: string,
     token: string,
@@ -78,6 +106,8 @@ export interface DeploymentExecutionContext {
   readonly operation: ClaimedDeploymentOperation;
   /** Aborts when shutdown wins or the operation lease is lost. */
   readonly signal: AbortSignal;
+  /** Downloads and verifies the content-addressed release for this current lease. */
+  artifact(): Promise<DeploymentArtifact>;
   /** Reports generation-fenced desired state for this operation's project. */
   observe(input: {
     generation: number;
@@ -157,6 +187,12 @@ export function createDeploymentCoordinatorHandler(
     1_024,
     1024 * 1024,
   );
+  const maxArtifactBytes = integer(
+    options.maxArtifactBytes ?? 100 * 1024 * 1024,
+    "maxArtifactBytes",
+    1_024,
+    1024 * 1024 * 1024,
+  );
 
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -197,6 +233,7 @@ export function createDeploymentCoordinatorHandler(
         "heartbeat",
         "drain",
         "claim",
+        ...(options.artifact ? ["artifact"] : []),
         "observe",
         "renew",
         "complete",
@@ -266,6 +303,45 @@ export function createDeploymentCoordinatorHandler(
       if (claimed.nodeId !== nodeId) {
         throw new CoordinatorRequestError(403, "NODE_SCOPE_DENIED", "The operation belongs to another deployment node.");
       }
+      if (operation === "artifact") {
+        const canonical = await orchestrator.authenticateOperation(claimed);
+        if (!canonical) {
+          throw new CoordinatorRequestError(409, "STALE_OPERATION", "The deployment operation lease is stale.");
+        }
+        const artifact = await options.artifact!.load({
+          operation: Object.freeze(canonical),
+          signal: request.signal,
+        });
+        if (!artifact) {
+          throw new CoordinatorRequestError(404, "ARTIFACT_NOT_FOUND", "The deployment artifact is unavailable.");
+        }
+        if (!(artifact.bytes instanceof Uint8Array)) {
+          throw new TypeError("Deployment artifact bytes are invalid.");
+        }
+        if (artifact.bytes.byteLength > maxArtifactBytes) {
+          throw new CoordinatorRequestError(413, "ARTIFACT_TOO_LARGE", "The deployment artifact is too large.");
+        }
+        if (!isArtifactDigest(artifact.sha256)) {
+          throw new Error("Deployment artifact provider returned an invalid digest.");
+        }
+        const digest = artifact.sha256;
+        if (await sha256(artifact.bytes) !== digest) {
+          throw new Error("Deployment artifact provider returned a digest mismatch.");
+        }
+        if (!await orchestrator.authenticateOperation(claimed)) {
+          throw new CoordinatorRequestError(409, "STALE_OPERATION", "The deployment operation lease is stale.");
+        }
+        return new Response(artifact.bytes, {
+          status: 200,
+          headers: {
+            "cache-control": "private, no-store",
+            "content-length": String(artifact.bytes.byteLength),
+            "content-type": "application/vnd.clank.deploy+gzip",
+            "x-clank-content-sha256": digest,
+            "x-content-type-options": "nosniff",
+          },
+        });
+      }
       if (operation === "renew") {
         return json({ ok: true, operation: await orchestrator.renewOperation(claimed) });
       }
@@ -319,6 +395,18 @@ export function createDeploymentCoordinatorClient(
     1_024,
     8 * 1024 * 1024,
   );
+  const maxArtifactBytes = integer(
+    options.maxArtifactBytes ?? 100 * 1024 * 1024,
+    "maxArtifactBytes",
+    1_024,
+    1024 * 1024 * 1024,
+  );
+  const artifactTimeoutMs = integer(
+    options.artifactTimeoutMs ?? 60_000,
+    "artifactTimeoutMs",
+    100,
+    10 * 60_000,
+  );
 
   const call = async (
     operation: string,
@@ -334,6 +422,7 @@ export function createDeploymentCoordinatorClient(
         redirect: "error",
         signal: controller.signal,
         headers: {
+          "accept-encoding": "identity",
           authorization: `Bearer ${boundedToken(token, "token")}`,
           "content-type": "application/json",
           ...(nodeId ? { "x-clank-node-id": boundedNodeId(nodeId) } : {}),
@@ -362,6 +451,90 @@ export function createDeploymentCoordinatorClient(
       clearTimeout(timer);
     }
   };
+  const downloadArtifact = async (
+    nodeId: string,
+    token: string,
+    operation: ClaimedDeploymentOperation,
+  ): Promise<DeploymentArtifact> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), artifactTimeoutMs);
+    try {
+      const response = await fetcher(`${baseUrl}/artifact`, {
+        method: "POST",
+        redirect: "error",
+        signal: controller.signal,
+        headers: {
+          "accept-encoding": "identity",
+          authorization: `Bearer ${boundedToken(token, "token")}`,
+          "content-type": "application/json",
+          "x-clank-node-id": boundedNodeId(nodeId),
+        },
+        body: JSON.stringify({ operation }),
+      });
+      if (!response.ok) {
+        const payload = object(await readResponseJson(response, maxResponseBytes));
+        const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
+          ? payload.error as Record<string, unknown>
+          : {};
+        throw new DeploymentCoordinatorError(
+          response.status,
+          typeof error.code === "string" ? error.code : "COORDINATOR_FAILED",
+          typeof error.message === "string" ? error.message : "The deployment artifact request failed.",
+        );
+      }
+      const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+      const lengthHeader = response.headers.get("content-length");
+      const length = lengthHeader === null ? Number.NaN : Number(lengthHeader);
+      const digestHeader = response.headers.get("x-clank-content-sha256");
+      if (!isArtifactDigest(digestHeader)) {
+        throw new DeploymentCoordinatorError(
+          502,
+          "INVALID_ARTIFACT_RESPONSE",
+          "The deployment artifact digest is invalid.",
+        );
+      }
+      const digest = digestHeader;
+      if (Number.isSafeInteger(length) && length > maxArtifactBytes) {
+        throw new DeploymentCoordinatorError(
+          502,
+          "ARTIFACT_TOO_LARGE",
+          "The deployment artifact is too large.",
+        );
+      }
+      if (
+        contentType !== "application/vnd.clank.deploy+gzip"
+        || !Number.isSafeInteger(length)
+        || length < 0
+        || length > maxArtifactBytes
+      ) {
+        throw new DeploymentCoordinatorError(
+          502,
+          "INVALID_ARTIFACT_RESPONSE",
+          "The deployment coordinator returned invalid artifact metadata.",
+        );
+      }
+      const bytes = await readBytes(response.body, maxArtifactBytes);
+      if (bytes.byteLength !== length || await sha256(bytes) !== digest) {
+        throw new DeploymentCoordinatorError(
+          502,
+          "ARTIFACT_INTEGRITY_FAILED",
+          "The deployment artifact failed integrity verification.",
+        );
+      }
+      return Object.freeze({ bytes, sha256: digest });
+    } catch (error) {
+      if (error instanceof DeploymentCoordinatorError) throw error;
+      if (error instanceof CoordinatorRequestError && error.status === 413) {
+        throw new DeploymentCoordinatorError(502, "ARTIFACT_TOO_LARGE", "The deployment artifact is too large.");
+      }
+      if (controller.signal.aborted) {
+        throw new DeploymentCoordinatorError(504, "COORDINATOR_TIMEOUT", "Deployment artifact transfer timed out.");
+      }
+      throw new DeploymentCoordinatorError(502, "COORDINATOR_UNAVAILABLE", "Deployment artifact transfer failed.");
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   return Object.freeze({
     async register(token, input) {
@@ -385,6 +558,7 @@ export function createDeploymentCoordinatorClient(
       if (!Array.isArray(payload.operations)) throw new TypeError("Coordinator operations response is invalid.");
       return payload.operations.map(claimedOperation);
     },
+    artifact: downloadArtifact,
     async renew(nodeId, token, operation) {
       const payload = await call("renew", { operation }, token, nodeId);
       return payload.operation === null ? null : claimedOperation(payload.operation);
@@ -551,6 +725,12 @@ export async function openDeploymentAgent(
             return current;
           },
           signal: controller.signal,
+          async artifact() {
+            if (leaseLost || controller.signal.aborted) {
+              throw new Error("Cannot fetch an artifact after the deployment operation lease is lost.");
+            }
+            return options.client.artifact(nodeId, token!, current);
+          },
           async observe(input) {
             if (leaseLost || controller.signal.aborted) {
               throw new Error("Cannot observe state after the deployment operation lease is lost.");
@@ -884,6 +1064,15 @@ function memoryCredentialStore(): DeploymentNodeCredentialStore {
 function boundedFailure(value: unknown): string {
   if (typeof value !== "string") throw new TypeError("failureMessage must return a string.");
   return value.replace(/[\u0000]/gu, "").slice(0, 4_096) || "Deployment execution failed.";
+}
+
+function isArtifactDigest(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+async function sha256(value: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", value));
+  return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {

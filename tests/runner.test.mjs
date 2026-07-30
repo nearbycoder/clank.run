@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmod,
   lstat,
@@ -26,7 +27,7 @@ import {
 
 const registrationToken = "clank_runner_enrollment_test_token_1234567890";
 
-async function fixture(orchestration = {}) {
+async function fixture(orchestration = {}, coordinator = {}) {
   const root = await mkdtemp(join(tmpdir(), "clank-runner-coordinator-"));
   const database = await openSQLite(defineDatabase({}), {
     path: join(root, "control.sqlite"),
@@ -43,6 +44,7 @@ async function fixture(orchestration = {}) {
     registrationToken,
     maxRequestBytes: 8 * 1024,
     onError: (error) => privateErrors.push(error),
+    ...coordinator,
   });
   const fetcher = (url, init) => handler.handle(new Request(url, init));
   const client = createDeploymentCoordinatorClient({
@@ -174,6 +176,236 @@ test("authenticated deployment nodes coordinate placement and fenced operations 
   }
 });
 
+test("release artifacts require the exact authenticated operation lease and verify content", async () => {
+  const bytes = new TextEncoder().encode("content-addressed-clank-release");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  let providerRequest;
+  const test = await fixture({}, {
+    artifact: {
+      async load(request) {
+        providerRequest = request;
+        return { bytes, sha256: digest };
+      },
+    },
+  });
+  try {
+    const session = await test.client.register(registrationToken, {
+      id: "runner-artifact-01",
+      region: "local",
+    });
+    await test.orchestrator.setDesired({
+      projectId: "project_artifact",
+      releaseId: "release-artifact-1",
+      state: "running",
+      region: "local",
+    });
+    const [operation] = await test.client.claim(session.node.id, session.token, 1);
+    const artifact = await test.client.artifact(session.node.id, session.token, {
+      ...operation,
+      payload: { releaseId: "attacker-selected-release" },
+    });
+    assert.deepEqual(artifact.bytes, bytes);
+    assert.equal(artifact.sha256, digest);
+    assert.equal(providerRequest.operation.id, operation.id);
+    assert.equal(providerRequest.operation.payload.releaseId, "release-artifact-1");
+    assert.equal("leaseToken" in providerRequest.operation, false);
+    assert.equal(Object.isFrozen(providerRequest.operation), true);
+    assert.equal(providerRequest.signal.aborted, false);
+
+    const other = await test.client.register(registrationToken, {
+      id: "runner-artifact-02",
+      region: "local",
+    });
+    await assert.rejects(
+      test.client.artifact(other.node.id, other.token, operation),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 403
+        && error.code === "NODE_SCOPE_DENIED",
+    );
+
+    assert.equal(await test.client.complete(session.node.id, session.token, operation), true);
+    await assert.rejects(
+      test.client.artifact(session.node.id, session.token, operation),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 409
+        && error.code === "STALE_OPERATION",
+    );
+    assert.equal(test.privateErrors.length, 0);
+  } finally {
+    await test.close();
+  }
+});
+
+test("artifact transport fails closed on provider and response integrity errors", async () => {
+  const bytes = new TextEncoder().encode("tampered-release");
+  const badDigest = "0".repeat(64);
+  const providerTest = await fixture({}, {
+    artifact: {
+      async load() {
+        return { bytes, sha256: badDigest };
+      },
+    },
+  });
+  try {
+    const session = await providerTest.client.register(registrationToken, {
+      id: "runner-bad-artifact-01",
+      region: "local",
+    });
+    const queued = await providerTest.orchestrator.enqueue({
+      projectId: "project_bad_artifact",
+      action: "deploy",
+      idempotencyKey: "bad-artifact-provider",
+      nodeId: session.node.id,
+    });
+    const [operation] = await providerTest.client.claim(session.node.id, session.token, 1);
+    assert.equal(operation.id, queued.operation.id);
+    await assert.rejects(
+      providerTest.client.artifact(session.node.id, session.token, operation),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 500
+        && error.code === "COORDINATOR_FAILED",
+    );
+    assert.match(String(providerTest.privateErrors[0]), /digest mismatch/u);
+  } finally {
+    await providerTest.close();
+  }
+
+  const operation = {
+    id: "op_artifact_client",
+    projectId: "project_artifact_client",
+    action: "deploy",
+    state: "leased",
+    payload: null,
+    nodeId: "runner-artifact-client",
+    attempts: 1,
+    maxAttempts: 10,
+    fence: 1,
+    nextAttemptAt: Date.now(),
+    leaseExpiresAt: Date.now() + 10_000,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    leaseToken: "clnko_artifact_client_123456789012345678901234",
+  };
+  const integrityClient = createDeploymentCoordinatorClient({
+    baseUrl: "http://127.0.0.1:4200",
+    maxArtifactBytes: 1_024,
+    fetch: async () => new Response(bytes, {
+      status: 200,
+      headers: {
+        "content-length": String(bytes.byteLength),
+        "content-type": "application/vnd.clank.deploy+gzip",
+        "x-clank-content-sha256": badDigest,
+      },
+    }),
+  });
+  await assert.rejects(
+    integrityClient.artifact(
+      operation.nodeId,
+      "clnka_artifact_client_123456789012345678901234",
+      operation,
+    ),
+    (error) => error instanceof DeploymentCoordinatorError
+      && error.status === 502
+      && error.code === "ARTIFACT_INTEGRITY_FAILED",
+  );
+
+  const oversized = new Uint8Array(1_025);
+  const boundedClient = createDeploymentCoordinatorClient({
+    baseUrl: "http://127.0.0.1:4200",
+    maxArtifactBytes: 1_024,
+    fetch: async () => new Response(oversized, {
+      status: 200,
+      headers: {
+        "content-length": "1",
+        "content-type": "application/vnd.clank.deploy+gzip",
+        "x-clank-content-sha256": createHash("sha256").update(oversized).digest("hex"),
+      },
+    }),
+  });
+  await assert.rejects(
+    boundedClient.artifact(
+      operation.nodeId,
+      "clnka_artifact_client_123456789012345678901234",
+      operation,
+    ),
+    (error) => error instanceof DeploymentCoordinatorError
+      && error.status === 502
+      && error.code === "ARTIFACT_TOO_LARGE",
+  );
+});
+
+test("artifact providers cannot exceed the coordinator transfer bound", async () => {
+  const bytes = new Uint8Array(1_025);
+  const test = await fixture({}, {
+    maxArtifactBytes: 1_024,
+    artifact: {
+      async load() {
+        return {
+          bytes,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        };
+      },
+    },
+  });
+  try {
+    const session = await test.client.register(registrationToken, {
+      id: "runner-large-artifact-01",
+      region: "local",
+    });
+    await test.orchestrator.enqueue({
+      projectId: "project_large_artifact",
+      action: "deploy",
+      idempotencyKey: "large-artifact-provider",
+      nodeId: session.node.id,
+    });
+    const [operation] = await test.client.claim(session.node.id, session.token, 1);
+    await assert.rejects(
+      test.client.artifact(session.node.id, session.token, operation),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 413
+        && error.code === "ARTIFACT_TOO_LARGE",
+    );
+  } finally {
+    await test.close();
+  }
+});
+
+test("artifact transfer rechecks the operation lease after provider work", async () => {
+  const bytes = new TextEncoder().encode("slow-artifact-provider");
+  const test = await fixture({ operationLeaseMs: 100 }, {
+    artifact: {
+      async load() {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return {
+          bytes,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        };
+      },
+    },
+  });
+  try {
+    const session = await test.client.register(registrationToken, {
+      id: "runner-expired-artifact-01",
+      region: "local",
+    });
+    await test.orchestrator.enqueue({
+      projectId: "project_expired_artifact",
+      action: "deploy",
+      idempotencyKey: "expired-artifact-provider",
+      nodeId: session.node.id,
+    });
+    const [operation] = await test.client.claim(session.node.id, session.token, 1);
+    await assert.rejects(
+      test.client.artifact(session.node.id, session.token, operation),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 409
+        && error.code === "STALE_OPERATION",
+    );
+  } finally {
+    await test.close();
+  }
+});
+
 test("coordinator transport is bounded, JSON-only, and fail-closed", async () => {
   const test = await fixture();
   try {
@@ -287,7 +519,15 @@ test("platform runner endpoints remain closed unless enrollment is configured", 
 });
 
 test("deployment agent enrolls, executes, observes, persists credentials, and drains", async () => {
-  const test = await fixture({ operationLeaseMs: 500 });
+  const artifactBytes = new TextEncoder().encode("deployment-agent-release");
+  const artifactSha256 = createHash("sha256").update(artifactBytes).digest("hex");
+  const test = await fixture({ operationLeaseMs: 500 }, {
+    artifact: {
+      async load() {
+        return { bytes: artifactBytes, sha256: artifactSha256 };
+      },
+    },
+  });
   const credentials = memoryDeploymentNodeCredentials();
   const executed = [];
   let agent;
@@ -309,6 +549,9 @@ test("deployment agent enrolls, executes, observes, persists credentials, and dr
         executed.push(operation.id);
         const payload = operation.payload;
         assert.equal(context.operation.id, operation.id);
+        const artifact = await context.artifact();
+        assert.deepEqual(artifact.bytes, artifactBytes);
+        assert.equal(artifact.sha256, artifactSha256);
         assert.equal(await context.observe({
           generation: payload.generation,
           releaseId: payload.releaseId,

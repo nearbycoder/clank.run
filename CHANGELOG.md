@@ -19,6 +19,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   fenced observations and settlement, redacted failures, graceful drain, and abortable shutdown.
   Persistent node credentials use a serialized, atomic, owner-only validated file store; a running
   node stops safely when credential rotation revokes its session.
+- Current operation leases can fetch their exact content-addressed release through a bounded binary
+  coordinator call. The platform optionally retains owner-only original uploads when remote
+  enrollment is enabled, accounts for that storage, and verifies identity, node scope, lease fence,
+  length, media type, and SHA-256 across the complete transfer.
 
 ### Fixed
 
@@ -39,6 +43,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   unsafe owners/modes, inode/path swaps, unsupported versions, and invalid tokens; reads use a
   no-follow descriptor and writes replace a `0600` file atomically. Executor exceptions stay in
   private node diagnostics by default instead of durable control-plane state.
+- A node credential alone cannot fetch a release: artifact access also requires its exact unexpired
+  operation token and fence. The provider never receives that token, redirects remain disabled,
+  and platform-managed secrets and databases are not included in retained release archives.
 
 ## 0.9.4 - 2026-07-28
 

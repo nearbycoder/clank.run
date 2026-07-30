@@ -64,6 +64,10 @@ const platform = await openPlatform({
         deploymentAgents: {
           registrationToken: process.env.CLANK_RUNNER_REGISTRATION_TOKEN,
           maxRequestBytes: number(process.env.CLANK_RUNNER_MAX_REQUEST_BYTES, 128 * 1024),
+          maxArtifactBytes: number(
+            process.env.CLANK_RUNNER_MAX_ARTIFACT_BYTES,
+            100 * 1024 * 1024,
+          ),
         },
       }
     : {}),

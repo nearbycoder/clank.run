@@ -77,14 +77,19 @@ test("node placement, desired generations, operation retries, and stale-worker f
     const [firstClaim] = await test.orchestrator.claim("node-b", nodeB.token);
     assert.equal(firstClaim.action, "reconcile");
     assert.equal(firstClaim.fence, 1);
+    assert.equal((await test.orchestrator.authenticateOperation(firstClaim)).id, firstClaim.id);
     const retry = await test.orchestrator.fail(firstClaim, new Error("runtime temporarily unavailable"));
     assert.equal(retry.state, "retry");
+    assert.equal(await test.orchestrator.authenticateOperation(firstClaim), null);
     await new Promise((resolve) => setTimeout(resolve, 15));
     const [secondClaim] = await test.orchestrator.claim("node-b", nodeB.token);
     assert.equal(secondClaim.id, firstClaim.id);
     assert.equal(secondClaim.fence, 2);
+    assert.equal(await test.orchestrator.authenticateOperation(firstClaim), null);
+    assert.equal((await test.orchestrator.authenticateOperation(secondClaim)).fence, 2);
     assert.equal(await test.orchestrator.complete(firstClaim, { stale: true }), false);
     assert.equal(await test.orchestrator.complete(secondClaim, { pid: 42 }), true);
+    assert.equal(await test.orchestrator.authenticateOperation(secondClaim), null);
     assert.equal(test.orchestrator.operation(secondClaim.id).state, "succeeded");
 
     assert.equal(await test.orchestrator.observe("node-b", nodeB.token, {

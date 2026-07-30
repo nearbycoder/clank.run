@@ -41,6 +41,14 @@ token holder can rotate a node identity, so rotate the token after provisioning-
 Node credentials authorize deployment coordination, not browser, CLI, database, secret, or
 application APIs.
 
+Release download additionally requires a current operation lease bound to the same node and fence;
+a node credential alone cannot enumerate or fetch releases. The provider never receives the
+operation lease token, and release selection comes from the canonical stored operation rather than
+the node's echoed payload. The coordinator and client independently bound the body and verify
+SHA-256, and the platform reads retained archives through an owner/mode/inode-validated no-follow
+file descriptor. Archives are retained only while remote enrollment is enabled, counted against
+release storage, and contain neither platform-managed secrets nor application database files.
+
 The built-in deployment-agent loop keeps the enrollment token separate from the per-node
 credential and needs enrollment authority only when no usable node credential exists. Its file
 store rejects symbolic links, non-regular and oversized files, group/world-readable permissions,

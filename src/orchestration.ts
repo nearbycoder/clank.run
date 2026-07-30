@@ -68,6 +68,8 @@ export interface ClaimedDeploymentOperation extends DeploymentOperation {
   leaseExpiresAt: number;
 }
 
+export type DeploymentOperationLease = Omit<ClaimedDeploymentOperation, "leaseToken">;
+
 export interface DesiredDeployment {
   projectId: string;
   desiredReleaseId: string | null;
@@ -108,6 +110,8 @@ export interface DeploymentOrchestrator {
   }): Promise<boolean>;
   enqueue(input: DeploymentOperationInput): Promise<{ operation: DeploymentOperation; existing: boolean }>;
   claim(nodeId: string, token: string, limit?: number): Promise<ClaimedDeploymentOperation[]>;
+  /** Returns the canonical current lease without extending or settling it. */
+  authenticateOperation(operation: ClaimedDeploymentOperation): Promise<DeploymentOperationLease | null>;
   renewOperation(operation: ClaimedDeploymentOperation): Promise<ClaimedDeploymentOperation | null>;
   complete(operation: ClaimedDeploymentOperation, result?: unknown): Promise<boolean>;
   fail(operation: ClaimedDeploymentOperation, error: unknown): Promise<DeploymentOperation>;
@@ -433,6 +437,26 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         });
       }
       return claimed;
+    },
+    async authenticateOperation(operation) {
+      ensureOpen();
+      const row = internal.prepare(`SELECT * FROM clank_deployment_operations
+        WHERE id = ? AND state = 'leased' AND node_id = ? AND fence = ?
+          AND lease_token_hash = ? AND lease_expires_at > ?`).get(
+        safeName(operation.id, "operation ID", 128),
+        nodeId(operation.nodeId),
+        integerRange(operation.fence, "operation fence", 1, Number.MAX_SAFE_INTEGER),
+        await digest(bounded(operation.leaseToken, "operation lease token", 8, 512)),
+        Date.now(),
+      );
+      if (!row) return null;
+      const stored = operationFromRow(row);
+      return {
+        ...stored,
+        state: "leased",
+        nodeId: String(row.node_id),
+        leaseExpiresAt: Number(row.lease_expires_at),
+      };
     },
     async renewOperation(operation) {
       ensureOpen();

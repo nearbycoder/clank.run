@@ -1,14 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import {
+  createDeploymentCoordinatorClient,
   createDeploymentBundle,
+  defineDatabase,
   deploymentDigest,
+  openDeploymentOrchestrator,
   openPlatform,
+  openSQLite,
   parseDeploymentConfig,
 } from "../dist/index.js";
 
@@ -241,6 +245,97 @@ async function deploy(platform, projectId, token, artifact, key) {
   return { response, body: await response.json() };
 }
 
+test("platform retains and serves exact release artifacts only to their leased deployment node", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-runner-artifacts-"));
+  const dataDirectory = join(root, "platform");
+  const runnerRegistrationToken = "clank_platform_runner_artifact_registration_1234567890";
+  const errors = [];
+  const platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4890,
+    appPortEnd: 4891,
+    deploymentAgents: {
+      registrationToken: runnerRegistrationToken,
+      maxArtifactBytes: 4 * 1024 * 1024,
+    },
+    backups: { intervalMs: false },
+    onError: (error) => errors.push(error),
+  });
+  let control;
+  let orchestrator;
+  try {
+    const owner = await authorizeCli(platform, "runner-artifact-platform@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Runner artifact", slug: "runner-artifact" },
+    }), 201);
+    const artifact = await appArtifact(
+      join(root, "app"),
+      "runner-artifact-release",
+      [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]],
+    );
+    const deployed = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      artifact,
+      "runner-artifact-release-0001",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    assert.ok(deployed.body.release.storageBytes > artifact.byteLength);
+
+    control = await openSQLite(defineDatabase({}), {
+      path: join(dataDirectory, "control.sqlite"),
+    });
+    orchestrator = openDeploymentOrchestrator(control);
+    const client = createDeploymentCoordinatorClient({
+      baseUrl: "http://127.0.0.1:4200",
+      fetch: (url, init) => platform.handle(new Request(url, init)),
+      maxArtifactBytes: 4 * 1024 * 1024,
+    });
+    const session = await client.register(runnerRegistrationToken, {
+      id: "runner-platform-artifact-01",
+      region: "local",
+    });
+    const queued = await orchestrator.enqueue({
+      projectId: created.project.id,
+      action: "deploy",
+      payload: { releaseId: deployed.body.release.id },
+      idempotencyKey: "platform-runner-artifact-operation",
+      nodeId: session.node.id,
+    });
+    const [operation] = await client.claim(session.node.id, session.token, 1);
+    assert.equal(operation.id, queued.operation.id);
+    const downloaded = await client.artifact(session.node.id, session.token, operation);
+    assert.equal(Buffer.from(downloaded.bytes).equals(artifact), true);
+    assert.equal(downloaded.sha256, await deploymentDigest(artifact));
+    assert.equal(errors.length, 0);
+
+    const artifactPath = join(
+      dataDirectory,
+      "projects",
+      created.project.id,
+      "artifacts",
+      `${deployed.body.release.id}.clank.gz`,
+    );
+    assert.equal((await stat(artifactPath)).mode & 0o777, 0o600);
+    await chmod(artifactPath, 0o644);
+    await assert.rejects(
+      client.artifact(session.node.id, session.token, operation),
+      (error) => error?.status === 500 && error?.code === "COORDINATOR_FAILED",
+    );
+    assert.match(String(errors.at(-1)), /unsafe or inconsistent/u);
+  } finally {
+    orchestrator?.close();
+    control?.close();
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("reserved listener ports are never assigned and existing conflicts reconcile at startup", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-reserved-ports-"));
   const dataDirectory = join(root, "platform");
@@ -325,6 +420,10 @@ test("deployed framework auth receives its exact managed public origin", async (
       "managed-auth-release-0001",
     );
     assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    await assert.rejects(
+      stat(join(root, "platform", "projects", created.project.id, "artifacts")),
+      (error) => error?.code === "ENOENT",
+    );
 
     const origin = "https://managed-auth.apps.example.test";
     const registration = await platform.handle(new Request(`${origin}/__clank/auth/register`, {

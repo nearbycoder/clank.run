@@ -29,6 +29,7 @@ configured worker/scheduler processes for each active project.
 | `CLANK_APP_PIDS` | `128` | Container PID limit |
 | `CLANK_RUNNER_REGISTRATION_TOKEN` | none | Enables authenticated remote-node enrollment and coordination |
 | `CLANK_RUNNER_MAX_REQUEST_BYTES` | `131072` | Remote-node protocol request limit |
+| `CLANK_RUNNER_MAX_ARTIFACT_BYTES` | `104857600` | Leased remote-node release-transfer limit |
 | `CLANK_APP_PORT_START` | `4300` | Port-range start |
 | `CLANK_APP_PORT_END` | `4999` | Port-range end |
 | `CLANK_APP_URL_TEMPLATE` | loopback with `{port}` | Public app URL pattern |
@@ -113,10 +114,11 @@ for deliberate rotation or replacement.
 
 The coordinator transport is useful on one host, a private network, or multiple runner hosts.
 `openDeploymentAgent` supplies the authenticated heartbeat, claim, lease, fencing, and drain
-lifecycle, but the operator still supplies the Docker/VM/microVM execution adapter. The transport
-does not by itself make local SQLite data or release directories available on another machine. The
-current built-in supervisor still owns application activation; use the protocol and agent loop as
-the secure control boundary for a runner integration and follow
+lifecycle, and leased nodes can retrieve verified release archives retained after enrollment is
+enabled. The operator still supplies the Docker/VM/microVM execution adapter, secret delivery, and
+application data plane; local SQLite data is never placed in the release transfer. The current
+built-in supervisor still owns application activation; use the protocol and agent loop as the
+secure control boundary for a runner integration and follow
 [Durable distributed deployment](distributed-deployment.md).
 
 ## Production start

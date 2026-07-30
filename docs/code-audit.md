@@ -1,6 +1,6 @@
 # Code and product audit
 
-Audit date: 2026-07-25
+Audit date: 2026-07-30
 
 This document records what was inspected, what changed, and what remains intentionally out of scope. It is evidence for maintainers, not a claim that any framework can make every application correct automatically.
 
@@ -38,6 +38,7 @@ The audit covered:
 | Authentication lacked production recovery and phishing-resistant credentials | Added email verification, generic single-use recovery, bounded MFA, WebAuthn passkeys, and atomic counter advancement | Auth and synthetic WebAuthn tests |
 | Project authority was account-wide | Added organizations, invitations, four roles, scoped tokens, permission intersection, and removal-time revocation | Platform RBAC and isolation tests |
 | Deploy coordination was local-only | Added durable authenticated leases, fences, nodes, desired generations, idempotent operations, retry, and stale-worker rejection | Orchestration and chaos tests |
+| Remote nodes had no lease-bound release transport | Added canonical-operation selection, node/lease/fence authorization, bounded content-addressed transfer, opt-in owner-only retention, and independent provider/client integrity verification | Runner, platform, storage-accounting, and chaos tests |
 | Backups were release-local snapshots or manual recovery points only | Added encrypted authenticated backup repositories, durable scheduling, cross-control-plane claims, retention, verification, restore confirmation, safety copies, path-safe API/console surfaces, and CLI | Recovery, platform-backup, conformance, and chaos tests |
 | The platform lacked a managed host/data-plane layer | Added exact-host ingress, DNS ownership challenges, external PostgreSQL transactions/migrations, and database provisioning contracts | Data-plane and platform tests |
 | Release security evidence was manual | Added ASVS-oriented mapping, threat model, package/secret audit, immutable CI actions, CodeQL, chaos tests, and beta gate | `npm run check` and GitHub workflows |
@@ -75,7 +76,7 @@ Large existing modules such as `backend.ts`, `auth.ts`, and `platform.ts` remain
 
 The existing security boundaries remain:
 
-- bounded request and artifact intake;
+- bounded request, upload, and remote artifact-transfer intake;
 - executable URL and inline-handler rejection;
 - safe SSR escaping and serialized state;
 - scrypt password hashing, CSRF, secure cookies, rate limits, roles, and revocation;
@@ -108,12 +109,12 @@ These examples demonstrate framework breadth. They do not replace domain-specifi
 - A capability-gated local file store and upload endpoint are included for trusted single-host deployments; production object storage, CDN delivery, and image transformation remain provider integrations.
 - No virtualized list is included yet; large datasets should page server-side.
 - Dialogs are rendered in place rather than through a portal.
-- The built-in process supervisor remains single-leader even though durable distributed coordination primitives are available.
+- The built-in process supervisor remains single-leader even though durable distributed coordination primitives and verified remote release transfer are available.
 - The trusted process runner is not a sandbox; use the Docker runner for stronger isolation.
 - Clank now provides verified domain eligibility for Caddy On-Demand TLS and a complete generic
   remote-agent lifecycle, but certificate/key custody, WAF/DDoS service, WebSocket ingress,
-  infrastructure-specific remote execution, and globally distributed control storage remain
-  external or future platform work.
+  infrastructure-specific remote execution, scoped remote secret/data delivery, and globally
+  distributed control storage remain external or future platform work.
 - Tailwind's browser build is suitable for examples and zero-install prototyping; production applications should serve compiled CSS.
 
 ## Release gate

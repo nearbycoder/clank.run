@@ -99,7 +99,9 @@ generations, idempotent durable operations, lease expiry, retries, draining, cap
 monotonic fences reject stale workers. The provider-neutral remote-agent loop implements
 enrollment, credential restart, heartbeat, bounded claim/concurrency, lease renewal, observation,
 settlement, and graceful drain; infrastructure adapters still map its fenced execution callback to
-Docker, VM, or microVM operations and remote storage. The included child-process supervisor owns
+Docker, VM, or microVM operations and remote storage. A current operation lease can retrieve its
+exact content-addressed release through the same authenticated boundary; platform secrets and
+application data remain separate contracts. The included child-process supervisor owns
 processes in memory and therefore runs as one active leader per project/data directory. Child
 processes support trusted operation, while Docker adds a constrained container boundary for
 mutually untrusted applications.

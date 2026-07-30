@@ -102,6 +102,12 @@ metadata](https://docs.railway.com/volumes/reference), which appears in Railway'
 metric but is outside the mounted filesystem usage Clank can inspect. A 50 GB volume can therefore
 start with roughly 1–1.5 GB reported by Railway even when application files are nearly empty.
 
+Leave `CLANK_RUNNER_REGISTRATION_TOKEN` unset for the inexpensive single-service topology. Enabling
+remote-node enrollment retains one additional compressed upload for each new release so an exact
+leased artifact can be transferred to another host; that copy is included in project release
+quotas and the storage-attribution panel. Set `CLANK_RUNNER_MAX_ARTIFACT_BYTES` deliberately before
+enabling enrollment, and budget the added volume usage until off-host object storage is configured.
+
 ## Domains
 
 Attach both `clank.run` and `*.apps.clank.run` to the Railway service. Publish every routing, ACME,

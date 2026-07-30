@@ -66,6 +66,8 @@ export interface ClankPlatformOptions {
     deploymentAgents?: {
         registrationToken: string;
         maxRequestBytes?: number;
+        /** Maximum content-addressed release transferred to a current node lease. */
+        maxArtifactBytes?: number;
     };
     /** Defaults to "bootstrap": only the first platform account may self-register. */
     signup?: boolean | "bootstrap";
