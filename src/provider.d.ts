@@ -5,6 +5,10 @@ import type {
     DeploymentAgentRuntime,
     DeploymentExecutionContext,
 } from "./runner.js";
+import {
+    DEPLOYMENT_RUNTIME_PROTOCOL,
+    type DeploymentRuntimeCapsule,
+} from "./runtime-placement.js";
 export declare const DEPLOYMENT_PROVIDER_RECONCILE_PATH = "/v1/clank/reconcile";
 export interface DeploymentProviderOperation {
     readonly id: string;
@@ -17,6 +21,8 @@ export interface DeploymentProviderDesiredState {
     readonly generation: number;
     readonly releaseId: string | null;
     readonly state: "running" | "stopped";
+    /** Selects the sensitive runtime capsule wire contract for a running release. */
+    readonly runtimeProtocol?: typeof DEPLOYMENT_RUNTIME_PROTOCOL | null;
 }
 export interface DeploymentProviderArtifact {
     readonly bytes: Uint8Array;
@@ -29,6 +35,8 @@ export interface DeploymentProviderRequest {
     readonly desired: DeploymentProviderDesiredState;
     /** Present only while reconciling a running release. */
     readonly artifact: DeploymentProviderArtifact | null;
+    /** Present when the desired state selects the runtime capsule protocol. */
+    readonly runtime?: DeploymentRuntimeCapsule | null;
     readonly signal: AbortSignal;
 }
 /**
@@ -62,6 +70,8 @@ export interface DeploymentProviderHandlerOptions {
     token: string;
     /** Maximum compressed deployment artifact. Defaults to 100 MiB. */
     maxArtifactBytes?: number;
+    /** Maximum sensitive runtime capsule. Defaults to 768 MiB. */
+    maxRuntimeBytes?: number;
     /** Receives private adapter failures. */
     onError?: (error: unknown) => void;
 }
@@ -91,7 +101,8 @@ export declare function reconcileDeploymentProvider(provider: DeploymentProvider
 }>;
 /**
  * Adapts the portable provider contract to a bounded, redirect-safe HTTP
- * service. Request bodies remain the original compressed deployment artifact.
+ * service. Legacy requests retain their original deployment artifact body;
+ * runtime requests carry the exact integrity-checked capsule without re-encoding.
  */
 export declare function createHttpDeploymentProvider(options: HttpDeploymentProviderOptions): DeploymentProvider;
 /**

@@ -23,6 +23,7 @@ const provider: DeploymentProvider = {
       state: request.desired.state,
       releaseId: request.desired.releaseId,
       artifact: request.artifact,
+      runtime: request.runtime,
       signal: request.signal,
     });
   },
@@ -32,7 +33,10 @@ const provider: DeploymentProvider = {
 For a running generation, `request.artifact` contains the original compressed bytes, their
 SHA-256, and a decoded `clank-deploy/1` bundle. Clank independently checks the transport digest,
 every file path, size, mode, checksum, deployment config, and aggregate bound before the provider
-runs. A stopped generation has no release or artifact.
+runs. A reconcile operation that selects `clank-runtime/1` also receives `request.runtime`: the
+project/release/generation-bound final environment, database placement intent and optional SQLite
+snapshot, and ingress identity. Its `request.artifact` is the verified release nested in that
+capsule. A stopped generation has no release, artifact, or runtime.
 
 ## Standard agent
 
@@ -66,10 +70,11 @@ const agent = await openProviderDeploymentAgent({
 });
 ```
 
-The wrapper accepts only canonical `reconcile` operations, validates the exact three-field desired
-payload, downloads and verifies an artifact only for a running state, calls the provider, then
-reports the matching generation as observed. A rejected stale observation fails the operation
-instead of claiming success.
+The wrapper accepts only canonical `reconcile` operations, validates the desired payload, and
+downloads either the legacy artifact or the explicitly selected runtime capsule only for a running
+state. It independently verifies the bytes and binds a capsule to the operation's exact project,
+release, and generation before calling the provider, then reports the matching generation as
+observed. A rejected stale observation fails the operation instead of claiming success.
 
 The operation result sent back to the control plane is fixed to provider kind, generation,
 release ID, and state. Provider return values, exception details, credentials, paths, and runtime
@@ -94,22 +99,25 @@ const remoteProvider = createHttpDeploymentProvider({
 const handler = createDeploymentProviderHandler(provider, {
   token: process.env.CLANK_PROVIDER_TOKEN!,
   maxArtifactBytes: 100 * 1024 * 1024,
+  maxRuntimeBytes: 768 * 1024 * 1024,
   onError(error) {
     privateOperatorLog(error);
   },
 });
 ```
 
-The fixed path is `POST /v1/clank/reconcile`. Running requests carry
-`application/vnd.clank.deploy+gzip` bytes directly, not base64 JSON. Bounded headers identify the
-project, operation, fence, attempt, generation, desired state, release, and artifact SHA-256.
-Stopped requests carry no body, release, or digest. A successful provider returns `204`.
+The fixed path is `POST /v1/clank/reconcile`. Legacy running requests carry
+`application/vnd.clank.deploy+gzip`; runtime requests carry `application/vnd.clank.runtime`.
+Both are exact binary bytes, not base64 JSON. Bounded headers identify the project, operation,
+fence, attempt, generation, desired state, release, protocol, and body SHA-256. Secret values,
+SQLite bytes, and ingress tokens stay only in the runtime body. Stopped requests carry no body,
+release, protocol, or digest. A successful provider returns `204`.
 
 Both sides require a separate 32–512 character bearer token. Non-loopback clients require HTTPS,
 refuse redirects, apply deadlines and body limits, discard bounded failure bodies, and retry only
 the same idempotent request after network, 408, 425, 429, or 5xx failure. The handler rehashes and
-decodes the artifact again because the HTTP hop is a new trust boundary. Provider exceptions reach
-only the private `onError` hook; callers receive a stable generic error.
+decodes the artifact or runtime capsule again because the HTTP hop is a new trust boundary.
+Provider exceptions reach only the private `onError` hook; callers receive a stable generic error.
 
 Do not expose this endpoint to browsers or reuse Clank account, CLI, enrollment, node, or operation
 credentials for it. Prefer a private network plus narrowly scoped edge admission even though the
@@ -137,7 +145,8 @@ result. With a saved node credential it authenticates the node; before first enr
 validates configuration without consuming the one-time value. After successful enrollment, remove
 `CLANK_RUNNER_REGISTRATION_TOKEN` from the long-running service. The persisted node credential is
 sufficient for restart. `SIGINT` and `SIGTERM` drain the node before exit. Run
-`clank-runner --help` for capacity, label, concurrency, timeout, retry, and artifact-limit settings.
+`clank-runner --help` for capacity, label, concurrency, timeout, retry, artifact, and
+runtime-capsule limits.
 
 This process requires no extra npm package or managed service. A systemd unit, container, VM, or
 existing scheduler can supervise it. The control plane's normal single-host mode remains the
@@ -157,8 +166,9 @@ Every adapter must satisfy all of these rules:
    generation. Never overwrite an active release in place.
 5. Keep application data outside immutable release directories. Mount or bind only the one
    project's data into its runtime.
-6. Resolve secrets on the provider side from a project-scoped secret store. Release artifacts
-   intentionally contain no platform-managed secrets or application database.
+6. Keep release artifacts non-secret. When a `clank-runtime/1` capsule is supplied, consume its
+   final environment and database only inside the trusted project runtime boundary; never log,
+   cache, or copy the body into generic provider metadata.
 7. Use an isolated runtime boundary for mutually untrusted deployers. A process launcher is not a
    sandbox; Docker is a minimum, while hostile workloads should use dedicated VMs or microVMs.
 8. Return success only after the requested state is externally usable. Keep private provider
@@ -169,16 +179,19 @@ Every adapter must satisfy all of these rules:
 
 ## What is and is not portable yet
 
-The provider contract, HTTP bridge, runner command, release transport, object storage, leases,
-credentials, and fencing are implemented and package-supported. They remove provider SDKs from
-Clank and give Docker, VM, microVM, Nomad, Kubernetes, or hosted adapters the same narrow surface.
+The provider contract, HTTP bridge, runner command, release and runtime transport, object storage,
+leases, credentials, and fencing are implemented and package-supported. They remove provider SDKs
+from Clank and give Docker, VM, microVM, Nomad, Kubernetes, or hosted adapters the same narrow
+surface.
 
 The built-in control plane still activates its ordinary hosted projects through its local
 supervisor. Enabling enrollment or starting `clank-runner` does not silently relocate existing
-projects. A fully remote installation must deliberately connect desired-state creation, a
-provider-side project secret source, application data, health routing, TLS/edge routing, log and
-metric collection, and deletion/backup policy. Clank refuses to pretend those data and security
-boundaries are solved by uploading code alone.
+projects. A fully remote installation must deliberately connect desired-state creation, runtime
+capsule creation, provider-side application data lifecycle, health routing, TLS/edge routing, log
+and metric collection, and deletion/backup policy. The capsule is not selected by the built-in
+platform until provider snapshot/restore/delete and ingress activation are implemented and tested.
+Clank refuses to pretend those data and security boundaries are solved by uploading code alone.
 
-The eventual provider integration should consume the same contract rather than adding
-provider-specific logic to application code or the control database.
+See [Remote runtime placement](runtime-placement.md) for the exact body, trust boundary, and
+activation gate. The eventual provider integration should consume the same contract rather than
+adding provider-specific logic to application code or the control database.

@@ -13,7 +13,15 @@ import {
   type DeploymentAgentRuntime,
   type DeploymentArtifact,
   type DeploymentExecutionContext,
+  type DeploymentRuntimeArtifact,
 } from "./runner.ts";
+import {
+  decodeDeploymentRuntimeCapsule,
+  DEPLOYMENT_RUNTIME_MEDIA_TYPE,
+  DEPLOYMENT_RUNTIME_PROTOCOL,
+  deploymentRuntimeDigest,
+  type DeploymentRuntimeCapsule,
+} from "./runtime-placement.ts";
 
 export const DEPLOYMENT_PROVIDER_RECONCILE_PATH = "/v1/clank/reconcile";
 
@@ -29,6 +37,8 @@ export interface DeploymentProviderDesiredState {
   readonly generation: number;
   readonly releaseId: string | null;
   readonly state: "running" | "stopped";
+  /** Selects the sensitive runtime capsule wire contract for a running release. */
+  readonly runtimeProtocol?: typeof DEPLOYMENT_RUNTIME_PROTOCOL | null;
 }
 
 export interface DeploymentProviderArtifact {
@@ -43,6 +53,8 @@ export interface DeploymentProviderRequest {
   readonly desired: DeploymentProviderDesiredState;
   /** Present only while reconciling a running release. */
   readonly artifact: DeploymentProviderArtifact | null;
+  /** Present when the desired state selects the runtime capsule protocol. */
+  readonly runtime?: DeploymentRuntimeCapsule | null;
   readonly signal: AbortSignal;
 }
 
@@ -81,6 +93,8 @@ export interface DeploymentProviderHandlerOptions {
   token: string;
   /** Maximum compressed deployment artifact. Defaults to 100 MiB. */
   maxArtifactBytes?: number;
+  /** Maximum sensitive runtime capsule. Defaults to 768 MiB. */
+  maxRuntimeBytes?: number;
   /** Receives private adapter failures. */
   onError?: (error: unknown) => void;
 }
@@ -151,15 +165,23 @@ export async function reconcileDeploymentProvider(
     maxAttempts: positiveInteger(context.operation.maxAttempts, "operation maxAttempts"),
   });
   let artifact: DeploymentProviderArtifact | null = null;
+  let runtime: DeploymentRuntimeCapsule | null = null;
   if (desired.state === "running") {
-    const downloaded = await context.artifact();
-    artifact = await verifiedArtifact(downloaded);
+    if (desired.runtimeProtocol === DEPLOYMENT_RUNTIME_PROTOCOL) {
+      runtime = await verifiedRuntime(await context.runtime());
+      assertRuntimeBindings(runtime, requestOperation, desired);
+      artifact = runtime.artifact;
+    } else {
+      const downloaded = await context.artifact();
+      artifact = await verifiedArtifact(downloaded);
+    }
   }
   throwIfAborted(context.signal);
   await provider.reconcile(Object.freeze({
     operation: requestOperation,
     desired,
     artifact,
+    runtime,
     signal: context.signal,
   }));
   throwIfAborted(context.signal);
@@ -181,7 +203,8 @@ export async function reconcileDeploymentProvider(
 
 /**
  * Adapts the portable provider contract to a bounded, redirect-safe HTTP
- * service. Request bodies remain the original compressed deployment artifact.
+ * service. Legacy requests retain their original deployment artifact body;
+ * runtime requests carry the exact integrity-checked capsule without re-encoding.
  */
 export function createHttpDeploymentProvider(
   options: HttpDeploymentProviderOptions,
@@ -201,11 +224,13 @@ export function createHttpDeploymentProvider(
   const provider: DeploymentProvider = {
     kind: "http",
     async reconcile(input: DeploymentProviderRequest) {
-      const normalized = providerRequest(input);
+      const normalized = await providerRequest(input);
       const headers = providerHeaders(normalized, token);
-      const body = normalized.artifact
-        ? requestBody(normalized.artifact.bytes)
-        : undefined;
+      const body = normalized.runtime
+        ? requestBody(normalized.runtime.bytes)
+        : normalized.artifact
+          ? requestBody(normalized.artifact.bytes)
+          : undefined;
       for (let attempt = 0; attempt <= retries; attempt += 1) {
         throwIfAborted(normalized.signal);
         const controller = new AbortController();
@@ -283,6 +308,12 @@ export function createDeploymentProviderHandler(
     1_024,
     1024 * 1024 * 1024,
   );
+  const maxRuntimeBytes = integer(
+    options.maxRuntimeBytes ?? 768 * 1024 * 1024,
+    "maxRuntimeBytes",
+    1_024,
+    2 * 1024 * 1024 * 1024,
+  );
   const report = (error: unknown) => {
     try {
       options.onError?.(error);
@@ -315,35 +346,88 @@ export function createDeploymentProviderHandler(
         const desired = parsed.desired;
         const operation = parsed.operation;
         const length = contentLength(request.headers);
-        if (length !== null && length > maxArtifactBytes) {
-          throw new ProviderRequestError(413, "ARTIFACT_TOO_LARGE", "Deployment artifact is too large.");
+        const bodyLimit = desired.runtimeProtocol === DEPLOYMENT_RUNTIME_PROTOCOL
+          ? maxRuntimeBytes
+          : maxArtifactBytes;
+        if (length !== null && length > bodyLimit) {
+          throw new ProviderRequestError(
+            413,
+            desired.runtimeProtocol ? "RUNTIME_TOO_LARGE" : "ARTIFACT_TOO_LARGE",
+            desired.runtimeProtocol
+              ? "Deployment runtime capsule is too large."
+              : "Deployment artifact is too large.",
+          );
         }
         let artifact: DeploymentProviderArtifact | null = null;
+        let runtime: DeploymentRuntimeCapsule | null = null;
         if (desired.state === "running") {
           const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-          if (contentType !== "application/vnd.clank.deploy+gzip") {
+          const expectedContentType = desired.runtimeProtocol
+            ? DEPLOYMENT_RUNTIME_MEDIA_TYPE
+            : "application/vnd.clank.deploy+gzip";
+          if (contentType !== expectedContentType) {
             throw new ProviderRequestError(
               415,
               "UNSUPPORTED_MEDIA_TYPE",
-              "Running reconciliation requires a Clank deployment artifact.",
+              desired.runtimeProtocol
+                ? "Running reconciliation requires a Clank runtime capsule."
+                : "Running reconciliation requires a Clank deployment artifact.",
             );
           }
-          const bytes = await readBytes(request.body, maxArtifactBytes);
+          const bytes = await readBytes(
+            request.body,
+            bodyLimit,
+            desired.runtimeProtocol ? "runtime" : "artifact",
+          );
           if (bytes.byteLength === 0) {
-            throw new ProviderRequestError(400, "ARTIFACT_REQUIRED", "Deployment artifact is required.");
+            throw new ProviderRequestError(
+              400,
+              desired.runtimeProtocol ? "RUNTIME_REQUIRED" : "ARTIFACT_REQUIRED",
+              desired.runtimeProtocol
+                ? "Deployment runtime capsule is required."
+                : "Deployment artifact is required.",
+            );
           }
-          const expected = artifactDigestHeader(request.headers);
-          const digest = await deploymentDigest(bytes);
+          const expected = contentDigestHeader(
+            request.headers,
+            desired.runtimeProtocol ? "RUNTIME_INVALID" : "ARTIFACT_INVALID",
+          );
+          const digest = desired.runtimeProtocol
+            ? await deploymentRuntimeDigest(bytes)
+            : await deploymentDigest(bytes);
           if (digest !== expected) {
-            throw new ProviderRequestError(400, "ARTIFACT_INVALID", "Deployment artifact failed verification.");
+            throw new ProviderRequestError(
+              400,
+              desired.runtimeProtocol ? "RUNTIME_INVALID" : "ARTIFACT_INVALID",
+              desired.runtimeProtocol
+                ? "Deployment runtime capsule failed verification."
+                : "Deployment artifact failed verification.",
+            );
           }
-          let bundle: DeploymentBundle;
-          try {
-            bundle = await decodeDeploymentBundle(bytes, { maxTotalBytes: maxArtifactBytes });
-          } catch {
-            throw new ProviderRequestError(400, "ARTIFACT_INVALID", "Deployment artifact failed verification.");
+          if (desired.runtimeProtocol) {
+            try {
+              runtime = await decodeDeploymentRuntimeCapsule(bytes, {
+                maxArtifactBytes,
+                maxCapsuleBytes: maxRuntimeBytes,
+              });
+              assertRuntimeBindings(runtime, operation, desired);
+            } catch {
+              throw new ProviderRequestError(
+                400,
+                "RUNTIME_INVALID",
+                "Deployment runtime capsule failed verification.",
+              );
+            }
+            artifact = runtime.artifact;
+          } else {
+            let bundle: DeploymentBundle;
+            try {
+              bundle = await decodeDeploymentBundle(bytes, { maxTotalBytes: maxArtifactBytes });
+            } catch {
+              throw new ProviderRequestError(400, "ARTIFACT_INVALID", "Deployment artifact failed verification.");
+            }
+            artifact = Object.freeze({ bytes, sha256: digest, bundle });
           }
-          artifact = Object.freeze({ bytes, sha256: digest, bundle });
         } else {
           if (length !== null && length !== 0) {
             throw new ProviderRequestError(400, "UNEXPECTED_ARTIFACT", "Stopped reconciliation cannot include an artifact.");
@@ -355,6 +439,9 @@ export function createDeploymentProviderHandler(
           if (request.headers.has("x-clank-content-sha256")) {
             throw new ProviderRequestError(400, "UNEXPECTED_ARTIFACT", "Stopped reconciliation cannot include an artifact.");
           }
+          if (request.headers.has("x-clank-runtime-protocol")) {
+            throw new ProviderRequestError(400, "UNEXPECTED_ARTIFACT", "Stopped reconciliation cannot include a runtime capsule.");
+          }
         }
         throwIfAborted(request.signal);
         try {
@@ -362,6 +449,7 @@ export function createDeploymentProviderHandler(
             operation,
             desired,
             artifact,
+            runtime,
             signal: request.signal,
           }));
         } catch (error) {
@@ -400,24 +488,67 @@ async function verifiedArtifact(input: DeploymentArtifact): Promise<DeploymentPr
   });
 }
 
+async function verifiedRuntime(
+  input: DeploymentRuntimeArtifact | DeploymentRuntimeCapsule,
+): Promise<DeploymentRuntimeCapsule> {
+  if (!(input.bytes instanceof Uint8Array) || !/^[a-f0-9]{64}$/u.test(input.sha256)) {
+    throw new TypeError("Deployment runtime capsule is invalid.");
+  }
+  const bytes = new Uint8Array(input.bytes);
+  if (await deploymentRuntimeDigest(bytes) !== input.sha256) {
+    throw new Error("Deployment runtime capsule failed digest verification.");
+  }
+  return decodeDeploymentRuntimeCapsule(bytes);
+}
+
+function assertRuntimeBindings(
+  runtime: DeploymentRuntimeCapsule,
+  operation: DeploymentProviderOperation,
+  desired: DeploymentProviderDesiredState,
+): void {
+  if (
+    runtime.manifest.protocol !== desired.runtimeProtocol
+    || runtime.manifest.projectId !== operation.projectId
+    || runtime.manifest.releaseId !== desired.releaseId
+    || runtime.manifest.generation !== desired.generation
+  ) {
+    throw new TypeError("Deployment runtime capsule does not match the desired placement.");
+  }
+}
+
 function desiredState(value: unknown): DeploymentProviderDesiredState {
   const input = plainObject(value, "reconcile payload");
-  exact(input, ["releaseId", "state", "generation"]);
+  exact(
+    input,
+    "runtimeProtocol" in input
+      ? ["releaseId", "state", "generation", "runtimeProtocol"]
+      : ["releaseId", "state", "generation"],
+  );
   const state = enumeration(input.state, "desired state", ["running", "stopped"] as const);
   const generation = positiveInteger(input.generation, "desired generation");
   const releaseId = input.releaseId === null
     ? null
     : safeIdentifier(input.releaseId, "release ID");
+  const runtimeProtocol = input.runtimeProtocol === undefined || input.runtimeProtocol === null
+    ? null
+    : enumeration(
+      input.runtimeProtocol,
+      "runtime protocol",
+      [DEPLOYMENT_RUNTIME_PROTOCOL] as const,
+    );
   if (state === "running" && releaseId === null) {
     throw new TypeError("A running deployment requires a release ID.");
   }
   if (state === "stopped" && releaseId !== null) {
     throw new TypeError("A stopped deployment cannot select a release ID.");
   }
-  return Object.freeze({ generation, releaseId, state });
+  if (state === "stopped" && runtimeProtocol !== null) {
+    throw new TypeError("A stopped deployment cannot select a runtime protocol.");
+  }
+  return Object.freeze({ generation, releaseId, state, runtimeProtocol });
 }
 
-function providerRequest(input: DeploymentProviderRequest): DeploymentProviderRequest {
+async function providerRequest(input: DeploymentProviderRequest): Promise<DeploymentProviderRequest> {
   const desired = desiredState(input.desired);
   const operation = Object.freeze({
     id: safeIdentifier(input.operation.id, "operation ID"),
@@ -427,20 +558,39 @@ function providerRequest(input: DeploymentProviderRequest): DeploymentProviderRe
     maxAttempts: positiveInteger(input.operation.maxAttempts, "operation maxAttempts"),
   });
   if (!(input.signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal.");
+  let runtime: DeploymentRuntimeCapsule | null = null;
+  let artifact: DeploymentProviderArtifact | null = null;
   if (desired.state === "running") {
-    if (!input.artifact
-      || !(input.artifact.bytes instanceof Uint8Array)
-      || !/^[a-f0-9]{64}$/u.test(input.artifact.sha256)
-      || !input.artifact.bundle) {
-      throw new TypeError("A running provider request requires a verified artifact.");
+    if (desired.runtimeProtocol === DEPLOYMENT_RUNTIME_PROTOCOL) {
+      if (!input.runtime) {
+        throw new TypeError("A runtime provider request requires a verified runtime capsule.");
+      }
+      runtime = await verifiedRuntime(input.runtime);
+      assertRuntimeBindings(runtime, operation, desired);
+      artifact = runtime.artifact;
+      if (input.artifact && input.artifact.sha256 !== artifact.sha256) {
+        throw new TypeError("Provider artifact does not match its runtime capsule.");
+      }
+    } else {
+      if (input.runtime !== undefined && input.runtime !== null) {
+        throw new TypeError("A legacy provider request cannot include a runtime capsule.");
+      }
+      if (!input.artifact) {
+        throw new TypeError("A running provider request requires a verified artifact.");
+      }
+      artifact = await verifiedArtifact(input.artifact);
     }
-  } else if (input.artifact !== null) {
-    throw new TypeError("A stopped provider request cannot include an artifact.");
+  } else if (
+    input.artifact !== null
+    || (input.runtime !== undefined && input.runtime !== null)
+  ) {
+    throw new TypeError("A stopped provider request cannot include deployment content.");
   }
   return Object.freeze({
     operation,
     desired,
-    artifact: input.artifact,
+    artifact,
+    runtime,
     signal: input.signal,
   });
 }
@@ -457,9 +607,18 @@ function providerHeaders(input: DeploymentProviderRequest, token: string): Heade
     "x-clank-desired-state": input.desired.state,
   });
   if (input.artifact && input.desired.releaseId) {
-    headers.set("content-type", "application/vnd.clank.deploy+gzip");
-    headers.set("x-clank-content-sha256", input.artifact.sha256);
+    headers.set(
+      "content-type",
+      input.runtime ? DEPLOYMENT_RUNTIME_MEDIA_TYPE : "application/vnd.clank.deploy+gzip",
+    );
+    headers.set(
+      "x-clank-content-sha256",
+      input.runtime ? input.runtime.sha256 : input.artifact.sha256,
+    );
     headers.set("x-clank-release-id", input.desired.releaseId);
+    if (input.runtime) {
+      headers.set("x-clank-runtime-protocol", DEPLOYMENT_RUNTIME_PROTOCOL);
+    }
   }
   return headers;
 }
@@ -475,6 +634,7 @@ function desiredStateFromHeaders(headers: Headers): DeploymentProviderDesiredSta
     state,
     generation: headerInteger(headers, "x-clank-generation"),
     releaseId: release === null ? null : release,
+    runtimeProtocol: headers.get("x-clank-runtime-protocol"),
   });
 }
 
@@ -503,10 +663,16 @@ function providerRequestHeaders(headers: Headers): {
   }
 }
 
-function artifactDigestHeader(headers: Headers): string {
+function contentDigestHeader(headers: Headers, code: "ARTIFACT_INVALID" | "RUNTIME_INVALID"): string {
   const digest = requiredHeader(headers, "x-clank-content-sha256");
   if (!/^[a-f0-9]{64}$/u.test(digest)) {
-    throw new ProviderRequestError(400, "ARTIFACT_INVALID", "Deployment artifact failed verification.");
+    throw new ProviderRequestError(
+      400,
+      code,
+      code === "RUNTIME_INVALID"
+        ? "Deployment runtime capsule failed verification."
+        : "Deployment artifact failed verification.",
+    );
   }
   return digest;
 }
@@ -617,6 +783,7 @@ async function tokensEqual(left: string, right: string): Promise<boolean> {
 async function readBytes(
   stream: ReadableStream<Uint8Array> | null,
   limit: number,
+  kind: "artifact" | "runtime" = "artifact",
 ): Promise<Uint8Array> {
   if (!stream) return new Uint8Array();
   const reader = stream.getReader();
@@ -629,7 +796,13 @@ async function readBytes(
       size += value.byteLength;
       if (size > limit) {
         await reader.cancel();
-        throw new ProviderRequestError(413, "ARTIFACT_TOO_LARGE", "Deployment artifact is too large.");
+        throw new ProviderRequestError(
+          413,
+          kind === "runtime" ? "RUNTIME_TOO_LARGE" : "ARTIFACT_TOO_LARGE",
+          kind === "runtime"
+            ? "Deployment runtime capsule is too large."
+            : "Deployment artifact is too large.",
+        );
       }
       chunks.push(value);
     }

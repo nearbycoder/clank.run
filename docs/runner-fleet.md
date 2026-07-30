@@ -6,8 +6,11 @@ maintenance, reactivate them, or revoke their credentials from `/admin`.
 
 This is a fleet-control foundation, not automatic remote application placement. In the current
 release, ordinary hosted projects still run under the built-in supervisor on the control-plane
-host. Enrolled nodes do not receive project secrets, SQLite databases, ingress traffic, backups,
-or rollback data. Those boundaries must be enabled deliberately in a later placement phase.
+host. Enrollment alone does not grant project secrets, SQLite databases, ingress traffic, backups,
+or rollback data. A separate exact-lease runtime-capsule protocol can carry application placement
+inputs to a trusted provider, but the built-in platform keeps it unselected until the complete
+data, backup/restore, rollback, and ingress lifecycle is implemented. See
+[Remote runtime placement](runtime-placement.md).
 
 ## Enable the coordinator
 

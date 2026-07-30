@@ -38,6 +38,7 @@
     "./orchestration": { "types": "./dist/orchestration.d.ts", "import": "./dist/orchestration.js" },
     "./runner": { "types": "./dist/runner.d.ts", "import": "./dist/runner.js" },
     "./provider": { "types": "./dist/provider.d.ts", "import": "./dist/provider.js" },
+    "./runtime-placement": { "types": "./dist/runtime-placement.d.ts", "import": "./dist/runtime-placement.js" },
     "./data-plane": { "types": "./dist/data-plane.d.ts", "import": "./dist/data-plane.js" },
     "./forms": { "types": "./dist/forms.d.ts", "import": "./dist/forms.js" },
     "./ui": { "types": "./dist/ui.d.ts", "import": "./dist/ui.js" },

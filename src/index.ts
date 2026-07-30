@@ -12,6 +12,7 @@ export * from "./recovery.ts";
 export * from "./orchestration.ts";
 export * from "./runner.ts";
 export * from "./provider.ts";
+export * from "./runtime-placement.ts";
 export * from "./data-plane.ts";
 export * from "./forms.ts";
 export * from "./ui.ts";

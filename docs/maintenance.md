@@ -49,6 +49,23 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Kept the current Railway production service on its existing local volume; no bucket or
   additional paid resource was provisioned.
 
+## 2026-07-30 remote runtime transport phase
+
+- [x] Added a deterministic, bounded runtime capsule that binds final environment, verified code,
+  SQLite placement intent/snapshot, and ingress identity to one project/release/generation.
+- [x] Added exact-lease, no-store coordinator transport with independent client deadlines, body
+  limits, media-type checks, digest verification, and post-provider lease revalidation.
+- [x] Carried the decoded capsule through both the in-process and authenticated HTTP provider
+  contracts without placing secret values or SQLite bytes in headers, URLs, public errors, or
+  durable operation results.
+- [x] Preserved the existing legacy artifact path and kept built-in remote activation closed until
+  provider snapshot/restore/delete, migration/rollback, and ingress lifecycle support is complete.
+- [x] Re-certified all 272 tests at 86.06% line, 74.41% branch, and 85.51% function
+  coverage; 55 documentation files, 180 local links, 31 declaration files, and 29 package
+  exports; packed consumer conformance; and package, current-tree, and reachable-history security
+  scans.
+- [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
 ## 2026-07-30 job operations phase
 
 - [x] Added per-project queue health, bounded job/schedule inspection, dead-letter and overdue

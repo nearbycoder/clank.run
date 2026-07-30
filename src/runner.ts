@@ -7,6 +7,7 @@ import type {
   DeploymentOrchestrator,
   NodeSession,
 } from "./orchestration.ts";
+import { DEPLOYMENT_RUNTIME_MEDIA_TYPE } from "./runtime-placement.ts";
 
 export const DEPLOYMENT_COORDINATOR_PREFIX = "/api/runner/v1";
 
@@ -42,6 +43,10 @@ export interface DeploymentCoordinatorHandlerOptions {
   artifact?: DeploymentArtifactProvider;
   /** Maximum artifact returned by the provider. Defaults to 100 MiB. */
   maxArtifactBytes?: number;
+  /** Optional sensitive runtime capsule source, scoped to a current operation lease. */
+  runtime?: DeploymentRuntimeProvider;
+  /** Maximum runtime capsule returned by the provider. Defaults to 768 MiB. */
+  maxRuntimeBytes?: number;
   /** Receives private unexpected failures. */
   onError?: (error: unknown) => void;
 }
@@ -63,6 +68,10 @@ export interface DeploymentCoordinatorClientOptions {
   maxArtifactBytes?: number;
   /** Artifact-transfer deadline. Defaults to 60 seconds. */
   artifactTimeoutMs?: number;
+  /** Maximum runtime capsule body. Defaults to 768 MiB. */
+  maxRuntimeBytes?: number;
+  /** Runtime-capsule transfer deadline. Defaults to 120 seconds. */
+  runtimeTimeoutMs?: number;
 }
 
 export interface DeploymentArtifact {
@@ -79,6 +88,20 @@ export interface DeploymentArtifactProvider {
   load(request: DeploymentArtifactRequest): Promise<DeploymentArtifact | null>;
 }
 
+export interface DeploymentRuntimeArtifact {
+  readonly bytes: Uint8Array;
+  readonly sha256: string;
+}
+
+export interface DeploymentRuntimeRequest {
+  readonly operation: DeploymentOperationLease;
+  readonly signal: AbortSignal;
+}
+
+export interface DeploymentRuntimeProvider {
+  load(request: DeploymentRuntimeRequest): Promise<DeploymentRuntimeArtifact | null>;
+}
+
 export interface DeploymentCoordinatorClient {
   register(registrationToken: string, input: DeploymentNodeInput): Promise<NodeSession>;
   authenticate(nodeId: string, token: string): Promise<DeploymentNode>;
@@ -93,6 +116,11 @@ export interface DeploymentCoordinatorClient {
     token: string,
     operation: ClaimedDeploymentOperation,
   ): Promise<DeploymentArtifact>;
+  runtime?(
+    nodeId: string,
+    token: string,
+    operation: ClaimedDeploymentOperation,
+  ): Promise<DeploymentRuntimeArtifact>;
   renew(
     nodeId: string,
     token: string,
@@ -131,6 +159,11 @@ export interface DeploymentExecutionContext {
   readonly signal: AbortSignal;
   /** Downloads and verifies the content-addressed release for this current lease. */
   artifact(): Promise<DeploymentArtifact>;
+  /**
+   * Downloads a no-store runtime capsule containing final environment, code,
+   * database placement intent, and ingress identity for this current lease.
+   */
+  runtime(): Promise<DeploymentRuntimeArtifact>;
   /** Reports generation-fenced desired state for this operation's project. */
   observe(input: {
     generation: number;
@@ -223,6 +256,12 @@ export function createDeploymentCoordinatorHandler(
     1_024,
     1024 * 1024 * 1024,
   );
+  const maxRuntimeBytes = integer(
+    options.maxRuntimeBytes ?? 768 * 1024 * 1024,
+    "maxRuntimeBytes",
+    1_024,
+    2 * 1024 * 1024 * 1024,
+  );
 
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
@@ -291,6 +330,7 @@ export function createDeploymentCoordinatorHandler(
         "drain",
         "claim",
         ...(options.artifact ? ["artifact"] : []),
+        ...(options.runtime ? ["runtime"] : []),
         "observe",
         "renew",
         "complete",
@@ -399,6 +439,45 @@ export function createDeploymentCoordinatorHandler(
           },
         });
       }
+      if (operation === "runtime") {
+        const canonical = await orchestrator.authenticateOperation(claimed);
+        if (!canonical) {
+          throw new CoordinatorRequestError(409, "STALE_OPERATION", "The deployment operation lease is stale.");
+        }
+        const runtime = await options.runtime!.load({
+          operation: Object.freeze(canonical),
+          signal: request.signal,
+        });
+        if (!runtime) {
+          throw new CoordinatorRequestError(404, "RUNTIME_NOT_FOUND", "The deployment runtime capsule is unavailable.");
+        }
+        if (!(runtime.bytes instanceof Uint8Array)) {
+          throw new TypeError("Deployment runtime capsule bytes are invalid.");
+        }
+        if (runtime.bytes.byteLength > maxRuntimeBytes) {
+          throw new CoordinatorRequestError(413, "RUNTIME_TOO_LARGE", "The deployment runtime capsule is too large.");
+        }
+        if (!isArtifactDigest(runtime.sha256)) {
+          throw new Error("Deployment runtime provider returned an invalid digest.");
+        }
+        const digest = runtime.sha256;
+        if (await sha256(runtime.bytes) !== digest) {
+          throw new Error("Deployment runtime provider returned a digest mismatch.");
+        }
+        if (!await orchestrator.authenticateOperation(claimed)) {
+          throw new CoordinatorRequestError(409, "STALE_OPERATION", "The deployment operation lease is stale.");
+        }
+        return new Response(runtime.bytes, {
+          status: 200,
+          headers: {
+            "cache-control": "private, no-store",
+            "content-length": String(runtime.bytes.byteLength),
+            "content-type": DEPLOYMENT_RUNTIME_MEDIA_TYPE,
+            "x-clank-content-sha256": digest,
+            "x-content-type-options": "nosniff",
+          },
+        });
+      }
       if (operation === "renew") {
         return json({ ok: true, operation: await orchestrator.renewOperation(claimed) });
       }
@@ -463,6 +542,18 @@ export function createDeploymentCoordinatorClient(
     "artifactTimeoutMs",
     100,
     10 * 60_000,
+  );
+  const maxRuntimeBytes = integer(
+    options.maxRuntimeBytes ?? 768 * 1024 * 1024,
+    "maxRuntimeBytes",
+    1_024,
+    2 * 1024 * 1024 * 1024,
+  );
+  const runtimeTimeoutMs = integer(
+    options.runtimeTimeoutMs ?? 120_000,
+    "runtimeTimeoutMs",
+    100,
+    30 * 60_000,
   );
 
   const call = async (
@@ -592,6 +683,82 @@ export function createDeploymentCoordinatorClient(
       clearTimeout(timer);
     }
   };
+  const downloadRuntime = async (
+    nodeId: string,
+    token: string,
+    operation: ClaimedDeploymentOperation,
+  ): Promise<DeploymentRuntimeArtifact> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), runtimeTimeoutMs);
+    try {
+      const response = await fetcher(`${baseUrl}/runtime`, {
+        method: "POST",
+        redirect: "error",
+        signal: controller.signal,
+        headers: {
+          "accept-encoding": "identity",
+          authorization: `Bearer ${boundedToken(token, "token")}`,
+          "content-type": "application/json",
+          "x-clank-node-id": boundedNodeId(nodeId),
+        },
+        body: JSON.stringify({ operation }),
+      });
+      if (!response.ok) {
+        const payload = object(await readResponseJson(response, maxResponseBytes));
+        const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
+          ? payload.error as Record<string, unknown>
+          : {};
+        throw new DeploymentCoordinatorError(
+          response.status,
+          typeof error.code === "string" ? error.code : "COORDINATOR_FAILED",
+          typeof error.message === "string" ? error.message : "The deployment runtime request failed.",
+        );
+      }
+      const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+      const lengthHeader = response.headers.get("content-length");
+      const length = lengthHeader === null ? Number.NaN : Number(lengthHeader);
+      const digestHeader = response.headers.get("x-clank-content-sha256");
+      if (!isArtifactDigest(digestHeader)) {
+        throw new DeploymentCoordinatorError(
+          502,
+          "INVALID_RUNTIME_RESPONSE",
+          "The deployment runtime digest is invalid.",
+        );
+      }
+      if (
+        contentType !== DEPLOYMENT_RUNTIME_MEDIA_TYPE
+        || !Number.isSafeInteger(length)
+        || length < 0
+        || length > maxRuntimeBytes
+      ) {
+        throw new DeploymentCoordinatorError(
+          502,
+          "INVALID_RUNTIME_RESPONSE",
+          "The deployment coordinator returned invalid runtime metadata.",
+        );
+      }
+      const bytes = await readBytes(response.body, maxRuntimeBytes);
+      if (bytes.byteLength !== length || await sha256(bytes) !== digestHeader) {
+        throw new DeploymentCoordinatorError(
+          502,
+          "RUNTIME_INTEGRITY_FAILED",
+          "The deployment runtime capsule failed integrity verification.",
+        );
+      }
+      return Object.freeze({ bytes, sha256: digestHeader });
+    } catch (error) {
+      if (error instanceof DeploymentCoordinatorError) throw error;
+      if (error instanceof CoordinatorRequestError && error.status === 413) {
+        throw new DeploymentCoordinatorError(502, "RUNTIME_TOO_LARGE", "The deployment runtime capsule is too large.");
+      }
+      if (controller.signal.aborted) {
+        throw new DeploymentCoordinatorError(504, "COORDINATOR_TIMEOUT", "Deployment runtime transfer timed out.");
+      }
+      throw new DeploymentCoordinatorError(502, "COORDINATOR_UNAVAILABLE", "Deployment runtime transfer failed.");
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 
   return Object.freeze({
     async register(token, input) {
@@ -616,6 +783,7 @@ export function createDeploymentCoordinatorClient(
       return payload.operations.map(claimedOperation);
     },
     artifact: downloadArtifact,
+    runtime: downloadRuntime,
     async renew(nodeId, token, operation) {
       const payload = await call("renew", { operation }, token, nodeId);
       return payload.operation === null ? null : claimedOperation(payload.operation);
@@ -787,6 +955,15 @@ export async function openDeploymentAgent(
               throw new Error("Cannot fetch an artifact after the deployment operation lease is lost.");
             }
             return options.client.artifact(nodeId, token!, current);
+          },
+          async runtime() {
+            if (leaseLost || controller.signal.aborted) {
+              throw new Error("Cannot fetch a runtime capsule after the deployment operation lease is lost.");
+            }
+            if (!options.client.runtime) {
+              throw new Error("This deployment coordinator client does not support runtime capsules.");
+            }
+            return options.client.runtime(nodeId, token!, current);
           },
           async observe(input) {
             if (leaseLost || controller.signal.aborted) {

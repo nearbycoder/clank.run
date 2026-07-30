@@ -6,6 +6,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- A versioned `clank-runtime/1` binary capsule now binds one desired project generation to its
+  verified release, final process environment, SQLite initialization/preservation/replacement
+  intent, optional integrity-checked snapshot, and managed-ingress identity. The codec has strict
+  section/aggregate limits and is exported as `@clank.run/framework/runtime-placement`.
+- Current operation leases can fetch an exact no-store runtime capsule through the coordinator,
+  and provider agents plus the authenticated HTTP provider bridge independently verify and bind it
+  before infrastructure code runs. `clank-runner` exposes separate runtime transfer deadline and
+  byte-ceiling settings.
 - The remote deployment coordinator now supports administrator-created one-time enrollment tokens
   bound to an exact node and region. The responsive control-plane fleet panel reports node health,
   capacity, placement, work, and pending enrollment metadata and provides audited drain,
@@ -84,6 +92,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Security
 
+- Runtime capsules require the exact current node and operation lease, use canonical stored desired
+  state, recheck the lease after capsule loading, verify whole-body and nested section digests, and
+  bind project/release/generation at the provider hop. Application secrets, SQLite bytes, and
+  ingress tokens remain only in bounded HTTPS bodies and never enter URLs, headers, public
+  failures, or durable operation results. The built-in platform keeps remote activation disabled
+  until provider backup/restore/delete and ingress lifecycle controls are complete.
 - Managed runner enrollment stores only a high-entropy digest, caps active grants, requires a
   recent same-origin browser administrator session plus CSRF, rejects bearer/admin impersonation,
   expires automatically, reserves transactionally, commits once, rolls back failed registration,
