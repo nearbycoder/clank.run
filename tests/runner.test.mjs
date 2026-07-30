@@ -176,6 +176,83 @@ test("authenticated deployment nodes coordinate placement and fenced operations 
   }
 });
 
+test("one-time deployment enrollment authorization commits or rolls back transactionally", async () => {
+  const events = [];
+  const test = await fixture({}, {
+    registrationToken: undefined,
+    async authorizeRegistration(request) {
+      events.push(["authorize", request.token, request.node.id, Object.isFrozen(request.node)]);
+      if (request.token === "clnke_denied_token_12345678901234567890") return null;
+      return {
+        async commit() {
+          events.push(["commit", request.node.id]);
+          if (request.token === "clnke_commit_failure_12345678901234567890") {
+            throw new Error("commit failed");
+          }
+        },
+        async rollback() {
+          events.push(["rollback", request.node.id]);
+        },
+      };
+    },
+  });
+  try {
+    await assert.rejects(
+      test.client.register("clnke_denied_token_12345678901234567890", {
+        id: "runner-denied",
+        region: "local",
+      }),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 401
+        && error.code === "REGISTRATION_DENIED",
+    );
+
+    const session = await test.client.register("clnke_allowed_token_12345678901234567890", {
+      id: "runner-managed",
+      region: "local",
+    });
+    assert.match(session.token, /^clnka_/u);
+    assert.deepEqual(events.slice(-2), [
+      ["authorize", "clnke_allowed_token_12345678901234567890", "runner-managed", true],
+      ["commit", "runner-managed"],
+    ]);
+
+    await assert.rejects(
+      test.client.register("clnke_invalid_node_12345678901234567890", {
+        id: "runner-invalid",
+        region: "local",
+        endpoint: "http://public.example",
+      }),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 422
+        && error.code === "INVALID_INPUT"
+        && !error.message.includes("public.example"),
+    );
+    assert.deepEqual(events.slice(-2), [
+      ["authorize", "clnke_invalid_node_12345678901234567890", "runner-invalid", true],
+      ["rollback", "runner-invalid"],
+    ]);
+
+    await assert.rejects(
+      test.client.register("clnke_commit_failure_12345678901234567890", {
+        id: "runner-commit-failure",
+        region: "local",
+      }),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 500
+        && !error.message.includes("commit failed"),
+    );
+    assert.deepEqual(events.slice(-3), [
+      ["authorize", "clnke_commit_failure_12345678901234567890", "runner-commit-failure", true],
+      ["commit", "runner-commit-failure"],
+      ["rollback", "runner-commit-failure"],
+    ]);
+    assert.equal(test.privateErrors.length, 1);
+  } finally {
+    await test.close();
+  }
+});
+
 test("release artifacts require the exact authenticated operation lease and verify content", async () => {
   const bytes = new TextEncoder().encode("content-addressed-clank-release");
   const digest = createHash("sha256").update(bytes).digest("hex");

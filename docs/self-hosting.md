@@ -27,7 +27,8 @@ configured worker/scheduler processes for each active project.
 | `CLANK_APP_MEMORY` | `512m` | Container memory |
 | `CLANK_APP_CPUS` | `1` | Container CPUs |
 | `CLANK_APP_PIDS` | `128` | Container PID limit |
-| `CLANK_RUNNER_REGISTRATION_TOKEN` | none | Enables authenticated remote-node enrollment and coordination |
+| `CLANK_RUNNER_COORDINATOR` | `0` | Set to `1` to enable the coordinator and administrator-created one-time enrollment |
+| `CLANK_RUNNER_REGISTRATION_TOKEN` | none | Optional legacy shared coordinator enrollment secret |
 | `CLANK_RUNNER_MAX_REQUEST_BYTES` | `131072` | Remote-node protocol request limit |
 | `CLANK_RUNNER_MAX_ARTIFACT_BYTES` | `104857600` | Leased remote-node release-transfer limit |
 | `CLANK_RUNNER_ARTIFACT_STORE` | `local` | Original remote-runner upload repository: `local` or `s3` |
@@ -128,17 +129,17 @@ must never fall back to process execution.
 ## Optional remote-node coordination
 
 Keep the runner API disabled on a single-host installation. To let deployment nodes coordinate
-without direct control-database access, create a separate enrollment secret:
+without direct control-database access, enable the coordinator:
 
 ```sh
-export CLANK_RUNNER_REGISTRATION_TOKEN="$(openssl rand -base64 48)"
+export CLANK_RUNNER_COORDINATOR=1
 ```
 
-This enables only `/api/runner/v1/*` on the control-plane hostname. It does not expose the secret in
-the dashboard and does not grant browser, CLI, project, or application access. A node exchanges the
-enrollment secret for its own `clnka_...` credential; the control database stores only its digest.
-Use the enrollment secret only during node provisioning, then retain it in operator secret storage
-for deliberate rotation or replacement.
+This enables only `/api/runner/v1/*` on the control-plane hostname. It does not grant browser, CLI,
+project, application, or MCP access. A platform administrator creates an expiring, one-time,
+node-and-region-bound `clnke_...` enrollment in `/admin`. A node exchanges it for its own
+`clnka_...` credential; the control database stores only digests. The plaintext enrollment is
+shown once and should be removed from the node after provisioning.
 
 The coordinator transport is useful on one host, a private network, or multiple runner hosts.
 `openDeploymentAgent` supplies the authenticated heartbeat, claim, lease, fencing, and drain
@@ -150,7 +151,7 @@ contract, while `clank-runner` connects it to the authenticated binary HTTP brid
 export CLANK_CONTROL_URL=https://deploy.example.com
 export CLANK_RUNNER_NODE_ID=runner-01
 export CLANK_RUNNER_REGION=us-central
-export CLANK_RUNNER_REGISTRATION_TOKEN="$(your-secret-manager read runner-enrollment)"
+export CLANK_RUNNER_REGISTRATION_TOKEN="$(your-secret-manager read one-time-runner-enrollment)"
 export CLANK_RUNNER_CREDENTIALS=/var/lib/clank-runner/credentials.json
 export CLANK_PROVIDER_URL=https://runtime.internal.example
 export CLANK_PROVIDER_TOKEN="$(your-secret-manager read runtime-provider)"
@@ -161,16 +162,17 @@ The operator still supplies the provider-side Docker/VM/microVM mutation, projec
 delivery, application data plane, and edge routing; local SQLite data is never placed in the
 release transfer. The current built-in supervisor still owns ordinary application activation.
 Use the protocol as the secure boundary for a deliberate runner integration and follow
+[Deployment runner fleet](runner-fleet.md),
 [Deployment provider adapters](provider-adapters.md) and
 [Durable distributed deployment](distributed-deployment.md).
 
 ### Optional off-host release uploads
 
 Remote enrollment uses the private data volume by default. To retain new original uploads through
-an S3-compatible store, configure the enrollment token and explicit repository together:
+an S3-compatible store, enable the coordinator and configure the explicit repository together:
 
 ```sh
-export CLANK_RUNNER_REGISTRATION_TOKEN="$(your-secret-manager read runner-enrollment)"
+export CLANK_RUNNER_COORDINATOR=1
 export CLANK_RUNNER_ARTIFACT_STORE=s3
 export CLANK_RUNNER_ARTIFACT_NAMESPACE=production-releases-v1
 export CLANK_OBJECT_ENDPOINT=https://objects.example.com

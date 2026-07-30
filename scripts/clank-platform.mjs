@@ -46,9 +46,19 @@ const backupInterval = process.env.CLANK_BACKUP_INTERVAL_MS;
 const previewCleanupInterval = process.env.CLANK_PREVIEW_CLEANUP_INTERVAL_MS;
 const runnerArtifactStorage = resolveRunnerArtifactStorage(process.env);
 const backupStorage = resolveBackupStorage(process.env);
-if (runnerArtifactStorage && !process.env.CLANK_RUNNER_REGISTRATION_TOKEN) {
+const runnerCoordinatorSetting = process.env.CLANK_RUNNER_COORDINATOR;
+if (
+  runnerCoordinatorSetting !== undefined
+  && runnerCoordinatorSetting !== "0"
+  && runnerCoordinatorSetting !== "1"
+) {
+  throw new Error("CLANK_RUNNER_COORDINATOR must be 0 or 1.");
+}
+const runnerCoordinatorEnabled =
+  runnerCoordinatorSetting === "1" || Boolean(process.env.CLANK_RUNNER_REGISTRATION_TOKEN);
+if (runnerArtifactStorage && !runnerCoordinatorEnabled) {
   throw new Error(
-    "CLANK_RUNNER_ARTIFACT_STORE=s3 requires CLANK_RUNNER_REGISTRATION_TOKEN.",
+    "CLANK_RUNNER_ARTIFACT_STORE=s3 requires CLANK_RUNNER_COORDINATOR=1.",
   );
 }
 const ingress = ingressEnabled ? {
@@ -72,10 +82,13 @@ const platform = await openPlatform({
   hostingProfile: hosting.hostingProfile,
   platformAdminEmails: list(process.env.CLANK_PLATFORM_ADMIN_EMAILS),
   runner,
-  ...(process.env.CLANK_RUNNER_REGISTRATION_TOKEN
+  ...(runnerCoordinatorEnabled
     ? {
         deploymentAgents: {
-          registrationToken: process.env.CLANK_RUNNER_REGISTRATION_TOKEN,
+          managedEnrollment: true,
+          ...(process.env.CLANK_RUNNER_REGISTRATION_TOKEN
+            ? { registrationToken: process.env.CLANK_RUNNER_REGISTRATION_TOKEN }
+            : {}),
           maxRequestBytes: number(process.env.CLANK_RUNNER_MAX_REQUEST_BYTES, 128 * 1024),
           maxArtifactBytes: number(
             process.env.CLANK_RUNNER_MAX_ARTIFACT_BYTES,
@@ -180,7 +193,9 @@ if (platform.hostingProfile === "trusted") {
   console.warn("Trusted hosting profile: deployed applications share the control-plane Unix trust boundary.");
 }
 console.log(`Managed ingress: ${ingressEnabled ? "enabled" : "disabled"}`);
-console.log(`Remote runner enrollment: ${process.env.CLANK_RUNNER_REGISTRATION_TOKEN ? "enabled" : "disabled"}`);
+console.log(`Remote runner coordinator: ${runnerCoordinatorEnabled ? "enabled" : "disabled"}`);
+console.log(`One-time runner enrollment: ${runnerCoordinatorEnabled ? "enabled" : "disabled"}`);
+console.log(`Legacy shared runner enrollment: ${process.env.CLANK_RUNNER_REGISTRATION_TOKEN ? "enabled" : "disabled"}`);
 console.log(`Runner artifact storage: ${runnerArtifactStorage ? "object" : "local"}`);
 console.log(`Encrypted backup storage: ${backupStorage ? "object" : "local"}`);
 console.log(`Automatic backups: ${backupInterval === "0" ? "disabled" : "enabled"}`);

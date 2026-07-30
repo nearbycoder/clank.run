@@ -104,6 +104,30 @@ The final certification result and exact test counts belong in the pull request 
   consumer conformance; and package, current-tree, and reachable-history credential scans.
 - [x] Kept the current Railway topology unchanged and did not publish an npm package.
 
+## 2026-07-30 managed runner activation phase
+
+- [x] Added administrator-created, exact-node-and-region, expiring one-time runner enrollment with
+  digest-only storage, transactional reservation, single-use commit, safe rollback, bounded active
+  grants, and secret-free audit records.
+- [x] Added responsive fleet health, pending-enrollment, capacity, placement, work, drain,
+  reactivate, enrollment-revoke, and credential-revoke controls to the platform operator console.
+- [x] Made desired placement survive zero-capacity windows, reconsider unassigned work when
+  capacity joins, and fence expired leases onto the current replacement node.
+- [x] Added `clank-runner --check [--json]`, explicit coordinator activation, a closed default,
+  and compatibility for deliberate legacy shared-secret automation.
+- [x] Fixed immediate configured-admin reconciliation for the first bootstrap account and added
+  a focused regression test.
+- [x] Browser-verified first-account operator access, server-rendered `/admin` navigation, one-time
+  secret display, secret disappearance after refresh, pending metadata, a 390px layout without
+  horizontal overflow, and no Clank page console errors.
+- [x] Kept project execution on the existing control-plane host until the next phase defines
+  remote secrets, SQLite data, ingress, backup, rollback, and release placement; no Railway
+  service, volume, bucket, or npm release was added.
+- [x] Re-certified all 264 tests at 86.05% line, 74.31% branch, and 85.29% function coverage;
+  54 documentation files, 169 local links, 30 declaration files, and 28 package exports; packed
+  consumer conformance; and package, current-tree, and reachable-history credential scans.
+- [ ] Record the CI evidence in the pull request after its required checks finish.
+
 ## 2026-07-26 follow-up
 
 - [x] Merged the complete 2026-07-25 security and release-certification pass into `main`.

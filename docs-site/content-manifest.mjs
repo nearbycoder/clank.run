@@ -65,6 +65,7 @@ export const groups = [
       ["usage-and-limits", "docs/usage-and-limits.md"],
       ["platform-dashboard", "docs/platform-dashboard.md"],
       ["organizations", "docs/organizations.md"],
+      ["runner-fleet", "docs/runner-fleet.md"],
       ["distributed-deployment", "docs/distributed-deployment.md"],
       ["provider-adapters", "docs/provider-adapters.md"],
       ["railway", "docs/railway.md"],

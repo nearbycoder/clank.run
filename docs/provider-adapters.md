@@ -132,10 +132,12 @@ export CLANK_PROVIDER_TOKEN="$(secret read clank-runtime-provider)"
 clank-runner
 ```
 
-After successful enrollment, remove `CLANK_RUNNER_REGISTRATION_TOKEN` from the long-running
-service. The persisted node credential is sufficient for restart. `SIGINT` and `SIGTERM` drain the
-node before exit. Run `clank-runner --help` for capacity, label, concurrency, timeout, retry, and
-artifact-limit settings.
+Run `clank-runner --check` before starting the service, or add `--json` for an agent-readable
+result. With a saved node credential it authenticates the node; before first enrollment it
+validates configuration without consuming the one-time value. After successful enrollment, remove
+`CLANK_RUNNER_REGISTRATION_TOKEN` from the long-running service. The persisted node credential is
+sufficient for restart. `SIGINT` and `SIGTERM` drain the node before exit. Run
+`clank-runner --help` for capacity, label, concurrency, timeout, retry, and artifact-limit settings.
 
 This process requires no extra npm package or managed service. A systemd unit, container, VM, or
 existing scheduler can supervise it. The control plane's normal single-host mode remains the

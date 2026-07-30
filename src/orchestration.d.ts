@@ -83,6 +83,13 @@ export interface DeploymentOrchestrator {
         labels?: Record<string, string>;
     }): Promise<DeploymentNode>;
     drainNode(nodeId: string, token: string, draining?: boolean): Promise<DeploymentNode>;
+    /** Operator-only lifecycle control; callers must enforce their own authorization boundary. */
+    setNodeDraining(nodeId: string, draining: boolean): DeploymentNode;
+    /**
+     * Invalidates a node credential and marks the node offline. Callers must
+     * enforce their own operator authorization boundary.
+     */
+    revokeNode(nodeId: string): DeploymentNode;
     listNodes(): DeploymentNode[];
     setDesired(input: {
         projectId: string;

@@ -10,9 +10,32 @@ import type {
 
 export const DEPLOYMENT_COORDINATOR_PREFIX = "/api/runner/v1";
 
+export interface DeploymentRegistrationAuthorization {
+  /**
+   * Finalizes a reserved one-time enrollment after the node credential has
+   * been created. A failure prevents the credential from reaching the node.
+   */
+  commit(): Promise<void>;
+  /** Releases a reservation when node validation or registration fails. */
+  rollback(): Promise<void>;
+}
+
+export interface DeploymentRegistrationRequest {
+  readonly token: string;
+  readonly node: Readonly<DeploymentNodeInput>;
+  readonly signal: AbortSignal;
+}
+
 export interface DeploymentCoordinatorHandlerOptions {
-  /** Separate high-entropy secret used only to enroll or rotate deployment nodes. */
-  registrationToken: string;
+  /** Optional static high-entropy secret used only to enroll or rotate deployment nodes. */
+  registrationToken?: string;
+  /**
+   * Optional transactional authorization for expiring or one-time enrollment
+   * credentials. Return null to deny the request.
+   */
+  authorizeRegistration?: (
+    request: DeploymentRegistrationRequest,
+  ) => Promise<DeploymentRegistrationAuthorization | null>;
   /** Maximum JSON request body. Defaults to 128 KiB. */
   maxRequestBytes?: number;
   /** Optional content-addressed release source, scoped to a current operation lease. */
@@ -180,7 +203,14 @@ export function createDeploymentCoordinatorHandler(
   orchestrator: DeploymentOrchestrator,
   options: DeploymentCoordinatorHandlerOptions,
 ): DeploymentCoordinatorHandler {
-  const registrationToken = boundedToken(options.registrationToken, "registrationToken");
+  const registrationToken = options.registrationToken === undefined
+    ? undefined
+    : boundedToken(options.registrationToken, "registrationToken");
+  if (!registrationToken && !options.authorizeRegistration) {
+    throw new TypeError(
+      "A registrationToken or authorizeRegistration callback is required.",
+    );
+  }
   const maxRequestBytes = integer(
     options.maxRequestBytes ?? 128 * 1024,
     "maxRequestBytes",
@@ -215,17 +245,44 @@ export function createDeploymentCoordinatorHandler(
       if (operation === "register") {
         exact(input, ["id", "region"], ["endpoint", "capacity", "labels"]);
         const bearer = bearerToken(request);
-        if (!await tokensEqual(bearer, registrationToken)) {
-          throw new CoordinatorRequestError(401, "REGISTRATION_DENIED", "Deployment node enrollment was denied.");
-        }
-        const session = await orchestrator.registerNode({
+        const node = Object.freeze({
           id: string(input.id, "id"),
           region: string(input.region, "region"),
           ...(input.endpoint === undefined ? {} : { endpoint: string(input.endpoint, "endpoint") }),
           ...(input.capacity === undefined ? {} : { capacity: number(input.capacity, "capacity") }),
           ...(input.labels === undefined ? {} : { labels: stringRecord(input.labels, "labels") }),
         });
-        return json({ ok: true, ...session }, 201);
+        const staticAuthorized = registrationToken
+          ? await tokensEqual(bearer, registrationToken)
+          : false;
+        const authorization = staticAuthorized
+          ? null
+          : await options.authorizeRegistration?.({
+              token: bearer,
+              node,
+              signal: request.signal,
+            }) ?? null;
+        if (!staticAuthorized && !authorization) {
+          throw new CoordinatorRequestError(401, "REGISTRATION_DENIED", "Deployment node enrollment was denied.");
+        }
+        let committed = false;
+        try {
+          const session = await orchestrator.registerNode(node);
+          if (authorization) {
+            await authorization.commit();
+            committed = true;
+          }
+          return json({ ok: true, ...session }, 201);
+        } catch (error) {
+          if (authorization && !committed) {
+            try {
+              await authorization.rollback();
+            } catch (rollbackError) {
+              options.onError?.(rollbackError);
+            }
+          }
+          throw error;
+        }
       }
 
       if (![

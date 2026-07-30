@@ -36,15 +36,21 @@ Desired-state observations are generation checked. A late report for generation 
 ## Authenticated HTTP transport
 
 Remote nodes should never open `control.sqlite`. Enable the optional coordinator transport on the
-control plane with a separate secret:
+control plane:
 
 ```sh
-CLANK_RUNNER_REGISTRATION_TOKEN="$(openssl rand -base64 48)" clank-platform
+CLANK_RUNNER_COORDINATOR=1 clank-platform
 ```
 
-The fixed protocol prefix is `/api/runner/v1`. It is closed with `404` when the token is unset.
+The fixed protocol prefix is `/api/runner/v1`. It is closed with `404` when the coordinator is
+disabled.
 Outside loopback, clients accept only HTTPS and refuse redirects so a control-plane response cannot
 forward a bearer credential to another origin.
+
+Create a node-and-region-bound one-time enrollment in the administrator fleet panel, then supply
+that `clnke_...` value to the runner's `CLANK_RUNNER_REGISTRATION_TOKEN` environment variable for
+its first start. The value is returned once, expires, and is consumed transactionally. See
+[Deployment runner fleet](runner-fleet.md) for the complete lifecycle.
 
 ```ts
 import { createDeploymentCoordinatorClient } from "@clank.run/framework/runner";
@@ -91,10 +97,12 @@ Requests are JSON-only and body-bounded. Responses are no-store and response-bou
 Authentication failures are generic, bearer credentials are never accepted in URLs, and private
 unexpected errors go only to the control plane's operator logger.
 
-The registration token is more powerful than a node token because it can rotate any named node.
-Use a dedicated secret—not the platform master key, account token, project token, or application
-secret. Put edge rate limiting in front of enrollment, restrict it to a private network when
-possible, and rotate it after provisioning-system exposure.
+A legacy shared `CLANK_RUNNER_REGISTRATION_TOKEN` can still be set on the control plane for
+provisioning compatibility. It is more powerful than a node token because it can rotate any named
+node. Prefer administrator-created one-time enrollment. If the legacy secret is needed, use a
+dedicated secret—not the platform master key, account token, project token, or application secret.
+Put edge rate limiting in front of enrollment, restrict it to a private network when possible, and
+rotate it after provisioning-system exposure.
 
 ## Content-addressed release transfer
 

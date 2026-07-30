@@ -94,7 +94,13 @@ export interface ClankPlatformOptions {
      * Omit it to keep every runner endpoint closed.
      */
     deploymentAgents?: {
-        registrationToken: string;
+        /** Legacy shared enrollment secret. Prefer managedEnrollment for new installations. */
+        registrationToken?: string;
+        /**
+         * Enables administrator-created, node-and-region-bound enrollment tokens
+         * that expire and can be used exactly once. Defaults to false.
+         */
+        managedEnrollment?: boolean;
         maxRequestBytes?: number;
         /** Maximum content-addressed release transferred to a current node lease. */
         maxArtifactBytes?: number;

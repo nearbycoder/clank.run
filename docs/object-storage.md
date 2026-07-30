@@ -114,7 +114,7 @@ original upload so the exact leased release can be downloaded by its assigned no
 owner-only files remain the default. Select object storage explicitly:
 
 ```sh
-export CLANK_RUNNER_REGISTRATION_TOKEN="$(your-secret-manager read runner-enrollment)"
+export CLANK_RUNNER_COORDINATOR=1
 export CLANK_RUNNER_ARTIFACT_STORE=s3
 export CLANK_RUNNER_ARTIFACT_NAMESPACE=production-releases-v1
 export CLANK_OBJECT_ENDPOINT=https://objects.example.com

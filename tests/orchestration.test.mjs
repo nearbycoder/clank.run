@@ -9,7 +9,7 @@ import {
   openSQLite,
 } from "../dist/index.js";
 
-async function fixture() {
+async function fixture(options = {}) {
   const root = await mkdtemp(join(tmpdir(), "clank-orchestration-"));
   const database = await openSQLite(defineDatabase({}), {
     path: join(root, "control.sqlite"),
@@ -18,6 +18,7 @@ async function fixture() {
   const orchestrator = openDeploymentOrchestrator(database, {
     distributedLeaseMs: 5_000,
     retryBaseMs: 10,
+    ...options,
   });
   return {
     root,
@@ -44,6 +45,74 @@ test("distributed leases use authenticated tokens and monotonic fences", async (
     assert.equal(renewed.fence, 2);
     assert.ok(renewed.expiresAt > replaced.expiresAt);
     assert.equal(await test.orchestrator.releaseLease(renewed), true);
+  } finally {
+    await test.close();
+  }
+});
+
+test("operator drain and revoke controls fence credentials and recover running placements", async () => {
+  const test = await fixture({ operationLeaseMs: 100 });
+  try {
+    const nodeA = await test.orchestrator.registerNode({
+      id: "node-a",
+      region: "us-central",
+      capacity: 2,
+    });
+    const nodeB = await test.orchestrator.registerNode({
+      id: "node-b",
+      region: "us-central",
+      capacity: 2,
+    });
+    assert.equal(test.orchestrator.setNodeDraining("node-a", true).status, "draining");
+    assert.equal(test.orchestrator.setNodeDraining("node-a", false).status, "active");
+
+    const desired = await test.orchestrator.setDesired({
+      projectId: "project_failover",
+      releaseId: "release-failover-1",
+      state: "running",
+      region: "us-central",
+    });
+    assert.equal(desired.assignedNodeId, "node-a");
+    const [staleLease] = await test.orchestrator.claim("node-a", nodeA.token, 1);
+    assert.equal(staleLease.nodeId, "node-a");
+
+    const revoked = test.orchestrator.revokeNode("node-a");
+    assert.equal(revoked.status, "offline");
+    assert.equal(test.orchestrator.desired("project_failover").assignedNodeId, "node-b");
+    await assert.rejects(
+      test.orchestrator.authenticateNode("node-a", nodeA.token),
+      /authentication failed/,
+    );
+    assert.equal((await test.orchestrator.claim("node-b", nodeB.token, 1)).length, 0);
+    await new Promise((resolve) => setTimeout(resolve, 110));
+    const [recovered] = await test.orchestrator.claim("node-b", nodeB.token, 1);
+    assert.equal(recovered.id, staleLease.id);
+    assert.equal(recovered.nodeId, "node-b");
+    assert.equal(recovered.fence, staleLease.fence + 1);
+    assert.equal(await test.orchestrator.complete(staleLease), false);
+
+    test.orchestrator.revokeNode("node-b");
+    const unassigned = await test.orchestrator.setDesired({
+      projectId: "project_waiting_for_capacity",
+      releaseId: "release-waiting-1",
+      state: "running",
+      region: "us-central",
+    });
+    assert.equal(unassigned.assignedNodeId, null);
+    const nodeC = await test.orchestrator.registerNode({
+      id: "node-c",
+      region: "us-central",
+      capacity: 2,
+    });
+    const claimed = await test.orchestrator.claim("node-c", nodeC.token, 10);
+    assert.equal(
+      claimed.some((operation) => operation.projectId === "project_waiting_for_capacity"),
+      true,
+    );
+    assert.equal(
+      test.orchestrator.desired("project_waiting_for_capacity").assignedNodeId,
+      "node-c",
+    );
   } finally {
     await test.close();
   }

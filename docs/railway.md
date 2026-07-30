@@ -60,9 +60,9 @@ CLANK_BACKUP_MAX_AGE_MS=7776000000
 CLANK_ALLOW_UNSAFE_MIGRATIONS=0
 ```
 
-Leave `CLANK_RUNNER_REGISTRATION_TOKEN` unset on the current single-service topology. Enabling the
-remote-node coordinator does not improve isolation by itself and is unnecessary until a separate
-runner host is provisioned.
+Leave `CLANK_RUNNER_COORDINATOR` and `CLANK_RUNNER_REGISTRATION_TOKEN` unset on the current
+single-service topology. Enabling the remote-node coordinator does not improve isolation by itself
+and is unnecessary until a separate runner host is provisioned.
 
 Do not put `CLANK_PLATFORM_MASTER_KEY` in source control. Back it up separately from the volume:
 losing it makes encrypted secrets and recovery points unreadable.
@@ -108,16 +108,17 @@ a Railway database, Redis instance, telemetry service, or bucket. Open `/usage` 
 Keep Railway's public edge in front of Clank: streamed response bytes and pre-admission abuse are
 outside this ledger. See [Usage accounting and traffic limits](usage-and-limits.md).
 
-Leave `CLANK_RUNNER_REGISTRATION_TOKEN` unset for the inexpensive single-service topology. Enabling
+Leave `CLANK_RUNNER_COORDINATOR` unset for the inexpensive single-service topology. Enabling
 remote-node enrollment retains one additional compressed upload for each new release so an exact
 leased artifact can be transferred to another host; that copy is included in project release
 quotas and the storage-attribution panel. Set `CLANK_RUNNER_MAX_ARTIFACT_BYTES` deliberately before
-enabling enrollment.
+enabling enrollment. See [Deployment runner fleet](runner-fleet.md) before adding a runner service.
 
 For independent deployment nodes, create a Railway Bucket only when needed, reference its
 S3-compatible variables into the control-plane service, and set:
 
 ```sh
+CLANK_RUNNER_COORDINATOR=1
 CLANK_RUNNER_ARTIFACT_STORE=s3
 CLANK_RUNNER_ARTIFACT_NAMESPACE=railway-production-v1
 CLANK_OBJECT_ENDPOINT=<reference the bucket ENDPOINT>
