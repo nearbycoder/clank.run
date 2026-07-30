@@ -2775,7 +2775,7 @@ test("account quotas prevent multiplying organizations to bypass hosted site lim
   }
 });
 
-test("Docker runner passes secret names in arguments and secret values only through its environment", async () => {
+test("Docker runner prevents application environment from controlling the host Docker client", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-docker-argv-"));
   const source = join(root, "source");
   const runnerPath = join(root, "fake-docker.mjs");
@@ -2783,17 +2783,27 @@ test("Docker runner passes secret names in arguments and secret values only thro
   await writeFile(runnerPath, `#!/usr/bin/env node
     import { spawn } from "node:child_process";
     import { writeFile } from "node:fs/promises";
-    import { join } from "node:path";
     const arguments_ = process.argv.slice(2);
+    const encoded = process.env.CLANK_RUNTIME_ENV_B64;
+    const runtimeEnvironment = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
     await writeFile(${JSON.stringify(invocationPath)}, JSON.stringify({
       arguments_,
-      secretPresent: process.env.DOCKER_TEST_SECRET === "abc",
+      envelopePresent: typeof encoded === "string",
+      hostSecretPresent: process.env.DOCKER_TEST_SECRET === "abc",
+      hostDockerRedirected: process.env.DOCKER_HOST === "tcp://attacker.example:2375",
+      hostPreloadInjected: process.env.LD_PRELOAD === "/app/evil.so",
+      runtimeSecretPresent: runtimeEnvironment.DOCKER_TEST_SECRET === "abc",
+      runtimeDockerHostPresent: runtimeEnvironment.DOCKER_HOST === "tcp://attacker.example:2375",
+      runtimePreloadPresent: runtimeEnvironment.LD_PRELOAD === "/app/evil.so",
     }));
     const mount = arguments_.find((value) => value.endsWith(":/app:ro"));
     if (!mount) throw new Error("Missing application mount.");
     const applicationRoot = mount.slice(0, -":/app:ro".length);
-    const child = spawn(process.execPath, [join(applicationRoot, arguments_.at(-1))], {
-      env: { ...process.env, HOST: "127.0.0.1" },
+    const nodeIndex = arguments_.indexOf("node");
+    if (nodeIndex === -1) throw new Error("Missing Node launcher.");
+    const child = spawn(process.execPath, arguments_.slice(nodeIndex + 1), {
+      cwd: applicationRoot,
+      env: { ...process.env },
       stdio: ["ignore", "inherit", "inherit"],
     });
     process.once("SIGTERM", () => child.kill("SIGTERM"));
@@ -2818,7 +2828,13 @@ test("Docker runner passes secret names in arguments and secret values only thro
     await payload(platform, jsonRequest(`/api/projects/${created.project.id}/secrets`, {
       method: "PUT",
       token: owner.accessToken,
-      body: { values: { DOCKER_TEST_SECRET: "abc" } },
+      body: {
+        values: {
+          DOCKER_TEST_SECRET: "abc",
+          DOCKER_HOST: "tcp://attacker.example:2375",
+          LD_PRELOAD: "/app/evil.so",
+        },
+      },
     }));
     const artifact = await appArtifact(source, "docker-release", [
       ["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"],
@@ -2832,9 +2848,19 @@ test("Docker runner passes secret names in arguments and secret values only thro
     );
     assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
     const invocation = JSON.parse(await readFile(invocationPath, "utf8"));
-    assert.equal(invocation.secretPresent, true);
-    assert.equal(invocation.arguments_.includes("DOCKER_TEST_SECRET"), true);
-    assert.equal(invocation.arguments_.some((argument) => argument.includes("abc")), false);
+    assert.equal(invocation.envelopePresent, true);
+    assert.equal(invocation.hostSecretPresent, false);
+    assert.equal(invocation.hostDockerRedirected, false);
+    assert.equal(invocation.hostPreloadInjected, false);
+    assert.equal(invocation.runtimeSecretPresent, true);
+    assert.equal(invocation.runtimeDockerHostPresent, true);
+    assert.equal(invocation.runtimePreloadPresent, true);
+    assert.equal(invocation.arguments_.includes("CLANK_RUNTIME_ENV_B64"), true);
+    assert.equal(
+      invocation.arguments_.some((argument) =>
+        /abc|attacker\.example|evil\.so/u.test(argument)),
+      false,
+    );
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });

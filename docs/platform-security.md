@@ -212,7 +212,13 @@ The control-plane audit API has no update or delete operation, but the trusted S
 
 ## Runner hardening
 
-Docker mode adds read-only root, dropped capabilities, no-new-privileges, non-root UID/GID, PID/memory/CPU limits, narrow bind mounts, and a constrained temporary filesystem. Runtime secret values are supplied through the Docker client's environment with name-only `-e NAME` arguments, so values do not appear in the Docker CLI process arguments. Privileged host/container administrators can still inspect runtime environment state.
+Docker mode adds read-only root, dropped capabilities, no-new-privileges, non-root UID/GID,
+PID/memory/CPU limits, narrow bind mounts, and a constrained temporary filesystem. Runtime values
+are serialized into one encoded `CLANK_RUNTIME_ENV_B64` envelope; only that inert name enters the
+Docker client's environment and arguments. The container bootstrap decodes and deletes it before
+application import. Application variables therefore cannot act as host-side Docker, loader, proxy,
+or TLS controls, and no secret value appears in Docker CLI arguments. Privileged host/container
+administrators can still inspect runtime environment state.
 
 Also pin image digests, patch the kernel/runtime, apply seccomp/AppArmor/SELinux, restrict network egress, protect the Docker socket, set disk quotas, isolate customer tiers, and prefer microVMs for hostile code.
 

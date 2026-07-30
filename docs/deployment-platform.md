@@ -246,7 +246,13 @@ clank secrets delete API_KEY
 
 Secret names and timestamps are visible; values are never returned. Values use AES-256-GCM under the platform master key and are decrypted only for runtime injection.
 
-Docker launches use name-only environment arguments (`-e NAME`); values are inherited by the Docker client rather than placed in process arguments. Privileged host/container administrators can still inspect runtime environment state. Platform-controlled names such as `PATH`, `HOME`, `HOST`, `PORT`, `NODE_ENV`, and `TRUST_PROXY` are reserved.
+Docker launches pass one name-only `CLANK_RUNTIME_ENV_B64` envelope to the container. The
+host-side Docker client receives no application-named variables, so values such as `DOCKER_HOST`,
+`LD_PRELOAD`, proxy settings, or TLS settings cannot change which daemon or executable performs
+the launch. The in-container Node bootstrap decodes the environment, deletes the envelope, and
+then imports application code. No secret value is placed in a process argument. Privileged
+host/container administrators can still inspect runtime environment state. Platform-controlled
+names such as `PATH`, `HOME`, `HOST`, `PORT`, `NODE_ENV`, and `TRUST_PROXY` are reserved.
 
 Secret changes take effect on the next release or supervised restart.
 
