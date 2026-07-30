@@ -23,6 +23,12 @@ export interface DeploymentNode {
     heartbeatAt: number;
     expiresAt: number;
 }
+export interface DeploymentNodeRequirements {
+    /** Require a registered private HTTPS/loopback endpoint. */
+    endpoint?: boolean;
+    /** Require exact node label values. */
+    labels?: Record<string, string>;
+}
 export interface NodeSession {
     node: DeploymentNode;
     token: string;
@@ -70,6 +76,10 @@ export interface DesiredDeployment {
     desiredReleaseId: string | null;
     desiredState: "running" | "stopped";
     placementMode: DeploymentPlacementMode;
+    nodeRequirements: Readonly<{
+        endpoint: boolean;
+        labels: Readonly<Record<string, string>>;
+    }>;
     assignedNodeId: string | null;
     generation: number;
     observedReleaseId: string | null;
@@ -107,6 +117,11 @@ export interface DeploymentOrchestrator {
          * on later generations. A placement mode cannot be changed implicitly.
          */
         placementMode?: DeploymentPlacementMode;
+        /**
+         * Durable capability selection. Later generations inherit omitted
+         * requirements; a pinned stateful placement cannot change them.
+         */
+        nodeRequirements?: DeploymentNodeRequirements;
         /** Selects the sensitive runtime capsule contract for the reconcile operation. */
         runtimeProtocol?: "clank-runtime/1";
     }): Promise<DesiredDeployment>;

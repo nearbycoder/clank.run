@@ -99,6 +99,10 @@ The fleet panel shows:
 - assigned placement count; and
 - queued, leased, retrying, and failed coordination operations.
 
+Desired placements may require an endpoint and exact capability labels. Those requirements remain
+attached while work waits for capacity. A node with assigned work cannot remove a capability that
+the placement requires during heartbeat or re-enrollment.
+
 To upgrade a runner:
 
 1. Select **Drain**. The node stops receiving new placement or claims but keeps its existing
