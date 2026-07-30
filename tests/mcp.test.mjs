@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  BackendActionError,
   defineAuth,
   defineBackend,
   defineDatabase,
@@ -127,6 +128,51 @@ function authenticatedBackend() {
     },
   }));
 }
+
+test("backend action errors retain their public code through MCP tool calls", async () => {
+  const schema = defineDatabase({
+    values: defineTable({ value: s.string() }),
+  });
+  const definition = defineBackend({ schema }).functions(({ mutation }) => ({
+    guarded: mutation({
+      description: "Run an action with a public application guard.",
+      args: {},
+      handler: ({ db }) => {
+        db.table("values").insert({ value: "must roll back" });
+        throw new BackendActionError(409, "ACTION_BLOCKED", "The guarded action is blocked.");
+      },
+    }),
+  }));
+  const runtime = await openBackend(definition, { path: ":memory:" });
+  try {
+    const initialized = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "backend-error-test", version: "1.0.0" },
+      },
+    }));
+    assert.equal(initialized.status, 200);
+    const session = initialized.headers.get("mcp-session-id");
+    assert.ok(session);
+    const called = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "guarded", arguments: {} },
+    }, undefined, { "mcp-session-id": session }));
+    const result = (await called.json()).result;
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.error.code, "ACTION_BLOCKED");
+    assert.equal(result.structuredContent.error.message, "The guarded action is blocked.");
+    assert.equal(runtime.version, 0);
+  } finally {
+    runtime.close();
+  }
+});
 
 async function registerUser(runtime) {
   const response = await runtime.handle(jsonRequest("/__clank/auth/register", {

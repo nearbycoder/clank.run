@@ -65,6 +65,16 @@ export declare class DatabaseConflictError extends Error {
     readonly status = 409;
     constructor(table: string, id: string, expectedVersion: number | null, actualVersion: number | null);
 }
+/**
+ * A bounded, intentional application failure that is safe to expose through
+ * browser RPC and MCP tool responses.
+ */
+export declare class BackendActionError extends Error {
+    readonly status: 400 | 404 | 409;
+    readonly code: string;
+    readonly name = "BackendActionError";
+    constructor(status: 400 | 404 | 409, code: string, message: string);
+}
 export interface ReadDatabase<Schema extends DatabaseSchema<any>> {
     table<Name extends TableName<Schema>>(name: Name): ReadTable<Schema, Name>;
 }

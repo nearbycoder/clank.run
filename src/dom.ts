@@ -315,11 +315,16 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
   cursor.node = node.nextSibling;
   const childNamespace = namespace === "svg" && tag === "foreignObject" ? undefined : namespace;
   const cleanups: Cleanup[] = [];
+  const deferred: Array<[string, unknown]> = [];
   let children: Mounted | undefined;
   const ref = vnode.props.ref;
   try {
     for (const [name, value] of Object.entries(vnode.props)) {
       if (name === "children" || name === "key") continue;
+      if (bindingNeedsChildren(node, name)) {
+        deferred.push([name, value]);
+        continue;
+      }
       const cleanup = bindProperty(node, name, value);
       if (cleanup) cleanups.push(cleanup);
     }
@@ -328,6 +333,10 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
       const childCursor: HydrationCursor = { node: node.firstChild };
       children = hydrateFragment(node, vnode.props.children as Renderable[], childCursor, { ...context, namespace: childNamespace });
       if (childCursor.node !== null) throw new HydrationMismatch(`Unexpected children in server-rendered <${tag}>.`);
+    }
+    for (const [name, value] of deferred) {
+      const cleanup = bindProperty(node, name, value);
+      if (cleanup) cleanups.push(cleanup);
     }
     if (typeof ref === "function") (ref as (element: Element) => void)(node);
     else if (isSignal(ref)) (ref as ReactiveSignal<Element | null>).value = node;
@@ -860,8 +869,13 @@ function mountElement(parent: Node, vnode: VNode, before: Node | null, context: 
     ? document.createElementNS("http://www.w3.org/2000/svg", tag)
     : document.createElement(tag);
   const cleanups: Cleanup[] = [];
+  const deferred: Array<[string, unknown]> = [];
   for (const [name, value] of Object.entries(vnode.props)) {
     if (name === "children" || name === "key") continue;
+    if (bindingNeedsChildren(element, name)) {
+      deferred.push([name, value]);
+      continue;
+    }
     const cleanup = bindProperty(element, name, value);
     if (cleanup) cleanups.push(cleanup);
   }
@@ -869,6 +883,10 @@ function mountElement(parent: Node, vnode: VNode, before: Node | null, context: 
   const children = rawHTML === undefined
     ? mountFragment(element, vnode.props.children as Renderable[], null, { ...context, namespace: childNamespace })
     : undefined;
+  for (const [name, value] of deferred) {
+    const cleanup = bindProperty(element, name, value);
+    if (cleanup) cleanups.push(cleanup);
+  }
   parent.insertBefore(element, before);
   const ref = vnode.props.ref;
   if (typeof ref === "function") (ref as (node: Element) => void)(element);
@@ -880,6 +898,14 @@ function mountElement(parent: Node, vnode: VNode, before: Node | null, context: 
       (ref as ReactiveSignal<Element | null>).value = null;
     }
   });
+}
+
+function bindingNeedsChildren(element: Element, name: string): boolean {
+  return element.localName === "select"
+    && (name === "value"
+      || name === "selectedIndex"
+      || name === "bind:value"
+      || name === "bind:selectedIndex");
 }
 
 function bindProperty(element: Element, name: string, input: unknown): Cleanup | undefined {

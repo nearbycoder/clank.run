@@ -61,6 +61,11 @@ class FakeElement extends FakeNode {
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   removeEventListener(name) { this.listeners.delete(name); }
   get children() { return this.childNodes.filter((node) => node instanceof FakeElement); }
+  set value(value) {
+    this.boundValueChildCount = this.childNodes.length;
+    this.currentValue = value;
+  }
+  get value() { return this.currentValue ?? ""; }
 }
 
 globalThis.Node = FakeNode;
@@ -102,6 +107,20 @@ test("agent labels give interactive controls the same accessible name", () => {
   label.value = "Create todo";
   assert.equal(button.getAttribute("data-clank-label"), "Create todo");
   assert.equal(button.getAttribute("aria-label"), "Create todo");
+});
+
+test("select value bindings attach after their options and remain reactive", () => {
+  const selected = signal("normal");
+  const root = new FakeElement("main");
+  render(root, h("select", { "bind:value": selected },
+    h("option", { value: "low" }, "Low"),
+    h("option", { value: "normal" }, "Normal"),
+  ));
+  const select = root.children[0];
+  assert.equal(select.boundValueChildCount, 2);
+  assert.equal(select.value, "normal");
+  selected.value = "low";
+  assert.equal(select.value, "low");
 });
 
 test("boolean ARIA states remain explicit as they change", () => {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  BackendActionError,
   DatabaseConflictError,
   createApi,
   createSyncClient,
@@ -228,6 +229,53 @@ test("Fetch RPC validates calls and exposes an SSE initial snapshot", async () =
   assert.equal((await shutdownReader.read()).done, false);
   runtime.close();
   assert.equal((await shutdownReader.read()).done, true);
+});
+
+test("intentional backend action failures are bounded, public, and atomic", async () => {
+  assert.throws(
+    () => new BackendActionError(500, "SAFE_CODE", "No"),
+    /status must be 400, 404, or 409/u,
+  );
+  assert.throws(
+    () => new BackendActionError(409, "bad-code", "No"),
+    /uppercase letters/u,
+  );
+  assert.throws(
+    () => new BackendActionError(409, "SAFE_CODE", "\u0000"),
+    /safe text/u,
+  );
+  const schema = defineDatabase({
+    values: defineTable({ value: s.string() }),
+  });
+  const definition = defineBackend({ schema }).functions(({ query, mutation }) => ({
+    list: query({ args: {}, handler: ({ db }) => db.table("values").collect() }),
+    guarded: mutation({
+      description: "Apply an intentional application guard.",
+      args: {},
+      handler: ({ db }) => {
+        db.table("values").insert({ value: "must roll back" });
+        throw new BackendActionError(409, "ACTION_BLOCKED", "The guarded action is blocked.");
+      },
+    }),
+  }));
+  const reported = [];
+  const runtime = await openBackend(definition, {
+    path: ":memory:",
+    onError: (error) => reported.push(error),
+  });
+  const response = await runtime.handle(new Request("https://app.test/__clank/mutation/guarded", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "https://app.test" },
+    body: "{}",
+  }));
+  const payload = await response.json();
+  assert.equal(response.status, 409);
+  assert.equal(payload.error.code, "ACTION_BLOCKED");
+  assert.equal(payload.error.message, "The guarded action is blocked.");
+  assert.deepEqual(runtime.query("list", {}).value, []);
+  assert.equal(runtime.version, 0);
+  assert.deepEqual(reported, [], "intentional public failures should not be reported as server faults");
+  runtime.close();
 });
 
 test("zero-codegen client references preserve paths and RPC behavior", async () => {

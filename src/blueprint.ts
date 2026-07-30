@@ -43,6 +43,15 @@ export interface AppRelationshipDefinition {
   to: string;
   kind: "one-to-one" | "one-to-many" | "many-to-many";
   onDelete?: "restrict" | "cascade" | "nullify";
+  /**
+   * The field that stores the relationship. It must be a reference field on
+   * either endpoint that targets the other endpoint. Clank infers it when
+   * exactly one unambiguous reference exists.
+   */
+  reference?: {
+    entity: string;
+    field: string;
+  };
 }
 
 export interface AppRoleDefinition {
@@ -66,6 +75,12 @@ export interface AppActionDefinition {
   description: string;
   entity?: string;
   operation: "create" | "read" | "update" | "delete" | "custom";
+  /**
+   * The safe generated implementation. Ordinary CRUD behaviors are inferred
+   * from operation and conventional names; custom actions remain explicit
+   * extension points until application code implements them.
+   */
+  behavior?: "list" | "create" | "update" | "toggle" | "delete";
   roles?: readonly string[];
   confirmation?: "never" | "write" | "always";
   realtime?: boolean;
@@ -158,7 +173,10 @@ export interface AppPlan {
 
 const NAME = /^[A-Za-z][A-Za-z0-9_]*$/;
 const ACTION_NAME = /^[A-Za-z][A-Za-z0-9_.-]*$/;
+const ACTION_SEGMENT = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const MIGRATION_ID = /^\d{4}$/;
+const UNSAFE_TEXT = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
+const RESERVED_API_SEGMENTS = new Set(["path", "then"]);
 
 export function defineApp(input: AppBlueprintInput): AppBlueprint {
   return normalizeApp(input);
@@ -183,10 +201,6 @@ export function generateAppFiles(
   const frameworkVersion = options.frameworkVersion ?? "latest";
   const frameworkDependency = options.frameworkDependency
     ?? (frameworkVersion === "latest" ? "latest" : `^${frameworkVersion}`);
-  const primaryName = primaryEntity(app);
-  const primary = app.entities[primaryName];
-  const display = primary.displayField;
-  const completion = primary.completionField;
   const files: GeneratedAppFile[] = [
     {
       path: ".gitignore",
@@ -244,7 +258,7 @@ export function generateAppFiles(
     },
     {
       path: "clank.app.ts",
-      contents: `export default ${JSON.stringify(app, null, 2)} satisfies import("@clank.run/framework/blueprint").AppBlueprintInput;\n`,
+      contents: `export default ${sourceLiteral(app, 2)} satisfies import("@clank.run/framework/blueprint").AppBlueprintInput;\n`,
     },
     {
       path: "clank.deploy.json",
@@ -276,19 +290,23 @@ export function generateAppFiles(
     },
     {
       path: "src/view.tsx",
-      contents: viewSource(app, primaryName, display, completion),
+      contents: viewSource(app),
     },
     {
       path: "src/app.tsx",
-      contents: browserSource(primaryName, completion),
+      contents: browserSource(app),
     },
     {
       path: "src/server.tsx",
-      contents: serverSource(app, primaryName, completion),
+      contents: serverSource(app),
     },
     {
       path: "src/service-requirements.ts",
       contents: serviceRequirementsSource(app),
+    },
+    {
+      path: "src/services.ts",
+      contents: servicesSource(app),
     },
   ];
   for (const migration of app.migrations) {
@@ -309,10 +327,49 @@ function serviceRequirementsSource(app: AppBlueprint): string {
   }));
   return `import type { ServiceRegistry, ServiceRequirement } from "@clank.run/framework/services";
 
-export const serviceRequirements = ${JSON.stringify(requirements, null, 2)} as const satisfies readonly ServiceRequirement[];
+export const serviceRequirements = ${sourceLiteral(requirements, 2)} as const satisfies readonly ServiceRequirement[];
 
 export function assertServices(services: ServiceRegistry): void {
   services.assert(serviceRequirements);
+}
+`;
+}
+
+function servicesSource(app: AppBlueprint): string {
+  const drivers = Object.entries(app.services).map(([name, service]) => `    {
+      name: ${sourceLiteral(name)},
+      kind: ${sourceLiteral(service.kind)},
+      capabilities: ${sourceLiteral(service.capabilities ?? [])},
+      service: Object.freeze({
+        development: true,
+        name: ${sourceLiteral(name)},
+        kind: ${sourceLiteral(service.kind)},
+      }),
+      health: async () => ({ ok: true }),
+    }`).join(",\n");
+  return `import {
+  createServiceRegistry,
+  type ServiceDriver,
+  type ServiceRegistry,
+} from "@clank.run/framework/services";
+import { assertServices } from "./service-requirements.ts";
+
+/**
+ * Replace or extend this function with real production drivers. Local drivers
+ * exist only under clank dev so a missing required integration fails closed
+ * during production startup instead of silently discarding work.
+ */
+export async function openAppServices(
+  environment: Record<string, string | undefined>,
+): Promise<ServiceRegistry> {
+  const drivers: ServiceDriver[] = environment.CLANK_DEV === "1"
+    ? [
+${drivers}
+      ]
+    : [];
+  const services = createServiceRegistry(drivers);
+  assertServices(services);
+  return services;
 }
 `;
 }
@@ -350,6 +407,20 @@ export async function createAppPlan(
 }
 
 function projectReadme(app: AppBlueprint): string {
+  const routes = app.routes.map((route) =>
+    `- \`${route.path}\` — ${humanize(route.view)}${route.entity ? ` over \`${route.entity}\`` : ""}; ${routeAccessLabel(route.access)}.`).join("\n");
+  const entities = Object.entries(app.entities).map(([name, entity]) =>
+    `- \`${name}\` — ${entity.description} ${entity.ownership} ownership; ${entity.realtime ? "live subscription" : "request/response refresh"}; ${Object.keys(entity.fields).length} fields.`).join("\n");
+  const actions = Object.entries(app.actions).map(([name, action]) =>
+    `- \`${name}\` — ${action.description} ${action.behavior ? `Generated as \`${action.behavior}\`` : "Manual implementation required"}${action.roles?.length ? `; roles: ${action.roles.map((role) => `\`${role}\``).join(", ")}` : ""}.`).join("\n");
+  const relationships = app.relationships.length
+    ? app.relationships.map((relationship) =>
+      `- \`${relationship.name}\` — ${relationship.from} → ${relationship.to}; ${relationship.kind}; \`${relationship.onDelete}\` on delete${relationship.reference ? ` through \`${relationship.reference.entity}.${relationship.reference.field}\`` : "; no generated reference enforcement"}.`).join("\n")
+    : "- None declared.";
+  const services = Object.keys(app.services).length
+    ? Object.entries(app.services).map(([name, service]) =>
+      `- \`${name}\` — ${service.kind}${service.required ? ", required" : ", optional"}; ${service.description}`).join("\n")
+    : "- None declared.";
   return `# ${app.name}
 
 ${app.description}
@@ -364,6 +435,35 @@ npm run dev
 \`\`\`
 
 Open http://127.0.0.1:3000. The first person can register, then each signed-in user receives isolated application data.
+
+## Generated application contract
+
+### Routes
+
+${routes}
+
+### Entities
+
+${entities}
+
+### Server actions
+
+${actions || "- Safe CRUD actions are generated from each entity."}
+
+The browser and each app's MCP endpoint call the same generated backend functions. Authorization
+is enforced inside those functions; hiding a control is only a usability aid.
+
+### Relationships
+
+${relationships}
+
+### Services
+
+${services}
+
+\`clank dev\` supplies explicit local-only service drivers. Required services fail production
+startup until \`src/services.ts\` is wired to real drivers, so email, jobs, files, or webhooks are
+never silently discarded.
 
 ## Check and deploy
 
@@ -402,6 +502,8 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 - \`src/view.tsx\`: accessible server/client UI and agent-addressable controls.
 - \`src/app.tsx\`: hydration, auth client, live queries, and browser interactions.
 - \`src/server.tsx\`: routes, SSR, CSP, static files, and API wiring.
+- \`src/service-requirements.ts\`: normalized external capability contract.
+- \`src/services.ts\`: local development drivers and production provisioning boundary.
 - \`migrations/\`: immutable, ordered SQL history.
 - \`clank.deploy.json\`: build, artifact, database, health, and public environment contract.
 - \`.clank/\`: local plans, artifacts, and project link; never commit it.
@@ -424,6 +526,12 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 
 Run \`npm run build\`, \`npm run doctor\`, and \`npm run deploy:check\`. For UI changes, verify registration/login and the main interaction in a browser. For data changes, verify a fresh database and an existing migrated database. For backend changes, compare agent-enabled \`GET /__clank/manifest\` paths with authenticated \`tools/list\`, verify the contract revision changed, reconnect an existing MCP session, and verify the narrowest OAuth scope that can perform the action.
 `;
+}
+
+function routeAccessLabel(access: AppRouteDefinition["access"]): string {
+  if (access === "public") return "public shell";
+  if (access === "authenticated") return "authenticated";
+  return `roles ${access.roles?.map((role) => `\`${role}\``).join(", ")}`;
 }
 
 export function explainApp(input: AppBlueprintInput | AppBlueprint): string {
@@ -472,6 +580,9 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
   const entities: Record<string, AppEntityDefinition> = {};
   for (const [entityName, raw] of Object.entries(sourceEntities)) {
     identifier(entityName, "entity");
+    if (RESERVED_API_SEGMENTS.has(entityName)) {
+      throw new TypeError(`Entity name ${entityName} conflicts with the typed API reference protocol.`);
+    }
     const entity = object(raw, `entities.${entityName}`);
     const fieldsInput = record(entity.fields, `entities.${entityName}.fields`);
     if (!Object.keys(fieldsInput).length) throw new TypeError(`Entity ${entityName} requires fields.`);
@@ -481,7 +592,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
       fields[fieldName] = normalizeField(fieldRaw, `${entityName}.${fieldName}`);
     }
     const displayField = text(entity.displayField, `${entityName}.displayField`, 1, 100);
-    if (!fields[displayField]) throw new TypeError(`${entityName}.displayField references an unknown field.`);
+    if (!Object.hasOwn(fields, displayField)) throw new TypeError(`${entityName}.displayField references an unknown field.`);
     if (!["string", "text", "email"].includes(fields[displayField].type)) {
       throw new TypeError(`${entityName}.displayField must reference a string-like field.`);
     }
@@ -496,7 +607,8 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
       identifier(indexName, "index");
       const index = object(indexRaw, `${entityName}.indexes.${indexName}`);
       const fieldsForIndex = stringArray(index.fields, `${entityName}.indexes.${indexName}.fields`, 1);
-      for (const field of fieldsForIndex) if (!fields[field]) throw new TypeError(`Index ${entityName}.${indexName} references unknown field ${field}.`);
+      unique(fieldsForIndex, `${entityName}.indexes.${indexName}.fields`);
+      for (const field of fieldsForIndex) if (!Object.hasOwn(fields, field)) throw new TypeError(`Index ${entityName}.${indexName} references unknown field ${field}.`);
       indexes[indexName] = { fields: fieldsForIndex };
     }
     entities[entityName] = {
@@ -512,19 +624,30 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
 
   for (const [entityName, entity] of Object.entries(entities)) {
     for (const [fieldName, field] of Object.entries(entity.fields)) {
-      if (field.type === "reference" && !entities[field.entity!]) {
+      if (field.type === "reference" && !Object.hasOwn(entities, field.entity!)) {
         throw new TypeError(`Reference ${entityName}.${fieldName} targets unknown entity ${field.entity}.`);
       }
     }
+  }
+  const generatedTypeNames = new Map<string, string>();
+  for (const entityName of Object.keys(entities)) {
+    const generated = typeName(entityName);
+    const existing = generatedTypeNames.get(generated);
+    if (existing) {
+      throw new TypeError(`Entities ${existing} and ${entityName} both generate the type name ${generated}.`);
+    }
+    generatedTypeNames.set(generated, entityName);
   }
 
   const roles: Record<string, AppRoleDefinition> = {};
   for (const [roleName, roleRaw] of Object.entries(record(input.auth?.roles ?? {}, "auth.roles"))) {
     identifier(roleName, "role");
     const role = object(roleRaw, `auth.roles.${roleName}`);
+    const permissions = stringArray(role.permissions, `auth.roles.${roleName}.permissions`);
+    unique(permissions, `auth.roles.${roleName}.permissions`);
     roles[roleName] = {
       description: text(role.description, `auth.roles.${roleName}.description`, 1, 300),
-      permissions: stringArray(role.permissions, `auth.roles.${roleName}.permissions`),
+      permissions,
     };
   }
   if (!roles.member) roles.member = { description: "Standard application member.", permissions: ["app.use"] };
@@ -536,23 +659,47 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     const relation = object(raw, `relationships.${index}`);
     const from = text(relation.from, `relationships.${index}.from`, 1, 100);
     const to = text(relation.to, `relationships.${index}.to`, 1, 100);
-    if (!entities[from] || !entities[to]) throw new TypeError(`Relationship ${index} references an unknown entity.`);
+    if (!Object.hasOwn(entities, from) || !Object.hasOwn(entities, to)) throw new TypeError(`Relationship ${index} references an unknown entity.`);
+    const onDelete = enumValue(relation.onDelete ?? "restrict", ["restrict", "cascade", "nullify"], `relationships.${index}.onDelete`);
+    const reference = normalizeRelationshipReference(relation.reference, entities, from, to, `relationships.${index}.reference`);
+    if (!reference) {
+      throw new TypeError(`Relationship ${index} requires an explicit reference because no single reference field can be inferred.`);
+    }
+    if (reference && entities[reference.entity].ownership !== entities[referenceTarget(entities, reference)].ownership) {
+      throw new TypeError(`Relationship ${index} cannot enforce deletion across different ownership scopes.`);
+    }
+    if (onDelete === "nullify" && reference && !entities[reference.entity].fields[reference.field].nullable) {
+      throw new TypeError(`Relationship ${index} uses nullify but ${reference.entity}.${reference.field} is not nullable.`);
+    }
     return {
       name: identifier(text(relation.name, `relationships.${index}.name`, 1, 100), "relationship"),
       from,
       to,
       kind: enumValue(relation.kind, ["one-to-one", "one-to-many", "many-to-many"], `relationships.${index}.kind`),
-      onDelete: enumValue(relation.onDelete ?? "restrict", ["restrict", "cascade", "nullify"], `relationships.${index}.onDelete`),
+      onDelete,
+      ...(reference ? { reference } : {}),
     } as AppRelationshipDefinition;
   });
   unique(relationships.map((relation) => relation.name), "relationship names");
+  assertAcyclicCascadeRelationships(relationships, entities);
 
   if (!Array.isArray(input.routes) || input.routes.length === 0) throw new TypeError("App blueprint requires at least one route.");
   const routes = input.routes.map((raw, index) => {
     const route = object(raw, `routes.${index}`);
     const path = routePath(route.path, `routes.${index}.path`);
+    if (
+      path === "/app.js"
+      || path === "/view.js"
+      || path === "/styles.css"
+      || path === "/_clank"
+      || path.startsWith("/_clank/")
+      || path === "/__clank"
+      || path.startsWith("/__clank/")
+    ) {
+      throw new TypeError(`Route ${path} conflicts with a generated framework endpoint.`);
+    }
     const entity = route.entity === undefined ? undefined : text(route.entity, `routes.${index}.entity`, 1, 100);
-    if (entity && !entities[entity]) throw new TypeError(`Route ${path} references unknown entity ${entity}.`);
+    if (entity && !Object.hasOwn(entities, entity)) throw new TypeError(`Route ${path} references unknown entity ${entity}.`);
     const access = normalizeAccess(route.access ?? "authenticated", roles, `routes.${index}.access`);
     return {
       path,
@@ -569,13 +716,36 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     if (!ACTION_NAME.test(actionName)) throw new TypeError(`Invalid action name: ${actionName}.`);
     const action = object(actionRaw, `actions.${actionName}`);
     const entity = action.entity === undefined ? undefined : text(action.entity, `${actionName}.entity`, 1, 100);
-    if (entity && !entities[entity]) throw new TypeError(`Action ${actionName} references unknown entity ${entity}.`);
+    if (entity && !Object.hasOwn(entities, entity)) throw new TypeError(`Action ${actionName} references unknown entity ${entity}.`);
+    if (entity && !actionName.startsWith(`${entity}.`)) {
+      throw new TypeError(`Action ${actionName} must start with its entity name (${entity}.).`);
+    }
+    if (entity && actionName.slice(entity.length + 1).includes(".")) {
+      throw new TypeError(`Action ${actionName} must contain one entity segment and one action segment.`);
+    }
+    const localActionName = entity ? actionName.slice(entity.length + 1) : actionName;
+    if (entity && !ACTION_SEGMENT.test(localActionName)) {
+      throw new TypeError(`Action ${actionName} must end with a non-empty action identifier.`);
+    }
+    if (RESERVED_API_SEGMENTS.has(localActionName)) {
+      throw new TypeError(`Action ${actionName} conflicts with the typed API reference protocol.`);
+    }
+    const operation = enumValue(action.operation, ["create", "read", "update", "delete", "custom"], `${actionName}.operation`);
+    const behavior = normalizeActionBehavior(
+      action.behavior,
+      operation,
+      actionName,
+      entity ? entities[entity] : undefined,
+      `${actionName}.behavior`,
+    );
     const actionRoles = stringArray(action.roles ?? [], `${actionName}.roles`);
-    for (const role of actionRoles) if (!roles[role]) throw new TypeError(`Action ${actionName} references unknown role ${role}.`);
+    unique(actionRoles, `${actionName}.roles`);
+    for (const role of actionRoles) if (!Object.hasOwn(roles, role)) throw new TypeError(`Action ${actionName} references unknown role ${role}.`);
     actions[actionName] = {
       description: text(action.description, `${actionName}.description`, 1, 500),
       ...(entity ? { entity } : {}),
-      operation: enumValue(action.operation, ["create", "read", "update", "delete", "custom"], `${actionName}.operation`),
+      operation,
+      ...(behavior ? { behavior } : {}),
       roles: actionRoles,
       confirmation: enumValue(
         action.confirmation ?? (action.operation === "delete" ? "always" : action.operation === "read" ? "never" : "write"),
@@ -602,11 +772,13 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
   for (const [serviceName, serviceRaw] of Object.entries(record(input.services ?? {}, "services"))) {
     identifier(serviceName, "service");
     const service = object(serviceRaw, `services.${serviceName}`);
+    const capabilities = stringArray(service.capabilities ?? [], `${serviceName}.capabilities`);
+    unique(capabilities, `${serviceName}.capabilities`);
     services[serviceName] = {
       kind: enumValue(service.kind, ["files", "images", "email", "jobs", "cron", "search", "webhooks", "custom"], `${serviceName}.kind`),
       description: text(service.description, `${serviceName}.description`, 1, 500),
       required: booleanValue(service.required ?? false, `${serviceName}.required`),
-      capabilities: stringArray(service.capabilities ?? [], `${serviceName}.capabilities`),
+      capabilities,
     };
   }
 
@@ -644,6 +816,9 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
       env,
     },
   };
+  if (routes.some((route) => route.path === normalized.deployment.healthPath)) {
+    throw new TypeError(`Health path ${normalized.deployment.healthPath} conflicts with an application route.`);
+  }
   return deepFreeze(normalized);
 }
 
@@ -691,6 +866,103 @@ function validateDefault(field: AppFieldDefinition, value: string | number | boo
   if (field.type === "enum" && !field.values!.includes(value as string)) throw new TypeError(`${path}.default is not an enum member.`);
 }
 
+function normalizeRelationshipReference(
+  raw: unknown,
+  entities: Record<string, AppEntityDefinition>,
+  from: string,
+  to: string,
+  path: string,
+): AppRelationshipDefinition["reference"] {
+  const candidates: Array<{ entity: string; field: string }> = [];
+  for (const entityName of new Set([from, to])) {
+    const other = entityName === from ? to : from;
+    for (const [fieldName, field] of Object.entries(entities[entityName].fields)) {
+      if (field.type === "reference" && field.entity === other) {
+        candidates.push({ entity: entityName, field: fieldName });
+      }
+    }
+  }
+  if (raw === undefined) return candidates.length === 1 ? candidates[0] : undefined;
+  const input = object(raw, path);
+  const entity = text(input.entity, `${path}.entity`, 1, 100);
+  const field = text(input.field, `${path}.field`, 1, 100);
+  if (entity !== from && entity !== to) throw new TypeError(`${path}.entity must be ${from} or ${to}.`);
+  const definition = entities[entity].fields[field];
+  const other = entity === from ? to : from;
+  if (!definition || definition.type !== "reference" || definition.entity !== other) {
+    throw new TypeError(`${path} must identify a reference field from one relationship endpoint to the other.`);
+  }
+  return { entity, field };
+}
+
+function referenceTarget(
+  entities: Record<string, AppEntityDefinition>,
+  reference: NonNullable<AppRelationshipDefinition["reference"]>,
+): string {
+  return entities[reference.entity].fields[reference.field].entity!;
+}
+
+function assertAcyclicCascadeRelationships(
+  relationships: readonly AppRelationshipDefinition[],
+  entities: Record<string, AppEntityDefinition>,
+): void {
+  const graph = new Map<string, string[]>();
+  for (const relationship of relationships) {
+    if (relationship.onDelete !== "cascade" || !relationship.reference) continue;
+    const parent = referenceTarget(entities, relationship.reference);
+    const children = graph.get(parent) ?? [];
+    children.push(relationship.reference.entity);
+    graph.set(parent, children);
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (entity: string) => {
+    if (visiting.has(entity)) throw new TypeError("Cascade relationships must not contain a deletion cycle.");
+    if (visited.has(entity)) return;
+    visiting.add(entity);
+    for (const child of graph.get(entity) ?? []) visit(child);
+    visiting.delete(entity);
+    visited.add(entity);
+  };
+  for (const entity of graph.keys()) visit(entity);
+}
+
+function normalizeActionBehavior(
+  raw: unknown,
+  operation: AppActionDefinition["operation"],
+  actionName: string,
+  entity: AppEntityDefinition | undefined,
+  path: string,
+): AppActionDefinition["behavior"] {
+  const behavior = raw === undefined
+    ? operation === "read"
+      ? "list"
+      : operation === "create"
+        ? "create"
+        : operation === "delete"
+          ? "delete"
+          : operation === "update"
+            ? entity?.completionField && /(?:complete|done|reopen|toggle)$/iu.test(actionName)
+              ? "toggle"
+              : "update"
+            : undefined
+    : enumValue(raw, ["list", "create", "update", "toggle", "delete"], path);
+  if (!behavior) return undefined;
+  const expected = behavior === "list"
+    ? "read"
+    : behavior === "create"
+      ? "create"
+      : behavior === "delete"
+        ? "delete"
+        : "update";
+  if (operation !== expected) throw new TypeError(`${path} is incompatible with operation ${operation}.`);
+  if (!entity) throw new TypeError(`${path} requires an entity-backed action.`);
+  if (behavior === "toggle" && !entity.completionField) {
+    throw new TypeError(`${path} requires the entity to declare completionField.`);
+  }
+  return behavior;
+}
+
 function appWarnings(app: AppBlueprint): string[] {
   const warnings: string[] = [];
   if (app.auth.organizations) warnings.push("Organization ownership requires the platform organization/RBAC capability.");
@@ -702,33 +974,60 @@ function appWarnings(app: AppBlueprint): string[] {
     warnings.push("Horizontal application writes require an external database; SQLite remains single-host.");
   }
   if (app.deployment.isolation === "process") warnings.push("Process isolation is for trusted applications only.");
+  for (const relationship of app.relationships) {
+    if (relationship.kind === "one-to-one" || relationship.kind === "many-to-many") {
+      warnings.push(`Relationship ${relationship.name} declares ${relationship.kind} cardinality; the generated reference and deletion policy are enforced, but cardinality needs an explicit unique or join-entity model.`);
+    }
+  }
+  for (const [name, action] of Object.entries(app.actions)) {
+    if (!action.behavior) {
+      warnings.push(`Custom action ${name} needs an application implementation before it can appear in HTTP or MCP.`);
+    }
+  }
+  for (const route of app.routes) {
+    if (route.access === "public") {
+      warnings.push(`Public route ${route.path} still uses the generated authenticated application shell; add an explicit public data contract before exposing data.`);
+    }
+  }
   for (const [name, service] of Object.entries(app.services)) {
-    if (service.required) warnings.push(`Required service ${name} (${service.kind}) must be provisioned before production deployment.`);
+    if (service.required) warnings.push(`Required service ${name} (${service.kind}) uses a local development driver and must be provisioned before production startup.`);
   }
   return warnings;
 }
 
+interface GeneratedEntityAction {
+  localName: string;
+  behavior: NonNullable<AppActionDefinition["behavior"]>;
+  description: string;
+  roles: readonly string[];
+  confirmation: NonNullable<AppActionDefinition["confirmation"]>;
+}
+
 function backendSource(app: AppBlueprint): string {
   const auth = app.auth.required
-    ? `export const auth = defineAuth({ defaultRole: ${JSON.stringify(Object.keys(app.auth.roles)[0] ?? "member")} });\n`
+    ? `export const auth = defineAuth({ defaultRole: ${sourceLiteral(Object.keys(app.auth.roles)[0] ?? "member")} });\n`
     : "";
   const tables = Object.entries(app.entities).map(([name, entity]) => {
     let chain = `defineTable({\n${Object.entries(entity.fields).map(([fieldName, field]) =>
       `      ${property(fieldName)}: ${schemaSource(field)},`).join("\n")}\n    })`;
     if (entity.ownership !== "public") chain += ".owned()";
     for (const [indexName, index] of Object.entries(entity.indexes ?? {})) {
-      chain += `.index(${JSON.stringify(indexName)}, ${JSON.stringify(index.fields)})`;
+      chain += `.index(${sourceLiteral(indexName)}, ${sourceLiteral(index.fields)})`;
     }
     return `  ${property(name)}: ${chain},`;
   }).join("\n");
-  const groups = Object.entries(app.entities).map(([name, entity]) => entityFunctions(name, entity)).join(",\n");
+  const groups = Object.entries(app.entities)
+    .map(([name, entity]) => entityFunctions(app, name, entity))
+    .join(",\n");
   return `import {
+  BackendActionError,
   defineAuth,
   defineBackend,
   defineDatabase,
   defineTable,
   s,
   type DocumentFor,
+  type WriteDatabase,
 } from "@clank.run/framework";
 
 ${auth}export const schema = defineDatabase({
@@ -736,9 +1035,10 @@ ${tables}
 });
 
 ${Object.keys(app.entities).map((name) =>
-    `export type ${typeName(name)} = DocumentFor<typeof schema, ${JSON.stringify(name)}>;`).join("\n")}
+    `export type ${typeName(name)} = DocumentFor<typeof schema, ${sourceLiteral(name)}>;`).join("\n")}
 
 const documentVersion = s.number({ integer: true, min: 1 });
+${deleteHelpersSource(app)}
 
 export const backend = defineBackend({
   schema,
@@ -749,193 +1049,704 @@ ${groups}
 `;
 }
 
-function entityFunctions(name: string, entity: AppEntityDefinition): string {
+function generatedEntityActions(
+  app: AppBlueprint,
+  name: string,
+  entity: AppEntityDefinition,
+): GeneratedEntityAction[] {
   const label = humanize(name);
   const singular = humanize(name.replace(/s$/u, ""));
+  const declared: GeneratedEntityAction[] = Object.entries(app.actions)
+    .filter(([, action]) => action.entity === name && action.behavior)
+    .map(([actionName, action]) => ({
+      localName: actionName.slice(name.length + 1),
+      behavior: action.behavior!,
+      description: action.description,
+      roles: action.roles ?? [],
+      confirmation: action.confirmation
+        ?? (action.operation === "delete" ? "always" : action.operation === "read" ? "never" : "write"),
+    }));
+  const defaults: Array<Omit<GeneratedEntityAction, "localName"> & { preferredName: string }> = [
+    {
+      preferredName: "list",
+      behavior: "list",
+      description: `List ${label.toLowerCase()} visible to the current user.`,
+      roles: routeRolesForEntity(app, name),
+      confirmation: "never",
+    },
+    {
+      preferredName: "create",
+      behavior: "create",
+      description: `Create one ${singular.toLowerCase()}.`,
+      roles: routeRolesForEntity(app, name),
+      confirmation: "write",
+    },
+    {
+      preferredName: "remove",
+      behavior: "delete",
+      description: `Permanently remove one ${singular.toLowerCase()}.`,
+      roles: routeRolesForEntity(app, name),
+      confirmation: "always",
+    },
+    ...(entity.completionField ? [{
+      preferredName: "toggle",
+      behavior: "toggle" as const,
+      description: `Change the completion state of one ${singular.toLowerCase()}.`,
+      roles: routeRolesForEntity(app, name),
+      confirmation: "write" as const,
+    }] : []),
+  ];
+  const output = [...declared];
+  const used = new Set(output.map((action) => action.localName));
+  for (const fallback of defaults) {
+    if (output.some((action) => action.behavior === fallback.behavior)) continue;
+    let localName = fallback.preferredName;
+    let suffix = 2;
+    while (used.has(localName)) localName = `${fallback.preferredName}${suffix++}`;
+    used.add(localName);
+    output.push({ ...fallback, localName });
+  }
+  return output;
+}
+
+function routeRolesForEntity(app: AppBlueprint, name: string): string[] {
+  const roles = new Set<string>();
+  for (const route of app.routes) {
+    if (route.entity !== name) continue;
+    if (typeof route.access === "string") return [];
+    for (const role of route.access.roles ?? []) roles.add(role);
+  }
+  return [...roles].sort();
+}
+
+function entityFunctions(app: AppBlueprint, name: string, entity: AppEntityDefinition): string {
   const createFields = Object.entries(entity.fields).map(([fieldName, field]) =>
     `        ${property(fieldName)}: ${createSchemaSource(field)},`).join("\n");
   const insertFields = Object.entries(entity.fields).map(([fieldName]) =>
     `          ${property(fieldName)}: input.${fieldName},`).join("\n");
   const updateFields = Object.entries(entity.fields).map(([fieldName, field]) =>
     `          ${property(fieldName)}: s.optional(${schemaSource({ ...field, required: true, default: undefined }, false)}),`).join("\n");
-  const toggle = entity.completionField ? `,
-    toggle: mutation({
-      description: ${JSON.stringify(`Change the completion state of one ${singular.toLowerCase()}.`)},
-      args: {
-        id: s.id(${JSON.stringify(name)}),
-        value: s.boolean(),
-        version: documentVersion,
-      },
-      agent: { destructive: false, idempotent: true },
-      handler: ({ db }, { id, value, version }) =>
-        db.table(${JSON.stringify(name)}).patch(id, { ${property(entity.completionField)}: value }, { ifVersion: version }),
-    })` : "";
-  return `  ${property(name)}: {
-    list: query({
-      description: ${JSON.stringify(`List ${label.toLowerCase()} visible to the current user.`)},
+  const cleanUpdateFields = Object.keys(entity.fields).map((fieldName) =>
+    `          ...(changes.${fieldName} === undefined ? {} : { ${property(fieldName)}: changes.${fieldName} }),`).join("\n");
+  const createReferenceGuards = Object.entries(entity.fields)
+    .filter(([, field]) => field.type === "reference")
+    .map(([fieldName, field]) => `        if (
+          input.${fieldName} !== undefined
+          && input.${fieldName} !== null
+          && !db.table(${sourceLiteral(field.entity)}).get(input.${fieldName})
+        ) {
+          throw new BackendActionError(
+            404,
+            "REFERENCE_NOT_FOUND",
+            ${sourceLiteral(`${humanize(fieldName)} does not reference a visible ${humanize(field.entity!).toLowerCase()} record.`)},
+          );
+        }`).join("\n");
+  const updateReferenceGuards = Object.entries(entity.fields)
+    .filter(([, field]) => field.type === "reference")
+    .map(([fieldName, field]) => `        if (
+          changes.${fieldName} !== undefined
+          && changes.${fieldName} !== null
+          && !db.table(${sourceLiteral(field.entity)}).get(changes.${fieldName})
+        ) {
+          throw new BackendActionError(
+            404,
+            "REFERENCE_NOT_FOUND",
+            ${sourceLiteral(`${humanize(fieldName)} does not reference a visible ${humanize(field.entity!).toLowerCase()} record.`)},
+          );
+        }`).join("\n");
+  const actions = generatedEntityActions(app, name, entity).map((action) => {
+    const guard = action.roles.length
+      ? `        auth.requireRole(${action.roles.map((role) => sourceLiteral(role)).join(", ")});\n`
+      : "";
+    const agent = `{
+        title: ${sourceLiteral(humanize(action.localName))},
+        description: ${sourceLiteral(action.description)},
+        destructive: ${action.behavior === "delete" || action.confirmation === "always"},
+        idempotent: ${action.behavior === "list" || action.behavior === "toggle"},
+      }`;
+    if (action.behavior === "list") {
+      return `    ${property(action.localName)}: query({
+      description: ${sourceLiteral(action.description)},
       args: {},
-      handler: ({ db }) => db.table(${JSON.stringify(name)}).query().orderBy("_creationTime", "asc").collect(),
-    }),
-    create: mutation({
-      description: ${JSON.stringify(`Create one ${singular.toLowerCase()}.`)},
+      agent: ${agent},
+      handler: ({ db, auth }) => {
+${guard}        return db.table(${sourceLiteral(name)}).query().orderBy("_creationTime", "asc").collect();
+      },
+    })`;
+    }
+    if (action.behavior === "create") {
+      return `    ${property(action.localName)}: mutation({
+      description: ${sourceLiteral(action.description)},
       args: {
 ${createFields}
       },
-      agent: { destructive: false },
-      handler: ({ db }, input) => db.table(${JSON.stringify(name)}).insert({
+      agent: ${agent},
+      handler: ({ db, auth }, input) => {
+${guard}${createReferenceGuards ? `${createReferenceGuards}\n` : ""}        return db.table(${sourceLiteral(name)}).insert({
 ${insertFields}
-      }),
-    }),
-    update: mutation({
-      description: ${JSON.stringify(`Update fields on one ${singular.toLowerCase()}.`)},
+        });
+      },
+    })`;
+    }
+    if (action.behavior === "toggle") {
+      return `    ${property(action.localName)}: mutation({
+      description: ${sourceLiteral(action.description)},
       args: {
-        id: s.id(${JSON.stringify(name)}),
+        id: s.id(${sourceLiteral(name)}),
+        value: s.boolean(),
+        version: documentVersion,
+      },
+      agent: ${agent},
+      handler: ({ db, auth }, { id, value, version }) => {
+${guard}        return db.table(${sourceLiteral(name)}).patch(
+          id,
+          { ${property(entity.completionField!)}: value },
+          { ifVersion: version },
+        );
+      },
+    })`;
+    }
+    if (action.behavior === "update") {
+      return `    ${property(action.localName)}: mutation({
+      description: ${sourceLiteral(action.description)},
+      args: {
+        id: s.id(${sourceLiteral(name)}),
         version: documentVersion,
         changes: s.object({
 ${updateFields}
         }),
       },
-      agent: { destructive: false },
-      handler: ({ db }, { id, version, changes }) =>
-        db.table(${JSON.stringify(name)}).patch(id, changes, { ifVersion: version }),
-    }),
-    remove: mutation({
-      description: ${JSON.stringify(`Permanently remove one ${singular.toLowerCase()}.`)},
-      args: { id: s.id(${JSON.stringify(name)}), version: documentVersion },
-      agent: { destructive: true },
-      handler: ({ db }, { id, version }) =>
-        db.table(${JSON.stringify(name)}).delete(id, { ifVersion: version }),
-    })${toggle},
+      agent: ${agent},
+      handler: ({ db, auth }, { id, version, changes }) => {
+${guard}${updateReferenceGuards ? `${updateReferenceGuards}\n` : ""}        const update = {
+${cleanUpdateFields}
+        };
+        if (Object.keys(update).length === 0) {
+          throw new BackendActionError(400, "EMPTY_UPDATE", "At least one field must be changed.");
+        }
+        return db.table(${sourceLiteral(name)}).patch(id, update, { ifVersion: version });
+      },
+    })`;
+    }
+    return `    ${property(action.localName)}: mutation({
+      description: ${sourceLiteral(action.description)},
+      args: { id: s.id(${sourceLiteral(name)}), version: documentVersion },
+      agent: ${agent},
+      handler: ({ db, auth }, { id, version }) => {
+${guard}        return deleteEntity_${name}(db, id, version, {
+          remaining: MAX_RELATED_DELETE_OPERATIONS,
+          seen: new Set(),
+        });
+      },
+    })`;
+  });
+  return `  ${property(name)}: {
+${actions.join(",\n")}
   }`;
 }
 
-function viewSource(
-  app: AppBlueprint,
-  entityName: string,
-  displayField: string,
-  completionField?: string,
-): string {
-  const type = typeName(entityName);
-  const singular = humanize(entityName.replace(/s$/u, ""));
-  const createDefaults = Object.entries(app.entities[entityName].fields)
-    .filter(([name]) => name !== displayField)
-    .map(([name, field]) => `${property(name)}: ${JSON.stringify(defaultFor(field, name))}`)
-    .join(", ");
-  return `/* @clankImportSource @clank.run/framework */
-import { For, signal${app.auth.required ? ", type AuthUser, type DefaultAuthProfile" : ""} } from "@clank.run/framework";
-import type { ${type} } from "./backend.ts";
-
-export interface AppViewProps {
-  ${app.auth.required ? "user: AuthUser<DefaultAuthProfile>;" : ""}
-  records: ${type}[];
-  version: number;
-  connected: boolean;
-  create(input: Omit<${type}, "_id" | "_creationTime" | "_version"${app.entities[entityName].ownership !== "public" ? ' | "_ownerId"' : ""}>): void | Promise<void>;
-  ${completionField ? `toggle(id: ${type}["_id"], value: boolean, version: number): void | Promise<void>;` : ""}
-  remove(id: ${type}["_id"], version: number): void | Promise<void>;
-  ${app.auth.required ? "logout(): void | Promise<void>;" : ""}
+function deleteHelpersSource(app: AppBlueprint): string {
+  const helpers = Object.keys(app.entities).map((name) => {
+    const relationships = app.relationships.filter((relationship) =>
+      relationship.reference
+      && referenceTarget(app.entities, relationship.reference) === name);
+    const operations = relationships.map((relationship) => {
+      const reference = relationship.reference!;
+      const child = reference.entity;
+      const query = `db.table(${sourceLiteral(child)}).query().where(${sourceLiteral(reference.field)}, id)`;
+      if (relationship.onDelete === "restrict") {
+        return `  if (${query}.limit(1).first()) {
+    throw new BackendActionError(
+      409,
+      "RELATIONSHIP_RESTRICTED",
+      ${sourceLiteral(`Cannot delete ${humanize(name).toLowerCase()} while related ${humanize(child).toLowerCase()} exist.`)},
+    );
+  }`;
+      }
+      if (relationship.onDelete === "nullify") {
+        return `  for (const related of ${query}.limit(MAX_RELATED_DELETE_OPERATIONS + 1).collect()) {
+    consumeDeleteOperation(state);
+    db.table(${sourceLiteral(child)}).patch(
+      related._id,
+      { ${property(reference.field)}: null },
+      { ifVersion: related._version },
+    );
+  }`;
+      }
+      return `  for (const related of ${query}.limit(MAX_RELATED_DELETE_OPERATIONS + 1).collect()) {
+    deleteEntity_${child}(db, related._id, related._version, state);
+  }`;
+    });
+    return `function deleteEntity_${name}(
+  db: WriteDatabase<typeof schema>,
+  id: ${typeName(name)}["_id"],
+  version: number,
+  state: DeleteState,
+): boolean {
+  const key = ${sourceLiteral(`${name}:`)} + id;
+  if (state.seen.has(key)) return true;
+  state.seen.add(key);
+  consumeDeleteOperation(state);
+${operations.join("\n")}
+  return db.table(${sourceLiteral(name)}).delete(id, { ifVersion: version });
+}`;
+  }).join("\n\n");
+  return `
+const MAX_RELATED_DELETE_OPERATIONS = 1_000;
+interface DeleteState {
+  remaining: number;
+  seen: Set<string>;
 }
 
+function consumeDeleteOperation(state: DeleteState): void {
+  state.remaining--;
+  if (state.remaining < 0) {
+    throw new BackendActionError(
+      409,
+      "RELATIONSHIP_LIMIT",
+      "The relationship change exceeds the generated transaction limit.",
+    );
+  }
+}
+
+${helpers}
+`;
+}
+
+function viewSource(app: AppBlueprint): string {
+  const entityNames = Object.keys(app.entities);
+  const types = entityNames.map(typeName).join(", ");
+  const createTypes = entityNames.map((name) => createInputTypeSource(name, app.entities[name])).join("\n\n");
+  const props = entityNames.map((name) => {
+    const type = typeName(name);
+    const entity = app.entities[name];
+    return `  ${name}Records: ${type}[];
+  ${name}Version: number;
+  ${name}Create(input: ${type}CreateInput): Promise<boolean>;
+  ${entity.completionField ? `${name}Toggle(id: ${type}["_id"], value: boolean, version: number): Promise<boolean>;\n  ` : ""}${name}Remove(id: ${type}["_id"], version: number): Promise<boolean>;`;
+  }).join("\n");
+  const panels = entityNames.map((name) => entityPanelSource(app, name, app.entities[name])).join("\n\n");
+  const navigation = app.routes.map((route) => {
+    const routeAgentId = route.path === "/"
+      ? "route-home"
+      : `route-${route.path.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "")}`;
+    const link = `<a
+              classList={{
+                "rounded-lg px-3 py-2 text-sm font-semibold transition": true,
+                "bg-slate-950 text-white": props.route === ${sourceLiteral(route.path)},
+                "text-slate-600 hover:bg-slate-100": props.route !== ${sourceLiteral(route.path)},
+              }}
+              href=${sourceLiteral(route.path)}
+              aria-current={props.route === ${sourceLiteral(route.path)} ? "page" : undefined}
+              agentId=${sourceLiteral(routeAgentId)}
+            >{${sourceLiteral(humanize(route.view))}}</a>`;
+    return typeof route.access === "object"
+      ? `{roleAllowed(props.user.role, ${sourceLiteral(route.access.roles ?? [])}) ? (${link}) : null}`
+      : link;
+  }).join("\n            ");
+  const routeViews = app.routes.map((route) => {
+    const contents = route.entity
+      ? `<${typeName(route.entity)}Panel {...props} />`
+      : `<section class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+              <p class="text-xs font-bold uppercase tracking-[.18em] text-emerald-600">{${sourceLiteral(humanize(route.view))}}</p>
+              <h2 class="mt-2 text-2xl font-semibold">{${sourceLiteral(humanize(route.view))}}</h2>
+              <p class="mt-3 text-slate-600">{${sourceLiteral(route.description ?? "This route is ready for application-specific content.")}}</p>
+            </section>`;
+    return `{props.route === ${sourceLiteral(route.path)} ? (${contents}) : null}`;
+  }).join("\n          ");
+  return `/* @clankImportSource @clank.run/framework */
+import { For, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
+import type { ${types} } from "./backend.ts";
+
+${createTypes}
+
+export interface AppViewProps {
+  route: string;
+  user: AuthUser<DefaultAuthProfile>;
+  version: number;
+  connected: boolean;
+  pending: boolean;
+  error: string;
+${props}
+  logout(): void | Promise<void>;
+}
+
+function roleAllowed(role: string, roles: readonly string[]): boolean {
+  return roles.length === 0 || roles.includes(role);
+}
+
+function valueLabel(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
+}
+
+${panels}
+
 export function AppView(props: AppViewProps) {
-  const draft = signal("");
-  const submit = async (event: Event) => {
-    event.preventDefault();
-    const value = draft.value.trim();
-    if (!value) return;
-    draft.value = "";
-    await props.create({ ${property(displayField)}: value${createDefaults ? `, ${createDefaults}` : ""} });
-  };
   return (
-    <main class="mx-auto min-h-screen max-w-4xl px-6 py-12 text-slate-950">
-      <header class="flex items-start justify-between gap-6">
+    <main class="mx-auto min-h-screen max-w-6xl px-4 py-8 text-slate-950 sm:px-6 sm:py-12">
+      <header class="flex flex-col gap-6 border-b border-slate-200 pb-7 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p class="text-xs font-bold uppercase tracking-[.2em] text-emerald-600">Clank generated application</p>
-          <h1 class="mt-2 text-4xl font-semibold tracking-tight">{${JSON.stringify(app.name)}}</h1>
-          <p class="mt-3 max-w-2xl text-slate-500">{${JSON.stringify(app.description)}}</p>
-          <p class="mt-2 text-sm text-slate-500">
+          <h1 class="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">{${sourceLiteral(app.name)}}</h1>
+          <p class="mt-3 max-w-2xl text-slate-500">{${sourceLiteral(app.description)}}</p>
+          <p class="mt-2 text-sm text-slate-500" role="status">
             {props.connected ? "Live sync connected." : "Reconnecting…"}
             <span class="sr-only"> Database snapshot {props.version}.</span>
           </p>
         </div>
-        ${app.auth.required ? `<button class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold" onClick={props.logout}>Sign out</button>` : ""}
+        <div class="flex items-center gap-3">
+          <span class="min-w-0 truncate text-sm text-slate-500">{props.user.email}</span>
+          <button class="shrink-0 rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-white" onClick={props.logout} agentId="auth-sign-out">Sign out</button>
+        </div>
       </header>
-      <form class="mt-10 flex gap-3" onSubmit={submit}>
-        <input
-          class="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 shadow-sm"
-          placeholder=${JSON.stringify(`New ${singular.toLowerCase()}`)}
-          maxlength={200}
-          required
-          bind:value={draft}
-          agentId="new-record"
-          agentLabel=${JSON.stringify(`New ${singular} ${humanize(displayField)}`)}
-        />
-        <button class="rounded-xl bg-slate-950 px-5 py-3 font-semibold text-white" type="submit" agentId="create-record">
-          Add ${singular}
-        </button>
-      </form>
-      <section class="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <For each={props.records} by="_id" fallback={<p class="p-8 text-center text-slate-500">No ${humanize(entityName).toLowerCase()} yet.</p>}>
-          {(record) => (
-            <article class="flex items-center gap-3 border-b border-slate-100 p-4 last:border-0">
-              ${completionField ? `<button
-                class="h-6 w-6 rounded-full border border-slate-400 text-xs"
-                onClick={() => props.toggle(record._id, !record.${completionField}, record._version)}
-                agentId={\`record-\${record._id}-toggle\`}
-                agentLabel={\`\${record.${completionField} ? "Reopen" : "Complete"} \${record.${displayField}}\`}
-              >{record.${completionField} ? "✓" : ""}</button>` : ""}
-              <span classList={{ "flex-1": true${completionField ? `, "line-through text-slate-400": record.${completionField}` : ""} }}>{record.${displayField}}</span>
-              <button
-                class="text-sm font-medium text-rose-600"
-                onClick={() => props.remove(record._id, record._version)}
-                agentId={\`record-\${record._id}-remove\`}
-                agentLabel={\`Remove \${record.${displayField}}\`}
-              >Remove</button>
-            </article>
-          )}
-        </For>
-      </section>
+      <nav class="my-6 flex flex-wrap gap-2" aria-label="Application">
+        ${navigation}
+      </nav>
+      {props.error ? <p class="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800" role="alert">{props.error}</p> : null}
+      <div aria-busy={props.pending}>
+        ${routeViews}
+      </div>
     </main>
   );
 }
 `;
 }
 
-function browserSource(entityName: string, completionField?: string): string {
+function createInputTypeSource(name: string, entity: AppEntityDefinition): string {
+  const type = typeName(name);
+  const fields = Object.entries(entity.fields).map(([fieldName, field]) => {
+    const optional = field.required === false || Object.hasOwn(field, "default");
+    return `  ${property(fieldName)}${optional ? "?" : ""}: ${type}[${sourceLiteral(fieldName)}];`;
+  }).join("\n");
+  return `export interface ${type}CreateInput {
+${fields}
+}`;
+}
+
+function entityPanelSource(app: AppBlueprint, name: string, entity: AppEntityDefinition): string {
+  const type = typeName(name);
+  const title = humanize(name);
+  const singular = humanize(name.replace(/s$/u, ""));
+  const actions = generatedEntityActions(app, name, entity);
+  const create = actions.find((action) => action.behavior === "create")!;
+  const remove = actions.find((action) => action.behavior === "delete")!;
+  const toggle = actions.find((action) => action.behavior === "toggle");
+  const signals = Object.entries(entity.fields).map(([fieldName, field]) =>
+    `  const draft_${fieldName} = signal(${draftDefaultSource(field)});`).join("\n");
+  const reset = Object.entries(entity.fields).map(([fieldName, field]) =>
+    `    draft_${fieldName}.value = ${draftDefaultSource(field)};`).join("\n");
+  const input = Object.entries(entity.fields).map(([fieldName, field]) =>
+    `      ${property(fieldName)}: ${draftValueSource(type, fieldName, field)},`).join("\n");
+  const controls = Object.entries(entity.fields).map(([fieldName, field]) =>
+    fieldControlSource(app, name, fieldName, field)).join("\n");
+  const details = Object.entries(entity.fields)
+    .filter(([fieldName]) => fieldName !== entity.displayField && fieldName !== entity.completionField)
+    .map(([fieldName, field]) => {
+      const value = field.type === "reference"
+        ? `record.${fieldName} == null
+                    ? "—"
+                    : props.${field.entity}Records.find((candidate) => candidate._id === record.${fieldName})?.${app.entities[field.entity!].displayField} ?? String(record.${fieldName})`
+        : `valueLabel(record.${fieldName})`;
+      return `<div>
+                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-400">{${sourceLiteral(humanize(fieldName))}}</dt>
+                <dd class="mt-1 break-words text-sm text-slate-700">{${value}}</dd>
+              </div>`;
+    }).join("\n              ");
+  return `function ${type}Panel(props: AppViewProps) {
+${signals}
+  const canCreate = roleAllowed(props.user.role, ${sourceLiteral(create.roles)});
+  const canRemove = roleAllowed(props.user.role, ${sourceLiteral(remove.roles)});
+  ${toggle ? `const canToggle = roleAllowed(props.user.role, ${sourceLiteral(toggle.roles)});` : ""}
+  const submit = async (event: Event) => {
+    event.preventDefault();
+    if (!canCreate || props.pending) return;
+    const created = await props.${name}Create({
+${input}
+    });
+    if (!created) return;
+${reset}
+  };
+  return (
+    <section>
+      <div class="mb-5">
+        <p class="text-xs font-bold uppercase tracking-[.18em] text-emerald-600">{${sourceLiteral(title)}}</p>
+        <h2 class="mt-1 text-2xl font-semibold">{${sourceLiteral(title)}}</h2>
+        <p class="mt-2 text-slate-500">{${sourceLiteral(entity.description)}}</p>
+      </div>
+      {canCreate ? (
+        <form class="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:grid-cols-2" onSubmit={submit}>
+${controls}
+          <div class="flex items-end sm:col-span-2">
+            <button class="w-full rounded-xl bg-slate-950 px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="submit" disabled={props.pending} agentId=${sourceLiteral(`${name}-create`)} agentAction=${sourceLiteral(`${name}.${create.localName}`)}>
+              Add {${sourceLiteral(singular)}}
+            </button>
+          </div>
+        </form>
+      ) : null}
+      <div class="mt-6 grid gap-4">
+        <For each={props.${name}Records} by="_id" fallback={<p class="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500">{${sourceLiteral(`No ${title.toLowerCase()} yet.`)}}</p>}>
+          {(record) => (
+            <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" agentId={\`${name}-\${record._id}\`} agentLabel={String(record.${entity.displayField})}>
+              <div class="flex items-start gap-3">
+                ${toggle && entity.completionField ? `{canToggle ? <button
+                  class="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-slate-400 text-xs hover:border-emerald-600 disabled:opacity-50"
+                  disabled={props.pending}
+                  onClick={() => props.${name}Toggle(record._id, !record.${entity.completionField}, record._version)}
+                  agentId={\`${name}-\${record._id}-toggle\`}
+                  agentAction=${sourceLiteral(`${name}.${toggle.localName}`)}
+                  agentLabel={\`\${record.${entity.completionField} ? "Reopen" : "Complete"} \${record.${entity.displayField}}\`}
+                >{record.${entity.completionField} ? "✓" : ""}</button> : null}` : ""}
+                <div class="min-w-0 flex-1">
+                  <h3 classList={{ "break-words font-semibold": true${entity.completionField ? `, "line-through text-slate-400": record.${entity.completionField}` : ""} }}>{record.${entity.displayField}}</h3>
+                  ${details ? `<dl class="mt-3 grid gap-3 sm:grid-cols-2">
+              ${details}
+                  </dl>` : ""}
+                </div>
+                {canRemove ? <button
+                  class="shrink-0 rounded-lg px-2 py-1 text-sm font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                  disabled={props.pending}
+                  onClick={() => props.${name}Remove(record._id, record._version)}
+                  agentId={\`${name}-\${record._id}-remove\`}
+                  agentAction=${sourceLiteral(`${name}.${remove.localName}`)}
+                  agentLabel={\`Remove \${record.${entity.displayField}}\`}
+                >Remove</button> : null}
+              </div>
+            </article>
+          )}
+        </For>
+      </div>
+    </section>
+  );
+}`;
+}
+
+function draftDefaultSource(field: AppFieldDefinition): string {
+  if (field.type === "boolean") return sourceLiteral(Object.hasOwn(field, "default") ? field.default : false);
+  if (field.type === "datetime") return '""';
+  if (Object.hasOwn(field, "default")) return sourceLiteral(field.default === null ? "" : String(field.default));
+  if (field.type === "enum") return sourceLiteral(field.values![0]);
+  return '""';
+}
+
+function draftValueSource(type: string, fieldName: string, field: AppFieldDefinition): string {
+  if (field.type === "boolean") return `draft_${fieldName}.value`;
+  const empty = `draft_${fieldName}.value.trim() === ""`;
+  let value: string;
+  if (field.type === "number") value = `Number(draft_${fieldName}.value)`;
+  else if (field.type === "datetime") value = `new Date(draft_${fieldName}.value).toISOString()`;
+  else if (field.type === "reference" || field.type === "enum") {
+    value = `draft_${fieldName}.value as ${type}[${sourceLiteral(fieldName)}]`;
+  } else value = `draft_${fieldName}.value.trim()`;
+  if (field.nullable) return `${empty} ? null : ${value}`;
+  if (field.required === false || Object.hasOwn(field, "default")) return `${empty} ? undefined : ${value}`;
+  return value;
+}
+
+function fieldControlSource(
+  app: AppBlueprint,
+  entityName: string,
+  fieldName: string,
+  field: AppFieldDefinition,
+): string {
+  const id = `${entityName}-${fieldName}`;
+  const label = humanize(fieldName);
+  const required = field.required !== false && !Object.hasOwn(field, "default") && !field.nullable;
+  const attributes = [
+    `id=${sourceLiteral(id)}`,
+    `name=${sourceLiteral(fieldName)}`,
+    ...(required ? ["required"] : []),
+    ...(field.min === undefined ? [] : [field.type === "number" ? `min={${field.min}}` : `minlength={${field.min}}`]),
+    ...(field.max === undefined ? [] : [field.type === "number" ? `max={${field.max}}` : `maxlength={${field.max}}`]),
+    ...(field.type === "number" && field.integer ? ['step="1"'] : field.type === "number" ? ['step="any"'] : []),
+    `agentId=${sourceLiteral(`${entityName}-${fieldName}-input`)}`,
+    `agentLabel=${sourceLiteral(`${humanize(entityName.replace(/s$/u, ""))} ${label}`)}`,
+  ].join(" ");
+  const description = field.description
+    ? `<p class="mt-1 text-xs text-slate-500">{${sourceLiteral(field.description)}}</p>`
+    : "";
+  if (field.type === "boolean") {
+    return `          <div class="sm:col-span-2">
+            <label class="flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3" for=${sourceLiteral(id)}>
+              <input type="checkbox" ${attributes} bind:checked={draft_${fieldName}} />
+              <span class="font-medium">{${sourceLiteral(label)}}</span>
+            </label>
+            ${description}
+          </div>`;
+  }
+  if (field.type === "enum") {
+    const options = field.values!.map((value) => `<option value=${sourceLiteral(value)}>{${sourceLiteral(value)}}</option>`).join("");
+    return `          <div>
+            <label class="text-sm font-semibold" for=${sourceLiteral(id)}>{${sourceLiteral(label)}}</label>
+            <select class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3" ${attributes} bind:value={draft_${fieldName}}>${options}</select>
+            ${description}
+          </div>`;
+  }
+  if (field.type === "reference") {
+    const target = app.entities[field.entity!];
+    return `          <div>
+            <label class="text-sm font-semibold" for=${sourceLiteral(id)}>{${sourceLiteral(label)}}</label>
+            <select class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3" ${attributes} bind:value={draft_${fieldName}}>
+              <option value="">{${sourceLiteral(`Choose ${humanize(field.entity!).toLowerCase()}…`)}}</option>
+              <For each={props.${field.entity}Records} by="_id">
+                {(option) => <option value={option._id}>{option.${target.displayField}}</option>}
+              </For>
+            </select>
+            ${description}
+          </div>`;
+  }
+  if (field.type === "text") {
+    return `          <div class="sm:col-span-2">
+            <label class="text-sm font-semibold" for=${sourceLiteral(id)}>{${sourceLiteral(label)}}</label>
+            <textarea class="mt-1 min-h-28 w-full resize-y rounded-xl border border-slate-300 bg-white px-4 py-3" ${attributes} bind:value={draft_${fieldName}} />
+            ${description}
+          </div>`;
+  }
+  const inputType = field.type === "string"
+    ? "text"
+    : field.type === "datetime"
+      ? "datetime-local"
+      : field.type;
+  return `          <div>
+            <label class="text-sm font-semibold" for=${sourceLiteral(id)}>{${sourceLiteral(label)}}</label>
+            <input class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3" type=${sourceLiteral(inputType)} ${attributes} bind:value={draft_${fieldName}} />
+            ${description}
+          </div>`;
+}
+
+function browserSource(app: AppBlueprint): string {
+  const names = Object.keys(app.entities);
+  const types = names.map(typeName).join(", ");
+  const state = names.map((name) =>
+    `    ${name}: { records: ${typeName(name)}[]; version: number };`).join("\n");
+  const fallback = names.map((name) =>
+    `      ${name}: { records: [], version: 0 },`).join("\n");
+  const seeds = names.map((name) => {
+    const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
+    return `client.seed(client.api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}], {}, boot.entities.${name}.records, boot.entities.${name}.version);`;
+  }).join("\n");
+  const live = names.map((name) => {
+    const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
+    return app.entities[name].realtime
+      ? `  const canRead_${name} = roleAllowed(user.role, ${sourceLiteral(list.roles)});
+  const live_${name} = canRead_${name}
+    ? client.live(client.api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}])
+    : null;`
+      : `  const canRead_${name} = roleAllowed(user.role, ${sourceLiteral(list.roles)});
+  const records_${name} = signal(boot.entities.${name}.records);`;
+  }).join("\n");
+  const dispose = names
+    .filter((name) => app.entities[name].realtime)
+    .map((name) => `    live_${name}?.dispose();`).join("\n");
+  const refresh = names
+    .filter((name) => !app.entities[name].realtime)
+    .map((name) => {
+      const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
+      return `    canRead_${name}
+      ? client.query(client.api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}]).then((value) => { records_${name}.value = value; })
+      : Promise.resolve(),`;
+    }).join("\n");
+  const version = names.map((name) => app.entities[name].realtime
+    ? `live_${name}?.version.value ?? boot.entities.${name}.version`
+    : `boot.entities.${name}.version`).join(", ");
+  const connected = names
+    .filter((name) => app.entities[name].realtime)
+    .map((name) => `(!live_${name} || (!live_${name}.loading.value && !live_${name}.error.value))`)
+    .join(" && ") || "true";
+  const props = names.map((name) => {
+    const entity = app.entities[name];
+    const actions = generatedEntityActions(app, name, entity);
+    const create = actions.find((action) => action.behavior === "create")!;
+    const remove = actions.find((action) => action.behavior === "delete")!;
+    const toggle = actions.find((action) => action.behavior === "toggle");
+    const records = entity.realtime
+      ? `live_${name}?.data.value ?? boot.entities.${name}.records`
+      : `records_${name}.value`;
+    const entityVersion = entity.realtime
+      ? `live_${name}?.version.value ?? boot.entities.${name}.version`
+      : `boot.entities.${name}.version`;
+    return `      ${name}Records={${records}}
+      ${name}Version={${entityVersion}}
+      ${name}Create={(input) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(create.localName)}], input))}
+      ${toggle ? `${name}Toggle={(id, value, version) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(toggle.localName)}], { id, value, version }))}\n      ` : ""}${name}Remove={(id, version) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(remove.localName)}], { id, version }))}`;
+  }).join("\n");
   return `/* @clankImportSource @clank.run/framework */
 import {
-  ${"AuthGate,"}
+  AuthGate,
   createClient,
   hydrate,
   onCleanup,
   readState,
+  signal,
   type AuthState,
   type DefaultAuthProfile,
 } from "@clank.run/framework";
-import type { backend, ${typeName(entityName)} } from "./backend.ts";
+import type { backend, ${types} } from "./backend.ts";
 import { AppView } from "./view.tsx";
 
 interface PageState {
   auth: AuthState<DefaultAuthProfile>;
-  records: ${typeName(entityName)}[];
+  route: string;
+  entities: {
+${state}
+  };
   version: number;
 }
 
-const boot = readState<PageState>()!;
+const boot = readState<PageState>() ?? {
+  auth: { user: null, session: null },
+  route: ${sourceLiteral(app.routes[0].path)},
+  entities: {
+${fallback}
+  },
+  version: 0,
+};
 const client = createClient<typeof backend>({ initialAuth: boot.auth });
-client.seed(client.api.${entityName}.list, {}, boot.records, boot.version);
+${seeds}
+
+function roleAllowed(role: string, roles: readonly string[]): boolean {
+  return roles.length === 0 || roles.includes(role);
+}
 
 function LiveApp() {
-  const records = client.live(client.api.${entityName}.list);
-  onCleanup(() => records.dispose());
+  const user = client.auth.user.value!;
+${live}
+  const pending = signal(0);
+  const error = signal("");
+  const refreshStatic = () => Promise.all([
+${refresh}
+  ]);
+  onCleanup(() => {
+${dispose}
+  });
+  const mutate = async <Output,>(operation: () => Promise<Output>): Promise<boolean> => {
+    pending.value++;
+    error.value = "";
+    try {
+      await operation();
+      try {
+        await refreshStatic();
+      } catch {
+        error.value = "The action completed, but request/response data could not be refreshed.";
+      }
+      return true;
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : "The application action failed.";
+      return false;
+    } finally {
+      pending.value--;
+    }
+  };
   return (
     <AppView
-      user={client.auth.user.value!}
-      records={records.data.value ?? boot.records}
-      version={records.version.value}
-      connected={!records.loading.value && !records.error.value}
-      create={(input) => client.mutate(client.api.${entityName}.create, input)}
-      ${completionField ? `toggle={(id, value, version) => client.mutate(client.api.${entityName}.toggle, { id, value, version })}` : ""}
-      remove={(id, version) => client.mutate(client.api.${entityName}.remove, { id, version })}
+      route={boot.route}
+      user={user}
+      version={Math.max(boot.version, ${version})}
+      connected={${connected}}
+      pending={pending.value > 0}
+      error={error.value}
+${props}
       logout={() => client.auth.logout()}
     />
   );
@@ -947,7 +1758,31 @@ hydrate(document.getElementById("app")!, (
 `;
 }
 
-function serverSource(app: AppBlueprint, entityName: string, completionField?: string): string {
+function serverSource(app: AppBlueprint): string {
+  const names = Object.keys(app.entities);
+  const initials = names.map((name) => {
+    const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
+    const allowed = list.roles.length
+      ? `${sourceLiteral(list.roles)}.includes(caller.auth.user.role)`
+      : "true";
+    return `  const initial_${name} = caller.auth.user && ${allowed}
+    ? caller.query(api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}])
+    : { value: [], version: runtime.version };`;
+  }).join("\n");
+  const stateEntities = names.map((name) =>
+    `        ${name}: { records: initial_${name}.value, version: initial_${name}.version },`).join("\n");
+  const props = names.map((name) => {
+    const entity = app.entities[name];
+    return `          ${name}Records={initial_${name}.value}
+          ${name}Version={initial_${name}.version}
+          ${name}Create={() => Promise.resolve(false)}
+          ${entity.completionField ? `${name}Toggle={() => Promise.resolve(false)}\n          ` : ""}${name}Remove={() => Promise.resolve(false)}`;
+  }).join("\n");
+  const versions = names.map((name) => `initial_${name}.version`).join(", ");
+  const access = app.routes.map((route) =>
+    `${sourceLiteral(route.path)}: ${typeof route.access === "object" ? sourceLiteral(route.access.roles ?? []) : "[]"}`).join(",\n  ");
+  const routeRegistrations = app.routes.map((route) =>
+    `  .get(${sourceLiteral(route.path)}, ({ request }) => renderRoute(request, ${sourceLiteral(route.path)}))`).join("\n");
   return `/* @clankImportSource @clank.run/framework */
 import {
   AuthGate,
@@ -964,87 +1799,124 @@ import {
   staticFiles,
 } from "@clank.run/framework";
 import { backend } from "./backend.ts";
+import { openAppServices } from "./services.ts";
 import { AppView } from "./view.tsx";
 
-const environment = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+const processRef = (globalThis as unknown as {
+  process?: {
+    env?: Record<string, string | undefined>;
+    once?(event: "SIGINT" | "SIGTERM", listener: () => void): void;
+  };
+}).process;
+const environment = processRef?.env ?? {};
 const root = decodeURIComponent(new URL("./", import.meta.url).pathname);
 const frameworkRoot = decodeURIComponent(new URL("../node_modules/@clank.run/framework/dist/", import.meta.url).pathname);
-const databasePath = environment?.CLANK_DATABASE_PATH ?? environment?.CLANK_DATABASE ?? "app.sqlite";
+const databasePath = environment.CLANK_DATABASE_PATH ?? environment.CLANK_DATABASE ?? "app.sqlite";
+const services = await openAppServices(environment);
 const runtime = await openBackend(backend, {
   path: databasePath,
   agent: {
-    name: ${JSON.stringify(app.slug)},
-    title: ${JSON.stringify(app.name)},
-    description: ${JSON.stringify(`${app.description} Its documented server actions are available to authenticated MCP clients.`)},
+    name: ${sourceLiteral(app.slug)},
+    title: ${sourceLiteral(app.name)},
+    description: ${sourceLiteral(`${app.description} Its documented server actions are available to authenticated MCP clients.`)},
   },
 });
 const observability = createObservability({
-  serviceName: ${JSON.stringify(app.slug)},
-  environment: environment?.NODE_ENV ?? "development",
+  serviceName: ${sourceLiteral(app.slug)},
+  environment: environment.NODE_ENV ?? "development",
 });
 observability.health.register("database", () => {
   runtime.version;
   return true;
 });
+observability.health.register("services", async () => {
+  const checks = await services.health();
+  return Object.values(checks).every((check) => check.ok);
+});
 const api = createApi<typeof backend>();
 const appFiles = staticFiles(root);
-const frameworkFiles = staticFiles(frameworkRoot, { prefix: "/_clank", cacheControl: "public, max-age=31536000, immutable" });
+const frameworkFiles = staticFiles(frameworkRoot, {
+  prefix: "/_clank",
+  cacheControl: environment.CLANK_DEV === "1"
+    ? "no-cache"
+    : "public, max-age=31536000, immutable",
+});
+const routeRoles: Readonly<Record<string, readonly string[]>> = {
+  ${access}
+};
+
+async function renderRoute(request: Request, route: string): Promise<Response> {
+  const caller = await runtime.caller(request);
+  if (!caller.auth) throw new Error("Auth runtime is unavailable.");
+  const requiredRoles = routeRoles[route] ?? [];
+  if (caller.auth.user && requiredRoles.length && !requiredRoles.includes(caller.auth.user.role)) {
+    return new Response("This account does not have access to this route.", {
+      status: 403,
+      headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" },
+    });
+  }
+  const bootAuth = authState(caller.auth);
+${initials}
+  const version = Math.max(runtime.version, ${versions});
+  const authClient = createAuthClient({ initial: bootAuth, immediate: false });
+  const nonce = crypto.randomUUID().replaceAll("-", "");
+  const page = await renderDocument(
+    <AuthGate auth={authClient}>
+      <AppView
+          route={route}
+          user={bootAuth.user!}
+          version={version}
+          connected={true}
+          pending={false}
+          error=""
+${props}
+          logout={() => {}}
+        />
+    </AuthGate>,
+    {
+      title: ${sourceLiteral(app.name)},
+      bodyClass: "m-0 bg-slate-50 antialiased",
+      nonce,
+      head: (
+        <>
+          <script type="importmap" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify({ imports: { "@clank.run/framework": "/_clank/index.js" } }) }} />
+          <link rel="stylesheet" href="/styles.css" />
+        </>
+      ),
+      state: {
+        auth: bootAuth,
+        route,
+        entities: {
+${stateEntities}
+        },
+        version,
+      },
+      scripts: ["/app.js"],
+    },
+  );
+  return html(page, {
+    headers: {
+      "cache-control": "no-store",
+      "content-security-policy": [
+        "default-src 'self'",
+        \`script-src 'self' 'nonce-\${nonce}'\`,
+        "style-src 'self'",
+        "connect-src 'self'",
+        "img-src 'self' data:",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+      ].join("; "),
+    },
+  });
+}
 
 const app = createApp()
   .use(observability.middleware())
   .use(securityHeaders({ contentSecurityPolicy: false }))
-  .get(${JSON.stringify(app.deployment.healthPath)}, () => observability.health.response())
-  .get("/", async ({ request }) => {
-    const caller = await runtime.caller(request);
-    if (!caller.auth) throw new Error("Auth runtime is unavailable.");
-    const bootAuth = authState(caller.auth);
-    const initial = caller.auth.user ? caller.query(api.${entityName}.list) : { value: [], version: runtime.version };
-    const authClient = createAuthClient({ initial: bootAuth, immediate: false });
-    const nonce = crypto.randomUUID().replaceAll("-", "");
-    const page = await renderDocument(
-      <AuthGate auth={authClient}>
-        <AppView
-          user={bootAuth.user!}
-          records={initial.value}
-          version={initial.version}
-          connected={true}
-          create={() => {}}
-          ${completionField ? "toggle={() => {}}" : ""}
-          remove={() => {}}
-          logout={() => {}}
-        />
-      </AuthGate>,
-      {
-        title: ${JSON.stringify(app.name)},
-        bodyClass: "m-0 bg-slate-50 antialiased",
-        nonce,
-        head: (
-          <>
-            <script type="importmap" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify({ imports: { "@clank.run/framework": "/_clank/index.js" } }) }} />
-            <link rel="stylesheet" href="/styles.css" />
-          </>
-        ),
-        state: { auth: bootAuth, records: initial.value, version: initial.version },
-        scripts: ["/app.js"],
-      },
-    );
-    return html(page, {
-      headers: {
-        "cache-control": "no-store",
-        "content-security-policy": [
-          "default-src 'self'",
-          \`script-src 'self' 'nonce-\${nonce}'\`,
-          "style-src 'self'",
-          "connect-src 'self'",
-          "img-src 'self' data:",
-          "base-uri 'self'",
-          "form-action 'self'",
-          "frame-ancestors 'none'",
-          "object-src 'none'",
-        ].join("; "),
-      },
-    });
-  })
+  .get(${sourceLiteral(app.deployment.healthPath)}, () => observability.health.response())
+${routeRegistrations}
   .get("/app.js", ({ request }) => appFiles.handle(request))
   .get("/view.js", ({ request }) => appFiles.handle(request))
   .get("/styles.css", ({ request }) => appFiles.handle(request))
@@ -1052,12 +1924,29 @@ const app = createApp()
   .route("*", "*", ({ request }) => runtime.handle(request));
 
 const server = await serve(app, {
-  hostname: environment?.HOST ?? "127.0.0.1",
-  port: Number(environment?.PORT ?? 3000),
-  trustProxy: environment?.TRUST_PROXY === "1",
-  allowedHosts: environment?.ALLOWED_HOSTS?.split(",").map((host) => host.trim()).filter(Boolean),
+  hostname: environment.HOST ?? "127.0.0.1",
+  port: Number(environment.PORT ?? 3000),
+  trustProxy: environment.TRUST_PROXY === "1",
+  allowedHosts: environment.ALLOWED_HOSTS?.split(",").map((host) => host.trim()).filter(Boolean),
 });
 
+let closing = false;
+const close = async () => {
+  if (closing) return;
+  closing = true;
+  const serverClose = server.close();
+  runtime.close();
+  const closeResults = await Promise.allSettled([serverClose, services.close()]);
+  await observability.close();
+  const closeFailure = closeResults.find((result) => result.status === "rejected");
+  if (closeFailure?.status === "rejected") throw closeFailure.reason;
+};
+const closeForSignal = () => void close().catch((error) => {
+  console.error("Application shutdown failed.", error instanceof Error ? error.message : "Unknown failure.");
+  processRef?.exit?.(1);
+});
+processRef?.once?.("SIGINT", closeForSignal);
+processRef?.once?.("SIGTERM", closeForSignal);
 observability.logger.info("Application started.", { url: server.url });
 `;
 }
@@ -1071,37 +1960,26 @@ function schemaSource(field: AppFieldDefinition, wrappers = true): string {
   };
   switch (field.type) {
     case "string":
-    case "text": source = `s.string(${JSON.stringify(options)})`; break;
-    case "number": source = `s.number(${JSON.stringify({ ...options, integer: field.integer ?? false })})`; break;
-    case "boolean": source = `s.boolean(${field.description ? JSON.stringify(field.description) : ""})`; break;
-    case "email": source = `s.email(${JSON.stringify(options)})`; break;
-    case "url": source = `s.url(${JSON.stringify(field.description ? { description: field.description } : {})})`; break;
-    case "date": source = `s.date(${field.description ? JSON.stringify(field.description) : ""})`; break;
-    case "datetime": source = `s.datetime(${field.description ? JSON.stringify(field.description) : ""})`; break;
-    case "enum": source = `s.enum(${JSON.stringify(field.values)} as const${field.description ? `, ${JSON.stringify(field.description)}` : ""})`; break;
-    case "reference": source = `s.id(${JSON.stringify(field.entity)}${field.description ? `, ${JSON.stringify(field.description)}` : ""})`; break;
+    case "text": source = `s.string(${sourceLiteral(options)})`; break;
+    case "number": source = `s.number(${sourceLiteral({ ...options, integer: field.integer ?? false })})`; break;
+    case "boolean": source = `s.boolean(${field.description ? sourceLiteral(field.description) : ""})`; break;
+    case "email": source = `s.email(${sourceLiteral(options)})`; break;
+    case "url": source = `s.url(${sourceLiteral(field.description ? { description: field.description } : {})})`; break;
+    case "date": source = `s.date(${field.description ? sourceLiteral(field.description) : ""})`; break;
+    case "datetime": source = `s.datetime(${field.description ? sourceLiteral(field.description) : ""})`; break;
+    case "enum": source = `s.enum(${sourceLiteral(field.values)} as const${field.description ? `, ${sourceLiteral(field.description)}` : ""})`; break;
+    case "reference": source = `s.id(${sourceLiteral(field.entity)}${field.description ? `, ${sourceLiteral(field.description)}` : ""})`; break;
   }
   if (!wrappers) return source;
   if (field.nullable) source = `s.nullable(${source})`;
-  if (Object.hasOwn(field, "default")) source = `s.default(${source}, ${JSON.stringify(field.default)})`;
+  if (Object.hasOwn(field, "default")) source = `s.default(${source}, ${sourceLiteral(field.default)})`;
   else if (field.required === false) source = `s.optional(${source})`;
   return source;
 }
 
 function createSchemaSource(field: AppFieldDefinition): string {
-  if (Object.hasOwn(field, "default")) return `s.default(${schemaSource({ ...field, default: undefined }, false)}, ${JSON.stringify(field.default)})`;
+  if (Object.hasOwn(field, "default")) return `s.default(${schemaSource({ ...field, default: undefined }, false)}, ${sourceLiteral(field.default)})`;
   return schemaSource(field);
-}
-
-function defaultFor(field: AppFieldDefinition, name: string): string | number | boolean | null | undefined {
-  if (Object.hasOwn(field, "default")) return field.default;
-  if (field.required === false) return undefined;
-  if (field.nullable) return null;
-  if (field.type === "boolean") return false;
-  if (field.type === "number") return field.min ?? 0;
-  if (field.type === "enum") return field.values![0];
-  if (field.type === "reference") return "";
-  return humanize(name);
 }
 
 function metadataMigration(app: AppBlueprint): string {
@@ -1114,10 +1992,6 @@ function metadataMigration(app: AppBlueprint): string {
 INSERT INTO app_metadata (key, value, updated_at)
 VALUES ('blueprint', ${sqlString(canonical(app))}, unixepoch() * 1000);
 `;
-}
-
-function primaryEntity(app: AppBlueprint): string {
-  return app.routes.find((route) => route.entity)?.entity ?? Object.keys(app.entities)[0];
 }
 
 function allowedDataModuleSuffix(input: string): boolean {
@@ -1301,8 +2175,9 @@ class DataModuleParser {
 function normalizeAccess(value: unknown, roles: Record<string, AppRoleDefinition>, path: string): AppRouteDefinition["access"] {
   if (value === "public" || value === "authenticated") return value;
   const input = object(value, path);
-  const allowed = stringArray(input.roles ?? [], `${path}.roles`);
-  for (const role of allowed) if (!roles[role]) throw new TypeError(`${path} references unknown role ${role}.`);
+  const allowed = stringArray(input.roles, `${path}.roles`, 1);
+  unique(allowed, `${path}.roles`);
+  for (const role of allowed) if (!Object.hasOwn(roles, role)) throw new TypeError(`${path} references unknown role ${role}.`);
   return { roles: allowed };
 }
 
@@ -1319,6 +2194,7 @@ function text(value: unknown, path: string, minimum: number, maximum: number): s
   if (typeof value !== "string") throw new TypeError(`${path} must be a string.`);
   const output = value.trim();
   if (output.length < minimum || output.length > maximum) throw new TypeError(`${path} must contain ${minimum}-${maximum} characters.`);
+  if (UNSAFE_TEXT.test(output)) throw new TypeError(`${path} contains an unsafe control character.`);
   return output;
 }
 
@@ -1339,8 +2215,11 @@ function slugify(value: string): string {
 }
 
 function routePath(value: unknown, path: string): string {
-  if (typeof value !== "string" || !value.startsWith("/") || value.includes("?") || value.includes("#") || value.includes("\0")) {
-    throw new TypeError(`${path} must be an absolute path without a query or hash.`);
+  if (
+    typeof value !== "string"
+    || !/^(?:\/|\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)$/u.test(value)
+  ) {
+    throw new TypeError(`${path} must be a static absolute path without parameters, a trailing slash, query, or hash.`);
   }
   return value;
 }
@@ -1360,7 +2239,12 @@ function stringArray(value: unknown, path: string, minimum = 0): string[] {
   if (!Array.isArray(value) || value.length < minimum || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
     throw new TypeError(`${path} must be an array containing at least ${minimum} non-empty strings.`);
   }
-  return value.map((entry) => entry.trim());
+  if (value.length > 1_000) throw new TypeError(`${path} must contain at most 1000 entries.`);
+  const output = value.map((entry) => entry.trim());
+  if (output.some((entry) => entry.length > 1_000 || UNSAFE_TEXT.test(entry))) {
+    throw new TypeError(`${path} entries must contain at most 1000 safe text characters.`);
+  }
+  return output;
 }
 
 function enumValue<T extends string>(value: unknown, values: readonly T[], path: string): T {
@@ -1372,8 +2256,21 @@ function unique(values: readonly string[], label: string): void {
   if (new Set(values).size !== values.length) throw new TypeError(`${label} must be unique.`);
 }
 
+const SOURCE_LITERAL_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
+  "<": "\\u003C",
+  ">": "\\u003E",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+});
+
+function sourceLiteral(value: unknown, space?: number): string {
+  const serialized = JSON.stringify(value, null, space);
+  if (serialized === undefined) throw new TypeError("Generated source values must be JSON serializable.");
+  return serialized.replace(/[<>\u2028\u2029]/gu, (character) => SOURCE_LITERAL_ESCAPES[character]!);
+}
+
 function property(value: string): string {
-  return NAME.test(value) ? value : JSON.stringify(value);
+  return NAME.test(value) ? value : sourceLiteral(value);
 }
 
 function typeName(value: string): string {
