@@ -141,6 +141,13 @@ test("runtime capsules fail closed on mismatched paths, modes, lengths, and byte
         return /BAD_VALUE/u.test(error.message);
       },
     );
+    await assert.rejects(
+      createDeploymentRuntimeCapsule({
+        ...base,
+        ingress: { ...base.ingress, route: "/v1/%2e%2e/project_runtime_02" },
+      }),
+      /ingress route is invalid/u,
+    );
 
     const capsule = await createDeploymentRuntimeCapsule(base);
     const view = new DataView(

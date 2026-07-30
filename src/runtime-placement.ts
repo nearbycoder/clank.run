@@ -464,6 +464,7 @@ function ingressRoute(value: unknown): string {
     || value.includes("?")
     || value.includes("#")
     || value.includes("\0")
+    || !/^\/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$/u.test(value)
     || value.split("/").some((segment, index) =>
       index > 0 && (!segment || segment === "." || segment === ".."))) {
     throw new TypeError("Runtime ingress route is invalid.");

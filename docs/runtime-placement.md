@@ -154,8 +154,12 @@ altering another runtime; they do not make the destination host untrusted comput
 ## Activation status
 
 The capsule codec, lease-scoped coordinator call, standard deployment-agent access, desired-state
-protocol selector, provider verification, authenticated HTTP forwarding, public declarations, and
-packaged-runner limits are implemented and tested.
+protocol selector, provider verification, authenticated HTTP forwarding, public declarations,
+packaged-runner limits, and generation-bound managed-ingress route contract are implemented and
+tested. A remote ingress route fixes the allowlisted provider origin, provider-local path,
+`clank-runtime/1` protocol, desired generation, project, and private route token. Public requests
+cannot override those headers, health uses the same binding, and an old generation's circuit state
+does not carry into the next generation.
 
 The built-in control plane deliberately does **not** select `clank-runtime/1` for hosted projects
 yet. The package-supported [provider data lifecycle](provider-data-lifecycle.md) now stages code
@@ -163,9 +167,10 @@ without persisting secrets; initializes, preserves, replaces, snapshots, rolls b
 per-project SQLite data; applies immutable migrations; retains one rollback generation; and
 recovers interrupted apply and rollback journals.
 
-Remote activation remains closed until that lifecycle is bound end to end to an isolated runtime
-launcher, private health check, atomic ingress publish/revoke, stateful node pinning, encrypted
-recovery replication, and lease-loss/traffic-switch certification.
+Remote activation remains closed until that lifecycle and ingress contract are bound end to end to
+an isolated runtime launcher, provider-side binding validation, atomic ingress publish/revoke,
+stateful node pinning, encrypted recovery replication, and lease-loss/traffic-switch
+certification.
 
 Until those controls land, enabling a runner fleet does not move existing applications or their
 data. The current single-host deployment path stays unchanged and no additional Railway service,
@@ -173,4 +178,5 @@ volume, database, or object store is required.
 
 Continue with [Provider data lifecycle](provider-data-lifecycle.md), [Deployment provider
 adapters](provider-adapters.md), [Durable distributed deployment](distributed-deployment.md),
-[Recovery](recovery.md), and [Platform security](platform-security.md).
+[Managed ingress and external data](data-plane.md), [Recovery](recovery.md), and
+[Platform security](platform-security.md).

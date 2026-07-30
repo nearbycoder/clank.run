@@ -1,10 +1,20 @@
 import type { Migration, MigrationPlan } from "./migrations.js";
+export interface IngressRuntimeRoute {
+    readonly protocol: "clank-runtime/1";
+    readonly generation: number;
+    /** Provider-local path dedicated to this application runtime. */
+    readonly path: string;
+    /** Secret delivered only in a managed-ingress request header. */
+    readonly token: string;
+}
 export interface IngressRoute {
     id: string;
     projectId: string;
     hosts: readonly string[];
     upstream: string;
     active: boolean;
+    /** Binds a remote provider origin to one exact application generation. */
+    runtime?: IngressRuntimeRoute;
 }
 export interface IngressRouteStore {
     routes(): readonly IngressRoute[] | Promise<readonly IngressRoute[]>;
