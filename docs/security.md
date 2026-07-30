@@ -60,6 +60,14 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 - Worker queues and concurrency are bounded in both config and environment parsing.
 - Rolling deployments quiesce old background code before starting the candidate and resume it on
   candidate failure.
+- Hosted inspection uses allowlisted operational columns and bounded rows. It never returns
+  arguments, results, error text, owner/group identity, worker identity, or lease credentials.
+- Hosted cancellation/retry requires the dedicated project `jobs` permission, applies a
+  conditional state transition inside the application SQLite transaction boundary, and writes
+  payload-free job plus control-plane audit events.
+- Job mutations also hold the project's durable deployment lock and recheck current membership
+  before touching the database, so a queued operation cannot race a migration, restore, rollback,
+  or project deletion.
 
 Delivery remains at least once. A handler can complete an external side effect before losing its
 lease, so the application must make that side effect idempotent. Abort signals are cooperative and

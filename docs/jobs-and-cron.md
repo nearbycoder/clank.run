@@ -339,6 +339,75 @@ policy, schedules, descriptions, and agent metadata. A manifest entry documents 
 capability; it does not make that job remotely callable. Expose an authenticated mutation when a
 person or agent should be able to request it.
 
+### Operate a deployed queue
+
+Every deployed project has a **Jobs** view at
+`/projects/<project-slug>/jobs`. It reads the job tables in that project's isolated application
+database; there is no shared cross-tenant queue. The view shows bounded operational metadata:
+
+- counts for queued, retrying, running, succeeded, dead, cancelled, due, and overdue work;
+- expired running leases and schedules with a recorded error;
+- the newest 100 jobs, with name, queue, state, attempts, run/completion time, and cancellation
+  state; and
+- the first 100 cron schedules, with expression, time zone, concurrency rule, next run, and safe
+  status.
+
+The platform deliberately does **not** return job arguments, results, error text, owner/group
+identities, worker identities, lease tokens, or schedule-error text. `hasError` says only that an
+error exists. This prevents a control-plane viewer, support session, CLI transcript, or monitoring
+collector from becoming a second copy of application data and credentials. Use the application's
+private logs and traces when an authorized engineer needs the error body.
+
+The same surface is available from a linked project:
+
+```sh
+clank jobs status
+clank jobs list
+clank jobs list --state=dead --queue=email --limit=25
+clank jobs list --json
+clank jobs cancel job_0123456789abcdef0123456789abcdef
+clank jobs retry job_0123456789abcdef0123456789abcdef
+```
+
+`clank jobs worker|scheduler` still runs local/provider processes; `status`, `list`, `cancel`, and
+`retry` operate the project linked in `.clank/project.json`. Human output is concise and `--json`
+returns the bounded API contract for agents and automation.
+
+The project API is:
+
+```text
+GET  /api/projects/<project-id>/jobs?state=<state>&queue=<queue>&limit=100
+POST /api/projects/<project-id>/jobs/<job-id>/cancel
+POST /api/projects/<project-id>/jobs/<job-id>/retry
+```
+
+Reads require project `read` permission. Cancellation and retry require the dedicated project
+`jobs` permission and are blocked during read-only support impersonation. They hold the same
+durable project lock as deployment, migration, restore, rollback, and deletion, then recheck
+membership immediately before the write. Conditional SQLite updates against the live application
+database ensure a concurrent worker cannot turn a stale dashboard decision into an invalid
+transition. Cancellation accepts only queued, retrying, or running work. A running job receives a
+cancellation request and stops cooperatively at its next lease heartbeat. Retry accepts only dead
+or cancelled jobs, clears the old result/error and lease, resets attempts, and enqueues the same
+validated stored payload. Both actions append a payload-free job event and a control-plane audit
+event.
+
+The API reports one of four compatibility states:
+
+| State | Meaning |
+| --- | --- |
+| `ready` | Current durable job tables are available |
+| `not_deployed` | The project does not have an application database yet |
+| `not_configured` | The app has a database but has never opened a durable job runtime |
+| `upgrade_required` | An older/incompatible queue table exists; redeploy the current framework |
+
+The console raises an **attention** state for any dead letter, due job older than five minutes,
+expired running lease, or schedule with a recorded error. Change the overdue threshold for a
+self-hosted control plane with `CLANK_JOB_ALERT_DUE_AFTER_MS`; the accepted range is one second
+through 30 days. This is durable state exposed to the console, CLI, and API, not an outbound paging
+service. Poll `clank jobs status --json` or the authenticated endpoint from an existing monitoring
+system when email, Slack, PagerDuty, or another delivery channel is required.
+
 For telemetry, use stable job name, queue, state, and attempt fields. Do not use job IDs, user IDs,
 arguments, or error messages as metric labels. The
 [OpenTelemetry messaging conventions](https://opentelemetry.io/docs/specs/semconv/messaging/messaging-spans/)
@@ -357,4 +426,3 @@ are a useful interoperability target for traces.
 - Restrict worker queue allowlists when a process has privileged network or secret access.
 - Inspect and alert on dead jobs and oldest-due age.
 - Back up the application database; queue state is part of that same database and restore point.
-

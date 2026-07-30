@@ -81,6 +81,26 @@ deployments start the configured topology automatically.
 See [Durable jobs and cron](jobs-and-cron.md) for definition, enqueue, delivery, and deployment
 semantics.
 
+## Hosted job operations
+
+From a linked deployed project:
+
+```sh
+clank jobs status
+clank jobs status --json
+clank jobs list
+clank jobs list --state=dead --queue=email --limit=25
+clank jobs cancel <job-id>
+clank jobs retry <job-id>
+```
+
+These subcommands use the authenticated control plane; they do not start a worker. `list` returns
+at most 100 safe records. It intentionally omits arguments, results, error text, owner/group
+identity, worker identity, and lease credentials. Status reports dead letters, overdue work,
+expired leases, and schedule-error presence. Cancel and retry require the dedicated `jobs`
+permission, and the server enforces the current state transition atomically. See
+[Operate a deployed queue](jobs-and-cron.md#operate-a-deployed-queue).
+
 ## Authenticate
 
 ```sh

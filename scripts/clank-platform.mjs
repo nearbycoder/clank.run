@@ -131,6 +131,9 @@ const platform = await openPlatform({
         }
       : {}),
   },
+  jobs: {
+    alertDueAfterMs: number(process.env.CLANK_JOB_ALERT_DUE_AFTER_MS, 5 * 60_000),
+  },
   ...(ingress ? { ingress } : {}),
   onError: (error) => console.error("[platform]", error),
 });
