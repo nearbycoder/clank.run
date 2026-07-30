@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openPlatform } from "../dist/platform.js";
 import {
+  resolveBackupStorage,
   resolvePlatformHosting,
   resolveRunnerArtifactStorage,
 } from "../scripts/platform-hosting.mjs";
@@ -122,6 +123,47 @@ test("runner artifact storage resolves explicit S3-compatible configuration with
       CLANK_OBJECT_PATH_STYLE: "yes",
     }),
     /CLANK_OBJECT_PATH_STYLE must be 0 or 1/u,
+  );
+});
+
+test("backup storage resolves bounded chunking over the shared S3 configuration", () => {
+  assert.equal(resolveBackupStorage({}), null);
+  const resolved = resolveBackupStorage({
+    CLANK_BACKUP_STORE: "s3",
+    CLANK_BACKUP_NAMESPACE: "recovery-production-v1",
+    CLANK_BACKUP_PREFIX: "recovery",
+    CLANK_BACKUP_CHUNK_BYTES: "1048576",
+    CLANK_OBJECT_ENDPOINT: "https://objects.example.test",
+    CLANK_OBJECT_REGION: "auto",
+    CLANK_OBJECT_BUCKET: "clank-private",
+    CLANK_OBJECT_ACCESS_KEY_ID: "ACCESSKEY",
+    CLANK_OBJECT_SECRET_ACCESS_KEY: "secret-access-key",
+  });
+  assert.deepEqual(resolved, {
+    namespace: "recovery-production-v1",
+    prefix: "recovery",
+    chunkBytes: 1_048_576,
+    options: {
+      endpoint: "https://objects.example.test",
+      region: "auto",
+      bucket: "clank-private",
+      accessKeyId: "ACCESSKEY",
+      secretAccessKey: "secret-access-key",
+      pathStyle: false,
+      maxObjectBytes: 32 * 1024 * 1024,
+    },
+  });
+  assert.throws(
+    () => resolveBackupStorage({ CLANK_BACKUP_STORE: "filesystem" }),
+    /CLANK_BACKUP_STORE must be local or s3/u,
+  );
+  assert.throws(
+    () => resolveBackupStorage({
+      CLANK_BACKUP_STORE: "s3",
+      CLANK_BACKUP_NAMESPACE: "recovery-production-v1",
+      CLANK_BACKUP_CHUNK_BYTES: "1024",
+    }),
+    /CLANK_BACKUP_CHUNK_BYTES/u,
   );
 });
 

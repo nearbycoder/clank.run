@@ -31,6 +31,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   instead of the control-plane volume. Each release persists its repository namespace and exact
   content-addressed key; leased reads, release cleanup, project deletion, legacy local releases,
   quota accounting, and provider failures are verified end to end.
+- Encrypted SQLite recovery points can use a local or S3-compatible object repository. Remote
+  backups use an authenticated per-database catalog and bounded immutable chunks, promote legacy
+  local copies, retain a usable local copy after upload failure, verify the complete remote copy,
+  apply retention across both locations, survive restarts, and are erased with platform-managed
+  project storage.
 
 ### Fixed
 
@@ -60,6 +65,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Failed or ambiguous release-object writes are cleaned before their quota reservation is released.
   A repository namespace mismatch refuses reads and deletion rather than silently interpreting an
   old release through a newly configured bucket or prefix.
+- Object backups authenticate catalog and manifest metadata, verify every chunk's exact key, media
+  type, length, and SHA-256, then recheck AES-GCM, plaintext length/digest, and SQLite integrity
+  before restore. The platform persists its backup namespace and logical root and refuses startup
+  after repository configuration drifts or disappears.
 
 ## 0.9.4 - 2026-07-28
 

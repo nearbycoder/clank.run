@@ -145,9 +145,9 @@ applications do not need a separate runtime compiler or bundler.
 | Live sync | Auth-partitioned Fetch RPC and cache, EventSource streams, session revocation, automatic invalidation, SSR seeding, multi-tab synchronization |
 | SSR | Async string rendering, full-document templates, safe state serialization, CSP nonces, context and keyed lists, marker-based DOM-preserving hydration |
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |
-| Object storage | Atomic owner-only local objects plus zero-dependency S3-compatible storage with SigV4, bounded retries, deadlines, and verified SHA-256 |
+| Object storage | Atomic owner-only local objects plus zero-dependency S3-compatible storage with SigV4, bounded retries, deadlines, verified SHA-256, and chunked encrypted recovery |
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, Tailwind Play CDN and compiled Tailwind CSS compatibility |
-| Deploy | Browser console, workspaces and RBAC, activity feeds, ingress metrics, enforced quotas, custom DNS/TLS onboarding, deterministic artifacts, optional off-host release objects, encrypted secrets, immutable migrations, SQLite backups, storage-backed readiness, health-gated releases, logs, audit, rollback |
+| Deploy | Browser console, workspaces and RBAC, activity feeds, ingress metrics, enforced quotas, custom DNS/TLS onboarding, deterministic artifacts, optional off-host release and backup objects, encrypted secrets, immutable migrations, storage-backed readiness, health-gated releases, logs, audit, rollback |
 | Hosting safety | Explicit trusted/isolated profiles, isolated production default, constrained Docker runner, bounded artifacts, resource ceilings, and fail-closed runner configuration |
 | Distributed execution | Durable leases, authenticated nodes, placement, desired generations, fenced operations, verified leased release transfer, and a provider-neutral agent lifecycle with persistent credentials and graceful drain |
 

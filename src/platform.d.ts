@@ -1,4 +1,5 @@
 import type { ObjectStore } from "./object-storage.js";
+import type { BackupObjectRepositoryOptions } from "./recovery.js";
 export interface ProcessRunnerOptions {
     kind?: "process";
 }
@@ -39,6 +40,11 @@ export interface PlatformBackupOptions {
     maxAgeMs?: number;
     /** Maximum source database size accepted by the backup engine. Defaults to 10 GiB. */
     maxDatabaseBytes?: number;
+    /**
+     * Optional off-host repository for encrypted backups. Each project receives
+     * an isolated catalog and chunk namespace automatically.
+     */
+    objects?: Omit<BackupObjectRepositoryOptions, "repositoryId">;
 }
 export interface ClankPlatformOptions {
     dataDirectory: string;

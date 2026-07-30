@@ -1,4 +1,5 @@
 import { backupSQLite, restoreSQLiteBackup } from "./migrations.ts";
+import type { ObjectStore } from "./object-storage.ts";
 
 export interface BackupManifest {
   protocol: "clank-backup/1";
@@ -27,7 +28,11 @@ export interface BackupVerification {
 }
 
 export interface BackupManager {
-  create(options?: { reason?: string }): Promise<BackupManifest>;
+  create(options?: {
+    reason?: string;
+    /** Backup IDs that this create/prune cycle must preserve temporarily. */
+    protectedBackupIds?: readonly string[];
+  }): Promise<BackupManifest>;
   list(): Promise<readonly BackupManifest[]>;
   verify(id: string): Promise<BackupVerification>;
   restore(id: string, options: {
@@ -35,6 +40,8 @@ export interface BackupManager {
     confirmation: string;
   }): Promise<BackupVerification>;
   delete(id: string): Promise<boolean>;
+  /** Permanently removes every local and object-backed recovery point. */
+  purge(options: { confirmation: "delete all backups" }): Promise<number>;
   start(intervalMs: number): () => void;
   close(): void;
 }
@@ -48,6 +55,15 @@ export interface BackupManagerOptions {
   maxAgeMs?: number;
   maxDatabaseBytes?: number;
   verifyAfterCreate?: boolean;
+  /**
+   * Stores encrypted backup envelopes outside the application volume.
+   *
+   * The local repository remains as a private staging area and compatibility
+   * source. Existing local backups are promoted on the next create. A stable
+   * namespace and repositoryId prevent a configuration change from silently
+   * pointing at a different backup history.
+   */
+  objects?: BackupObjectRepositoryOptions;
   onEvent?: (event: {
     type: "created" | "verified" | "restored" | "deleted" | "failed";
     backupId?: string;
@@ -56,11 +72,32 @@ export interface BackupManagerOptions {
   }) => void;
 }
 
+export interface BackupObjectRepositoryOptions {
+  store: ObjectStore;
+  /** Stable operator-selected identity for the physical repository. */
+  namespace: string;
+  /** Stable identity for this database within the shared object repository. */
+  repositoryId: string;
+  /** Logical key prefix. Defaults to "backups". */
+  prefix?: string;
+  /** Encrypted bytes uploaded per immutable object. Defaults to 8 MiB. */
+  chunkBytes?: number;
+}
+
 const BACKUP_ID = /^bk_[0-9]{13}_[A-Za-z0-9_-]{12,64}$/u;
 const MAGIC = new TextEncoder().encode("CLNKBK1\n");
+const OBJECT_CATALOG_PROTOCOL = "clank-backup-catalog/1" as const;
+const OBJECT_CONTENT_TYPE = "application/vnd.clank.backup-chunk";
+const CATALOG_CONTENT_TYPE = "application/vnd.clank.backup-catalog+json";
+const MAX_CATALOG_BYTES = 32 * 1024 * 1024;
 
-/** Opens an encrypted local backup repository for one SQLite database. */
+/** Opens an encrypted local or object-backed backup repository for one SQLite database. */
 export async function openBackupManager(options: BackupManagerOptions): Promise<BackupManager> {
+  if (!options.objects) return openLocalBackupManager(options);
+  return openObjectBackupManager(options);
+}
+
+async function openLocalBackupManager(options: BackupManagerOptions): Promise<BackupManager> {
   const fs = await nodeFs();
   const path = await nodePath();
   const source = path.resolve(options.databasePath);
@@ -155,11 +192,12 @@ export async function openBackupManager(options: BackupManagerOptions): Promise<
     }
   };
 
-  const prune = async (): Promise<void> => {
+  const prune = async (protectedIds: ReadonlySet<string> = new Set()): Promise<void> => {
     const manifests = await manager.list();
     const cutoff = Date.now() - maxAgeMs;
     for (let index = 0; index < manifests.length; index++) {
       const manifest = manifests[index]!;
+      if (protectedIds.has(manifest.id)) continue;
       if (index < maxBackups && (manifest.createdAt >= cutoff || index === 0)) continue;
       await fs.rm(pathsFor(manifest.id).directory, { recursive: true, force: true });
       emit({ type: "deleted", backupId: manifest.id });
@@ -170,6 +208,7 @@ export async function openBackupManager(options: BackupManagerOptions): Promise<
     async create(createOptions = {}) {
       if (closed) throw new Error("Backup manager is closed.");
       if (creating) throw new Error("A backup is already in progress.");
+      const protectedIds = protectedBackupIds(createOptions.protectedBackupIds);
       creating = true;
       const started = performance.now();
       const id = `bk_${Date.now()}_${randomId(18)}`;
@@ -213,7 +252,7 @@ export async function openBackupManager(options: BackupManagerOptions): Promise<
         await fs.rename(temporaryDirectory, pathsFor(id).directory);
         await fs.rm(snapshot, { force: true });
         emit({ type: "created", backupId: id, durationMs: rounded(performance.now() - started) });
-        await prune();
+        await prune(protectedIds);
         return manifest;
       } catch (error) {
         await fs.rm(snapshot, { force: true });
@@ -269,6 +308,15 @@ export async function openBackupManager(options: BackupManagerOptions): Promise<
       emit({ type: "deleted", backupId: id });
       return true;
     },
+    async purge(purgeOptions) {
+      if (closed) throw new Error("Backup manager is closed.");
+      if (purgeOptions?.confirmation !== "delete all backups") {
+        throw new Error('Backup purge confirmation must equal "delete all backups".');
+      }
+      const manifests = await manager.list();
+      for (const manifest of manifests) await manager.delete(manifest.id);
+      return manifests.length;
+    },
     start(intervalMs) {
       if (closed) throw new Error("Backup manager is closed.");
       const interval = integerRange(intervalMs, "intervalMs", 60_000, Number.MAX_SAFE_INTEGER);
@@ -289,6 +337,804 @@ export async function openBackupManager(options: BackupManagerOptions): Promise<
     },
   };
   return manager;
+}
+
+type ObjectBackupState = "uploading" | "active" | "deleting";
+
+interface ObjectBackupChunk {
+  key: string;
+  size: number;
+  sha256: string | null;
+}
+
+interface ObjectBackupEntry {
+  id: string;
+  state: ObjectBackupState;
+  manifest: BackupManifest;
+  manifestMac: string;
+  envelopeBytes: number;
+  chunks: readonly ObjectBackupChunk[];
+  updatedAt: number;
+}
+
+interface ObjectBackupCatalog {
+  protocol: typeof OBJECT_CATALOG_PROTOCOL;
+  namespace: string;
+  repositoryId: string;
+  revision: number;
+  entries: readonly ObjectBackupEntry[];
+}
+
+async function openObjectBackupManager(options: BackupManagerOptions): Promise<BackupManager> {
+  const fs = await nodeFs();
+  const path = await nodePath();
+  const source = path.resolve(options.databasePath);
+  const repository = path.resolve(options.repositoryDirectory);
+  const objectStaging = path.join(repository, ".object-staging");
+  const configured = normalizeBackupObjects(options.objects);
+  const key = await encryptionKey(options.encryptionKey);
+  const maxBackups = integerRange(options.maxBackups ?? 30, "maxBackups", 1, 10_000);
+  const maxAgeMs = integerRange(
+    options.maxAgeMs ?? 90 * 24 * 60 * 60 * 1_000,
+    "maxAgeMs",
+    60_000,
+    Number.MAX_SAFE_INTEGER,
+  );
+  const maxDatabaseBytes = integerRange(
+    options.maxDatabaseBytes ?? 10 * 1024 * 1024 * 1024,
+    "maxDatabaseBytes",
+    1,
+    Number.MAX_SAFE_INTEGER,
+  );
+  await fs.mkdir(objectStaging, { recursive: true, mode: 0o700 });
+  await fs.chmod(objectStaging, 0o700);
+
+  // The local engine remains the source of truth for encryption, SQLite
+  // consistency, and compatibility with backups created before object storage
+  // was enabled. Retention is coordinated across both repositories below.
+  const local = await openLocalBackupManager({
+    ...options,
+    objects: undefined,
+    maxBackups: 10_000,
+    maxAgeMs: Number.MAX_SAFE_INTEGER,
+    onEvent: undefined,
+  });
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let creating = false;
+  let closed = false;
+  let mutationTail: Promise<void> = Promise.resolve();
+
+  const emit = (event: Parameters<NonNullable<BackupManagerOptions["onEvent"]>>[0]) => {
+    try { options.onEvent?.(event); }
+    catch { /* Recovery observers cannot alter backup state. */ }
+  };
+
+  const mutate = async <Value>(operation: () => Promise<Value>): Promise<Value> => {
+    const previous = mutationTail;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    mutationTail = previous.then(() => gate, () => gate);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  };
+
+  const catalogKey = `${configured.root}/catalog.json`;
+  const emptyCatalog = (): ObjectBackupCatalog => ({
+    protocol: OBJECT_CATALOG_PROTOCOL,
+    namespace: configured.namespace,
+    repositoryId: configured.repositoryId,
+    revision: 0,
+    entries: [],
+  });
+
+  const readCatalog = async (): Promise<ObjectBackupCatalog> => {
+    const stored = await configured.store.get(catalogKey);
+    if (!stored) return emptyCatalog();
+    await assertStoredObject(stored, catalogKey, MAX_CATALOG_BYTES, CATALOG_CONTENT_TYPE);
+    let signed: unknown;
+    try {
+      signed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(stored.bytes));
+    } catch {
+      throw new Error("Object backup catalog is invalid.");
+    }
+    if (!signed || typeof signed !== "object" || Array.isArray(signed)) {
+      throw new Error("Object backup catalog is invalid.");
+    }
+    const record = signed as { catalog?: unknown; mac?: unknown };
+    const catalog = validateObjectCatalog(
+      record.catalog,
+      configured.namespace,
+      configured.repositoryId,
+      configured.root,
+    );
+    const encoded = JSON.stringify(catalog);
+    if (typeof record.mac !== "string" || !await safeEqual(record.mac, await hmac(encoded, key))) {
+      throw new Error("Object backup catalog authentication failed.");
+    }
+    for (const entry of catalog.entries) {
+      if (!await safeEqual(entry.manifestMac, await hmac(JSON.stringify(entry.manifest), key))) {
+        throw new Error(`Backup manifest authentication failed: ${entry.id}`);
+      }
+    }
+    return catalog;
+  };
+
+  const writeCatalog = async (
+    previous: ObjectBackupCatalog,
+    entries: readonly ObjectBackupEntry[],
+  ): Promise<ObjectBackupCatalog> => {
+    const catalog: ObjectBackupCatalog = {
+      protocol: OBJECT_CATALOG_PROTOCOL,
+      namespace: configured.namespace,
+      repositoryId: configured.repositoryId,
+      revision: previous.revision + 1,
+      entries: [...entries].sort((left, right) =>
+        right.manifest.createdAt - left.manifest.createdAt || right.id.localeCompare(left.id)),
+    };
+    const encoded = JSON.stringify(catalog);
+    const bytes = new TextEncoder().encode(
+      `${JSON.stringify({ catalog, mac: await hmac(encoded, key) }, null, 2)}\n`,
+    );
+    if (bytes.byteLength > MAX_CATALOG_BYTES) {
+      throw new Error(`Object backup catalog exceeds ${MAX_CATALOG_BYTES} bytes.`);
+    }
+    const metadata = await configured.store.put(catalogKey, bytes, {
+      contentType: CATALOG_CONTENT_TYPE,
+    });
+    await assertWrittenObject(metadata, catalogKey, bytes, CATALOG_CONTENT_TYPE);
+    return catalog;
+  };
+
+  const replaceEntry = async (
+    catalog: ObjectBackupCatalog,
+    entry: ObjectBackupEntry,
+  ): Promise<ObjectBackupCatalog> => {
+    const entries = catalog.entries.filter((candidate) => candidate.id !== entry.id);
+    entries.push(entry);
+    return writeCatalog(catalog, entries);
+  };
+
+  const removeEntry = async (
+    catalog: ObjectBackupCatalog,
+    id: string,
+  ): Promise<ObjectBackupCatalog> => {
+    return writeCatalog(catalog, catalog.entries.filter((entry) => entry.id !== id));
+  };
+
+  const localLocations = (id: string) => {
+    const checked = backupId(id);
+    const directory = path.join(repository, checked);
+    return {
+      directory,
+      envelope: path.join(directory, "database.enc"),
+      manifest: path.join(directory, "manifest.json"),
+    };
+  };
+
+  const readSignedLocalManifest = async (
+    manifest: BackupManifest,
+  ): Promise<{ manifest: BackupManifest; mac: string }> => {
+    let value: unknown;
+    try {
+      value = JSON.parse(await fs.readFile(localLocations(manifest.id).manifest, "utf8"));
+    } catch {
+      throw new Error(`Backup manifest is invalid: ${manifest.id}`);
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`Backup manifest is invalid: ${manifest.id}`);
+    }
+    const signed = value as { manifest?: unknown; mac?: unknown };
+    const checked = validateManifest(signed.manifest, manifest.id);
+    if (
+      JSON.stringify(checked) !== JSON.stringify(manifest)
+      || typeof signed.mac !== "string"
+      || !await safeEqual(signed.mac, await hmac(JSON.stringify(checked), key))
+    ) {
+      throw new Error(`Backup manifest authentication failed: ${manifest.id}`);
+    }
+    return { manifest: checked, mac: signed.mac };
+  };
+
+  const plannedChunks = (id: string, envelopeBytes: number): ObjectBackupChunk[] => {
+    if (!Number.isSafeInteger(envelopeBytes) || envelopeBytes <= 0) {
+      throw new Error(`Encrypted backup envelope is invalid: ${id}`);
+    }
+    const count = Math.ceil(envelopeBytes / configured.chunkBytes);
+    if (!Number.isSafeInteger(count) || count < 1 || count > 1_000_000) {
+      throw new Error("Encrypted backup requires too many object chunks.");
+    }
+    return Array.from({ length: count }, (_, index) => ({
+      key: objectChunkKey(configured.root, id, index),
+      size: Math.min(configured.chunkBytes, envelopeBytes - index * configured.chunkBytes),
+      sha256: null,
+    }));
+  };
+
+  const uploadEnvelope = async (
+    envelope: string,
+    chunks: readonly ObjectBackupChunk[],
+  ): Promise<ObjectBackupChunk[]> => {
+    const handle = await fs.open(envelope, "r");
+    const uploaded: ObjectBackupChunk[] = [];
+    try {
+      for (let index = 0; index < chunks.length; index++) {
+        const planned = chunks[index]!;
+        const bytes = new Uint8Array(planned.size);
+        let offset = 0;
+        while (offset < bytes.byteLength) {
+          const result = await handle.read(bytes, offset, bytes.byteLength - offset, index * configured.chunkBytes + offset);
+          if (result.bytesRead <= 0) throw new Error("Encrypted backup ended before its declared size.");
+          offset += result.bytesRead;
+        }
+        const metadata = await configured.store.put(planned.key, bytes, {
+          contentType: OBJECT_CONTENT_TYPE,
+        });
+        await assertWrittenObject(metadata, planned.key, bytes, OBJECT_CONTENT_TYPE);
+        uploaded.push({
+          key: planned.key,
+          size: bytes.byteLength,
+          sha256: metadata.sha256,
+        });
+      }
+    } finally {
+      await handle.close();
+    }
+    return uploaded;
+  };
+
+  const materializeRemote = async (
+    entry: ObjectBackupEntry,
+  ): Promise<{ root: string; manager: BackupManager }> => {
+    if (entry.state !== "active" || entry.chunks.some((chunk) => chunk.sha256 === null)) {
+      throw new Error(`Backup is not available: ${entry.id}`);
+    }
+    const root = await fs.mkdtemp(path.join(objectStaging, "read-"));
+    const directory = path.join(root, entry.id);
+    const envelope = path.join(directory, "database.enc");
+    try {
+      await fs.mkdir(directory, { recursive: false, mode: 0o700 });
+      await fs.writeFile(
+        path.join(directory, "manifest.json"),
+        `${JSON.stringify({ manifest: entry.manifest, mac: entry.manifestMac }, null, 2)}\n`,
+        { mode: 0o600, flag: "wx" },
+      );
+      const handle = await fs.open(envelope, "wx", 0o600);
+      let position = 0;
+      try {
+        for (const chunk of entry.chunks) {
+          const stored = await configured.store.get(chunk.key);
+          if (!stored) throw new Error(`Backup object is missing: ${entry.id}`);
+          await assertStoredObject(stored, chunk.key, configured.chunkBytes, OBJECT_CONTENT_TYPE);
+          if (
+            stored.metadata.size !== chunk.size
+            || stored.metadata.sha256 !== chunk.sha256
+            || stored.metadata.contentType !== OBJECT_CONTENT_TYPE
+          ) {
+            throw new Error(`Backup object integrity failed: ${entry.id}`);
+          }
+          let offset = 0;
+          while (offset < stored.bytes.byteLength) {
+            const result = await handle.write(
+              stored.bytes,
+              offset,
+              stored.bytes.byteLength - offset,
+              position + offset,
+            );
+            if (result.bytesWritten <= 0) throw new Error("Backup object could not be materialized.");
+            offset += result.bytesWritten;
+          }
+          position += stored.bytes.byteLength;
+        }
+      } finally {
+        await handle.close();
+      }
+      if (position !== entry.envelopeBytes) {
+        throw new Error(`Backup object size failed: ${entry.id}`);
+      }
+      const manager = await openLocalBackupManager({
+        ...options,
+        objects: undefined,
+        repositoryDirectory: root,
+        onEvent: undefined,
+      });
+      return { root, manager };
+    } catch (error) {
+      await fs.rm(root, { recursive: true, force: true });
+      throw error;
+    }
+  };
+
+  const deleteRemoteEntry = async (
+    startingCatalog: ObjectBackupCatalog,
+    startingEntry: ObjectBackupEntry,
+  ): Promise<ObjectBackupCatalog> => {
+    let catalog = startingCatalog;
+    let entry = startingEntry;
+    if (entry.state !== "deleting") {
+      entry = { ...entry, state: "deleting", updatedAt: Date.now() };
+      catalog = await replaceEntry(catalog, entry);
+    }
+    for (const chunk of entry.chunks) await configured.store.delete(chunk.key);
+    try {
+      return await removeEntry(catalog, entry.id);
+    } catch (error) {
+      const observed = await readCatalog().catch(() => null);
+      if (observed && !observed.entries.some((candidate) => candidate.id === entry.id)) return observed;
+      throw error;
+    }
+  };
+
+  const publishLocal = async (manifest: BackupManifest): Promise<void> => {
+    const signed = await readSignedLocalManifest(manifest);
+    const envelope = localLocations(manifest.id).envelope;
+    const stats = await fs.lstat(envelope);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new Error(`Encrypted backup envelope is invalid: ${manifest.id}`);
+    }
+    const plan = plannedChunks(manifest.id, stats.size);
+    let catalog = await readCatalog();
+    let existing = catalog.entries.find((entry) => entry.id === manifest.id);
+    if (existing?.state === "active") {
+      if (JSON.stringify(existing.manifest) !== JSON.stringify(manifest)) {
+        throw new Error(`Object backup ID conflicts with a different manifest: ${manifest.id}`);
+      }
+      await local.delete(manifest.id);
+      return;
+    }
+    if (existing?.state === "deleting") {
+      catalog = await deleteRemoteEntry(catalog, existing);
+      existing = undefined;
+    }
+    if (existing && JSON.stringify(existing.manifest) !== JSON.stringify(manifest)) {
+      throw new Error(`Object backup ID conflicts with a different manifest: ${manifest.id}`);
+    }
+    const uploading: ObjectBackupEntry = {
+      id: manifest.id,
+      state: "uploading",
+      manifest,
+      manifestMac: signed.mac,
+      envelopeBytes: stats.size,
+      chunks: plan,
+      updatedAt: Date.now(),
+    };
+    if (!existing) {
+      try {
+        catalog = await replaceEntry(catalog, uploading);
+      } catch (error) {
+        const observed = await readCatalog().catch(() => null);
+        const pending = observed?.entries.find((entry) => entry.id === manifest.id);
+        if (!observed || pending?.state !== "uploading") throw error;
+        catalog = observed;
+      }
+    } else {
+      catalog = await replaceEntry(catalog, uploading);
+    }
+    const chunks = await uploadEnvelope(envelope, plan);
+    const active: ObjectBackupEntry = {
+      ...uploading,
+      state: "active",
+      chunks,
+      updatedAt: Date.now(),
+    };
+    if (options.verifyAfterCreate !== false) {
+      const materialized = await materializeRemote(active);
+      try {
+        await materialized.manager.verify(active.id);
+      } finally {
+        materialized.manager.close();
+        await fs.rm(materialized.root, { recursive: true, force: true });
+      }
+    }
+    try {
+      await replaceEntry(await readCatalog(), active);
+    } catch (error) {
+      const observed = await readCatalog().catch(() => null);
+      const committed = observed?.entries.find((entry) =>
+        entry.id === manifest.id
+        && entry.state === "active"
+        && JSON.stringify(entry.chunks) === JSON.stringify(active.chunks));
+      if (!committed) throw error;
+    }
+    await local.delete(manifest.id);
+  };
+
+  const synchronizeLocal = async (): Promise<void> => {
+    let catalog = await readCatalog();
+    for (const entry of [...catalog.entries]) {
+      if (entry.state !== "deleting") continue;
+      catalog = await deleteRemoteEntry(catalog, entry);
+    }
+    const localBackups = await local.list();
+    const localIds = new Set(localBackups.map((manifest) => manifest.id));
+    const staleBefore = Date.now() - 60 * 60_000;
+    for (const entry of [...catalog.entries]) {
+      if (
+        entry.state !== "uploading"
+        || localIds.has(entry.id)
+        || entry.updatedAt >= staleBefore
+      ) continue;
+      for (const chunk of entry.chunks) await configured.store.delete(chunk.key);
+      catalog = await removeEntry(catalog, entry.id);
+    }
+    for (const manifest of localBackups) await publishLocal(manifest);
+  };
+
+  const combinedList = async (): Promise<BackupManifest[]> => {
+    const [catalog, localBackups] = await Promise.all([readCatalog(), local.list()]);
+    const manifests = new Map<string, BackupManifest>();
+    for (const entry of catalog.entries) {
+      if (entry.state === "active") manifests.set(entry.id, entry.manifest);
+    }
+    for (const manifest of localBackups) {
+      const existing = manifests.get(manifest.id);
+      if (existing && JSON.stringify(existing) !== JSON.stringify(manifest)) {
+        throw new Error(`Backup ID conflicts across repositories: ${manifest.id}`);
+      }
+      if (!existing) manifests.set(manifest.id, manifest);
+    }
+    return [...manifests.values()].sort((left, right) =>
+      right.createdAt - left.createdAt || right.id.localeCompare(left.id));
+  };
+
+  const deleteInternal = async (idInput: string): Promise<boolean> => {
+    const id = backupId(idInput);
+    let removed = false;
+    let catalog = await readCatalog();
+    const remote = catalog.entries.find((entry) => entry.id === id);
+    if (remote) {
+      catalog = await deleteRemoteEntry(catalog, remote);
+      removed = true;
+    }
+    if (await local.delete(id)) removed = true;
+    return removed;
+  };
+
+  const prune = async (protectedIds: ReadonlySet<string> = new Set()): Promise<void> => {
+    const manifests = await combinedList();
+    const cutoff = Date.now() - maxAgeMs;
+    for (let index = 0; index < manifests.length; index++) {
+      const manifest = manifests[index]!;
+      if (protectedIds.has(manifest.id)) continue;
+      if (index < maxBackups && (manifest.createdAt >= cutoff || index === 0)) continue;
+      if (await deleteInternal(manifest.id)) {
+        emit({ type: "deleted", backupId: manifest.id });
+      }
+    }
+  };
+
+  const manager: BackupManager = {
+    async create(createOptions = {}) {
+      if (closed) throw new Error("Backup manager is closed.");
+      if (creating) throw new Error("A backup is already in progress.");
+      const protectedIds = protectedBackupIds(createOptions.protectedBackupIds);
+      creating = true;
+      const started = performance.now();
+      let backup: BackupManifest | undefined;
+      try {
+        return await mutate(async () => {
+          await synchronizeLocal();
+          backup = await local.create(createOptions);
+          await publishLocal(backup);
+          await prune(protectedIds);
+          emit({ type: "created", backupId: backup.id, durationMs: rounded(performance.now() - started) });
+          return backup;
+        });
+      } catch (error) {
+        emit({
+          type: "failed",
+          backupId: backup?.id,
+          durationMs: rounded(performance.now() - started),
+          error: safeError(error),
+        });
+        throw error;
+      } finally {
+        creating = false;
+      }
+    },
+    async list() {
+      if (closed) throw new Error("Backup manager is closed.");
+      return combinedList();
+    },
+    async verify(idInput) {
+      if (closed) throw new Error("Backup manager is closed.");
+      const id = backupId(idInput);
+      const catalog = await readCatalog();
+      const remote = catalog.entries.find((entry) => entry.id === id && entry.state === "active");
+      let verification: BackupVerification;
+      if (remote) {
+        const materialized = await materializeRemote(remote);
+        try {
+          verification = await materialized.manager.verify(id);
+        } finally {
+          materialized.manager.close();
+          await fs.rm(materialized.root, { recursive: true, force: true });
+        }
+      } else {
+        verification = await local.verify(id);
+      }
+      emit({ type: "verified", backupId: id, durationMs: verification.durationMs });
+      return verification;
+    },
+    async restore(idInput, restoreOptions) {
+      if (closed) throw new Error("Backup manager is closed.");
+      const id = backupId(idInput);
+      if (restoreOptions.confirmation !== `restore ${id}`) {
+        throw new Error(`Restore confirmation must equal "restore ${id}".`);
+      }
+      const catalog = await readCatalog();
+      const remote = catalog.entries.find((entry) => entry.id === id && entry.state === "active");
+      let verification: BackupVerification;
+      if (remote) {
+        const materialized = await materializeRemote(remote);
+        try {
+          verification = await materialized.manager.restore(id, {
+            confirmation: restoreOptions.confirmation,
+            targetPath: path.resolve(restoreOptions.targetPath ?? source),
+          });
+        } finally {
+          materialized.manager.close();
+          await fs.rm(materialized.root, { recursive: true, force: true });
+        }
+      } else {
+        verification = await local.restore(id, restoreOptions);
+      }
+      emit({ type: "restored", backupId: id, durationMs: verification.durationMs });
+      return verification;
+    },
+    async delete(id) {
+      if (closed) throw new Error("Backup manager is closed.");
+      return mutate(async () => {
+        const removed = await deleteInternal(id);
+        if (removed) emit({ type: "deleted", backupId: id });
+        return removed;
+      });
+    },
+    async purge(purgeOptions) {
+      if (closed) throw new Error("Backup manager is closed.");
+      if (purgeOptions?.confirmation !== "delete all backups") {
+        throw new Error('Backup purge confirmation must equal "delete all backups".');
+      }
+      return mutate(async () => {
+        const catalog = await readCatalog();
+        const localBackups = await local.list();
+        const ids = new Set([
+          ...catalog.entries.map((entry) => entry.id),
+          ...localBackups.map((manifest) => manifest.id),
+        ]);
+        for (const entry of catalog.entries) {
+          for (const chunk of entry.chunks) await configured.store.delete(chunk.key);
+        }
+        for (const manifest of localBackups) await local.delete(manifest.id);
+        await configured.store.delete(catalogKey);
+        for (const id of ids) emit({ type: "deleted", backupId: id });
+        return ids.size;
+      });
+    },
+    start(intervalMs) {
+      if (closed) throw new Error("Backup manager is closed.");
+      const interval = integerRange(intervalMs, "intervalMs", 60_000, Number.MAX_SAFE_INTEGER);
+      if (timer) return () => manager.close();
+      timer = setInterval(() => {
+        if (!creating && !closed) void manager.create({ reason: "scheduled" }).catch(() => undefined);
+      }, interval);
+      timer.unref?.();
+      return () => {
+        if (timer) clearInterval(timer);
+        timer = undefined;
+      };
+    },
+    close() {
+      closed = true;
+      local.close();
+      if (timer) clearInterval(timer);
+      timer = undefined;
+    },
+  };
+  return manager;
+}
+
+function normalizeBackupObjects(
+  configured: BackupObjectRepositoryOptions | undefined,
+): {
+  store: ObjectStore;
+  namespace: string;
+  repositoryId: string;
+  root: string;
+  chunkBytes: number;
+} {
+  if (!configured || typeof configured !== "object") {
+    throw new TypeError("objects must configure an object backup repository.");
+  }
+  const namespace = portableIdentifier(configured.namespace, "objects.namespace", 128);
+  if (namespace === "local") throw new TypeError("objects.namespace cannot be local.");
+  const repositoryId = portableIdentifier(configured.repositoryId, "objects.repositoryId", 128);
+  const prefix = objectPrefix(configured.prefix ?? "backups");
+  const store = configured.store;
+  if (
+    !store
+    || typeof store !== "object"
+    || typeof store.put !== "function"
+    || typeof store.get !== "function"
+    || typeof store.stat !== "function"
+    || typeof store.delete !== "function"
+  ) {
+    throw new TypeError("objects.store must implement ObjectStore.");
+  }
+  return Object.freeze({
+    store,
+    namespace,
+    repositoryId,
+    root: `${prefix}/${repositoryId}`,
+    chunkBytes: integerRange(
+      configured.chunkBytes ?? 8 * 1024 * 1024,
+      "objects.chunkBytes",
+      64 * 1024,
+      64 * 1024 * 1024,
+    ),
+  });
+}
+
+function validateObjectCatalog(
+  value: unknown,
+  namespace: string,
+  repositoryId: string,
+  root: string,
+): ObjectBackupCatalog {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Object backup catalog is invalid.");
+  }
+  const catalog = value as ObjectBackupCatalog;
+  if (
+    catalog.protocol !== OBJECT_CATALOG_PROTOCOL
+    || catalog.namespace !== namespace
+    || catalog.repositoryId !== repositoryId
+    || !Number.isSafeInteger(catalog.revision)
+    || catalog.revision < 0
+    || !Array.isArray(catalog.entries)
+    || catalog.entries.length > 10_001
+  ) {
+    throw new Error("Object backup catalog does not match the configured repository.");
+  }
+  const ids = new Set<string>();
+  const entries = catalog.entries.map((input) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new Error("Object backup catalog entry is invalid.");
+    }
+    const entry = input as ObjectBackupEntry;
+    const id = backupId(entry.id);
+    if (
+      ids.has(id)
+      || !["uploading", "active", "deleting"].includes(entry.state)
+      || typeof entry.manifestMac !== "string"
+      || !/^[A-Za-z0-9_-]{43}$/u.test(entry.manifestMac)
+      || !Number.isSafeInteger(entry.envelopeBytes)
+      || entry.envelopeBytes <= 0
+      || !Number.isSafeInteger(entry.updatedAt)
+      || entry.updatedAt <= 0
+      || !Array.isArray(entry.chunks)
+      || entry.chunks.length < 1
+      || entry.chunks.length > 1_000_000
+    ) {
+      throw new Error("Object backup catalog entry is invalid.");
+    }
+    ids.add(id);
+    const manifest = validateManifest(entry.manifest, id);
+    let total = 0;
+    const chunks = entry.chunks.map((inputChunk, index) => {
+      if (!inputChunk || typeof inputChunk !== "object" || Array.isArray(inputChunk)) {
+        throw new Error("Object backup catalog chunk is invalid.");
+      }
+      const chunk = inputChunk as ObjectBackupChunk;
+      if (
+        chunk.key !== objectChunkKey(root, id, index)
+        || !Number.isSafeInteger(chunk.size)
+        || chunk.size <= 0
+        || (chunk.sha256 !== null && !/^[a-f0-9]{64}$/u.test(chunk.sha256))
+        || (entry.state === "active" && chunk.sha256 === null)
+      ) {
+        throw new Error("Object backup catalog chunk is invalid.");
+      }
+      total += chunk.size;
+      if (!Number.isSafeInteger(total)) throw new Error("Object backup size is invalid.");
+      return Object.freeze({ key: chunk.key, size: chunk.size, sha256: chunk.sha256 });
+    });
+    if (total !== entry.envelopeBytes) throw new Error("Object backup envelope size is invalid.");
+    return Object.freeze({
+      id,
+      state: entry.state,
+      manifest,
+      manifestMac: entry.manifestMac,
+      envelopeBytes: entry.envelopeBytes,
+      chunks,
+      updatedAt: entry.updatedAt,
+    });
+  });
+  return Object.freeze({
+    protocol: OBJECT_CATALOG_PROTOCOL,
+    namespace,
+    repositoryId,
+    revision: catalog.revision,
+    entries: Object.freeze(entries),
+  });
+}
+
+function objectChunkKey(root: string, idInput: string, index: number): string {
+  const id = backupId(idInput);
+  if (!Number.isSafeInteger(index) || index < 0 || index > 999_999) {
+    throw new Error("Object backup chunk index is invalid.");
+  }
+  return `${root}/${id}/chunks/${String(index).padStart(6, "0")}.enc`;
+}
+
+function objectPrefix(value: string): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 384) {
+    throw new TypeError("objects.prefix must contain 1 to 384 characters.");
+  }
+  const segments = value.split("/");
+  if (
+    segments.some((segment) =>
+      segment.length < 1
+      || segment.length > 100
+      || segment === "."
+      || segment === ".."
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(segment))
+  ) {
+    throw new TypeError("objects.prefix must contain portable path segments.");
+  }
+  return segments.join("/");
+}
+
+function portableIdentifier(value: string, name: string, maximum: number): string {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > maximum
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)
+  ) {
+    throw new TypeError(`${name} must be a portable identifier.`);
+  }
+  return value;
+}
+
+async function assertStoredObject(
+  stored: {
+    metadata: { key: string; size: number; sha256: string; contentType: string };
+    bytes: Uint8Array;
+  },
+  key: string,
+  maximum: number,
+  contentType: string,
+): Promise<void> {
+  if (
+    stored.metadata.key !== key
+    || stored.metadata.size !== stored.bytes.byteLength
+    || stored.bytes.byteLength > maximum
+    || !/^[a-f0-9]{64}$/u.test(stored.metadata.sha256)
+    || stored.metadata.sha256 !== await sha256Bytes(stored.bytes)
+    || stored.metadata.contentType !== contentType
+  ) {
+    throw new Error("Object backup repository returned inconsistent metadata.");
+  }
+}
+
+async function assertWrittenObject(
+  metadata: { key: string; size: number; sha256: string; contentType: string },
+  key: string,
+  bytes: Uint8Array,
+  contentType: string,
+): Promise<void> {
+  if (
+    metadata.key !== key
+    || metadata.size !== bytes.byteLength
+    || metadata.sha256 !== await sha256Bytes(bytes)
+    || metadata.contentType !== contentType
+  ) {
+    throw new Error("Object backup repository returned inconsistent write metadata.");
+  }
 }
 
 async function encryptFile(
@@ -422,9 +1268,39 @@ function validateManifest(value: unknown, expectedId: string): BackupManifest {
     || manifest.id !== expectedId
     || !BACKUP_ID.test(manifest.id)
     || !Number.isSafeInteger(manifest.createdAt)
+    || manifest.createdAt <= 0
     || !Number.isSafeInteger(manifest.databaseBytes)
+    || manifest.databaseBytes <= 0
     || !/^[a-f0-9]{64}$/u.test(manifest.databaseSha256)
+    || (
+      manifest.databaseRevision !== null
+      && (!Number.isSafeInteger(manifest.databaseRevision) || manifest.databaseRevision < 0)
+    )
+    || !Number.isSafeInteger(manifest.migrationCount)
+    || manifest.migrationCount < 0
+    || (
+      manifest.latestMigration !== null
+      && (
+        typeof manifest.latestMigration !== "string"
+        || manifest.latestMigration.length < 1
+        || manifest.latestMigration.length > 200
+        || manifest.latestMigration.includes("\0")
+      )
+    )
+    || typeof manifest.source !== "string"
+    || manifest.source.length < 1
+    || manifest.source.length > 255
+    || manifest.source.includes("/")
+    || manifest.source.includes("\\")
+    || manifest.source.includes("\0")
+    || typeof manifest.reason !== "string"
+    || manifest.reason.length < 1
+    || manifest.reason.length > 200
+    || manifest.reason.includes("\0")
     || manifest.encryption?.algorithm !== "AES-256-GCM"
+    || typeof manifest.encryption.keyId !== "string"
+    || !/^[A-Za-z0-9_.-]+$/u.test(manifest.encryption.keyId)
+    || manifest.encryption.keyId.length > 100
   ) throw new Error(`Backup manifest is invalid: ${expectedId}`);
   return manifest;
 }
@@ -453,6 +1329,16 @@ async function safeEqual(left: string, right: string): Promise<boolean> {
 function backupId(value: string): string {
   if (!BACKUP_ID.test(value)) throw new TypeError("Invalid backup ID.");
   return value;
+}
+
+function protectedBackupIds(value: readonly string[] | undefined): ReadonlySet<string> {
+  if (value === undefined) return new Set();
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new TypeError("protectedBackupIds must contain at most 100 backup IDs.");
+  }
+  const ids = new Set<string>();
+  for (const id of value) ids.add(backupId(id));
+  return ids;
 }
 
 function safeIdentifier(value: string, name: string, maximum: number): string {

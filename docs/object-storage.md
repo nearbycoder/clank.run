@@ -38,7 +38,9 @@ time. Logical keys use bounded portable segments; they are never interpolated as
 paths or unsigned URLs. `put` snapshots a mutable input before returning.
 
 The current contract deliberately buffers one bounded object. It is intended for release archives,
-backup envelopes, and ordinary application files up to 1 GiB—not multi-gigabyte media ingest.
+bounded encrypted-backup chunks, and ordinary application files up to 1 GiB—not multi-gigabyte
+media ingest as one object. The backup manager splits a large encrypted envelope into independently
+verified chunks before it crosses this boundary.
 Multipart upload, public bucket administration, CDN policy, browser presigning, and lifecycle rules
 remain explicit provider integrations.
 
@@ -140,6 +142,72 @@ before its quota reservation is released. A namespace or key mismatch refuses re
 restore the original repository configuration rather than reusing an identity for a different
 bucket. Existing local releases never move implicitly.
 
+## Encrypted recovery backups
+
+The framework and deployment platform can store completed encrypted recovery points through the
+same object contract:
+
+```ts
+import { createS3ObjectStore } from "@clank.run/framework/object-storage";
+import { openBackupManager } from "@clank.run/framework/recovery";
+
+const store = createS3ObjectStore({
+  endpoint: process.env.AWS_ENDPOINT_URL!,
+  region: process.env.AWS_DEFAULT_REGION ?? "auto",
+  bucket: process.env.AWS_S3_BUCKET_NAME!,
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  maxObjectBytes: 32 * 1024 * 1024,
+});
+
+const backups = await openBackupManager({
+  databasePath: "app.sqlite",
+  repositoryDirectory: ".data/recovery",
+  encryptionKey: process.env.BACKUP_KEY!,
+  objects: {
+    store,
+    namespace: "production-recovery-v1",
+    repositoryId: "orbit-tasks",
+    chunkBytes: 8 * 1024 * 1024,
+  },
+});
+```
+
+The local directory remains an owner-only staging and compatibility area. The manager:
+
+1. creates a consistent SQLite snapshot and AES-256-GCM envelope locally;
+2. records an authenticated `uploading` catalog entry before uploading deterministic chunk keys;
+3. verifies every returned key, size, media type, and SHA-256;
+4. downloads, reassembles, decrypts, hashes, and runs SQLite `integrity_check` when verification is
+   enabled;
+5. publishes the catalog entry as `active`; and
+6. removes the completed local copy only after the remote recovery point is usable.
+
+A failed upload leaves the encrypted local copy available and retries its promotion before the next
+new backup. Existing local backups are promoted the same way. Retention spans both locations while
+that transition is in progress. Restore never trusts provider metadata alone: it checks the
+catalog HMAC, per-chunk digest, AES-GCM tag, plaintext digest and length, then SQLite integrity.
+
+The namespace is the durable identity of the physical repository. Do not reuse it for a different
+bucket. `repositoryId` isolates one database's catalog and keys; the platform supplies its project
+ID automatically. A prefix separates installations, but provider credentials and bucket policy
+remain the authorization boundary.
+
+For `clank-platform`, select the backend explicitly:
+
+```sh
+export CLANK_BACKUP_STORE=s3
+export CLANK_BACKUP_NAMESPACE=production-recovery-v1
+export CLANK_BACKUP_PREFIX=backups
+export CLANK_BACKUP_CHUNK_BYTES=8388608
+```
+
+These settings use the same `CLANK_OBJECT_*` or fallback `AWS_*` connection variables shown above.
+The control database binds the namespace and backup root on first use. Startup fails if either is
+removed or changed, preventing a typo from presenting an empty backup history. Move or copy all
+keys first and preserve the identity when intentionally changing provider credentials or
+endpoints.
+
 ## Railway without surprise cost
 
 Creating this adapter does not create a bucket. Provision one only when its failure-domain benefit
@@ -172,7 +240,7 @@ right default for development.
 - Exercise restore and provider-outage drills. Remote existence is not proof that an object can be
   decrypted, verified, and used.
 
-The control plane can now opt new remote-runner uploads into this object contract. Runtime
-directories, databases, migration snapshots, encrypted recovery backups, and legacy release
-uploads remain local. Moving encrypted recovery backups off-host is the next independent storage
-phase.
+Runtime directories, live databases, and migration rollback snapshots remain local. New
+remote-runner uploads and encrypted recovery backups can independently opt into the object
+contract; both remain local by default. Provider-backed storage is not a substitute for control
+database and key recovery.
