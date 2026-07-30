@@ -521,7 +521,7 @@ async function verifyAgentProtocol(origin, session) {
   const tools = await mcp("tools/list");
   assert.ok(tools.tools.some((tool) => tool.name === "tasks.list"));
   assert.ok(tools.tools.some((tool) =>
-    tool.name === "tasks.remove" && tool.annotations.destructiveHint === true));
+    tool.name === "tasks.delete" && tool.annotations.destructiveHint === true));
 
   const created = await mcp("tools/call", {
     name: "tasks.create",
@@ -532,7 +532,7 @@ async function verifyAgentProtocol(origin, session) {
   const task = listed.structuredContent.value.find((entry) => entry.title === "Agent protocol round trip");
   assert.ok(task);
   const removed = await mcp("tools/call", {
-    name: "tasks.remove",
+    name: "tasks.delete",
     arguments: { id: task._id, version: task._version },
   });
   assert.equal(removed.isError, false);

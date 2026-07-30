@@ -37,7 +37,55 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   reactive interaction updated without navigation, a source edit rebuilt and health-swapped to
   revision 3, the existing tab reloaded over SSE at the unchanged URL, and the rendered page had no
   console or page errors.
-- [ ] Record PR checks, CodeQL, merge SHA, post-merge deployments, and production health.
+- [x] Recorded [PR #107](https://github.com/nearbycoder/clank.run/pull/107): Node 22.16,
+  Node 24, packaged conformance, JavaScript/TypeScript analysis, and CodeQL passed before squash
+  merge `dab6b96b818f5ce612ce767ae0a453867010d678`; post-merge CI run `30559675869`, CodeQL
+  run `30559676098`, and docs deployment run `30559836141` passed on that exact source.
+- [x] Railway deployment `da0cbcc0-b52b-4686-8d5a-35862f28a726` activated the exact merge
+  commit through `/railway.json`, removed the prior generation only after success, and served
+  healthy database-backed readiness. `docs.clank.run` remained healthy at version `0.10.0`.
+- [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
+
+## 2026-07-30 executable AI blueprint phase
+
+- [x] Expanded generated apps from one primary entity/route into every declared static route,
+  entity, field type, reference selector, and role-filtered navigation target with SSR, hydration,
+  live or request/response data, responsive Tailwind UI, stable agent controls, and no client-only
+  authorization assumption.
+- [x] Preserved exact declared server-action names and descriptions across browser RPC, public
+  manifests, OAuth-scoped MCP tools, and contract revisions; enforced declared roles in backend
+  handlers; generated sparse updates and explicit safe CRUD fallbacks; and left custom domain
+  actions as warning-bearing implementation points instead of inventing argument schemas.
+- [x] Added explicit/inferred relationship references plus bounded, atomic `restrict`, `nullify`,
+  and recursive `cascade` deletion. Rejected cross-ownership deletes, nullable mismatches,
+  ambiguous relationship storage, cascade cycles, dangling/cross-owner create or update
+  references, empty route-role policies, route/framework collisions, and generated type-name
+  collisions.
+- [x] Added public bounded `BackendActionError` mapping for browser RPC and MCP while keeping
+  unexpected failures private and transactionally rolling back partial work.
+- [x] Wired generated service requirements into startup and health. Local `clank dev` receives
+  explicit development-only drivers; production has no pretend drivers and fails before serving
+  when a required integration is missing.
+- [x] Added multi-entity runtime coverage for exact actions, owner/member denial, SSR route source,
+  MCP manifests, empty updates, relationship rollback, restrict/nullify/cascade completion,
+  request/response entities, service wiring, and both browser-RPC and MCP application errors.
+- [x] Corrected select binding order so generated enum/reference form resets apply after their
+  options mount, and separated development module revalidation from production immutable caching.
+- [x] Wrapped generated route navigation on narrow viewports and closed runtime streams concurrently
+  with the HTTP server and service drivers so long-lived connections cannot stall shutdown.
+- [x] Rewrote the blueprint guide around executable semantics, validation, generated files,
+  relationship/service boundaries, per-app MCP parity, and honest warnings; expanded each generated
+  README and `AGENTS.md` with the concrete app contract and provisioning boundary.
+- [x] Passed the complete local gate: 334 tests, 86.45% line / 75.41% branch / 87.03% function
+  coverage, 59 Markdown files, 252 local links, 54 indexed guides, 35 synchronized declaration
+  files, 33 package exports, packed consumer/deploy/migration/rollback conformance, release/current
+  tree/history credential scans, and a 211-file npm dry run under the five-MiB ceiling.
+- [x] Browser-certified a generated five-route workspace on desktop and 390 px mobile: registration,
+  SSR/hydration, exact mutations, live and request/response refresh, reference selection, form
+  resets, transactional relationship restriction, development replacement, responsive layout,
+  browser diagnostics, and live-stream shutdown all passed.
+- [ ] Record PR checks, CodeQL, merge SHA, post-merge docs deployment, Railway activation, and
+  production health.
 - [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 version 0.10.0 release phase

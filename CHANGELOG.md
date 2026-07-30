@@ -11,6 +11,30 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   `clank-dev-event/1` lifecycle records.
 - Removed the browser package barrel's eager `node:fs/promises` import so generated module
   applications execute hydration instead of stalling while resolving a Node-only module.
+- AI blueprints now generate every declared static route and entity instead of collapsing the
+  contract to one primary table. Generated apps include SSR/hydration state per route, role-aware
+  navigation and field forms, reference selectors, live subscriptions or request/response refresh,
+  exact declared action names, sparse updates, and safe CRUD fallbacks shared by browser RPC and
+  each app's OAuth-scoped MCP server.
+- Blueprint relationships now resolve an explicit or unambiguous reference field and enforce
+  bounded transactional `restrict`, `nullify`, and acyclic recursive `cascade` behavior. Invalid
+  or other-owner reference inputs return a public bounded error; ambiguous relationship storage,
+  cross-ownership deletion, non-nullable nullification, cascade cycles, empty role policies,
+  reserved routes, and generated type-name collisions fail before generation.
+- Generated service requirements now participate in startup and readiness. `clank dev` supplies
+  explicit development-only placeholders, while production fails closed when a required driver
+  has not been provisioned.
+- Added bounded `BackendActionError` failures for intentional application guards. Their safe
+  status/code/message survive browser RPC and MCP tool calls without reporting them as internal
+  faults, while the surrounding mutation still rolls back atomically.
+- Reworked the AI blueprint guide and generated project/agent READMEs to document exact action,
+  relationship, route, service, authorization, and per-app MCP behavior plus unresolved boundaries.
+- Select bindings now attach after their options, so programmatic resets preserve declared defaults
+  and empty reference placeholders. Generated development servers also serve framework modules with
+  revalidation instead of production's immutable cache policy.
+- Generated route navigation now wraps on narrow viewports instead of clipping the active route.
+  Shutdown closes live runtime streams alongside the HTTP server and service drivers so long-lived
+  connections cannot stall process termination.
 
 ## 0.10.0 - 2026-07-30
 

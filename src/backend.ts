@@ -204,6 +204,31 @@ export class DatabaseConflictError extends Error {
   }
 }
 
+/**
+ * A bounded, intentional application failure that is safe to expose through
+ * browser RPC and MCP tool responses.
+ */
+export class BackendActionError extends Error {
+  readonly name = "BackendActionError";
+
+  constructor(
+    readonly status: 400 | 404 | 409,
+    readonly code: string,
+    message: string,
+  ) {
+    if (status !== 400 && status !== 404 && status !== 409) {
+      throw new TypeError("Backend action error status must be 400, 404, or 409.");
+    }
+    if (!/^[A-Z][A-Z0-9_]{2,63}$/u.test(code)) {
+      throw new TypeError("Backend action error codes must be 3-64 uppercase letters, digits, or underscores.");
+    }
+    if (!message || message.length > 1_000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(message)) {
+      throw new TypeError("Backend action error messages must be 1-1000 safe text characters.");
+    }
+    super(message);
+  }
+}
+
 export interface ReadDatabase<Schema extends DatabaseSchema<any>> {
   table<Name extends TableName<Schema>>(name: Name): ReadTable<Schema, Name>;
 }
@@ -1607,6 +1632,7 @@ export async function openBackend<
                   actualVersion: error.actualVersion,
                 });
               }
+              if (error instanceof BackendActionError) throw new McpToolError(error.code, error.message);
               if (error instanceof BackendInvocationError) throw new McpToolError(error.code, error.message);
               if (error instanceof BackendOutputError) reportError(error.cause);
               else reportError(error);
@@ -1843,6 +1869,7 @@ export async function openBackend<
             actualVersion: error.actualVersion,
           });
         }
+        if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
         if (error instanceof BackendInvocationError) return problem(error.status, error.code, error.message);
         if (error instanceof BackendOutputError) {
           reportError(error.cause);

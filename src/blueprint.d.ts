@@ -29,6 +29,15 @@ export interface AppRelationshipDefinition {
     to: string;
     kind: "one-to-one" | "one-to-many" | "many-to-many";
     onDelete?: "restrict" | "cascade" | "nullify";
+    /**
+     * The field that stores the relationship. It must be a reference field on
+     * either endpoint that targets the other endpoint. Clank infers it when
+     * exactly one unambiguous reference exists.
+     */
+    reference?: {
+        entity: string;
+        field: string;
+    };
 }
 export interface AppRoleDefinition {
     description: string;
@@ -48,6 +57,12 @@ export interface AppActionDefinition {
     description: string;
     entity?: string;
     operation: "create" | "read" | "update" | "delete" | "custom";
+    /**
+     * The safe generated implementation. Ordinary CRUD behaviors are inferred
+     * from operation and conventional names; custom actions remain explicit
+     * extension points until application code implements them.
+     */
+    behavior?: "list" | "create" | "update" | "toggle" | "delete";
     roles?: readonly string[];
     confirmation?: "never" | "write" | "always";
     realtime?: boolean;

@@ -1,7 +1,7 @@
 export default {
     name: "Orbit Tasks",
     slug: "orbit-tasks",
-    description: "A collaborative Todoist-style planner with live tasks, roles, reminders, and deploy requirements.",
+    description: "A collaborative Todoist-style planner with live tasks, roles, and optional reminder integrations.",
     auth: {
         required: true,
         organizations: true,
@@ -118,7 +118,7 @@ export default {
         reminders: {
             kind: "jobs",
             description: "Schedule durable task reminders.",
-            required: true,
+            required: false,
             capabilities: [
                 "delayed",
                 "retry"
@@ -127,7 +127,7 @@ export default {
         mail: {
             kind: "email",
             description: "Deliver invitations and reminder notifications.",
-            required: true,
+            required: false,
             capabilities: [
                 "transactional"
             ]
