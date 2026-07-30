@@ -330,6 +330,143 @@ export async function mutatePlatformJob(
   }
 }
 
+/**
+ * Revalidates a serialized job snapshot received across a provider trust
+ * boundary. Only the privacy-safe public shape is accepted.
+ */
+export function parsePlatformJobSnapshot(value: unknown): PlatformJobSnapshot {
+  const input = exactObject(value, [
+    "available",
+    "configured",
+    "compatibility",
+    "health",
+    "alertDueAfterMs",
+    "stats",
+    "jobs",
+    "schedules",
+    "scheduleCount",
+  ], "platform job snapshot");
+  const compatibility = input.compatibility;
+  if (
+    compatibility !== "ready"
+    && compatibility !== "not_deployed"
+    && compatibility !== "not_configured"
+    && compatibility !== "upgrade_required"
+    && compatibility !== "remote_unavailable"
+  ) {
+    throw new TypeError("Platform job snapshot compatibility is invalid.");
+  }
+  const available = strictBoolean(input.available, "platform job availability");
+  const configured = strictBoolean(input.configured, "platform job configuration");
+  const expectedAvailable = compatibility !== "not_deployed"
+    && compatibility !== "remote_unavailable";
+  if (
+    available !== expectedAvailable
+    || configured !== (compatibility === "ready")
+  ) {
+    throw new TypeError("Platform job snapshot availability is inconsistent.");
+  }
+  const alertDueAfterMs = safeInteger(
+    input.alertDueAfterMs,
+    "platform job alert threshold",
+    1_000,
+    30 * 24 * 60 * 60_000,
+  );
+  const statsInput = exactObject(input.stats, [
+    "queued",
+    "running",
+    "retry",
+    "succeeded",
+    "dead",
+    "cancelled",
+    "due",
+    "oldestDueAt",
+    "overdue",
+    "expiredLeases",
+    "scheduleErrors",
+  ], "platform job statistics");
+  const stats = Object.freeze({
+    queued: safeInteger(statsInput.queued, "queued job count", 0, Number.MAX_SAFE_INTEGER),
+    running: safeInteger(statsInput.running, "running job count", 0, Number.MAX_SAFE_INTEGER),
+    retry: safeInteger(statsInput.retry, "retry job count", 0, Number.MAX_SAFE_INTEGER),
+    succeeded: safeInteger(statsInput.succeeded, "succeeded job count", 0, Number.MAX_SAFE_INTEGER),
+    dead: safeInteger(statsInput.dead, "dead job count", 0, Number.MAX_SAFE_INTEGER),
+    cancelled: safeInteger(statsInput.cancelled, "cancelled job count", 0, Number.MAX_SAFE_INTEGER),
+    due: safeInteger(statsInput.due, "due job count", 0, Number.MAX_SAFE_INTEGER),
+    oldestDueAt: serializedNullableInteger(statsInput.oldestDueAt, "oldest due time"),
+    overdue: safeInteger(statsInput.overdue, "overdue job count", 0, Number.MAX_SAFE_INTEGER),
+    expiredLeases: safeInteger(
+      statsInput.expiredLeases,
+      "expired job lease count",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    scheduleErrors: safeInteger(
+      statsInput.scheduleErrors,
+      "schedule error count",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+  });
+  const jobsInput = boundedArray(input.jobs, "platform jobs", 100);
+  const schedulesInput = boundedArray(input.schedules, "platform job schedules", 100);
+  const jobs = Object.freeze(jobsInput.map(serializedJob));
+  const schedules = Object.freeze(schedulesInput.map(serializedSchedule));
+  const scheduleCount = safeInteger(
+    input.scheduleCount,
+    "platform schedule count",
+    schedules.length,
+    Number.MAX_SAFE_INTEGER,
+  );
+  const expectedHealth = compatibility !== "ready"
+    ? "unavailable"
+    : stats.dead > 0
+      || stats.overdue > 0
+      || stats.expiredLeases > 0
+      || stats.scheduleErrors > 0
+      ? "attention"
+      : "healthy";
+  if (input.health !== expectedHealth) {
+    throw new TypeError("Platform job snapshot health is inconsistent.");
+  }
+  return Object.freeze({
+    available,
+    configured,
+    compatibility,
+    health: expectedHealth,
+    alertDueAfterMs,
+    stats,
+    jobs,
+    schedules,
+    scheduleCount,
+  });
+}
+
+/** Revalidates a serialized, privacy-safe provider job mutation result. */
+export function parsePlatformJobMutation(value: unknown): PlatformJobMutation {
+  const input = exactObject(
+    value,
+    ["changed", "reason", "job"],
+    "platform job mutation",
+  );
+  const changed = strictBoolean(input.changed, "platform job mutation state");
+  if (
+    input.reason !== "changed"
+    && input.reason !== "not_found"
+    && input.reason !== "invalid_state"
+  ) {
+    throw new TypeError("Platform job mutation reason is invalid.");
+  }
+  if (changed !== (input.reason === "changed")) {
+    throw new TypeError("Platform job mutation state is inconsistent.");
+  }
+  const job = input.job === null ? null : serializedJob(input.job);
+  if ((input.reason === "not_found") !== (job === null)) {
+    throw new TypeError("Platform job mutation result is inconsistent.");
+  }
+  return Object.freeze({ changed, reason: input.reason, job });
+}
+
 function emptySnapshot(
   compatibility: Exclude<PlatformJobSnapshot["compatibility"], "ready">,
   alertDueAfterMs: number,
@@ -478,4 +615,137 @@ function nullableStoredInteger(value: unknown, label: string): number | null {
   return value === null || value === undefined
     ? null
     : storedInteger(value, label, 0);
+}
+
+function exactObject(
+  value: unknown,
+  fields: readonly string[],
+  label: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label} is invalid.`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${label} is invalid.`);
+  }
+  const keys = Object.keys(value);
+  if (
+    keys.length !== fields.length
+    || keys.some((key) => !fields.includes(key))
+  ) {
+    throw new TypeError(`${label} contains invalid fields.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function strictBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new TypeError(`${label} is invalid.`);
+  return value;
+}
+
+function boundedArray(value: unknown, label: string, maximum: number): unknown[] {
+  if (!Array.isArray(value) || value.length > maximum) {
+    throw new TypeError(`${label} is invalid.`);
+  }
+  return value;
+}
+
+function serializedNullableInteger(value: unknown, label: string): number | null {
+  return value === null
+    ? null
+    : safeInteger(value, label, 0, Number.MAX_SAFE_INTEGER);
+}
+
+function serializedJob(value: unknown): PlatformJobRecord {
+  const input = exactObject(value, [
+    "id",
+    "name",
+    "queue",
+    "state",
+    "priority",
+    "attempt",
+    "maxAttempts",
+    "runAt",
+    "scheduledAt",
+    "cron",
+    "createdAt",
+    "updatedAt",
+    "startedAt",
+    "completedAt",
+    "leaseUntil",
+    "cancelRequested",
+    "hasError",
+  ], "platform job");
+  if (!JOB_STATES.has(input.state as JobState)) {
+    throw new TypeError("Platform job state is invalid.");
+  }
+  return Object.freeze({
+    id: jobIdentifier(input.id),
+    name: portableIdentifier(input.name, "platform job name", 512),
+    queue: portableIdentifier(input.queue, "platform job queue", 128),
+    state: input.state as JobState,
+    priority: safeInteger(input.priority, "platform job priority", -1_000, 1_000),
+    attempt: safeInteger(input.attempt, "platform job attempt", 0, 1_000_000),
+    maxAttempts: safeInteger(input.maxAttempts, "platform job max attempts", 1, 100),
+    runAt: safeInteger(input.runAt, "platform job run time", 0, Number.MAX_SAFE_INTEGER),
+    scheduledAt: serializedNullableInteger(input.scheduledAt, "platform scheduled time"),
+    cron: input.cron === null
+      ? null
+      : printableIdentifier(input.cron, "platform cron name", 128),
+    createdAt: safeInteger(input.createdAt, "platform job created time", 0, Number.MAX_SAFE_INTEGER),
+    updatedAt: safeInteger(input.updatedAt, "platform job updated time", 0, Number.MAX_SAFE_INTEGER),
+    startedAt: serializedNullableInteger(input.startedAt, "platform job started time"),
+    completedAt: serializedNullableInteger(input.completedAt, "platform job completed time"),
+    leaseUntil: serializedNullableInteger(input.leaseUntil, "platform job lease time"),
+    cancelRequested: strictBoolean(input.cancelRequested, "platform job cancellation"),
+    hasError: strictBoolean(input.hasError, "platform job error state"),
+  });
+}
+
+function serializedSchedule(value: unknown): PlatformJobSchedule {
+  const input = exactObject(value, [
+    "name",
+    "job",
+    "expression",
+    "timezone",
+    "concurrency",
+    "enabled",
+    "nextRunAt",
+    "lastScheduledAt",
+    "updatedAt",
+    "hasError",
+  ], "platform job schedule");
+  if (
+    input.concurrency !== "allow"
+    && input.concurrency !== "forbid"
+    && input.concurrency !== "replace"
+  ) {
+    throw new TypeError("Platform job schedule concurrency is invalid.");
+  }
+  return Object.freeze({
+    name: printableIdentifier(input.name, "platform schedule name", 128),
+    job: portableIdentifier(input.job, "platform scheduled job name", 512),
+    expression: printableIdentifier(input.expression, "platform schedule expression", 256),
+    timezone: printableIdentifier(input.timezone, "platform schedule timezone", 128),
+    concurrency: input.concurrency,
+    enabled: strictBoolean(input.enabled, "platform schedule enabled"),
+    nextRunAt: safeInteger(
+      input.nextRunAt,
+      "platform schedule next time",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    lastScheduledAt: serializedNullableInteger(
+      input.lastScheduledAt,
+      "platform schedule last time",
+    ),
+    updatedAt: safeInteger(
+      input.updatedAt,
+      "platform schedule updated time",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    hasError: strictBoolean(input.hasError, "platform schedule error state"),
+  });
 }

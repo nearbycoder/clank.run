@@ -180,12 +180,16 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   existing-account confirmation, queued/sent/failed state, successful reissue, synchronized
   fallback copy, desktop and 390px layout, mobile navigation, zero horizontal overflow, no error
   overlay, and no console errors against an isolated HTTP mail gateway.
-- [x] Passed the complete local check: 324 tests, 60-guide/261-link documentation audit, clean
+- [x] Passed the complete local check: 347 tests, 60-guide/261-link documentation audit, clean
   packed consumer and generated-app conformance, browser and agent auth, MCP actions, deployment,
   migration, failed activation, rollback/data restore, and repository plus reachable-history
   credential scanning.
-- [ ] Record PR checks, CodeQL, merge, gated docs deployment, exact Railway activation, and public
-  production health.
+- [x] Recorded [PR #111](https://github.com/nearbycoder/clank.run/pull/111), all required checks,
+  squash merge `85c20a2d7e45de13a1471787c6a29f582d1a1d98`, post-merge CI
+  `30577037468`, CodeQL `30577037453`, and gated docs deployment `30577179210`.
+- [x] Activated Railway deployment `0335d358-e371-46a9-ab09-f2d09f64a3a2` from that exact merge
+  only after database readiness passed, then verified control-plane readiness, invitation UI,
+  documentation health, and the public invitation guide before removing the prior generation.
 - [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 version 0.10.0 release phase
@@ -234,6 +238,32 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   exports, packed-release conformance, and package/current-tree/reachable-history credential scans.
 - [ ] Record GitHub CI/CodeQL evidence, merge SHA, and post-merge documentation result.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
+## 2026-07-30 remote jobs, capacity, and failover phase
+
+- [x] Added generation-bound provider job inspection, conditional cancel/retry, exact private
+  identity, strict query/body/response bounds, schema revalidation, and post-transfer placement
+  checks while keeping payloads, results, error text, identities, leases, paths, and credentials
+  out of the control plane.
+- [x] Replaced project-count placement with durable process-slot demand: web plus configured
+  workers and scheduler. Selection, reservation, and expired portable reassignment now commit
+  transactionally; node heartbeat/re-enrollment cannot shrink below reservations.
+- [x] Preserved explicit failure semantics: portable placements wait for sufficient matching
+  capacity and can reassign after node loss; stateful provider SQLite remains pinned and fails
+  closed until the node returns or an encrypted recovery point is restored deliberately.
+- [x] Added used/free process-slot visibility to the operator fleet API and responsive console,
+  plus provider transport, privacy, malformed identity, migration, capacity-shrink, insufficient
+  capacity, portable failover, and stateful pinning coverage.
+- [x] Passed the complete local gate: 349 tests at 86.47% line / 75.15% branch / 87.45%
+  function coverage, 60-guide/261-link documentation audit, clean packed-consumer conformance,
+  repository plus reachable-history credential scanning, and every security check.
+- [x] Browser-certified the authenticated operator fleet on desktop and a 390px mobile viewport:
+  SSR opened directly on the requested route without an auth/overview flash, process-slot
+  reservations and offline stateful demand rendered correctly, navigation stayed available,
+  no horizontal overflow occurred, and no exception, error, or failed request was observed.
+- [ ] Record PR checks, CodeQL, merge, gated docs deployment, exact Railway activation, and public
+  production health.
+- [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 provider diagnostics phase
 

@@ -4,13 +4,12 @@ Clank can expose a closed, authenticated coordinator for deployment runners. The
 administrator can enroll named nodes, inspect heartbeat and capacity, drain them before
 maintenance, reactivate them, or revoke their credentials from `/admin`.
 
-This is a fleet-control foundation, not automatic remote application placement. In the current
-release, ordinary hosted projects still run under the built-in supervisor on the control-plane
-host. Enrollment alone does not grant project secrets, SQLite databases, ingress traffic, backups,
-or rollback data. A separate exact-lease runtime-capsule protocol can carry application placement
-inputs to a trusted provider, but the built-in platform keeps it unselected until the complete
-data, backup/restore, rollback, and ingress lifecycle is implemented. See
-[Remote runtime placement](runtime-placement.md).
+Local projects remain on the built-in control-plane supervisor. A project created explicitly with
+`placement: "provider"` uses the enrolled fleet, exact-lease runtime capsules, stateful provider
+data, managed ingress, encrypted backup/restore, rollback, diagnostics, and job controls.
+Enrollment alone moves nothing and grants no application data; placement must be enabled by the
+operator and selected when the project is created. See [Remote runtime
+placement](runtime-placement.md).
 
 ## Enable the coordinator
 
@@ -94,14 +93,17 @@ token, or node credential.
 The fleet panel shows:
 
 - active, draining, and offline nodes;
-- advertised region, capacity, and labels;
+- advertised region, process-slot capacity, used/free slots, and labels;
 - last heartbeat and current credential lease;
 - assigned placement count; and
 - queued, leased, retrying, and failed coordination operations.
 
 Desired placements may require an endpoint and exact capability labels. Those requirements remain
-attached while work waits for capacity. A node with assigned work cannot remove a capability that
-the placement requires during heartbeat or re-enrollment.
+attached while work waits for capacity. Capacity is a reservation of runtime processes: the web
+process costs one slot, each configured worker costs one, and the scheduler costs one. Selection
+and reservation happen in one database write transaction. A node with assigned work cannot remove
+a required capability or reduce its advertised capacity below reserved slots during heartbeat or
+re-enrollment.
 
 To upgrade a runner:
 
@@ -154,7 +156,8 @@ scheduling, listing, verification, and fenced restore use the ordinary encrypted
 repository. Restore remains pinned to the current stateful node and intentionally pauses the
 writer while a replacement generation is validated. The same generation-bound private control
 credential now carries bounded runtime logs and Docker resource/I/O attribution back to the
-control plane; it never authorizes public ingress. See [Remote runtime
+control plane and provides payload-free job inspection plus conditional cancellation/retry; it
+never authorizes public ingress. See [Remote runtime
 placement](runtime-placement.md#enable-built-in-provider-placement) before enabling it.
 
 For the underlying authentication, leases, artifacts, fencing, and agent loop, see

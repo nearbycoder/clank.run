@@ -25,6 +25,7 @@ const desired = await orchestrator.setDesired({
   state: "running",
   region: "iad",
   placementMode: "stateful",
+  capacityUnits: 4,
   nodeRequirements: {
     endpoint: true,
     labels: { provider: "http", isolation: "docker" },
@@ -66,6 +67,14 @@ requires exact capability values. This matters when a deployment waits for capac
 artifact-only runner cannot accidentally claim runtime work. Assigned nodes cannot remove a
 required label or endpoint during credential rotation or heartbeat. Pinned stateful requirements
 become immutable after the first node is selected.
+
+`capacityUnits` defaults to one and is durable across later generations when omitted. It reserves
+process slots rather than merely counting projects. Selection and reservation run inside one
+immediate control-database transaction, so concurrent control planes cannot both consume the last
+slot. Portable failover carries the same demand and waits if no matching node can fit it. A node
+cannot advertise less capacity than its current reservations during heartbeat or credential
+rotation. The built-in provider calculates demand as web + workers + scheduler; custom providers
+should choose a stable unit that reflects their own admission policy.
 
 ## Authenticated HTTP transport
 
@@ -211,13 +220,13 @@ inject a confirmation string, and neither artifact/runtime downloads nor desired
 observations occur. Existing operation tables are migrated transactionally to add the explicit
 `delete` action while preserving queued work, history, and fence seeding.
 
-The built-in platform does not select this protocol yet. The packaged [complete provider
-service](provider-service.md) composes independently verified capsules, local snapshot/migration
-recovery, isolated Docker health and deferred jobs, durable fencing, stopped state, exact private
-request binding, drain-before-stop, and restart reconciliation on one provider node. Stateful node
-pinning, independent backup replication, and control-plane ingress activation must be integrated
-before enabling provider projects. The built-in control plane now uses these requirements for
-explicit stateful provider placement. See [Remote runtime placement](runtime-placement.md).
+The built-in control plane selects this protocol only for projects created explicitly with
+provider placement. The packaged [complete provider service](provider-service.md) composes
+independently verified capsules, local snapshot/migration recovery, isolated Docker health and
+deferred jobs, durable fencing, stopped state, exact private request binding, drain-before-stop,
+restart reconciliation, encrypted backup/restore, diagnostics, and job controls on one provider
+node. Local projects never move merely because runner enrollment is enabled. See [Remote runtime
+placement](runtime-placement.md).
 
 ## Platform behavior
 
@@ -351,6 +360,7 @@ infrastructure.
 - Portable placements may be reassigned after node loss. Stateful placements remain pinned and
   fail closed until that node identity returns or an explicit recovery workflow moves the data.
 - Retry delay is exponential and bounded; exhausted operations enter `failed`.
-- Node capacity is placement based, deterministic, and region aware.
+- Node capacity is process-slot based, deterministic, transactional, capability-aware, and region
+  aware. The built-in provider reserves web + configured workers + scheduler.
 
 SQLite coordination is suitable for multiple workers on one durable host. Multi-region control planes should bind the same orchestration semantics to the external transactional control database described in the data-plane guide.

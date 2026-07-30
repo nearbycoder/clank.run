@@ -4,6 +4,16 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Provider-hosted projects now expose the same bounded job status/list/cancel/retry API and CLI as
+  local projects through a private `clank-provider-jobs/1` control contract. The transport binds
+  exact node/release/generation identity, validates all query/body/response bounds and schemas,
+  rechecks placement after transfer, and never returns job payloads, results, error text,
+  identities, leases, paths, or credentials.
+- Runner placement now reserves durable process slots instead of counting projects: one web slot
+  plus every configured worker and scheduler. Selection and portable reassignment are
+  transactional, insufficient capacity waits safely, heartbeat/re-enrollment cannot shrink below
+  assigned demand, and the operator fleet shows used and free slots. Stateful provider SQLite
+  remains pinned and fails closed rather than moving implicitly.
 - Added durable invitation email delivery for workspace and personal onboarding with an encrypted
   transactional outbox, cross-control-plane leases, bounded retries, stable idempotency, stale-lease
   recovery, revocation fencing, visible delivery state, and log-safe fragment links.

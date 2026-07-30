@@ -28,6 +28,11 @@ import {
   DEPLOYMENT_RUNTIME_PROTOCOL,
   deploymentRuntimeDigest,
 } from "./runtime-placement.ts";
+import {
+  inspectPlatformJobs,
+  mutatePlatformJob,
+} from "./platform-jobs.ts";
+import type { JobState } from "./jobs.ts";
 
 export const DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL = "clank-provider-service/1";
 export const DEPLOYMENT_PROVIDER_CONTROL_PREFIX = "/v1/clank/control";
@@ -35,6 +40,9 @@ export const DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE =
   "application/vnd.clank.provider-snapshot";
 export const DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE =
   "application/vnd.clank.provider-diagnostics+json";
+export const DEPLOYMENT_PROVIDER_JOBS_PROTOCOL = "clank-provider-jobs/1";
+export const DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE =
+  "application/vnd.clank.provider-jobs+json";
 
 export interface DeploymentProviderServiceState {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
@@ -473,12 +481,28 @@ export async function openDeploymentProviderService(
     async handle(request) {
       const url = new URL(request.url);
       const control = new RegExp(
-        `^${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/([A-Za-z0-9_-]{1,128})/(snapshot|diagnostics)$`,
+        `^${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/([A-Za-z0-9_-]{1,128})/(snapshot|diagnostics|jobs(?:/(job_[a-f0-9]{32})/(cancel|retry))?)$`,
         "u",
       ).exec(url.pathname);
-      if (!control) return ingress.handle(request);
+      if (!control) {
+        if (
+          url.pathname === DEPLOYMENT_PROVIDER_CONTROL_PREFIX
+          || url.pathname.startsWith(`${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/`)
+        ) {
+          return controlProblem(
+            404,
+            "CONTROL_NOT_FOUND",
+            "Provider control endpoint not found.",
+          );
+        }
+        return ingress.handle(request);
+      }
       const operation = control[2]!;
       let logLimit = 200;
+      let jobState: JobState | undefined;
+      let jobQueue: string | undefined;
+      let jobLimit = 100;
+      let alertDueAfterMs = 5 * 60_000;
       if (operation === "diagnostics") {
         if (
           [...url.searchParams.keys()].some((key) => key !== "logs")
@@ -492,9 +516,52 @@ export async function openDeploymentProviderService(
         }
         if (requested !== null) logLimit = Number(requested);
       }
+      if (operation === "jobs") {
+        const allowed = new Set(["state", "queue", "limit", "alertDueAfterMs"]);
+        if (
+          [...url.searchParams.keys()].some((key) => !allowed.has(key))
+          || [...allowed].some((key) => url.searchParams.getAll(key).length > 1)
+        ) {
+          return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
+        }
+        const state = url.searchParams.get("state");
+        if (
+          state !== null
+          && !["queued", "running", "retry", "succeeded", "dead", "cancelled"].includes(state)
+        ) {
+          return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
+        }
+        if (state !== null) jobState = state as JobState;
+        const queue = url.searchParams.get("queue");
+        if (
+          queue !== null
+          && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(queue)
+        ) {
+          return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
+        }
+        if (queue !== null) jobQueue = queue;
+        const limit = url.searchParams.get("limit");
+        if (limit !== null && !/^(?:[1-9]|[1-9][0-9]|100)$/u.test(limit)) {
+          return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
+        }
+        if (limit !== null) jobLimit = Number(limit);
+        const alert = url.searchParams.get("alertDueAfterMs");
+        if (
+          alert !== null
+          && (
+            !/^[1-9][0-9]{3,9}$/u.test(alert)
+            || Number(alert) < 1_000
+            || Number(alert) > 30 * 24 * 60 * 60_000
+          )
+        ) {
+          return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
+        }
+        if (alert !== null) alertDueAfterMs = Number(alert);
+      }
+      const jobMutation = operation.startsWith("jobs/");
       if (
-        request.method !== "GET"
-        || (operation === "snapshot" && url.search)
+        (jobMutation ? request.method !== "POST" : request.method !== "GET")
+        || ((operation === "snapshot" || jobMutation) && url.search)
       ) {
         return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
       }
@@ -514,9 +581,7 @@ export async function openDeploymentProviderService(
             return controlProblem(
               503,
               "PROVIDER_UNAVAILABLE",
-              operation === "diagnostics"
-                ? "Provider diagnostics are unavailable."
-                : "Provider snapshot is unavailable.",
+              providerControlUnavailableMessage(operation),
             );
           }
           const current = controls.get(projectId);
@@ -568,6 +633,58 @@ export async function openDeploymentProviderService(
               },
             });
           }
+          if (operation === "jobs" || jobMutation) {
+            const providerData = await data.inspect(projectId);
+            if (
+              !providerData
+              || providerData.releaseId !== binding.releaseId
+              || providerData.generation !== binding.generation
+            ) {
+              return controlProblem(
+                409,
+                "PROVIDER_GENERATION_STALE",
+                "Provider generation is not current.",
+              );
+            }
+            const databasePath = await providerJobDatabasePath(
+              fs,
+              path,
+              root,
+              projectId,
+              providerData.databasePath,
+              maxDatabaseBytes,
+            );
+            if (operation === "jobs") {
+              const snapshot = await inspectPlatformJobs({
+                databasePath,
+                alertDueAfterMs,
+                ...(jobState === undefined ? {} : { state: jobState }),
+                ...(jobQueue === undefined ? {} : { queue: jobQueue }),
+                limit: jobLimit,
+              });
+              return providerJobsResponse(binding, { snapshot });
+            }
+            const input = exactControlJson(
+              await readControlJson(request, 1_024),
+              control[4] === "retry" ? ["runAt"] : [],
+            );
+            const mutation = await mutatePlatformJob({
+              databasePath,
+              id: control[3]!,
+              action: control[4] as "cancel" | "retry",
+              ...(control[4] === "retry" && input.runAt !== undefined
+                ? {
+                    runAt: integer(
+                      input.runAt,
+                      "runAt",
+                      0,
+                      Number.MAX_SAFE_INTEGER,
+                    ),
+                  }
+                : {}),
+            });
+            return providerJobsResponse(binding, { mutation });
+          }
           const snapshot = await data.snapshot(projectId);
           if (
             !snapshot
@@ -595,9 +712,7 @@ export async function openDeploymentProviderService(
           return controlProblem(
             503,
             "PROVIDER_UNAVAILABLE",
-            operation === "diagnostics"
-              ? "Provider diagnostics are unavailable."
-              : "Provider snapshot is unavailable.",
+            providerControlUnavailableMessage(operation),
           );
         }
       });
@@ -1166,6 +1281,124 @@ export function deploymentProviderDiagnosticsPath(projectId: string): string {
   return `${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/${identifier(projectId, "projectId")}/diagnostics`;
 }
 
+export function deploymentProviderJobsPath(projectId: string): string {
+  return `${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/${identifier(projectId, "projectId")}/jobs`;
+}
+
+export function deploymentProviderJobMutationPath(
+  projectId: string,
+  jobId: string,
+  action: "cancel" | "retry",
+): string {
+  if (!/^job_[a-f0-9]{32}$/u.test(jobId)) {
+    throw new TypeError("jobId is invalid.");
+  }
+  if (action !== "cancel" && action !== "retry") {
+    throw new TypeError("job action is invalid.");
+  }
+  return `${deploymentProviderJobsPath(projectId)}/${jobId}/${action}`;
+}
+
+function providerJobsResponse(
+  binding: ProviderControlBinding,
+  payload: { snapshot: unknown } | { mutation: unknown },
+): Response {
+  const body = JSON.stringify({
+    protocol: DEPLOYMENT_PROVIDER_JOBS_PROTOCOL,
+    projectId: binding.projectId,
+    releaseId: binding.releaseId,
+    generation: binding.generation,
+    ...payload,
+  });
+  const bodyBytes = new TextEncoder().encode(body).byteLength;
+  if (bodyBytes > 512 * 1024) {
+    throw new Error("Provider jobs response exceeded its bound.");
+  }
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "cache-control": "private, no-store",
+      "content-length": String(bodyBytes),
+      "content-type": DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE,
+      "x-clank-release-id": binding.releaseId,
+      "x-clank-runtime-generation": String(binding.generation),
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function providerControlUnavailableMessage(operation: string): string {
+  if (operation === "diagnostics") return "Provider diagnostics are unavailable.";
+  if (operation === "jobs" || operation.startsWith("jobs/")) {
+    return "Provider job controls are unavailable.";
+  }
+  return "Provider snapshot is unavailable.";
+}
+
+async function readControlJson(
+  request: Request,
+  maximum: number,
+): Promise<unknown> {
+  if (request.headers.get("content-type") !== "application/json") {
+    throw new TypeError("Provider control request content type is invalid.");
+  }
+  const declared = request.headers.get("content-length");
+  if (!declared || !/^[1-9][0-9]*$/u.test(declared)) {
+    throw new TypeError("Provider control request length is invalid.");
+  }
+  const expected = Number(declared);
+  if (!Number.isSafeInteger(expected) || expected > maximum || !request.body) {
+    throw new TypeError("Provider control request length is invalid.");
+  }
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const item = await reader.read();
+      if (item.done) break;
+      length += item.value.byteLength;
+      if (length > expected || length > maximum) {
+        throw new TypeError("Provider control request exceeds its bound.");
+      }
+      chunks.push(item.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (length !== expected) {
+    throw new TypeError("Provider control request length is invalid.");
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new TypeError("Provider control request JSON is invalid.");
+  }
+}
+
+function exactControlJson(
+  value: unknown,
+  allowed: readonly string[],
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Provider control request JSON is invalid.");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (
+    (prototype !== Object.prototype && prototype !== null)
+    || Object.keys(value).some((key) => !allowed.includes(key))
+  ) {
+    throw new TypeError("Provider control request JSON is invalid.");
+  }
+  return value as Record<string, unknown>;
+}
+
 function bearerCredential(value: string | null): string | null {
   if (!value) return null;
   const match = /^Bearer ([^\u0000-\u0020\u007f]{32,512})$/u.exec(value);
@@ -1326,6 +1559,52 @@ function requireInside(
   if (!relative || relative === ".." || relative.startsWith(`..${separator()}`)) {
     throw new Error(`${label} is outside its provider root.`);
   }
+}
+
+async function providerJobDatabasePath(
+  fs: NodeFs,
+  path: NodePath,
+  root: string,
+  projectId: string,
+  relative: string,
+  maximum: number,
+): Promise<string> {
+  const projectDirectory = path.join(root, "projects", projectId);
+  const dataDirectory = path.join(projectDirectory, "data");
+  const database = path.resolve(projectDirectory, relative);
+  requireInside(path, dataDirectory, database, "provider job database");
+  const resolvedData = await fs.realpath(dataDirectory);
+  const sidecars = ["", "-wal", "-shm", "-journal"];
+  let total = 0;
+  for (const suffix of sidecars) {
+    const filename = `${database}${suffix}`;
+    let stats: NodeStats;
+    try {
+      stats = await fs.lstat(filename);
+    } catch (error) {
+      if (suffix && nodeCode(error) === "ENOENT") continue;
+      throw error;
+    }
+    if (
+      stats.isSymbolicLink()
+      || !stats.isFile()
+      || (stats.mode & 0o077) !== 0
+      || !ownedByCurrentUser(stats)
+    ) {
+      throw new Error("Provider job database must use private regular files.");
+    }
+    requireInside(
+      path,
+      resolvedData,
+      await fs.realpath(filename),
+      "provider job database file",
+    );
+    total += stats.size;
+    if (!Number.isSafeInteger(total) || total > maximum) {
+      throw new Error("Provider job database exceeds its configured bound.");
+    }
+  }
+  return database;
 }
 
 function separator(): string {

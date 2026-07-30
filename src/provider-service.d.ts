@@ -22,6 +22,8 @@ export declare const DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL: "clank-provider-servi
 export declare const DEPLOYMENT_PROVIDER_CONTROL_PREFIX: "/v1/clank/control";
 export declare const DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE: "application/vnd.clank.provider-snapshot";
 export declare const DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE: "application/vnd.clank.provider-diagnostics+json";
+export declare const DEPLOYMENT_PROVIDER_JOBS_PROTOCOL: "clank-provider-jobs/1";
+export declare const DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE: "application/vnd.clank.provider-jobs+json";
 
 export interface DeploymentProviderServiceState {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
@@ -118,3 +120,13 @@ export declare function deploymentProviderSnapshotPath(projectId: string): strin
 
 /** Returns the exact provider-private diagnostics path for one project. */
 export declare function deploymentProviderDiagnosticsPath(projectId: string): string;
+
+/** Returns the exact provider-private job inspection path for one project. */
+export declare function deploymentProviderJobsPath(projectId: string): string;
+
+/** Returns one exact provider-private job mutation path. */
+export declare function deploymentProviderJobMutationPath(
+  projectId: string,
+  jobId: string,
+  action: "cancel" | "retry",
+): string;

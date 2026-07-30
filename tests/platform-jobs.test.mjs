@@ -13,6 +13,10 @@ import {
   openSQLite,
   s,
 } from "../dist/index.js";
+import {
+  parsePlatformJobMutation,
+  parsePlatformJobSnapshot,
+} from "../dist/platform-jobs.js";
 
 function jsonRequest(path, {
   method = "GET",
@@ -455,4 +459,71 @@ test("job inspection explains undeployed, unconfigured, and legacy-schema states
     await platform.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("provider job payload parsing rejects extra private data and inconsistent state", () => {
+  const snapshot = {
+    available: true,
+    configured: true,
+    compatibility: "ready",
+    health: "healthy",
+    alertDueAfterMs: 300_000,
+    stats: {
+      queued: 1,
+      running: 0,
+      retry: 0,
+      succeeded: 0,
+      dead: 0,
+      cancelled: 0,
+      due: 0,
+      oldestDueAt: null,
+      overdue: 0,
+      expiredLeases: 0,
+      scheduleErrors: 0,
+    },
+    jobs: [{
+      id: `job_${"1".repeat(32)}`,
+      name: "sync.todo",
+      queue: "default",
+      state: "queued",
+      priority: 0,
+      attempt: 0,
+      maxAttempts: 3,
+      runAt: 1_850_000_000_000,
+      scheduledAt: null,
+      cron: null,
+      createdAt: 1_750_000_000_000,
+      updatedAt: 1_750_000_000_000,
+      startedAt: null,
+      completedAt: null,
+      leaseUntil: null,
+      cancelRequested: false,
+      hasError: false,
+    }],
+    schedules: [],
+    scheduleCount: 0,
+  };
+  const parsed = parsePlatformJobSnapshot(snapshot);
+  assert.equal(Object.isFrozen(parsed), true);
+  assert.equal(parsed.jobs[0].name, "sync.todo");
+
+  assert.throws(
+    () => parsePlatformJobSnapshot({
+      ...snapshot,
+      jobs: [{ ...snapshot.jobs[0], payload: { secret: "must-not-cross" } }],
+    }),
+    /invalid fields/u,
+  );
+  assert.throws(
+    () => parsePlatformJobSnapshot({ ...snapshot, health: "attention" }),
+    /health is inconsistent/u,
+  );
+  assert.throws(
+    () => parsePlatformJobMutation({
+      changed: false,
+      reason: "changed",
+      job: snapshot.jobs[0],
+    }),
+    /state is inconsistent/u,
+  );
 });

@@ -159,7 +159,7 @@ applications do not need a separate runtime compiler or bundler.
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, and an atomic production Tailwind CLI pipeline |
 | Deploy | Browser console, workspaces and RBAC, activity feeds, ingress and provider resource metrics, transparent monthly usage and traffic limits, custom DNS/TLS onboarding, deterministic artifacts, optional off-host release and backup objects, encrypted secrets, immutable migrations, encrypted local and generation-bound provider backup/restore, storage-backed readiness, health-gated releases, redacted local/provider logs, audit, rollback |
 | Hosting safety | Explicit trusted/isolated profiles, isolated production default, constrained Docker runner, bounded artifacts, resource ceilings, and fail-closed runner configuration |
-| Distributed execution | Durable leases, authenticated nodes, placement, desired generations, fenced operations, verified leased runtime transfer, provider-neutral agents, crash-safe provider data, deferred Docker activation, generation-bound ingress, a complete restart-safe provider service, and an authenticated provider bridge |
+| Distributed execution | Durable leases, authenticated nodes, transactional process-slot placement, portable failover, stateful pinning, fenced operations, verified leased runtime transfer, provider-neutral agents, crash-safe provider data, deferred Docker activation, generation-bound ingress, encrypted recovery, private diagnostics/job controls, a complete restart-safe provider service, and an authenticated provider bridge |
 
 </details>
 
