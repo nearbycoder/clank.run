@@ -208,7 +208,7 @@ export function generateAppFiles(
         type: "module",
         scripts: {
           build: "clank build src dist --tailwind=src/styles.css",
-          dev: "clank build src dist --tailwind=src/styles.css && node --disable-warning=ExperimentalWarning dist/server.js",
+          dev: "clank dev",
           start: "node --disable-warning=ExperimentalWarning dist/server.js",
           plan: "clank plan",
           generate: "clank generate .",
@@ -388,7 +388,7 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 
 ## Working commands
 
-- \`npm run dev\` builds and starts the app at http://127.0.0.1:3000.
+- \`npm run dev\` builds, starts, watches, health-swaps, and browser-reloads the app at http://127.0.0.1:3000.
 - \`npm run build\` compiles \`src/\` into \`dist/\`.
 - \`npm run doctor\` performs local readiness diagnostics.
 - \`npm run deploy:check\` builds and verifies a deterministic artifact without login or upload.

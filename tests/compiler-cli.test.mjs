@@ -200,6 +200,8 @@ test("CLI help is command-aware, agent-readable, and never executes the target c
     })).stdout);
     assert.ok(completeHelp.commands.some((entry) =>
       entry.name === "templates" && entry.usage.includes("--json")));
+    assert.ok(completeHelp.commands.some((entry) =>
+      entry.name === "dev" && entry.usage.includes("--no-reload")));
 
     const typo = await runCliResult(["depoy"], repository, {
       ...process.env,
@@ -217,6 +219,17 @@ test("CLI help is command-aware, agent-readable, and never executes the target c
     assert.equal(error.ok, false);
     assert.equal(error.error.code, "UNKNOWN_OPTION");
     assert.match(error.error.message, /--dry-run/);
+
+    const invalidDev = await runCliResult(["dev", "--host=bad,host", "--json"], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    });
+    assert.equal(invalidDev.code, 1);
+    assert.equal(invalidDev.stderr, "");
+    const devError = JSON.parse(invalidDev.stdout);
+    assert.equal(devError.protocol, "clank-dev-event/1");
+    assert.equal(devError.type, "fatal");
+    assert.match(devError.message, /Development host/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1017,7 +1030,7 @@ test("create scaffolds a named, buildable authenticated application", async () =
     assert.equal(packageJson.devDependencies.tailwindcss, "^4.2.4");
     assert.equal(packageJson.devDependencies["@tailwindcss/cli"], "^4.2.4");
     assert.match(packageJson.scripts.build, /--tailwind=src\/styles\.css/);
-    assert.match(packageJson.scripts.dev, /dist\/server\.js/);
+    assert.equal(packageJson.scripts.dev, "clank dev");
     assert.equal(packageJson.scripts.doctor, "clank doctor");
     assert.equal(packageJson.scripts["jobs:worker"], "clank jobs worker");
     assert.equal(packageJson.scripts["jobs:scheduler"], "clank jobs scheduler");
@@ -1656,6 +1669,177 @@ test("SSR reference apps map the bare module specifier emitted by their shared v
       `${example} must resolve the same package-style import in its browser import map`,
     );
   }
+});
+
+test("the browser package barrel has no eager Node-only module imports", async () => {
+  const files = await readdir(fileURLToPath(new URL("dist", repository)));
+  for (const filename of files.filter((entry) => entry.endsWith(".js"))) {
+    const source = await readFile(fileURLToPath(new URL(`dist/${filename}`, repository)), "utf8");
+    assert.doesNotMatch(
+      source,
+      /^\s*(?:import(?:\s+[^"'`]*?\s+from)?|export\s+[^"'`]*?\s+from)\s*["']node:/mu,
+      `${filename} must defer Node-only imports until its server API is called`,
+    );
+  }
+});
+
+test("clank dev rebuilds, health-swaps, live-reloads, and preserves the last good server", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-dev-"));
+  const input = join(root, "src");
+  const output = join(root, "dist");
+  const migrations = join(root, "migrations");
+  await Promise.all([
+    mkdir(input),
+    mkdir(output),
+    mkdir(migrations),
+  ]);
+  const sourcePath = join(input, "server.ts");
+  const source = (marker) => `
+    import { createServer } from "node:http";
+    const marker = ${JSON.stringify(marker)};
+    createServer((request, response) => {
+      if (request.url === "/healthz") {
+        response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+        response.end("ok");
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><html><body><main>" + marker + "</main></body></html>");
+    }).listen(Number(process.env.PORT), process.env.HOST);
+  `;
+  await writeFile(sourcePath, source("revision-one"));
+  await writeFile(join(root, "clank.deploy.json"), JSON.stringify({
+    version: 1,
+    entry: "dist/server.js",
+    include: ["dist", "migrations"],
+    build: {
+      command: ["clank", "build", "src", "dist"],
+    },
+    database: {
+      path: "app.sqlite",
+      migrations: "migrations",
+      allowUnsafeMigrations: false,
+    },
+    health: {
+      path: "/healthz",
+      timeoutMs: 5_000,
+    },
+    env: {},
+  }));
+
+  const probe = createServer();
+  await new Promise((resolve, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", resolve);
+  });
+  const address = probe.address();
+  assert(address && typeof address === "object");
+  const port = address.port;
+  await new Promise((resolve, reject) => probe.close((error) => error ? reject(error) : resolve()));
+
+  const child = spawn(process.execPath, [
+    "--disable-warning=ExperimentalWarning",
+    fileURLToPath(new URL("scripts/clank.mjs", repository)),
+    "dev",
+    root,
+    `--port=${port}`,
+    "--json",
+  ], {
+    cwd: repository,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let outputBuffer = "";
+  let diagnostics = "";
+  const events = [];
+  const waiters = new Set();
+  const publish = (event) => {
+    events.push(event);
+    for (const waiter of waiters) waiter();
+  };
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    outputBuffer += chunk;
+    const lines = outputBuffer.split("\n");
+    outputBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (line.trim()) publish(JSON.parse(line));
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    diagnostics += chunk;
+  });
+  const waitForEvent = (type, after = 0) => new Promise((resolve, reject) => {
+    const deadline = setTimeout(() => {
+      waiters.delete(check);
+      reject(new Error(`Timed out waiting for ${type}. stderr: ${diagnostics}`));
+    }, 10_000);
+    const check = () => {
+      const event = events.slice(after).find((entry) => entry.type === type);
+      if (!event) return;
+      clearTimeout(deadline);
+      waiters.delete(check);
+      resolve(event);
+    };
+    waiters.add(check);
+    check();
+  });
+
+  const base = `http://127.0.0.1:${port}`;
+  const controller = new AbortController();
+  try {
+    const ready = await waitForEvent("ready");
+    assert.equal(ready.protocol, "clank-dev-event/1");
+    assert.equal(ready.url, base);
+    const initial = await fetch(base);
+    assert.equal(initial.status, 200);
+    const initialHtml = await initial.text();
+    assert.match(initialHtml, /revision-one/u);
+    assert.match(initialHtml, /\/_clank\/dev-client\.js/u);
+
+    const client = await fetch(`${base}/_clank/dev-client.js`);
+    assert.equal(client.status, 200);
+    assert.match(await client.text(), /EventSource/u);
+    const stream = await fetch(`${base}/_clank/dev-events`, { signal: controller.signal });
+    assert.equal(stream.status, 200);
+    assert.match(stream.headers.get("content-type") ?? "", /text\/event-stream/u);
+    const reader = stream.body.getReader();
+    const decoder = new TextDecoder();
+    let streamText = decoder.decode((await reader.read()).value);
+    assert.match(streamText, /connected/u);
+
+    const beforeRestart = events.length;
+    await writeFile(sourcePath, source("revision-two"));
+    const restarted = await waitForEvent("restarted", beforeRestart);
+    assert.equal(restarted.revision, 2);
+    while (!streamText.includes("event: reload")) {
+      const next = await Promise.race([
+        reader.read(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Live-reload event timed out.")), 5_000)),
+      ]);
+      if (next.done) break;
+      streamText += decoder.decode(next.value);
+    }
+    assert.match(streamText, /event: reload/u);
+    assert.match(streamText, /"revision":2/u);
+    assert.match(await (await fetch(base)).text(), /revision-two/u);
+
+    const beforeFailure = events.length;
+    await symlink("server.ts", join(input, "bad.ts"));
+    const failed = await waitForEvent("build_failed", beforeFailure);
+    assert.match(failed.message, /Symbolic links are not compiled/u);
+    assert.match(await (await fetch(base)).text(), /revision-two/u);
+    await rm(join(input, "bad.ts"));
+    await reader.cancel();
+  } finally {
+    controller.abort();
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      await once(child, "exit");
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+  assert.equal(child.exitCode, 0, diagnostics);
 });
 
 test("development server resolves documented trailing-slash example URLs", async () => {

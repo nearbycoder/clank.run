@@ -34,6 +34,10 @@ file, and atomically replaces `dist/styles.css` only after a successful minified
 servers link `/styles.css` and use `style-src 'self'`; they do not allow or load a Tailwind browser
 CDN.
 
+`npm run dev` uses `clank dev`, so the same declared build command recompiles Tailwind before a
+replacement application is health-checked and activated. Invalid CSS or a missing Tailwind
+executable leaves the last good local server and stylesheet in place.
+
 The generated app declares `tailwindcss` and `@tailwindcss/cli` as build-only development
 dependencies. The application runtime still has one zero-transitive-dependency framework package,
 and Clank includes only compiled CSS in the deployment artifact. The platform does not run

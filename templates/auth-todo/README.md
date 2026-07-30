@@ -12,6 +12,9 @@ npm run dev
 ```
 
 Open http://127.0.0.1:3000. Register the first account, then open a second browser to see committed changes synchronize live.
+Clank watches the project, rebuilds after source or migration changes, starts a healthy replacement
+before stopping the previous process, and reloads connected browser tabs. A failed build leaves the
+last good server running.
 
 The build compiles `src/styles.css` with the local Tailwind CLI and serves the resulting static
 `dist/styles.css`; production does not load Tailwind from a browser CDN.
