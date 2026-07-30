@@ -1,4 +1,7 @@
-import { extractDeploymentBundle } from "./deploy.ts";
+import {
+  extractDeploymentBundle,
+  type DeploymentConfig,
+} from "./deploy.ts";
 import {
   applyMigrations,
   backupSQLite,
@@ -50,6 +53,8 @@ export interface PreparedDeploymentRuntimeData {
   readonly capsuleSha256: string;
   readonly releaseDirectory: string;
   readonly databasePath: string;
+  /** Exact verified deployment config extracted from the runtime capsule. */
+  readonly config: DeploymentConfig;
   /** Sensitive values are memory-only and must not be logged or persisted. */
   readonly environment: Readonly<Record<string, string>>;
   readonly ingress: DeploymentRuntimeIngressManifest;
@@ -882,6 +887,7 @@ function preparedData(
     capsuleSha256: active.capsuleSha256,
     releaseDirectory: resolveRelative(path, locations.project, active.releaseDirectory),
     databasePath: resolveRelative(path, locations.project, active.databasePath),
+    config: runtime.artifact.bundle.config,
     environment: runtime.manifest.environment,
     ingress: runtime.manifest.ingress,
     migrationCount,

@@ -6,6 +6,15 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- A zero-dependency `@clank.run/framework/provider-docker` reference launcher now starts the exact
+  verified web, worker, and scheduler topology inside resource-bounded Docker containers, checks
+  private health over loopback, and exposes only non-secret candidate metadata. Immutable images,
+  non-root execution, read-only releases/root filesystems, project-only data mounts, bounded logs,
+  owner-scoped orphan cleanup, generation fencing, graceful stop, close-race fencing, and restart
+  reconciliation are enforced.
+- Provider-prepared runtime data now carries the exact normalized config decoded from the verified
+  capsule, so launchers cannot accidentally substitute another entry, database path, or job
+  topology.
 - A provider-private `@clank.run/framework/provider-runtime` registry now publishes overlapping
   application generations, validates the complete managed-ingress binding before dispatch, retains
   only a route-token digest, proxies only to loopback origins, and revokes then drains exact
@@ -114,6 +123,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Security
 
+- The provider Docker launcher delivers the final application environment through bounded
+  container stdin after Node starts. Secret values are absent from host Docker environment
+  variables, command arguments, labels, and persisted container environment metadata; the
+  in-container bootstrap validates names and values before importing the verified entry. The host
+  Docker process receives only an operator-controlled connection/context/proxy/locale allowlist.
 - Provider data metadata is exact-field decoded, size-bounded, project-bound, owner-only, and
   confined to typed data/generation/recovery paths. Unsafe permissions, symbolic-link storage,
   conflicting capsule/desired-state bindings, changed database paths, stale fences, and corrupted

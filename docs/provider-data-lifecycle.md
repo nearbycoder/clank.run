@@ -74,6 +74,8 @@ const provider: DeploymentProvider = {
 
 The callback receives final environment values and the managed-ingress token in memory. Treat it as
 a secret-bearing runtime boundary: do not log, serialize, persist, or return the prepared object.
+It also receives the exact normalized deployment config from the verified capsule, so a launcher
+does not need a second caller-supplied copy.
 It may start an unreachable candidate and run its health check, but it must not expose that
 candidate to public traffic. If the callback throws or the signal is aborted, Clank restores the
 prior database and removes the candidate release. Provider code must also stop a failed candidate
@@ -195,18 +197,19 @@ forward, and is itself journaled. Deletion recursively removes only the provider
 root and requires an exact confirmation. Stop and revoke ingress before either operation; restore
 and deletion do not coordinate public traffic themselves.
 
-## Remaining hosted activation boundary
+## Runtime launch and remaining hosted activation boundary
 
 This package completes provider-side release staging, per-project SQLite
 initialize/preserve/replace, migrations, consistent export, one-generation rollback, crash
 recovery, and confirmed deletion. It deliberately does not launch untrusted code, publish routes,
 issue TLS certificates, replicate recovery backups, or move a stateful project between nodes.
 
-The built-in control plane still uses its local supervisor. Remote placement remains disabled
-until the next integration binds this lifecycle to:
+The package-supported [Provider Docker runtime](provider-docker-runtime.md) now binds this prepared
+state to resource-bounded web, worker, and scheduler containers, private loopback health,
+exact-owner orphan cleanup, and fail-closed restart reconciliation. The built-in control plane
+still uses its local supervisor. Remote placement remains disabled until the next integration
+binds these lifecycles to:
 
-- an isolated runtime launcher and provider-side validation of the generation-bound private
-  health/traffic route;
 - atomic ingress publish/revoke with generation and token checks;
 - durable provider-node pinning and rolling-update behavior;
 - encrypted backup replication and restore drills; and
@@ -214,4 +217,5 @@ until the next integration binds this lifecycle to:
 
 Continue with [Remote runtime placement](runtime-placement.md), [Deployment provider
 adapters](provider-adapters.md), [Provider runtime ingress](provider-runtime-ingress.md),
+[Provider Docker runtime](provider-docker-runtime.md),
 [Managed ingress](data-plane.md), and [Backup and disaster recovery](recovery.md).

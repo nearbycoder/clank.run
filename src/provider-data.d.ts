@@ -6,6 +6,7 @@ import type {
   DeploymentRuntimeCapsule,
   DeploymentRuntimeIngressManifest,
 } from "./runtime-placement.js";
+import type { DeploymentConfig } from "./deploy.js";
 
 export declare const DEPLOYMENT_PROVIDER_DATA_PROTOCOL: "clank-provider-data/1";
 
@@ -40,6 +41,8 @@ export interface PreparedDeploymentRuntimeData {
   readonly capsuleSha256: string;
   readonly releaseDirectory: string;
   readonly databasePath: string;
+  /** Exact verified deployment config extracted from the runtime capsule. */
+  readonly config: DeploymentConfig;
   /** Sensitive values are memory-only and must not be logged or persisted. */
   readonly environment: Readonly<Record<string, string>>;
   readonly ingress: DeploymentRuntimeIngressManifest;

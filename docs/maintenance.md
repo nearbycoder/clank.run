@@ -121,7 +121,31 @@ The final certification result and exact test counts belong in the pull request 
   coverage; 57 documentation files, 212 local links, 33 declaration files, and 31 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
-- [ ] Record GitHub CI, CodeQL, merge, and post-merge evidence after the phase PR passes.
+- [x] Merged PR #90 as `ab12eb7a629567e4f6b7d22adea1d661e09ce0ae` after Node 22/24,
+  packaged-release conformance, and CodeQL passed; post-merge CI, CodeQL, docs deployment, human
+  guide, and agent JSON completed successfully.
+- [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
+## 2026-07-30 isolated provider Docker runtime phase
+
+- [x] Added a zero-dependency reference launcher for the exact verified web, worker, and scheduler
+  topology with private loopback health and non-secret candidate inspection.
+- [x] Required immutable images and non-root execution by default; constrained root, capabilities,
+  privilege escalation, memory/swap, CPU, PIDs, tmpfs, logs, mounts, restart policy, stop time,
+  project count, container count, and loopback port allocation.
+- [x] Delivered the final application environment through bounded container stdin after Node
+  startup, keeping capsule secrets out of Docker arguments, labels, host application variables,
+  and persisted container environment metadata.
+- [x] Bound launch to the exact config returned by verified provider data, retained no environment
+  or ingress token, fenced conflicting/stale generations, and allowed exact committed-generation
+  restart for failed-rollout recovery.
+- [x] Added exact-owner startup orphan cleanup, uncertain-create cleanup, graceful verified stop,
+  no process adoption after restart, and launch/health/close race fencing.
+- [x] Re-certified all 295 tests at 86.07% line, 74.66% branch, and 85.79% function
+  coverage; 58 documentation files, 227 local links, 34 declaration files, and 32 package
+  exports; packed consumer conformance; and package, current-tree, and reachable-history security
+  scans.
+- [ ] Record GitHub CI, CodeQL, merge, post-merge, and live documentation evidence.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 remote runtime transport phase
