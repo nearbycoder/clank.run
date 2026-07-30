@@ -7,6 +7,8 @@ Clank tests failures as state-machine behavior, not only happy-path output. The 
 | Fault | Expected invariant | Evidence |
 | --- | --- | --- |
 | Deployment worker disappears after claiming work | Expired work is reclaimed with a higher fence; the stale worker cannot commit | `tests/chaos.test.mjs`, orchestration tests |
+| Remote agent restarts, loses a lease, or drains mid-claim | Saved credentials resume without enrollment; lost work is aborted without stale settlement; drained nodes claim nothing new | Runner and orchestration tests |
+| Completion response is lost | A possibly committed success is not converted into an explicit failure/retry | Runner tests |
 | Encrypted backup is corrupted | Authentication fails before replacement; the live database remains unchanged | Chaos and recovery tests |
 | Application upstream becomes unreachable | Requests fail generically, the circuit opens, and a later probe recovers | Chaos and data-plane tests |
 | Candidate startup/health fails | Prior data and active release are restored | Platform tests and packaged conformance |
@@ -37,8 +39,12 @@ Before public beta and at least quarterly:
 4. Restore an encrypted off-host backup into a clean directory with the original key; compare integrity, revision, migrations, and representative application queries.
 5. Remove access to email, object storage, webhook targets, and external database APIs; verify timeouts, retries, idempotency, dead letters, and redacted logs.
 6. Drain a node and expire its heartbeat; verify desired placement is reassigned without accepting a stale observation.
-7. Rotate a project secret and scoped CLI token; verify the prior values stop working and audit records remain readable.
-8. Simulate disk-full and read-only filesystem conditions in an isolated environment; verify no partial release is activated.
+7. Rotate a node credential while its prior holder is executing; verify the prior agent loses its
+   lease, cannot settle, and the replacement agent reclaims with a higher fence.
+8. Drop only the completion response after the coordinator commits it; verify the agent does not
+   send `fail` and the runtime mutation remains idempotent when reconciliation resumes.
+9. Rotate a project secret and scoped CLI token; verify the prior values stop working and audit records remain readable.
+10. Simulate disk-full and read-only filesystem conditions in an isolated environment; verify no partial release is activated.
 
 ## Safety rules
 

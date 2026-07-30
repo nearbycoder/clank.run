@@ -94,4 +94,12 @@ Expired work is retried with bounded backoff; stale workers are fenced; cron sch
 separate durable lease and deterministic occurrence keys. Web, worker, and scheduler are separate
 OS processes even when one Clank supervisor manages all three.
 
-Project mutations also acquire durable distributed leases. Authenticated deployment nodes, desired generations, idempotent durable operations, lease expiry, retries, draining, capacity placement, and monotonic fences reject stale workers. The included child-process supervisor still owns processes in memory and therefore runs as one active leader per project/data directory; remote agents can implement the durable orchestration contract. Child processes support trusted operation, while Docker adds a constrained container boundary for mutually untrusted applications.
+Project mutations also acquire durable distributed leases. Authenticated deployment nodes, desired
+generations, idempotent durable operations, lease expiry, retries, draining, capacity placement, and
+monotonic fences reject stale workers. The provider-neutral remote-agent loop implements
+enrollment, credential restart, heartbeat, bounded claim/concurrency, lease renewal, observation,
+settlement, and graceful drain; infrastructure adapters still map its fenced execution callback to
+Docker, VM, or microVM operations and remote storage. The included child-process supervisor owns
+processes in memory and therefore runs as one active leader per project/data directory. Child
+processes support trusted operation, while Docker adds a constrained container boundary for
+mutually untrusted applications.

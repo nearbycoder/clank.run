@@ -398,7 +398,8 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
       ensureOpen();
       const id = nodeId(nodeIdInput);
       const node = await verifyNode(id, token);
-      if (Number(node.expires_at) <= Date.now() || String(node.status) === "offline") {
+      if (Number(node.expires_at) <= Date.now() || String(node.status) !== "active") {
+        if (String(node.status) === "draining") return [];
         throw new Error("Deployment node lease is expired.");
       }
       const count = integerRange(limit, "limit", 1, 100);

@@ -67,6 +67,60 @@ export interface DeploymentCoordinatorClient {
   }): Promise<boolean>;
 }
 
+export interface DeploymentNodeCredentialStore {
+  load(nodeId: string): Promise<string | null>;
+  save(nodeId: string, token: string): Promise<void>;
+  clear(nodeId: string): Promise<void>;
+}
+
+export interface DeploymentExecutionContext {
+  /** The current claim, including its monotonic fence and latest lease expiry. */
+  readonly operation: ClaimedDeploymentOperation;
+  /** Aborts when shutdown wins or the operation lease is lost. */
+  readonly signal: AbortSignal;
+  /** Reports generation-fenced desired state for this operation's project. */
+  observe(input: {
+    generation: number;
+    releaseId: string | null;
+    state: "running" | "stopped" | "failed";
+  }): Promise<boolean>;
+}
+
+export interface DeploymentAgentOptions {
+  client: DeploymentCoordinatorClient;
+  node: DeploymentNodeInput;
+  /** Needed only when the credential store does not contain a valid node token. */
+  registrationToken?: string;
+  credentials?: DeploymentNodeCredentialStore;
+  execute(
+    operation: ClaimedDeploymentOperation,
+    context: DeploymentExecutionContext,
+  ): Promise<unknown>;
+  concurrency?: number;
+  claimLimit?: number;
+  pollIntervalMs?: number;
+  heartbeatIntervalMs?: number;
+  shutdownTimeoutMs?: number;
+  /**
+   * Converts an execution failure into the safe remote message. Defaults to a
+   * generic value so local exception details cannot become control-plane logs.
+   */
+  failureMessage?: (error: unknown) => string;
+  /** Receives private local execution and transport failures. */
+  onError?: (error: unknown) => void;
+}
+
+export interface DeploymentAgentRuntime {
+  readonly nodeId: string;
+  readonly node: DeploymentNode;
+  readonly activeOperations: number;
+  readonly draining: boolean;
+  /** Resolves after both background loops stop. */
+  readonly done: Promise<void>;
+  /** Drains claims, waits for work, then aborts work beyond the shutdown deadline. */
+  close(): Promise<void>;
+}
+
 class CoordinatorRequestError extends Error {
   constructor(
     readonly status: number,
@@ -347,6 +401,502 @@ export function createDeploymentCoordinatorClient(
     async observe(nodeId, token, input) {
       return boolean((await call("observe", input, token, nodeId)).accepted, "accepted");
     },
+  });
+}
+
+/**
+ * Runs the provider-neutral deployment-node lifecycle. Runtime adapters only
+ * implement `execute`; enrollment, credentials, claims, renewal, fencing,
+ * heartbeat, drain, and bounded shutdown stay identical across Docker/VM hosts.
+ */
+export async function openDeploymentAgent(
+  options: DeploymentAgentOptions,
+): Promise<DeploymentAgentRuntime> {
+  const nodeId = boundedNodeId(options.node.id);
+  const concurrency = integer(options.concurrency ?? 2, "concurrency", 1, 64);
+  const claimLimit = integer(options.claimLimit ?? concurrency, "claimLimit", 1, 100);
+  const pollIntervalMs = integer(options.pollIntervalMs ?? 1_000, "pollIntervalMs", 10, 60_000);
+  const heartbeatIntervalMs = integer(
+    options.heartbeatIntervalMs ?? 10_000,
+    "heartbeatIntervalMs",
+    100,
+    5 * 60_000,
+  );
+  const shutdownTimeoutMs = integer(
+    options.shutdownTimeoutMs ?? 30_000,
+    "shutdownTimeoutMs",
+    100,
+    10 * 60_000,
+  );
+  const credentials = options.credentials ?? memoryCredentialStore();
+  const report = (error: unknown) => {
+    try {
+      options.onError?.(error);
+    } catch {
+      // Operator diagnostics must never break the runner lifecycle.
+    }
+  };
+
+  let token = await credentials.load(nodeId);
+  let currentNode: DeploymentNode | undefined;
+  if (token) {
+    try {
+      currentNode = await options.client.heartbeat(nodeId, token, {
+        ...(options.node.capacity === undefined ? {} : { capacity: options.node.capacity }),
+        ...(options.node.labels === undefined ? {} : { labels: options.node.labels }),
+      });
+    } catch (error) {
+      if (!(error instanceof DeploymentCoordinatorError) || error.code !== "NODE_AUTH_FAILED"
+        || !options.registrationToken) {
+        throw error;
+      }
+      await credentials.clear(nodeId);
+      token = null;
+    }
+  }
+  if (!token) {
+    if (!options.registrationToken) {
+      throw new TypeError("A registrationToken is required when no deployment node credential is stored.");
+    }
+    const session = await options.client.register(options.registrationToken, options.node);
+    token = session.token;
+    currentNode = session.node;
+    await credentials.save(nodeId, token);
+  }
+  currentNode = await options.client.drain(nodeId, token, false);
+
+  let closing = false;
+  let closePromise: Promise<void> | undefined;
+  let draining = false;
+  const lifecycle = new AbortController();
+  let wakePoll: (() => void) | undefined;
+  const active = new Map<string, {
+    promise: Promise<void>;
+    abandon(error: Error): void;
+  }>();
+  const stopForInvalidCredential = (error: DeploymentCoordinatorError) => {
+    report(error);
+    draining = true;
+    closing = true;
+    wakePoll?.();
+    for (const entry of active.values()) entry.abandon(error);
+    lifecycle.abort();
+  };
+
+  const waitForPoll = () => new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      if (wakePoll === wake) wakePoll = undefined;
+      resolve();
+    }, pollIntervalMs);
+    const wake = () => {
+      clearTimeout(timer);
+      if (wakePoll === wake) wakePoll = undefined;
+      resolve();
+    };
+    wakePoll = wake;
+  });
+
+  const execute = (claimed: ClaimedDeploymentOperation) => {
+    const controller = new AbortController();
+    let current = claimed;
+    let finished = false;
+    let leaseLost = false;
+    let abandoned = false;
+    const renewalController = new AbortController();
+    const abandon = (error: Error) => {
+      if (finished || abandoned) return;
+      abandoned = true;
+      controller.abort(error);
+      renewalController.abort();
+    };
+    const renew = (async () => {
+      while (!finished && !abandoned) {
+        const remaining = current.leaseExpiresAt - Date.now();
+        if (remaining <= 0) {
+          leaseLost = true;
+          abandon(new Error("Deployment operation lease expired."));
+          return;
+        }
+        await delay(Math.max(25, Math.min(5_000, Math.floor(remaining / 3))), renewalController.signal);
+        if (finished || abandoned) return;
+        try {
+          const renewed = await options.client.renew(nodeId, token!, current);
+          if (!renewed) {
+            leaseLost = true;
+            abandon(new Error("Deployment operation lease was reclaimed."));
+            return;
+          }
+          current = renewed;
+        } catch (error) {
+          if (error instanceof DeploymentCoordinatorError && error.code === "NODE_AUTH_FAILED") {
+            leaseLost = true;
+            stopForInvalidCredential(error);
+            return;
+          }
+          report(error);
+          if (Date.now() >= current.leaseExpiresAt) {
+            leaseLost = true;
+            abandon(new Error("Deployment operation renewal failed before expiry."));
+            return;
+          }
+        }
+      }
+    })();
+
+    const promise = Promise.resolve().then(async () => {
+      let result: unknown;
+      try {
+        result = await options.execute(claimed, {
+          get operation() {
+            return current;
+          },
+          signal: controller.signal,
+          async observe(input) {
+            if (leaseLost || controller.signal.aborted) {
+              throw new Error("Cannot observe state after the deployment operation lease is lost.");
+            }
+            return options.client.observe(nodeId, token!, {
+              projectId: current.projectId,
+              ...input,
+            });
+          },
+        });
+      } catch (error) {
+        if (!leaseLost && !abandoned) {
+          report(error);
+          let message = "Deployment execution failed.";
+          if (options.failureMessage) {
+            try {
+              message = boundedFailure(options.failureMessage(error));
+            } catch (formatError) {
+              report(formatError);
+            }
+          }
+          try {
+            await options.client.fail(nodeId, token!, current, message);
+          } catch (settlementError) {
+            report(settlementError);
+          }
+        }
+        return;
+      }
+
+      if (!leaseLost && !abandoned && !controller.signal.aborted) {
+        try {
+          const accepted = await options.client.complete(nodeId, token!, current, result ?? null);
+          if (!accepted) {
+            leaseLost = true;
+            abandon(new Error("Deployment operation completion was stale."));
+          }
+        } catch (settlementError) {
+          // A timed-out completion may have committed. Never turn an uncertain
+          // success into a second execution by explicitly failing the lease.
+          report(settlementError);
+        }
+      }
+    }).finally(async () => {
+      finished = true;
+      renewalController.abort();
+      await renew;
+      active.delete(claimed.id);
+      wakePoll?.();
+    });
+    active.set(claimed.id, { promise, abandon });
+  };
+
+  const heartbeatLoop = (async () => {
+    while (!lifecycle.signal.aborted) {
+      await delay(heartbeatIntervalMs, lifecycle.signal);
+      if (lifecycle.signal.aborted) return;
+      try {
+        currentNode = await options.client.heartbeat(nodeId, token!, {
+          ...(options.node.capacity === undefined ? {} : { capacity: options.node.capacity }),
+          ...(options.node.labels === undefined ? {} : { labels: options.node.labels }),
+        });
+      } catch (error) {
+        if (error instanceof DeploymentCoordinatorError && error.code === "NODE_AUTH_FAILED") {
+          stopForInvalidCredential(error);
+          return;
+        }
+        report(error);
+      }
+    }
+  })();
+
+  const claimLoop = (async () => {
+    while (!closing) {
+      const available = concurrency - active.size;
+      if (!draining && available > 0) {
+        try {
+          const operations = await options.client.claim(
+            nodeId,
+            token!,
+            Math.min(available, claimLimit),
+          );
+          for (const operation of operations) {
+            // A claim request may have crossed a shutdown request. Work already
+            // leased to this node is still accepted during the grace period.
+            if (lifecycle.signal.aborted || active.size >= concurrency) break;
+            if (!active.has(operation.id)) execute(operation);
+          }
+          if (closing) return;
+          if (operations.length > 0) continue;
+        } catch (error) {
+          if (error instanceof DeploymentCoordinatorError && error.code === "NODE_AUTH_FAILED") {
+            stopForInvalidCredential(error);
+            return;
+          }
+          report(error);
+          if (closing) return;
+        }
+      }
+      await waitForPoll();
+    }
+  })();
+
+  const done = Promise.all([heartbeatLoop, claimLoop]).then(() => undefined);
+  const runtime: DeploymentAgentRuntime = {
+    nodeId,
+    get node() {
+      return currentNode!;
+    },
+    get activeOperations() {
+      return active.size;
+    },
+    get draining() {
+      return draining;
+    },
+    done,
+    async close() {
+      if (closePromise) return closePromise;
+      closePromise = (async () => {
+        draining = true;
+        closing = true;
+        wakePoll?.();
+        try {
+          currentNode = await options.client.drain(nodeId, token!, true);
+        } catch (error) {
+          report(error);
+        }
+        // Let an in-flight claim finish before taking the work snapshot. The
+        // coordinator refuses claims once its drain update wins the race.
+        await claimLoop;
+        const work = [...active.values()];
+        const shutdownDeadline = new AbortController();
+        const graceful = await Promise.race([
+          Promise.allSettled(work.map((entry) => entry.promise)).then(() => true),
+          delay(shutdownTimeoutMs, shutdownDeadline.signal).then(() => false),
+        ]);
+        shutdownDeadline.abort();
+        if (!graceful) {
+          for (const entry of work) {
+            entry.abandon(new Error("Deployment agent shutdown deadline exceeded."));
+          }
+        }
+        lifecycle.abort();
+        await done;
+      })();
+      return closePromise;
+    },
+  };
+  return runtime;
+}
+
+/** In-memory credentials are useful for tests and ephemeral enrolled nodes. */
+export function memoryDeploymentNodeCredentials(
+  initial: Record<string, string> = {},
+): DeploymentNodeCredentialStore {
+  const values = new Map<string, string>();
+  for (const [nodeId, token] of Object.entries(initial)) {
+    values.set(boundedNodeId(nodeId), boundedToken(token, "node token"));
+  }
+  return Object.freeze({
+    async load(nodeId) {
+      return values.get(boundedNodeId(nodeId)) ?? null;
+    },
+    async save(nodeId, token) {
+      values.set(boundedNodeId(nodeId), boundedToken(token, "node token"));
+    },
+    async clear(nodeId) {
+      values.delete(boundedNodeId(nodeId));
+    },
+  });
+}
+
+/**
+ * Persists one or more node credentials in an owner-only JSON file using an
+ * atomic replacement. The path is operator configuration, never remote input.
+ */
+export function fileDeploymentNodeCredentials(pathInput: string): DeploymentNodeCredentialStore {
+  if (
+    typeof pathInput !== "string"
+    || !pathInput
+    || pathInput.length > 4_096
+    || pathInput.includes("\0")
+  ) {
+    throw new TypeError("Deployment node credential path is invalid.");
+  }
+  const path = pathInput;
+  let pending: Promise<void> = Promise.resolve();
+  const serialized = <Value>(operation: () => Promise<Value>): Promise<Value> => {
+    const result = pending.then(operation, operation);
+    pending = result.then(() => undefined, () => undefined);
+    return result;
+  };
+  const read = async (): Promise<Record<string, string>> => {
+    const fsName = "node:fs/promises";
+    const nodeFsName = "node:fs";
+    const [fs, nodeFs] = await Promise.all([
+      import(fsName) as unknown as Promise<{
+        lstat(path: string): Promise<{
+          dev: number;
+          ino: number;
+          isSymbolicLink(): boolean;
+        }>;
+        open(path: string, flags: number): Promise<{
+          stat(): Promise<{
+            dev: number;
+            ino: number;
+            mode: number;
+            size: number;
+            uid: number;
+            isFile(): boolean;
+          }>;
+          readFile(options: { encoding: "utf8" }): Promise<string>;
+          close(): Promise<void>;
+        }>;
+      }>,
+      import(nodeFsName) as unknown as Promise<{
+        constants: { O_RDONLY: number; O_NOFOLLOW?: number };
+      }>,
+    ]);
+    let handle: {
+      stat(): Promise<{
+        dev: number;
+        ino: number;
+        mode: number;
+        size: number;
+        uid: number;
+        isFile(): boolean;
+      }>;
+      readFile(options: { encoding: "utf8" }): Promise<string>;
+      close(): Promise<void>;
+    } | undefined;
+    try {
+      handle = await fs.open(
+        path,
+        nodeFs.constants.O_RDONLY | (nodeFs.constants.O_NOFOLLOW ?? 0),
+      );
+    } catch (error) {
+      if ((error as { code?: string }).code === "ENOENT") return {};
+      if ((error as { code?: string }).code === "ELOOP") {
+        throw new Error("Deployment node credential file is unsafe or too large.");
+      }
+      throw error;
+    }
+    let encoded: string;
+    try {
+      const [stats, pathStats] = await Promise.all([handle.stat(), fs.lstat(path)]);
+      const getUid = (globalThis as any).process?.getuid;
+      const currentUid = typeof getUid === "function" ? Number(getUid.call((globalThis as any).process)) : null;
+      if (
+        pathStats.isSymbolicLink()
+        || pathStats.dev !== stats.dev
+        || pathStats.ino !== stats.ino
+        || !stats.isFile()
+        || stats.size > 64 * 1024
+        || (stats.mode & 0o077) !== 0
+        || (currentUid !== null && stats.uid !== currentUid)
+      ) {
+        throw new Error("Deployment node credential file is unsafe or too large.");
+      }
+      encoded = await handle.readFile({ encoding: "utf8" });
+    } finally {
+      await handle.close();
+    }
+    const parsed = object(JSON.parse(encoded));
+    exact(parsed, ["version", "credentials"]);
+    if (parsed.version !== 1) throw new Error("Deployment node credential file version is unsupported.");
+    const input = object(parsed.credentials);
+    const output = Object.create(null) as Record<string, string>;
+    for (const [nodeId, token] of Object.entries(input)) {
+      output[boundedNodeId(nodeId)] = boundedToken(token, "node token");
+    }
+    return output;
+  };
+  const write = async (values: Record<string, string>): Promise<void> => {
+    const fsName = "node:fs/promises";
+    const pathName = "node:path";
+    const [fs, pathModule] = await Promise.all([
+      import(fsName) as unknown as Promise<{
+        chmod(path: string, mode: number): Promise<void>;
+        mkdir(path: string, options: { recursive: true; mode: number }): Promise<void>;
+        rename(source: string, destination: string): Promise<void>;
+        rm(path: string, options: { force: true }): Promise<void>;
+        writeFile(path: string, value: string, options: { encoding: "utf8"; flag: "wx"; mode: number }): Promise<void>;
+      }>,
+      import(pathName) as unknown as Promise<{ dirname(path: string): string }>,
+    ]);
+    const directory = pathModule.dirname(path);
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const temporary = `${path}.tmp-${crypto.randomUUID()}`;
+    try {
+      await fs.writeFile(
+        temporary,
+        `${JSON.stringify({ version: 1, credentials: values }, null, 2)}\n`,
+        { encoding: "utf8", flag: "wx", mode: 0o600 },
+      );
+      await fs.rename(temporary, path);
+      await fs.chmod(path, 0o600);
+    } finally {
+      await fs.rm(temporary, { force: true });
+    }
+  };
+  return Object.freeze({
+    async load(nodeId) {
+      return serialized(async () => {
+        const values = await read();
+        const token = values[boundedNodeId(nodeId)];
+        return token === undefined ? null : boundedToken(token, "node token");
+      });
+    },
+    async save(nodeId, token) {
+      await serialized(async () => {
+        const values = await read();
+        values[boundedNodeId(nodeId)] = boundedToken(token, "node token");
+        await write(values);
+      });
+    },
+    async clear(nodeId) {
+      await serialized(async () => {
+        const values = await read();
+        delete values[boundedNodeId(nodeId)];
+        await write(values);
+      });
+    },
+  });
+}
+
+function memoryCredentialStore(): DeploymentNodeCredentialStore {
+  return memoryDeploymentNodeCredentials();
+}
+
+function boundedFailure(value: unknown): string {
+  if (typeof value !== "string") throw new TypeError("failureMessage must return a string.");
+  return value.replace(/[\u0000]/gu, "").slice(0, 4_096) || "Deployment execution failed.";
+}
+
+function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, milliseconds);
+    const abort = () => done();
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }
+    signal?.addEventListener("abort", abort, { once: true });
   });
 }
 

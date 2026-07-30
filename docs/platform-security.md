@@ -41,6 +41,21 @@ token holder can rotate a node identity, so rotate the token after provisioning-
 Node credentials authorize deployment coordination, not browser, CLI, database, secret, or
 application APIs.
 
+The built-in deployment-agent loop keeps the enrollment token separate from the per-node
+credential and needs enrollment authority only when no usable node credential exists. Its file
+store rejects symbolic links, non-regular and oversized files, group/world-readable permissions,
+unexpected owners or inode/path swaps, invalid versions, malformed records, and invalid tokens;
+reads use a no-follow descriptor and writes use an atomic owner-only replacement. Keep that file on
+a private persistent volume and do not share one store across processes.
+
+Lease loss and shutdown deadline are abandonment paths, not failure settlement: the executor is
+aborted and the coordinator reclaims the operation only after its current fenced lease expires.
+Likewise, an uncertain completion response is never followed by an explicit failure, because the
+completion may already have committed. Runtime adapters must honor the abort signal and make
+provider mutations idempotent under the operation identity and monotonically increasing fence.
+Private execution and transport errors go to the node's operator hook; the default durable failure
+message contains no exception detail.
+
 ## Authentication
 
 Browser accounts inherit Clank's scrypt passwords, hardened cookies, CSRF, generic login errors, expiry, idle timeout, verification, recovery, email-code MFA, WebAuthn passkeys, and revocation.

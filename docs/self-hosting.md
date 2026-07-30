@@ -111,10 +111,12 @@ enrollment secret for its own `clnka_...` credential; the control database store
 Use the enrollment secret only during node provisioning, then retain it in operator secret storage
 for deliberate rotation or replacement.
 
-The coordinator transport is useful on one host, a private network, or multiple runner hosts. It
+The coordinator transport is useful on one host, a private network, or multiple runner hosts.
+`openDeploymentAgent` supplies the authenticated heartbeat, claim, lease, fencing, and drain
+lifecycle, but the operator still supplies the Docker/VM/microVM execution adapter. The transport
 does not by itself make local SQLite data or release directories available on another machine. The
-current built-in supervisor still owns application activation; use the protocol as the secure
-control boundary for a runner integration and follow
+current built-in supervisor still owns application activation; use the protocol and agent loop as
+the secure control boundary for a runner integration and follow
 [Durable distributed deployment](distributed-deployment.md).
 
 ## Production start
@@ -199,4 +201,11 @@ Authentication and CLI device-start rate-limit windows also live in `control.sql
 4. Start the selected active supervisor/worker topology.
 5. Verify browser login, CLI login, organization and scoped-token access, project status, ingress/domain state, app health, test deploy, backup verification, rollback, and a disposable-site deletion.
 
-Durable distributed locks, authenticated nodes, desired generations, operations/fencing, wildcard base-domain routing, ownership and routing verification, Caddy certificate eligibility, ingress metrics, enforced account/organization/site/domain limits, organization RBAC, scheduled encrypted backups, and external database drivers are implemented. The included child-process supervisor remains single-leader and artifacts/backups are local by default; a hosted multi-region service still needs leader/remote-runner integration, external object storage, globally transactional control storage, shared metric storage, and a multi-region edge service.
+Durable distributed locks, authenticated nodes, the generic deployment-agent lifecycle, desired
+generations, operations/fencing, wildcard base-domain routing, ownership and routing verification,
+Caddy certificate eligibility, ingress metrics, enforced account/organization/site/domain limits,
+organization RBAC, scheduled encrypted backups, and external database drivers are implemented. The
+included child-process supervisor remains single-leader and artifacts/backups are local by default;
+a hosted multi-region service still needs leader integration, an infrastructure-specific remote
+execution adapter, external object storage, globally transactional control storage, shared metric
+storage, and a multi-region edge service.
