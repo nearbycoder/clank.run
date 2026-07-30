@@ -105,6 +105,22 @@ The final certification result and exact test counts belong in the pull request 
   coverage; 57 documentation files, 212 local links, 33 declaration files, and 31 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
+- [x] Merged PR #89 as `07811e9e5cc1e2595e1b2dbc2425555e94faf4ad` after Node 22/24,
+  packaged-release conformance, and CodeQL passed; post-merge CI, CodeQL, docs deployment, human
+  guide, and agent JSON completed successfully.
+- [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
+## 2026-07-30 Docker launcher environment-boundary phase
+
+- [x] Removed application-named environment variables from the host-side Docker CLI process.
+- [x] Added a single name-only encoded runtime envelope that is decoded and deleted inside the
+  container before application import, without putting secret values in process arguments.
+- [x] Covered Docker daemon redirection and dynamic-loader injection names with an end-to-end fake
+  Docker regression while preserving application secret delivery.
+- [x] Re-certified all 290 tests at 86.16% line, 74.74% branch, and 85.99% function
+  coverage; 57 documentation files, 212 local links, 33 declaration files, and 31 package
+  exports; packed consumer conformance; and package, current-tree, and reachable-history security
+  scans.
 - [ ] Record GitHub CI, CodeQL, merge, and post-merge evidence after the phase PR passes.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 

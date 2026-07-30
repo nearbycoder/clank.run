@@ -97,6 +97,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- Docker application environment is now delivered through one inert, name-only encoded envelope
+  that the in-container Node bootstrap deletes before importing application code. Application
+  variables such as `DOCKER_HOST`, `LD_PRELOAD`, proxy settings, and TLS settings can no longer
+  control the host-side Docker client or executable, and secret values remain absent from process
+  arguments.
 - The first-account bootstrap response now waits for winner retention before reconciling the
   configured platform-administrator allowlist, so a new operator receives administrator access
   immediately instead of only after the control plane restarts.

@@ -7557,6 +7557,9 @@ async function spawnRelease(
       PROACT_DATABASE_PATH: containerDatabase,
       PROACT_DATABASE: containerDatabase,
     };
+    const environmentEnvelope = base64Url(
+      new TextEncoder().encode(JSON.stringify(dockerEnvironment)),
+    );
     const args = [
       "run", "--rm",
       "--name", `clank-${release.projectId.slice(0, 12)}-${release.id.slice(0, 8)}-${launch.role}-${launch.instance}`,
@@ -7572,15 +7575,21 @@ async function spawnRelease(
       "-v", `${path.resolve(release.directory)}:/app:ro`,
       "-v", `${path.resolve(dataRoot)}:/data:rw`,
       "-w", "/app",
-      ...Object.keys(dockerEnvironment).flatMap((name) => ["-e", name]),
+      "-e", "CLANK_RUNTIME_ENV_B64",
       runner.image ?? "node:22-bookworm-slim",
-      "node", "--disable-warning=ExperimentalWarning", launch.entry,
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "--eval",
+      DOCKER_RUNTIME_LAUNCHER,
+      launch.entry,
     ];
     return spawn(runner.executable ?? "docker", args, {
       env: {
         ...(globalThis as any).process.env,
-        ...dockerEnvironment,
+        CLANK_RUNTIME_ENV_B64: environmentEnvelope,
         PATH: (globalThis as any).process.env.PATH ?? "",
+        HOME: (globalThis as any).process.env.HOME ?? "",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -7621,6 +7630,21 @@ async function writeReleaseLauncher(directory: string, entry: string, suffix = "
   );
   return launcher;
 }
+
+const DOCKER_RUNTIME_LAUNCHER = `
+const encoded = process.env.CLANK_RUNTIME_ENV_B64;
+delete process.env.CLANK_RUNTIME_ENV_B64;
+if (!encoded) throw new Error("Clank runtime environment is missing.");
+const environment = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+for (const [name, value] of Object.entries(environment)) process.env[name] = String(value);
+process.umask(0o077);
+const entry = process.argv[1];
+if (!entry || entry.startsWith("/") || entry.includes("\\0")) {
+  throw new Error("Clank runtime entry is invalid.");
+}
+const { pathToFileURL } = await import("node:url");
+await import(pathToFileURL(entry).href);
+`.trim();
 
 async function stopChild(child: NativeChild): Promise<void> {
   if (child.exitCode !== null && child.exitCode !== undefined) return;
