@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   createHttpEmailService,
+  createResendEmailService,
   createServiceRegistry,
   createWebhookSender,
   defineDatabase,
@@ -171,6 +172,7 @@ test("file and HTTP email drivers validate envelopes and preserve idempotency", 
     assert.equal(sent.id, "provider-message");
     assert.equal(requests[0].init.headers.authorization, "Bearer mail-token");
     assert.equal(requests[0].init.headers["idempotency-key"], "password-reset-0001");
+    assert.equal(requests[0].init.redirect, "error");
     await assert.rejects(
       remote.send({
         from: { email: "noreply@example.com" },
@@ -184,6 +186,88 @@ test("file and HTTP email drivers validate envelopes and preserve idempotency", 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Resend email driver maps normalized envelopes and preserves retry idempotency", async () => {
+  const requests = [];
+  const resend = createResendEmailService({
+    apiKey: "re_test_secret",
+    apiUrl: "https://mail.example.test/emails",
+    retries: 0,
+    fetch: async (url, init) => {
+      requests.push({ url, init });
+      return Response.json({ id: "resend-message" });
+    },
+  });
+  const receipt = await resend.send({
+    from: { email: "noreply@example.com", name: "Clank \"Cloud\"" },
+    to: [{ email: "person@example.com", name: "Ada" }],
+    replyTo: { email: "support@example.com" },
+    subject: "You are invited",
+    text: "Use the secure link.",
+    html: "<p>Use the secure link.</p>",
+    headers: { "x-campaign": "invitation" },
+    idempotencyKey: "clank-invitation-test-0001",
+    tags: { category: "invitation" },
+  });
+  assert.deepEqual(receipt, {
+    id: "resend-message",
+    acceptedAt: receipt.acceptedAt,
+    provider: "resend",
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://mail.example.test/emails");
+  assert.equal(requests[0].init.headers.authorization, "Bearer re_test_secret");
+  assert.equal(requests[0].init.headers["idempotency-key"], "clank-invitation-test-0001");
+  assert.equal(requests[0].init.redirect, "error");
+  assert.deepEqual(JSON.parse(requests[0].init.body), {
+    from: "\"Clank \\\"Cloud\\\"\" <noreply@example.com>",
+    to: ["\"Ada\" <person@example.com>"],
+    subject: "You are invited",
+    text: "Use the secure link.",
+    html: "<p>Use the secure link.</p>",
+    reply_to: "support@example.com",
+    headers: { "x-campaign": "invitation" },
+    tags: [{ name: "category", value: "invitation" }],
+  });
+  assert.throws(
+    () => createResendEmailService({ apiKey: "bad\napi-key" }),
+    /apiKey is invalid/u,
+  );
+  await assert.rejects(
+    resend.send({
+      from: { email: "noreply@example.com" },
+      to: [{ email: "person@example.com" }],
+      subject: "Bad tag",
+      text: "Body",
+      tags: { "not.valid": "spaces are invalid" },
+    }),
+    /Invalid Resend tag/u,
+  );
+
+  let concurrentAttempts = 0;
+  const concurrent = createResendEmailService({
+    apiKey: "re_test_secret",
+    retries: 1,
+    fetch: async () => {
+      concurrentAttempts++;
+      return concurrentAttempts === 1
+        ? Response.json(
+            { name: "concurrent_idempotent_requests", message: "still sending" },
+            { status: 409 },
+          )
+        : Response.json({ id: "deduplicated-message" });
+    },
+  });
+  const deduplicated = await concurrent.send({
+    from: { email: "noreply@example.com" },
+    to: [{ email: "person@example.com" }],
+    subject: "Retry",
+    text: "Body",
+    idempotencyKey: "clank-invitation-test-0002",
+  });
+  assert.equal(concurrentAttempts, 2);
+  assert.equal(deduplicated.id, "deduplicated-message");
 });
 
 test("durable jobs provide idempotent enqueue, leases, retries, completion, and dead letters", async () => {

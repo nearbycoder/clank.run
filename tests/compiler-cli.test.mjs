@@ -966,6 +966,11 @@ test("organization CLI lists and administers roles and invitations", async () =>
         id: "invitation_cli_test",
         email: "developer@example.com",
         role: "developer",
+        delivery: {
+          status: "retrying",
+          attempts: 2,
+          sentAt: null,
+        },
         expiresAt,
       }],
     } : { ok: true }));
@@ -997,6 +1002,7 @@ test("organization CLI lists and administers roles and invitations", async () =>
     ], repository, env);
     assert.equal(listed.code, 0, listed.stderr);
     assert.match(listed.stdout, /invitation_cli_test  developer@example\.com  developer/);
+    assert.match(listed.stdout, /email retrying \(2 attempts\)/);
     assert.match(listed.stdout, new RegExp(new Date(expiresAt).toISOString()));
 
     const changed = await runCliResult([

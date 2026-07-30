@@ -68,6 +68,18 @@ export declare function createHttpEmailService(options: {
     retries?: number;
     headers?: Record<string, string>;
 }): EmailService;
+/**
+ * Sends email through Resend's HTTPS API without adding a runtime dependency.
+ * The API key is kept in the Authorization header and idempotency keys are
+ * forwarded so durable workers can safely retry an uncertain response.
+ */
+export declare function createResendEmailService(options: {
+    apiKey: string;
+    fetch?: typeof fetch;
+    timeoutMs?: number;
+    retries?: number;
+    apiUrl?: string;
+}): EmailService;
 export interface FileMetadata {
     key: string;
     size: number;

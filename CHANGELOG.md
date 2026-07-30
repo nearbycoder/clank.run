@@ -4,6 +4,13 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added durable invitation email delivery for workspace and personal onboarding with an encrypted
+  transactional outbox, cross-control-plane leases, bounded retries, stable idempotency, stale-lease
+  recovery, revocation fencing, visible delivery state, and log-safe fragment links.
+- Added zero-dependency Resend delivery plus a provider-neutral HTTPS gateway configuration;
+  manual copy-once invitation tokens remain the explicit fallback.
+- Added automatic invite-link prefill for both new and existing accounts, CLI delivery status, and
+  complete operator/security documentation.
 - Server-backed controls can now pass typed backend function references directly to `agentAction`.
   New bounded inspection and parity APIs compare SSR or DOM controls with the no-store backend
   manifest and MCP contract revision, rejecting stale, internal, undocumented, unstable, or

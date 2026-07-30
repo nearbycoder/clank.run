@@ -4,6 +4,10 @@ import { openPlatform } from "../dist/platform.js";
 import { serve } from "../dist/node.js";
 import { createS3ObjectStore } from "../dist/object-storage.js";
 import {
+  createHttpEmailService,
+  createResendEmailService,
+} from "../dist/services.js";
+import {
   resolveBackupStorage,
   resolvePlatformHosting,
   resolveProviderPlacement,
@@ -45,6 +49,7 @@ const ingressEnabled = environment("CLANK_INGRESS", "PROACT_INGRESS") === "1" ||
 const domainRecheckInterval = process.env.CLANK_DOMAIN_RECHECK_INTERVAL_MS;
 const backupInterval = process.env.CLANK_BACKUP_INTERVAL_MS;
 const previewCleanupInterval = process.env.CLANK_PREVIEW_CLEANUP_INTERVAL_MS;
+const invitationDelivery = resolveInvitationDelivery(process.env);
 const runnerArtifactStorage = resolveRunnerArtifactStorage(process.env);
 const backupStorage = resolveBackupStorage(process.env);
 const providerPlacement = resolveProviderPlacement(process.env);
@@ -181,6 +186,7 @@ const platform = await openPlatform({
       ? false
       : number(previewCleanupInterval, 5 * 60_000),
   },
+  ...(invitationDelivery ? { invitations: invitationDelivery } : {}),
   ...(ingress ? { ingress } : {}),
   onError: (error) => console.error("[platform]", error),
 });
@@ -218,6 +224,7 @@ console.log(
 console.log(`Encrypted backup storage: ${backupStorage ? "object" : "local"}`);
 console.log(`Automatic backups: ${backupInterval === "0" ? "disabled" : "enabled"}`);
 console.log(`Preview cleanup: ${previewCleanupInterval === "0" ? "disabled" : "enabled"}`);
+console.log(`Invitation email delivery: ${invitationDelivery ? "enabled" : "manual token fallback"}`);
 
 let closing;
 const close = async () => {
@@ -276,4 +283,62 @@ function number(value, fallback) {
 
 function list(value) {
   return value?.split(",").map((entry) => entry.trim()).filter(Boolean) ?? [];
+}
+
+function resolveInvitationDelivery(environment) {
+  const resendKey = environment.CLANK_RESEND_API_KEY;
+  const deliveryUrl = environment.CLANK_EMAIL_DELIVERY_URL;
+  const fromEmail = environment.CLANK_EMAIL_FROM;
+  if (resendKey && deliveryUrl) {
+    throw new Error("Configure CLANK_RESEND_API_KEY or CLANK_EMAIL_DELIVERY_URL, not both.");
+  }
+  if (!resendKey && !deliveryUrl) {
+    if (fromEmail) {
+      throw new Error("CLANK_EMAIL_FROM requires an invitation email provider.");
+    }
+    return undefined;
+  }
+  if (!fromEmail) {
+    throw new Error("Invitation email delivery requires CLANK_EMAIL_FROM.");
+  }
+  const email = resendKey
+    ? createResendEmailService({
+        apiKey: resendKey,
+        ...(environment.CLANK_RESEND_API_URL ? { apiUrl: environment.CLANK_RESEND_API_URL } : {}),
+        timeoutMs: number(environment.CLANK_EMAIL_TIMEOUT_MS, 10_000),
+        retries: numberIncludingZero(environment.CLANK_EMAIL_REQUEST_RETRIES, 2),
+      })
+    : createHttpEmailService({
+        url: deliveryUrl,
+        ...(environment.CLANK_EMAIL_DELIVERY_TOKEN
+          ? { token: environment.CLANK_EMAIL_DELIVERY_TOKEN }
+          : {}),
+        timeoutMs: number(environment.CLANK_EMAIL_TIMEOUT_MS, 10_000),
+        retries: numberIncludingZero(environment.CLANK_EMAIL_REQUEST_RETRIES, 2),
+      });
+  return {
+    email,
+    from: {
+      email: fromEmail,
+      name: environment.CLANK_EMAIL_FROM_NAME ?? "Clank",
+    },
+    ...(environment.CLANK_EMAIL_REPLY_TO
+      ? { replyTo: { email: environment.CLANK_EMAIL_REPLY_TO } }
+      : {}),
+    intervalMs: number(environment.CLANK_INVITATION_DELIVERY_INTERVAL_MS, 30_000),
+    batchSize: number(environment.CLANK_INVITATION_DELIVERY_BATCH_SIZE, 20),
+    concurrency: number(environment.CLANK_INVITATION_DELIVERY_CONCURRENCY, 2),
+    retryBaseMs: number(environment.CLANK_INVITATION_RETRY_BASE_MS, 30_000),
+    maxAttempts: number(environment.CLANK_INVITATION_MAX_ATTEMPTS, 6),
+    leaseMs: number(environment.CLANK_INVITATION_DELIVERY_LEASE_MS, 60_000),
+  };
+}
+
+function numberIncludingZero(value, fallback) {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid non-negative numeric environment value: ${value}`);
+  }
+  return parsed;
 }

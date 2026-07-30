@@ -118,9 +118,12 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, resolved `.hostingProfile`,
   `.runnerKind`, and async `.close()`.
 - Runners: dependency-free process runner or constrained Docker runner.
+- `openPlatform({ invitations })`: durable, encrypted, cross-instance-leased invitation delivery
+  through any `EmailService`, while retaining manual copy-once fallback.
 - Types: `ClankPlatformOptions`, `PlatformBackupOptions`, `PlatformJobOperationsOptions`,
-  `PlatformLimits`, `PlatformHostingProfile`, `PlatformRunnerOptions`, `ProcessRunnerOptions`,
-  `DockerRunnerOptions`, `PlatformProjectPlacement`.
+  `PlatformInvitationDeliveryOptions`, `PlatformLimits`, `PlatformHostingProfile`,
+  `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`,
+  `PlatformProjectPlacement`.
 - `openPlatform({ deploymentAgents: { placement } })`: enables immutable per-project
   `local | provider` selection. Provider projects use stateful endpoint/label placement, an
   encrypted frozen environment per generation, lease-scoped `clank-runtime/1`, exact observed
@@ -379,6 +382,20 @@ details.
 - `LiveQuery`: reactive `.data`, `.loading`, `.error`, `.version`, plus `.dispose()`.
 - `functionPath`, `functionKey`, `stableStringify`: reference and canonical argument helpers.
 - Types: `DatabaseSchema`, `TableDefinition`, `DocumentWriteOptions`, `DatabaseChange`, `SQLiteOptions`, `QueryBuilder`, `ReadDatabase`, `WriteDatabase`, `BackendFunction`, `BackendDefinition`, `FunctionReference`, `ApiOf`, `BackendRuntime`.
+
+## Service drivers
+
+- `createServiceRegistry(drivers)`: named capability registry with startup assertions, isolated
+  health checks, and reverse-order shutdown.
+- `openFileEmailService({ directory })`: owner-only development outbox; it does not send mail.
+- `createHttpEmailService(options)`: normalized HTTPS JSON delivery with bounded transport retry,
+  optional bearer authorization, and idempotency forwarding.
+- `createResendEmailService(options)`: zero-SDK Resend `POST /emails` driver with provider recipient
+  and tag validation plus idempotency forwarding.
+- Types: `ServiceDriver`, `ServiceRequirement`, `ServiceRegistry`, `EmailAddress`, `EmailMessage`,
+  `EmailReceipt`, and `EmailService`.
+
+See [Service drivers](services.md) and [Invitations and email delivery](invitations.md).
 
 ## Durable jobs and cron
 

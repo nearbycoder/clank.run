@@ -124,8 +124,12 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   registration, SSR/hydration, related-record creation through real mutations, reference
   selection, navigation, responsive layout without horizontal overflow, and browser diagnostics
   all passed.
-- [ ] Record PR checks, CodeQL, merge SHA, gated docs deployment, exact Railway activation, and
-  public production health.
+- [x] Recorded [PR #109](https://github.com/nearbycoder/clank.run/pull/109): Node 22.16,
+  Node 24, packaged conformance, JavaScript/TypeScript analysis, and CodeQL passed before squash
+  merge `500fe57322f65237e5025ec88edff05a8104e2e4`; post-merge CI run `30569232829`,
+  CodeQL run `30569232810`, and gated docs deployment `30569386846` passed on that exact source.
+- [x] Railway deployment `a95b9937-7a4c-40ea-8b4d-cf360772174e` activated the exact merge,
+  passed public health/readiness, and was removed only after its healthy successor activated.
 - [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 UI and MCP parity phase
@@ -146,8 +150,42 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 - [x] Generated a fresh five-route/two-role app, passed its eight application-owned tests, then
   verified desktop and 375px browser surfaces, SSR hydration, live create/toggle mutations, stable
   dynamic IDs, zero UI↔MCP issues, no application console errors, and no horizontal overflow.
-- [ ] Complete PR checks, CodeQL, merge, gated docs deployment, exact Railway activation, and
-  public production health.
+- [x] Recorded [PR #110](https://github.com/nearbycoder/clank.run/pull/110): Node 22.16,
+  Node 24, packaged conformance, JavaScript/TypeScript analysis, and CodeQL passed before squash
+  merge `7cf00a51d619d4e320251bd94373e31db2afc1d5`; post-merge CI run `30572018182`,
+  CodeQL run `30572018183`, and gated docs deployment `30572157590` passed on that exact source.
+- [x] Railway deployment `4c14c8ee-bcf7-45f0-a9d0-305236bbf2e8` activated the exact merge,
+  returned HTTP 200 from control, database readiness, and docs health, served the public typed
+  parity guide, and removed the prior generation only after success.
+- [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
+
+## 2026-07-30 invitation delivery phase
+
+- [x] Added optional automatic workspace and personal invitation email while preserving the
+  explicit copy-once manual fallback.
+- [x] Added a transactional AES-256-GCM outbox, expiring cross-control-plane claims, stable
+  provider idempotency, bounded exponential retry, stale-lease recovery, late-response fencing,
+  and ciphertext erasure after send, accept, replace, revoke, or expiry.
+- [x] Added zero-dependency Resend and provider-neutral HTTPS drivers with fail-fast configuration,
+  strict envelope/provider bounds, deadlines, bounded transport retry, and private provider errors.
+- [x] Added fragment-based invitation links that stay out of HTTP targets and referrers, scrub
+  browser history immediately, and prefill new-account or existing-account flows.
+- [x] Added visible manual/queued/retrying/sent/failed status in the browser and CLI without
+  returning token hashes, ciphertext, provider failures, or credentials.
+- [x] Added restart, crashed-lease, multi-control-plane exactly-once claim, in-flight revoke,
+  idempotency, ciphertext lifecycle, Resend mapping, and declaration coverage.
+- [x] Added a complete invitation guide plus deployment, Railway, organization, CLI, API,
+  service-driver, threat-model, ASVS, security, README, and changelog documentation.
+- [x] Browser-certified fragment scrubbing and automatic prefill, invited registration,
+  existing-account confirmation, queued/sent/failed state, successful reissue, synchronized
+  fallback copy, desktop and 390px layout, mobile navigation, zero horizontal overflow, no error
+  overlay, and no console errors against an isolated HTTP mail gateway.
+- [x] Passed the complete local check: 324 tests, 60-guide/261-link documentation audit, clean
+  packed consumer and generated-app conformance, browser and agent auth, MCP actions, deployment,
+  migration, failed activation, rollback/data restore, and repository plus reachable-history
+  credential scanning.
+- [ ] Record PR checks, CodeQL, merge, gated docs deployment, exact Railway activation, and public
+  production health.
 - [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 version 0.10.0 release phase

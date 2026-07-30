@@ -1,5 +1,6 @@
 import type { ObjectStore } from "./object-storage.js";
 import type { BackupObjectRepositoryOptions } from "./recovery.js";
+import type { EmailAddress, EmailService } from "./services.js";
 export interface ProcessRunnerOptions {
     kind?: "process";
 }
@@ -69,6 +70,23 @@ export interface PlatformPreviewOptions {
     maxTtlMs?: number;
     /** Expired-preview cleanup cadence. Defaults to 5 minutes; false disables background cleanup. */
     cleanupIntervalMs?: number | false;
+}
+export interface PlatformInvitationDeliveryOptions {
+    email: EmailService;
+    from: EmailAddress;
+    replyTo?: EmailAddress;
+    /** Longest idle poll interval. Defaults to 30 seconds. */
+    intervalMs?: number;
+    /** Invitations claimed by one pass. Defaults to 20. */
+    batchSize?: number;
+    /** Concurrent provider requests. Defaults to 2. */
+    concurrency?: number;
+    /** Initial retry delay. Defaults to 30 seconds. */
+    retryBaseMs?: number;
+    /** Maximum provider attempts. Defaults to 6. */
+    maxAttempts?: number;
+    /** Delivery-claim lifetime. Defaults to 60 seconds. */
+    leaseMs?: number;
 }
 export interface ClankPlatformOptions {
     dataDirectory: string;
@@ -152,6 +170,11 @@ export interface ClankPlatformOptions {
     backups?: PlatformBackupOptions;
     jobs?: PlatformJobOperationsOptions;
     previews?: PlatformPreviewOptions;
+    /**
+     * Optional durable invitation-email delivery. Without it, invitation
+     * creation preserves the copy-once token workflow.
+     */
+    invitations?: PlatformInvitationDeliveryOptions;
     ingress?: {
         enabled?: boolean;
         baseDomain?: string;

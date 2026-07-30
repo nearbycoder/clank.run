@@ -3954,8 +3954,13 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
     assert.equal(organizationBeforeAcceptance.invitations.length, 1);
     assert.deepEqual(
       Object.keys(organizationBeforeAcceptance.invitations[0]).sort(),
-      ["createdAt", "email", "expiresAt", "id", "invitedBy", "role"],
+      ["createdAt", "delivery", "email", "expiresAt", "id", "invitedBy", "role"],
     );
+    assert.deepEqual(organizationBeforeAcceptance.invitations[0].delivery, {
+      status: "manual",
+      attempts: 0,
+      sentAt: null,
+    });
     assert.equal(organizationBeforeAcceptance.invitations[0].id, invitation.invitation.id);
     assert.equal(organizationBeforeAcceptance.invitations[0].invitedBy.email, "org-owner@example.com");
     const superseded = await platform.handle(jsonRequest("/api/invitations/accept", {
@@ -4149,6 +4154,392 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
     assert.equal(adminAccountStillWorks.status, 200);
   } finally {
     await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("invalid invitation delivery configuration fails before serving and releases storage", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-invitation-config-"));
+  try {
+    await assert.rejects(
+      openPlatform({
+        dataDirectory: root,
+        publicUrl: "https://control.example.test",
+        signup: true,
+        backups: { intervalMs: false },
+        invitations: {
+          email: { async send() { throw new Error("must not send"); } },
+          from: { email: "not-an-email" },
+        },
+      }),
+      /invitations\.from\.email is invalid/u,
+    );
+    const platform = await openPlatform({
+      dataDirectory: root,
+      publicUrl: "https://control.example.test",
+      signup: true,
+      backups: { intervalMs: false },
+    });
+    await platform.close();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("invitation email delivery is durable, encrypted, retry-safe, and uses log-safe fragment links", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-invitation-delivery-"));
+  const dataDirectory = join(root, "platform");
+  const attempts = [];
+  const reported = [];
+  let failDelivery = true;
+  const email = {
+    async send(message) {
+      attempts.push(message);
+      if (failDelivery) throw new Error("temporary mail provider failure");
+      return {
+        id: "provider-invitation-message",
+        acceptedAt: Date.now(),
+        provider: "test",
+      };
+    },
+  };
+  const options = {
+    dataDirectory,
+    publicUrl: "https://control.example.test",
+    signup: true,
+    backups: { intervalMs: false },
+    invitations: {
+      email,
+      from: { email: "noreply@example.test", name: "Clank" },
+      replyTo: { email: "support@example.test" },
+      intervalMs: 25,
+      batchSize: 5,
+      concurrency: 1,
+      retryBaseMs: 1_000,
+      maxAttempts: 3,
+      leaseMs: 500,
+    },
+    onError(error) {
+      reported.push(error);
+    },
+  };
+  let platform = await openPlatform(options);
+  try {
+    const owner = await authorizeCli(platform, "delivery-owner@example.com");
+    const recipient = await authorizeCli(platform, "delivery-recipient@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const organizationId = dashboard.organizations[0].id;
+    const created = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { email: recipient.user.email, role: "developer" },
+      },
+    ), 201);
+    assert.deepEqual(created.invitation.delivery, {
+      status: "queued",
+      attempts: 0,
+      sentAt: null,
+    });
+    await waitFor(() => attempts.length === 1);
+    const retrying = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(retrying.invitations[0].delivery, {
+      status: "retrying",
+      attempts: 1,
+      sentAt: null,
+    });
+    assert.equal(reported.length, 1);
+    assert.doesNotMatch(String(reported[0]), new RegExp(created.invitation.token, "u"));
+
+    const firstMessage = attempts[0];
+    assert.equal(firstMessage.idempotencyKey, `clank-invitation-${created.invitation.id}`);
+    assert.equal(firstMessage.to[0].email, recipient.user.email);
+    assert.equal(firstMessage.replyTo.email, "support@example.test");
+    const invitationUrl = new URL(firstMessage.text.match(/https:\/\/\S+/u)[0]);
+    assert.equal(invitationUrl.origin, "https://control.example.test");
+    assert.equal(invitationUrl.pathname, "/invite");
+    assert.equal(invitationUrl.search, "");
+    assert.equal(
+      new URLSearchParams(invitationUrl.hash.slice(1)).get("token"),
+      created.invitation.token,
+    );
+
+    await platform.close();
+    const pendingDatabase = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    const pending = pendingDatabase.prepare(`SELECT encrypted_token, state, attempt_count
+      FROM clank_platform_invitation_deliveries WHERE invitation_id = ?`)
+      .get(created.invitation.id);
+    const invitation = pendingDatabase.prepare(`SELECT token_hash
+      FROM clank_platform_invitations WHERE id = ?`).get(created.invitation.id);
+    assert.equal(pending.state, "retry");
+    assert.equal(pending.attempt_count, 1);
+    assert.match(pending.encrypted_token, /^v1\./u);
+    assert.doesNotMatch(pending.encrypted_token, new RegExp(created.invitation.token, "u"));
+    assert.doesNotMatch(invitation.token_hash, new RegExp(created.invitation.token, "u"));
+    pendingDatabase.prepare(`UPDATE clank_platform_invitation_deliveries SET
+      state = 'delivering', lease_token = 'crashed-worker', lease_until = ?,
+      next_attempt_at = ? WHERE invitation_id = ?`)
+      .run(Date.now() - 1, Date.now() - 1, created.invitation.id);
+    pendingDatabase.close();
+
+    failDelivery = false;
+    platform = await openPlatform({ ...options, signup: false });
+    await waitFor(() => attempts.length === 2);
+    const delivered = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(delivered.invitations[0].delivery.status, "sent");
+    assert.equal(delivered.invitations[0].delivery.attempts, 2);
+    assert.ok(delivered.invitations[0].delivery.sentAt > 0);
+    assert.equal(attempts[1].idempotencyKey, attempts[0].idempotencyKey);
+
+    const deliveredDatabase = new DatabaseSync(join(dataDirectory, "control.sqlite"), {
+      readOnly: true,
+    });
+    const sent = deliveredDatabase.prepare(`SELECT encrypted_token, state, provider_id, last_error
+      FROM clank_platform_invitation_deliveries WHERE invitation_id = ?`)
+      .get(created.invitation.id);
+    deliveredDatabase.close();
+    assert.deepEqual({ ...sent }, {
+      encrypted_token: null,
+      state: "sent",
+      provider_id: "provider-invitation-message",
+      last_error: null,
+    });
+
+    await payload(platform, jsonRequest("/api/invitations/accept", {
+      method: "POST",
+      token: recipient.accessToken,
+      body: { token: created.invitation.token },
+    }));
+    const invitePage = await platform.handle(jsonRequest("/invite"));
+    const inviteHtml = await invitePage.text();
+    assert.match(inviteHtml, /function takeInvitationToken\(\)/u);
+    assert.match(inviteHtml, /window\.history\.replaceState/u);
+    assert.doesNotMatch(inviteHtml, new RegExp(created.invitation.token, "u"));
+
+    failDelivery = true;
+    const disabledDelivery = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { email: "manual-fallback@example.com", role: "viewer" },
+      },
+    ), 201);
+    await waitFor(() => attempts.length === 3);
+    await platform.close();
+    platform = await openPlatform({
+      dataDirectory,
+      publicUrl: options.publicUrl,
+      signup: false,
+      backups: { intervalMs: false },
+    });
+    const disabledDatabase = new DatabaseSync(join(dataDirectory, "control.sqlite"), {
+      readOnly: true,
+    });
+    const cancelled = disabledDatabase.prepare(`SELECT state, encrypted_token, lease_token
+      FROM clank_platform_invitation_deliveries WHERE invitation_id = ?`)
+      .get(disabledDelivery.invitation.id);
+    disabledDatabase.close();
+    assert.deepEqual({ ...cancelled }, {
+      state: "cancelled",
+      encrypted_token: null,
+      lease_token: null,
+    });
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("one control plane serializes invitation wake passes at configured concurrency", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-invitation-wake-"));
+  const deliveries = [];
+  let releaseFirst;
+  const firstDelivery = new Promise((resolve) => { releaseFirst = resolve; });
+  const platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "https://control.example.test",
+    signup: true,
+    backups: { intervalMs: false },
+    invitations: {
+      email: {
+        async send(message) {
+          deliveries.push(message);
+          if (deliveries.length === 1) await firstDelivery;
+          return {
+            id: `serialized-${deliveries.length}`,
+            acceptedAt: Date.now(),
+            provider: "test",
+          };
+        },
+      },
+      from: { email: "noreply@example.test" },
+      intervalMs: 20,
+      concurrency: 1,
+      retryBaseMs: 100,
+      leaseMs: 500,
+    },
+  });
+  try {
+    const owner = await authorizeCli(platform, "wake-owner@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const organizationId = dashboard.organizations[0].id;
+    await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { email: "first-wake@example.com", role: "viewer" },
+      },
+    ), 201);
+    await waitFor(() => deliveries.length === 1);
+    const delivering = await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(delivering.invitations[0].delivery, {
+      status: "queued",
+      attempts: 1,
+      sentAt: null,
+    });
+    await payload(platform, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { email: "second-wake@example.com", role: "viewer" },
+      },
+    ), 201);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(deliveries.length, 1);
+    releaseFirst();
+    await waitFor(() => deliveries.length === 2);
+  } finally {
+    releaseFirst?.();
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("multiple control planes lease one invitation delivery exactly once", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-invitation-lease-"));
+  const deliveries = [];
+  let holdNext = false;
+  let releaseHeldDelivery;
+  const email = {
+    async send(message) {
+      deliveries.push(message);
+      if (holdNext) {
+        await new Promise((resolve) => { releaseHeldDelivery = resolve; });
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 75));
+      }
+      return {
+        id: "single-delivery",
+        acceptedAt: Date.now(),
+        provider: "test",
+      };
+    },
+  };
+  const options = {
+    dataDirectory: root,
+    publicUrl: "https://control.example.test",
+    signup: true,
+    backups: { intervalMs: false },
+    invitations: {
+      email,
+      from: { email: "noreply@example.test" },
+      intervalMs: 20,
+      retryBaseMs: 100,
+      leaseMs: 500,
+    },
+  };
+  const first = await openPlatform(options);
+  const second = await openPlatform(options);
+  try {
+    const owner = await authorizeCli(first, "lease-owner@example.com");
+    const dashboard = await payload(first, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const organizationId = dashboard.organizations[0].id;
+    const created = await payload(first, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { email: "lease-recipient@example.com", role: "viewer" },
+      },
+    ), 201);
+    await waitFor(async () => {
+      const state = await payload(second, jsonRequest(
+        `/api/organizations/${organizationId}`,
+        { token: owner.accessToken },
+      ));
+      return state.invitations[0]?.delivery.status === "sent";
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].idempotencyKey, `clank-invitation-${created.invitation.id}`);
+    const control = new DatabaseSync(join(root, "control.sqlite"), { readOnly: true });
+    const row = control.prepare(`SELECT state, attempt_count, encrypted_token
+      FROM clank_platform_invitation_deliveries WHERE invitation_id = ?`)
+      .get(created.invitation.id);
+    control.close();
+    assert.deepEqual({ ...row }, {
+      state: "sent",
+      attempt_count: 1,
+      encrypted_token: null,
+    });
+
+    holdNext = true;
+    const revoked = await payload(first, jsonRequest(
+      `/api/organizations/${organizationId}/invitations`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { email: "revoked-delivery@example.com", role: "viewer" },
+      },
+    ), 201);
+    await waitFor(() => deliveries.length === 2);
+    await payload(first, jsonRequest(
+      `/api/organizations/${organizationId}/invitations/${revoked.invitation.id}`,
+      { method: "DELETE", token: owner.accessToken },
+    ));
+    const cancelledControl = new DatabaseSync(join(root, "control.sqlite"), { readOnly: true });
+    const cancelled = cancelledControl.prepare(`SELECT state, encrypted_token, lease_token
+      FROM clank_platform_invitation_deliveries WHERE invitation_id = ?`)
+      .get(revoked.invitation.id);
+    cancelledControl.close();
+    assert.deepEqual({ ...cancelled }, {
+      state: "cancelled",
+      encrypted_token: null,
+      lease_token: null,
+    });
+    releaseHeldDelivery();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const fencedControl = new DatabaseSync(join(root, "control.sqlite"), { readOnly: true });
+    const fenced = fencedControl.prepare(`SELECT state, encrypted_token
+      FROM clank_platform_invitation_deliveries WHERE invitation_id = ?`)
+      .get(revoked.invitation.id);
+    fencedControl.close();
+    assert.deepEqual({ ...fenced }, {
+      state: "cancelled",
+      encrypted_token: null,
+    });
+  } finally {
+    releaseHeldDelivery?.();
+    await Promise.all([first.close(), second.close()]);
     await rm(root, { recursive: true, force: true });
   }
 });

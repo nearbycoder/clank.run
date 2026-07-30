@@ -64,6 +64,10 @@ import {
   inspectPlatformJobs,
   mutatePlatformJob,
 } from "./platform-jobs.ts";
+import {
+  createPlatformInvitationDeliveryScheduler,
+  type PlatformInvitationDeliveryOptions as InvitationDeliveryOptions,
+} from "./platform-invitations.ts";
 import type { JobState } from "./jobs.ts";
 import {
   createDomainManager,
@@ -165,6 +169,8 @@ export interface PlatformPreviewOptions {
   /** Expired-preview cleanup cadence. Defaults to 5 minutes; false disables background cleanup. */
   cleanupIntervalMs?: number | false;
 }
+
+export type PlatformInvitationDeliveryOptions = InvitationDeliveryOptions;
 
 type PlatformQuotaKey =
   | "organizationsPerAccount"
@@ -325,6 +331,11 @@ export interface ClankPlatformOptions {
   backups?: PlatformBackupOptions;
   jobs?: PlatformJobOperationsOptions;
   previews?: PlatformPreviewOptions;
+  /**
+   * Optional durable invitation-email delivery. Without it, invitation
+   * creation preserves the copy-once token workflow.
+   */
+  invitations?: PlatformInvitationDeliveryOptions;
   ingress?: {
     enabled?: boolean;
     baseDomain?: string;
@@ -816,8 +827,17 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
+  let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
+    invitationDeliveries = createPlatformInvitationDeliveryScheduler({
+      internal: storage.internal,
+      publicUrl,
+      ...(options.invitations ? { delivery: options.invitations } : {}),
+      encrypt: (token) => encryptSecret(token, masterKey),
+      decrypt: (encrypted) => decryptSecret(encrypted, masterKey),
+      onError: options.onError,
+    });
     pruneUsageStorage(storage.internal, usageOpenedAt, limits.usageRetentionMonths);
     reconcileBackupObjectBinding(storage.internal, backupObjects);
   } catch (error) {
@@ -3646,7 +3666,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const registering = request.method === "POST" && authOperation === "register";
         const invitationRegistering = request.method === "POST" && authOperation === "invited-register";
         if (invitationRegistering) {
-          return finalizePlatformRegistration(await registerWithInvitation(storage, request, authPrefix));
+          return finalizePlatformRegistration(await registerWithInvitation(
+            storage,
+            request,
+            authPrefix,
+            invitationDeliveries.cancel,
+          ));
         }
         if (registering && signupMode === false) {
           return problem(403, "SIGNUP_DISABLED", "Platform registration is closed.");
@@ -3905,6 +3930,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             id: String(row.id),
             email: String(row.email),
             scope: "personal",
+            delivery: invitationDeliveries.view(String(row.id)),
             invitedBy: {
               id: String(row.invited_by_id),
               email: String(row.invited_by_email),
@@ -3928,6 +3954,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const now = Date.now();
         const expiresAt = now + expiresIn * 1_000;
         let replacedInvitationId: string | null = null;
+        let delivery = invitationDeliveries.view(id);
         storage.internal.transaction((changes) => {
           const existingAccount = storage.internal.prepare(
             "SELECT 1 AS present FROM clank_auth_users WHERE email = ?",
@@ -3939,11 +3966,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               "That email already has an account and does not need a personal invitation.",
             );
           }
-          const existingInvitation = storage.internal.prepare(`SELECT id
+          const existingInvitations = storage.internal.prepare(`SELECT id
             FROM clank_platform_personal_invitations
             WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?
-            ORDER BY created_at DESC LIMIT 1`).get(email, now);
-          replacedInvitationId = existingInvitation ? String(existingInvitation.id) : null;
+            ORDER BY created_at DESC`).all(email, now);
+          replacedInvitationId = existingInvitations.length
+            ? String(existingInvitations[0]!.id)
+            : null;
           const pendingCount = Number(storage.internal.prepare(`SELECT count(*) AS count
             FROM clank_platform_personal_invitations
             WHERE accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`).get(now)?.count ?? 0);
@@ -3957,10 +3986,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           storage.internal.prepare(`UPDATE clank_platform_personal_invitations SET revoked_at = ?
             WHERE email = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
             .run(now, email, now);
+          for (const invitation of existingInvitations) {
+            invitationDeliveries.cancel(String(invitation.id));
+          }
           storage.internal.prepare(`INSERT INTO clank_platform_personal_invitations
             (id, token_hash, email, invited_by, expires_at, accepted_at, revoked_at, created_at)
             VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)`)
             .run(id, syncHash(token), email, auth.user!.id, expiresAt, now);
+          delivery = invitationDeliveries.enqueue({
+            invitationId: id,
+            scope: "personal",
+            token,
+          });
           audit(storage.internal, auth.user!.id, null, null, "personal_invitation.create", {
             invitationId: id,
             email,
@@ -3969,9 +4006,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           });
           changes.record("__platform", auth.user!.id);
         });
+        invitationDeliveries.wake();
         return api({
           ok: true,
-          invitation: { id, token, email, scope: "personal", expiresAt },
+          invitation: { id, token, email, scope: "personal", expiresAt, delivery },
         }, 201);
       }
       const adminInvitationMatch = /^\/api\/admin\/invitations\/([A-Za-z0-9_-]{8,128})$/
@@ -3988,6 +4026,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           if (Number(result.changes) !== 1) {
             throw new PlatformError(404, "INVITATION_NOT_FOUND", "Active personal invitation not found.");
           }
+          invitationDeliveries.cancel(invitationId);
           audit(storage.internal, auth.user!.id, null, null, "personal_invitation.revoke", {
             invitationId,
           });
@@ -4521,6 +4560,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               role = CASE WHEN clank_platform_memberships.role = 'owner' THEN 'owner' ELSE excluded.role END,
               updated_at = excluded.updated_at`)
             .run(invitation.organization_id, principal.userId, invitation.role, now, now);
+          invitationDeliveries.cancel(String(invitation.id));
           changes.record("__platform", String(invitation.organization_id));
         });
         audit(storage.internal, principal.userId, principal.tokenId, null, "invitation.accept", {
@@ -4574,6 +4614,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               id: String(row.id),
               email: String(row.email),
               role: String(row.role),
+              delivery: invitationDeliveries.view(String(row.id)),
               invitedBy: {
                 id: String(row.invited_by_id),
                 email: String(row.invited_by_email),
@@ -4600,6 +4641,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           const expiresAt = Date.now() + expiresIn * 1_000;
           const now = Date.now();
           let replacedInvitationId: string | null = null;
+          let delivery = invitationDeliveries.view(id);
           storage.internal.transaction((changes) => {
             const existingMember = storage.internal.prepare(`SELECT 1 AS present
               FROM clank_platform_memberships m
@@ -4608,12 +4650,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             if (existingMember) {
               throw new PlatformError(409, "ALREADY_MEMBER", "That account is already a workspace member.");
             }
-            const existingInvitation = storage.internal.prepare(`SELECT id
+            const existingInvitations = storage.internal.prepare(`SELECT id
               FROM clank_platform_invitations
               WHERE organization_id = ? AND email = ? AND accepted_at IS NULL
                 AND revoked_at IS NULL AND expires_at > ?
-              ORDER BY created_at DESC LIMIT 1`).get(organizationId, email, now);
-            replacedInvitationId = existingInvitation ? String(existingInvitation.id) : null;
+              ORDER BY created_at DESC`).all(organizationId, email, now);
+            replacedInvitationId = existingInvitations.length
+              ? String(existingInvitations[0]!.id)
+              : null;
             const pendingCount = Number(storage.internal.prepare(`SELECT count(*) AS count
               FROM clank_platform_invitations
               WHERE organization_id = ? AND accepted_at IS NULL
@@ -4628,10 +4672,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             storage.internal.prepare(`UPDATE clank_platform_invitations SET revoked_at = ?
               WHERE organization_id = ? AND email = ? AND accepted_at IS NULL
                 AND revoked_at IS NULL AND expires_at > ?`).run(now, organizationId, email, now);
+            for (const invitation of existingInvitations) {
+              invitationDeliveries.cancel(String(invitation.id));
+            }
             storage.internal.prepare(`INSERT INTO clank_platform_invitations
               (id, token_hash, organization_id, email, role, invited_by, expires_at, accepted_at, revoked_at, created_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`)
               .run(id, syncHash(token), organizationId, email, role, principal.userId, expiresAt, now);
+            delivery = invitationDeliveries.enqueue({
+              invitationId: id,
+              scope: "workspace",
+              token,
+            });
             changes.record("__platform", organizationId);
           });
           audit(storage.internal, principal.userId, principal.tokenId, null, "invitation.create", {
@@ -4641,7 +4693,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             role,
             replacedInvitationId,
           });
-          return api({ ok: true, invitation: { id, token, email, role, expiresAt } }, 201);
+          invitationDeliveries.wake();
+          return api({ ok: true, invitation: { id, token, email, role, expiresAt, delivery } }, 201);
         }
         const invitationMatch = /^invitations\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
         if (invitationMatch && request.method === "DELETE") {
@@ -4655,6 +4708,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             if (Number(result.changes) !== 1) {
               throw new PlatformError(404, "INVITATION_NOT_FOUND", "Active workspace invitation not found.");
             }
+            invitationDeliveries.cancel(invitationId);
             changes.record("__platform", organizationId);
           });
           audit(storage.internal, principal.userId, principal.tokenId, null, "invitation.revoke", {
@@ -5819,6 +5873,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   scheduleDomainReconciliation();
   schedulePreviewCleanup();
   backupScheduler.start();
+  invitationDeliveries.start();
 
   return {
     handle,
@@ -5835,6 +5890,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (previewCleanupTimer) clearTimeout(previewCleanupTimer);
       previewCleanupTimer = undefined;
       await previewCleanupFlight?.catch(() => undefined);
+      await invitationDeliveries.close();
       await backupScheduler.close();
       for (const state of restartState.values()) {
         state.cancelled = true;
@@ -8978,6 +9034,7 @@ async function registerWithInvitation(
   storage: PlatformDatabase,
   request: Request,
   authPrefix: string,
+  cancelDelivery: (invitationId: string) => void,
 ): Promise<Response> {
   if (!requestOriginAllowed(request)) {
     throw new PlatformError(403, "ORIGIN_MISMATCH", "Cross-origin auth request rejected.");
@@ -9040,6 +9097,7 @@ async function registerWithInvitation(
       if (Number(accepted.changes) !== 1) {
         throw new PlatformError(409, "INVITATION_USED", "Invitation was already handled.");
       }
+      cancelDelivery(String(invitation.id));
       if (workspaceInvitation) {
         storage.internal.prepare(`INSERT INTO clank_platform_memberships
           (organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)

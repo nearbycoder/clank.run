@@ -435,7 +435,7 @@ Platform:
   clank whoami                          Show the active platform account
   clank org list                        List organizations and roles
   clank org create <name>               Create an organization
-  clank org invite <org> <email>        Create a single-use invitation
+  clank org invite <org> <email>        Create and, when configured, email an invitation
   clank org accept <token>              Accept an invitation
   clank org members <org>               List organization membership
   clank org invitations <org>           List active invitations
@@ -1155,6 +1155,7 @@ async function organizationCommand(args) {
     console.log(`Invitation for ${payload.invitation.email} (${payload.invitation.role})`);
     console.log(payload.invitation.token);
     console.log(`Expires: ${new Date(payload.invitation.expiresAt).toISOString()}`);
+    console.log(`Delivery: ${invitationDeliveryLabel(payload.invitation.delivery)}`);
     return;
   }
   if (subcommand === "accept") {
@@ -1190,7 +1191,7 @@ async function organizationCommand(args) {
     if (!payload.invitations.length) return console.log("No pending invitations.");
     for (const invitation of payload.invitations) {
       console.log(
-        `${invitation.id}  ${invitation.email}  ${invitation.role}  expires ${new Date(invitation.expiresAt).toISOString()}`,
+        `${invitation.id}  ${invitation.email}  ${invitation.role}  ${invitationDeliveryLabel(invitation.delivery)}  expires ${new Date(invitation.expiresAt).toISOString()}`,
       );
     }
     return;
@@ -1235,6 +1236,17 @@ async function organizationCommand(args) {
   throw new CliError(
     "Usage: clank org <list|create|invite|accept|members|invitations|role|remove|revoke-invite>",
   );
+}
+
+function invitationDeliveryLabel(delivery) {
+  if (!delivery || delivery.status === "manual") return "manual token";
+  if (delivery.status === "sent") return delivery.sentAt
+    ? `email sent ${new Date(delivery.sentAt).toISOString()}`
+    : "email sent";
+  if (delivery.status === "queued") return "email queued";
+  if (delivery.status === "retrying") return `email retrying (${delivery.attempts ?? 0} attempts)`;
+  if (delivery.status === "failed") return `email failed (${delivery.attempts ?? 0} attempts)`;
+  return "manual token";
 }
 
 async function projectCommand(args) {

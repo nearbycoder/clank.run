@@ -227,7 +227,13 @@ clank org role <organization-id> <user-id> <owner|admin|developer|viewer>
 clank org remove <organization-id> <user-id>
 ```
 
-Invitation creation prints its email-bound token once. Reissuing for the same email invalidates older tokens. Invitation lists contain identifiers and safe metadata, never tokens or hashes. Only owners and administrators can create/revoke invitations or change/remove members; only an owner can grant or change the owner role, and the last owner is protected.
+Invitation creation prints its email-bound token once. When the platform has email delivery
+configured, it also queues the same invitation through the durable encrypted outbox; the printed
+token remains a fallback for unattended CLI use. Reissuing for the same email invalidates older
+tokens. Invitation lists contain identifiers and safe metadata, never tokens, hashes, ciphertext,
+or provider errors. Only owners and administrators can create/revoke invitations or change/remove
+members; only an owner can grant or change the owner role, and the last owner is protected. See
+[Invitations and email delivery](invitations.md).
 
 ## Workspace activity
 

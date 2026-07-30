@@ -60,6 +60,22 @@ CLANK_BACKUP_MAX_AGE_MS=7776000000
 CLANK_ALLOW_UNSAFE_MIGRATIONS=0
 ```
 
+To send invitation links rather than copying tokens manually, add:
+
+```sh
+CLANK_RESEND_API_KEY=<secret>
+CLANK_EMAIL_FROM=noreply@your-verified-domain.example
+CLANK_EMAIL_FROM_NAME=Clank
+CLANK_EMAIL_REPLY_TO=support@example.com
+```
+
+Railway should store the API key as a service variable, never in the repository. Clank also
+supports `CLANK_EMAIL_DELIVERY_URL` plus an optional `CLANK_EMAIL_DELIVERY_TOKEN` for a
+provider-neutral HTTPS gateway. Do not configure both providers. The inexpensive topology is
+unchanged: invitation retries use the existing control SQLite database and process, not another
+Railway service, Redis instance, queue, or volume. See
+[Invitations and email delivery](invitations.md).
+
 Leave `CLANK_RUNNER_COORDINATOR` and `CLANK_RUNNER_REGISTRATION_TOKEN` unset on the current
 single-service topology. Enabling the remote-node coordinator does not improve isolation by itself
 and is unnecessary until a separate runner host is provisioned.
@@ -69,6 +85,9 @@ losing it makes encrypted secrets and recovery points unreadable.
 
 `bootstrap` lets the first browser user create the only public account, then closes registration.
 Additional people join through email-bound invitations created by an owner or administrator.
+With a mail driver configured, the People page sends a fragment-based secure link automatically
+and shows queued, retrying, sent, or failed status. Manual copy-once delivery remains the explicit
+fallback.
 The explicit `trusted` hosting profile is required because Railway's hosted container does not
 provide a Docker daemon. It preserves the inexpensive single-service topology, but every invited
 deployer must be treated as having the control-plane Unix user's authority. Do not change

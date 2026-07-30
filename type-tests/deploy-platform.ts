@@ -5,6 +5,7 @@ import {
   createHttpDeploymentProvider,
   openProviderDeploymentAgent,
   parseDeploymentConfig,
+  createResendEmailService,
   type DeploymentProvider,
   type DeploymentConfig,
   type ObjectStore,
@@ -55,6 +56,13 @@ void openPlatform({
   },
   jobs: {
     alertDueAfterMs: 5 * 60_000,
+  },
+  invitations: {
+    email: createResendEmailService({ apiKey: "re_example_secret" }),
+    from: { email: "noreply@example.com", name: "Clank" },
+    replyTo: { email: "support@example.com" },
+    intervalMs: 30_000,
+    maxAttempts: 6,
   },
 });
 
