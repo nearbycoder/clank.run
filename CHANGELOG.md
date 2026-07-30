@@ -4,6 +4,22 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.12.0 - 2026-07-30
+
+- Added optional hosted plan catalogs with exact public prices, account entitlement snapshots,
+  browser checkout and portal flows, a server-rendered responsive Billing view, read-only
+  `clank billing` output, and audited operator plan grants. Billing remains disabled by default
+  and catalog-only installations require no payment service.
+- Added a zero-dependency Stripe adapter with fixed-origin bounded requests, durable idempotent
+  checkout attempts, raw-body HMAC webhook verification, live/test separation, exact plan/Price
+  mapping and pre-checkout amount/currency/interval verification, replay/conflict detection,
+  out-of-order event handling, provider-bound customer and subscription identities, and optional
+  operator-tested API-version pinning.
+- Plan entitlements now layer between installation defaults and explicit account/workspace
+  overrides. Trialing and active subscriptions apply immediately, past-due plans receive a
+  bounded grace interval, invalid or inactive state fails closed to the free plan, and a
+  downgrade never deletes existing resources.
+
 ## 0.11.0 - 2026-07-30
 
 - Added secretless GitHub pull-request previews. `clank preview github configure` binds an

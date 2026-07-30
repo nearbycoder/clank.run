@@ -1,6 +1,7 @@
 import type { ObjectStore } from "./object-storage.js";
 import type { BackupObjectRepositoryOptions } from "./recovery.js";
 import type { EmailAddress, EmailService } from "./services.js";
+import type { BillingProvider } from "./billing.js";
 export interface ProcessRunnerOptions {
     kind?: "process";
 }
@@ -15,6 +16,8 @@ export interface DockerRunnerOptions {
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
 export type PlatformHostingProfile = "trusted" | "isolated";
 export type PlatformProjectPlacement = "local" | "provider";
+export type PlatformQuotaKey = "organizationsPerAccount" | "projectsPerAccount" | "projectsPerOrganization" | "domainsPerProject" | "releasesPerProject" | "releaseStorageBytesPerProject" | "backupsPerProject" | "requestsPerMonthPerOrganization" | "transferBytesPerMonthPerOrganization" | "requestsPerMinutePerProject";
+export type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
 export interface PlatformLimits {
     /** Maximum organizations created by one account. Defaults to 5. */
     organizationsPerAccount?: number;
@@ -92,6 +95,32 @@ export interface PlatformInvitationDeliveryOptions {
     maxAttempts?: number;
     /** Delivery-claim lifetime. Defaults to 60 seconds. */
     leaseMs?: number;
+}
+export interface PlatformBillingPlan {
+    /** Stable public identifier persisted in subscription and audit records. */
+    id: string;
+    /** Human-readable plan name. */
+    name: string;
+    /** Short, plain-text description shown in the control plane. */
+    description: string;
+    /** Transparent recurring monthly price in the smallest currency unit. Zero denotes a free plan. */
+    monthlyPrice: {
+        currency: string;
+        amount: number;
+    };
+    /** Account entitlements layered over the platform limits. */
+    quotas: Partial<PlatformQuotaValues>;
+    featured?: boolean;
+}
+export interface PlatformBillingOptions {
+    /** Ordered public plan catalog. */
+    plans: readonly PlatformBillingPlan[];
+    /** Plan inherited by accounts without an active paid or operator-granted plan. */
+    defaultPlanId: string;
+    /** Optional hosted checkout, portal, and signed-webhook provider. */
+    provider?: BillingProvider;
+    /** Entitlement grace after first entering past_due. Defaults to 7 days. */
+    pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
     dataDirectory: string;
@@ -180,6 +209,8 @@ export interface ClankPlatformOptions {
      * creation preserves the copy-once token workflow.
      */
     invitations?: PlatformInvitationDeliveryOptions;
+    /** Optional provider-neutral hosted plan catalog and billing integration. */
+    billing?: PlatformBillingOptions;
     ingress?: {
         enabled?: boolean;
         baseDomain?: string;

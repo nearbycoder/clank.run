@@ -108,6 +108,13 @@ import {
   repositoryName as githubRepositoryName,
   workflowPathName as githubWorkflowPathName,
 } from "./github-oidc.ts";
+import {
+  BillingProviderError,
+  BillingWebhookError,
+  type BillingProvider,
+  type BillingProviderEvent,
+  type BillingSubscriptionStatus,
+} from "./billing.ts";
 
 export interface ProcessRunnerOptions {
   kind?: "process";
@@ -193,7 +200,7 @@ export interface PlatformPreviewOptions {
 
 export type PlatformInvitationDeliveryOptions = InvitationDeliveryOptions;
 
-type PlatformQuotaKey =
+export type PlatformQuotaKey =
   | "organizationsPerAccount"
   | "projectsPerAccount"
   | "projectsPerOrganization"
@@ -205,8 +212,53 @@ type PlatformQuotaKey =
   | "transferBytesPerMonthPerOrganization"
   | "requestsPerMinutePerProject";
 
-type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
+export type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
 type PlatformQuotaScope = "account" | "workspace";
+
+export interface PlatformBillingPlan {
+  /** Stable public identifier persisted in subscription and audit records. */
+  id: string;
+  /** Human-readable plan name. */
+  name: string;
+  /** Short, plain-text description shown in the control plane. */
+  description: string;
+  /** Transparent recurring monthly price in the smallest currency unit. Zero denotes a free plan. */
+  monthlyPrice: {
+    currency: string;
+    amount: number;
+  };
+  /** Account entitlements layered over the platform limits. */
+  quotas: Partial<PlatformQuotaValues>;
+  featured?: boolean;
+}
+
+export interface PlatformBillingOptions {
+  /** Ordered public plan catalog. */
+  plans: readonly PlatformBillingPlan[];
+  /** Plan inherited by accounts without an active paid or operator-granted plan. */
+  defaultPlanId: string;
+  /** Optional hosted checkout, portal, and signed-webhook provider. */
+  provider?: BillingProvider;
+  /** Entitlement grace after first entering past_due. Defaults to 7 days. */
+  pastDueGraceMs?: number;
+}
+
+interface NormalizedPlatformBillingPlan {
+  id: string;
+  name: string;
+  description: string;
+  monthlyPrice: Readonly<{ currency: string; amount: number }>;
+  quotas: Readonly<Partial<PlatformQuotaValues>>;
+  featured: boolean;
+}
+
+interface NormalizedPlatformBilling {
+  plans: readonly NormalizedPlatformBillingPlan[];
+  plansById: ReadonlyMap<string, NormalizedPlatformBillingPlan>;
+  defaultPlan: NormalizedPlatformBillingPlan;
+  provider: BillingProvider | null;
+  pastDueGraceMs: number;
+}
 
 const PLATFORM_QUOTA_KEYS = Object.freeze([
   "organizationsPerAccount",
@@ -357,6 +409,8 @@ export interface ClankPlatformOptions {
    * creation preserves the copy-once token workflow.
    */
   invitations?: PlatformInvitationDeliveryOptions;
+  /** Optional provider-neutral hosted plan catalog and billing integration. */
+  billing?: PlatformBillingOptions;
   ingress?: {
     enabled?: boolean;
     baseDomain?: string;
@@ -721,6 +775,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       ? { fetch: options.previews.githubOidcFetch }
       : {}),
   });
+  const billing = normalizePlatformBilling(options.billing);
   const limits = Object.freeze({
     organizationsPerAccount: integerInRange(
       options.limits?.organizationsPerAccount ?? 5,
@@ -800,6 +855,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     requestsPerMonthPerOrganization: limits.requestsPerMonthPerOrganization,
     transferBytesPerMonthPerOrganization: limits.transferBytesPerMonthPerOrganization,
     requestsPerMinutePerProject: limits.requestsPerMinutePerProject,
+    ...(billing?.defaultPlan.quotas ?? {}),
   });
   const tlsAskToken = options.ingress?.tlsAskToken === undefined
     ? undefined
@@ -3855,6 +3911,29 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if ((url.pathname === "/healthz" || url.pathname === "/readyz") && request.method === "GET") {
         return readiness();
       }
+      if (url.pathname === "/api/billing/webhook") {
+        if (!billing?.provider || request.method !== "POST" || url.search) {
+          return problem(404, "NOT_FOUND", "Billing webhook endpoint not found.");
+        }
+        const retryAfter = await storage.rateLimits.consume(
+          `billing-webhook\n${trustedClientAddress(request) ?? "unknown"}`,
+          300,
+          60_000,
+        );
+        if (retryAfter !== undefined) {
+          throw new PlatformError(429, "RATE_LIMITED", "Too many billing webhook attempts.", retryAfter);
+        }
+        const received = await billing.provider.verifyWebhook(request);
+        if (!received) return api({ ok: true, accepted: true, relevant: false });
+        let event: BillingProviderEvent;
+        try {
+          event = normalizeBillingProviderEvent(received);
+        } catch (error) {
+          throw new BillingWebhookError(error);
+        }
+        const result = applyPlatformBillingEvent(storage.internal, billing, event);
+        return api({ ok: true, accepted: true, relevant: true, ...result });
+      }
       if (
         url.pathname === DEPLOYMENT_COORDINATOR_PREFIX
         || url.pathname.startsWith(`${DEPLOYMENT_COORDINATOR_PREFIX}/`)
@@ -3878,6 +3957,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         });
       }
       if (request.method === "GET" && !consolePath && isPlatformConsoleNamespacePath(url.pathname)) {
+        return problem(404, "NOT_FOUND", "Control-plane page not found.");
+      }
+      if (consolePath === "/billing" && !billing) {
         return problem(404, "NOT_FOUND", "Control-plane page not found.");
       }
       const authPrefix = url.pathname === "/__proact/auth" || url.pathname.startsWith("/__proact/auth/")
@@ -3950,6 +4032,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           signupMode === "bootstrap",
           {
             platformRole,
+            billingEnabled: billing !== null,
             impersonation: impersonation ? {
               id: impersonation.id,
               actor: {
@@ -4766,6 +4849,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             adminQuotaMatch[1] as PlatformQuotaScope,
             adminQuotaMatch[2]!,
             quotaDefaults,
+            billing,
           ),
         });
       }
@@ -4789,8 +4873,33 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             adminQuotaMatch[1] as PlatformQuotaScope,
             adminQuotaMatch[2]!,
             quotaDefaults,
+            billing,
           ),
         });
+      }
+      const adminBillingMatch =
+        /^\/api\/admin\/billing\/accounts\/([A-Za-z0-9_-]{8,128})$/.exec(url.pathname);
+      if (adminBillingMatch && request.method === "PUT") {
+        if (!billing) throw new PlatformError(404, "NOT_FOUND", "Billing is not configured.");
+        const auth = await requirePlatformAdmin(storage, request, true);
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["planId"]);
+        const requestedPlanId = input.planId === null
+          ? null
+          : boundedString(input.planId, "planId", 2, 64);
+        updateManualBillingPlan(
+          storage.internal,
+          billing,
+          adminBillingMatch[1]!,
+          requestedPlanId,
+          auth.user!.id,
+        );
+        return api(platformBillingPayload(
+          storage.internal,
+          adminBillingMatch[1]!,
+          billing,
+          quotaDefaults,
+        ));
       }
       if (url.pathname === "/api/admin/analytics" && request.method === "GET") {
         await requirePlatformAdmin(storage, request);
@@ -4823,6 +4932,56 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
 
       const principal = await requirePlatformPrincipal(storage, request);
+      if (url.pathname === "/api/billing" && request.method === "GET") {
+        if (!billing) throw new PlatformError(404, "NOT_FOUND", "Billing is not configured.");
+        if (principal.projectId) {
+          throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot read account billing.");
+        }
+        return api(platformBillingPayload(
+          storage.internal,
+          principal.userId,
+          billing,
+          quotaDefaults,
+        ));
+      }
+      if (url.pathname === "/api/billing/checkout" && request.method === "POST") {
+        if (!billing) throw new PlatformError(404, "NOT_FOUND", "Billing is not configured.");
+        if (request.headers.has("authorization")) {
+          throw new PlatformError(
+            403,
+            "BROWSER_BILLING_REQUIRED",
+            "Billing checkout requires an interactive browser session.",
+          );
+        }
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["planId"]);
+        const planId = boundedString(input.planId, "planId", 2, 64);
+        return api(await startPlatformBillingCheckout(
+          storage.internal,
+          principal,
+          billing,
+          publicUrl,
+          planId,
+        ), 201);
+      }
+      if (url.pathname === "/api/billing/portal" && request.method === "POST") {
+        if (!billing) throw new PlatformError(404, "NOT_FOUND", "Billing is not configured.");
+        if (request.headers.has("authorization")) {
+          throw new PlatformError(
+            403,
+            "BROWSER_BILLING_REQUIRED",
+            "Billing management requires an interactive browser session.",
+          );
+        }
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, []);
+        return api(await startPlatformBillingPortal(
+          storage.internal,
+          principal,
+          billing,
+          publicUrl,
+        ), 201);
+      }
       if (url.pathname === "/api/audit" && request.method === "GET") {
         const limit = queryInteger(url.searchParams.get("limit"), "limit", 100, 1, 200);
         const before = queryInteger(url.searchParams.get("before"), "before", null, 1, Number.MAX_SAFE_INTEGER);
@@ -6537,6 +6696,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
       if (error instanceof AuthError) return problem(error.status, error.code, error.message, error.retryAfter);
+      if (error instanceof BillingWebhookError) {
+        return problem(400, error.code, error.message);
+      }
       options.onError?.(error);
       return problem(500, "PLATFORM_ERROR", "The platform operation failed.");
     }
@@ -6788,6 +6950,111 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
       DELETE FROM clank_platform_quota_overrides
       WHERE scope_type = 'workspace' AND scope_id = old.id;
     END`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_billing_accounts (
+    account_id TEXT PRIMARY KEY REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    plan_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+      'free', 'manual', 'incomplete', 'incomplete_expired', 'trialing',
+      'active', 'past_due', 'canceled', 'unpaid', 'paused'
+    )),
+    provider TEXT,
+    checkout_attempt_id TEXT,
+    customer_ref TEXT,
+    subscription_ref TEXT,
+    cancel_at_period_end INTEGER NOT NULL DEFAULT 0 CHECK (cancel_at_period_end IN (0, 1)),
+    current_period_end INTEGER,
+    grace_until INTEGER,
+    provider_event_created_at INTEGER,
+    provider_event_id TEXT,
+    quota_snapshot TEXT NOT NULL CHECK (
+      json_valid(quota_snapshot) AND json_type(quota_snapshot) = 'object'
+    ),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    CHECK (
+      (
+        provider IS NULL
+        AND checkout_attempt_id IS NULL
+        AND customer_ref IS NULL
+        AND subscription_ref IS NULL
+        AND provider_event_created_at IS NULL
+        AND provider_event_id IS NULL
+        AND status = 'manual'
+      )
+      OR (
+        provider IS NOT NULL
+        AND checkout_attempt_id IS NOT NULL
+        AND customer_ref IS NOT NULL
+        AND subscription_ref IS NOT NULL
+        AND provider_event_created_at IS NOT NULL
+        AND provider_event_id IS NOT NULL
+        AND status NOT IN ('free', 'manual')
+      )
+    )
+  )`);
+  internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_platform_billing_customer
+    ON clank_platform_billing_accounts (provider, customer_ref)
+    WHERE provider IS NOT NULL`);
+  internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_platform_billing_subscription
+    ON clank_platform_billing_accounts (provider, subscription_ref)
+    WHERE provider IS NOT NULL`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_billing_checkout_attempts (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    plan_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    session_ref TEXT,
+    state TEXT NOT NULL CHECK (state IN ('creating', 'pending', 'completed', 'failed', 'expired')),
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    completed_at INTEGER
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_billing_attempt_account
+    ON clank_platform_billing_checkout_attempts (account_id, created_at DESC)`);
+  internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_platform_billing_attempt_session
+    ON clank_platform_billing_checkout_attempts (provider, session_ref)
+    WHERE session_ref IS NOT NULL`);
+  const billingAccountColumns = internal.prepare(
+    "PRAGMA table_info(clank_platform_billing_accounts)",
+  ).all();
+  if (!billingAccountColumns.some((column) => column.name === "checkout_attempt_id")) {
+    internal.exec(
+      "ALTER TABLE clank_platform_billing_accounts ADD COLUMN checkout_attempt_id TEXT",
+    );
+    internal.exec(`UPDATE clank_platform_billing_accounts AS account
+      SET checkout_attempt_id = (
+        SELECT attempt.id FROM clank_platform_billing_checkout_attempts AS attempt
+        WHERE attempt.account_id = account.account_id
+          AND attempt.provider = account.provider
+          AND attempt.state = 'completed'
+        ORDER BY attempt.completed_at DESC, attempt.created_at DESC
+        LIMIT 1
+      )
+      WHERE account.provider IS NOT NULL`);
+  }
+  internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_platform_billing_attempt_binding
+    ON clank_platform_billing_accounts (provider, checkout_attempt_id)
+    WHERE provider IS NOT NULL`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_billing_events (
+    provider TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    event_digest TEXT NOT NULL,
+    event_created_at INTEGER NOT NULL,
+    received_at INTEGER NOT NULL,
+    processed_at INTEGER NOT NULL,
+    PRIMARY KEY (provider, event_id)
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_billing_events_received
+    ON clank_platform_billing_events (received_at)`);
+  const billingPrunedAt = Date.now();
+  internal.prepare(`DELETE FROM clank_platform_billing_events
+    WHERE received_at < ?`).run(billingPrunedAt - 7 * 365 * 24 * 60 * 60_000);
+  internal.prepare(`DELETE FROM clank_platform_billing_checkout_attempts
+    WHERE created_at < ?
+      AND id NOT IN (
+        SELECT checkout_attempt_id FROM clank_platform_billing_accounts
+        WHERE checkout_attempt_id IS NOT NULL
+      )`).run(billingPrunedAt - 30 * 24 * 60 * 60_000);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_memberships (
     organization_id TEXT NOT NULL REFERENCES clank_platform_organizations(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
@@ -8383,6 +8650,7 @@ function platformAdminQuotaScope(
   scopeType: PlatformQuotaScope,
   scopeId: string,
   defaults: PlatformQuotaValues,
+  billing: NormalizedPlatformBilling | null,
 ): Record<string, unknown> {
   if (scopeType === "account") {
     const account = internal.prepare(`SELECT id, email, json_extract(profile, '$.name') AS name
@@ -8404,6 +8672,9 @@ function platformAdminQuotaScope(
         (SELECT count(*) FROM clank_platform_organizations WHERE created_by = ?) AS organizations,
         (SELECT count(*) FROM clank_platform_projects WHERE owner_id = ?) AS projects`)
       .get(scopeId, scopeId);
+    const inherited = billing
+      ? { ...defaults, ...billingEntitlementQuotas(internal, scopeId) }
+      : { ...defaults };
     return {
       scope: {
         type: scopeType,
@@ -8413,12 +8684,16 @@ function platformAdminQuotaScope(
       },
       definitions: publicQuotaDefinitions(),
       defaults,
+      inherited,
       overrides,
-      effective: { ...defaults, ...overrides },
+      effective: accountQuotas(internal, scopeId, defaults),
       usage: {
         organizations: Number(usage?.organizations ?? 0),
         projects: Number(usage?.projects ?? 0),
       },
+      ...(billing
+        ? { billing: platformBillingPayload(internal, scopeId, billing, defaults) }
+        : {}),
       workspaces,
     };
   }
@@ -9327,12 +9602,54 @@ function quotaOverrides(
   return result;
 }
 
+function billingEntitlementQuotas(
+  internal: SQLiteInternal,
+  accountId: string,
+): Partial<PlatformQuotaValues> {
+  const row = internal.prepare(`SELECT status, provider, checkout_attempt_id, grace_until, quota_snapshot
+    FROM clank_platform_billing_accounts WHERE account_id = ?`).get(accountId);
+  if (!row) return {};
+  if (row.provider !== null && row.checkout_attempt_id === null) return {};
+  const status = String(row.status);
+  const applies = status === "manual"
+    || status === "active"
+    || status === "trialing"
+    || (status === "past_due" && Number(row.grace_until ?? 0) > Date.now());
+  if (!applies) return {};
+  try {
+    const parsed = JSON.parse(String(row.quota_snapshot));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const output: Partial<PlatformQuotaValues> = {};
+    for (const [rawKey, rawValue] of Object.entries(parsed)) {
+      const key = rawKey as PlatformQuotaKey;
+      if (!PLATFORM_QUOTA_KEYS.includes(key)) return {};
+      const definition = PLATFORM_QUOTA_DEFINITIONS[key];
+      if (
+        typeof rawValue !== "number"
+        || !Number.isSafeInteger(rawValue)
+        || rawValue < definition.minimum
+        || rawValue > definition.maximum
+      ) return {};
+      output[key] = rawValue;
+    }
+    return output;
+  } catch {
+    // Stored billing state fails closed to the default plan.
+    return {};
+  }
+}
+
 function accountQuotas(
   internal: SQLiteInternal,
   accountId: string,
   defaults: PlatformQuotaValues,
 ): PlatformQuotaValues {
-  return { ...defaults, ...quotaOverrides(internal, "account", accountId) };
+  return {
+    ...defaults,
+    ...billingEntitlementQuotas(internal, accountId),
+    // Explicit operator overrides always win over commercial plan capacity.
+    ...quotaOverrides(internal, "account", accountId),
+  };
 }
 
 function workspaceQuotas(
@@ -9389,6 +9706,610 @@ function publicLimits(
     requestsPerMinutePerProject: limits.requestsPerMinutePerProject,
     maxArtifactBytes: maxArtifactBytes ?? 100 * 1024 * 1024,
   };
+}
+
+function billingStateApplies(status: string, graceUntil: number | null): boolean {
+  return status === "manual"
+    || status === "active"
+    || status === "trialing"
+    || (status === "past_due" && (graceUntil ?? 0) > Date.now());
+}
+
+function platformBillingPayload(
+  internal: SQLiteInternal,
+  accountId: string,
+  billing: NormalizedPlatformBilling,
+  defaults: PlatformQuotaValues,
+): Record<string, unknown> {
+  const row = internal.prepare(`SELECT plan_id, status, provider, checkout_attempt_id,
+      cancel_at_period_end, current_period_end, grace_until, created_at, updated_at
+    FROM clank_platform_billing_accounts WHERE account_id = ?`).get(accountId);
+  const storedPlan = row ? billing.plansById.get(String(row.plan_id)) : undefined;
+  const bound = !row || row.provider === null || row.checkout_attempt_id !== null;
+  const applies = row && bound
+    ? billingStateApplies(
+      String(row.status),
+      row.grace_until === null ? null : Number(row.grace_until),
+    )
+    : false;
+  const effectivePlan = applies && storedPlan ? storedPlan : billing.defaultPlan;
+  const overrides = quotaOverrides(internal, "account", accountId);
+  const current = {
+    planId: effectivePlan.id,
+    storedPlanId: row ? String(row.plan_id) : billing.defaultPlan.id,
+    status: row ? String(row.status) : "free",
+    source: row && String(row.status) === "manual"
+      ? "operator"
+      : row && row.provider !== null
+        ? "provider"
+        : "default",
+    entitlementsActive: applies,
+    cancelAtPeriodEnd: row ? Number(row.cancel_at_period_end) !== 0 : false,
+    currentPeriodEnd: row?.current_period_end === null || row?.current_period_end === undefined
+      ? null
+      : Number(row.current_period_end),
+    graceUntil: row?.grace_until === null || row?.grace_until === undefined
+      ? null
+      : Number(row.grace_until),
+    portalAvailable: Boolean(
+      billing.provider
+      && row?.provider === billing.provider.name
+      && row?.checkout_attempt_id !== null,
+    ),
+    updatedAt: row ? Number(row.updated_at) : null,
+  };
+  return {
+    ok: true,
+    protocol: "clank-billing/1",
+    provider: billing.provider ? { name: billing.provider.name } : null,
+    defaultPlanId: billing.defaultPlan.id,
+    current,
+    plans: billing.plans.map((plan) => ({
+      id: plan.id,
+      name: plan.name,
+      description: plan.description,
+      monthlyPrice: plan.monthlyPrice,
+      quotas: { ...defaults, ...plan.quotas },
+      featured: plan.featured,
+      current: plan.id === effectivePlan.id,
+      checkoutAvailable: Boolean(
+        billing.provider
+        && plan.monthlyPrice.amount > 0
+        && (!row || ["free", "canceled", "incomplete_expired"].includes(String(row.status))),
+      ),
+    })),
+    entitlements: accountQuotas(internal, accountId, defaults),
+    operatorOverrides: overrides,
+  };
+}
+
+async function startPlatformBillingCheckout(
+  internal: SQLiteInternal,
+  principal: TokenPrincipal,
+  billing: NormalizedPlatformBilling,
+  publicUrl: string,
+  planId: string,
+): Promise<Record<string, unknown>> {
+  const provider = billing.provider;
+  if (!provider) {
+    throw new PlatformError(409, "BILLING_CHECKOUT_UNAVAILABLE", "Hosted billing checkout is not configured.");
+  }
+  const plan = billing.plansById.get(planId);
+  if (!plan || plan.monthlyPrice.amount <= 0 || !provider.planIds.includes(plan.id)) {
+    throw new PlatformError(422, "INVALID_BILLING_PLAN", "Select an available paid plan.");
+  }
+  const account = internal.prepare(`SELECT provider, customer_ref, subscription_ref, status
+    FROM clank_platform_billing_accounts WHERE account_id = ?`).get(principal.userId);
+  if (account && String(account.status) === "manual") {
+    throw new PlatformError(
+      409,
+      "OPERATOR_MANAGED_PLAN",
+      "An operator-granted plan must be removed before starting hosted checkout.",
+    );
+  }
+  if (account && !["free", "canceled", "incomplete_expired"].includes(String(account.status))) {
+    throw new PlatformError(
+      409,
+      "BILLING_PORTAL_REQUIRED",
+      "Manage the existing subscription through the billing portal.",
+    );
+  }
+  if (account?.provider !== null && account?.provider !== undefined
+    && String(account.provider) !== provider.name) {
+    throw new PlatformError(409, "BILLING_PROVIDER_MISMATCH", "The account is bound to another billing provider.");
+  }
+  const now = Date.now();
+  internal.prepare(`UPDATE clank_platform_billing_checkout_attempts
+    SET state = 'expired'
+    WHERE account_id = ? AND state IN ('creating', 'pending') AND expires_at <= ?`)
+    .run(principal.userId, now);
+  const recentCount = Number(internal.prepare(`SELECT count(*) AS count
+    FROM clank_platform_billing_checkout_attempts
+    WHERE account_id = ? AND created_at > ?`).get(principal.userId, now - 60 * 60_000)?.count ?? 0);
+  if (recentCount >= 10) {
+    throw new PlatformError(429, "BILLING_CHECKOUT_RATE_LIMITED", "Too many billing checkout attempts.", 60);
+  }
+  let attempt = internal.prepare(`SELECT id, expires_at FROM clank_platform_billing_checkout_attempts
+    WHERE account_id = ? AND plan_id = ? AND provider = ? AND state = 'creating'
+      AND expires_at > ? ORDER BY created_at DESC LIMIT 1`)
+    .get(principal.userId, plan.id, provider.name, now);
+  if (!attempt) {
+    const attemptId = `bill_${await randomId(18)}`;
+    const expiresAt = now + 31 * 60_000;
+    internal.prepare(`INSERT INTO clank_platform_billing_checkout_attempts
+      (id, account_id, plan_id, provider, session_ref, state, created_at, expires_at, completed_at)
+      VALUES (?, ?, ?, ?, NULL, 'creating', ?, ?, NULL)`)
+      .run(attemptId, principal.userId, plan.id, provider.name, now, expiresAt);
+    attempt = { id: attemptId, expires_at: expiresAt };
+  }
+  let session;
+  try {
+    session = normalizeBillingHostedSession(await provider.createCheckout({
+      attemptId: String(attempt.id),
+      accountId: principal.userId,
+      accountEmail: principal.email,
+      planId: plan.id,
+      successUrl: `${publicUrl}/billing?checkout=success`,
+      cancelUrl: `${publicUrl}/billing?checkout=cancel`,
+      expiresAt: Number(attempt.expires_at),
+      ...(account?.customer_ref ? { customerId: String(account.customer_ref) } : {}),
+    }), "checkout");
+  } catch (error) {
+    if (error instanceof BillingProviderError) {
+      throw new PlatformError(503, error.code, error.message, 30);
+    }
+    throw error;
+  }
+  internal.transaction((changes) => {
+    const current = internal.prepare(`SELECT state, session_ref
+      FROM clank_platform_billing_checkout_attempts WHERE id = ? AND account_id = ?`)
+      .get(attempt.id, principal.userId);
+    if (
+      !current
+      || !["creating", "pending", "completed"].includes(String(current.state))
+      || (current.session_ref !== null && String(current.session_ref) !== session.id)
+    ) throw new PlatformError(409, "BILLING_CHECKOUT_CONFLICT", "The checkout attempt changed while it was created.");
+    internal.prepare(`UPDATE clank_platform_billing_checkout_attempts
+      SET session_ref = ?, state = CASE WHEN state = 'creating' THEN 'pending' ELSE state END
+      WHERE id = ?`).run(session.id, attempt.id);
+    audit(internal, principal.userId, principal.tokenId, null, "billing.checkout.create", {
+      attemptId: String(attempt.id),
+      planId: plan.id,
+      provider: provider.name,
+    });
+    changes.record("__platform", principal.userId);
+  });
+  return {
+    ok: true,
+    checkout: {
+      url: session.url,
+      expiresAt: Number(attempt.expires_at),
+    },
+  };
+}
+
+async function startPlatformBillingPortal(
+  internal: SQLiteInternal,
+  principal: TokenPrincipal,
+  billing: NormalizedPlatformBilling,
+  publicUrl: string,
+): Promise<Record<string, unknown>> {
+  const provider = billing.provider;
+  if (!provider) {
+    throw new PlatformError(409, "BILLING_PORTAL_UNAVAILABLE", "Hosted billing management is not configured.");
+  }
+  const account = internal.prepare(`SELECT provider, checkout_attempt_id, customer_ref
+    FROM clank_platform_billing_accounts WHERE account_id = ?`).get(principal.userId);
+  if (
+    !account?.customer_ref
+    || account.provider !== provider.name
+    || account.checkout_attempt_id === null
+  ) {
+    throw new PlatformError(409, "BILLING_PORTAL_UNAVAILABLE", "This account has no managed billing profile.");
+  }
+  try {
+    const session = normalizeBillingHostedSession(await provider.createPortal({
+      customerId: String(account.customer_ref),
+      returnUrl: `${publicUrl}/billing`,
+    }), "portal");
+    audit(internal, principal.userId, principal.tokenId, null, "billing.portal.create", {
+      provider: provider.name,
+    });
+    return { ok: true, portal: { url: session.url } };
+  } catch (error) {
+    if (error instanceof BillingProviderError) {
+      throw new PlatformError(503, error.code, error.message, 30);
+    }
+    throw error;
+  }
+}
+
+function updateManualBillingPlan(
+  internal: SQLiteInternal,
+  billing: NormalizedPlatformBilling,
+  accountId: string,
+  requestedPlanId: string | null,
+  actorUserId: string,
+): void {
+  const user = internal.prepare("SELECT id FROM clank_auth_users WHERE id = ?").get(accountId);
+  if (!user) throw new PlatformError(404, "USER_NOT_FOUND", "The target account is unavailable.");
+  const existing = internal.prepare(`SELECT plan_id, status, provider
+    FROM clank_platform_billing_accounts WHERE account_id = ?`).get(accountId);
+  if (existing?.provider !== null && existing?.provider !== undefined) {
+    throw new PlatformError(
+      409,
+      "BILLING_PROVIDER_MANAGED",
+      "Provider-managed subscriptions must be changed through their billing portal.",
+    );
+  }
+  const plan = requestedPlanId === null
+    ? billing.defaultPlan
+    : billing.plansById.get(requestedPlanId);
+  if (!plan) throw new PlatformError(422, "INVALID_BILLING_PLAN", "Select a configured billing plan.");
+  const manual = requestedPlanId !== null && plan.id !== billing.defaultPlan.id;
+  const previousPlanId = existing ? String(existing.plan_id) : billing.defaultPlan.id;
+  const previousStatus = existing ? String(existing.status) : "free";
+  const now = Date.now();
+  internal.transaction((changes) => {
+    if (manual) {
+      internal.prepare(`INSERT INTO clank_platform_billing_accounts
+        (account_id, plan_id, status, provider, checkout_attempt_id, customer_ref, subscription_ref,
+         cancel_at_period_end, current_period_end, grace_until,
+         provider_event_created_at, provider_event_id, quota_snapshot, created_at, updated_at)
+        VALUES (?, ?, 'manual', NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL, ?, ?, ?)
+        ON CONFLICT(account_id) DO UPDATE SET
+          plan_id = excluded.plan_id,
+          status = 'manual',
+          provider = NULL,
+          checkout_attempt_id = NULL,
+          customer_ref = NULL,
+          subscription_ref = NULL,
+          cancel_at_period_end = 0,
+          current_period_end = NULL,
+          grace_until = NULL,
+          provider_event_created_at = NULL,
+          provider_event_id = NULL,
+          quota_snapshot = excluded.quota_snapshot,
+          updated_at = excluded.updated_at`)
+        .run(accountId, plan.id, JSON.stringify({ ...plan.quotas }), now, now);
+    } else {
+      internal.prepare(`DELETE FROM clank_platform_billing_accounts
+        WHERE account_id = ? AND provider IS NULL`).run(accountId);
+    }
+    audit(internal, actorUserId, null, null, manual ? "billing.plan.grant" : "billing.plan.revoke", {
+      accountId,
+      from: { planId: previousPlanId, status: previousStatus },
+      to: { planId: manual ? plan.id : billing.defaultPlan.id, status: manual ? "manual" : "free" },
+    });
+    changes.record("__platform", accountId);
+  });
+}
+
+function normalizeBillingHostedSession(
+  value: unknown,
+  kind: "checkout" | "portal",
+): { id: string; url: string } {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new TypeError(`Billing ${kind} session is invalid.`);
+    }
+    const input = value as Record<string, unknown>;
+    const fields = Object.keys(input);
+    if (fields.length !== 2 || !fields.includes("id") || !fields.includes("url")) {
+      throw new TypeError(`Billing ${kind} session is invalid.`);
+    }
+    const id = configurationText(
+      input.id,
+      `billing ${kind} session ID`,
+      3,
+      255,
+      /^[A-Za-z0-9_-]+$/u,
+    );
+    const rawUrl = configurationText(input.url, `billing ${kind} session URL`, 10, 2_048);
+    const url = new URL(rawUrl);
+    const loopback = url.hostname === "localhost"
+      || url.hostname === "127.0.0.1"
+      || url.hostname === "[::1]";
+    if (
+      (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+      || url.username
+      || url.password
+      || url.hash
+    ) throw new TypeError(`Billing ${kind} session URL is invalid.`);
+    return { id, url: url.href };
+  } catch (error) {
+    throw new BillingProviderError(undefined, error);
+  }
+}
+
+function normalizeBillingProviderEvent(value: unknown): BillingProviderEvent {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Billing provider event is invalid.");
+  }
+  const input = value as Record<string, unknown>;
+  const kind = input.kind;
+  const common = [
+    "kind",
+    "id",
+    "createdAt",
+    "attemptId",
+    "accountId",
+    "planId",
+    "customerId",
+    "subscriptionId",
+  ];
+  const allowed = kind === "checkout.completed"
+    ? [...common, "sessionId"]
+    : kind === "subscription.updated"
+      ? [...common, "status", "cancelAtPeriodEnd", "currentPeriodEnd"]
+      : null;
+  if (!allowed || Object.keys(input).some((field) => !allowed.includes(field))) {
+    throw new TypeError("Billing provider event type or fields are invalid.");
+  }
+  if (allowed.some((field) => !Object.hasOwn(input, field))) {
+    throw new TypeError("Billing provider event fields are incomplete.");
+  }
+  const identifier = (field: string, minimum = 3, maximum = 255) =>
+    configurationText(
+      input[field],
+      `billing event ${field}`,
+      minimum,
+      maximum,
+      /^[A-Za-z0-9_-]+$/u,
+    );
+  const createdAt = configurationInteger(
+    input.createdAt,
+    "billing event createdAt",
+    1,
+    Date.now() + 5 * 60_000,
+  );
+  const normalized = {
+    id: identifier("id"),
+    createdAt,
+    attemptId: identifier("attemptId", 8, 128),
+    accountId: identifier("accountId", 8, 128),
+    planId: identifier("planId", 2, 64),
+    customerId: identifier("customerId"),
+    subscriptionId: identifier("subscriptionId"),
+  };
+  if (kind === "checkout.completed") {
+    return Object.freeze({
+      kind,
+      ...normalized,
+      sessionId: identifier("sessionId"),
+    });
+  }
+  if (![
+    "incomplete",
+    "incomplete_expired",
+    "trialing",
+    "active",
+    "past_due",
+    "canceled",
+    "unpaid",
+    "paused",
+  ].includes(String(input.status))) {
+    throw new TypeError("Billing subscription status is invalid.");
+  }
+  if (typeof input.cancelAtPeriodEnd !== "boolean") {
+    throw new TypeError("Billing subscription cancellation state is invalid.");
+  }
+  const currentPeriodEnd = input.currentPeriodEnd === null
+    ? null
+    : configurationInteger(
+      input.currentPeriodEnd,
+      "billing event currentPeriodEnd",
+      1,
+      Number.MAX_SAFE_INTEGER,
+    );
+  return Object.freeze({
+    kind,
+    ...normalized,
+    status: input.status as BillingSubscriptionStatus,
+    cancelAtPeriodEnd: input.cancelAtPeriodEnd,
+    currentPeriodEnd,
+  });
+}
+
+function applyPlatformBillingEvent(
+  internal: SQLiteInternal,
+  billing: NormalizedPlatformBilling,
+  event: BillingProviderEvent,
+): { duplicate: boolean; changed: boolean } {
+  const provider = billing.provider;
+  if (!provider) throw new PlatformError(404, "NOT_FOUND", "Billing webhook endpoint not found.");
+  const plan = billing.plansById.get(event.planId);
+  if (!plan || plan.monthlyPrice.amount <= 0) {
+    throw new PlatformError(422, "INVALID_BILLING_EVENT", "The billing event references an unavailable plan.");
+  }
+  const digest = syncHash(`${provider.name}\0${JSON.stringify(event)}`);
+  return internal.transaction((changes) => {
+    const recorded = internal.prepare(`SELECT event_digest FROM clank_platform_billing_events
+      WHERE provider = ? AND event_id = ?`).get(provider.name, event.id);
+    if (recorded) {
+      if (String(recorded.event_digest) !== digest) {
+        throw new PlatformError(409, "BILLING_EVENT_CONFLICT", "A billing event ID was reused with different data.");
+      }
+      return { duplicate: true, changed: false };
+    }
+    const attempt = internal.prepare(`SELECT * FROM clank_platform_billing_checkout_attempts
+      WHERE id = ? AND account_id = ? AND provider = ?`)
+      .get(event.attemptId, event.accountId, provider.name);
+    if (!attempt || ["failed", "expired"].includes(String(attempt.state))) {
+      throw new PlatformError(422, "INVALID_BILLING_EVENT", "The billing event is not bound to a checkout attempt.");
+    }
+    const existing = internal.prepare(`SELECT * FROM clank_platform_billing_accounts
+      WHERE account_id = ?`).get(event.accountId);
+    let changed = false;
+    if (event.kind === "checkout.completed") {
+      if (
+        String(attempt.plan_id) !== event.planId
+        || (attempt.session_ref !== null && String(attempt.session_ref) !== event.sessionId)
+      ) throw new PlatformError(422, "INVALID_BILLING_EVENT", "The checkout event does not match its attempt.");
+      const exactBinding = existing
+        && existing.provider === provider.name
+        && existing.checkout_attempt_id === event.attemptId
+        && existing.customer_ref === event.customerId
+        && existing.subscription_ref === event.subscriptionId;
+      const replaceable = !existing
+        || (
+          ["free", "canceled", "incomplete_expired"].includes(String(existing.status))
+          && (existing.customer_ref === null || existing.customer_ref === event.customerId)
+        );
+      if (!exactBinding && !replaceable) {
+        throw new PlatformError(409, "BILLING_ACCOUNT_CONFLICT", "The checkout conflicts with existing billing identity.");
+      }
+      if (!exactBinding) {
+        writeBillingAccount(internal, {
+          accountId: event.accountId,
+          planId: event.planId,
+          status: "incomplete",
+          provider: provider.name,
+          attemptId: event.attemptId,
+          customerId: event.customerId,
+          subscriptionId: event.subscriptionId,
+          cancelAtPeriodEnd: false,
+          currentPeriodEnd: null,
+          graceUntil: null,
+          eventCreatedAt: event.createdAt,
+          eventId: event.id,
+          quotas: { ...plan.quotas },
+          now: Date.now(),
+        });
+        changed = true;
+      }
+      internal.prepare(`UPDATE clank_platform_billing_checkout_attempts
+        SET session_ref = ?, state = 'completed', completed_at = COALESCE(completed_at, ?)
+        WHERE id = ?`).run(event.sessionId, event.createdAt, event.attemptId);
+    } else {
+      const exactBinding = existing
+        && existing.provider === provider.name
+        && existing.checkout_attempt_id === event.attemptId
+        && existing.customer_ref === event.customerId
+        && existing.subscription_ref === event.subscriptionId;
+      const retiredBinding = existing
+        && existing.provider === provider.name
+        && String(attempt.state) === "completed"
+        && existing.checkout_attempt_id !== event.attemptId
+        && existing.customer_ref === event.customerId
+        && existing.subscription_ref !== event.subscriptionId;
+      const replaceable = !existing
+        || (
+          ["free", "canceled", "incomplete_expired"].includes(String(existing.status))
+          && (existing.customer_ref === null || existing.customer_ref === event.customerId)
+          && String(attempt.plan_id) === event.planId
+        );
+      if (!exactBinding && !replaceable && !retiredBinding) {
+        throw new PlatformError(409, "BILLING_ACCOUNT_CONFLICT", "The subscription conflicts with existing billing identity.");
+      }
+      const storedCreatedAt = exactBinding && existing.provider_event_created_at !== null
+        ? Number(existing.provider_event_created_at)
+        : null;
+      const storedEventId = exactBinding && existing.provider_event_id !== null
+        ? String(existing.provider_event_id)
+        : "";
+      const newer = storedCreatedAt === null
+        || event.createdAt > storedCreatedAt
+        || (event.createdAt === storedCreatedAt && event.id > storedEventId);
+      if (!retiredBinding && newer) {
+        const graceUntil = event.status === "past_due"
+          ? exactBinding && String(existing.status) === "past_due" && existing.grace_until !== null
+            ? Number(existing.grace_until)
+            : event.createdAt + billing.pastDueGraceMs
+          : null;
+        writeBillingAccount(internal, {
+          accountId: event.accountId,
+          planId: event.planId,
+          status: event.status,
+          provider: provider.name,
+          attemptId: event.attemptId,
+          customerId: event.customerId,
+          subscriptionId: event.subscriptionId,
+          cancelAtPeriodEnd: event.cancelAtPeriodEnd,
+          currentPeriodEnd: event.currentPeriodEnd,
+          graceUntil,
+          eventCreatedAt: event.createdAt,
+          eventId: event.id,
+          quotas: { ...plan.quotas },
+          now: Date.now(),
+        });
+        internal.prepare(`UPDATE clank_platform_billing_checkout_attempts
+          SET state = 'completed', completed_at = COALESCE(completed_at, ?)
+          WHERE id = ?`).run(event.createdAt, event.attemptId);
+        changed = true;
+      }
+    }
+    internal.prepare(`INSERT INTO clank_platform_billing_events
+      (provider, event_id, event_digest, event_created_at, received_at, processed_at)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .run(provider.name, event.id, digest, event.createdAt, Date.now(), Date.now());
+    if (changed) {
+      audit(internal, event.accountId, null, null, `billing.${event.kind}`, {
+        planId: event.planId,
+        provider: provider.name,
+        ...(event.kind === "subscription.updated" ? { status: event.status } : {}),
+      });
+      changes.record("__platform", event.accountId);
+    }
+    return { duplicate: false, changed };
+  });
+}
+
+function writeBillingAccount(
+  internal: SQLiteInternal,
+  value: {
+    accountId: string;
+    planId: string;
+    status: string;
+    provider: string;
+    attemptId: string;
+    customerId: string;
+    subscriptionId: string;
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd: number | null;
+    graceUntil: number | null;
+    eventCreatedAt: number;
+    eventId: string;
+    quotas: Partial<PlatformQuotaValues>;
+    now: number;
+  },
+): void {
+  internal.prepare(`INSERT INTO clank_platform_billing_accounts
+    (account_id, plan_id, status, provider, checkout_attempt_id, customer_ref, subscription_ref,
+     cancel_at_period_end, current_period_end, grace_until,
+     provider_event_created_at, provider_event_id, quota_snapshot, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(account_id) DO UPDATE SET
+      plan_id = excluded.plan_id,
+      status = excluded.status,
+      provider = excluded.provider,
+      checkout_attempt_id = excluded.checkout_attempt_id,
+      customer_ref = excluded.customer_ref,
+      subscription_ref = excluded.subscription_ref,
+      cancel_at_period_end = excluded.cancel_at_period_end,
+      current_period_end = excluded.current_period_end,
+      grace_until = excluded.grace_until,
+      provider_event_created_at = excluded.provider_event_created_at,
+      provider_event_id = excluded.provider_event_id,
+      quota_snapshot = excluded.quota_snapshot,
+      updated_at = excluded.updated_at`)
+    .run(
+      value.accountId,
+      value.planId,
+      value.status,
+      value.provider,
+      value.attemptId,
+      value.customerId,
+      value.subscriptionId,
+      value.cancelAtPeriodEnd ? 1 : 0,
+      value.currentPeriodEnd,
+      value.graceUntil,
+      value.eventCreatedAt,
+      value.eventId,
+      JSON.stringify(value.quotas),
+      value.now,
+      value.now,
+    );
 }
 
 function dashboardPayload(
@@ -11458,6 +12379,7 @@ const PLATFORM_CONSOLE_STATIC_PATHS = new Set([
   "/invite",
   "/overview",
   "/usage",
+  "/billing",
   "/projects",
   "/workspaces",
   "/activity",
@@ -11503,6 +12425,7 @@ function isPlatformConsoleNamespacePath(pathname: string): boolean {
     || firstSegment === "invite"
     || firstSegment === "overview"
     || firstSegment === "usage"
+    || firstSegment === "billing"
     || firstSegment === "projects"
     || firstSegment === "workspaces"
     || firstSegment === "activity"
@@ -11878,6 +12801,168 @@ function normalizePlatformAdminEmail(value: string): string {
     throw new TypeError("platformAdminEmails entries must be valid email addresses.");
   }
   return email;
+}
+
+function normalizePlatformBilling(
+  input: PlatformBillingOptions | undefined,
+): NormalizedPlatformBilling | null {
+  if (input === undefined) return null;
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("billing must be an object.");
+  }
+  if (!Array.isArray(input.plans) || input.plans.length < 1 || input.plans.length > 20) {
+    throw new TypeError("billing.plans must contain 1 through 20 plans.");
+  }
+  const plans: NormalizedPlatformBillingPlan[] = [];
+  const plansById = new Map<string, NormalizedPlatformBillingPlan>();
+  let featuredPlans = 0;
+  for (const [index, raw] of input.plans.entries()) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new TypeError(`billing.plans[${index}] must be an object.`);
+    }
+    const id = configurationText(
+      raw.id,
+      `billing.plans[${index}].id`,
+      2,
+      64,
+      /^[A-Za-z0-9_-]+$/u,
+    );
+    if (plansById.has(id)) throw new TypeError(`billing plan ${id} is duplicated.`);
+    const name = configurationText(raw.name, `billing.plans[${index}].name`, 1, 80);
+    const description = configurationText(
+      raw.description,
+      `billing.plans[${index}].description`,
+      1,
+      500,
+    );
+    if (
+      !raw.monthlyPrice
+      || typeof raw.monthlyPrice !== "object"
+      || Array.isArray(raw.monthlyPrice)
+    ) throw new TypeError(`billing plan ${id} monthlyPrice must be an object.`);
+    const currency = configurationText(
+      raw.monthlyPrice.currency,
+      `billing plan ${id} currency`,
+      3,
+      3,
+      /^[A-Za-z]{3}$/u,
+    ).toLowerCase();
+    const amount = configurationInteger(
+      raw.monthlyPrice.amount,
+      `billing plan ${id} monthly amount`,
+      0,
+      1_000_000_000_000,
+    );
+    if (!raw.quotas || typeof raw.quotas !== "object" || Array.isArray(raw.quotas)) {
+      throw new TypeError(`billing plan ${id} quotas must be an object.`);
+    }
+    const quotas: Partial<PlatformQuotaValues> = {};
+    for (const [rawKey, rawValue] of Object.entries(raw.quotas)) {
+      const key = rawKey as PlatformQuotaKey;
+      if (!PLATFORM_QUOTA_KEYS.includes(key)) {
+        throw new TypeError(`billing plan ${id} contains unknown quota ${rawKey}.`);
+      }
+      const definition = PLATFORM_QUOTA_DEFINITIONS[key];
+      quotas[key] = configurationInteger(
+        rawValue,
+        `billing plan ${id} ${key}`,
+        definition.minimum,
+        definition.maximum,
+      );
+    }
+    if (raw.featured !== undefined && typeof raw.featured !== "boolean") {
+      throw new TypeError(`billing plan ${id} featured must be a boolean.`);
+    }
+    if (raw.featured) featuredPlans++;
+    const plan = Object.freeze({
+      id,
+      name,
+      description,
+      monthlyPrice: Object.freeze({ currency, amount }),
+      quotas: Object.freeze(quotas),
+      featured: raw.featured === true,
+    });
+    plans.push(plan);
+    plansById.set(id, plan);
+  }
+  if (featuredPlans > 1) throw new TypeError("At most one billing plan may be featured.");
+  const defaultPlanId = configurationText(
+    input.defaultPlanId,
+    "billing.defaultPlanId",
+    2,
+    64,
+    /^[A-Za-z0-9_-]+$/u,
+  );
+  const defaultPlan = plansById.get(defaultPlanId);
+  if (!defaultPlan) throw new TypeError("billing.defaultPlanId is not in the plan catalog.");
+  if (defaultPlan.monthlyPrice.amount !== 0) {
+    throw new TypeError("The default billing plan must have a zero monthly amount.");
+  }
+  const provider = input.provider ?? null;
+  if (provider) {
+    if (
+      typeof provider !== "object"
+      || typeof provider.createCheckout !== "function"
+      || typeof provider.createPortal !== "function"
+      || typeof provider.verifyWebhook !== "function"
+      || !Array.isArray(provider.planIds)
+    ) throw new TypeError("billing.provider does not implement the BillingProvider contract.");
+    configurationText(provider.name, "billing.provider.name", 2, 32, /^[a-z][a-z0-9_-]+$/u);
+    const configured = [...provider.planIds].map((planId, index) =>
+      configurationText(planId, `billing.provider.planIds[${index}]`, 2, 64, /^[A-Za-z0-9_-]+$/u))
+      .sort();
+    if (new Set(configured).size !== configured.length) {
+      throw new TypeError("billing.provider.planIds must be unique.");
+    }
+    const paid = plans.filter((plan) => plan.monthlyPrice.amount > 0).map((plan) => plan.id).sort();
+    if (JSON.stringify(configured) !== JSON.stringify(paid)) {
+      throw new TypeError("billing.provider.planIds must exactly match the paid plan catalog.");
+    }
+  }
+  return Object.freeze({
+    plans: Object.freeze(plans),
+    plansById,
+    defaultPlan,
+    provider,
+    pastDueGraceMs: configurationInteger(
+      input.pastDueGraceMs ?? 7 * 24 * 60 * 60_000,
+      "billing.pastDueGraceMs",
+      60 * 60_000,
+      90 * 24 * 60 * 60_000,
+    ),
+  });
+}
+
+function configurationText(
+  value: unknown,
+  name: string,
+  minimum: number,
+  maximum: number,
+  pattern?: RegExp,
+): string {
+  if (
+    typeof value !== "string"
+    || value.length < minimum
+    || value.length > maximum
+    || /[\u0000-\u001f\u007f]/u.test(value)
+    || (pattern && !pattern.test(value))
+  ) throw new TypeError(`${name} is invalid.`);
+  return value;
+}
+
+function configurationInteger(
+  value: unknown,
+  name: string,
+  minimum: number,
+  maximum: number,
+): number {
+  if (
+    typeof value !== "number"
+    || !Number.isSafeInteger(value)
+    || value < minimum
+    || value > maximum
+  ) throw new TypeError(`${name} must be an integer from ${minimum} through ${maximum}.`);
+  return value;
 }
 
 function normalizeProviderPlacement(

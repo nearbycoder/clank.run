@@ -110,6 +110,8 @@ test("GitHub Actions OIDC failures are fixed and reject claim, signature, key, a
     ref: "refs/pull/482/merge",
     workflow_ref: "nearby/app/.github/workflows/clank-preview.yml@refs/pull/482/merge",
   };
+  const signed = fixture.token(validOverrides).split(".");
+  signed[2] = `${signed[2][0] === "A" ? "B" : "A"}${signed[2].slice(1)}`;
   const invalid = [
     fixture.token({ ...validOverrides, aud: "https://attacker.example" }),
     fixture.token({ ...validOverrides, repository_id: "92837466" }),
@@ -117,7 +119,7 @@ test("GitHub Actions OIDC failures are fixed and reject claim, signature, key, a
     fixture.token({ ...validOverrides, ref: "refs/heads/main" }),
     fixture.token({ ...validOverrides, exp: NOW_SECONDS - 1 }),
     fixture.token({ ...validOverrides, exp: NOW_SECONDS + 601 }),
-    `${fixture.token(validOverrides).slice(0, -1)}A`,
+    signed.join("."),
   ];
   for (const token of invalid) {
     await assert.rejects(

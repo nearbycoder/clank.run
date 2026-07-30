@@ -196,6 +196,37 @@ CLI flow follows [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628/): hashed hig
 
 Bearer tokens are returned once and hashed at rest. Follow [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750): TLS, no tokens in URLs/logs, revocation, and rotation. Account tokens can create or administer organizations according to membership; project tokens are restricted to one project and explicit `read`, `deploy`, `rollback`, `jobs`, `secrets`, `tokens`, and `audit` permissions.
 
+## Billing and entitlements
+
+Billing is absent unless an operator configures a bounded plan catalog. Catalog parsing is exact
+and fail-closed: the free default must have a zero price, paid plans must map one-to-one to the
+provider adapter, quota keys and ranges are validated, and provider secrets are accepted only
+through environment variables. Public billing payloads contain plan names, descriptions, prices,
+states, and effective quotas, but never customer/subscription references or provider secrets.
+
+Account billing reads accept an interactive account or account-wide token; project-scoped tokens
+are denied. Checkout and portal mutations reject bearer credentials and require the account's
+same-origin browser session and CSRF header. Administrators can grant or revoke catalog plans only
+through a non-impersonating browser-admin boundary. A provider-managed row cannot be replaced by a
+manual grant, and an explicit account quota override remains the highest account-level authority.
+All grants, revocations, checkout creation, and provider state changes emit bounded audit metadata
+without provider resource identifiers.
+
+The included Stripe adapter sends POST requests only to the fixed Stripe API origin, refuses
+redirects and encoded or unbounded responses, applies deadlines, validates hosted return origins,
+and uses a durable checkout-attempt identity as Stripe's idempotency key. The webhook reads at most
+512 KiB and verifies HMAC-SHA256 over the exact raw bytes with a bounded timestamp window before
+JSON parsing. It checks live/test mode, supported event type, metadata, one configured subscription
+item, quantity, Price mapping, and opaque ID syntax.
+
+Clank transactionally binds a webhook to its durable attempt, account, session, customer, and
+subscription. Event IDs are stored with a digest: an exact replay is idempotent and conflicting
+reuse is rejected. Subscription event timestamps impose a monotonic state order, including when a
+subscription event arrives before checkout completion. Entitlement snapshots apply for manual,
+trialing, active, and bounded-grace past-due states; every other state and malformed stored snapshot
+falls back to the default plan. Downgrades change future admission only and never delete resources.
+See [Hosted plans and billing](hosted-plans-and-billing.md).
+
 ## Artifact intake
 
 Before extraction Clank bounds HTTP and gzip output; rejects unknown fields, traversal, duplicates, links, special files, sensitive dotfiles, NULs, and unsafe modes; verifies base64, sizes, every file hash, and the artifact hash; and writes exclusively inside a new release root.
