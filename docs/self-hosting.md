@@ -58,6 +58,10 @@ configured worker/scheduler processes for each active project.
 | `CLANK_BACKUP_MAX_COUNT` | `30` | Maximum retained backups per project |
 | `CLANK_BACKUP_MAX_AGE_MS` | `7776000000` | Maximum retained backup age |
 | `CLANK_BACKUP_MAX_DATABASE_BYTES` | `10737418240` | Maximum source database size accepted by backup creation |
+| `CLANK_BACKUP_STORE` | `local` | Encrypted recovery repository: `local` or `s3` |
+| `CLANK_BACKUP_NAMESPACE` | none | Required stable repository identity for object backups |
+| `CLANK_BACKUP_PREFIX` | `backups` | Logical backup root inside the object-store prefix |
+| `CLANK_BACKUP_CHUNK_BYTES` | `8388608` | Encrypted bytes per object, from 64 KiB through 64 MiB |
 | `CLANK_MAX_ORGANIZATIONS_PER_ACCOUNT` | `5` | Transactionally enforced account organization limit |
 | `CLANK_MAX_PROJECTS_PER_ACCOUNT` | `10` | Transactionally enforced account-wide site limit |
 | `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Transactionally enforced site limit |
@@ -155,12 +159,37 @@ repository. Clank refuses old object reads and destructive cleanup when the conf
 does not match, allowing the operator to restore the correct configuration without losing
 metadata.
 
-New uploads use object storage; runtime directories, databases, pre-migration snapshots, encrypted
-recovery backups, and legacy local uploads remain under `CLANK_PLATFORM_DATA`. Provider failures
+New uploads use object storage; runtime directories, databases, pre-migration snapshots, recovery
+backups unless separately configured below, and legacy local uploads remain under
+`CLANK_PLATFORM_DATA`. Provider failures
 are privately reported and returned as stable deployment errors. Cleanup attempts the remote
 deletion only after local paths pass containment and symlink checks. The external delete and local
 filesystem removal cannot share one transaction, so monitor failed cleanup and retry with the same
 repository configuration. See [Object storage](object-storage.md).
+
+### Optional off-host encrypted backups
+
+Release transport and database recovery are independent switches. To move new encrypted recovery
+points outside the platform volume, reuse the private S3-compatible connection above and add:
+
+```sh
+export CLANK_BACKUP_STORE=s3
+export CLANK_BACKUP_NAMESPACE=production-recovery-v1
+export CLANK_BACKUP_PREFIX=backups
+export CLANK_BACKUP_CHUNK_BYTES=8388608
+```
+
+No runner enrollment token is required. Every project gets its own authenticated catalog below
+`<backup-prefix>/<project-id>/`. Encrypted envelopes are uploaded in bounded chunks and verified
+end to end before the local completed copy is removed. Existing local backups are promoted before
+the next new backup; failed promotions leave their local recovery copy intact.
+
+On first use, `control.sqlite` binds the repository namespace and logical backup root. Removing or
+changing either setting then fails startup instead of silently showing an empty history. Preserve
+the binding, master key, and object keys together during a provider migration. Permanent project
+deletion removes platform-managed object backups as well as local project state; manually copied
+or provider-retained versions remain the operator's responsibility. See
+[Backup and disaster recovery](recovery.md).
 
 ## Production start
 
@@ -221,16 +250,28 @@ projects/<id>/
   data/app.sqlite
   releases/<release-id>/
   backups/<release-id>.sqlite
-  recovery/<backup-id>/
+  recovery/<backup-id>/       # completed local mode or pending object promotion
     database.enc
     manifest.json
 ```
 
 Use a local filesystem with correct SQLite locking/rename semantics. The platform sets umask `0077`.
 
-Clank automatically creates authenticated, AES-256-GCM encrypted recovery points under `recovery/`. Durable control-database claims prevent duplicate scheduled work when multiple control-plane processes share the store. Release count and byte ceilings separately bound retained extracted runtime files and pre-deploy rollback snapshots. Back up the control database, completed recovery directories, recoverable artifacts/source, and master key through separate paths. Pre-release snapshots remain rollback material, not part of the recovery retention policy. See [Backup and disaster recovery](recovery.md).
+Clank automatically creates authenticated, AES-256-GCM encrypted recovery points. Local mode keeps
+them under `recovery/`; object mode uses that directory only for private staging, legacy copies,
+and failed promotions. Durable control-database claims prevent duplicate scheduled work when
+multiple control-plane processes share the store. Release count and byte ceilings separately bound
+retained extracted runtime files and pre-deploy rollback snapshots. Back up the control database,
+recovery repository, recoverable artifacts or source, and master key through separate paths.
+Pre-release snapshots remain rollback material, not part of the recovery retention policy. See
+[Backup and disaster recovery](recovery.md).
 
-Permanent site deletion removes the complete matching `projects/<id>/` tree after symlink-safe validation, then removes its control rows and revokes project tokens. It does not reach copied/off-host backups, external databases, artifact mirrors, or Caddy certificate storage. Include those systems in tenant-retention and erasure runbooks, and preserve the control database if deletion audit history must remain available.
+Permanent site deletion removes platform-managed object backup chunks and catalog entries, remote
+runner artifacts, and the complete matching `projects/<id>/` tree before it removes control rows and
+revokes project tokens. It does not discover manual copies, provider-retained object versions,
+external databases, unrelated artifact mirrors, or Caddy certificate storage. Include those systems
+in tenant-retention and erasure runbooks, and preserve the control database if deletion audit
+history must remain available.
 
 Audit rows live in `control.sqlite`, retain organization attribution after project removal, and upgrade in place from earlier schemas. The public API does not mutate them, but SQLite administrators can. Export them to a separate append-only audit system when control-plane operator tampering or longer retention is in scope.
 

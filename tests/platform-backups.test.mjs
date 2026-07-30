@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -96,10 +97,47 @@ async function seedDatabaseProject(root, email) {
       "UPDATE clank_platform_projects SET database_path = ?, updated_at = ? WHERE id = ?",
     ).run("app.sqlite", Date.now(), projectId);
     control.close();
-    return { accessToken, dataDirectory, projectId };
+    return { accessToken, dataDirectory, projectId, slug: created.project.slug };
   } finally {
     await platform.close();
   }
+}
+
+function memoryObjectStore() {
+  const values = new Map();
+  return {
+    values,
+    store: Object.freeze({
+      kind: "memory",
+      async put(key, input, options = {}) {
+        const bytes = new Uint8Array(input instanceof Uint8Array ? input : new Uint8Array(input));
+        const now = Date.now();
+        const existing = values.get(key);
+        const metadata = Object.freeze({
+          key,
+          size: bytes.byteLength,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          contentType: options.contentType ?? "application/octet-stream",
+          createdAt: existing?.metadata.createdAt ?? now,
+          updatedAt: now,
+        });
+        values.set(key, { metadata, bytes });
+        return metadata;
+      },
+      async get(key) {
+        const value = values.get(key);
+        return value
+          ? { metadata: value.metadata, bytes: new Uint8Array(value.bytes) }
+          : null;
+      },
+      async stat(key) {
+        return values.get(key)?.metadata ?? null;
+      },
+      async delete(key) {
+        return values.delete(key);
+      },
+    }),
+  };
 }
 
 test("scheduled platform backups are encrypted, private, observable, and retention bounded", async () => {
@@ -200,6 +238,109 @@ test("scheduled backup failures are reported privately and retried without expos
     assert.equal(observed.length, 1);
     assert.match(observed[0].message, /Database exceeds backup limit of 1 bytes/u);
     assert.doesNotMatch(JSON.stringify(failed), /1 bytes|app\.sqlite|clank-platform-backup-failure/u);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("platform object backups survive restarts, bind repository identity, and clean up with a project", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-object-backup-"));
+  const seed = await seedDatabaseProject(root, "object-backup@example.com");
+  const objects = memoryObjectStore();
+  const objectOptions = {
+    namespace: "platform-recovery-v1",
+    store: objects.store,
+    prefix: "recovery",
+    chunkBytes: 64 * 1024,
+  };
+  let platform = await openPlatform({
+    dataDirectory: seed.dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    backups: { intervalMs: false, objects: objectOptions },
+  });
+  try {
+    const created = await payload(platform, jsonRequest(
+      `/api/projects/${seed.projectId}/backups`,
+      {
+        method: "POST",
+        token: seed.accessToken,
+        body: { reason: "off-host platform recovery" },
+      },
+    ), 201);
+    const listed = await payload(platform, jsonRequest(
+      `/api/projects/${seed.projectId}/backups`,
+      { token: seed.accessToken },
+    ));
+    assert.equal(listed.automation.storage, "object");
+    assert.equal(listed.backups[0].id, created.backup.id);
+    assert.ok([...objects.values.keys()].some(
+      (key) => key === `recovery/${seed.projectId}/catalog.json`,
+    ));
+    assert.equal(
+      (await readdir(join(
+        seed.dataDirectory,
+        "projects",
+        seed.projectId,
+        "recovery",
+      ))).some((entry) => entry.startsWith("bk_")),
+      false,
+    );
+
+    await platform.close();
+    platform = await openPlatform({
+      dataDirectory: seed.dataDirectory,
+      publicUrl: "http://127.0.0.1:4200",
+      signup: true,
+      backups: { intervalMs: false, objects: objectOptions },
+    });
+    const afterRestart = await payload(platform, jsonRequest(
+      `/api/projects/${seed.projectId}/backups`,
+      { token: seed.accessToken },
+    ));
+    assert.equal(afterRestart.backups[0].id, created.backup.id);
+    await platform.close();
+
+    await assert.rejects(
+      openPlatform({
+        dataDirectory: seed.dataDirectory,
+        publicUrl: "http://127.0.0.1:4200",
+        signup: true,
+        backups: { intervalMs: false },
+      }),
+      /bound to object repository "platform-recovery-v1"/u,
+    );
+    await assert.rejects(
+      openPlatform({
+        dataDirectory: seed.dataDirectory,
+        publicUrl: "http://127.0.0.1:4200",
+        signup: true,
+        backups: {
+          intervalMs: false,
+          objects: { ...objectOptions, prefix: "different-recovery-root" },
+        },
+      }),
+      /bound to object root "recovery"/u,
+    );
+    platform = await openPlatform({
+      dataDirectory: seed.dataDirectory,
+      publicUrl: "http://127.0.0.1:4200",
+      signup: true,
+      backups: { intervalMs: false, objects: objectOptions },
+    });
+    await payload(platform, jsonRequest(`/api/projects/${seed.projectId}`, {
+      method: "DELETE",
+      token: seed.accessToken,
+      body: {
+        confirmation: `delete-site ${seed.slug}`,
+        acknowledgeDataLoss: true,
+      },
+    }));
+    assert.equal(
+      [...objects.values.keys()].some((key) => key.startsWith(`recovery/${seed.projectId}/`)),
+      false,
+    );
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });

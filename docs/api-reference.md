@@ -88,13 +88,26 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `restoreSQLiteBackup(source, destination)`: replace a stopped database and clear WAL sidecars.
 - Types: `Migration`, `MigrationRecord`, `MigrationPlan`, `ApplyMigrationsOptions`.
 
+## Recovery
+
+- `openBackupManager(options)`: consistent AES-256-GCM SQLite recovery points with authenticated
+  manifests, retention, verification, explicit restore confirmation, and optional chunked
+  `ObjectStore` persistence.
+- `BackupManager.purge({ confirmation: "delete all backups" })`: explicit repository-wide cleanup,
+  including incomplete object promotions.
+- Local mode commits owner-only envelope/manifest directories atomically. Object mode promotes
+  existing local copies, publishes an HMAC-authenticated per-database catalog, verifies every
+  chunk and the reconstructed database, and retains the local copy after provider failure.
+- Types: `BackupManager`, `BackupManagerOptions`, `BackupManifest`, `BackupVerification`,
+  `BackupObjectRepositoryOptions`.
+
 ## Deployment platform
 
 - `openPlatform(options)`: browser dashboard, workspace people/invitation administration and activity, device authorization, tokens, projects, transactionally enforced limits, ingress metrics, DNS/domain lifecycle, TLS eligibility, encrypted secrets, role-filtered audit, release transaction, logs, rollback, and supervision.
 - `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, resolved `.hostingProfile`,
   `.runnerKind`, and async `.close()`.
 - Runners: dependency-free process runner or constrained Docker runner.
-- Types: `ClankPlatformOptions`, `PlatformLimits`, `PlatformHostingProfile`,
+- Types: `ClankPlatformOptions`, `PlatformBackupOptions`, `PlatformLimits`, `PlatformHostingProfile`,
   `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`.
 
 ## Object storage
@@ -110,6 +123,8 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `openPlatform({ deploymentAgents: { artifacts: { namespace, store } } })`: retains each new
   remote-runner upload under a persisted repository identity and content-addressed key. Existing
   local releases remain readable; mismatched repositories fail closed.
+- `openPlatform({ backups: { objects: { namespace, store } } })`: gives every project an isolated
+  authenticated backup catalog and binds the repository identity/root in the control database.
 
 ## Remote deployment coordination
 

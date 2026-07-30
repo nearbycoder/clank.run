@@ -8,7 +8,17 @@ Clank distinguishes deployment rollback from database recovery:
 ## Application API
 
 ```ts
+import { createS3ObjectStore } from "@clank.run/framework/object-storage";
 import { openBackupManager } from "@clank.run/framework/recovery";
+
+const objects = createS3ObjectStore({
+  endpoint: process.env.AWS_ENDPOINT_URL!,
+  region: process.env.AWS_DEFAULT_REGION ?? "auto",
+  bucket: process.env.AWS_S3_BUCKET_NAME!,
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+  maxObjectBytes: 32 * 1024 * 1024,
+});
 
 const backups = await openBackupManager({
   databasePath: "app.sqlite",
@@ -17,6 +27,12 @@ const backups = await openBackupManager({
   maxBackups: 30,
   maxAgeMs: 90 * 24 * 60 * 60 * 1_000,
   verifyAfterCreate: true,
+  objects: {
+    store: objects,
+    namespace: "production-recovery-v1",
+    repositoryId: "orbit-tasks",
+    chunkBytes: 8 * 1024 * 1024,
+  },
 });
 
 await backups.create({ reason: "scheduled" });
@@ -36,6 +52,17 @@ Each `clank-backup/1` record contains:
 Logical manifests are HMAC authenticated and are also bound as AEAD additional data. Restore decrypts to a private temporary file, verifies the plaintext digest and byte count, runs SQLite `integrity_check`, and only then replaces the stopped database.
 
 `restore` requires the exact confirmation `restore <backup-id>`.
+`purge({ confirmation: "delete all backups" })` removes completed and incomplete repository state;
+the deployment platform uses it only inside an already confirmed permanent project deletion.
+`protectedBackupIds` can temporarily exempt restore targets from one create-time retention pass.
+Clank uses that protection for the safety copy created immediately before a restore, so a full
+retention window cannot prune the selected target.
+
+Omit `objects` for the original owner-only local repository. With `objects`, Clank encrypts locally,
+uploads bounded immutable chunks, authenticates the remote catalog, verifies the completed remote
+copy, and then removes the committed local copy. Existing local recovery points are promoted before
+the next new backup. If a provider write fails, the encrypted local recovery point remains listed
+and is retried; it is never discarded merely because replication failed.
 
 ## Platform workflow
 
@@ -64,8 +91,18 @@ Platform retention defaults to 30 backups and 90 days per project. Configure it 
 | `CLANK_BACKUP_MAX_COUNT` | `30` | Maximum retained backups per project |
 | `CLANK_BACKUP_MAX_AGE_MS` | `7776000000` | Maximum retained age |
 | `CLANK_BACKUP_MAX_DATABASE_BYTES` | `10737418240` | Maximum source database size |
+| `CLANK_BACKUP_STORE` | `local` | Recovery repository: `local` or `s3` |
+| `CLANK_BACKUP_NAMESPACE` | none | Required stable physical-repository identity for `s3` |
+| `CLANK_BACKUP_PREFIX` | `backups` | Logical root inside the configured object-store prefix |
+| `CLANK_BACKUP_CHUNK_BYTES` | `8388608` | Encrypted bytes per object, from 64 KiB through 64 MiB |
 
 Disabling automation does not disable manual backup, verification, or restore. It also does not delete existing restore points.
+
+The `s3` mode uses the shared `CLANK_OBJECT_*` connection variables documented in
+[Object storage](object-storage.md). The platform records the namespace and logical root in its
+control database. It refuses to start if object backup configuration later disappears or changes.
+This protects against silent repository drift; preserve that control database and keep the
+operator-selected namespace stable during a provider migration.
 
 ## Recovery objectives
 
@@ -75,8 +112,13 @@ Operators should set and test explicit objectives:
 - **RTO**: detection, backup selection, decrypt/verify time, and application restart time;
 - **retention**: enough restore points to cover delayed discovery;
 - **key recovery**: backup keys must be stored separately from the backup repository; and
-- **failure domain**: copy encrypted backup directories to storage outside the application host and region.
+- **failure domain**: select an object repository outside the application host and, where required,
+  outside its region.
 
 Run `verify` automatically and perform recurring restore drills into a temporary environment. A backup that has never been decrypted and opened is not a proven recovery point.
 
-The built-in repository is local. A remote repository can synchronize completed backup directories because a backup becomes visible only after its encrypted envelope and authenticated manifest are complete. Replicate `projects/<id>/recovery/` off-host; the local schedule alone does not protect against loss of the platform disk or master key.
+Local storage remains the zero-setup default and does not protect against platform-volume loss.
+Object mode publishes a recovery point only after its authenticated chunk set has been reassembled
+and verified. It still depends on the control database for project identity and on the platform
+master key for decryption. Back up those through separate access paths, monitor failed promotions,
+and test a clean-environment restore rather than treating object existence as proof of recovery.

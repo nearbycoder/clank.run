@@ -46,39 +46,85 @@ export function resolveRunnerArtifactStorage(environment) {
   if (mode !== "s3") {
     throw new Error("CLANK_RUNNER_ARTIFACT_STORE must be local or s3.");
   }
-  const required = (primary, fallback) => {
-    const result = environment[primary] ?? (fallback ? environment[fallback] : undefined);
-    if (!result) throw new Error(`${primary} is required for S3 runner artifact storage.`);
-    return result;
-  };
+  return Object.freeze({
+    namespace: required(
+      environment,
+      "CLANK_RUNNER_ARTIFACT_NAMESPACE",
+      undefined,
+      "runner artifact storage",
+    ),
+    options: s3Options(
+      environment,
+      positiveNumber(environment.CLANK_RUNNER_MAX_ARTIFACT_BYTES, 100 * 1024 * 1024),
+      "runner artifact storage",
+    ),
+  });
+}
+
+export function resolveBackupStorage(environment) {
+  const mode = environment.CLANK_BACKUP_STORE ?? "local";
+  if (mode === "local") return null;
+  if (mode !== "s3") {
+    throw new Error("CLANK_BACKUP_STORE must be local or s3.");
+  }
+  const chunkBytes = positiveNumber(
+    environment.CLANK_BACKUP_CHUNK_BYTES,
+    8 * 1024 * 1024,
+  );
+  if (chunkBytes < 64 * 1024 || chunkBytes > 64 * 1024 * 1024) {
+    throw new Error("CLANK_BACKUP_CHUNK_BYTES must be from 65536 to 67108864.");
+  }
+  return Object.freeze({
+    namespace: required(
+      environment,
+      "CLANK_BACKUP_NAMESPACE",
+      undefined,
+      "backup storage",
+    ),
+    prefix: environment.CLANK_BACKUP_PREFIX ?? "backups",
+    chunkBytes,
+    options: s3Options(
+      environment,
+      Math.max(32 * 1024 * 1024, chunkBytes),
+      "backup storage",
+    ),
+  });
+}
+
+function s3Options(environment, maxObjectBytes, purpose) {
   const pathStyle = environment.CLANK_OBJECT_PATH_STYLE ?? "0";
   if (pathStyle !== "0" && pathStyle !== "1") {
     throw new Error("CLANK_OBJECT_PATH_STYLE must be 0 or 1.");
   }
   return Object.freeze({
-    namespace: required("CLANK_RUNNER_ARTIFACT_NAMESPACE"),
-    options: Object.freeze({
-      endpoint: required("CLANK_OBJECT_ENDPOINT", "AWS_ENDPOINT_URL"),
-      region: required("CLANK_OBJECT_REGION", "AWS_DEFAULT_REGION"),
-      bucket: required("CLANK_OBJECT_BUCKET", "AWS_S3_BUCKET_NAME"),
-      accessKeyId: required("CLANK_OBJECT_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"),
-      secretAccessKey: required("CLANK_OBJECT_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"),
-      ...(environment.CLANK_OBJECT_SESSION_TOKEN || environment.AWS_SESSION_TOKEN
-        ? {
-            sessionToken: environment.CLANK_OBJECT_SESSION_TOKEN
-              ?? environment.AWS_SESSION_TOKEN,
-          }
-        : {}),
-      ...(environment.CLANK_OBJECT_PREFIX
-        ? { prefix: environment.CLANK_OBJECT_PREFIX }
-        : {}),
-      pathStyle: pathStyle === "1",
-      maxObjectBytes: positiveNumber(
-        environment.CLANK_RUNNER_MAX_ARTIFACT_BYTES,
-        100 * 1024 * 1024,
-      ),
-    }),
+    endpoint: required(environment, "CLANK_OBJECT_ENDPOINT", "AWS_ENDPOINT_URL", purpose),
+    region: required(environment, "CLANK_OBJECT_REGION", "AWS_DEFAULT_REGION", purpose),
+    bucket: required(environment, "CLANK_OBJECT_BUCKET", "AWS_S3_BUCKET_NAME", purpose),
+    accessKeyId: required(environment, "CLANK_OBJECT_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID", purpose),
+    secretAccessKey: required(
+      environment,
+      "CLANK_OBJECT_SECRET_ACCESS_KEY",
+      "AWS_SECRET_ACCESS_KEY",
+      purpose,
+    ),
+    ...(environment.CLANK_OBJECT_SESSION_TOKEN || environment.AWS_SESSION_TOKEN
+      ? {
+          sessionToken: environment.CLANK_OBJECT_SESSION_TOKEN
+            ?? environment.AWS_SESSION_TOKEN,
+        }
+      : {}),
+    ...(environment.CLANK_OBJECT_PREFIX
+      ? { prefix: environment.CLANK_OBJECT_PREFIX }
+      : {}),
+    pathStyle: pathStyle === "1",
+    maxObjectBytes,
   });
+}
+
+function required(environment, primary, fallback, purpose) {
+  const result = environment[primary] ?? (fallback ? environment[fallback] : undefined);
+  if (!result) throw new Error(`${primary} is required for S3 ${purpose}.`);
+  return result;
 }
 
 function value(environment, primary, legacy) {

@@ -23,7 +23,11 @@ import {
   planMigrations,
   restoreSQLiteBackup,
 } from "./migrations.ts";
-import { openBackupManager, type BackupManifest } from "./recovery.ts";
+import {
+  openBackupManager,
+  type BackupManifest,
+  type BackupObjectRepositoryOptions,
+} from "./recovery.ts";
 import { openDeploymentOrchestrator } from "./orchestration.ts";
 import {
   createDeploymentCoordinatorHandler,
@@ -103,6 +107,11 @@ export interface PlatformBackupOptions {
   maxAgeMs?: number;
   /** Maximum source database size accepted by the backup engine. Defaults to 10 GiB. */
   maxDatabaseBytes?: number;
+  /**
+   * Optional off-host repository for encrypted backups. Each project receives
+   * an isolated catalog and chunk namespace automatically.
+   */
+  objects?: Omit<BackupObjectRepositoryOptions, "repositoryId">;
 }
 
 type PlatformQuotaKey =
@@ -485,6 +494,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       Number.MAX_SAFE_INTEGER,
     ),
   });
+  const backupObjects = normalizePlatformBackupObjects(options.backups?.objects);
   const limits = Object.freeze({
     organizationsPerAccount: integerInRange(
       options.limits?.organizationsPerAccount ?? 5,
@@ -559,6 +569,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
+  try {
+    reconcileBackupObjectBinding(storage.internal, backupObjects);
+  } catch (error) {
+    storage.auth.close();
+    storage.database.close();
+    throw error;
+  }
   reconcileReservedProjectPorts(storage.internal, appPortStart, appPortEnd, reservedAppPorts);
   reconcilePlatformAdminRoles(storage, platformAdminEmails);
   const finalizePlatformRegistration = (response: Response): Response => {
@@ -895,7 +912,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const manager = await projectBackupManager(paths.projects, project, masterKey, {
           ...backupPolicy,
           maxBackups: effective.backupsPerProject,
-        });
+        }, backupObjects);
         try {
           return await manager.create({ reason: "automatic scheduled backup" });
         } finally {
@@ -1784,6 +1801,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     await stopProject(project.id);
     try {
       await deleteProjectStorage(paths.projects, project.id, async () => {
+        await deleteProjectBackups(
+          paths.projects,
+          project,
+          masterKey,
+          backupPolicy,
+          backupObjects,
+        );
         await deleteProjectRunnerArtifacts(
           storage.internal,
           project.id,
@@ -3048,12 +3072,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const automation = {
           ...backupScheduler.status(project.id, Boolean(project.databasePath)),
           maxBackups: effective.backupsPerProject,
+          storage: backupObjects ? "object" : "local",
         };
         if (!project.databasePath) return api({ ok: true, backups: [], automation });
         const manager = await projectBackupManager(paths.projects, project, masterKey, {
           ...backupPolicy,
           maxBackups: effective.backupsPerProject,
-        });
+        }, backupObjects);
         try {
           return api({
             ok: true,
@@ -3077,7 +3102,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           const manager = await projectBackupManager(paths.projects, current, masterKey, {
             ...backupPolicy,
             maxBackups: effective.backupsPerProject,
-          });
+          }, backupObjects);
           try {
             return await manager.create({ reason });
           } finally {
@@ -3098,7 +3123,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const manager = await projectBackupManager(paths.projects, project, masterKey, {
           ...backupPolicy,
           maxBackups: effective.backupsPerProject,
-        });
+        }, backupObjects);
         try {
           if (backupMatch[2] === "verify") {
             const verification = await manager.verify(backupMatch[1]!);
@@ -3118,7 +3143,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           return await withProjectLock(project.id, async () => {
             cancelRestart(project.id);
             const activeRelease = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
-            const safety = await manager.create({ reason: `automatic safety copy before restoring ${backupMatch[1]}` });
+            const safety = await manager.create({
+              reason: `automatic safety copy before restoring ${backupMatch[1]}`,
+              protectedBackupIds: [backupMatch[1]!],
+            });
             await stopProject(project.id);
             try {
               const verification = await manager.restore(backupMatch[1]!, {
@@ -3456,6 +3484,20 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   )`);
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_rate_limits_expiry
     ON clank_platform_rate_limits (expires_at)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_storage_bindings (
+    purpose TEXT PRIMARY KEY CHECK (purpose IN ('backups')),
+    namespace TEXT NOT NULL,
+    object_root TEXT NOT NULL DEFAULT 'backups',
+    created_at INTEGER NOT NULL
+  )`);
+  const storageBindingColumns = internal.prepare(
+    "PRAGMA table_info(clank_platform_storage_bindings)",
+  ).all();
+  if (!storageBindingColumns.some((column) => column.name === "object_root")) {
+    internal.exec(
+      "ALTER TABLE clank_platform_storage_bindings ADD COLUMN object_root TEXT NOT NULL DEFAULT 'backups'",
+    );
+  }
   const rateLimits = createPlatformRateLimitStore(internal, masterKey);
   // The platform gates public, bootstrap, and invitation-assisted registration
   // before delegating to auth. Keeping the internal primitive enabled lets a
@@ -6408,6 +6450,7 @@ async function projectBackupManager(
   project: ProjectRow,
   masterKey: Uint8Array,
   policy: PlatformBackupPolicy,
+  objects: PlatformBackupObjects | null,
 ) {
   if (!project.databasePath) {
     throw new PlatformError(409, "DATABASE_UNAVAILABLE", "Deploy the project before creating a database backup.");
@@ -6429,6 +6472,14 @@ async function projectBackupManager(
     maxAgeMs: policy.maxAgeMs,
     maxDatabaseBytes: policy.maxDatabaseBytes,
     verifyAfterCreate: true,
+    ...(objects
+      ? {
+          objects: {
+            ...objects,
+            repositoryId: project.id,
+          },
+        }
+      : {}),
   });
 }
 
@@ -6452,6 +6503,98 @@ async function newReleaseDirectory(projectsRoot: string, projectId: string, rele
 interface RunnerArtifactObjects {
   namespace: string;
   store: ObjectStore;
+}
+
+type PlatformBackupObjects = Omit<BackupObjectRepositoryOptions, "repositoryId">;
+
+function normalizePlatformBackupObjects(
+  configured: Omit<BackupObjectRepositoryOptions, "repositoryId"> | undefined,
+): PlatformBackupObjects | null {
+  if (!configured) return null;
+  const namespace = boundedString(configured.namespace, "backups.objects.namespace", 1, 128);
+  if (
+    namespace === "local"
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(namespace)
+  ) {
+    throw new TypeError(
+      "backups.objects.namespace must be a portable non-local identifier.",
+    );
+  }
+  const store = configured.store;
+  if (
+    !store
+    || typeof store !== "object"
+    || typeof store.put !== "function"
+    || typeof store.get !== "function"
+    || typeof store.stat !== "function"
+    || typeof store.delete !== "function"
+  ) {
+    throw new TypeError("backups.objects.store must implement ObjectStore.");
+  }
+  const prefix = configured.prefix === undefined
+    ? undefined
+    : boundedString(configured.prefix, "backups.objects.prefix", 1, 384);
+  if (prefix !== undefined) {
+    const segments = prefix.split("/");
+    if (segments.some((segment) =>
+      segment.length < 1
+      || segment.length > 100
+      || segment === "."
+      || segment === ".."
+      || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(segment))) {
+      throw new TypeError("backups.objects.prefix must contain portable path segments.");
+    }
+  }
+  const chunkBytes = configured.chunkBytes === undefined
+    ? undefined
+    : integerInRange(
+        configured.chunkBytes,
+        "backups.objects.chunkBytes",
+        64 * 1024,
+        64 * 1024 * 1024,
+      );
+  return Object.freeze({
+    store,
+    namespace,
+    ...(prefix === undefined ? {} : { prefix }),
+    ...(chunkBytes === undefined ? {} : { chunkBytes }),
+  });
+}
+
+function reconcileBackupObjectBinding(
+  internal: SQLiteInternal,
+  objects: PlatformBackupObjects | null,
+): void {
+  const row = internal.prepare(
+    "SELECT namespace, object_root FROM clank_platform_storage_bindings WHERE purpose = 'backups'",
+  ).get();
+  const existing = row?.namespace === undefined ? null : String(row.namespace);
+  const existingRoot = row?.object_root === undefined ? null : String(row.object_root);
+  const configuredRoot = objects?.prefix ?? "backups";
+  if (!objects) {
+    if (existing) {
+      throw new TypeError(
+        `Encrypted backups are bound to object repository "${existing}". `
+        + "Restore the matching backups.objects configuration before starting the platform.",
+      );
+    }
+    return;
+  }
+  if (existing && existing !== objects.namespace) {
+    throw new TypeError(
+      `Encrypted backups are bound to object repository "${existing}", not "${objects.namespace}".`,
+    );
+  }
+  if (existingRoot && existingRoot !== configuredRoot) {
+    throw new TypeError(
+      `Encrypted backups are bound to object root "${existingRoot}", not "${configuredRoot}".`,
+    );
+  }
+  if (!existing) {
+    internal.prepare(`INSERT INTO clank_platform_storage_bindings
+      (purpose, namespace, object_root, created_at) VALUES ('backups', ?, ?, ?)`)
+      .run(objects.namespace, configuredRoot, Date.now());
+  }
 }
 
 interface RunnerArtifactDescriptor {
@@ -6778,6 +6921,28 @@ async function deleteProjectRunnerArtifacts(
       ORDER BY created_at`,
   ).all(projectId).map(releaseRow);
   for (const release of releases) await deleteRunnerReleaseObject(release, objects);
+}
+
+async function deleteProjectBackups(
+  projectsRoot: string,
+  project: ProjectRow,
+  masterKey: Uint8Array,
+  policy: PlatformBackupPolicy,
+  objects: PlatformBackupObjects | null,
+): Promise<void> {
+  if (!project.databasePath || !objects) return;
+  const manager = await projectBackupManager(
+    projectsRoot,
+    project,
+    masterKey,
+    policy,
+    objects,
+  );
+  try {
+    await manager.purge({ confirmation: "delete all backups" });
+  } finally {
+    manager.close();
+  }
 }
 
 async function deleteReleaseSnapshot(

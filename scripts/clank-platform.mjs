@@ -4,6 +4,7 @@ import { openPlatform } from "../dist/platform.js";
 import { serve } from "../dist/node.js";
 import { createS3ObjectStore } from "../dist/object-storage.js";
 import {
+  resolveBackupStorage,
   resolvePlatformHosting,
   resolveRunnerArtifactStorage,
 } from "./platform-hosting.mjs";
@@ -43,6 +44,7 @@ const ingressEnabled = environment("CLANK_INGRESS", "PROACT_INGRESS") === "1" ||
 const domainRecheckInterval = process.env.CLANK_DOMAIN_RECHECK_INTERVAL_MS;
 const backupInterval = process.env.CLANK_BACKUP_INTERVAL_MS;
 const runnerArtifactStorage = resolveRunnerArtifactStorage(process.env);
+const backupStorage = resolveBackupStorage(process.env);
 if (runnerArtifactStorage && !process.env.CLANK_RUNNER_REGISTRATION_TOKEN) {
   throw new Error(
     "CLANK_RUNNER_ARTIFACT_STORE=s3 requires CLANK_RUNNER_REGISTRATION_TOKEN.",
@@ -118,6 +120,16 @@ const platform = await openPlatform({
     maxBackups: number(process.env.CLANK_BACKUP_MAX_COUNT, 30),
     maxAgeMs: number(process.env.CLANK_BACKUP_MAX_AGE_MS, 90 * 24 * 60 * 60_000),
     maxDatabaseBytes: number(process.env.CLANK_BACKUP_MAX_DATABASE_BYTES, 10 * 1024 * 1024 * 1024),
+    ...(backupStorage
+      ? {
+          objects: {
+            namespace: backupStorage.namespace,
+            prefix: backupStorage.prefix,
+            chunkBytes: backupStorage.chunkBytes,
+            store: createS3ObjectStore(backupStorage.options),
+          },
+        }
+      : {}),
   },
   ...(ingress ? { ingress } : {}),
   onError: (error) => console.error("[platform]", error),
@@ -146,6 +158,7 @@ if (platform.hostingProfile === "trusted") {
 console.log(`Managed ingress: ${ingressEnabled ? "enabled" : "disabled"}`);
 console.log(`Remote runner enrollment: ${process.env.CLANK_RUNNER_REGISTRATION_TOKEN ? "enabled" : "disabled"}`);
 console.log(`Runner artifact storage: ${runnerArtifactStorage ? "object" : "local"}`);
+console.log(`Encrypted backup storage: ${backupStorage ? "object" : "local"}`);
 console.log(`Automatic backups: ${backupInterval === "0" ? "disabled" : "enabled"}`);
 
 let closing;

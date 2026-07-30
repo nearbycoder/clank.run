@@ -161,7 +161,11 @@ The generated local key is onboarding convenience, not protection from a comprom
 - Failure restores prior data/code.
 - Data rollback is narrow and explicitly confirmed.
 
-Export completed encrypted backup directories off-host and keep the master key in a separate failure domain. Site deletion removes the platform-managed local recovery directory but cannot erase already replicated backups, external databases, copied artifacts, or edge certificate storage; operators must apply the same retention/deletion request to those systems.
+Configure the built-in object-backed recovery repository or export completed encrypted backups
+off-host, and keep the master key in a separate failure domain. Site deletion removes
+platform-managed local and object-backed recovery points, but cannot discover provider-retained
+versions, manual copies, external databases, unrelated artifacts, or edge certificate storage;
+operators must apply the same retention/deletion request to those systems.
 
 The control-plane audit API has no update or delete operation, but the trusted SQLite administrator can modify local history. Replicate events to a separately administered append-only or signed log when operator tampering is part of the threat model.
 

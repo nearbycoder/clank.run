@@ -32,6 +32,23 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 
 The final certification result and exact test counts belong in the pull request or release record after the complete gate and browser review finish.
 
+## 2026-07-30 storage phases
+
+- [x] Added atomic local and zero-dependency S3-compatible object adapters with bounded SigV4
+  requests, exact integrity metadata, retries, deadlines, and private provider errors.
+- [x] Moved optional remote-runner source releases behind the object boundary while preserving
+  content addressing, quotas, leased reads, legacy local releases, and deletion safety.
+- [x] Added optional chunked object storage for encrypted recovery points without changing the
+  zero-setup local default.
+- [x] Authenticated per-database catalogs, verified chunk metadata and bytes, reassembled and
+  checked every promoted backup, retained local copies on provider failure, and migrated legacy
+  local recovery points on the next create.
+- [x] Bound the platform backup namespace/root in the control database, kept restore targets safe
+  during pre-restore backup pruning, and purged complete or incomplete object state during
+  confirmed permanent project deletion.
+- [x] Kept the current Railway production service on its existing local volume; no bucket or
+  additional paid resource was provisioned.
+
 ## 2026-07-26 follow-up
 
 - [x] Merged the complete 2026-07-25 security and release-certification pass into `main`.

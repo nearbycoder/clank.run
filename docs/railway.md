@@ -125,9 +125,28 @@ CLANK_OBJECT_PREFIX=clank-production
 Map Railway's provided `ENDPOINT`, `REGION`, `BUCKET`, `ACCESS_KEY_ID`, and
 `SECRET_ACCESS_KEY` values into the corresponding `CLANK_OBJECT_*` service variables with Railway
 variable references. New runner uploads then leave the mounted volume; existing release runtime
-directories, databases, snapshots, backups, and legacy uploads remain local. Clank never creates
-a bucket automatically, and the current single-service production topology deliberately stays on
-local storage to avoid a new resource charge.
+directories, databases, snapshots, backups unless separately configured, and legacy uploads remain
+local.
+
+The same private bucket can hold encrypted database recovery points under a separate logical root:
+
+```sh
+CLANK_BACKUP_STORE=s3
+CLANK_BACKUP_NAMESPACE=railway-recovery-v1
+CLANK_BACKUP_PREFIX=backups
+CLANK_BACKUP_CHUNK_BYTES=8388608
+```
+
+This does not require remote runners. Clank uploads bounded encrypted chunks, verifies a completed
+copy before removing its local committed copy, and retains a local copy whenever promotion fails.
+The control database binds the repository namespace and root so a missing Railway variable fails
+startup instead of presenting an empty backup list. Back up the control database and master key
+separately; the bucket alone cannot decrypt or associate recovery points.
+
+Clank never creates a bucket automatically. The current single-service `clank.run` production
+topology deliberately stays on local release and backup storage until its measured recovery need
+justifies the additional managed resource. If both switches are enabled later, reuse one bucket
+and installation prefix to stay inexpensive, then monitor service egress and stored bytes.
 
 ## Domains
 

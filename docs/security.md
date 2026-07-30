@@ -152,7 +152,8 @@ Also:
 - alert on dead letters, oldest-due age, lease expiry, and background restart loops;
 - use Docker or stronger isolation for mutually untrusted deployers;
 - supply the platform master key from external secret management;
-- export scheduled backups and pre-release snapshots off-host.
+- configure object-backed scheduled recovery or export backups off-host, and independently protect
+  any pre-release snapshots required by the rollback policy.
 
 ## CSP nonces
 

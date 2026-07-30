@@ -1,7 +1,9 @@
 import {
   openPlatform,
+  openBackupManager,
   parseDeploymentConfig,
   type DeploymentConfig,
+  type ObjectStore,
   type PlatformRunnerOptions,
 } from "@clank.run/framework";
 
@@ -32,11 +34,32 @@ const runner: PlatformRunnerOptions = {
   pidsLimit: 128,
 };
 
+declare const objects: ObjectStore;
+
 void openPlatform({
   dataDirectory: ".clank-platform",
   publicUrl: "https://deploy.example.com",
   appUrlTemplate: "https://{slug}.apps.example.com",
   runner,
+  backups: {
+    objects: {
+      store: objects,
+      namespace: "production-recovery-v1",
+      prefix: "backups",
+      chunkBytes: 8 * 1024 * 1024,
+    },
+  },
+});
+
+void openBackupManager({
+  databasePath: "app.sqlite",
+  repositoryDirectory: ".data/recovery",
+  encryptionKey: new Uint8Array(32),
+  objects: {
+    store: objects,
+    namespace: "production-recovery-v1",
+    repositoryId: "orbit-tasks",
+  },
 });
 
 // @ts-expect-error runner kind is intentionally closed.
