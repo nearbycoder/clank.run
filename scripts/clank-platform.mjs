@@ -6,6 +6,7 @@ import { createS3ObjectStore } from "../dist/object-storage.js";
 import {
   resolveBackupStorage,
   resolvePlatformHosting,
+  resolveProviderPlacement,
   resolveRunnerArtifactStorage,
 } from "./platform-hosting.mjs";
 
@@ -46,6 +47,7 @@ const backupInterval = process.env.CLANK_BACKUP_INTERVAL_MS;
 const previewCleanupInterval = process.env.CLANK_PREVIEW_CLEANUP_INTERVAL_MS;
 const runnerArtifactStorage = resolveRunnerArtifactStorage(process.env);
 const backupStorage = resolveBackupStorage(process.env);
+const providerPlacement = resolveProviderPlacement(process.env);
 const runnerCoordinatorSetting = process.env.CLANK_RUNNER_COORDINATOR;
 if (
   runnerCoordinatorSetting !== undefined
@@ -59,6 +61,16 @@ const runnerCoordinatorEnabled =
 if (runnerArtifactStorage && !runnerCoordinatorEnabled) {
   throw new Error(
     "CLANK_RUNNER_ARTIFACT_STORE=s3 requires CLANK_RUNNER_COORDINATOR=1.",
+  );
+}
+if (providerPlacement && !runnerCoordinatorEnabled) {
+  throw new Error(
+    "CLANK_PROVIDER_DEFAULT_PLACEMENT requires CLANK_RUNNER_COORDINATOR=1.",
+  );
+}
+if (providerPlacement && !ingressEnabled) {
+  throw new Error(
+    "CLANK_PROVIDER_DEFAULT_PLACEMENT requires managed ingress.",
   );
 }
 const ingress = ingressEnabled ? {
@@ -102,6 +114,7 @@ const platform = await openPlatform({
                 },
               }
             : {}),
+          ...(providerPlacement ? { placement: providerPlacement } : {}),
         },
       }
     : {}),
@@ -197,6 +210,11 @@ console.log(`Remote runner coordinator: ${runnerCoordinatorEnabled ? "enabled" :
 console.log(`One-time runner enrollment: ${runnerCoordinatorEnabled ? "enabled" : "disabled"}`);
 console.log(`Legacy shared runner enrollment: ${process.env.CLANK_RUNNER_REGISTRATION_TOKEN ? "enabled" : "disabled"}`);
 console.log(`Runner artifact storage: ${runnerArtifactStorage ? "object" : "local"}`);
+console.log(
+  `Provider project placement: ${
+    providerPlacement ? `enabled (default ${providerPlacement.default})` : "disabled"
+  }`,
+);
 console.log(`Encrypted backup storage: ${backupStorage ? "object" : "local"}`);
 console.log(`Automatic backups: ${backupInterval === "0" ? "disabled" : "enabled"}`);
 console.log(`Preview cleanup: ${previewCleanupInterval === "0" ? "disabled" : "enabled"}`);

@@ -2,10 +2,11 @@
 
 The `clank` executable contains both the compiler and deployment client. It does not install application dependencies or execute remote build hooks.
 
-The package also exposes two operator processes: `clank-platform` starts the control plane, and
-`clank-runner` connects an authenticated remote deployment node to the portable HTTP provider
-bridge. `clank-runner --help` lists its environment-only configuration; the complete trust and
-idempotency contract is in [Deployment provider adapters](provider-adapters.md).
+The package also exposes three operator processes: `clank-platform` starts the control plane,
+`clank-runner` connects an authenticated remote deployment node, and `clank-provider` runs the
+reference stateful Docker provider plus private runtime ingress. Their `--help` output lists
+environment-only configuration; the complete trust and idempotency contract is in [Deployment
+provider adapters](provider-adapters.md).
 
 ## Interactive launcher
 
@@ -134,6 +135,7 @@ flow. See [Agent protocol](agent-protocol.md#connect-from-codex).
 ```sh
 clank project create my-app
 clank project create "Customer workspace" --slug=customer-workspace
+clank project create remote-app --placement=provider
 clank project list
 clank project link <project-id>
 clank project delete [project-id] \
@@ -142,6 +144,12 @@ clank project delete [project-id] \
 ```
 
 Links are written to `.clank/project.json` and should normally remain uncommitted.
+
+`--placement` accepts `local` or `provider` and is used only when the project is created. Provider
+selection must be enabled by the self-hosted platform operator; Clank returns
+`PROVIDER_PLACEMENT_DISABLED` otherwise. Placement is immutable because a silent change would
+create or abandon a different SQLite database. `clank project list` includes each project's
+placement.
 
 Deletion is permanent and requires an account-wide token plus an owner/admin organization role. Project-scoped tokens are rejected even if they have `tokens` permission. A successful deletion removes the matching local project link, but leaves other directories and off-platform copies untouched. See [Site deletion](deployment-platform.md#site-deletion).
 
@@ -199,15 +207,21 @@ clank deploy ../another-app
 clank deploy --dry-run
 clank deploy --output=/secure/path/release.clank.gz
 clank deploy --name="Customer workspace" --slug=customer-workspace --org=<organization-id>
+clank deploy --name=remote-app --placement=provider
 clank deploy --json
 clank inspect /secure/path/release.clank.gz
 ```
 
-Deployment validates config, runs the local build without a shell, packages included files plus the exact Clank runtime, verifies the artifact locally, creates and links a project if needed, uploads with a digest/idempotency key, and waits for migration and health. `--name`, `--slug`, and `--org` configure that automatic first project creation, so login plus one deploy command is sufficient.
+Deployment validates config, runs the local build without a shell, packages included files plus the exact Clank runtime, verifies the artifact locally, creates and links a project if needed, uploads with a digest/idempotency key, and waits for migration and health. `--name`, `--slug`, `--org`, and `--placement` configure only that automatic first project creation, so login plus one deploy command is sufficient.
 
 `--dry-run` is deliberately offline: it builds and writes a verified artifact without reading a login, creating a project, or contacting a platform. `--json` suppresses human progress output and emits one `clank-deploy-result/1` document with artifact, release, URL, and timing data.
 
-Before upload the CLI stores a non-secret attempt record in `.clank/deploy-attempt.json`. If the connection fails after the platform may have accepted the artifact, the next identical deploy within 24 hours reuses the same idempotency key and converges on the original release. A definitive platform response clears the record.
+Before upload the CLI stores a non-secret attempt record in `.clank/deploy-attempt.json`. If the
+connection fails after the platform may have accepted the artifact, or a provider returns
+`PROVIDER_DEPLOYMENT_PENDING`, the next identical deploy within 24 hours reuses the same
+idempotency key and converges on the original release. A successful activation or definitive
+validation/provider rejection clears the record; ambiguous and retryable responses preserve it.
+A changed artifact digest creates a separate attempt.
 
 ## Preview environments
 

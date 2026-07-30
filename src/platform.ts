@@ -28,11 +28,18 @@ import {
   type BackupManifest,
   type BackupObjectRepositoryOptions,
 } from "./recovery.ts";
-import { openDeploymentOrchestrator } from "./orchestration.ts";
+import {
+  openDeploymentOrchestrator,
+  type DeploymentOrchestrator,
+} from "./orchestration.ts";
 import {
   createDeploymentCoordinatorHandler,
   DEPLOYMENT_COORDINATOR_PREFIX,
 } from "./runner.ts";
+import {
+  createDeploymentRuntimeCapsule,
+  DEPLOYMENT_RUNTIME_PROTOCOL,
+} from "./runtime-placement.ts";
 import {
   createPlatformBackupScheduler,
   type PlatformBackupPolicy,
@@ -85,6 +92,7 @@ export interface DockerRunnerOptions {
 
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
 export type PlatformHostingProfile = "trusted" | "isolated";
+export type PlatformProjectPlacement = "local" | "provider";
 
 export interface PlatformLimits {
   /** Maximum organizations created by one account. Defaults to 5. */
@@ -270,6 +278,26 @@ export interface ClankPlatformOptions {
       namespace: string;
       store: ObjectStore;
     };
+    /**
+     * Enables provider-hosted, stateful projects. Local placement remains the
+     * default unless `default` is explicitly set to `provider`.
+     */
+    placement?: {
+      default?: PlatformProjectPlacement;
+      /** Optional region constraint for every provider-hosted project. */
+      region?: string;
+      /** Additional exact runner labels. `provider=http` is always required. */
+      labels?: Record<string, string>;
+      /**
+       * Non-loopback provider hostnames that managed ingress may contact.
+       * Provider origins outside this allowlist are never published.
+       */
+      allowedProviderHosts?: readonly string[];
+      /** Time one deploy request waits for exact provider observation. Defaults to 2 minutes. */
+      activationTimeoutMs?: number;
+      /** Maximum generated runtime capsule. Defaults to 768 MiB. */
+      maxRuntimeBytes?: number;
+    };
   };
   /** Defaults to "bootstrap": only the first platform account may self-register. */
   signup?: boolean | "bootstrap";
@@ -353,11 +381,32 @@ interface ProjectRow {
   port: number;
   activeReleaseId: string | null;
   databasePath: string | null;
+  placement: PlatformProjectPlacement;
+  activeGeneration: number | null;
+  providerOrigin: string | null;
+  providerNodeId: string | null;
   parentProjectId: string | null;
   previewName: string | null;
   previewExpiresAt: number | null;
   createdAt: number;
   updatedAt: number;
+}
+
+interface ProviderGenerationRow {
+  projectId: string;
+  generation: number;
+  releaseId: string;
+  encryptedEnvironment: string;
+  createdAt: number;
+}
+
+interface NormalizedProviderPlacement {
+  default: PlatformProjectPlacement;
+  region: string | null;
+  labels: Readonly<Record<string, string>>;
+  allowedProviderHosts: readonly string[];
+  activationTimeoutMs: number;
+  maxRuntimeBytes: number;
 }
 
 interface ReleaseRow {
@@ -382,6 +431,7 @@ interface ReleaseRow {
   createdAt: number;
   activatedAt: number | null;
   failure: string | null;
+  providerGeneration: number | null;
 }
 
 interface TokenPrincipal {
@@ -522,6 +572,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const baseDomain = options.ingress?.baseDomain
     ? normalizeHostname(options.ingress.baseDomain)
     : undefined;
+  const ingressEnabled = options.ingress?.enabled === true || Boolean(baseDomain);
   const customDomainTarget = options.ingress?.customDomainTarget
     ? normalizeHostname(options.ingress.customDomainTarget)
     : baseDomain;
@@ -707,6 +758,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const runnerArtifactObjects = normalizeRunnerArtifactObjects(
     options.deploymentAgents?.artifacts,
   );
+  const providerPlacement = options.deploymentAgents?.placement
+    ? normalizeProviderPlacement(options.deploymentAgents.placement)
+    : null;
+  if (providerPlacement && !ingressEnabled) {
+    throw new TypeError("deploymentAgents.placement requires managed ingress.");
+  }
   const managedRunnerEnrollment = options.deploymentAgents?.managedEnrollment === true;
   if (
     options.deploymentAgents
@@ -784,6 +841,68 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             );
           },
         },
+        ...(providerPlacement
+          ? {
+              runtime: {
+                async load({ operation, signal }) {
+                  if (signal.aborted || operation.action !== "reconcile") return null;
+                  const desired = providerDesiredPayload(operation.payload);
+                  if (
+                    desired.state !== "running"
+                    || desired.releaseId === null
+                    || desired.runtimeProtocol !== DEPLOYMENT_RUNTIME_PROTOCOL
+                  ) return null;
+                  const project = projectById(storage.internal, operation.projectId);
+                  const release = releaseById(storage.internal, desired.releaseId);
+                  const generation = providerGeneration(
+                    storage.internal,
+                    operation.projectId,
+                    desired.generation,
+                    desired.releaseId,
+                  );
+                  if (
+                    !project
+                    || project.placement !== "provider"
+                    || !release
+                    || release.projectId !== project.id
+                    || release.providerGeneration !== desired.generation
+                    || !generation
+                  ) return null;
+                  const artifact = await readRunnerReleaseArtifact(
+                    paths.projects,
+                    release,
+                    signal,
+                    runnerArtifactObjects,
+                  );
+                  if (!artifact || signal.aborted) return null;
+                  const environment = decryptProviderEnvironment(
+                    generation.encryptedEnvironment,
+                    masterKey,
+                  );
+                  const capsule = await createDeploymentRuntimeCapsule({
+                    projectId: project.id,
+                    releaseId: release.id,
+                    generation: desired.generation,
+                    environment,
+                    database: {
+                      path: release.config.database.path,
+                      mode: "preserve",
+                    },
+                    ingress: {
+                      route: providerRuntimePath(project.id),
+                      token: providerIngressToken(masterKey, project.id, desired.generation),
+                    },
+                    artifact: artifact.bytes,
+                  }, {
+                    maxArtifactBytes: runnerArtifactLimit,
+                    maxCapsuleBytes: providerPlacement.maxRuntimeBytes,
+                  });
+                  return { bytes: capsule.bytes, sha256: capsule.sha256 };
+                },
+              },
+              maxRuntimeBytes: providerPlacement.maxRuntimeBytes,
+            }
+          : {}),
         onError: options.onError,
       })
     : null;
@@ -811,13 +930,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     if (storageDiagnosticsFlight) return storageDiagnosticsFlight;
     const flight = (async () => {
       const projects = storage.internal.prepare(
-        `SELECT id, name, slug, database_path
+        `SELECT id, name, slug, database_path, placement
          FROM clank_platform_projects ORDER BY id`,
       ).all().map((row): StorageDiagnosticProject => ({
         id: String(row.id),
         name: String(row.name),
         slug: String(row.slug),
-        databasePath: row.database_path === null ? null : String(row.database_path),
+        databasePath: row.placement === "provider" || row.database_path === null
+          ? null
+          : String(row.database_path),
       }));
       const value = await inspectPlatformStorage(paths.root, projects, {
         releasesPerProject: limits.releasesPerProject,
@@ -935,12 +1056,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         .run(metric.recordedAt - limits.metricRetentionDays * 24 * 60 * 60_000);
     }
   };
-  const ingressEnabled = options.ingress?.enabled === true || Boolean(baseDomain);
   const ingress = ingressEnabled
     ? createManagedIngress({
-        routes: () => ingressRoutes(storage.internal, baseDomain, active),
+        routes: () => ingressRoutes(
+          storage.internal,
+          baseDomain,
+          active,
+          masterKey,
+          orchestrator,
+        ),
         timeoutMs: options.ingress?.timeoutMs,
         maxBodyBytes: options.ingress?.maxBodyBytes,
+        ...(providerPlacement
+          ? { allowedUpstreamHosts: providerPlacement.allowedProviderHosts }
+          : {}),
         admitRequest: admitIngressRequest,
         onRequest: recordIngressMetric,
       })
@@ -1357,6 +1486,403 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     );
   };
 
+  const finishProviderRelease = (
+    principal: TokenPrincipal,
+    project: ProjectRow,
+    release: ReleaseRow,
+    generation: number,
+  ): Record<string, unknown> => {
+    const desired = orchestrator.desired(project.id);
+    if (
+      !desired
+      || desired.generation !== generation
+      || desired.desiredReleaseId !== release.id
+      || desired.observedGeneration !== generation
+      || desired.observedReleaseId !== release.id
+      || desired.observedState !== "running"
+      || !desired.assignedNodeId
+    ) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_OBSERVATION_STALE",
+        "The provider observation no longer matches this release.",
+      );
+    }
+    const node = orchestrator.listNodes().find((entry) =>
+      entry.id === desired.assignedNodeId);
+    if (!node?.endpoint || node.status !== "active") {
+      throw new PlatformError(
+        503,
+        "PROVIDER_ENDPOINT_UNAVAILABLE",
+        "The assigned provider is not online with a routable endpoint.",
+        1,
+      );
+    }
+    const providerOrigin = providerIngressOrigin(
+      node.endpoint,
+      providerPlacement!.allowedProviderHosts,
+    );
+    const activatedAt = Date.now();
+    storage.internal.transaction((changes) => {
+      storage.internal.prepare(
+        "UPDATE clank_platform_releases SET status = 'active', activated_at = ?, failure = NULL WHERE id = ?",
+      ).run(activatedAt, release.id);
+      if (project.activeReleaseId && project.activeReleaseId !== release.id) {
+        storage.internal.prepare(
+          "UPDATE clank_platform_releases SET status = 'inactive' WHERE id = ? AND status = 'active'",
+        ).run(project.activeReleaseId);
+      }
+      storage.internal.prepare(`UPDATE clank_platform_projects
+        SET active_release_id = ?, database_path = ?, active_generation = ?,
+          provider_origin = ?, provider_node_id = ?, updated_at = ?
+        WHERE id = ? AND placement = 'provider'`)
+        .run(
+          release.id,
+          release.config.database.path,
+          generation,
+          providerOrigin,
+          node.id,
+          activatedAt,
+          project.id,
+        );
+      changes.record("__platform", project.id);
+    });
+    recordLog(
+      project.id,
+      release.id,
+      "platform",
+      `Provider ${node.id} observed generation ${generation}; published managed ingress.`,
+    );
+    audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.activate", {
+      releaseId: release.id,
+      previousReleaseId: project.activeReleaseId,
+      placement: "provider",
+      generation,
+      nodeId: node.id,
+    });
+    const activatedProject = projectById(storage.internal, project.id)!;
+    const activatedRelease = releaseById(storage.internal, release.id)!;
+    return releasePayload(activatedProject, activatedRelease, appUrlTemplate);
+  };
+
+  const waitForProviderRelease = async (
+    principal: TokenPrincipal,
+    project: ProjectRow,
+    release: ReleaseRow,
+    generation: number,
+  ): Promise<Record<string, unknown>> => {
+    const deadline = Date.now() + providerPlacement!.activationTimeoutMs;
+    const operationKey = `reconcile:${project.id}:${generation}`;
+    while (!closed && Date.now() < deadline) {
+      const currentProject = projectById(storage.internal, project.id);
+      if (
+        currentProject?.activeReleaseId === release.id
+        && currentProject.activeGeneration === generation
+      ) {
+        return releasePayload(
+          currentProject,
+          releaseById(storage.internal, release.id)!,
+          appUrlTemplate,
+        );
+      }
+      const desired = orchestrator.desired(project.id);
+      if (
+        desired?.generation === generation
+        && desired.observedGeneration === generation
+      ) {
+        if (
+          desired.observedState === "running"
+          && desired.observedReleaseId === release.id
+        ) {
+          return finishProviderRelease(principal, project, release, generation);
+        }
+        storage.internal.prepare(
+          "UPDATE clank_platform_releases SET status = 'failed', failure = ? WHERE id = ?",
+        ).run("Provider failed to activate this release.", release.id);
+        throw new PlatformError(
+          422,
+          "PROVIDER_DEPLOYMENT_FAILED",
+          "The provider failed to activate this release.",
+        );
+      }
+      const operation = storage.internal.prepare(
+        "SELECT state FROM clank_deployment_operations WHERE idempotency_key = ?",
+      ).get(operationKey);
+      if (operation?.state === "failed" || operation?.state === "cancelled") {
+        storage.internal.prepare(
+          "UPDATE clank_platform_releases SET status = 'failed', failure = ? WHERE id = ?",
+        ).run("Provider deployment exhausted its safe retries.", release.id);
+        throw new PlatformError(
+          422,
+          "PROVIDER_DEPLOYMENT_FAILED",
+          "The provider deployment exhausted its safe retries.",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (closed) {
+      throw new PlatformError(503, "PLATFORM_CLOSING", "The platform is closing.", 1);
+    }
+    throw new PlatformError(
+      503,
+      "PROVIDER_DEPLOYMENT_PENDING",
+      "The provider deployment is still pending. Retry this exact deploy.",
+      1,
+    );
+  };
+
+  const queueProviderRelease = async (
+    principal: TokenPrincipal,
+    project: ProjectRow,
+    release: ReleaseRow,
+    config: DeploymentBundle["config"] | null,
+    retryFailed = false,
+  ): Promise<Record<string, unknown>> => {
+    if (!providerPlacement || !deploymentCoordinator) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_PLACEMENT_DISABLED",
+        "Provider placement is not enabled on this platform.",
+      );
+    }
+    const currentDesired = orchestrator.desired(project.id);
+    if (release.providerGeneration === null) {
+      const recoverable = storage.internal.prepare(`SELECT generation
+        FROM clank_platform_provider_generations
+        WHERE project_id = ? AND release_id = ?
+        ORDER BY generation DESC LIMIT 1`).get(project.id, release.id);
+      const recoverableGeneration = recoverable ? Number(recoverable.generation) : null;
+      if (
+        recoverableGeneration !== null
+        && currentDesired?.generation === recoverableGeneration
+        && currentDesired.desiredReleaseId === release.id
+      ) {
+        storage.internal.prepare(
+          "UPDATE clank_platform_releases SET provider_generation = ? WHERE id = ?",
+        ).run(recoverableGeneration, release.id);
+        release = { ...release, providerGeneration: recoverableGeneration };
+      } else if (recoverableGeneration !== null) {
+        storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
+          WHERE project_id = ? AND release_id = ? AND generation > ?`)
+          .run(project.id, release.id, currentDesired?.generation ?? 0);
+      }
+    }
+    if (
+      release.providerGeneration !== null
+      && currentDesired?.generation === release.providerGeneration
+      && currentDesired.desiredReleaseId === release.id
+    ) {
+      const operation = storage.internal.prepare(
+        "SELECT state FROM clank_deployment_operations WHERE idempotency_key = ?",
+      ).get(`reconcile:${project.id}:${release.providerGeneration}`);
+      if (
+        !retryFailed
+        || (operation?.state !== "failed" && operation?.state !== "cancelled")
+      ) {
+        return waitForProviderRelease(
+          principal,
+          project,
+          release,
+          release.providerGeneration,
+        );
+      }
+    }
+    if (release.providerGeneration !== null && !retryFailed) {
+      storage.internal.prepare(`UPDATE clank_platform_releases
+        SET status = 'failed', failure = ?
+        WHERE id = ? AND status = 'staging'`)
+        .run("Provider deployment was superseded by a newer generation.", release.id);
+      throw new PlatformError(
+        409,
+        "PROVIDER_DEPLOYMENT_SUPERSEDED",
+        "This provider deployment was superseded. Start a new deploy with a new idempotency key.",
+      );
+    }
+    if (!config) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_RELEASE_STATE_INVALID",
+        "The provider release is missing its frozen runtime generation.",
+      );
+    }
+    const prior = currentDesired;
+    if (
+      prior
+      && prior.desiredState === "running"
+      && prior.observedGeneration < prior.generation
+      && prior.desiredReleaseId !== release.id
+      && !retryFailed
+    ) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_DEPLOYMENT_IN_PROGRESS",
+        "Another provider release is still converging.",
+      );
+    }
+    const generation = (prior?.generation ?? 0) + 1;
+    const environment = providerRuntimeEnvironment(
+      config,
+      decryptProjectSecrets(storage.internal, project.id, masterKey),
+    );
+    const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
+    storage.internal.prepare(`INSERT INTO clank_platform_provider_generations
+      (project_id, generation, release_id, encrypted_environment, created_at)
+      VALUES (?, ?, ?, ?, ?)`)
+      .run(project.id, generation, release.id, encryptedEnvironment, Date.now());
+    try {
+      const desired = await orchestrator.setDesired({
+        projectId: project.id,
+        releaseId: release.id,
+        state: "running",
+        placementMode: "stateful",
+        nodeRequirements: {
+          endpoint: true,
+          labels: providerPlacement.labels,
+        },
+        ...(providerPlacement.region ? { region: providerPlacement.region } : {}),
+        runtimeProtocol: DEPLOYMENT_RUNTIME_PROTOCOL,
+      });
+      if (desired.generation !== generation) {
+        throw new Error("Provider generation allocation changed unexpectedly.");
+      }
+      storage.internal.prepare(
+        "UPDATE clank_platform_releases SET provider_generation = ? WHERE id = ?",
+      ).run(generation, release.id);
+      recordLog(
+        project.id,
+        release.id,
+        "platform",
+        desired.assignedNodeId
+          ? `Queued provider generation ${generation} on ${desired.assignedNodeId}.`
+          : `Queued provider generation ${generation}; waiting for matching capacity.`,
+      );
+    } catch (error) {
+      storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
+        WHERE project_id = ? AND generation = ? AND release_id = ?`)
+        .run(project.id, generation, release.id);
+      throw error;
+    }
+    return waitForProviderRelease(principal, project, {
+      ...release,
+      providerGeneration: generation,
+    }, generation);
+  };
+
+  const deployProviderRelease = async (
+    principal: TokenPrincipal,
+    project: ProjectRow,
+    release: ReleaseRow,
+    config: DeploymentBundle["config"],
+  ): Promise<Record<string, unknown>> => queueProviderRelease(
+    principal,
+    project,
+    release,
+    config,
+  );
+
+  const waitForProviderLifecycle = async (
+    operationId: string,
+    action: "rollback" | "delete",
+  ): Promise<void> => {
+    const deadline = Date.now() + providerPlacement!.activationTimeoutMs;
+    while (!closed && Date.now() < deadline) {
+      const operation = orchestrator.operation(operationId);
+      if (operation?.state === "succeeded") return;
+      if (!operation || operation.state === "failed" || operation.state === "cancelled") {
+        throw new PlatformError(
+          422,
+          `PROVIDER_${action.toUpperCase()}_FAILED`,
+          `The provider could not complete the ${action} operation safely.`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (closed) {
+      throw new PlatformError(503, "PLATFORM_CLOSING", "The platform is closing.", 1);
+    }
+    throw new PlatformError(
+      503,
+      `PROVIDER_${action.toUpperCase()}_PENDING`,
+      `The provider ${action} operation is still pending. Retry this exact request.`,
+      1,
+    );
+  };
+
+  const exactProviderRuntime = (
+    project: ProjectRow,
+    release: ReleaseRow,
+  ): { generation: number; nodeId: string } => {
+    const desired = orchestrator.desired(project.id);
+    if (
+      project.activeGeneration === null
+      || !project.providerNodeId
+      || !desired
+      || desired.generation !== project.activeGeneration
+      || desired.desiredReleaseId !== release.id
+      || desired.desiredState !== "running"
+      || desired.observedGeneration !== project.activeGeneration
+      || desired.observedReleaseId !== release.id
+      || desired.observedState !== "running"
+      || desired.assignedNodeId !== project.providerNodeId
+    ) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_RUNTIME_NOT_STABLE",
+        "The provider runtime is not at the exact active generation required for this operation.",
+      );
+    }
+    return {
+      generation: project.activeGeneration,
+      nodeId: project.providerNodeId,
+    };
+  };
+
+  const runProviderLifecycle = async (
+    project: ProjectRow,
+    release: ReleaseRow,
+    action: "rollback" | "delete",
+    suffix = "",
+  ): Promise<void> => {
+    if (!providerPlacement || !deploymentCoordinator) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_PLACEMENT_DISABLED",
+        "Provider placement is not enabled on this platform.",
+      );
+    }
+    if (project.activeGeneration === null) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_RUNTIME_NOT_STABLE",
+        "The provider runtime has no active generation for this operation.",
+      );
+    }
+    const idempotencyKey = `${action}:${project.id}:${project.activeGeneration}${suffix}`;
+    const existing = storage.internal.prepare(
+      "SELECT id FROM clank_deployment_operations WHERE idempotency_key = ?",
+    ).get(idempotencyKey);
+    if (existing) {
+      await waitForProviderLifecycle(String(existing.id), action);
+      return;
+    }
+    const runtime = exactProviderRuntime(project, release);
+    const queued = await orchestrator.enqueue({
+      projectId: project.id,
+      action,
+      payload: { generation: runtime.generation },
+      idempotencyKey,
+      nodeId: runtime.nodeId,
+      maxAttempts: 10,
+    });
+    recordLog(
+      project.id,
+      release.id,
+      "platform",
+      `Queued provider ${action} for generation ${runtime.generation} on ${runtime.nodeId}.`,
+    );
+    await waitForProviderLifecycle(queued.operation.id, action);
+  };
+
   const scheduleRestart = (projectId: string, releaseId: string): void => {
     if (closed) return;
     const now = Date.now();
@@ -1419,6 +1945,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     ).get(project.id, idempotencyKey);
     if (existing) {
       const release = releaseById(storage.internal, String(existing.id));
+      if (project.placement === "provider" && release?.status === "staging") {
+        return deployProviderRelease(principal, project, release, release.config);
+      }
       return releasePayload(project, release!, appUrlTemplate, active.get(project.id)?.port);
     }
     let bundle: DeploymentBundle;
@@ -1452,25 +1981,28 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         "This release exceeds the remote deployment-node artifact limit.",
       );
     }
-    let databaseStorageBytes: number;
-    try {
-      databaseStorageBytes = await projectDatabaseFootprint(
-        paths.projects,
-        project,
-        bundle.config.database.path,
-      );
-    } catch (error) {
-      try { options.onError?.(error); } catch { /* Operator reporting must not change deployment validation. */ }
-      throw new PlatformError(
-        422,
-        "INVALID_DATABASE_STORAGE",
-        "Project database storage must use regular files without symbolic links.",
-      );
+    let databaseStorageBytes = 0;
+    if (project.placement === "local") {
+      try {
+        databaseStorageBytes = await projectDatabaseFootprint(
+          paths.projects,
+          project,
+          bundle.config.database.path,
+        );
+      } catch (error) {
+        try { options.onError?.(error); } catch { /* Operator reporting must not change deployment validation. */ }
+        throw new PlatformError(
+          422,
+          "INVALID_DATABASE_STORAGE",
+          "Project database storage must use regular files without symbolic links.",
+        );
+      }
     }
+    const runtimeStorageBytes = project.placement === "local" ? bundleStorageBytes : 0;
     assertReleaseCapacity(
       storage.internal,
       project.id,
-      bundleStorageBytes + runnerArtifactBytes + databaseStorageBytes,
+      runtimeStorageBytes + runnerArtifactBytes + databaseStorageBytes,
       projectQuotas(storage.internal, project, quotaDefaults),
     );
     const releaseId = await randomId(18);
@@ -1495,11 +2027,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         previousReleaseId,
         digest,
         bytes.byteLength,
-        bundleStorageBytes,
+        runtimeStorageBytes,
         runnerArtifactBytes,
         runnerArtifactStore,
         runnerArtifactKey,
-        bundleStorageBytes + runnerArtifactBytes + databaseStorageBytes,
+        runtimeStorageBytes + runnerArtifactBytes + databaseStorageBytes,
         bundle.provenance.frameworkVersion,
         bundle.provenance.nodeVersion,
         JSON.stringify(bundle.config),
@@ -1560,6 +2092,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               : "The original release could not be retained and automatic cleanup failed.",
           );
         }
+      }
+      if (project.placement === "provider") {
+        return await deployProviderRelease(
+          principal,
+          project,
+          releaseById(storage.internal, releaseId)!,
+          bundle.config,
+        );
       }
       await extractDeploymentBundle(bundle, releaseDirectory);
       const dataRoot = await projectDataDirectory(paths.projects, project.id);
@@ -1699,6 +2239,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     } catch (error) {
       options.onError?.(error);
       if (activationCommitted && activatedResult) return activatedResult;
+      if (project.placement === "provider") {
+        if (error instanceof PlatformError) throw error;
+        const failure = safeError(error);
+        storage.internal.prepare(
+          "UPDATE clank_platform_releases SET status = 'failed', failure = ? WHERE id = ?",
+        ).run(failure, releaseId);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.fail", {
+          releaseId,
+          digest,
+          failure,
+          placement: "provider",
+        });
+        throw new PlatformError(422, "DEPLOYMENT_FAILED", failure);
+      }
       if (rolloutPort !== undefined) reservedRolloutPorts.delete(rolloutPort);
       if (candidateRuntime) {
         try {
@@ -1827,6 +2381,64 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       throw new PlatformError(409, "RELEASE_ARTIFACT_UNAVAILABLE", "This release's runtime artifact has been removed.");
     }
     if (target.id === current.id) return releasePayload(project, current, appUrlTemplate);
+    if (project.placement === "provider") {
+      if (restoreData) {
+        if (target.id !== current.previousReleaseId) {
+          throw new PlatformError(
+            409,
+            "DATA_RESTORE_UNAVAILABLE",
+            "Provider data restore is available only for the immediately previous release.",
+          );
+        }
+        if (confirmation !== `restore ${project.slug}`) {
+          throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "restore ${project.slug}".`);
+        }
+      }
+      const desired = orchestrator.desired(project.id);
+      let retryingFailedTarget = false;
+      if (
+        target.providerGeneration !== null
+        && desired?.generation === target.providerGeneration
+        && desired.desiredReleaseId === target.id
+      ) {
+        const operation = storage.internal.prepare(
+          "SELECT state FROM clank_deployment_operations WHERE idempotency_key = ?",
+        ).get(`reconcile:${project.id}:${target.providerGeneration}`);
+        retryingFailedTarget = operation?.state === "failed"
+          || operation?.state === "cancelled";
+        if (!retryingFailedTarget) {
+          return waitForProviderRelease(
+            principal,
+            project,
+            target,
+            target.providerGeneration,
+          );
+        }
+      }
+      if (!retryingFailedTarget) exactProviderRuntime(project, current);
+      if (restoreData) {
+        await runProviderLifecycle(
+          project,
+          current,
+          "rollback",
+          `:${target.id}`,
+        );
+      }
+      const result = await queueProviderRelease(
+        principal,
+        project,
+        target,
+        target.config,
+        true,
+      );
+      audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.rollback", {
+        from: current.id,
+        to: target.id,
+        restoreData,
+        placement: "provider",
+      });
+      return result;
+    }
     if (restoreData) {
       if (target.id !== current.previousReleaseId || !current.backupPath) {
         throw new PlatformError(409, "DATA_RESTORE_UNAVAILABLE", "Data restore is available only for the immediately previous release with a snapshot.");
@@ -1891,8 +2503,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
     }
     if (!release.artifactAvailable) {
+      storage.internal.transaction(() => {
+        storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
+          WHERE project_id = ? AND release_id = ?`).run(project.id, release.id);
+        storage.internal.prepare(`UPDATE clank_platform_releases
+          SET provider_generation = NULL WHERE id = ? AND project_id = ?`)
+          .run(release.id, project.id);
+      });
+      const cleaned = releaseById(storage.internal, release.id)!;
       return {
-        ...publicRelease(release),
+        ...publicRelease(cleaned),
         cleanup: {
           allowed: false,
           rollbackProtected: currentProject.activeReleaseId
@@ -1903,6 +2523,28 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
     if (currentProject.activeReleaseId === release.id) {
       throw new PlatformError(409, "ACTIVE_RELEASE_PROTECTED", "The active release artifact cannot be removed.");
+    }
+    if (release.status === "staging") {
+      const desired = currentProject.placement === "provider"
+        ? orchestrator.desired(currentProject.id)
+        : null;
+      const providerFinishedWithFailure = desired
+        && release.providerGeneration !== null
+        && desired.generation === release.providerGeneration
+        && desired.desiredReleaseId === release.id
+        && desired.observedGeneration === desired.generation
+        && desired.observedState !== "running";
+      if (!providerFinishedWithFailure) {
+        throw new PlatformError(
+          409,
+          "RELEASE_DEPLOYMENT_PENDING",
+          "A release that is still deploying cannot be removed.",
+        );
+      }
+      storage.internal.prepare(`UPDATE clank_platform_releases
+        SET status = 'failed', failure = COALESCE(failure, ?)
+        WHERE id = ? AND project_id = ? AND status = 'staging'`)
+        .run("Provider failed to activate this release.", release.id, project.id);
     }
     const activeRelease = currentProject.activeReleaseId
       ? releaseById(storage.internal, currentProject.activeReleaseId)
@@ -1922,8 +2564,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     storage.internal.transaction((changes) => {
       storage.internal.prepare(`UPDATE clank_platform_releases
         SET artifact_available = 0, runtime_bytes = 0, runner_artifact_bytes = 0, snapshot_bytes = 0,
-          storage_bytes = 0, backup_path = NULL
+          storage_bytes = 0, backup_path = NULL, provider_generation = NULL
         WHERE id = ? AND project_id = ?`).run(release.id, project.id);
+      storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
+        WHERE project_id = ? AND release_id = ?`).run(project.id, release.id);
       if (rollbackProtected && activeRelease?.backupPath) {
         storage.internal.prepare(`UPDATE clank_platform_releases
           SET snapshot_bytes = 0,
@@ -1956,7 +2600,24 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       : null;
     const summary = projectDeletionSummary(storage.internal, project.id);
     cancelRestart(project.id);
-    await stopProject(project.id);
+    if (project.placement === "provider") {
+      if (activeRelease) {
+        await runProviderLifecycle(project, activeRelease, "delete");
+      } else if (
+        project.activeGeneration !== null
+        || orchestrator.desired(project.id)
+        || storage.internal.prepare(`SELECT 1 AS present
+          FROM clank_platform_provider_generations WHERE project_id = ? LIMIT 1`).get(project.id)
+      ) {
+        throw new PlatformError(
+          409,
+          "PROVIDER_RUNTIME_NOT_STABLE",
+          "Finish or retry the pending provider deployment before deleting this site.",
+        );
+      }
+    } else {
+      await stopProject(project.id);
+    }
     try {
       await deleteProjectStorage(paths.projects, project.id, async () => {
         await deleteProjectBackups(
@@ -1974,7 +2635,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       });
     } catch (error) {
       try { options.onError?.(error); } catch { /* Operator reporting must not alter recovery. */ }
-      if (activeRelease) {
+      if (project.placement === "local" && activeRelease) {
         try {
           await startRelease(project, activeRelease, decryptProjectSecrets(storage.internal, project.id, masterKey));
         } catch (restartError) {
@@ -2655,7 +3316,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ok: true,
           enabled: deploymentCoordinator !== null,
           managedEnrollment: managedRunnerEnrollment,
-          placementActive: false,
+          placementActive: providerPlacement !== null,
           nodes,
           enrollments,
           summary: {
@@ -2951,6 +3612,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           customDomainAddresses,
           Boolean(tlsAskToken),
           domainReconciliation,
+          {
+            enabled: providerPlacement !== null,
+            default: providerPlacement?.default ?? "local",
+          },
         ));
       }
       if (url.pathname === "/api/account" && request.method === "GET") {
@@ -3351,9 +4016,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (url.pathname === "/api/projects" && request.method === "POST") {
         if (principal.projectId) throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project tokens cannot create projects.");
         const input = plainObject(await readJsonRequest(request, 16 * 1024));
-        exact(input, ["name", "slug", "organizationId"]);
+        exact(input, ["name", "slug", "organizationId", "placement"]);
         const name = boundedString(input.name, "name", 1, 100);
         const slug = normalizeSlug(input.slug === undefined ? name : boundedString(input.slug, "slug", 1, 50));
+        const placement = projectPlacement(
+          input.placement,
+          providerPlacement?.default ?? "local",
+          providerPlacement !== null,
+        );
         const organizationId = input.organizationId === undefined
           ? await ensurePersonalOrganization(storage.internal, principal, quotaDefaults)
           : boundedString(input.organizationId, "organizationId", 8, 128);
@@ -3388,9 +4058,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             }
             port = allocatePort(storage.internal, appPortStart, appPortEnd, reservedAppPorts);
             storage.internal.prepare(`INSERT INTO clank_platform_projects
-              (id, owner_id, organization_id, name, slug, port, active_release_id, database_path, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`)
-              .run(id, principal.userId, organizationId, name, slug, port, now, now);
+              (id, owner_id, organization_id, name, slug, port, active_release_id,
+               database_path, placement, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`)
+              .run(id, principal.userId, organizationId, name, slug, port, placement, now, now);
             changes.record("__platform", organizationId);
           });
         } catch (error) {
@@ -3405,6 +4076,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           name,
           slug,
           port,
+          placement,
           organizationId,
         });
         return api({ ok: true, project: projectPayload(project) }, 201);
@@ -3466,8 +4138,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             ...projectPayload(project),
             url: appUrlTemplate.replaceAll("{slug}", project.slug)
               .replaceAll("{port}", String(active.get(project.id)?.port ?? project.port)),
-            directUrl: `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`,
-            runtimeStatus: active.has(project.id) ? "online" : release ? "degraded" : "not_deployed",
+            directUrl: project.placement === "local"
+              ? `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`
+              : null,
+            runtimeStatus: projectRuntimeOnline(storage.internal, active, project)
+              ? "online"
+              : release ? "degraded" : "not_deployed",
           },
           activeRelease: release ? publicRelease(release) : null,
           access: {
@@ -3494,7 +4170,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             ...projectPayload(preview),
             url: appUrlTemplate.replaceAll("{slug}", preview.slug)
               .replaceAll("{port}", String(active.get(preview.id)?.port ?? preview.port)),
-            runtimeStatus: active.has(preview.id) ? "online" : release ? "degraded" : "not_deployed",
+            runtimeStatus: projectRuntimeOnline(storage.internal, active, preview)
+              ? "online"
+              : release ? "degraded" : "not_deployed",
             activeRelease: release ? publicRelease(release) : null,
           };
         });
@@ -3603,8 +4281,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               port = allocatePort(storage.internal, appPortStart, appPortEnd, reservedAppPorts);
               storage.internal.prepare(`INSERT INTO clank_platform_projects
                 (id, owner_id, organization_id, name, slug, port, active_release_id, database_path,
-                  parent_project_id, preview_name, preview_expires_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`)
+                  placement, parent_project_id, preview_name, preview_expires_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`)
                 .run(
                   id,
                   principal.userId,
@@ -3612,6 +4290,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                   `${current.name} · ${previewName}`,
                   slug,
                   port,
+                  current.placement,
                   current.id,
                   previewName,
                   expiresAt,
@@ -3634,6 +4313,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             previewName,
             slug,
             port,
+            placement: current.placement,
             expiresAt,
             isolatedData: true,
           });
@@ -3646,7 +4326,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             ...projectPayload(result.preview),
             url: appUrlTemplate.replaceAll("{slug}", result.preview.slug)
               .replaceAll("{port}", String(result.preview.port)),
-            runtimeStatus: result.preview.activeReleaseId ? "degraded" : "not_deployed",
+            runtimeStatus: projectRuntimeOnline(storage.internal, active, result.preview)
+              ? "online"
+              : result.preview.activeReleaseId ? "degraded" : "not_deployed",
           },
         }, result.created ? 201 : 200);
       }
@@ -3708,7 +4390,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             return {
               ...publicRelease(release),
               cleanup: {
-                allowed: release.artifactAvailable && release.id !== project.activeReleaseId,
+                allowed: release.artifactAvailable
+                  && release.id !== project.activeReleaseId
+                  && release.status !== "staging",
                 rollbackProtected: release.id === activeRelease?.previousReleaseId,
               },
             };
@@ -3784,13 +4468,33 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           : boundedString(input.confirmation, "confirmation", 1, 200);
         return api({ ok: true, release: await rollback(principal, project, releaseId, restoreData, confirmation) });
       }
+      if (
+        operation.startsWith("backups")
+        && project.placement === "provider"
+        && !(operation === "backups" && request.method === "GET")
+      ) {
+        throw new PlatformError(
+          409,
+          "PROVIDER_BACKUP_PENDING",
+          "Provider-hosted backups are not enabled until a remote encrypted backup transport is configured.",
+        );
+      }
       if (operation === "backups" && request.method === "GET") {
         const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const automation = {
-          ...backupScheduler.status(project.id, Boolean(project.databasePath)),
+          ...backupScheduler.status(
+            project.id,
+            project.placement === "local" && Boolean(project.databasePath),
+          ),
           maxBackups: effective.backupsPerProject,
-          storage: backupObjects ? "object" : "local",
+          storage: project.placement === "provider"
+            ? "provider_pending"
+            : backupObjects ? "object" : "local",
+          providerPending: project.placement === "provider",
         };
+        if (project.placement === "provider") {
+          return api({ ok: true, backups: [], automation });
+        }
         if (!project.databasePath) return api({ ok: true, backups: [], automation });
         const manager = await projectBackupManager(paths.projects, project, masterKey, {
           ...backupPolicy,
@@ -3923,9 +4627,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         ) {
           throw new PlatformError(422, "INVALID_JOB_FILTER", "Invalid job queue filter.");
         }
-        const databasePath = await projectJobsDatabasePath(paths.projects, project);
+        const databasePath = project.placement === "local"
+          ? await projectJobsDatabasePath(paths.projects, project)
+          : null;
         const snapshot = await inspectPlatformJobs({
           databasePath,
+          remote: project.placement === "provider",
           alertDueAfterMs: jobAlertDueAfterMs,
           ...(state === undefined ? {} : { state }),
           ...(queue === null ? {} : { queue: boundedString(queue, "queue", 1, 128) }),
@@ -3948,6 +4655,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         exact(input, jobMutationMatch[2] === "retry" ? ["runAt"] : []);
         const mutation = await withProjectLock(project.id, async () => {
           const current = accessibleProject(storage.internal, project.id, principal, "jobs").project;
+          if (current.placement === "provider") {
+            throw new PlatformError(
+              409,
+              "PROVIDER_JOBS_PENDING",
+              "Provider-hosted job operations require a remote diagnostics transport.",
+            );
+          }
           if (!current.databasePath) {
             throw new PlatformError(
               409,
@@ -4266,6 +4980,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const projects = storage.internal.prepare(
     `SELECT * FROM clank_platform_projects
       WHERE active_release_id IS NOT NULL
+        AND placement = 'local'
         AND (parent_project_id IS NULL OR preview_expires_at > ?)`,
   ).all(Date.now()).map(projectRow);
   const startupRecovery = Promise.all(projects.map(async (project) => {
@@ -4546,6 +5261,10 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     port INTEGER NOT NULL UNIQUE,
     active_release_id TEXT,
     database_path TEXT,
+    placement TEXT NOT NULL DEFAULT 'local' CHECK (placement IN ('local', 'provider')),
+    active_generation INTEGER,
+    provider_origin TEXT,
+    provider_node_id TEXT,
     parent_project_id TEXT REFERENCES clank_platform_projects(id) ON DELETE RESTRICT,
     preview_name TEXT,
     preview_expires_at INTEGER,
@@ -4565,6 +5284,26 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   if (!projectColumns.some((column) => column.name === "preview_expires_at")) {
     internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN preview_expires_at INTEGER");
   }
+  if (!projectColumns.some((column) => column.name === "placement")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN placement TEXT NOT NULL DEFAULT 'local'");
+  }
+  if (!projectColumns.some((column) => column.name === "active_generation")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN active_generation INTEGER");
+  }
+  if (!projectColumns.some((column) => column.name === "provider_origin")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN provider_origin TEXT");
+  }
+  if (!projectColumns.some((column) => column.name === "provider_node_id")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN provider_node_id TEXT");
+  }
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_provider_generations (
+    project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    release_id TEXT NOT NULL,
+    encrypted_environment TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, generation)
+  ) WITHOUT ROWID`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_projects_org ON clank_platform_projects (organization_id, created_at)");
   internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_platform_projects_preview_name
     ON clank_platform_projects (parent_project_id, preview_name)
@@ -4744,6 +5483,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     created_at INTEGER NOT NULL,
     activated_at INTEGER,
     failure TEXT,
+    provider_generation INTEGER,
     UNIQUE(project_id, idempotency_key)
   )`);
   const releaseColumns = internal.prepare("PRAGMA table_info(clank_platform_releases)").all();
@@ -4770,6 +5510,9 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   if (!releaseColumns.some((column) => column.name === "runner_artifact_key")) {
     internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN runner_artifact_key TEXT");
+  }
+  if (!releaseColumns.some((column) => column.name === "provider_generation")) {
+    internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN provider_generation INTEGER");
   }
   internal.exec("DROP INDEX IF EXISTS proact_platform_releases_project");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_releases_project ON clank_platform_releases (project_id, created_at)");
@@ -5088,6 +5831,7 @@ async function requirePlatformPrincipal(storage: PlatformDatabase, request: Requ
 }
 
 function projectRow(row: Record<string, unknown>): ProjectRow {
+  const placement = row.placement === "provider" ? "provider" : "local";
   return {
     id: String(row.id),
     ownerId: String(row.owner_id),
@@ -5099,6 +5843,16 @@ function projectRow(row: Record<string, unknown>): ProjectRow {
     port: Number(row.port),
     activeReleaseId: row.active_release_id === null ? null : String(row.active_release_id),
     databasePath: row.database_path === null ? null : String(row.database_path),
+    placement,
+    activeGeneration: row.active_generation === null || row.active_generation === undefined
+      ? null
+      : Number(row.active_generation),
+    providerOrigin: row.provider_origin === null || row.provider_origin === undefined
+      ? null
+      : String(row.provider_origin),
+    providerNodeId: row.provider_node_id === null || row.provider_node_id === undefined
+      ? null
+      : String(row.provider_node_id),
     parentProjectId: row.parent_project_id === null || row.parent_project_id === undefined
       ? null
       : String(row.parent_project_id),
@@ -5140,6 +5894,9 @@ function releaseRow(row: Record<string, unknown>): ReleaseRow {
     createdAt: Number(row.created_at),
     activatedAt: row.activated_at === null ? null : Number(row.activated_at),
     failure: row.failure === null ? null : String(row.failure),
+    providerGeneration: row.provider_generation === null || row.provider_generation === undefined
+      ? null
+      : Number(row.provider_generation),
   };
 }
 
@@ -5194,6 +5951,9 @@ function projectPayload(project: ProjectRow): Record<string, unknown> {
     port: project.port,
     activeReleaseId: project.activeReleaseId,
     databasePath: project.databasePath,
+    placement: project.placement,
+    activeGeneration: project.activeGeneration,
+    providerNodeId: project.providerNodeId,
     kind: project.parentProjectId ? "preview" : "production",
     parentProjectId: project.parentProjectId,
     previewName: project.previewName,
@@ -5217,26 +5977,112 @@ function domainChallengeFromRow(row: Record<string, unknown>): DomainChallenge {
   };
 }
 
-function ingressRoutes(
+async function ingressRoutes(
   internal: SQLiteInternal,
   baseDomain: string | undefined,
   active: ReadonlyMap<string, ActiveProcess>,
+  masterKey: Uint8Array,
+  orchestrator: DeploymentOrchestrator,
 ) {
-  const projects = internal.prepare(`SELECT id, slug, port FROM clank_platform_projects
+  const projects = internal.prepare(`SELECT * FROM clank_platform_projects
     WHERE active_release_id IS NOT NULL ORDER BY id`).all();
-  return projects.map((project) => {
+  const nodes = new Map(orchestrator.listNodes().map((node) => [node.id, node]));
+  return Promise.all(projects.map(async (row) => {
+    const project = projectRow(row);
     const hosts = internal.prepare(`SELECT hostname FROM clank_platform_domains
       WHERE project_id = ? AND status = 'verified' AND routing_status = 'ready' ORDER BY hostname`).all(project.id)
       .map((row) => String(row.hostname));
-    if (baseDomain) hosts.unshift(`${String(project.slug)}.${baseDomain}`);
+    if (baseDomain) hosts.unshift(`${project.slug}.${baseDomain}`);
+    if (project.placement === "provider") {
+      const desired = orchestrator.desired(project.id);
+      const node = project.providerNodeId ? nodes.get(project.providerNodeId) : undefined;
+      let endpointMatches = false;
+      try {
+        endpointMatches = node?.status === "active"
+          && Boolean(node.endpoint)
+          && new URL(node.endpoint!).origin === project.providerOrigin;
+      } catch {
+        endpointMatches = false;
+      }
+      const ready = project.activeGeneration !== null
+        && project.providerOrigin !== null
+        && project.providerNodeId !== null
+        && endpointMatches
+        && desired?.assignedNodeId === project.providerNodeId
+        && desired.generation === project.activeGeneration
+        && desired.desiredReleaseId === project.activeReleaseId
+        && desired.desiredState === "running"
+        && desired.observedGeneration === project.activeGeneration
+        && desired.observedReleaseId === project.activeReleaseId
+        && desired.observedState === "running";
+      return {
+        id: `route_${project.id}`,
+        projectId: project.id,
+        hosts,
+        upstream: project.providerOrigin ?? "http://127.0.0.1:1",
+        active: hosts.length > 0 && ready,
+        ...(ready
+          ? {
+              runtime: {
+                protocol: DEPLOYMENT_RUNTIME_PROTOCOL,
+                generation: project.activeGeneration!,
+                path: providerRuntimePath(project.id),
+                token: providerIngressToken(masterKey, project.id, project.activeGeneration!),
+              },
+            }
+          : {}),
+      };
+    }
     return {
-      id: `route_${String(project.id)}`,
-      projectId: String(project.id),
+      id: `route_${project.id}`,
+      projectId: project.id,
       hosts,
-      upstream: `http://127.0.0.1:${active.get(String(project.id))?.port ?? Number(project.port)}`,
-      active: hosts.length > 0 && active.has(String(project.id)),
+      upstream: `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`,
+      active: hosts.length > 0 && active.has(project.id),
     };
-  });
+  }));
+}
+
+function projectRuntimeOnline(
+  internal: SQLiteInternal,
+  active: ReadonlyMap<string, ActiveProcess>,
+  project: ProjectRow,
+): boolean {
+  if (project.placement === "local") return active.has(project.id);
+  if (
+    !project.activeReleaseId
+    || project.activeGeneration === null
+    || !project.providerNodeId
+    || !project.providerOrigin
+  ) return false;
+  const placement = internal.prepare(`SELECT assigned_node_id, desired_release_id,
+      desired_state, generation, observed_release_id, observed_state, observed_generation
+    FROM clank_deployment_placements WHERE project_id = ?`).get(project.id);
+  const node = internal.prepare(`SELECT endpoint, status, expires_at
+    FROM clank_deployment_nodes WHERE id = ?`).get(project.providerNodeId);
+  let endpointMatches = false;
+  try {
+    endpointMatches = Boolean(
+      node
+      && node.status === "active"
+      && Number(node.expires_at) > Date.now()
+      && node.endpoint !== null
+      && new URL(String(node.endpoint)).origin === project.providerOrigin,
+    );
+  } catch {
+    endpointMatches = false;
+  }
+  return Boolean(
+    placement
+    && endpointMatches
+    && placement.assigned_node_id === project.providerNodeId
+    && placement.desired_release_id === project.activeReleaseId
+    && placement.desired_state === "running"
+    && Number(placement.generation) === project.activeGeneration
+    && placement.observed_release_id === project.activeReleaseId
+    && placement.observed_state === "running"
+    && Number(placement.observed_generation) === project.activeGeneration,
+  );
 }
 
 function admitProjectUsage(
@@ -6888,6 +7734,10 @@ function dashboardPayload(
     lastChecked: number;
     lastFailed: number;
   }>,
+  providerPlacement: Readonly<{
+    enabled: boolean;
+    default: PlatformProjectPlacement;
+  }>,
 ): Record<string, unknown> {
   const accountLimits = accountQuotas(internal, principal.userId, defaults);
   const organizationRows = principal.organizationId
@@ -6935,8 +7785,12 @@ function dashboardPayload(
       ...projectPayload(project),
       url: appUrlTemplate.replaceAll("{slug}", project.slug)
         .replaceAll("{port}", String(active.get(project.id)?.port ?? project.port)),
-      directUrl: `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`,
-      runtimeStatus: active.has(project.id) ? "online" : release ? "degraded" : "not_deployed",
+      directUrl: project.placement === "local"
+        ? `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`
+        : null,
+      runtimeStatus: projectRuntimeOnline(internal, active, project)
+        ? "online"
+        : release ? "degraded" : "not_deployed",
       activeRelease: release ? publicRelease(release) : null,
       domains: { count: Number(domainUsage?.count ?? 0), ready: Number(domainUsage?.ready ?? 0), limit: effective.domainsPerProject },
       releases: {
@@ -7000,6 +7854,10 @@ function dashboardPayload(
       automaticTls,
       automation: { ...domainAutomation },
     },
+    placements: {
+      local: { enabled: true },
+      provider: { ...providerPlacement },
+    },
   };
 }
 
@@ -7025,6 +7883,7 @@ function publicRelease(release: ReleaseRow): Record<string, unknown> {
     createdAt: release.createdAt,
     activatedAt: release.activatedAt,
     failure: release.failure,
+    providerGeneration: release.providerGeneration,
     migrations: release.config.database.migrations,
   };
 }
@@ -7039,7 +7898,9 @@ function releasePayload(
     ...publicRelease(release),
     project: projectPayload(project),
     url: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(directPort)),
-    directUrl: `http://127.0.0.1:${directPort}`,
+    directUrl: project.placement === "local"
+      ? `http://127.0.0.1:${directPort}`
+      : null,
   };
 }
 
@@ -8352,7 +9213,7 @@ async function deleteProjectBackups(
   policy: PlatformBackupPolicy,
   objects: PlatformBackupObjects | null,
 ): Promise<void> {
-  if (!project.databasePath || !objects) return;
+  if (project.placement === "provider" || !project.databasePath || !objects) return;
   const manager = await projectBackupManager(
     projectsRoot,
     project,
@@ -8943,6 +9804,264 @@ function normalizePlatformAdminEmail(value: string): string {
     throw new TypeError("platformAdminEmails entries must be valid email addresses.");
   }
   return email;
+}
+
+function normalizeProviderPlacement(
+  input: NonNullable<NonNullable<ClankPlatformOptions["deploymentAgents"]>["placement"]>,
+): NormalizedProviderPlacement {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("deploymentAgents.placement must be an object.");
+  }
+  const allowedFields = new Set([
+    "default",
+    "region",
+    "labels",
+    "allowedProviderHosts",
+    "activationTimeoutMs",
+    "maxRuntimeBytes",
+  ]);
+  for (const field of Object.keys(input)) {
+    if (!allowedFields.has(field)) {
+      throw new TypeError(`deploymentAgents.placement contains unknown field ${field}.`);
+    }
+  }
+  const defaultPlacement = input.default ?? "local";
+  if (defaultPlacement !== "local" && defaultPlacement !== "provider") {
+    throw new TypeError('deploymentAgents.placement.default must be "local" or "provider".');
+  }
+  const region = input.region === undefined
+    ? null
+    : runnerIdentity(input.region, "deploymentAgents.placement.region", 100);
+  const rawLabels = input.labels ?? {};
+  if (
+    !rawLabels
+    || typeof rawLabels !== "object"
+    || Array.isArray(rawLabels)
+    || Object.keys(rawLabels).length > 99
+  ) {
+    throw new TypeError("deploymentAgents.placement.labels must contain at most 99 labels.");
+  }
+  const labels: Record<string, string> = { provider: "http" };
+  for (const [name, raw] of Object.entries(rawLabels)) {
+    if (
+      !/^[A-Za-z0-9_-][A-Za-z0-9_.:-]{0,99}$/u.test(name)
+      || ["__proto__", "constructor", "prototype"].includes(name)
+      || typeof raw !== "string"
+      || raw.length > 200
+      || raw.includes("\0")
+    ) {
+      throw new TypeError(`deploymentAgents.placement label ${name} is invalid.`);
+    }
+    if (name === "provider" && raw !== "http") {
+      throw new TypeError('deploymentAgents.placement label provider must equal "http".');
+    }
+    labels[name] = raw;
+  }
+  const rawHosts = input.allowedProviderHosts ?? [];
+  if (!Array.isArray(rawHosts) || rawHosts.length > 100) {
+    throw new TypeError(
+      "deploymentAgents.placement.allowedProviderHosts must contain at most 100 hostnames.",
+    );
+  }
+  const allowedProviderHosts = Object.freeze(
+    [...new Set(rawHosts.map((host) =>
+      normalizeHostname(boundedString(host, "allowedProviderHosts entry", 1, 253))))]
+      .sort(),
+  );
+  return Object.freeze({
+    default: defaultPlacement,
+    region,
+    labels: Object.freeze(labels),
+    allowedProviderHosts,
+    activationTimeoutMs: integerInRange(
+      input.activationTimeoutMs ?? 2 * 60_000,
+      "deploymentAgents.placement.activationTimeoutMs",
+      1_000,
+      10 * 60_000,
+    ),
+    maxRuntimeBytes: integerInRange(
+      input.maxRuntimeBytes ?? 768 * 1024 * 1024,
+      "deploymentAgents.placement.maxRuntimeBytes",
+      1_024,
+      2 * 1024 * 1024 * 1024,
+    ),
+  });
+}
+
+function projectPlacement(
+  input: unknown,
+  fallback: PlatformProjectPlacement,
+  providerEnabled: boolean,
+): PlatformProjectPlacement {
+  const placement = input === undefined ? fallback : input;
+  if (placement !== "local" && placement !== "provider") {
+    throw new PlatformError(
+      422,
+      "INVALID_INPUT",
+      'placement must be "local" or "provider".',
+    );
+  }
+  if (placement === "provider" && !providerEnabled) {
+    throw new PlatformError(
+      409,
+      "PROVIDER_PLACEMENT_DISABLED",
+      "Provider placement is not enabled on this platform.",
+    );
+  }
+  return placement;
+}
+
+function providerDesiredPayload(value: unknown): {
+  releaseId: string | null;
+  state: "running" | "stopped";
+  generation: number;
+  runtimeProtocol?: typeof DEPLOYMENT_RUNTIME_PROTOCOL;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Provider desired-state payload is invalid.");
+  }
+  const input = value as Record<string, unknown>;
+  const allowed = new Set(["releaseId", "state", "generation", "runtimeProtocol"]);
+  if (Object.keys(input).some((key) => !allowed.has(key))) {
+    throw new TypeError("Provider desired-state payload contains an unknown field.");
+  }
+  const state = input.state;
+  const releaseId = input.releaseId;
+  const generation = input.generation;
+  if (
+    (state !== "running" && state !== "stopped")
+    || (releaseId !== null
+      && (typeof releaseId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(releaseId)))
+    || !Number.isSafeInteger(generation)
+    || Number(generation) < 1
+    || (input.runtimeProtocol !== undefined
+      && input.runtimeProtocol !== DEPLOYMENT_RUNTIME_PROTOCOL)
+  ) {
+    throw new TypeError("Provider desired-state payload is invalid.");
+  }
+  return {
+    releaseId: releaseId as string | null,
+    state,
+    generation: Number(generation),
+    ...(input.runtimeProtocol === DEPLOYMENT_RUNTIME_PROTOCOL
+      ? { runtimeProtocol: DEPLOYMENT_RUNTIME_PROTOCOL }
+      : {}),
+  };
+}
+
+function providerRuntimeEnvironment(
+  config: DeploymentBundle["config"],
+  secrets: Record<string, string>,
+): Record<string, string> {
+  return {
+    ...config.env,
+    ...secrets,
+    NODE_ENV: "production",
+    ALLOWED_HOSTS: "",
+    CLANK_MANAGED_INGRESS: "1",
+    TRUST_PROXY: "1",
+  };
+}
+
+function encryptProviderEnvironment(
+  environment: Record<string, string>,
+  masterKey: Uint8Array,
+): string {
+  const serialized = JSON.stringify(environment);
+  if (new TextEncoder().encode(serialized).byteLength > 1_900_000) {
+    throw new PlatformError(
+      413,
+      "RUNTIME_ENVIRONMENT_TOO_LARGE",
+      "The provider runtime environment exceeds its secure manifest limit.",
+    );
+  }
+  return encryptSecret(serialized, masterKey);
+}
+
+function decryptProviderEnvironment(
+  encrypted: string,
+  masterKey: Uint8Array,
+): Record<string, string> {
+  const value = JSON.parse(decryptSecret(encrypted, masterKey));
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Stored provider runtime environment is invalid.");
+  }
+  const output: Record<string, string> = Object.create(null);
+  for (const [name, raw] of Object.entries(value)) {
+    if (
+      !/^[A-Z_][A-Z0-9_]{0,127}$/u.test(name)
+      || typeof raw !== "string"
+      || raw.length > 65_536
+      || raw.includes("\0")
+    ) {
+      throw new Error("Stored provider runtime environment is invalid.");
+    }
+    output[name] = raw;
+  }
+  return output;
+}
+
+function providerGeneration(
+  internal: SQLiteInternal,
+  projectId: string,
+  generation: number,
+  releaseId: string,
+): ProviderGenerationRow | null {
+  const row = internal.prepare(`SELECT * FROM clank_platform_provider_generations
+    WHERE project_id = ? AND generation = ? AND release_id = ?`)
+    .get(projectId, generation, releaseId);
+  return row
+    ? {
+        projectId: String(row.project_id),
+        generation: Number(row.generation),
+        releaseId: String(row.release_id),
+        encryptedEnvironment: String(row.encrypted_environment),
+        createdAt: Number(row.created_at),
+      }
+    : null;
+}
+
+function providerRuntimePath(projectId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(projectId)) {
+    throw new Error("Provider project ID is invalid.");
+  }
+  return `/v1/clank/apps/${projectId}`;
+}
+
+function providerIngressToken(
+  masterKey: Uint8Array,
+  projectId: string,
+  generation: number,
+): string {
+  const module = (globalThis as any).process.getBuiltinModule?.("node:crypto");
+  if (!module) throw new Error("Node crypto module is unavailable.");
+  return `clnki_${module.createHmac("sha256", masterKey)
+    .update("clank-provider-ingress\0")
+    .update(projectId)
+    .update("\0")
+    .update(String(generation))
+    .digest("base64url")}`;
+}
+
+function providerIngressOrigin(endpoint: string, allowedHosts: readonly string[]): string {
+  const url = new URL(endpoint);
+  const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (
+    url.username
+    || url.password
+    || url.search
+    || url.hash
+    || url.pathname !== "/"
+    || (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+    || (!loopback && !allowedHosts.includes(url.hostname.toLowerCase()))
+  ) {
+    throw new PlatformError(
+      409,
+      "PROVIDER_ENDPOINT_DENIED",
+      "The assigned provider endpoint is outside the managed-ingress allowlist.",
+    );
+  }
+  return url.origin;
 }
 
 function integerInRange(value: unknown, name: string, minimum: number, maximum: number): number {

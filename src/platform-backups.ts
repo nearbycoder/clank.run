@@ -51,6 +51,9 @@ export function createPlatformBackupScheduler(options: {
   );
   const leaseMs = integerRange(options.leaseMs ?? 30 * 60_000, "backup leaseMs", 10_000, 60 * 60_000);
   ensureSchema(internal);
+  const hasPlacement = internal.prepare("PRAGMA table_info(clank_platform_projects)").all()
+    .some((column) => column.name === "placement");
+  const localProjectPredicate = hasPlacement ? " AND p.placement = 'local'" : "";
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let flight: Promise<void> | undefined;
@@ -104,6 +107,7 @@ export function createPlatformBackupScheduler(options: {
       FROM clank_platform_backup_schedules s
       JOIN clank_platform_projects p ON p.id = s.project_id
       WHERE p.database_path IS NOT NULL
+        ${localProjectPredicate}
         AND s.next_backup_at IS NOT NULL
         AND s.next_backup_at <= ?
         AND (s.lease_until IS NULL OR s.lease_until <= ?)
@@ -232,7 +236,8 @@ export function createPlatformBackupScheduler(options: {
           (project_id, next_backup_at, lease_token, lease_until, last_started_at,
            last_completed_at, last_backup_id, last_error, updated_at)
           SELECT id, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?
-          FROM clank_platform_projects WHERE database_path IS NOT NULL
+          FROM clank_platform_projects p WHERE p.database_path IS NOT NULL
+            ${localProjectPredicate}
           ON CONFLICT(project_id) DO NOTHING`).run(now, now);
         schedule(0);
       } catch (error) {

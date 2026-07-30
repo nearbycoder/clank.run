@@ -33,6 +33,12 @@ configured worker/scheduler processes for each active project.
 | `CLANK_RUNNER_MAX_ARTIFACT_BYTES` | `104857600` | Leased remote-node release-transfer limit |
 | `CLANK_RUNNER_ARTIFACT_STORE` | `local` | Original remote-runner upload repository: `local` or `s3` |
 | `CLANK_RUNNER_ARTIFACT_NAMESPACE` | none | Required stable repository identity when the store is `s3` |
+| `CLANK_PROVIDER_DEFAULT_PLACEMENT` | none | Enable provider projects with new-project default `local` or `provider` |
+| `CLANK_PROVIDER_REGION` | any | Optional exact region required by provider projects |
+| `CLANK_PROVIDER_LABELS` | `provider=http` only | Comma-separated additional exact runner `key=value` requirements |
+| `CLANK_PROVIDER_ALLOWED_HOSTS` | loopback only | Comma-separated non-loopback HTTPS node endpoint hostnames managed ingress may contact |
+| `CLANK_PROVIDER_ACTIVATION_TIMEOUT_MS` | `120000` | Synchronous wait before a provider deploy returns resumable pending state |
+| `CLANK_RUNNER_MAX_RUNTIME_BYTES` | `805306368` | Maximum lease-scoped sensitive runtime capsule |
 | `CLANK_OBJECT_ENDPOINT` | `AWS_ENDPOINT_URL` | S3-compatible HTTPS origin |
 | `CLANK_OBJECT_REGION` | `AWS_DEFAULT_REGION` | SigV4 region, commonly `auto` for compatible providers |
 | `CLANK_OBJECT_BUCKET` | `AWS_S3_BUCKET_NAME` | Private bucket name |
@@ -158,13 +164,32 @@ export CLANK_PROVIDER_TOKEN="$(your-secret-manager read runtime-provider)"
 clank-runner
 ```
 
-The operator still supplies the provider host and edge routing; local SQLite data is never placed
-in the non-secret release transfer. The separate runtime capsule carries final environment,
-SQLite placement, and ingress identity. The packaged [complete provider
-service](provider-service.md) safely composes its data, isolated Docker runtime, durable fencing,
-and private ingress on that host. The current built-in supervisor keeps the capsule inactive until
-stateful node pinning, independent recovery, and control-plane traffic switching are integrated.
-Use the protocol as the secure boundary for a deliberate runner integration and follow
+The operator still supplies the provider host. Local SQLite data is never placed in the non-secret
+release transfer. The separate runtime capsule carries final environment, SQLite placement, and
+ingress identity. The packaged [complete provider service](provider-service.md) safely composes
+its data, isolated Docker runtime, durable fencing, and private ingress on that host.
+
+To enable explicit provider projects while keeping local creation as the default:
+
+```sh
+export CLANK_RUNNER_COORDINATOR=1
+export CLANK_INGRESS_BASE_DOMAIN=apps.example.com
+export CLANK_PROVIDER_DEFAULT_PLACEMENT=local
+export CLANK_PROVIDER_REGION=us-central
+export CLANK_PROVIDER_ALLOWED_HOSTS=runtime.internal.example
+```
+
+Then create with `clank project create my-app --placement=provider` or add
+`--placement=provider` to the first `clank deploy`. The platform rejects this configuration unless
+the coordinator and managed ingress are both enabled. It also refuses non-loopback provider
+origins unless they use HTTPS and appear in the explicit hostname allowlist.
+
+Provider projects are stateful: node loss causes unavailability, never implicit movement of the
+SQLite database. Remote encrypted backup/restore is not available yet, so establish and test an
+independent provider-host backup policy before production use. Local backup scheduling excludes
+provider projects and backup mutations fail closed.
+
+Follow
 [Deployment runner fleet](runner-fleet.md),
 [Remote runtime placement](runtime-placement.md),
 [Deployment provider adapters](provider-adapters.md),

@@ -6,12 +6,28 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- The built-in control plane can now opt immutable projects and inherited previews into stateful
+  provider placement. It freezes encrypted generation inputs, emits sensitive capsules only to a
+  current lease, publishes only exact allowlisted observations, resumes pending deploys, supports
+  fenced code/data rollback, survives restart, and confirms provider deletion before removing
+  metadata. Local placement remains the default and existing projects never move.
+- The CLI and control-plane project dialog expose explicit `local | provider` creation. Persisted
+  deploy-attempt keys now survive provider-pending responses so an exact retry cannot create a
+  duplicate release.
+- A packaged `clank-provider` process runs the complete Docker provider lifecycle bridge and
+  generation-bound private runtime ingress with environment-only resource and trust-boundary
+  configuration.
 - Deployment desired state now distinguishes portable from stateful placement. Stateful projects
   reserve one node identity across releases, stopped state, expiry, and credential revocation;
   unsafe implicit failover, mode changes, and pinned-region changes are rejected.
 - Desired placement can durably require a private node endpoint and exact capability labels.
   Delayed placement keeps those constraints, and assigned nodes cannot shed required capabilities
   through heartbeat or credential rotation.
+- Provider projects are excluded from local backup scheduling and report the unsupported remote
+  backup boundary without touching a nonexistent control-plane database. Backup mutations fail
+  closed until the remote encrypted backup transport is implemented. Job diagnostics and
+  mutations have the same explicit remote boundary instead of accidentally inspecting a local
+  path.
 
 - A complete zero-dependency `@clank.run/framework/provider-service` composition now binds
   independently verified runtime capsules, durable operation/generation/fence intent, provider

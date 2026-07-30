@@ -13,6 +13,7 @@ export interface DockerRunnerOptions {
 }
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
 export type PlatformHostingProfile = "trusted" | "isolated";
+export type PlatformProjectPlacement = "local" | "provider";
 export interface PlatformLimits {
     /** Maximum organizations created by one account. Defaults to 5. */
     organizationsPerAccount?: number;
@@ -115,6 +116,26 @@ export interface ClankPlatformOptions {
              */
             namespace: string;
             store: ObjectStore;
+        };
+        /**
+         * Enables provider-hosted, stateful projects. Local placement remains
+         * the default unless `default` is explicitly set to `provider`.
+         */
+        placement?: {
+            default?: PlatformProjectPlacement;
+            /** Optional region constraint for every provider-hosted project. */
+            region?: string;
+            /** Additional exact runner labels. `provider=http` is always required. */
+            labels?: Record<string, string>;
+            /**
+             * Non-loopback provider hostnames that managed ingress may contact.
+             * Provider origins outside this allowlist are never published.
+             */
+            allowedProviderHosts?: readonly string[];
+            /** Time one deploy request waits for exact provider observation. Defaults to 2 minutes. */
+            activationTimeoutMs?: number;
+            /** Maximum generated runtime capsule. Defaults to 768 MiB. */
+            maxRuntimeBytes?: number;
         };
     };
     /** Defaults to "bootstrap": only the first platform account may self-register. */

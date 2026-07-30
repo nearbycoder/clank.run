@@ -216,7 +216,8 @@ service](provider-service.md) composes independently verified capsules, local sn
 recovery, isolated Docker health and deferred jobs, durable fencing, stopped state, exact private
 request binding, drain-before-stop, and restart reconciliation on one provider node. Stateful node
 pinning, independent backup replication, and control-plane ingress activation must be integrated
-before hosted remote placement is enabled. See [Remote runtime placement](runtime-placement.md).
+before enabling provider projects. The built-in control plane now uses these requirements for
+explicit stateful provider placement. See [Remote runtime placement](runtime-placement.md).
 
 ## Platform behavior
 
