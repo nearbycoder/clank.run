@@ -315,6 +315,13 @@ minimizes the unavoidable volume handoff. A truly zero-downtime control-plane im
 requires moving control data, release artifacts, application data, and runners off the mounted
 local volume so the Railway service can run multiple stateless replicas.
 
+Before that handoff, `railway.json` runs an import-only smoke check inside the completed runtime
+image. Railway pre-deploy containers do not mount the persistent volume, so a missing production
+module fails without disturbing the active stateful instance. The external `/_clank/readyz` probe
+then admits the candidate only after its control database is open. Keep the smoke-check import
+list synchronized with every runtime import in `scripts/clank-platform.mjs`; the repository gate
+enforces that closure.
+
 The Railway deployment uses Clank's `process` runner because hosted Railway containers do not expose
 a Docker daemon. This runner is intentionally for trusted deployers: application code runs with the
 same container and volume authority as the control plane. Use Clank's Docker runner or a remote

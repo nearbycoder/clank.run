@@ -5,6 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
+    "preDeployCommand": "node --input-type=module --disable-warning=ExperimentalWarning -e \"await Promise.all([import('./dist/platform.js'),import('./dist/node.js'),import('./dist/object-storage.js'),import('./dist/services.js'),import('./scripts/platform-hosting.mjs'),import('./scripts/platform-billing.mjs')])\"",
     "healthcheckPath": "/_clank/readyz",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
