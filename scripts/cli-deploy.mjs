@@ -68,6 +68,10 @@ const COMMANDS = Object.freeze({
     usage: "clank create <directory> [--template <auth-todo|minimal>] [--name <name>] [--framework <version|local|spec>] [--json]",
     summary: "Create a deploy-ready full-stack app from a built-in template.",
   },
+  dev: {
+    usage: "clank dev [directory] [--host <host>] [--port <port>] [--no-reload] [--json]",
+    summary: "Build, supervise, restart, and live-reload a local application.",
+  },
   plan: {
     usage: "clank plan [clank.app.ts] [--output <file>] [--framework <version|local|spec>]",
     summary: "Print a deterministic generated-file plan.",
@@ -401,10 +405,12 @@ Run clank help for the complete command list.`);
 Start:
   clank templates                      List built-in app starters
   clank create <directory>             Create a deploy-ready full-stack app
+  clank dev [directory]                Build, run, and live-reload an app
   clank doctor [directory]             Check build and deployment readiness
   clank deploy [directory]             Create, link, and deploy a project
 
 Build and agents:
+  clank dev [directory]                Build, supervise, and live-reload locally
   clank plan [clank.app.ts]            Print a deterministic generated-file plan
   clank explain [clank.app.ts]         Explain an app blueprint in plain language
   clank generate [directory]           Generate from clank.app.ts without executing it

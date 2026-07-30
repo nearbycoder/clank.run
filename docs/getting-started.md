@@ -118,7 +118,7 @@ Start in `src/view.tsx` when changing what the app looks like. Put trusted data 
 The generated npm scripts keep the normal workflow short:
 
 ```sh
-npm run dev           # build and start the local server
+npm run dev           # build, supervise, watch, and browser-reload the local server
 npm run jobs:worker   # build and start a worker in a second terminal
 npm run jobs:scheduler # run cron after adding schedules
 npm run build         # compile src/ into dist/
@@ -130,6 +130,7 @@ npm run deploy        # build, migrate, health-check, and deploy
 You can call the package CLI directly when you need more control:
 
 ```sh
+clank dev
 clank build src dist
 clank watch src dist
 clank jobs worker --concurrency=4

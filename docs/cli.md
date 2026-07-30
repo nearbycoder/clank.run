@@ -67,6 +67,55 @@ npm install
 
 `--framework` also accepts an explicit npm dependency spec, tarball, or `file:` path. Blueprint `plan` and `generate` accept the same option so their checksum includes the actual dependency choice.
 
+## Integrated development loop
+
+Generated applications use one local command:
+
+```sh
+npm run dev
+# equivalent to:
+clank dev
+```
+
+`clank dev` reads `clank.deploy.json`, executes its shell-free `build.command`, launches the
+compiled `entry`, and checks the declared health route. It watches the project while excluding
+generated output, dependency directories, local Clank state, and live SQLite files. After a
+relevant change it:
+
+1. reruns the complete build, including Tailwind;
+2. starts the replacement on a private loopback port;
+3. waits for the declared health check to return `2xx`;
+4. atomically switches the local development proxy to the healthy process;
+5. reloads connected browser tabs; and
+6. gracefully stops the prior process.
+
+A compiler error or failed replacement does not take down the last good process. Rapid changes are
+debounced and serialized, and repeated application crashes are bounded instead of creating an
+unlimited restart loop. The proxy reserves only two local development paths:
+`/_clank/dev-client.js` and `/_clank/dev-events`. It adds the reload client only to bounded,
+uncompressed UTF-8 HTML responses, reuses an existing CSP nonce when present, and leaves API,
+streaming, cookie, and non-HTML response bodies untouched. Proxy responses use `no-store` so an
+immutable production asset policy cannot keep stale JavaScript during local development.
+
+Useful options are explicit:
+
+```sh
+clank dev ./my-app --port=4100
+clank dev --host=0.0.0.0 --port=3000
+clank dev --no-reload
+clank dev --json
+```
+
+The default is `http://127.0.0.1:3000`; `PORT` and `HOST` are also honored for the public
+development listener. Binding a non-loopback host makes the app reachable from the local network,
+so do it only on a trusted network. `--no-reload` keeps rebuild/restart supervision without
+injecting a browser client. `--json` writes newline-delimited `clank-dev-event/1` lifecycle events
+to stdout while build and application logs remain on stderr, giving agents a stable ready,
+restarted, failure, and shutdown signal.
+
+`clank watch` remains available as a compiler-only primitive when another process manager owns the
+server. For normal application work, prefer `clank dev`.
+
 ## Help and readiness
 
 ```sh

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "clank build src dist --tailwind=src/styles.css",
-    "dev": "clank build src dist --tailwind=src/styles.css && node --disable-warning=ExperimentalWarning dist/server.js",
+    "dev": "clank dev",
     "start": "node --disable-warning=ExperimentalWarning dist/server.js",
     "doctor": "clank doctor",
     "deploy:check": "clank deploy --dry-run",

@@ -27,6 +27,31 @@ if (command === "--version" || command === "-v" || command === "version") {
   process.exit(process.exitCode ?? 0);
 }
 
+if (command === "dev") {
+  if (args.includes("--help") || args.includes("-h")) {
+    const { run } = await import("./cli-deploy.mjs");
+    await run("help", ["dev", ...(args.includes("--json") ? ["--json"] : [])]);
+    process.exit(process.exitCode ?? 0);
+  }
+  try {
+    const { runDev } = await import("./clank-dev.mjs");
+    await runDev(args);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (args.includes("--json")) {
+      console.log(JSON.stringify({
+        protocol: "clank-dev-event/1",
+        type: "fatal",
+        message,
+      }));
+    } else {
+      console.error(`clank: ${message}`);
+    }
+    process.exitCode = 1;
+  }
+  process.exit(process.exitCode ?? 0);
+}
+
 if (command !== "build" && command !== "watch") {
   const { run } = await import("./cli-deploy.mjs");
   if (args.includes("--help") || args.includes("-h")) {

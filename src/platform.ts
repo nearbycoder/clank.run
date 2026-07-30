@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import {
   AuthError,
   defineAuth,
@@ -574,6 +573,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   if (hostingProfile === "isolated" && runner.kind !== "docker") {
     throw new TypeError('hostingProfile "isolated" requires a Docker runner.');
   }
+  const { readFile } = await import("node:fs/promises");
   const platformBrandAssets = new Map<string, { bytes: Uint8Array; contentType: string }>(await Promise.all([
     ["/favicon.ico", "../brand/favicon.ico", "image/x-icon"],
     ["/apple-touch-icon.png", "../brand/apple-touch-icon.png", "image/png"],

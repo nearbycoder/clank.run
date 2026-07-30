@@ -4,7 +4,7 @@ This is a Clank full-stack application. Keep the safe path short, the generated 
 
 ## Working commands
 
-- `npm run dev` builds and starts the app at http://127.0.0.1:3000.
+- `npm run dev` builds, starts, watches, health-swaps, and browser-reloads the app at http://127.0.0.1:3000.
 - `npm run jobs:worker` builds and starts a durable background worker.
 - `npm run jobs:scheduler` builds and starts the cron scheduler.
 - `npm run build` compiles `src/` into `dist/`.

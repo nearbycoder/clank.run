@@ -4,6 +4,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added an integrated `clank dev` supervisor that runs the deployment-configured build and entry,
+  watches relevant project files, health-checks replacements on private loopback ports, atomically
+  swaps the local proxy, reloads connected browsers, preserves the last good process after build or
+  candidate failures, bounds crash restarts and reload clients, and emits agent-readable
+  `clank-dev-event/1` lifecycle records.
+- Removed the browser package barrel's eager `node:fs/promises` import so generated module
+  applications execute hydration instead of stalling while resolving a Node-only module.
+
 ## 0.10.0 - 2026-07-30
 
 ### Added

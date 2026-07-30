@@ -17,6 +17,29 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 
 `npm run check` covers the build, dependency contract, coverage floors, documentation/declaration audit, packed-release conformance, deterministic chaos tests, package/current-tree/history credential scans, and workflow-policy checks. Browser review remains intentionally explicit because visual and interaction regressions need a rendered application.
 
+## 2026-07-30 integrated development loop phase
+
+- [x] Replaced generated one-shot development scripts with one `clank dev` command driven by the
+  same transparent build, entry, environment, and health contract used for deployment.
+- [x] Added serialized project watching, atomic compiler output reuse, candidate health checks,
+  last-good-process retention, bounded crash recovery, graceful replacement shutdown, and reserved
+  output/database/dependency exclusions.
+- [x] Added a bounded loopback reverse proxy that preserves streaming/non-HTML responses, injects a
+  CSP-compatible external reload client into eligible HTML, and fans out reloads to at most 64
+  connected browsers.
+- [x] Added newline-delimited `clank-dev-event/1` lifecycle output for agents while keeping build
+  and application diagnostics on stderr.
+- [x] Passed the complete local gate: 328 tests, 85.92% line coverage, a 209-file packed
+  allowlist, packaged consumer/auth/MCP/deploy/migration/failure/rollback conformance, 59-file
+  documentation audit, complete current-tree and reachable-history credential scans, and the
+  zero-dependency security policy checks.
+- [x] Verified a freshly generated minimal app in Chromium: SSR hydration attached in place,
+  reactive interaction updated without navigation, a source edit rebuilt and health-swapped to
+  revision 3, the existing tab reloaded over SSE at the unchanged URL, and the rendered page had no
+  console or page errors.
+- [ ] Record PR checks, CodeQL, merge SHA, post-merge deployments, and production health.
+- [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
+
 ## 2026-07-30 version 0.10.0 release phase
 
 - [x] Selected a minor release because the accumulated public provider, preview, usage, and

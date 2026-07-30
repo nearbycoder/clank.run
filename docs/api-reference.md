@@ -62,6 +62,9 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 
 ## Compiler
 
+- `clank dev [directory]`: run the deployment-configured build and entry, watch the project,
+  health-swap successful replacements, preserve the last good process after errors, and reload
+  connected browser tabs.
 - `clank build [input] [output]`: compile `.ts`/`.tsx` and copy static files once.
 - `clank watch [input] [output]`: rebuild after source changes.
 - `--jsx-import-source=specifier`: choose the generated runtime module.

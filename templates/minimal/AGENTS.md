@@ -4,7 +4,7 @@ This is a minimal Clank application. Keep the generated output reproducible and 
 
 ## Working commands
 
-- `npm run dev` builds and starts the app at http://127.0.0.1:3000.
+- `npm run dev` builds, starts, watches, health-swaps, and browser-reloads the app at http://127.0.0.1:3000.
 - `npm run build` compiles `src/` into `dist/`.
 - `npm run doctor` performs local readiness diagnostics.
 - `npm run deploy:check` builds and verifies a deterministic artifact without login or upload.

@@ -56,6 +56,9 @@ clank deploy
 for the interactive launcher, or give the same commands directly to a coding agent or CI job.
 Agents can inspect the exact starter capabilities with `clank templates --json` and receive a
 checksummed file manifest plus next-command map from `clank create my-app --json`.
+`npm run dev` is a complete local supervisor: it rebuilds TypeScript and Tailwind, starts only
+healthy replacements, keeps the last good process after errors, and reloads connected browsers.
+Agents can use `clank dev --json` for stable newline-delimited lifecycle events.
 
 The generated app is already a working product—not an empty component. It includes:
 
