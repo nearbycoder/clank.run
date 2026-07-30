@@ -23,14 +23,35 @@ export interface BackupVerification {
     databaseBytes: number;
     databaseSha256: string;
 }
+export interface BackupSnapshotInput {
+    /** Consistent SQLite snapshot bytes obtained from a trusted source. */
+    bytes: Uint8Array;
+    /** Optional precomputed checksum, verified before encryption. */
+    sha256?: string;
+    /** Basename recorded in the manifest. */
+    source: string;
+    reason?: string;
+    databaseRevision?: number | null;
+    migrationCount?: number;
+    latestMigration?: string | null;
+    protectedBackupIds?: readonly string[];
+}
+export interface BackupReadResult {
+    bytes: Uint8Array;
+    verification: BackupVerification;
+}
 export interface BackupManager {
     create(options?: {
         reason?: string;
         /** Backup IDs that this create/prune cycle must preserve temporarily. */
         protectedBackupIds?: readonly string[];
     }): Promise<BackupManifest>;
+    /** Encrypts an already-consistent snapshot without writing plaintext staging data. */
+    createFromSnapshot(options: BackupSnapshotInput): Promise<BackupManifest>;
     list(): Promise<readonly BackupManifest[]>;
     verify(id: string): Promise<BackupVerification>;
+    /** Authenticates and decrypts a backup into bounded memory without a plaintext staging file. */
+    read(id: string): Promise<BackupReadResult>;
     restore(id: string, options: {
         targetPath?: string;
         confirmation: string;
@@ -44,7 +65,8 @@ export interface BackupManager {
     close(): void;
 }
 export interface BackupManagerOptions {
-    databasePath: string;
+    /** Local live database. Optional for snapshot-import-only repositories. */
+    databasePath?: string;
     repositoryDirectory: string;
     encryptionKey: string | Uint8Array;
     keyId?: string;

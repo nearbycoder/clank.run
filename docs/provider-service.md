@@ -165,6 +165,35 @@ to the provider data store's consistent SQLite backup and is intended to feed an
 encrypted recovery repository. Both calls serialize with lifecycle work for the project and reject
 new work after the service starts closing.
 
+### Remote snapshot boundary
+
+A runtime capsule may carry a separate high-entropy `ingress.controlToken`. The complete service
+keeps only its SHA-256 in memory for the active generation; it never places the token in provider
+state, Docker metadata, application environment, public ingress, or logs. When present, the
+service exposes the exact private path returned by
+`deploymentProviderSnapshotPath(projectId)`:
+
+```http
+GET /v1/clank/control/<project-id>/snapshot
+Authorization: Bearer <generation-control-token>
+```
+
+The request succeeds only while the token, durable service state, active release, and active
+generation all agree. It serializes with lifecycle work, asks the data store for a consistent
+SQLite snapshot, rechecks the generation and SHA-256, and returns
+`application/vnd.clank.provider-snapshot` with exact length, digest, release, and generation
+headers. Missing, malformed, old, restarted-without-reconcile, stopped, or deleted bindings return
+a fixed non-enumerating response. Query strings and non-`GET` methods are rejected.
+
+This endpoint returns plaintext SQLite bytes and belongs only on the authenticated private TLS
+provider origin. The control token is an authorization secret, not transport encryption. Never
+mount the control prefix through an application's public domain or managed app route. The
+receiving control plane must enforce response deadlines and byte limits, refuse redirects, verify
+all identity headers and the body digest, and immediately import the bytes into an encrypted
+recovery repository. The low-level service provides this boundary; whether a particular
+control-plane release consumes it is documented separately in [Remote runtime
+placement](runtime-placement.md#current-support-boundary).
+
 Use `rollback(request)` and `delete(request)` rather than reaching into the provider data store
 beneath a live service:
 

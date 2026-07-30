@@ -21,6 +21,8 @@ export interface DeploymentRuntimeIngressManifest {
   readonly route: string;
   /** Secret sent only by Clank managed ingress when proxying this project. */
   readonly token: string;
+  /** Separate secret for provider control operations; never sent with public traffic. */
+  readonly controlToken?: string;
 }
 
 export interface DeploymentRuntimeManifest {
@@ -64,6 +66,7 @@ export interface CreateDeploymentRuntimeCapsuleInput {
   ingress: {
     route: string;
     token: string;
+    controlToken?: string;
   };
   artifact: Uint8Array;
 }
@@ -141,6 +144,9 @@ export async function createDeploymentRuntimeCapsule(
     ingress: {
       route: ingressRoute(input.ingress.route),
       token: ingressToken(input.ingress.token),
+      ...(input.ingress.controlToken === undefined
+        ? {}
+        : { controlToken: ingressToken(input.ingress.controlToken) }),
     },
     artifact: {
       bytes: artifact.byteLength,
@@ -299,7 +305,8 @@ function runtimeManifest(value: unknown): DeploymentRuntimeManifest {
     : digestMetadata(database.snapshot, "runtime database snapshot");
   const artifact = digestMetadata(input.artifact, "runtime artifact");
   const ingress = plainObject(input.ingress, "runtime ingress");
-  exact(ingress, ["route", "token"]);
+  const hasControlToken = Object.hasOwn(ingress, "controlToken");
+  exact(ingress, hasControlToken ? ["route", "token", "controlToken"] : ["route", "token"]);
   return Object.freeze({
     protocol: DEPLOYMENT_RUNTIME_PROTOCOL,
     projectId: identifier(input.projectId, "projectId"),
@@ -314,6 +321,9 @@ function runtimeManifest(value: unknown): DeploymentRuntimeManifest {
     ingress: Object.freeze({
       route: ingressRoute(ingress.route),
       token: ingressToken(ingress.token),
+      ...(hasControlToken
+        ? { controlToken: ingressToken(ingress.controlToken) }
+        : {}),
     }),
     artifact,
   });

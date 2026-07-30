@@ -28,6 +28,9 @@ import {
 } from "./runtime-placement.ts";
 
 export const DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL = "clank-provider-service/1";
+export const DEPLOYMENT_PROVIDER_CONTROL_PREFIX = "/v1/clank/control";
+export const DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE =
+  "application/vnd.clank.provider-snapshot";
 
 export interface DeploymentProviderServiceState {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
@@ -102,6 +105,13 @@ export interface DeploymentProviderService extends DeploymentProvider {
 }
 
 interface StoredServiceState extends DeploymentProviderServiceState {}
+
+interface ProviderControlBinding {
+  projectId: string;
+  releaseId: string;
+  generation: number;
+  tokenDigest: Uint8Array;
+}
 
 interface NodeStats {
   dev: number;
@@ -207,6 +217,7 @@ export async function openDeploymentProviderService(
     "close",
   ]);
   const tails = new Map<string, Promise<void>>();
+  const controls = new Map<string, ProviderControlBinding>();
   let closed = false;
 
   const report = (error: unknown): void => {
@@ -255,6 +266,7 @@ export async function openDeploymentProviderService(
   };
 
   const quiesce = async (projectId: string): Promise<void> => {
+    controls.delete(projectId);
     const bindings = ingress.inspect()
       .filter((binding) => binding.projectId === projectId)
       .sort((left, right) => right.generation - left.generation);
@@ -418,9 +430,20 @@ export async function openDeploymentProviderService(
             token: prepared.ingress.token,
             upstream: active.upstream,
           });
+          if (prepared.ingress.controlToken) {
+            controls.set(committed.projectId, {
+              projectId: committed.projectId,
+              releaseId: committed.releaseId,
+              generation: committed.generation,
+              tokenDigest: await secretDigest(prepared.ingress.controlToken),
+            });
+          } else {
+            controls.delete(committed.projectId);
+          }
           throwIfAborted(request.signal);
           await writeProjectState(stateFor(request, "running"));
         } catch (error) {
+          controls.delete(request.operation.projectId);
           try {
             await cleanupCandidate(candidate, prepared);
           } catch (cleanupError) {
@@ -437,8 +460,70 @@ export async function openDeploymentProviderService(
       });
     },
 
-    handle(request) {
-      return ingress.handle(request);
+    async handle(request) {
+      const url = new URL(request.url);
+      const control = new RegExp(
+        `^${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/([A-Za-z0-9_-]{1,128})/snapshot$`,
+        "u",
+      ).exec(url.pathname);
+      if (!control) return ingress.handle(request);
+      if (request.method !== "GET" || url.search) {
+        return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
+      }
+      const projectId = control[1]!;
+      const binding = controls.get(projectId);
+      const credential = bearerCredential(request.headers.get("authorization"));
+      if (
+        !binding
+        || !credential
+        || !await secretMatches(credential, binding.tokenDigest)
+      ) {
+        return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
+      }
+      return exclusive(projectId, async () => {
+        try {
+          if (closed) {
+            return controlProblem(503, "PROVIDER_UNAVAILABLE", "Provider snapshot is unavailable.");
+          }
+          const current = controls.get(projectId);
+          const state = await readProjectState(projectId);
+          if (
+            current !== binding
+            || !state
+            || state.phase !== "running"
+            || state.state !== "running"
+            || state.releaseId !== binding.releaseId
+            || state.generation !== binding.generation
+          ) {
+            return controlProblem(409, "PROVIDER_GENERATION_STALE", "Provider generation is not current.");
+          }
+          const snapshot = await data.snapshot(projectId);
+          if (
+            !snapshot
+            || snapshot.releaseId !== binding.releaseId
+            || snapshot.generation !== binding.generation
+            || snapshot.bytes.byteLength > maxDatabaseBytes
+            || snapshot.sha256 !== await deploymentRuntimeDigest(snapshot.bytes)
+          ) {
+            return controlProblem(409, "PROVIDER_GENERATION_STALE", "Provider generation is not current.");
+          }
+          return new Response(snapshot.bytes, {
+            status: 200,
+            headers: {
+              "cache-control": "private, no-store",
+              "content-length": String(snapshot.bytes.byteLength),
+              "content-type": DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
+              "x-clank-content-sha256": snapshot.sha256,
+              "x-clank-release-id": snapshot.releaseId,
+              "x-clank-runtime-generation": String(snapshot.generation),
+              "x-content-type-options": "nosniff",
+            },
+          });
+        } catch (error) {
+          report(error);
+          return controlProblem(503, "PROVIDER_UNAVAILABLE", "Provider snapshot is unavailable.");
+        }
+      });
     },
 
     async inspect(projectIdInput) {
@@ -557,6 +642,7 @@ export async function openDeploymentProviderService(
     async close() {
       if (closed) return;
       closed = true;
+      controls.clear();
       const activeOperations = [...tails.values()];
       const failures: unknown[] = [];
       try {
@@ -983,6 +1069,43 @@ function serviceState(
 
 function publicState(state: StoredServiceState): DeploymentProviderServiceState {
   return Object.freeze({ ...state });
+}
+
+export function deploymentProviderSnapshotPath(projectId: string): string {
+  return `${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/${identifier(projectId, "projectId")}/snapshot`;
+}
+
+function bearerCredential(value: string | null): string | null {
+  if (!value) return null;
+  const match = /^Bearer ([^\u0000-\u0020\u007f]{32,512})$/u.exec(value);
+  return match?.[1] ?? null;
+}
+
+async function secretDigest(value: string): Promise<Uint8Array> {
+  return new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+  );
+}
+
+async function secretMatches(value: string, expected: Uint8Array): Promise<boolean> {
+  const actual = await secretDigest(value);
+  if (actual.byteLength !== expected.byteLength) return false;
+  let difference = 0;
+  for (let index = 0; index < actual.byteLength; index++) {
+    difference |= actual[index]! ^ expected[index]!;
+  }
+  return difference === 0;
+}
+
+function controlProblem(status: number, code: string, message: string): Response {
+  return new Response(JSON.stringify({ error: { code, message } }), {
+    status,
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 async function readPrivateJson(

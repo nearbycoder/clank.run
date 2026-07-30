@@ -17,6 +17,25 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 
 `npm run check` covers the build, dependency contract, coverage floors, documentation/declaration audit, packed-release conformance, deterministic chaos tests, package/current-tree/history credential scans, and workflow-policy checks. Browser review remains intentionally explicit because visual and interaction regressions need a rendered application.
 
+## 2026-07-30 provider recovery foundation phase
+
+- [x] Added a generation-bound provider snapshot control endpoint with a separate capsule secret,
+  in-memory digest retention, fixed non-enumerating failures, exact durable release/generation
+  checks, consistent provider-data export, and verified response identity.
+- [x] Added import-only encrypted recovery repositories, direct in-memory snapshot encryption, and
+  bounded authenticated backup reads without plaintext repository staging.
+- [x] Preserved local and S3-compatible object repositories, retention protection, explicit
+  restore targets, and the zero-dependency contract.
+- [x] Added focused missing/wrong/stale provider credential, restart/stop revocation, response
+  identity, invalid SQLite/checksum, no-plaintext-staging, explicit-target restore, and object
+  round-trip coverage.
+- [x] Re-certified all 320 tests at 85.99% line, 74.89% branch, and 86.44% function
+  coverage; 59 documentation files, 249 local links, 35 declaration files, and 33 package
+  exports; packed consumer conformance; and package, current-tree, and reachable-history security
+  scans.
+- [ ] Record GitHub CI/CodeQL evidence, merge SHA, and post-merge documentation result.
+- [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
 ## 2026-07-25 review
 
 - [x] Preserved the existing security-remediation branch and removed the unused logo artifact.

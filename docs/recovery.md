@@ -6,10 +6,12 @@ Clank distinguishes deployment rollback from database recovery:
 - a recovery backup is an independently retained, encrypted, integrity-verified SQLite snapshot.
 
 Remote runtime providers can obtain a generation-bound consistent export through
-`openDeploymentProviderDataStore().snapshot(projectId)`. Feed that byte stream into the encrypted
-recovery repository; the provider store's immediate rollback snapshot is intentionally local,
-single-generation, and not a disaster-recovery copy. See [Provider data
-lifecycle](provider-data-lifecycle.md).
+`openDeploymentProviderDataStore().snapshot(projectId)`. `BackupManager.createFromSnapshot()`
+accepts that bounded export and encrypts it directly from memory without creating a plaintext
+staging file on the repository host. The provider store's immediate rollback snapshot is
+intentionally local, single-generation, and not a disaster-recovery copy. See [Provider data
+lifecycle](provider-data-lifecycle.md) and [Complete provider
+service](provider-service.md#remote-snapshot-boundary).
 
 ## Application API
 
@@ -45,6 +47,33 @@ await backups.create({ reason: "scheduled" });
 backups.start(6 * 60 * 60 * 1_000);
 ```
 
+An import-only repository does not need access to a live local database:
+
+```ts
+const backups = await openBackupManager({
+  repositoryDirectory: "/srv/clank/backups/remote-orbit-tasks",
+  encryptionKey: process.env.BACKUP_KEY!,
+  maxDatabaseBytes: 512 * 1024 * 1024,
+});
+
+const backup = await backups.createFromSnapshot({
+  bytes: consistentSQLiteBytes,
+  sha256: expectedSha256,
+  source: "app.sqlite",
+  reason: "provider snapshot",
+});
+
+const restored = await backups.read(backup.id);
+// `restored.bytes` is authenticated, checksum-verified, bounded, and SQLite-identified.
+```
+
+`createFromSnapshot()` copies the caller's `Uint8Array`, validates the SQLite header, byte limit,
+optional SHA-256, source basename, and metadata before it allocates a recovery point. It writes
+only the AES-256-GCM envelope and authenticated manifest. `read()` authenticates both, decrypts
+into bounded memory, verifies the byte count, SHA-256, and SQLite header, and returns a fresh byte
+array. Treat both input and output bytes as sensitive: keep them off logs, URLs, headers, and
+unencrypted storage, and release references promptly.
+
 Each `clank-backup/1` record contains:
 
 - a transactionally consistent SQLite snapshot;
@@ -55,7 +84,11 @@ Each `clank-backup/1` record contains:
 - key ID, reason, and creation time; and
 - retention metadata.
 
-Logical manifests are HMAC authenticated and are also bound as AEAD additional data. Restore decrypts to a private temporary file, verifies the plaintext digest and byte count, runs SQLite `integrity_check`, and only then replaces the stopped database.
+Logical manifests are HMAC authenticated and are also bound as AEAD additional data. File restore
+decrypts to a private temporary file, verifies the plaintext digest and byte count, runs SQLite
+`integrity_check`, and only then replaces the stopped database. An import-only manager requires an
+explicit `targetPath` for file restore; use `read()` when the verified bytes will travel inside a
+fenced provider runtime capsule instead.
 
 `restore` requires the exact confirmation `restore <backup-id>`.
 `purge({ confirmation: "delete all backups" })` removes completed and incomplete repository state;

@@ -15,6 +15,8 @@ import test from "node:test";
 import { createDeploymentBundle } from "../dist/deploy.js";
 import { openDeploymentProviderDataStore } from "../dist/provider-data.js";
 import {
+  deploymentProviderSnapshotPath,
+  DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
   DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
   openDeploymentProviderService,
 } from "../dist/provider-service.js";
@@ -57,7 +59,67 @@ test("provider service orders durable data, deferred jobs, ingress, stop, and re
       "project_service_01.json",
     ), "utf8");
     assert.equal(persisted.includes("service-secret-canary"), false);
-    assert.equal((await first.service.snapshot("project_service_01")).generation, 1);
+    assert.equal(
+      persisted.includes("clankc_provider-service-control-token"),
+      false,
+    );
+    const expectedSnapshot = await first.service.snapshot("project_service_01");
+    assert.equal(expectedSnapshot.generation, 1);
+    const snapshotPath = deploymentProviderSnapshotPath("project_service_01");
+    const deniedSnapshot = await first.service.handle(new Request(
+      `https://provider.example${snapshotPath}`,
+    ));
+    assert.equal(deniedSnapshot.status, 404);
+    assert.equal((await deniedSnapshot.json()).error.code, "CONTROL_NOT_FOUND");
+    assert.equal((await first.service.handle(new Request(
+      `https://provider.example${snapshotPath}?generation=1`,
+      {
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+        },
+      },
+    ))).status, 404);
+    assert.equal((await first.service.handle(new Request(
+      `https://provider.example${snapshotPath}`,
+      {
+        method: "POST",
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+        },
+      },
+    ))).status, 404);
+    const remoteSnapshot = await first.service.handle(new Request(
+      `https://provider.example${snapshotPath}`,
+      {
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+        },
+      },
+    ));
+    assert.equal(remoteSnapshot.status, 200);
+    assert.equal(
+      remoteSnapshot.headers.get("content-type"),
+      DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
+    );
+    assert.equal(remoteSnapshot.headers.get("cache-control"), "private, no-store");
+    assert.equal(
+      remoteSnapshot.headers.get("x-clank-content-sha256"),
+      expectedSnapshot.sha256,
+    );
+    assert.equal(
+      remoteSnapshot.headers.get("x-clank-release-id"),
+      "release_service_01",
+    );
+    assert.equal(remoteSnapshot.headers.get("x-clank-runtime-generation"), "1");
+    const remoteBytes = new Uint8Array(await remoteSnapshot.arrayBuffer());
+    assert.deepEqual(remoteBytes, expectedSnapshot.bytes);
+    assert.equal(
+      Number(remoteSnapshot.headers.get("content-length")),
+      remoteBytes.byteLength,
+    );
     assert.equal(await (await first.service.handle(new Request(
       "https://provider.example/v1/clank/apps/project_service_01",
     ))).text(), "fake ingress");
@@ -73,6 +135,15 @@ test("provider service orders durable data, deferred jobs, ingress, stop, and re
     await first.service.close();
 
     const restarted = await fixture.open();
+    assert.equal((await restarted.service.handle(new Request(
+      `https://provider.example${snapshotPath}`,
+      {
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+        },
+      },
+    ))).status, 404);
     await restarted.service.reconcile(request);
     assert.deepEqual(restarted.events, [
       "launch-web:1",
@@ -87,6 +158,15 @@ test("provider service orders durable data, deferred jobs, ingress, stop, and re
     ]);
     assert.equal((await restarted.service.inspect("project_service_01")).phase, "stopped");
     assert.equal((await fixture.data.inspect("project_service_01")).generation, 1);
+    assert.equal((await restarted.service.handle(new Request(
+      `https://provider.example${snapshotPath}`,
+      {
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+        },
+      },
+    ))).status, 404);
     await assert.rejects(
       restarted.service.reconcile(providerInput(runtime, 3)),
       /generation is stale/u,
@@ -579,6 +659,8 @@ async function serviceFixture(name) {
         ingress: {
           route: "/v1/clank/apps/project_service_01",
           token: "clanki_provider-service-token-12345678901234567890",
+          controlToken:
+            "clankc_provider-service-control-token-12345678901234567890",
         },
         artifact,
       }, {

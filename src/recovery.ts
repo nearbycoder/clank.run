@@ -27,14 +27,37 @@ export interface BackupVerification {
   databaseSha256: string;
 }
 
+export interface BackupSnapshotInput {
+  /** Consistent SQLite snapshot bytes obtained from a trusted source. */
+  bytes: Uint8Array;
+  /** Optional precomputed checksum, verified before encryption. */
+  sha256?: string;
+  /** Basename recorded in the manifest. */
+  source: string;
+  reason?: string;
+  databaseRevision?: number | null;
+  migrationCount?: number;
+  latestMigration?: string | null;
+  protectedBackupIds?: readonly string[];
+}
+
+export interface BackupReadResult {
+  bytes: Uint8Array;
+  verification: BackupVerification;
+}
+
 export interface BackupManager {
   create(options?: {
     reason?: string;
     /** Backup IDs that this create/prune cycle must preserve temporarily. */
     protectedBackupIds?: readonly string[];
   }): Promise<BackupManifest>;
+  /** Encrypts an already-consistent snapshot without writing plaintext staging data. */
+  createFromSnapshot(options: BackupSnapshotInput): Promise<BackupManifest>;
   list(): Promise<readonly BackupManifest[]>;
   verify(id: string): Promise<BackupVerification>;
+  /** Authenticates and decrypts a backup into bounded memory without a plaintext staging file. */
+  read(id: string): Promise<BackupReadResult>;
   restore(id: string, options: {
     targetPath?: string;
     confirmation: string;
@@ -47,7 +70,8 @@ export interface BackupManager {
 }
 
 export interface BackupManagerOptions {
-  databasePath: string;
+  /** Local live database. Optional for snapshot-import-only repositories. */
+  databasePath?: string;
   repositoryDirectory: string;
   encryptionKey: string | Uint8Array;
   keyId?: string;
@@ -86,6 +110,7 @@ export interface BackupObjectRepositoryOptions {
 
 const BACKUP_ID = /^bk_[0-9]{13}_[A-Za-z0-9_-]{12,64}$/u;
 const MAGIC = new TextEncoder().encode("CLNKBK1\n");
+const SQLITE_HEADER = new TextEncoder().encode("SQLite format 3\0");
 const OBJECT_CATALOG_PROTOCOL = "clank-backup-catalog/1" as const;
 const OBJECT_CONTENT_TYPE = "application/vnd.clank.backup-chunk";
 const CATALOG_CONTENT_TYPE = "application/vnd.clank.backup-catalog+json";
@@ -100,7 +125,7 @@ export async function openBackupManager(options: BackupManagerOptions): Promise<
 async function openLocalBackupManager(options: BackupManagerOptions): Promise<BackupManager> {
   const fs = await nodeFs();
   const path = await nodePath();
-  const source = path.resolve(options.databasePath);
+  const source = options.databasePath ? path.resolve(options.databasePath) : null;
   const repository = path.resolve(options.repositoryDirectory);
   const staging = path.join(repository, ".staging");
   const key = await encryptionKey(options.encryptionKey);
@@ -208,6 +233,7 @@ async function openLocalBackupManager(options: BackupManagerOptions): Promise<Ba
     async create(createOptions = {}) {
       if (closed) throw new Error("Backup manager is closed.");
       if (creating) throw new Error("A backup is already in progress.");
+      if (!source) throw new Error("A local database path is required for live backup creation.");
       const protectedIds = protectedBackupIds(createOptions.protectedBackupIds);
       creating = true;
       const started = performance.now();
@@ -263,6 +289,83 @@ async function openLocalBackupManager(options: BackupManagerOptions): Promise<Ba
         creating = false;
       }
     },
+    async createFromSnapshot(snapshotOptions) {
+      if (closed) throw new Error("Backup manager is closed.");
+      if (creating) throw new Error("A backup is already in progress.");
+      const snapshot = backupSnapshotInput(snapshotOptions, maxDatabaseBytes);
+      const protectedIds = protectedBackupIds(snapshot.protectedBackupIds);
+      creating = true;
+      const started = performance.now();
+      const id = `bk_${Date.now()}_${randomId(18)}`;
+      const temporaryDirectory = pathsFor(id, staging).directory;
+      try {
+        await fs.mkdir(temporaryDirectory, { recursive: false, mode: 0o700 });
+        const sha256 = await sha256Bytes(snapshot.bytes);
+        if (snapshot.sha256 !== undefined && snapshot.sha256 !== sha256) {
+          throw new Error("Imported backup snapshot checksum failed.");
+        }
+        const manifest: BackupManifest = {
+          protocol: "clank-backup/1",
+          id,
+          source: snapshot.source,
+          createdAt: Date.now(),
+          reason: snapshot.reason,
+          databaseBytes: snapshot.bytes.byteLength,
+          databaseSha256: sha256,
+          databaseRevision: snapshot.databaseRevision,
+          migrationCount: snapshot.migrationCount,
+          latestMigration: snapshot.latestMigration,
+          encryption: { algorithm: "AES-256-GCM", keyId },
+        };
+        const encoded = JSON.stringify(manifest);
+        const locations = pathsFor(id, staging);
+        await encryptBytes(
+          snapshot.bytes,
+          locations.envelope,
+          key,
+          new TextEncoder().encode(encoded),
+        );
+        await fs.writeFile(
+          locations.manifest,
+          `${JSON.stringify({ manifest, mac: await hmac(encoded, key) }, null, 2)}\n`,
+          { mode: 0o600, flag: "wx" },
+        );
+        if (options.verifyAfterCreate !== false) {
+          const verified = await decryptBytes(
+            locations.envelope,
+            key,
+            new TextEncoder().encode(encoded),
+            maxDatabaseBytes,
+          );
+          if (
+            verified.byteLength !== manifest.databaseBytes
+            || await sha256Bytes(verified) !== manifest.databaseSha256
+          ) {
+            throw new Error(`Backup plaintext checksum failed: ${id}`);
+          }
+          assertSQLiteBytes(verified);
+        }
+        await fs.rename(temporaryDirectory, pathsFor(id).directory);
+        emit({
+          type: "created",
+          backupId: id,
+          durationMs: rounded(performance.now() - started),
+        });
+        await prune(protectedIds);
+        return manifest;
+      } catch (error) {
+        await fs.rm(temporaryDirectory, { recursive: true, force: true });
+        emit({
+          type: "failed",
+          backupId: id,
+          durationMs: rounded(performance.now() - started),
+          error: safeError(error),
+        });
+        throw error;
+      } finally {
+        creating = false;
+      }
+    },
     async list() {
       const entries = await fs.readdir(repository, { withFileTypes: true });
       const manifests: BackupManifest[] = [];
@@ -279,6 +382,37 @@ async function openLocalBackupManager(options: BackupManagerOptions): Promise<Ba
       emit({ type: "verified", backupId: id, durationMs: result.verification.durationMs });
       return result.verification;
     },
+    async read(idInput) {
+      if (closed) throw new Error("Backup manager is closed.");
+      const id = backupId(idInput);
+      const started = performance.now();
+      const manifest = await readManifest(id);
+      const bytes = await decryptBytes(
+        pathsFor(id).envelope,
+        key,
+        new TextEncoder().encode(JSON.stringify(manifest)),
+        maxDatabaseBytes,
+      );
+      const sha256 = await sha256Bytes(bytes);
+      if (
+        bytes.byteLength !== manifest.databaseBytes
+        || sha256 !== manifest.databaseSha256
+      ) {
+        throw new Error(`Backup plaintext checksum failed: ${id}`);
+      }
+      assertSQLiteBytes(bytes);
+      return {
+        bytes,
+        verification: {
+          id,
+          ok: true,
+          verifiedAt: Date.now(),
+          durationMs: rounded(performance.now() - started),
+          databaseBytes: bytes.byteLength,
+          databaseSha256: sha256,
+        },
+      };
+    },
     async restore(id, restoreOptions) {
       if (closed) throw new Error("Backup manager is closed.");
       const checked = backupId(id);
@@ -287,7 +421,13 @@ async function openLocalBackupManager(options: BackupManagerOptions): Promise<Ba
       }
       const result = await decryptAndVerify(checked);
       try {
-        await restoreSQLiteBackup(result.temporary, path.resolve(restoreOptions.targetPath ?? source));
+        const target = restoreOptions.targetPath
+          ? path.resolve(restoreOptions.targetPath)
+          : source;
+        if (!target) {
+          throw new Error("A restore target path is required for this backup repository.");
+        }
+        await restoreSQLiteBackup(result.temporary, target);
       } finally {
         await fs.rm(result.temporary, { force: true });
       }
@@ -368,7 +508,7 @@ interface ObjectBackupCatalog {
 async function openObjectBackupManager(options: BackupManagerOptions): Promise<BackupManager> {
   const fs = await nodeFs();
   const path = await nodePath();
-  const source = path.resolve(options.databasePath);
+  const source = options.databasePath ? path.resolve(options.databasePath) : null;
   const repository = path.resolve(options.repositoryDirectory);
   const objectStaging = path.join(repository, ".object-staging");
   const configured = normalizeBackupObjects(options.objects);
@@ -835,6 +975,38 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
         creating = false;
       }
     },
+    async createFromSnapshot(snapshotOptions) {
+      if (closed) throw new Error("Backup manager is closed.");
+      if (creating) throw new Error("A backup is already in progress.");
+      const protectedIds = protectedBackupIds(snapshotOptions.protectedBackupIds);
+      creating = true;
+      const started = performance.now();
+      let backup: BackupManifest | undefined;
+      try {
+        return await mutate(async () => {
+          await synchronizeLocal();
+          backup = await local.createFromSnapshot(snapshotOptions);
+          await publishLocal(backup);
+          await prune(protectedIds);
+          emit({
+            type: "created",
+            backupId: backup.id,
+            durationMs: rounded(performance.now() - started),
+          });
+          return backup;
+        });
+      } catch (error) {
+        emit({
+          type: "failed",
+          backupId: backup?.id,
+          durationMs: rounded(performance.now() - started),
+          error: safeError(error),
+        });
+        throw error;
+      } finally {
+        creating = false;
+      }
+    },
     async list() {
       if (closed) throw new Error("Backup manager is closed.");
       return combinedList();
@@ -859,6 +1031,23 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
       emit({ type: "verified", backupId: id, durationMs: verification.durationMs });
       return verification;
     },
+    async read(idInput) {
+      if (closed) throw new Error("Backup manager is closed.");
+      const id = backupId(idInput);
+      const catalog = await readCatalog();
+      const remote = catalog.entries.find((entry) =>
+        entry.id === id && entry.state === "active");
+      if (remote) {
+        const materialized = await materializeRemote(remote);
+        try {
+          return await materialized.manager.read(id);
+        } finally {
+          materialized.manager.close();
+          await fs.rm(materialized.root, { recursive: true, force: true });
+        }
+      }
+      return local.read(id);
+    },
     async restore(idInput, restoreOptions) {
       if (closed) throw new Error("Backup manager is closed.");
       const id = backupId(idInput);
@@ -873,7 +1062,11 @@ async function openObjectBackupManager(options: BackupManagerOptions): Promise<B
         try {
           verification = await materialized.manager.restore(id, {
             confirmation: restoreOptions.confirmation,
-            targetPath: path.resolve(restoreOptions.targetPath ?? source),
+            ...(restoreOptions.targetPath
+              ? { targetPath: path.resolve(restoreOptions.targetPath) }
+              : source
+                ? { targetPath: source }
+                : {}),
           });
         } finally {
           materialized.manager.close();
@@ -1159,6 +1352,131 @@ async function encryptFile(
   await fs.appendFile(destination, cipher.getAuthTag());
 }
 
+async function encryptBytes(
+  source: Uint8Array,
+  destination: string,
+  key: Uint8Array,
+  additionalData: Uint8Array,
+): Promise<void> {
+  const fs = await nodeFs();
+  const nodeCrypto = await import("node:crypto") as any;
+  const streams = await import("node:stream/promises") as any;
+  const nativeFs = await import("node:fs") as any;
+  const nativeStream = await import("node:stream") as any;
+  const iv = nodeCrypto.randomBytes(12);
+  const cipher = nodeCrypto.createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(additionalData);
+  await fs.writeFile(destination, concatenate(MAGIC, iv), {
+    mode: 0o600,
+    flag: "wx",
+  });
+  await streams.pipeline(
+    nativeStream.Readable.from([source]),
+    cipher,
+    nativeFs.createWriteStream(destination, { flags: "a", mode: 0o600 }),
+  );
+  await fs.appendFile(destination, cipher.getAuthTag());
+}
+
+async function decryptBytes(
+  source: string,
+  key: Uint8Array,
+  additionalData: Uint8Array,
+  maximum: number,
+): Promise<Uint8Array> {
+  const fs = await nodeFs();
+  const nodeCrypto = await import("node:crypto") as any;
+  const stats = await fs.lstat(source);
+  const overhead = MAGIC.byteLength + 12 + 16;
+  const plaintextBytes = stats.size - overhead;
+  if (
+    !stats.isFile()
+    || stats.isSymbolicLink()
+    || stats.size <= overhead
+    || plaintextBytes > maximum
+  ) {
+    throw new Error("Encrypted backup envelope is invalid.");
+  }
+  const header = new Uint8Array(MAGIC.byteLength + 12);
+  const tag = new Uint8Array(16);
+  const handle = await fs.open(source, "r");
+  try {
+    await readExactly(handle, header, 0);
+    await readExactly(handle, tag, stats.size - tag.byteLength);
+    if (!bytesEqual(header.subarray(0, MAGIC.byteLength), MAGIC)) {
+      throw new Error("Encrypted backup magic is invalid.");
+    }
+    const decipher = nodeCrypto.createDecipheriv(
+      "aes-256-gcm",
+      key,
+      header.subarray(MAGIC.byteLength),
+    );
+    decipher.setAAD(additionalData);
+    decipher.setAuthTag(tag);
+    const output = new Uint8Array(plaintextBytes);
+    const input = new Uint8Array(Math.min(64 * 1024, plaintextBytes));
+    let inputPosition = header.byteLength;
+    let outputPosition = 0;
+    while (inputPosition < stats.size - tag.byteLength) {
+      const requested = Math.min(
+        input.byteLength,
+        stats.size - tag.byteLength - inputPosition,
+      );
+      const result = await handle.read(input, 0, requested, inputPosition);
+      if (result.bytesRead <= 0) {
+        throw new Error("Encrypted backup envelope ended unexpectedly.");
+      }
+      const decrypted = new Uint8Array(
+        decipher.update(input.subarray(0, result.bytesRead)),
+      );
+      if (outputPosition + decrypted.byteLength > output.byteLength) {
+        throw new Error("Encrypted backup envelope is invalid.");
+      }
+      output.set(decrypted, outputPosition);
+      outputPosition += decrypted.byteLength;
+      inputPosition += result.bytesRead;
+    }
+    const final = new Uint8Array(decipher.final());
+    if (outputPosition + final.byteLength !== output.byteLength) {
+      throw new Error("Encrypted backup envelope is invalid.");
+    }
+    output.set(final, outputPosition);
+    return output;
+  } catch (error) {
+    if (error instanceof Error && error.message === "Encrypted backup magic is invalid.") {
+      throw error;
+    }
+    throw new Error(`Backup decryption failed: ${safeError(error)}`);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readExactly(
+  handle: { read(
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number,
+  ): Promise<{ bytesRead: number }> },
+  output: Uint8Array,
+  position: number,
+): Promise<void> {
+  let offset = 0;
+  while (offset < output.byteLength) {
+    const result = await handle.read(
+      output,
+      offset,
+      output.byteLength - offset,
+      position + offset,
+    );
+    if (result.bytesRead <= 0) {
+      throw new Error("Encrypted backup envelope ended unexpectedly.");
+    }
+    offset += result.bytesRead;
+  }
+}
+
 async function decryptFile(
   source: string,
   destination: string,
@@ -1257,6 +1575,87 @@ async function verifySQLite(path: string): Promise<void> {
     }
   } finally {
     database.close();
+  }
+}
+
+function backupSnapshotInput(
+  value: BackupSnapshotInput,
+  maximum: number,
+): Required<Omit<BackupSnapshotInput, "sha256">> & { sha256?: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Backup snapshot input is required.");
+  }
+  const allowed = new Set([
+    "bytes",
+    "sha256",
+    "source",
+    "reason",
+    "databaseRevision",
+    "migrationCount",
+    "latestMigration",
+    "protectedBackupIds",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new TypeError("Backup snapshot input contains an unknown field.");
+  }
+  if (!(value.bytes instanceof Uint8Array)
+    || value.bytes.byteLength < SQLITE_HEADER.byteLength
+    || value.bytes.byteLength > maximum) {
+    throw new TypeError(`Backup snapshot must contain at most ${maximum} SQLite bytes.`);
+  }
+  const bytes = new Uint8Array(value.bytes);
+  assertSQLiteBytes(bytes);
+  const source = bounded(value.source, "backup source", 1, 255);
+  if (source.includes("/") || source.includes("\\")) {
+    throw new TypeError("Backup source must be a basename.");
+  }
+  if (value.sha256 !== undefined && !/^[a-f0-9]{64}$/u.test(value.sha256)) {
+    throw new TypeError("Backup snapshot checksum is invalid.");
+  }
+  const databaseRevision = value.databaseRevision ?? null;
+  if (
+    databaseRevision !== null
+    && (
+      !Number.isSafeInteger(databaseRevision)
+      || Number(databaseRevision) < 0
+    )
+  ) {
+    throw new TypeError("Backup database revision is invalid.");
+  }
+  const migrationCount = value.migrationCount ?? 0;
+  if (!Number.isSafeInteger(migrationCount) || migrationCount < 0) {
+    throw new TypeError("Backup migration count is invalid.");
+  }
+  const latestMigration = value.latestMigration ?? null;
+  if (
+    latestMigration !== null
+    && (
+      typeof latestMigration !== "string"
+      || latestMigration.length < 1
+      || latestMigration.length > 200
+      || latestMigration.includes("\0")
+    )
+  ) {
+    throw new TypeError("Backup latest migration is invalid.");
+  }
+  return {
+    bytes,
+    ...(value.sha256 === undefined ? {} : { sha256: value.sha256 }),
+    source,
+    reason: bounded(value.reason ?? "remote snapshot", "backup reason", 1, 200),
+    databaseRevision,
+    migrationCount,
+    latestMigration,
+    protectedBackupIds: [...protectedBackupIds(value.protectedBackupIds)],
+  };
+}
+
+function assertSQLiteBytes(value: Uint8Array): void {
+  if (
+    value.byteLength < SQLITE_HEADER.byteLength
+    || SQLITE_HEADER.some((byte, index) => value[index] !== byte)
+  ) {
+    throw new TypeError("Backup snapshot is not a SQLite database.");
   }
 }
 
