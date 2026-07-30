@@ -104,12 +104,22 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   desired-state observation.
 - `createDeploymentCoordinatorClient(options)`: HTTPS/loopback-only, redirect-refusing, bounded
   remote-node client.
+- `openDeploymentAgent(options)`: provider-neutral enrollment, credential recovery, heartbeat,
+  bounded claim/concurrency, lease-renewal, fenced settlement, and graceful-drain loop. The
+  provider-specific `execute` callback receives the current claim, an abort signal, and
+  generation-fenced `observe`.
+- `fileDeploymentNodeCredentials(path)`: serialized, atomic, owner-only persistent node credential
+  store with file type, mode, size, version, token, and symlink validation.
+- `memoryDeploymentNodeCredentials(initial?)`: ephemeral credential store for tests and temporary
+  nodes.
 - `DEPLOYMENT_COORDINATOR_PREFIX`: fixed `/api/runner/v1` protocol namespace.
 - `DeploymentCoordinatorError`: safe client error with HTTP `status` and stable `code`.
 - `DeploymentOrchestrator.authenticateNode(id, token)`: verifies the current node credential and
   heartbeat lease without extending it.
 - Types: `DeploymentCoordinatorHandler`, `DeploymentCoordinatorHandlerOptions`,
-  `DeploymentCoordinatorClient`, `DeploymentCoordinatorClientOptions`.
+  `DeploymentCoordinatorClient`, `DeploymentCoordinatorClientOptions`,
+  `DeploymentNodeCredentialStore`, `DeploymentExecutionContext`, `DeploymentAgentOptions`,
+  `DeploymentAgentRuntime`.
 
 ## Managed data plane
 

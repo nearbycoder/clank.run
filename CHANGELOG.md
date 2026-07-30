@@ -14,6 +14,17 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   for remote nodes. A separate enrollment secret provisions hashed node credentials; authenticated
   nodes can heartbeat, drain, claim, renew, complete, fail, and report generation-fenced
   observations without access to the control database.
+- A provider-neutral remote deployment-agent loop now handles credential-only restart and
+  deliberate re-enrollment, heartbeats, bounded claims/concurrency, automatic operation renewal,
+  fenced observations and settlement, redacted failures, graceful drain, and abortable shutdown.
+  Persistent node credentials use a serialized, atomic, owner-only validated file store; a running
+  node stops safely when credential rotation revokes its session.
+
+### Fixed
+
+- Draining deployment nodes can no longer claim queued operations. Lost/expired leases and shutdown
+  deadlines abandon work without stale settlement, while a missing completion response no longer
+  converts a possibly committed success into an explicit failure and duplicate retry.
 
 ### Security
 
@@ -24,6 +35,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   redirect-safe, no-store, and disabled unless a dedicated high-entropy enrollment token is
   configured. Node and operation credentials remain plaintext only to their holder and hashed at
   rest; expired nodes and stale operation fences fail closed.
+- File-backed node credentials reject symbolic links, non-files, oversized or malformed data,
+  unsafe owners/modes, inode/path swaps, unsupported versions, and invalid tokens; reads use a
+  no-follow descriptor and writes replace a `0600` file atomically. Executor exceptions stay in
+  private node diagnostics by default instead of durable control-plane state.
 
 ## 0.9.4 - 2026-07-28
 

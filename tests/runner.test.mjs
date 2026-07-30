@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,6 +16,9 @@ import {
   createDeploymentCoordinatorHandler,
   defineDatabase,
   DeploymentCoordinatorError,
+  fileDeploymentNodeCredentials,
+  memoryDeploymentNodeCredentials,
+  openDeploymentAgent,
   openDeploymentOrchestrator,
   openPlatform,
   openSQLite,
@@ -15,7 +26,7 @@ import {
 
 const registrationToken = "clank_runner_enrollment_test_token_1234567890";
 
-async function fixture() {
+async function fixture(orchestration = {}) {
   const root = await mkdtemp(join(tmpdir(), "clank-runner-coordinator-"));
   const database = await openSQLite(defineDatabase({}), {
     path: join(root, "control.sqlite"),
@@ -25,6 +36,7 @@ async function fixture() {
     nodeTtlMs: 5_000,
     operationLeaseMs: 5_000,
     retryBaseMs: 10,
+    ...orchestration,
   });
   const privateErrors = [];
   const handler = createDeploymentCoordinatorHandler(orchestrator, {
@@ -52,6 +64,16 @@ async function fixture() {
       await rm(root, { recursive: true, force: true });
     },
   };
+}
+
+async function waitFor(check, message, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await check();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(message);
 }
 
 test("authenticated deployment nodes coordinate placement and fenced operations over HTTP", async () => {
@@ -132,6 +154,14 @@ test("authenticated deployment nodes coordinate placement and fenced operations 
 
     const draining = await test.client.drain(session.node.id, session.token);
     assert.equal(draining.status, "draining");
+    const queuedWhileDraining = await test.orchestrator.enqueue({
+      projectId: "project_draining",
+      action: "deploy",
+      idempotencyKey: "draining-node-must-not-claim",
+      nodeId: session.node.id,
+    });
+    assert.equal((await test.client.claim(session.node.id, session.token, 1)).length, 0);
+    assert.equal(test.orchestrator.operation(queuedWhileDraining.operation.id).state, "queued");
     const heartbeat = await test.client.heartbeat(session.node.id, session.token, {
       capacity: 3,
       labels: { isolation: "docker" },
@@ -252,6 +282,459 @@ test("platform runner endpoints remain closed unless enrollment is configured", 
     assert.match((await response.json()).token, /^clnka_/u);
   } finally {
     await Promise.all([closed.close(), enabled.close()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("deployment agent enrolls, executes, observes, persists credentials, and drains", async () => {
+  const test = await fixture({ operationLeaseMs: 500 });
+  const credentials = memoryDeploymentNodeCredentials();
+  const executed = [];
+  let agent;
+  try {
+    agent = await openDeploymentAgent({
+      client: test.client,
+      node: {
+        id: "runner-agent-01",
+        region: "us-central",
+        capacity: 2,
+        labels: { isolation: "docker" },
+      },
+      registrationToken,
+      credentials,
+      concurrency: 1,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      async execute(operation, context) {
+        executed.push(operation.id);
+        const payload = operation.payload;
+        assert.equal(context.operation.id, operation.id);
+        assert.equal(await context.observe({
+          generation: payload.generation,
+          releaseId: payload.releaseId,
+          state: payload.state,
+        }), true);
+        return { runtimeId: "container-agent-01" };
+      },
+    });
+
+    const desired = await test.orchestrator.setDesired({
+      projectId: "project_agent_one",
+      releaseId: "release-agent-1",
+      state: "running",
+      region: "us-central",
+    });
+    const operation = await waitFor(
+      () => {
+        const candidate = executed[0]
+          ? test.orchestrator.operation(executed[0])
+          : null;
+        return candidate?.state === "succeeded" ? candidate : null;
+      },
+      "the deployment agent did not complete its operation",
+    );
+    assert.deepEqual(operation.result, { runtimeId: "container-agent-01" });
+    assert.equal(test.orchestrator.desired(desired.projectId).observedState, "running");
+    assert.match(await credentials.load(agent.nodeId), /^clnka_/u);
+
+    await agent.close();
+    assert.equal(agent.draining, true);
+    assert.equal(agent.activeOperations, 0);
+    assert.equal(test.orchestrator.listNodes()[0].status, "draining");
+    assert.equal(test.privateErrors.length, 0);
+  } finally {
+    await agent?.close();
+    await test.close();
+  }
+});
+
+test("deployment agent restarts from stored node credentials without enrollment access", async () => {
+  const test = await fixture({ operationLeaseMs: 500 });
+  const credentials = memoryDeploymentNodeCredentials();
+  let first;
+  let second;
+  try {
+    first = await openDeploymentAgent({
+      client: test.client,
+      node: { id: "runner-restart-01", region: "local" },
+      registrationToken,
+      credentials,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      async execute() {
+        return null;
+      },
+    });
+    await first.close();
+    assert.equal(test.orchestrator.listNodes()[0].status, "draining");
+
+    second = await openDeploymentAgent({
+      client: test.client,
+      node: { id: "runner-restart-01", region: "local" },
+      credentials,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      async execute() {
+        return { restarted: true };
+      },
+    });
+    assert.equal(second.node.status, "active");
+    const queued = await test.orchestrator.enqueue({
+      projectId: "project_restart",
+      action: "deploy",
+      payload: {},
+      idempotencyKey: "runner-restart-operation",
+      nodeId: second.nodeId,
+    });
+    const completed = await waitFor(
+      () => test.orchestrator.operation(queued.operation.id)?.state === "succeeded",
+      "the restarted deployment agent did not claim work",
+    );
+    assert.equal(completed, true);
+  } finally {
+    await second?.close();
+    await first?.close();
+    await test.close();
+  }
+});
+
+test("deployment agent rotates an invalid stored credential only with enrollment access", async () => {
+  const test = await fixture();
+  const invalidToken = "clnka_invalid_stored_token_123456789012345678901";
+  const credentials = memoryDeploymentNodeCredentials({
+    "runner-rotation-01": invalidToken,
+  });
+  let agent;
+  try {
+    await assert.rejects(
+      openDeploymentAgent({
+        client: test.client,
+        node: { id: "runner-rotation-01", region: "local" },
+        credentials,
+        async execute() {
+          return null;
+        },
+      }),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.code === "NODE_AUTH_FAILED",
+    );
+    assert.equal(await credentials.load("runner-rotation-01"), invalidToken);
+
+    agent = await openDeploymentAgent({
+      client: test.client,
+      node: { id: "runner-rotation-01", region: "local" },
+      credentials,
+      registrationToken,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      async execute() {
+        return null;
+      },
+    });
+    assert.notEqual(await credentials.load(agent.nodeId), invalidToken);
+    assert.equal(agent.node.status, "active");
+  } finally {
+    await agent?.close();
+    await test.close();
+  }
+});
+
+test("deployment agent stops safely when its active node credential is rotated", async () => {
+  const test = await fixture();
+  const localErrors = [];
+  let agent;
+  try {
+    agent = await openDeploymentAgent({
+      client: test.client,
+      node: { id: "runner-revoked-01", region: "local" },
+      registrationToken,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      onError: (error) => localErrors.push(error),
+      async execute() {
+        return null;
+      },
+    });
+    await test.client.register(registrationToken, {
+      id: agent.nodeId,
+      region: "local",
+    });
+    await waitFor(() => agent.draining, "the revoked deployment agent did not stop");
+    await agent.done;
+    assert.ok(localErrors.some(
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.code === "NODE_AUTH_FAILED",
+    ));
+  } finally {
+    await agent?.close();
+    await test.close();
+  }
+});
+
+test("deployment agent renews short leases while execution is still active", async () => {
+  const test = await fixture({ operationLeaseMs: 100 });
+  let renewals = 0;
+  let agent;
+  const client = {
+    ...test.client,
+    async renew(...arguments_) {
+      renewals += 1;
+      return test.client.renew(...arguments_);
+    },
+  };
+  try {
+    agent = await openDeploymentAgent({
+      client,
+      node: { id: "runner-renew-01", region: "local" },
+      registrationToken,
+      concurrency: 1,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      async execute() {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        return { renewed: true };
+      },
+    });
+    const queued = await test.orchestrator.enqueue({
+      projectId: "project_renew",
+      action: "deploy",
+      idempotencyKey: "runner-renew-operation",
+      nodeId: agent.nodeId,
+    });
+    await waitFor(
+      () => test.orchestrator.operation(queued.operation.id)?.state === "succeeded",
+      "the renewed deployment operation did not complete",
+    );
+    assert.ok(renewals >= 3, `expected at least 3 lease renewals, received ${renewals}`);
+  } finally {
+    await agent?.close();
+    await test.close();
+  }
+});
+
+test("deployment agent abandons a lost lease without completing or failing stale work", async () => {
+  const test = await fixture({ operationLeaseMs: 100 });
+  let completes = 0;
+  let failures = 0;
+  let aborted = false;
+  let agent;
+  const client = {
+    ...test.client,
+    async renew() {
+      return null;
+    },
+    async complete(...arguments_) {
+      completes += 1;
+      return test.client.complete(...arguments_);
+    },
+    async fail(...arguments_) {
+      failures += 1;
+      return test.client.fail(...arguments_);
+    },
+  };
+  try {
+    agent = await openDeploymentAgent({
+      client,
+      node: { id: "runner-lost-lease-01", region: "local" },
+      registrationToken,
+      concurrency: 1,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      async execute(_operation, context) {
+        await new Promise((resolve) => {
+          context.signal.addEventListener("abort", resolve, { once: true });
+        });
+        aborted = true;
+        throw context.signal.reason;
+      },
+    });
+    const queued = await test.orchestrator.enqueue({
+      projectId: "project_lost_lease",
+      action: "deploy",
+      idempotencyKey: "runner-lost-lease-operation",
+      nodeId: agent.nodeId,
+    });
+    await waitFor(() => aborted, "the executor was not aborted after losing its lease");
+    await waitFor(() => agent.activeOperations === 0, "the abandoned operation remained active");
+    assert.equal(completes, 0);
+    assert.equal(failures, 0);
+    assert.equal(test.orchestrator.operation(queued.operation.id).state, "leased");
+  } finally {
+    await agent?.close();
+    await test.close();
+  }
+});
+
+test("deployment agent keeps private execution errors out of coordinator state", async () => {
+  const test = await fixture({ operationLeaseMs: 500, retryBaseMs: 1_000 });
+  const localErrors = [];
+  let agent;
+  try {
+    agent = await openDeploymentAgent({
+      client: test.client,
+      node: { id: "runner-error-01", region: "local" },
+      registrationToken,
+      concurrency: 1,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      onError: (error) => localErrors.push(error),
+      async execute() {
+        throw new Error("private-provider-token-should-not-leak");
+      },
+    });
+    const queued = await test.orchestrator.enqueue({
+      projectId: "project_error",
+      action: "deploy",
+      idempotencyKey: "runner-error-operation",
+      nodeId: agent.nodeId,
+    });
+    const failed = await waitFor(
+      () => {
+        const operation = test.orchestrator.operation(queued.operation.id);
+        return operation?.state === "retry" ? operation : null;
+      },
+      "the failed deployment operation did not enter retry",
+    );
+    assert.equal(failed.error, "Deployment execution failed.");
+    assert.equal(JSON.stringify(failed).includes("private-provider-token"), false);
+    assert.match(String(localErrors[0]), /private-provider-token-should-not-leak/u);
+  } finally {
+    await agent?.close();
+    await test.close();
+  }
+});
+
+test("deployment agent never retries an uncertain successful completion", async () => {
+  const test = await fixture({ operationLeaseMs: 500 });
+  let failures = 0;
+  let releaseExecution;
+  let agent;
+  const client = {
+    ...test.client,
+    async complete() {
+      throw new DeploymentCoordinatorError(
+        504,
+        "COORDINATOR_TIMEOUT",
+        "The completion response was lost.",
+      );
+    },
+    async fail(...arguments_) {
+      failures += 1;
+      return test.client.fail(...arguments_);
+    },
+  };
+  try {
+    agent = await openDeploymentAgent({
+      client,
+      node: { id: "runner-uncertain-01", region: "local" },
+      registrationToken,
+      concurrency: 1,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      async execute() {
+        await new Promise((resolve) => {
+          releaseExecution = resolve;
+        });
+        return { maybeCommitted: true };
+      },
+    });
+    const queued = await test.orchestrator.enqueue({
+      projectId: "project_uncertain",
+      action: "deploy",
+      idempotencyKey: "runner-uncertain-operation",
+      nodeId: agent.nodeId,
+    });
+    await waitFor(() => releaseExecution, "the uncertain operation did not start");
+    releaseExecution();
+    await waitFor(() => agent.activeOperations === 0, "the uncertain operation did not settle locally");
+    assert.equal(failures, 0);
+    assert.equal(test.orchestrator.operation(queued.operation.id).state, "leased");
+  } finally {
+    await agent?.close();
+    await test.close();
+  }
+});
+
+test("deployment agent shutdown drains, renews during grace, and aborts at its deadline", async () => {
+  const test = await fixture({ operationLeaseMs: 500 });
+  let started = false;
+  let aborted = false;
+  let agent;
+  try {
+    agent = await openDeploymentAgent({
+      client: test.client,
+      node: { id: "runner-shutdown-01", region: "local" },
+      registrationToken,
+      concurrency: 1,
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+      shutdownTimeoutMs: 100,
+      async execute(_operation, context) {
+        started = true;
+        await new Promise((resolve) => {
+          context.signal.addEventListener("abort", resolve, { once: true });
+        });
+        aborted = true;
+        return null;
+      },
+    });
+    await test.orchestrator.enqueue({
+      projectId: "project_shutdown",
+      action: "deploy",
+      idempotencyKey: "runner-shutdown-operation",
+      nodeId: agent.nodeId,
+    });
+    await waitFor(() => started, "the shutdown test operation did not start");
+    const before = Date.now();
+    await agent.close();
+    assert.equal(aborted, true);
+    assert.ok(Date.now() - before < 1_000);
+    assert.equal(agent.draining, true);
+    assert.equal(test.orchestrator.listNodes()[0].status, "draining");
+  } finally {
+    await agent?.close();
+    await test.close();
+  }
+});
+
+test("file deployment node credentials are serialized, owner-only, atomic, and bounded", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-runner-credentials-"));
+  const path = join(root, "nested", "credentials.json");
+  const tokenOne = "clnka_file_token_one_123456789012345678901234";
+  const tokenTwo = "clnka_file_token_two_123456789012345678901234";
+  try {
+    const credentials = fileDeploymentNodeCredentials(path);
+    await Promise.all([
+      credentials.save("runner-file-01", tokenOne),
+      credentials.save("constructor", tokenTwo),
+    ]);
+    assert.equal(await credentials.load("runner-file-01"), tokenOne);
+    assert.equal(await credentials.load("constructor"), tokenTwo);
+    assert.equal((await lstat(path)).mode & 0o777, 0o600);
+    const stored = JSON.parse(await readFile(path, "utf8"));
+    assert.equal(stored.version, 1);
+    assert.equal(stored.credentials["runner-file-01"], tokenOne);
+    await credentials.clear("runner-file-01");
+    assert.equal(await credentials.load("runner-file-01"), null);
+
+    await rm(path);
+    await writeFile(join(root, "target"), "{}");
+    await symlink(join(root, "target"), path);
+    await assert.rejects(credentials.load("constructor"), /unsafe or too large/u);
+    await rm(path);
+    await writeFile(path, "x".repeat(64 * 1024 + 1));
+    await chmod(path, 0o600);
+    await assert.rejects(credentials.load("constructor"), /unsafe or too large/u);
+    await writeFile(path, "{not-json");
+    await chmod(path, 0o600);
+    await assert.rejects(credentials.load("constructor"), SyntaxError);
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      credentials: { constructor: tokenTwo },
+    }));
+    await chmod(path, 0o644);
+    await assert.rejects(credentials.load("constructor"), /unsafe or too large/u);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

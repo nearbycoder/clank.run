@@ -22,7 +22,7 @@ project to the first free application port before recovering its active release.
 
 Use exactly one replica. Clank's control database and each application database use SQLite, and the
 included application supervisor is single-leader. Horizontal replicas need the external storage,
-leader, and remote-runner integrations described in [Self-hosting](self-hosting.md).
+leader, and infrastructure execution integrations described in [Self-hosting](self-hosting.md).
 
 ## Repository configuration
 

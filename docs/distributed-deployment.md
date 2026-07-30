@@ -99,33 +99,117 @@ possible, and rotate it after provisioning-system exposure.
 
 The built-in platform acquires a durable `project:<id>` lease in addition to its local queue. It renews the lease during long operations and returns `PROJECT_BUSY` if another control worker owns it. A lost lease is surfaced as `PROJECT_LEASE_LOST` rather than silently claiming coordinated success.
 
-## Agent loop
+## Deployment agent loop
 
-A production deployment agent should:
+`openDeploymentAgent` owns the provider-neutral worker lifecycle. A runtime integration supplies
+only the fenced `execute` function; Clank handles enrollment, durable node credentials, startup
+heartbeat, un-draining, bounded claims, concurrency, lease renewal, desired-state observations,
+settlement, and graceful drain.
 
-1. register or load its node credential;
-2. heartbeat before half of the node TTL;
-3. stop claiming new work while draining;
-4. claim a bounded operation batch;
-5. renew long-running operation leases;
-6. make runtime changes using the operation fence;
-7. report desired generation observations; and
-8. complete or fail with a bounded, non-secret result.
+```ts
+import {
+  createDeploymentCoordinatorClient,
+  fileDeploymentNodeCredentials,
+  openDeploymentAgent,
+} from "@clank.run/framework/runner";
 
-Agent credentials and operation lease tokens are shown only to the worker and stored as digests. Control-plane database access remains privileged and should not be exposed to application processes.
+const client = createDeploymentCoordinatorClient({
+  baseUrl: "https://deploy.example.com",
+  timeoutMs: 10_000,
+});
 
-`createDeploymentCoordinatorClient` implements the network calls above. A later execution adapter
-still has to map claimed operations to the host's Docker, VM, or microVM runtime and make the
-release/data plane reachable. In the current built-in platform, local deployment activation remains
-owned by the included supervisor; enabling enrollment alone does not move a project or add an
-infrastructure service.
+const agent = await openDeploymentAgent({
+  client,
+  node: {
+    id: "runner-west-01",
+    region: "us-west",
+    capacity: 20,
+    labels: { isolation: "docker", architecture: "amd64" },
+  },
+  // Needed on first enrollment or deliberate credential rotation only.
+  registrationToken: process.env.CLANK_RUNNER_REGISTRATION_TOKEN,
+  credentials: fileDeploymentNodeCredentials(
+    "/var/lib/clank-runner/credentials.json",
+  ),
+  concurrency: 4,
+  async execute(operation, context) {
+    // The provider adapter must make each runtime mutation idempotent under
+    // context.operation.fence and stop when context.signal aborts.
+    const result = await reconcileRuntime(operation, {
+      fence: context.operation.fence,
+      signal: context.signal,
+    });
+
+    const desired = operation.payload as {
+      generation: number;
+      releaseId: string | null;
+      state: "running" | "stopped";
+    };
+    await context.observe({
+      generation: desired.generation,
+      releaseId: desired.releaseId,
+      state: desired.state,
+    });
+    return result; // Bounded, JSON-serializable, and non-secret.
+  },
+  onError(error) {
+    writePrivateOperatorLog(error);
+  },
+});
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => void agent.close());
+}
+await agent.done;
+```
+
+The file credential store serializes updates in one process, rejects symbolic links, non-regular
+files, inode/path swaps, unexpected ownership, oversized documents, and group/world-readable modes,
+and replaces an owner-only `0600` JSON file atomically. Put it on a persistent private volume. Use
+a separate file per agent process; it is not a cross-process lock or network secret store. The
+in-memory store is intended for tests and ephemeral nodes.
+
+After the first successful enrollment, remove the enrollment secret from the node when your
+provisioning system permits it. A restart authenticates with the saved node credential. If that
+credential was rotated, startup fails unless the enrollment secret is deliberately supplied; with
+it, the agent clears the invalid credential, re-enrolls, and atomically saves the replacement.
+An already-running holder whose credential is rotated stops claims and renewals, aborts its active
+work, reports the authentication failure privately, and resolves `done` so its process supervisor
+can replace it.
+
+### Execution and shutdown guarantees
+
+- The executor receives an `AbortSignal`. It must pass that signal to provider calls and terminate
+  subprocesses or containers when it fires; JavaScript cannot forcibly stop code that ignores it.
+- Lease renewal runs while execution and settlement are in progress. Losing or expiring a lease
+  aborts local work and never completes or fails through a stale fence.
+- Executor failures reach `onError` locally, while the coordinator receives
+  `Deployment execution failed.` by default. A custom `failureMessage` must return only bounded,
+  non-secret text.
+- A missing completion response is an uncertain outcome: the agent reports it locally and leaves
+  the lease to expire instead of converting a possibly committed success into an explicit retry.
+  Provider mutations must still be idempotent under the operation ID and fence.
+- `close()` marks the node draining, stops new claims, finishes work accepted by an in-flight claim,
+  and keeps heartbeats and operation renewals alive during the grace period. At
+  `shutdownTimeoutMs`, remaining work is aborted and abandoned for fenced reclamation.
+- Draining is enforced in the coordinator as well as the loop, so a misbehaving or racing node
+  cannot claim queued work after the drain update commits.
+
+Agent credentials and operation lease tokens are shown only to the worker and stored as digests in
+the control database. Control-plane database access remains privileged and must not be exposed to
+application processes.
+
+The generic lifecycle is complete, but `execute` still has to map operations to the host's Docker,
+VM, or microVM runtime and make the release/data plane reachable. In the current built-in platform,
+local deployment activation remains owned by the included supervisor; enabling enrollment alone
+does not move a project or provision infrastructure.
 
 ## Failure semantics
 
 - Duplicate API requests converge through idempotency keys.
 - Crashed workers leave leased operations that become reclaimable.
 - Expired nodes become offline for placement.
-- Draining nodes keep current work but receive no new desired placements.
+- Draining nodes keep current work but receive no new desired placements or operation claims.
 - Retry delay is exponential and bounded; exhausted operations enter `failed`.
 - Node capacity is placement based, deterministic, and region aware.
 
