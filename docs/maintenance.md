@@ -141,7 +141,7 @@ The final certification result and exact test counts belong in the pull request 
   restart for failed-rollout recovery.
 - [x] Added exact-owner startup orphan cleanup, uncertain-create cleanup, graceful verified stop,
   no process adoption after restart, and launch/health/close race fencing.
-- [x] Re-certified all 295 tests at 86.10% line, 74.69% branch, and 85.86% function
+- [x] Re-certified all 295 tests at 86.07% line, 74.66% branch, and 85.79% function
   coverage; 58 documentation files, 227 local links, 34 declaration files, and 32 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
