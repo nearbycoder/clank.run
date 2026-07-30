@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "./build.mjs";
+import { runCoverageGate } from "./coverage-gate.mjs";
 
 await build();
 
@@ -23,19 +24,7 @@ await new Promise((resolve, reject) => {
     : reject(new Error(`Documentation site build exited with ${code}.`)));
 });
 
-await new Promise((resolve, reject) => {
-  const child = spawn(process.execPath, [
-    "--disable-warning=ExperimentalWarning",
-    "--test",
-    "--experimental-test-coverage",
-    "--test-coverage-include=dist/**/*.js",
-    "--test-coverage-lines=80",
-    "--test-coverage-branches=65",
-    "--test-coverage-functions=80",
-  ], { stdio: "inherit" });
-  child.once("error", reject);
-  child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`Tests exited with ${code}.`)));
-});
+await runCoverageGate();
 
 await new Promise((resolve, reject) => {
   const child = spawn(process.execPath, [
