@@ -64,6 +64,14 @@ provider mutations idempotent under the operation identity and monotonically inc
 Private execution and transport errors go to the node's operator hook; the default durable failure
 message contains no exception detail.
 
+The `DeploymentProvider` wrapper gives provider code only the operation ID, project ID, monotonic
+fence, attempt counters, desired generation/state/release, verified artifact, and abort signal.
+Node credentials and operation lease tokens do not cross that boundary. The optional HTTP bridge
+uses a separate high-entropy bearer token, refuses redirects and non-loopback plaintext HTTP,
+bounds requests and failure bodies, independently verifies artifact bytes and config, and exposes
+only generic provider failures. Its exact retries are safe only when provider code persists the
+operation/fence idempotency rule.
+
 ## Authentication
 
 Browser accounts inherit Clank's scrypt passwords, hardened cookies, CSRF, generic login errors, expiry, idle timeout, verification, recovery, email-code MFA, WebAuthn passkeys, and revocation.

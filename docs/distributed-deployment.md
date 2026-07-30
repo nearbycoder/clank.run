@@ -156,7 +156,10 @@ The built-in platform acquires a durable `project:<id>` lease in addition to its
 `openDeploymentAgent` owns the provider-neutral worker lifecycle. A runtime integration supplies
 only the fenced `execute` function; Clank handles enrollment, durable node credentials, startup
 heartbeat, un-draining, bounded claims, concurrency, lease renewal, desired-state observations,
-settlement, and graceful drain.
+settlement, and graceful drain. Prefer `openProviderDeploymentAgent` for infrastructure work: it
+accepts only canonical reconcile operations, independently verifies the artifact, removes
+coordinator credentials, and exposes the smaller `DeploymentProvider` contract documented in
+[Deployment provider adapters](provider-adapters.md).
 
 ```ts
 import {
@@ -259,10 +262,12 @@ Agent credentials and operation lease tokens are shown only to the worker and st
 the control database. Control-plane database access remains privileged and must not be exposed to
 application processes.
 
-The generic lifecycle is complete, but `execute` still has to map operations to the host's Docker,
-VM, or microVM runtime and make the release/data plane reachable. In the current built-in platform,
-local deployment activation remains owned by the included supervisor; enabling enrollment alone
-does not move a project or provision infrastructure.
+The generic lifecycle, portable provider contract, authenticated HTTP bridge, and packaged
+`clank-runner` process are complete. Provider-side code still maps reconciliation to its Docker,
+VM, microVM, Nomad, Kubernetes, or hosted runtime and makes the secret, data, observability, and
+edge planes reachable. In the current built-in platform, local deployment activation remains
+owned by the included supervisor; enabling enrollment alone does not move a project or provision
+infrastructure.
 
 ## Failure semantics
 

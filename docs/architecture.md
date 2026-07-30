@@ -17,6 +17,7 @@ jobs.ts     typed durable jobs, fenced workers, retries, retention, cron schedul
 deploy.ts   deterministic artifact config, packaging, verification, extraction
 migrations.ts immutable SQL ledger, backup, restore, transactional application
 platform.ts device auth, projects, secrets, audit, releases, supervision
+provider.ts credential-free infrastructure reconciliation and HTTP bridge
 security.ts shared URL, origin, validation-redaction, and bounded JSON helpers
 ssr.ts      escaped HTML rendering, document templates, serialized state
 node.ts     dependency-free Node HTTP and static-file adapters
@@ -98,10 +99,12 @@ Project mutations also acquire durable distributed leases. Authenticated deploym
 generations, idempotent durable operations, lease expiry, retries, draining, capacity placement, and
 monotonic fences reject stale workers. The provider-neutral remote-agent loop implements
 enrollment, credential restart, heartbeat, bounded claim/concurrency, lease renewal, observation,
-settlement, and graceful drain; infrastructure adapters still map its fenced execution callback to
-Docker, VM, or microVM operations and remote storage. A current operation lease can retrieve its
-exact content-addressed release through the same authenticated boundary; platform secrets and
-application data remain separate contracts. The included child-process supervisor owns
+settlement, and graceful drain. The `DeploymentProvider` boundary narrows infrastructure work to
+one verified, credential-free, generation-fenced reconcile request; the authenticated HTTP bridge
+and `clank-runner` carry it to Docker, VM, microVM, or scheduler-specific code without a provider
+SDK in Clank. A current operation lease can retrieve its exact content-addressed release through
+the same authenticated boundary; platform secrets and application data remain separate contracts.
+The included child-process supervisor owns
 processes in memory and therefore runs as one active leader per project/data directory. Child
 processes support trusted operation, while Docker adds a constrained container boundary for
 mutually untrusted applications.

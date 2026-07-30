@@ -37,6 +37,7 @@
     "./recovery": { "types": "./dist/recovery.d.ts", "import": "./dist/recovery.js" },
     "./orchestration": { "types": "./dist/orchestration.d.ts", "import": "./dist/orchestration.js" },
     "./runner": { "types": "./dist/runner.d.ts", "import": "./dist/runner.js" },
+    "./provider": { "types": "./dist/provider.d.ts", "import": "./dist/provider.js" },
     "./data-plane": { "types": "./dist/data-plane.d.ts", "import": "./dist/data-plane.js" },
     "./forms": { "types": "./dist/forms.d.ts", "import": "./dist/forms.js" },
     "./ui": { "types": "./dist/ui.d.ts", "import": "./dist/ui.js" },
@@ -56,7 +57,8 @@
   },
   "bin": {
     "clank": "scripts/clank.mjs",
-    "clank-platform": "scripts/clank-platform.mjs"
+    "clank-platform": "scripts/clank-platform.mjs",
+    "clank-runner": "scripts/clank-runner.mjs"
   },
   "files": [
     "brand",
@@ -71,6 +73,7 @@
     "scripts/clank.mjs",
     "scripts/cli-deploy.mjs",
     "scripts/clank-platform.mjs",
+    "scripts/clank-runner.mjs",
     "scripts/platform-hosting.mjs",
     "scripts/conformance.mjs",
     "scripts/tsx.mjs",

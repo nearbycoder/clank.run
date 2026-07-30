@@ -40,6 +40,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   The bounded API reports queue health, overdue work, expired leases, dead letters, and cron
   schedule state; cancellation/retry use conditional live-database transitions and durable audit
   events.
+- Remote infrastructure integrations now have a credential-free `DeploymentProvider` contract,
+  canonical desired-state validation, independent artifact verification, fenced observation, and
+  the `openProviderDeploymentAgent` lifecycle wrapper.
+- A zero-dependency authenticated HTTP provider bridge carries the original bounded binary release
+  through a redirect-safe, retry-safe protocol, and the packaged `clank-runner` command connects
+  that bridge to a remote control plane with persistent node credentials and graceful drain.
 
 ### Fixed
 
@@ -77,6 +83,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   identity, and lease credentials. Mutations require the dedicated `jobs` permission, remain
   blocked during support impersonation, serialize with deployment/data operations, and never place
   application payloads in platform audit metadata.
+- Provider adapters never receive control-plane node or operation credentials. Their HTTP bridge
+  requires a distinct high-entropy token, HTTPS outside loopback, exact bounded headers and bodies,
+  fresh artifact digest/config verification, no redirects, generic public failures, and private
+  diagnostics.
 
 ## 0.9.4 - 2026-07-28
 

@@ -2,6 +2,11 @@
 
 The `clank` executable contains both the compiler and deployment client. It does not install application dependencies or execute remote build hooks.
 
+The package also exposes two operator processes: `clank-platform` starts the control plane, and
+`clank-runner` connects an authenticated remote deployment node to the portable HTTP provider
+bridge. `clank-runner --help` lists its environment-only configuration; the complete trust and
+idempotency contract is in [Deployment provider adapters](provider-adapters.md).
+
 ## Interactive launcher
 
 Run the command without arguments in a terminal:
