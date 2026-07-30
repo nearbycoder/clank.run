@@ -26,6 +26,10 @@ import {
 import { openBackupManager, type BackupManifest } from "./recovery.ts";
 import { openDeploymentOrchestrator } from "./orchestration.ts";
 import {
+  createDeploymentCoordinatorHandler,
+  DEPLOYMENT_COORDINATOR_PREFIX,
+} from "./runner.ts";
+import {
   createPlatformBackupScheduler,
   type PlatformBackupPolicy,
 } from "./platform-backups.ts";
@@ -170,6 +174,14 @@ export interface ClankPlatformOptions {
    */
   hostingProfile?: PlatformHostingProfile;
   runner?: PlatformRunnerOptions;
+  /**
+   * Enables the authenticated remote deployment-node coordination API.
+   * Omit it to keep every runner endpoint closed.
+   */
+  deploymentAgents?: {
+    registrationToken: string;
+    maxRequestBytes?: number;
+  };
   /** Defaults to "bootstrap": only the first platform account may self-register. */
   signup?: boolean | "bootstrap";
   masterKey?: string | Uint8Array;
@@ -533,6 +545,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     return response;
   };
   const orchestrator = openDeploymentOrchestrator(storage.database);
+  const deploymentCoordinator = options.deploymentAgents
+    ? createDeploymentCoordinatorHandler(orchestrator, {
+        registrationToken: options.deploymentAgents.registrationToken,
+        ...(options.deploymentAgents.maxRequestBytes === undefined
+          ? {}
+          : { maxRequestBytes: options.deploymentAgents.maxRequestBytes }),
+        onError: options.onError,
+      })
+    : null;
   const leaseOwner = `control-${(globalThis as any).process?.pid ?? 0}-${crypto.randomUUID()}`;
   const active = new Map<string, ActiveProcess>();
   const starting = new Set<ActiveProcess>();
@@ -1794,6 +1815,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       if ((url.pathname === "/healthz" || url.pathname === "/readyz") && request.method === "GET") {
         return readiness();
+      }
+      if (
+        url.pathname === DEPLOYMENT_COORDINATOR_PREFIX
+        || url.pathname.startsWith(`${DEPLOYMENT_COORDINATOR_PREFIX}/`)
+      ) {
+        return deploymentCoordinator
+          ? deploymentCoordinator.handle(request)
+          : problem(404, "NOT_FOUND", "Deployment coordinator endpoint not found.");
       }
       const consolePath = request.method === "GET"
         ? canonicalPlatformConsolePath(url.pathname)

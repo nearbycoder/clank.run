@@ -23,6 +23,24 @@ anything other than the Docker runner and reports the resolved profile and runne
 operator diagnostics. The profile is a policy assertion; it does not turn a container into a VM or
 replace daemon hardening, network policy, resource limits, image pinning, or host monitoring.
 
+## Remote deployment nodes
+
+The deployment-node API is absent unless `CLANK_RUNNER_REGISTRATION_TOKEN` is configured. That
+token is a dedicated provisioning authority and must not reuse the master key, CLI credentials,
+project tokens, or application secrets. Registration returns a node credential once and stores only
+its digest. Every subsequent call binds a bearer credential to an exact bounded node ID.
+
+The versioned transport accepts only POST JSON, bounds request and response bytes, refuses
+non-loopback cleartext clients and redirects, emits no-store responses, and returns generic
+authentication failures. Operation settlement still compares node ID, operation token digest,
+lease expiry, and monotonically increasing fence. An expired heartbeat cannot authenticate for
+settlement, and a generation-stale observation cannot replace current desired state.
+
+Protect enrollment with edge rate limiting and preferably private-network admission. A registration
+token holder can rotate a node identity, so rotate the token after provisioning-system exposure.
+Node credentials authorize deployment coordination, not browser, CLI, database, secret, or
+application APIs.
+
 ## Authentication
 
 Browser accounts inherit Clank's scrypt passwords, hardened cookies, CSRF, generic login errors, expiry, idle timeout, verification, recovery, email-code MFA, WebAuthn passkeys, and revocation.

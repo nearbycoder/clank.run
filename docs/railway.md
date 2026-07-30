@@ -60,6 +60,10 @@ CLANK_BACKUP_MAX_AGE_MS=7776000000
 CLANK_ALLOW_UNSAFE_MIGRATIONS=0
 ```
 
+Leave `CLANK_RUNNER_REGISTRATION_TOKEN` unset on the current single-service topology. Enabling the
+remote-node coordinator does not improve isolation by itself and is unnecessary until a separate
+runner host is provisioned.
+
 Do not put `CLANK_PLATFORM_MASTER_KEY` in source control. Back it up separately from the volume:
 losing it makes encrypted secrets and recovery points unreadable.
 

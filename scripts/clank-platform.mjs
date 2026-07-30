@@ -59,6 +59,14 @@ const platform = await openPlatform({
   hostingProfile: hosting.hostingProfile,
   platformAdminEmails: list(process.env.CLANK_PLATFORM_ADMIN_EMAILS),
   runner,
+  ...(process.env.CLANK_RUNNER_REGISTRATION_TOKEN
+    ? {
+        deploymentAgents: {
+          registrationToken: process.env.CLANK_RUNNER_REGISTRATION_TOKEN,
+          maxRequestBytes: number(process.env.CLANK_RUNNER_MAX_REQUEST_BYTES, 128 * 1024),
+        },
+      }
+    : {}),
   signup,
   masterKey: environment("CLANK_PLATFORM_MASTER_KEY", "PROACT_PLATFORM_MASTER_KEY"),
   appHostname: environment("CLANK_APP_HOST", "PROACT_APP_HOST"),
@@ -114,6 +122,7 @@ if (platform.hostingProfile === "trusted") {
   console.warn("Trusted hosting profile: deployed applications share the control-plane Unix trust boundary.");
 }
 console.log(`Managed ingress: ${ingressEnabled ? "enabled" : "disabled"}`);
+console.log(`Remote runner enrollment: ${process.env.CLANK_RUNNER_REGISTRATION_TOKEN ? "enabled" : "disabled"}`);
 console.log(`Automatic backups: ${backupInterval === "0" ? "disabled" : "enabled"}`);
 
 let closing;

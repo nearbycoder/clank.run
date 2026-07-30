@@ -10,12 +10,20 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   selects the constrained Docker runner unless the operator deliberately chooses the low-cost
   `trusted` profile. Programmatic platform runtimes expose their resolved hosting profile and
   runner kind for diagnostics.
+- Durable deployment coordination now has an optional, versioned HTTP transport and bounded client
+  for remote nodes. A separate enrollment secret provisions hashed node credentials; authenticated
+  nodes can heartbeat, drain, claim, renew, complete, fail, and report generation-fenced
+  observations without access to the control database.
 
 ### Security
 
 - Unknown `CLANK_RUNNER` and `CLANK_HOSTING_PROFILE` values now fail at startup instead of silently
   selecting process execution. The isolated profile rejects the process runner, and the packaged
   control plane rejects public signup when applications share the platform Unix trust boundary.
+- Remote-runner requests are HTTPS-only outside loopback, JSON-only, size- and time-bounded,
+  redirect-safe, no-store, and disabled unless a dedicated high-entropy enrollment token is
+  configured. Node and operation credentials remain plaintext only to their holder and hashed at
+  rest; expired nodes and stale operation fences fail closed.
 
 ## 0.9.4 - 2026-07-28
 

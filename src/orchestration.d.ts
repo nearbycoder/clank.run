@@ -75,6 +75,8 @@ export interface DeploymentOrchestrator {
     renewLease(lease: DistributedLease, ttlMs?: number): Promise<DistributedLease | null>;
     releaseLease(lease: DistributedLease): Promise<boolean>;
     registerNode(input: DeploymentNodeInput): Promise<NodeSession>;
+    /** Verifies a node credential without extending its heartbeat lease. */
+    authenticateNode(nodeId: string, token: string): Promise<DeploymentNode>;
     heartbeat(nodeId: string, token: string, input?: {
         capacity?: number;
         labels?: Record<string, string>;

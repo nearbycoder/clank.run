@@ -59,6 +59,14 @@ export interface ClankPlatformOptions {
      */
     hostingProfile?: PlatformHostingProfile;
     runner?: PlatformRunnerOptions;
+    /**
+     * Enables the authenticated remote deployment-node coordination API.
+     * Omit it to keep every runner endpoint closed.
+     */
+    deploymentAgents?: {
+        registrationToken: string;
+        maxRequestBytes?: number;
+    };
     /** Defaults to "bootstrap": only the first platform account may self-register. */
     signup?: boolean | "bootstrap";
     masterKey?: string | Uint8Array;
