@@ -234,6 +234,107 @@ test("managed ingress routes by verified host, strips hop headers, bounds bodies
   assert.equal(upstreamSignal.aborted, true);
 });
 
+test("managed ingress admission is metadata-minimal, fail-closed, and observable", async () => {
+  const admissions = [];
+  const metrics = [];
+  let mode = "deny";
+  let upstreamCalls = 0;
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_admission",
+      projectId: "project_admission",
+      hosts: ["limited.example.com"],
+      upstream: "http://127.0.0.1:4505",
+      active: true,
+    }],
+    admitRequest: (request) => {
+      admissions.push(request);
+      if (mode === "throw") throw new Error("private limiter failure");
+      if (mode === "malformed") {
+        return {
+          allowed: false,
+          code: "bad code",
+          message: "must stay private",
+          retryAfterSeconds: 0,
+        };
+      }
+      if (mode === "malformed-allow") return { allowed: "yes" };
+      return mode === "deny"
+        ? {
+            allowed: false,
+            code: "PROJECT_RATE_LIMIT_REACHED",
+            message: "This project has reached its request rate limit.",
+            retryAfterSeconds: 17,
+          }
+        : { allowed: true };
+    },
+    onRequest: (metric) => metrics.push(metric),
+    fetch: async () => {
+      upstreamCalls++;
+      return new Response("accepted", {
+        status: 200,
+        headers: { "content-length": "8" },
+      });
+    },
+  });
+
+  const denied = await ingress.handle(new Request("https://limited.example.com/private?token=no", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer never-forward-to-policy",
+      cookie: "private=session",
+    },
+    body: "hello",
+  }));
+  assert.equal(denied.status, 429);
+  assert.equal(denied.headers.get("retry-after"), "17");
+  assert.equal((await denied.json()).error.code, "PROJECT_RATE_LIMIT_REACHED");
+  assert.equal(upstreamCalls, 0);
+  assert.deepEqual(Object.keys(admissions[0]).sort(), [
+    "method",
+    "projectId",
+    "recordedAt",
+    "requestBytes",
+    "routeId",
+  ]);
+  assert.equal(admissions[0].requestBytes, 5);
+  assert.equal(metrics[0].admitted, false);
+
+  mode = "allow";
+  const accepted = await ingress.handle(new Request("https://limited.example.com/"));
+  assert.equal(accepted.status, 200);
+  assert.equal(await accepted.text(), "accepted");
+  assert.equal(upstreamCalls, 1);
+  assert.equal(metrics.at(-1).admitted, true);
+  assert.equal(metrics.at(-1).responseBytes, 8);
+
+  mode = "throw";
+  const unavailable = await ingress.handle(new Request("https://limited.example.com/"));
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.json()).error.code, "ADMISSION_UNAVAILABLE");
+  assert.equal(metrics.at(-1).admitted, false);
+
+  mode = "malformed";
+  const invalid = await ingress.handle(new Request("https://limited.example.com/"));
+  assert.equal(invalid.status, 503);
+  const invalidBody = await invalid.text();
+  assert.equal(JSON.parse(invalidBody).error.code, "ADMISSION_UNAVAILABLE");
+  assert.doesNotMatch(invalidBody, /private limiter failure|must stay private/);
+
+  mode = "malformed-allow";
+  const invalidAllow = await ingress.handle(new Request("https://limited.example.com/"));
+  assert.equal(invalidAllow.status, 503);
+  assert.equal((await invalidAllow.json()).error.code, "ADMISSION_UNAVAILABLE");
+  assert.equal(upstreamCalls, 1);
+
+  mode = "allow";
+  const head = await ingress.handle(new Request("https://limited.example.com/", {
+    method: "HEAD",
+  }));
+  assert.equal(head.status, 200);
+  assert.equal(metrics.at(-1).responseBytes, 0);
+});
+
 test("managed ingress drains requests already assigned to a replaced upstream", async () => {
   let upstream = "http://127.0.0.1:4510";
   let oldBody;

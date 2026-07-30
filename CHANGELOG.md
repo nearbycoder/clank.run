@@ -53,6 +53,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   Clank build, serve a same-origin static stylesheet, and omit the development-only browser CDN.
   `clank build --tailwind=<source>` can use the local CLI module or an explicitly configured
   standalone executable.
+- Workspaces now have a durable `clank-usage/1` monthly ledger, responsive server-rendered Usage
+  console, and `clank usage [--org] [--month] [--json]`. It reports admitted requests, request
+  bodies, declared response bytes, traffic-limit rejections, retained deleted-project totals, and
+  current resource inventory without inventing streamed-byte or pricing data.
+- Managed ingress now enforces inherited workspace UTC-month request/known-transfer limits and a
+  per-project UTC-minute request ceiling in one SQLite admission transaction. New installation,
+  account, and workspace limits appear in the existing operator editor; retention is bounded and
+  pruned at startup and during traffic.
 
 ### Fixed
 
@@ -101,6 +109,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Tailwind builds execute an exact local binary and argument array without a shell, restrict the
   source to the compiler input tree, write output atomically, and fail deployment when the compiler
   is unavailable instead of silently shipping unprocessed production CSS.
+- Traffic admission receives only project/route IDs, normalized method, request bytes, and receipt
+  time; paths, hosts, headers, cookies, IP addresses, query strings, and body content never enter
+  its ledger. Invalid policy decisions fail closed, project-scoped tokens cannot read workspace
+  usage, and deleted-project rows contain only bounded operational aggregates until expiry.
 
 ## 0.9.4 - 2026-07-28
 

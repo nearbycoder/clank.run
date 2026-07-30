@@ -733,6 +733,167 @@ test("activity CLI validates cursors and emits the workspace audit feed as struc
   }
 });
 
+test("usage CLI exposes the stable monthly workspace contract", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-usage-"));
+  const home = join(root, "home");
+  const observed = [];
+  const usage = {
+    ok: true,
+    protocol: "clank-usage/1",
+    workspace: { id: "organization_usage", name: "Usage workspace", slug: "usage-workspace" },
+    period: {
+      key: "2026-07",
+      startedAt: 1_783_000_000_000,
+      endsAt: 1_785_700_000_000,
+      current: true,
+      closed: false,
+      complete: true,
+      trackingStartedAt: 1_780_000_000_000,
+      timezone: "UTC",
+    },
+    usage: {
+      requests: 1200,
+      requestBytes: 1000,
+      responseBytes: 2_000_000,
+      knownTransferBytes: 2_001_000,
+      rejectedRequests: 3,
+    },
+    limits: {
+      requests: 5_000_000,
+      knownTransferBytes: 100_000_000_000,
+      requestsPerMinutePerProject: 3000,
+    },
+    remaining: { requests: 4_998_800, knownTransferBytes: 99_997_999_000 },
+    resources: {
+      asOf: 1_783_500_000_000,
+      projects: 2,
+      previews: 1,
+      members: 1,
+      domains: 1,
+      releases: 4,
+      releaseStorageBytes: 8_000_000,
+    },
+    projects: [{
+      id: "project_usage",
+      name: "Tasks",
+      slug: "tasks",
+      kind: "production",
+      deleted: false,
+      requests: 1200,
+      requestBytes: 1000,
+      responseBytes: 2_000_000,
+      knownTransferBytes: 2_001_000,
+      rejectedRequests: 3,
+      updatedAt: 1_783_500_000_000,
+    }],
+    retentionMonths: 24,
+    metering: {
+      requestBoundary: "managed_ingress_admission",
+      transferBoundary: "request_body_and_declared_response_content_length",
+      streamedResponseBytesKnown: false,
+      pricingIncluded: false,
+    },
+  };
+  const server = createHttpServer((request, response) => {
+    observed.push({
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+    });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(request.url === "/api/projects/project_usage"
+      ? { ok: true, project: { id: "project_usage", organizationId: "organization_usage" } }
+      : usage));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}/`;
+  const environment = { ...process.env, CLANK_HOME: home };
+  try {
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_usage_test_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    const structured = await runCliResult([
+      "usage",
+      "--org=organization_usage",
+      "--month=2026-07",
+      "--json",
+    ], repository, environment);
+    assert.equal(structured.code, 0, structured.stderr);
+    assert.deepEqual(JSON.parse(structured.stdout), usage);
+
+    const human = await runCliResult([
+      "usage",
+      "--org=organization_usage",
+      "--month=2026-07",
+    ], repository, environment);
+    assert.equal(human.code, 0, human.stderr);
+    assert.match(human.stdout, /Usage workspace · 2026-07 UTC · current partial month/);
+    assert.match(human.stdout, /Requests: 1,200 \/ 5,000,000 · 3 rejected/);
+    assert.match(human.stdout, /tasks  1,200 requests  2.00 MB known transfer/);
+    assert.match(human.stdout, /no prices or invoices are calculated/);
+    const invalidMonth = await runCliResult([
+      "usage",
+      "--org=organization_usage",
+      "--month=2026-13",
+      "--json",
+    ], repository, environment);
+    assert.equal(invalidMonth.code, 1);
+    assert.deepEqual(JSON.parse(invalidMonth.stderr).error, {
+      code: "INVALID_USAGE_MONTH",
+      message: "--month must use YYYY-MM.",
+    });
+    const linked = join(root, "project");
+    await mkdir(join(linked, ".clank"), { recursive: true });
+    await writeFile(join(linked, ".clank", "project.json"), JSON.stringify({
+      version: 1,
+      server: platform,
+      projectId: "project_usage",
+    }));
+    const resolved = await runCliResult([
+      "usage",
+      linked,
+      "--month=2026-07",
+      "--json",
+    ], repository, environment);
+    assert.equal(resolved.code, 0, resolved.stderr);
+    assert.equal(JSON.parse(resolved.stdout).workspace.id, "organization_usage");
+    assert.deepEqual(observed, [{
+      method: "GET",
+      url: "/api/usage?organizationId=organization_usage&month=2026-07",
+      authorization: "Bearer clnk_usage_test_token",
+    }, {
+      method: "GET",
+      url: "/api/usage?organizationId=organization_usage&month=2026-07",
+      authorization: "Bearer clnk_usage_test_token",
+    }, {
+      method: "GET",
+      url: "/api/projects/project_usage",
+      authorization: "Bearer clnk_usage_test_token",
+    }, {
+      method: "GET",
+      url: "/api/usage?organizationId=organization_usage&month=2026-07",
+      authorization: "Bearer clnk_usage_test_token",
+    }]);
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("organization CLI lists and administers roles and invitations", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-organization-access-"));
   const home = join(root, "home");

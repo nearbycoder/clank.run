@@ -18,6 +18,7 @@ The console uses normal, refresh-safe URLs rather than keeping navigation only i
 | --- | --- |
 | `/login`, `/signup`, `/invite` | Account access and invitation-assisted registration |
 | `/overview` | Account-wide project and traffic summary |
+| `/usage` | Monthly workspace usage, project breakdown, and enforced traffic limits |
 | `/activity` | Authorized workspace audit history |
 | `/admin` | Browser-only global analytics, account directory, and support access for allowlisted operators |
 | `/workspaces/<workspace-slug>/people` | Members, roles, and invitations for one workspace |
@@ -57,6 +58,14 @@ backups, jobs, and logs.
 
 The workspace Activity view shows append-only API history across every organization where the current owner, administrator, or developer role permits audit access. Events identify their action, target, actor, timestamp, and expandable safe metadata. Pagination uses a descending event-ID cursor, so concurrent new events do not duplicate or skip older pages. Deleted projects remain named and visibly marked as deleted.
 
+The **Usage** view switches between accessible workspaces and retained UTC months. It shows
+admitted requests, known transfer, rejections, the project-rate ceiling, live resource inventory,
+and a production/preview project breakdown. Deleted projects retain only bounded monthly totals
+until usage retention expires. Partial pre-upgrade months are labelled instead of being silently
+presented as complete, and the page states that streamed response bytes and prices are not
+calculated. The same stable response is available through `clank usage --json`; see
+[Usage accounting and traffic limits](usage-and-limits.md).
+
 The **People** view creates and switches between the account's workspaces, then shows the current role, members, pending invitations, and project usage. The creation control reflects the transactionally enforced owned-workspace quota and selects the new workspace immediately. A signed-in recipient can paste an email-bound workspace token to join without using the CLI. Owners and administrators can invite by email, copy the single-use token once, revoke pending invitations, change roles, remove collaborators, or leave when last-owner protection permits. Allowlisted platform administrators get an additional **Personal workspace only** choice that onboards the recipient without granting access to any inviter workspace. The pending list labels both access scopes explicitly. Pending invitation addresses are hidden from unauthorized workspace members, including email redaction in developer activity metadata; disabled controls reflect server capabilities, but every operation is authorized again by the API.
 
 Allowlisted platform operators see a separate **Control plane** view. Its range-selectable global
@@ -66,7 +75,8 @@ metadata and supports bounded email/name search. CLI bearer tokens cannot open t
 
 The **Limits…** action on every account opens the durable capacity editor. Operators can set
 account-wide workspace and project capacity, then select any workspace owned by that account to
-override its project, domain, release, release-storage, or backup retention limits. A blank field
+override its project, domain, release, release-storage, backup retention, monthly request,
+monthly known-transfer, or per-project request-rate limits. A blank field
 removes the explicit override and restores inheritance. The editor always shows the effective value
 and current usage. Saving a lower value never removes application resources; it blocks new capacity
 until usage returns below the limit. Backup retention is the explicit exception: the next successful
@@ -119,6 +129,10 @@ Limits are operator configuration, not cosmetic dashboard values:
 | `CLANK_MAX_RELEASES_PER_PROJECT` | `50` | Available release-artifact count (valid range 2–100) checked under the distributed project lock |
 | `CLANK_MAX_RELEASE_STORAGE_BYTES_PER_PROJECT` | `21474836480` | Uncompressed release files and pre-deploy snapshots checked under the same lock |
 | `CLANK_BACKUP_MAX_COUNT` | `30` | Retained encrypted restore points per project |
+| `CLANK_MAX_REQUESTS_PER_MONTH_PER_ORGANIZATION` | `5000000` | Admitted managed-ingress requests in one workspace and UTC month |
+| `CLANK_MAX_TRANSFER_BYTES_PER_MONTH_PER_ORGANIZATION` | `107374182400` | Request bodies plus declared response lengths in one workspace and UTC month |
+| `CLANK_MAX_REQUESTS_PER_MINUTE_PER_PROJECT` | `3000` | Admitted requests for one project and UTC minute |
+| `CLANK_USAGE_RETENTION_MONTHS` | `24` | Installation-wide monthly ledger retention, 1–120 months |
 | `CLANK_METRICS_RETENTION_DAYS` | `30` | Installation-wide minute ingress-metric retention; not customer-adjustable |
 
 The API returns `ORGANIZATION_LIMIT_REACHED`, `ACCOUNT_PROJECT_LIMIT_REACHED`, `PROJECT_LIMIT_REACHED`, or `DOMAIN_LIMIT_REACHED` with HTTP `409` when capacity is exhausted. Account limits count organizations created by the account and projects owned by the account; joining someone else's organization does not consume the invitee's creator quota. A pending or verified hostname belongs to exactly one project; another project cannot replace its challenge. The console hostname, custom-domain target, base domain, and the base-domain application namespace are reserved.
@@ -133,8 +147,8 @@ deterministic:
 
 The account's own override governs its total owned workspaces and projects. Workspace overrides are
 available only for limits that naturally belong inside a workspace. Backup cadence, maximum source
-database size, maximum backup age, upload size, and metric retention remain operator-wide safety
-policies rather than tenant overrides.
+database size, maximum backup age, upload size, metric retention, and usage retention remain
+operator-wide safety policies rather than tenant overrides.
 
 Overrides live in the control SQLite database as one validated row per scope and quota key. The
 admin API accepts only known keys and safe integer bounds, requires a same-origin browser
@@ -165,11 +179,20 @@ Metrics are recorded only for requests that pass through managed ingress. Clank 
 - request bytes plus response bytes when the upstream declares `Content-Length`; and
 - fixed counters for `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, and every other method.
 
+This short-lived operational series includes limit-denial responses so operators can see 429
+pressure. The separate durable usage ledger counts only admitted requests and records denied
+traffic in its explicit rejection counter. It also enforces workspace-month and project-minute
+limits transactionally. See [Usage accounting and traffic limits](usage-and-limits.md) for that
+contract, retention, and privacy boundary.
+
 Reported percentiles are upper bounds of matching fixed buckets, not precomputed quantiles. That makes buckets safely aggregatable across time, following the [Prometheus histogram model](https://prometheus.io/docs/practices/histograms/). Method names are normalized into eight bounded counters. Rows created before method counters were introduced appear as `OTHER`, preserving totals through the automatic schema upgrade. The persisted series has no path, hostname, IP, email, user, query-string, or user-agent labels, avoiding high-cardinality and personal-data growth. The HTTP names and duration/size concepts follow the [OpenTelemetry HTTP metric conventions](https://opentelemetry.io/docs/specs/semconv/http/http-metrics/).
 
 The project API returns a fixed number of chart buckets for the complete selected window, a summary, and the equally sized preceding window. Percentage changes use the previous value as their denominator; a new nonzero series with no preceding value is reported as `null` rather than an infinite percentage. Server-error changes are returned as percentage-point differences. The smallest window is 15 minutes at one-minute resolution; longer windows downsample to keep responses and rendering bounded.
 
-Latency currently measures ingress receipt through upstream response headers. It does not measure completion of a streamed body. Response bytes are zero when their final size is not declared. Application-level business metrics and end-to-end traces remain separate; see [Observability](observability.md).
+Latency currently measures ingress receipt through upstream response headers. It does not measure
+completion of a streamed body. Response bytes are zero when their final size is not declared, and
+also for `HEAD`, `204`, and `304` responses that cannot carry a response body. Application-level
+business metrics and end-to-end traces remain separate; see [Observability](observability.md).
 
 ## Custom-domain lifecycle
 

@@ -76,7 +76,15 @@ Expose `observability.metrics.response()` only on an operator-protected endpoint
 
 Clank Deploy separately records per-project traffic that passes through managed ingress. Minute rows contain status classes, 5xx errors, fixed method counters, duration sum/max, cumulative latency buckets, and bounded byte counts. The dashboard returns bounded `15m`, `1h`, `24h`, `7d`, and `30d` current/previous series, rates, percentiles, and distributions without storing host, path, IP, user, email, query-string, or user-agent labels.
 
-Ingress latency ends when upstream response headers arrive; it is not streamed-response completion time. Response size is known only when `Content-Length` is present. See [Deployment dashboard, quotas, and domains](platform-dashboard.md) for exact semantics and retention.
+Ingress latency ends when upstream response headers arrive; it is not streamed-response completion
+time. Response size is known only when `Content-Length` is present and a response can carry a body.
+Limit-denial responses remain visible in this operational series.
+
+A separate monthly ledger records only admitted requests, their request bytes, declared response
+bytes, and traffic-limit rejections. It has longer configurable retention and drives `/usage`,
+`GET /api/usage`, and `clank usage`; it is not a trace, total-egress estimate, or billing record.
+See [Usage accounting and traffic limits](usage-and-limits.md) and
+[Deployment dashboard, quotas, and domains](platform-dashboard.md).
 
 ### Jobs and cron
 

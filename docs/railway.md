@@ -102,6 +102,12 @@ metadata](https://docs.railway.com/volumes/reference), which appears in Railway'
 metric but is outside the mounted filesystem usage Clank can inspect. A 50 GB volume can therefore
 start with roughly 1–1.5 GB reported by Railway even when application files are nearly empty.
 
+Workspace traffic accounting remains inside the same control SQLite database and does not require
+a Railway database, Redis instance, telemetry service, or bucket. Open `/usage` or run
+`clank usage --json` to inspect admitted monthly requests, known transfer, and limit rejections.
+Keep Railway's public edge in front of Clank: streamed response bytes and pre-admission abuse are
+outside this ledger. See [Usage accounting and traffic limits](usage-and-limits.md).
+
 Leave `CLANK_RUNNER_REGISTRATION_TOKEN` unset for the inexpensive single-service topology. Enabling
 remote-node enrollment retains one additional compressed upload for each new release so an exact
 leased artifact can be transferred to another host; that copy is included in project release
@@ -221,6 +227,7 @@ railway metrics --service clank --since 1h --cpu --memory
 railway metrics --service clank --since 24h --memory --raw --json
 railway metrics --service clank --since 7d --volume
 railway metrics --service clank --since 7d --volume --raw --json
+clank usage --json
 ```
 
 Also verify browser session refresh, CLI device authorization, a disposable deployment, its

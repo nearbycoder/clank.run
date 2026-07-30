@@ -34,6 +34,10 @@ Any known cross-tenant access, authentication bypass, remote code execution acro
 - The control-plane catalog uses SQLite. It supports durable coordination on one shared transactional store, not globally distributed consensus.
 - Built-in application data and live queries are SQLite-first. The external PostgreSQL driver/provisioner is available, but generated backend tables do not transparently switch engines.
 - Managed ingress performs exact-host HTTP proxying, automatically reconciles customer DNS routing with durable bounded leases, and supplies a restricted Caddy certificate-permission lookup. It does not itself issue or store certificates, change customer DNS, provide a WAF/DDoS edge, or proxy WebSocket upgrades. Put it behind the documented production edge.
+- Managed ingress enforces durable workspace-month request/known-transfer and project-minute
+  request limits, but known transfer excludes streamed or undeclared response bytes and direct
+  application ports bypass it. Keep ports private and retain edge connection, body, response,
+  WAF, and DDoS controls.
 - Local file and email drivers are development/reference implementations. Configure durable object storage and a production email provider for hosted workloads.
 - Verified encrypted backups run automatically every 24 hours by default and coordinate through
   durable leases. Repositories are local by default; operators can select the built-in

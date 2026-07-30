@@ -165,6 +165,14 @@ The generated local key is onboarding convenience, not protection from a comprom
   event. Workspace values override their owning account, which overrides installation defaults;
   lowering capacity never implicitly deletes application resources. Backup retention reconciles
   oldest restore points during the next successful backup, as stated in the operator UI.
+- Monthly workspace requests, known transfer, and per-project minute requests are admitted in one
+  immediate SQLite transaction, so concurrent control-plane connections cannot cross the request
+  boundary by racing reads. Policy errors and malformed decisions fail closed. Denials increment a
+  separate rejection counter without becoming admitted usage.
+- The retained usage ledger has fixed workspace/project/month dimensions and contains no paths,
+  hosts, headers, cookies, IP addresses, query strings, body content, email addresses, or
+  application identities. Deleted projects retain only bounded operational totals until the
+  configured installation-wide retention expires; pruning runs at startup and during ingress.
 - Active artifacts cannot be removed; cleanup requires rollback scope, and deleting the immediate rollback target requires a separate rollback-loss decision that also prunes its now-unusable matching data snapshot.
 - Permanent site deletion requires an owner/admin account principal, exact slug-bound confirmation, a separate data-loss acknowledgement, and the durable project lock. Project-scoped tokens cannot invoke it.
 - Site storage removal derives the directory from the validated project ID, rejects symbolic-link parents/roots, and occurs before metadata removal. Active project tokens and distributed orchestration rows are cleared, while the deletion audit event survives the project cascade.
@@ -200,6 +208,15 @@ Distributed leases, authenticated workers, desired generations, durable idempote
 Managed ingress routes only exact verified hosts to loopback or explicit allowlisted upstreams, strips hop-by-hop and `Connection`-nominated headers, bounds request bodies and timeouts, retries only safe methods, and opens failure circuits. TLS certificates, DNS automation, WAF/DDoS controls, and WebSocket proxying belong at the external edge.
 
 Ingress constructs the upstream URL from trusted route configuration before assigning the untrusted path, preventing scheme-relative path SSRF. The Node adapter exposes request bodies as capped streams, so authentication and smaller route-level limits run without first buffering the deployment-wide artifact maximum. Bodies without `Content-Length` are stopped at the same transport and ingress limits. Metrics are project-only aggregates with fixed status, method, byte, and histogram columns; they do not create host/path/IP/user/query/user-agent label cardinality.
+
+The traffic admission callback receives only project/route IDs, normalized method, request byte
+count, and receipt time. It never receives the URL path, headers, cookies, client address, query
+string, or body content. Known transfer deliberately counts only admitted request bodies and
+body-capable responses with `Content-Length`; streamed bytes are not estimated. Already-admitted
+concurrent responses can move that ledger beyond its limit before later requests are refused.
+Keep direct application ports private, set application/edge response and concurrency bounds, and
+retain edge rate/body/DDoS controls because pre-admission failures and unmetered response streams
+are outside the tenant ledger.
 
 Custom domains require an exact random TXT ownership proof and a separate CNAME/A/AAAA routing check. A pending or verified hostname cannot move between projects, and Clank's own console, target, base domain, and base-domain namespace are reserved. Account organization/site, organization site, and project domain ceilings are enforced inside SQLite transactions.
 

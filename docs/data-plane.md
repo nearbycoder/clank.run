@@ -34,6 +34,36 @@ await openPlatform({
 
 Projects are then available at `https://<slug>.apps.clank.example`. TLS should terminate at the edge proxy or load balancer in front of the Clank control/data-plane process.
 
+### Admission policy
+
+Embedders can apply durable capacity policy after the request body passes its bound and before any
+upstream call:
+
+```ts
+const ingress = createManagedIngress({
+  routes,
+  async admitRequest(request) {
+    // projectId, routeId, normalized method, requestBytes, recordedAt
+    return withinCapacity(request)
+      ? { allowed: true }
+      : {
+          allowed: false,
+          code: "PROJECT_RATE_LIMIT_REACHED",
+          message: "This project has reached its request rate limit.",
+          retryAfterSeconds: 30,
+        };
+  },
+});
+```
+
+The callback receives no path, hostname, headers, cookies, IP address, query string, or body
+content. A thrown exception, invalid decision, unsafe code/message, or invalid retry interval fails
+closed with a generic `ADMISSION_UNAVAILABLE` response. A valid denial returns `429` without
+calling upstream and remains observable with `admitted: false` in `onRequest`.
+
+The built-in platform uses this boundary for its transactional workspace/month and project/minute
+ledger. See [Usage accounting and traffic limits](usage-and-limits.md).
+
 ## Custom domains
 
 ```sh

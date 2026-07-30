@@ -103,7 +103,10 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 
 ## Deployment platform
 
-- `openPlatform(options)`: browser dashboard, workspace people/invitation administration and activity, device authorization, tokens, projects, transactionally enforced limits, ingress metrics, DNS/domain lifecycle, TLS eligibility, encrypted secrets, role-filtered audit, release transaction, logs, rollback, and supervision.
+- `openPlatform(options)`: browser dashboard, workspace people/invitation administration and
+  activity, transparent monthly usage, device authorization, tokens, projects, transactionally
+  enforced capacity and traffic limits, ingress metrics, DNS/domain lifecycle, TLS eligibility,
+  encrypted secrets, role-filtered audit, release transaction, logs, rollback, and supervision.
 - `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, resolved `.hostingProfile`,
   `.runnerKind`, and async `.close()`.
 - Runners: dependency-free process runner or constrained Docker runner.
@@ -175,11 +178,15 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 
 ## Managed data plane
 
-- `createManagedIngress(options)`: exact-host reverse proxy with fixed upstream origins, bounded streaming request bodies, hop-header stripping, safe retries, circuits, health, and request observation.
+- `createManagedIngress(options)`: exact-host reverse proxy with fixed upstream origins, bounded
+  streaming request bodies, metadata-minimal fail-closed `admitRequest`, hop-header stripping, safe
+  retries, circuits, health, and admitted/denied request observation.
 - `inspectDomainRouting(hostname, target, resolver?)`: compare live CNAME/A/AAAA results to a configured edge target.
 - `createDomainManager(options)`: project-bound random TXT ownership challenges.
 - `createMemoryDomainStore()`: in-memory domain challenge store for local use and tests.
-- Types: `IngressRoute`, `IngressRequestMetric`, `ManagedIngress`, `DomainChallenge`, `DomainDnsResolver`, `DomainRoutingReport`.
+- Types: `IngressRoute`, `IngressRequestMetric`, `IngressAdmissionRequest`,
+  `IngressAdmissionDecision`, `IngressAdmissionPolicy`, `ManagedIngress`, `DomainChallenge`,
+  `DomainDnsResolver`, `DomainRoutingReport`.
 
 ## AI
 

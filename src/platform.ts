@@ -55,6 +55,8 @@ import {
   type DomainChallengeStore,
   type DomainDnsResolver,
   type DomainRoutingReport,
+  type IngressAdmissionDecision,
+  type IngressAdmissionRequest,
   type IngressRequestMetric,
 } from "./data-plane.ts";
 import { platformConsolePage } from "./platform-console.ts";
@@ -99,6 +101,14 @@ export interface PlatformLimits {
   releasesPerProject?: number;
   /** Maximum retained release and pre-deploy snapshot bytes per project. Defaults to 20 GiB. */
   releaseStorageBytesPerProject?: number;
+  /** Maximum admitted requests per UTC month in one workspace. Defaults to 5,000,000. */
+  requestsPerMonthPerOrganization?: number;
+  /** Maximum known ingress plus declared-response bytes per UTC month in one workspace. Defaults to 100 GiB. */
+  transferBytesPerMonthPerOrganization?: number;
+  /** Maximum admitted requests per project in one UTC minute. Defaults to 3,000. */
+  requestsPerMinutePerProject?: number;
+  /** Retention for monthly usage records. Defaults to 24 months. */
+  usageRetentionMonths?: number;
 }
 
 export interface PlatformBackupOptions {
@@ -143,7 +153,10 @@ type PlatformQuotaKey =
   | "domainsPerProject"
   | "releasesPerProject"
   | "releaseStorageBytesPerProject"
-  | "backupsPerProject";
+  | "backupsPerProject"
+  | "requestsPerMonthPerOrganization"
+  | "transferBytesPerMonthPerOrganization"
+  | "requestsPerMinutePerProject";
 
 type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
 type PlatformQuotaScope = "account" | "workspace";
@@ -156,6 +169,9 @@ const PLATFORM_QUOTA_KEYS = Object.freeze([
   "releasesPerProject",
   "releaseStorageBytesPerProject",
   "backupsPerProject",
+  "requestsPerMonthPerOrganization",
+  "transferBytesPerMonthPerOrganization",
+  "requestsPerMinutePerProject",
 ] as const satisfies readonly PlatformQuotaKey[]);
 
 const WORKSPACE_QUOTA_KEYS = Object.freeze([
@@ -164,6 +180,9 @@ const WORKSPACE_QUOTA_KEYS = Object.freeze([
   "releasesPerProject",
   "releaseStorageBytesPerProject",
   "backupsPerProject",
+  "requestsPerMonthPerOrganization",
+  "transferBytesPerMonthPerOrganization",
+  "requestsPerMinutePerProject",
 ] as const satisfies readonly PlatformQuotaKey[]);
 
 const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
@@ -179,6 +198,24 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
     label: "Release storage per project",
   },
   backupsPerProject: { minimum: 1, maximum: 10_000, unit: "backups", label: "Retained backups per project" },
+  requestsPerMonthPerOrganization: {
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    unit: "requests/month",
+    label: "Requests per workspace month",
+  },
+  transferBytesPerMonthPerOrganization: {
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    unit: "bytes/month",
+    label: "Known transfer per workspace month",
+  },
+  requestsPerMinutePerProject: {
+    minimum: 1,
+    maximum: 1_000_000,
+    unit: "requests/minute",
+    label: "Requests per project minute",
+  },
 } as const satisfies Record<PlatformQuotaKey, {
   minimum: number;
   maximum: number;
@@ -424,6 +461,10 @@ const DEFAULT_BACKUP_MAX_DATABASE_BYTES = 10 * 1024 * 1024 * 1024;
 const BACKUP_CONCURRENCY = 2;
 const DEFAULT_RELEASES_PER_PROJECT = 50;
 const DEFAULT_RELEASE_STORAGE_BYTES = 20 * 1024 * 1024 * 1024;
+const DEFAULT_REQUESTS_PER_MONTH = 5_000_000;
+const DEFAULT_TRANSFER_BYTES_PER_MONTH = 100 * 1024 * 1024 * 1024;
+const DEFAULT_REQUESTS_PER_MINUTE = 3_000;
+const DEFAULT_USAGE_RETENTION_MONTHS = 24;
 const DEFAULT_PREVIEW_TTL_MS = 7 * 24 * 60 * 60_000;
 const DEFAULT_PREVIEW_MAX_TTL_MS = 30 * 24 * 60 * 60_000;
 const DEFAULT_PREVIEW_CLEANUP_INTERVAL_MS = 5 * 60_000;
@@ -601,6 +642,30 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       1,
       Number.MAX_SAFE_INTEGER,
     ),
+    requestsPerMonthPerOrganization: integerInRange(
+      options.limits?.requestsPerMonthPerOrganization ?? DEFAULT_REQUESTS_PER_MONTH,
+      "limits.requestsPerMonthPerOrganization",
+      1,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    transferBytesPerMonthPerOrganization: integerInRange(
+      options.limits?.transferBytesPerMonthPerOrganization ?? DEFAULT_TRANSFER_BYTES_PER_MONTH,
+      "limits.transferBytesPerMonthPerOrganization",
+      1,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    requestsPerMinutePerProject: integerInRange(
+      options.limits?.requestsPerMinutePerProject ?? DEFAULT_REQUESTS_PER_MINUTE,
+      "limits.requestsPerMinutePerProject",
+      1,
+      1_000_000,
+    ),
+    usageRetentionMonths: integerInRange(
+      options.limits?.usageRetentionMonths ?? DEFAULT_USAGE_RETENTION_MONTHS,
+      "limits.usageRetentionMonths",
+      1,
+      120,
+    ),
   });
   const quotaDefaults: PlatformQuotaValues = Object.freeze({
     organizationsPerAccount: limits.organizationsPerAccount,
@@ -610,6 +675,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     releasesPerProject: limits.releasesPerProject,
     releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
     backupsPerProject: backupPolicy.maxBackups,
+    requestsPerMonthPerOrganization: limits.requestsPerMonthPerOrganization,
+    transferBytesPerMonthPerOrganization: limits.transferBytesPerMonthPerOrganization,
+    requestsPerMinutePerProject: limits.requestsPerMinutePerProject,
   });
   const tlsAskToken = options.ingress?.tlsAskToken === undefined
     ? undefined
@@ -632,7 +700,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
+  const usageOpenedAt = Date.now();
   try {
+    pruneUsageStorage(storage.internal, usageOpenedAt, limits.usageRetentionMonths);
     reconcileBackupObjectBinding(storage.internal, backupObjects);
   } catch (error) {
     storage.auth.close();
@@ -815,8 +885,17 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     "Domain routing lookup timed out.",
   );
   let lastMetricPrune = 0;
+  let lastUsagePrune = usageOpenedAt;
+  const admitIngressRequest = (request: Readonly<IngressAdmissionRequest>): IngressAdmissionDecision => {
+    if (request.recordedAt - lastUsagePrune >= 60 * 60_000) {
+      lastUsagePrune = request.recordedAt;
+      pruneUsageStorage(storage.internal, request.recordedAt, limits.usageRetentionMonths);
+    }
+    return admitProjectUsage(storage.internal, request, quotaDefaults);
+  };
   const recordIngressMetric = (metric: IngressRequestMetric): void => {
     recordMetric(storage.internal, metric);
+    if (metric.admitted) recordUsageResponse(storage.internal, metric);
     if (metric.recordedAt - lastMetricPrune >= 60 * 60_000) {
       lastMetricPrune = metric.recordedAt;
       storage.internal.prepare("DELETE FROM clank_platform_metrics WHERE bucket_started_at < ?")
@@ -829,6 +908,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         routes: () => ingressRoutes(storage.internal, baseDomain, active),
         timeoutMs: options.ingress?.timeoutMs,
         maxBodyBytes: options.ingress?.maxBodyBytes,
+        admitRequest: admitIngressRequest,
         onRequest: recordIngressMetric,
       })
     : undefined;
@@ -2654,6 +2734,40 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           },
         });
       }
+      if (url.pathname === "/api/usage" && request.method === "GET") {
+        if (principal.projectId) {
+          throw new PlatformError(
+            403,
+            "TOKEN_SCOPE_DENIED",
+            "Project-scoped tokens cannot read workspace usage.",
+          );
+        }
+        const organizationId = url.searchParams.get("organizationId");
+        if (!organizationId || !/^[A-Za-z0-9_-]{8,128}$/u.test(organizationId)) {
+          throw new PlatformError(422, "INVALID_INPUT", "organizationId is required.");
+        }
+        if (principal.organizationId && principal.organizationId !== organizationId) {
+          throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token is scoped to another workspace.");
+        }
+        organizationMembership(storage.internal, organizationId, principal.userId);
+        const usageAsOf = Date.now();
+        const month = usageMonth(
+          url.searchParams.get("month"),
+          usageAsOf,
+          limits.usageRetentionMonths,
+        );
+        return api({
+          ok: true,
+          ...workspaceUsagePayload(
+            storage.internal,
+            organizationId,
+            month,
+            quotaDefaults,
+            limits.usageRetentionMonths,
+            usageAsOf,
+          ),
+        });
+      }
       if (url.pathname === "/api/tokens" && request.method === "GET") {
         const tokenRows = principal.projectId
           ? storage.internal.prepare(`SELECT id, name, organization_id, project_id, permissions,
@@ -4067,7 +4181,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`);
-  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_quota_overrides (
+  const quotaOverridesTable = `CREATE TABLE clank_platform_quota_overrides (
     scope_type TEXT NOT NULL CHECK (scope_type IN ('account', 'workspace')),
     scope_id TEXT NOT NULL,
     quota_key TEXT NOT NULL CHECK (quota_key IN (
@@ -4077,13 +4191,39 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
       'domainsPerProject',
       'releasesPerProject',
       'releaseStorageBytesPerProject',
-      'backupsPerProject'
+      'backupsPerProject',
+      'requestsPerMonthPerOrganization',
+      'transferBytesPerMonthPerOrganization',
+      'requestsPerMinutePerProject'
     )),
     quota_value INTEGER NOT NULL CHECK (quota_value > 0),
     updated_by TEXT NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (scope_type, scope_id, quota_key)
-  )`);
+  )`;
+  const existingQuotaTable = internal.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'clank_platform_quota_overrides'",
+  ).get();
+  if (!existingQuotaTable) {
+    internal.exec(quotaOverridesTable);
+  } else if ([
+    "requestsPerMonthPerOrganization",
+    "transferBytesPerMonthPerOrganization",
+    "requestsPerMinutePerProject",
+  ].some((key) => !String(existingQuotaTable.sql).includes(key))) {
+    internal.transaction(() => {
+      internal.exec("DROP TRIGGER IF EXISTS clank_platform_quota_overrides_account_cleanup");
+      internal.exec("DROP TRIGGER IF EXISTS clank_platform_quota_overrides_workspace_cleanup");
+      internal.exec("DROP INDEX IF EXISTS clank_platform_quota_overrides_scope");
+      internal.exec("ALTER TABLE clank_platform_quota_overrides RENAME TO clank_platform_quota_overrides_legacy");
+      internal.exec(quotaOverridesTable);
+      internal.exec(`INSERT INTO clank_platform_quota_overrides
+        (scope_type, scope_id, quota_key, quota_value, updated_by, updated_at)
+        SELECT scope_type, scope_id, quota_key, quota_value, updated_by, updated_at
+        FROM clank_platform_quota_overrides_legacy`);
+      internal.exec("DROP TABLE clank_platform_quota_overrides_legacy");
+    });
+  }
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_quota_overrides_scope
     ON clank_platform_quota_overrides (scope_type, scope_id)`);
   internal.exec(`CREATE TRIGGER IF NOT EXISTS clank_platform_quota_overrides_account_cleanup
@@ -4261,6 +4401,61 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     }
   }
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_metrics_time ON clank_platform_metrics (bucket_started_at)");
+  const usageLedgerExists = Boolean(internal.prepare(
+    "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'clank_platform_usage_monthly'",
+  ).get());
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_usage_monthly (
+    organization_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    project_name TEXT NOT NULL,
+    project_slug TEXT NOT NULL,
+    project_kind TEXT NOT NULL CHECK (project_kind IN ('production', 'preview')),
+    month_started_at INTEGER NOT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0 CHECK (request_count >= 0),
+    request_bytes INTEGER NOT NULL DEFAULT 0 CHECK (request_bytes >= 0),
+    response_bytes INTEGER NOT NULL DEFAULT 0 CHECK (response_bytes >= 0),
+    rejected_count INTEGER NOT NULL DEFAULT 0 CHECK (rejected_count >= 0),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, month_started_at)
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_usage_monthly_workspace
+    ON clank_platform_usage_monthly (organization_id, month_started_at, project_id)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_usage_rate_windows (
+    project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    window_started_at INTEGER NOT NULL,
+    request_count INTEGER NOT NULL CHECK (request_count >= 0),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (project_id, window_started_at)
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_usage_rate_time
+    ON clank_platform_usage_rate_windows (window_started_at)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_usage_state (
+    key TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+  )`);
+  if (!usageLedgerExists) {
+    const trackingStartedAt = Date.now();
+    const monthStart = utcMonthStart(trackingStartedAt);
+    internal.transaction(() => {
+      internal.prepare(`INSERT INTO clank_platform_usage_state (key, value)
+        VALUES ('tracking_started_at', ?) ON CONFLICT(key) DO NOTHING`).run(trackingStartedAt);
+      internal.prepare(`INSERT INTO clank_platform_usage_monthly (
+          organization_id, project_id, project_name, project_slug, project_kind,
+          month_started_at, request_count, request_bytes, response_bytes, rejected_count, updated_at
+        )
+        SELECT p.organization_id, p.id, p.name, p.slug,
+          CASE WHEN p.parent_project_id IS NULL THEN 'production' ELSE 'preview' END,
+          ?, sum(m.request_count), sum(m.request_bytes), sum(m.response_bytes), 0, ?
+        FROM clank_platform_metrics m
+        JOIN clank_platform_projects p ON p.id = m.project_id
+        WHERE p.organization_id IS NOT NULL AND m.bucket_started_at >= ?
+        GROUP BY p.organization_id, p.id, p.name, p.slug, p.parent_project_id`)
+        .run(monthStart, trackingStartedAt, monthStart);
+    });
+  } else {
+    internal.prepare(`INSERT INTO clank_platform_usage_state (key, value)
+      VALUES ('tracking_started_at', ?) ON CONFLICT(key) DO NOTHING`).run(Date.now());
+  }
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_releases (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
@@ -4776,6 +4971,135 @@ function ingressRoutes(
   });
 }
 
+function admitProjectUsage(
+  internal: SQLiteInternal,
+  request: Readonly<IngressAdmissionRequest>,
+  defaults: PlatformQuotaValues,
+): IngressAdmissionDecision {
+  return internal.transaction(() => {
+    const project = projectById(internal, request.projectId);
+    if (!project?.organizationId) throw new Error("Ingress project has no workspace.");
+    const effective = projectQuotas(internal, project, defaults);
+    const monthStart = utcMonthStart(request.recordedAt);
+    const minuteStart = Math.floor(request.recordedAt / 60_000) * 60_000;
+    const usage = internal.prepare(`SELECT
+        coalesce(sum(request_count), 0) AS request_count,
+        coalesce(sum(request_bytes), 0) AS request_bytes,
+        coalesce(sum(response_bytes), 0) AS response_bytes
+      FROM clank_platform_usage_monthly
+      WHERE organization_id = ? AND month_started_at = ?`)
+      .get(project.organizationId, monthStart);
+    const currentRate = Number(internal.prepare(`SELECT request_count
+      FROM clank_platform_usage_rate_windows
+      WHERE project_id = ? AND window_started_at = ?`).get(project.id, minuteStart)?.request_count ?? 0);
+    const requestCount = Number(usage?.request_count ?? 0);
+    const knownTransfer = boundedMetricSum(
+      Number(usage?.request_bytes ?? 0),
+      Number(usage?.response_bytes ?? 0),
+    );
+    let denial: Exclude<IngressAdmissionDecision, { allowed: true }> | undefined;
+    if (currentRate >= effective.requestsPerMinutePerProject) {
+      denial = {
+        allowed: false,
+        code: "PROJECT_RATE_LIMIT_REACHED",
+        message: "This project has reached its request rate limit.",
+        retryAfterSeconds: Math.max(1, Math.ceil((minuteStart + 60_000 - request.recordedAt) / 1_000)),
+      };
+    } else if (requestCount >= effective.requestsPerMonthPerOrganization) {
+      denial = {
+        allowed: false,
+        code: "WORKSPACE_REQUEST_LIMIT_REACHED",
+        message: "This workspace has reached its monthly request limit.",
+        retryAfterSeconds: Math.max(1, Math.ceil((addUtcMonths(monthStart, 1) - request.recordedAt) / 1_000)),
+      };
+    } else if (
+      knownTransfer + request.requestBytes
+      > effective.transferBytesPerMonthPerOrganization
+    ) {
+      denial = {
+        allowed: false,
+        code: "WORKSPACE_TRANSFER_LIMIT_REACHED",
+        message: "This workspace has reached its monthly known-transfer limit.",
+        retryAfterSeconds: Math.max(1, Math.ceil((addUtcMonths(monthStart, 1) - request.recordedAt) / 1_000)),
+      };
+    }
+    if (denial) {
+      internal.prepare(`INSERT INTO clank_platform_usage_monthly (
+          organization_id, project_id, project_name, project_slug, project_kind,
+          month_started_at, request_count, request_bytes, response_bytes, rejected_count, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 1, ?)
+        ON CONFLICT(project_id, month_started_at) DO UPDATE SET
+          project_name = excluded.project_name,
+          project_slug = excluded.project_slug,
+          project_kind = excluded.project_kind,
+          rejected_count = min(9007199254740991, rejected_count + 1),
+          updated_at = excluded.updated_at`)
+        .run(
+          project.organizationId,
+          project.id,
+          project.name,
+          project.slug,
+          project.parentProjectId ? "preview" : "production",
+          monthStart,
+          request.recordedAt,
+        );
+      return denial;
+    }
+    internal.prepare(`INSERT INTO clank_platform_usage_rate_windows
+        (project_id, window_started_at, request_count, updated_at)
+      VALUES (?, ?, 1, ?)
+      ON CONFLICT(project_id, window_started_at) DO UPDATE SET
+        request_count = min(9007199254740991, request_count + 1),
+        updated_at = excluded.updated_at`)
+      .run(project.id, minuteStart, request.recordedAt);
+    internal.prepare(`INSERT INTO clank_platform_usage_monthly (
+        organization_id, project_id, project_name, project_slug, project_kind,
+        month_started_at, request_count, request_bytes, response_bytes, rejected_count, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, 0, 0, ?)
+      ON CONFLICT(project_id, month_started_at) DO UPDATE SET
+        organization_id = excluded.organization_id,
+        project_name = excluded.project_name,
+        project_slug = excluded.project_slug,
+        project_kind = excluded.project_kind,
+        request_count = min(9007199254740991, request_count + 1),
+        request_bytes = min(9007199254740991, request_bytes + excluded.request_bytes),
+        updated_at = excluded.updated_at`)
+      .run(
+        project.organizationId,
+        project.id,
+        project.name,
+        project.slug,
+        project.parentProjectId ? "preview" : "production",
+        monthStart,
+        boundedMetricBytes(request.requestBytes),
+        request.recordedAt,
+      );
+    return { allowed: true };
+  });
+}
+
+function recordUsageResponse(internal: SQLiteInternal, metric: IngressRequestMetric): void {
+  const responseBytes = boundedMetricBytes(metric.responseBytes);
+  if (responseBytes === 0) return;
+  internal.prepare(`UPDATE clank_platform_usage_monthly
+    SET response_bytes = min(9007199254740991, response_bytes + ?), updated_at = max(updated_at, ?)
+    WHERE project_id = ? AND month_started_at = ?`)
+    .run(responseBytes, metric.recordedAt, metric.projectId, utcMonthStart(metric.recordedAt));
+}
+
+function pruneUsageStorage(
+  internal: SQLiteInternal,
+  now: number,
+  retentionMonths: number,
+): void {
+  internal.transaction(() => {
+    internal.prepare("DELETE FROM clank_platform_usage_rate_windows WHERE window_started_at < ?")
+      .run(Math.floor(now / 60_000) * 60_000 - 2 * 60_000);
+    internal.prepare("DELETE FROM clank_platform_usage_monthly WHERE month_started_at < ?")
+      .run(addUtcMonths(utcMonthStart(now), -(retentionMonths - 1)));
+  });
+}
+
 function recordMetric(internal: SQLiteInternal, metric: IngressRequestMetric): void {
   const bucket = Math.floor(metric.recordedAt / METRIC_BUCKET_MS) * METRIC_BUCKET_MS;
   const duration = Math.min(10 * 60_000, Math.max(0, Number(metric.durationMs) || 0));
@@ -4840,9 +5164,26 @@ function recordMetric(internal: SQLiteInternal, metric: IngressRequestMetric): v
     );
 }
 
+function utcMonthStart(timestamp: number): number {
+  const date = new Date(timestamp);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+}
+
+function addUtcMonths(timestamp: number, months: number): number {
+  const date = new Date(timestamp);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1);
+}
+
 function boundedMetricBytes(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.min(Number.MAX_SAFE_INTEGER, Math.floor(value));
+}
+
+function boundedMetricSum(...values: number[]): number {
+  return values.reduce(
+    (total, value) => Math.min(Number.MAX_SAFE_INTEGER, total + boundedMetricBytes(value)),
+    0,
+  );
 }
 
 interface MetricRange {
@@ -4981,6 +5322,196 @@ function metricSummaryChange(
 function percentChange(current: number, previous: number): number | null {
   if (previous === 0) return current === 0 ? 0 : null;
   return (current - previous) / previous;
+}
+
+function usageMonth(input: string | null, now: number, retentionMonths: number): {
+  key: string;
+  startedAt: number;
+  endsAt: number;
+} {
+  const current = utcMonthStart(now);
+  let startedAt = current;
+  if (input !== null) {
+    if (!/^\d{4}-(?:0[1-9]|1[0-2])$/u.test(input)) {
+      throw new PlatformError(422, "INVALID_USAGE_MONTH", "month must use YYYY-MM.");
+    }
+    const [year, month] = input.split("-").map(Number);
+    startedAt = Date.UTC(year!, month! - 1, 1);
+    if (usageMonthKey(startedAt) !== input) {
+      throw new PlatformError(422, "INVALID_USAGE_MONTH", "month must use YYYY-MM.");
+    }
+  }
+  const earliest = addUtcMonths(current, -(retentionMonths - 1));
+  if (startedAt < earliest || startedAt > current) {
+    throw new PlatformError(
+      422,
+      "USAGE_MONTH_UNAVAILABLE",
+      `Usage is available from ${usageMonthKey(earliest)} through ${usageMonthKey(current)}.`,
+    );
+  }
+  return {
+    key: usageMonthKey(startedAt),
+    startedAt,
+    endsAt: addUtcMonths(startedAt, 1),
+  };
+}
+
+function usageMonthKey(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function workspaceUsagePayload(
+  internal: SQLiteInternal,
+  organizationId: string,
+  month: { key: string; startedAt: number; endsAt: number },
+  defaults: PlatformQuotaValues,
+  retentionMonths: number,
+  asOf: number,
+): Record<string, unknown> {
+  const organization = internal.prepare(`SELECT id, name, slug
+    FROM clank_platform_organizations WHERE id = ?`).get(organizationId);
+  if (!organization) {
+    throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "Workspace not found.");
+  }
+  const effective = workspaceQuotas(internal, organizationId, defaults);
+  const usageRows = internal.prepare(`SELECT *
+    FROM clank_platform_usage_monthly
+    WHERE organization_id = ? AND month_started_at = ?
+    ORDER BY request_count DESC, project_name, project_id`)
+    .all(organizationId, month.startedAt);
+  const currentRows = internal.prepare(`SELECT id, name, slug, parent_project_id, created_at
+    FROM clank_platform_projects WHERE organization_id = ? AND created_at < ?
+    ORDER BY created_at, id`).all(organizationId, month.endsAt);
+  const current = new Map(currentRows.map((row) => [String(row.id), row]));
+  const projects = usageRows.map((row) => {
+    const active = current.get(String(row.project_id));
+    current.delete(String(row.project_id));
+    const requestBytes = Number(row.request_bytes ?? 0);
+    const responseBytes = Number(row.response_bytes ?? 0);
+    return {
+      id: String(row.project_id),
+      name: active ? String(active.name) : String(row.project_name),
+      slug: active ? String(active.slug) : String(row.project_slug),
+      kind: active
+        ? active.parent_project_id === null ? "production" : "preview"
+        : String(row.project_kind),
+      deleted: !active,
+      requests: Number(row.request_count ?? 0),
+      requestBytes,
+      responseBytes,
+      knownTransferBytes: boundedMetricSum(requestBytes, responseBytes),
+      rejectedRequests: Number(row.rejected_count ?? 0),
+      updatedAt: Number(row.updated_at),
+    };
+  });
+  for (const row of current.values()) {
+    projects.push({
+      id: String(row.id),
+      name: String(row.name),
+      slug: String(row.slug),
+      kind: row.parent_project_id === null ? "production" : "preview",
+      deleted: false,
+      requests: 0,
+      requestBytes: 0,
+      responseBytes: 0,
+      knownTransferBytes: 0,
+      rejectedRequests: 0,
+      updatedAt: null,
+    });
+  }
+  const totals = projects.reduce((result, project) => {
+    result.requests = boundedMetricSum(result.requests, project.requests);
+    result.requestBytes = boundedMetricSum(result.requestBytes, project.requestBytes);
+    result.responseBytes = boundedMetricSum(result.responseBytes, project.responseBytes);
+    result.knownTransferBytes = boundedMetricSum(
+      result.knownTransferBytes,
+      project.knownTransferBytes,
+    );
+    result.rejectedRequests = boundedMetricSum(
+      result.rejectedRequests,
+      project.rejectedRequests,
+    );
+    return result;
+  }, {
+    requests: 0,
+    requestBytes: 0,
+    responseBytes: 0,
+    knownTransferBytes: 0,
+    rejectedRequests: 0,
+  });
+  const resources = internal.prepare(`SELECT
+      (SELECT count(*) FROM clank_platform_projects
+        WHERE organization_id = ?) AS projects,
+      (SELECT count(*) FROM clank_platform_projects
+        WHERE organization_id = ? AND parent_project_id IS NOT NULL) AS previews,
+      (SELECT count(*) FROM clank_platform_memberships
+        WHERE organization_id = ?) AS members,
+      (SELECT count(*) FROM clank_platform_domains d
+        JOIN clank_platform_projects p ON p.id = d.project_id
+        WHERE p.organization_id = ?) AS domains,
+      (SELECT count(*) FROM clank_platform_releases r
+        JOIN clank_platform_projects p ON p.id = r.project_id
+        WHERE p.organization_id = ? AND r.artifact_available = 1) AS releases,
+      (SELECT coalesce(sum(r.storage_bytes), 0) FROM clank_platform_releases r
+        JOIN clank_platform_projects p ON p.id = r.project_id
+        WHERE p.organization_id = ? AND r.artifact_available = 1) AS release_storage_bytes`)
+    .get(
+      organizationId,
+      organizationId,
+      organizationId,
+      organizationId,
+      organizationId,
+      organizationId,
+    )!;
+  const trackingStartedAt = Number(internal.prepare(`SELECT value
+    FROM clank_platform_usage_state WHERE key = 'tracking_started_at'`).get()?.value ?? Date.now());
+  return {
+    protocol: "clank-usage/1",
+    workspace: {
+      id: String(organization.id),
+      name: String(organization.name),
+      slug: String(organization.slug),
+    },
+    period: {
+      ...month,
+      current: month.startedAt === utcMonthStart(asOf),
+      closed: month.endsAt <= asOf,
+      complete: trackingStartedAt <= month.startedAt,
+      trackingStartedAt,
+      timezone: "UTC",
+    },
+    usage: totals,
+    limits: {
+      requests: effective.requestsPerMonthPerOrganization,
+      knownTransferBytes: effective.transferBytesPerMonthPerOrganization,
+      requestsPerMinutePerProject: effective.requestsPerMinutePerProject,
+    },
+    remaining: {
+      requests: Math.max(0, effective.requestsPerMonthPerOrganization - totals.requests),
+      knownTransferBytes: Math.max(
+        0,
+        effective.transferBytesPerMonthPerOrganization - totals.knownTransferBytes,
+      ),
+    },
+    resources: {
+      asOf,
+      projects: Number(resources.projects ?? 0),
+      previews: Number(resources.previews ?? 0),
+      members: Number(resources.members ?? 0),
+      domains: Number(resources.domains ?? 0),
+      releases: Number(resources.releases ?? 0),
+      releaseStorageBytes: Number(resources.release_storage_bytes ?? 0),
+    },
+    projects,
+    retentionMonths,
+    metering: {
+      requestBoundary: "managed_ingress_admission",
+      transferBoundary: "request_body_and_declared_response_content_length",
+      streamedResponseBytesKnown: false,
+      pricingIncluded: false,
+    },
+  };
 }
 
 function platformAdminUsers(
@@ -6061,6 +6592,9 @@ function publicLimits(
     releasesPerProject: limits.releasesPerProject,
     releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
     backupsPerProject: limits.backupsPerProject,
+    requestsPerMonthPerOrganization: limits.requestsPerMonthPerOrganization,
+    transferBytesPerMonthPerOrganization: limits.transferBytesPerMonthPerOrganization,
+    requestsPerMinutePerProject: limits.requestsPerMinutePerProject,
     maxArtifactBytes: maxArtifactBytes ?? 100 * 1024 * 1024,
   };
 }
@@ -7684,6 +8218,7 @@ const PLATFORM_CONSOLE_STATIC_PATHS = new Set([
   "/signup",
   "/invite",
   "/overview",
+  "/usage",
   "/projects",
   "/workspaces",
   "/activity",
@@ -7728,6 +8263,7 @@ function isPlatformConsoleNamespacePath(pathname: string): boolean {
     || firstSegment === "signup"
     || firstSegment === "invite"
     || firstSegment === "overview"
+    || firstSegment === "usage"
     || firstSegment === "projects"
     || firstSegment === "workspaces"
     || firstSegment === "activity"

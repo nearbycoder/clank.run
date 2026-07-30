@@ -887,6 +887,293 @@ test("deployed framework auth receives its exact managed public origin", async (
   }
 });
 
+test("workspace usage is durable, transparent, deletion-safe, and admission-enforced", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-usage-"));
+  const dataDirectory = join(root, "platform");
+  let platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4640,
+    appPortEnd: 4641,
+    ingress: {
+      enabled: true,
+      baseDomain: "apps.example.test",
+      domainRecheckIntervalMs: false,
+    },
+    limits: {
+      requestsPerMonthPerOrganization: 2,
+      transferBytesPerMonthPerOrganization: 1_000_000,
+      requestsPerMinutePerProject: 10,
+      usageRetentionMonths: 12,
+    },
+    backups: { intervalMs: false },
+  });
+  try {
+    const owner = await authorizeCli(platform, "usage-owner@example.com");
+    const outsider = await authorizeCli(platform, "usage-outsider@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const organizationId = dashboard.organizations[0].id;
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Usage app",
+        slug: "usage-app",
+        organizationId,
+      },
+    }), 201);
+    const artifact = await appArtifact(join(root, "source"), "usage-app", []);
+    const deployed = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      artifact,
+      "usage-release-0001",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+
+    const requests = await Promise.all(Array.from({ length: 3 }, () =>
+      platform.handle(new Request("https://usage-app.apps.example.test/"))));
+    assert.deepEqual(requests.map((response) => response.status).sort(), [200, 200, 429]);
+    const monthlyDenied = requests.find((response) => response.status === 429);
+    assert(monthlyDenied);
+    await Promise.all(requests.filter((response) => response.status === 200)
+      .map((response) => response.text()));
+    assert.equal(monthlyDenied.headers.get("retry-after") !== null, true);
+    assert.equal((await monthlyDenied.json()).error.code, "WORKSPACE_REQUEST_LIMIT_REACHED");
+
+    const month = new Date().toISOString().slice(0, 7);
+    const usagePath = `/api/usage?organizationId=${organizationId}&month=${month}`;
+    const usage = await payload(platform, jsonRequest(usagePath, {
+      token: owner.accessToken,
+    }));
+    assert.equal(usage.protocol, "clank-usage/1");
+    assert.equal(usage.period.key, month);
+    assert.equal(usage.period.timezone, "UTC");
+    assert.equal(usage.period.complete, false);
+    assert.deepEqual(usage.usage, {
+      requests: 2,
+      requestBytes: 0,
+      responseBytes: usage.usage.responseBytes,
+      knownTransferBytes: usage.usage.responseBytes,
+      rejectedRequests: 1,
+    });
+    assert.equal(usage.limits.requests, 2);
+    assert.equal(usage.remaining.requests, 0);
+    assert.equal(usage.projects[0].id, created.project.id);
+    assert.equal(usage.projects[0].deleted, false);
+    assert.equal(usage.projects[0].requests, 2);
+    assert.equal(usage.metering.streamedResponseBytesKnown, false);
+    assert.equal(usage.metering.pricingIncluded, false);
+    assert.equal(usage.retentionMonths, 12);
+    assert.equal(Object.hasOwn(usage.workspace, "ownerId"), false);
+
+    const invalidMonth = await platform.handle(jsonRequest(
+      `/api/usage?organizationId=${organizationId}&month=2026-13`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(invalidMonth.status, 422);
+    assert.equal((await invalidMonth.json()).error.code, "INVALID_USAGE_MONTH");
+    const nextMonthDate = new Date();
+    nextMonthDate.setUTCDate(1);
+    nextMonthDate.setUTCHours(0, 0, 0, 0);
+    nextMonthDate.setUTCMonth(nextMonthDate.getUTCMonth() + 1);
+    const futureMonth = nextMonthDate.toISOString().slice(0, 7);
+    const future = await platform.handle(jsonRequest(
+      `/api/usage?organizationId=${organizationId}&month=${futureMonth}`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(future.status, 422);
+    assert.equal((await future.json()).error.code, "USAGE_MONTH_UNAVAILABLE");
+    const previousMonthDate = new Date();
+    previousMonthDate.setUTCDate(1);
+    previousMonthDate.setUTCHours(0, 0, 0, 0);
+    previousMonthDate.setUTCMonth(previousMonthDate.getUTCMonth() - 1);
+    const previousMonth = previousMonthDate.toISOString().slice(0, 7);
+    const historical = await payload(platform, jsonRequest(
+      `/api/usage?organizationId=${organizationId}&month=${previousMonth}`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(historical.projects, []);
+    assert.equal(historical.period.closed, true);
+    assert.equal(historical.period.complete, false);
+
+    const outsiderDenied = await platform.handle(jsonRequest(usagePath, {
+      token: outsider.accessToken,
+    }));
+    assert.equal(outsiderDenied.status, 404);
+    const projectToken = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/tokens`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { name: "Usage scope", permissions: ["read"] },
+      },
+    ), 201);
+    const scopedDenied = await platform.handle(jsonRequest(usagePath, {
+      token: projectToken.token.accessToken,
+    }));
+    assert.equal(scopedDenied.status, 403);
+
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    const now = Date.now();
+    const setQuota = control.prepare(`INSERT INTO clank_platform_quota_overrides
+        (scope_type, scope_id, quota_key, quota_value, updated_by, updated_at)
+      VALUES ('workspace', ?, ?, ?, ?, ?)
+      ON CONFLICT(scope_type, scope_id, quota_key) DO UPDATE SET
+        quota_value = excluded.quota_value,
+        updated_by = excluded.updated_by,
+        updated_at = excluded.updated_at`);
+    setQuota.run(organizationId, "requestsPerMonthPerOrganization", 10, owner.user.id, now);
+    setQuota.run(organizationId, "requestsPerMinutePerProject", 10, owner.user.id, now);
+    setQuota.run(organizationId, "transferBytesPerMonthPerOrganization", 1, owner.user.id, now);
+    control.close();
+
+    const transferDenied = await platform.handle(new Request("https://usage-app.apps.example.test/", {
+      method: "POST",
+      body: "xx",
+    }));
+    assert.equal(transferDenied.status, 429);
+    assert.equal((await transferDenied.json()).error.code, "WORKSPACE_TRANSFER_LIMIT_REACHED");
+
+    const rateControl = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    rateControl.prepare(`UPDATE clank_platform_quota_overrides
+      SET quota_value = 1000000, updated_at = ?
+      WHERE scope_type = 'workspace' AND scope_id = ?
+        AND quota_key = 'transferBytesPerMonthPerOrganization'`).run(Date.now(), organizationId);
+    rateControl.prepare(`UPDATE clank_platform_quota_overrides
+      SET quota_value = 1, updated_at = ?
+      WHERE scope_type = 'workspace' AND scope_id = ?
+        AND quota_key = 'requestsPerMinutePerProject'`).run(Date.now(), organizationId);
+    rateControl.close();
+    const rateDenied = await platform.handle(new Request("https://usage-app.apps.example.test/"));
+    assert.equal(rateDenied.status, 429);
+    assert.equal((await rateDenied.json()).error.code, "PROJECT_RATE_LIMIT_REACHED");
+
+    await payload(platform, jsonRequest(`/api/projects/${created.project.id}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: "delete-site usage-app",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    const retained = await payload(platform, jsonRequest(usagePath, {
+      token: owner.accessToken,
+    }));
+    assert.equal(retained.projects[0].deleted, true);
+    assert.equal(retained.projects[0].requests, 2);
+    assert.equal(retained.projects[0].rejectedRequests, 3);
+    assert.equal(retained.resources.projects, 0);
+
+    const raw = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    const stored = raw.prepare("SELECT * FROM clank_platform_usage_monthly").all();
+    assert.equal(stored.length, 1);
+    assert.doesNotMatch(JSON.stringify(stored), /usage-owner|authorization|cookie|https?:/iu);
+    raw.close();
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("platform upgrades legacy quota storage and prunes usage at startup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-usage-upgrade-"));
+  const dataDirectory = join(root, "platform");
+  let platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4645,
+    appPortEnd: 4646,
+    backups: { intervalMs: false },
+    limits: { usageRetentionMonths: 2 },
+  });
+  try {
+    const owner = await authorizeCli(platform, "usage-upgrade@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const organizationId = dashboard.organizations[0].id;
+    await platform.close();
+
+    const controlPath = join(dataDirectory, "control.sqlite");
+    const legacy = new DatabaseSync(controlPath);
+    legacy.exec("DROP TRIGGER IF EXISTS clank_platform_quota_overrides_account_cleanup");
+    legacy.exec("DROP TRIGGER IF EXISTS clank_platform_quota_overrides_workspace_cleanup");
+    legacy.exec("DROP INDEX IF EXISTS clank_platform_quota_overrides_scope");
+    legacy.exec("ALTER TABLE clank_platform_quota_overrides RENAME TO clank_platform_quota_overrides_current");
+    legacy.exec(`CREATE TABLE clank_platform_quota_overrides (
+      scope_type TEXT NOT NULL CHECK (scope_type IN ('account', 'workspace')),
+      scope_id TEXT NOT NULL,
+      quota_key TEXT NOT NULL CHECK (quota_key IN (
+        'organizationsPerAccount',
+        'projectsPerAccount',
+        'projectsPerOrganization',
+        'domainsPerProject',
+        'releasesPerProject',
+        'releaseStorageBytesPerProject',
+        'backupsPerProject'
+      )),
+      quota_value INTEGER NOT NULL CHECK (quota_value > 0),
+      updated_by TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (scope_type, scope_id, quota_key)
+    )`);
+    legacy.prepare(`INSERT INTO clank_platform_quota_overrides
+      (scope_type, scope_id, quota_key, quota_value, updated_by, updated_at)
+      VALUES ('workspace', ?, 'projectsPerOrganization', 7, ?, ?)`)
+      .run(organizationId, owner.user.id, Date.now());
+    legacy.exec("DROP TABLE clank_platform_quota_overrides_current");
+    const staleMonth = Date.UTC(
+      new Date().getUTCFullYear(),
+      new Date().getUTCMonth() - 3,
+      1,
+    );
+    legacy.prepare(`INSERT INTO clank_platform_usage_monthly (
+        organization_id, project_id, project_name, project_slug, project_kind,
+        month_started_at, request_count, request_bytes, response_bytes, rejected_count, updated_at
+      ) VALUES (?, 'project_deleted', 'Deleted', 'deleted', 'production', ?, 9, 1, 2, 3, ?)`)
+      .run(organizationId, staleMonth, Date.now());
+    legacy.close();
+
+    platform = await openPlatform({
+      dataDirectory,
+      publicUrl: "http://127.0.0.1:4200",
+      signup: true,
+      appPortStart: 4645,
+      appPortEnd: 4646,
+      backups: { intervalMs: false },
+      limits: { usageRetentionMonths: 2 },
+    });
+    const upgraded = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    assert.equal(upgraded.organizations[0].usage.limit, 7);
+
+    const verified = new DatabaseSync(controlPath);
+    const schema = String(verified.prepare(`SELECT sql FROM sqlite_master
+      WHERE type = 'table' AND name = 'clank_platform_quota_overrides'`).get().sql);
+    assert.match(schema, /requestsPerMonthPerOrganization/u);
+    verified.prepare(`INSERT INTO clank_platform_quota_overrides
+      (scope_type, scope_id, quota_key, quota_value, updated_by, updated_at)
+      VALUES ('workspace', ?, 'requestsPerMonthPerOrganization', 1234, ?, ?)`)
+      .run(organizationId, owner.user.id, Date.now());
+    assert.equal(
+      verified.prepare("SELECT count(*) AS count FROM clank_platform_usage_monthly WHERE project_id = 'project_deleted'")
+        .get().count,
+      0,
+    );
+    verified.close();
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("code-only deployments keep serving until a healthy candidate takes traffic", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-rolling-"));
   const platform = await openPlatform({
@@ -1916,6 +2203,9 @@ test("administrator quota overrides are durable, scoped, inherited, and audited"
       domainsPerProject: 4,
       releasesPerProject: 6,
       releaseStorageBytesPerProject: 8 * 1024 * 1024,
+      requestsPerMonthPerOrganization: 10_000,
+      transferBytesPerMonthPerOrganization: 16 * 1024 * 1024,
+      requestsPerMinutePerProject: 100,
     },
   };
   let platform = await openPlatform(options);
@@ -1946,6 +2236,12 @@ test("administrator quota overrides are durable, scoped, inherited, and audited"
     ));
     assert.equal(initial.defaults.projectsPerAccount, 5);
     assert.equal(initial.defaults.backupsPerProject, 9);
+    assert.equal(initial.defaults.requestsPerMonthPerOrganization, 10_000);
+    assert.deepEqual(
+      initial.definitions.find((definition) =>
+        definition.key === "requestsPerMonthPerOrganization").scopes,
+      ["account", "workspace"],
+    );
     assert.deepEqual(initial.overrides, {});
     assert.equal(initial.workspaces[0].id, workspaceId);
     assert.equal(initial.workspaces[0].effective.projectsPerOrganization, 3);
@@ -1971,12 +2267,14 @@ test("administrator quota overrides are durable, scoped, inherited, and audited"
             organizationsPerAccount: 2,
             projectsPerAccount: 2,
             backupsPerProject: 4,
+            requestsPerMonthPerOrganization: 5000,
           },
         },
       },
     ));
     assert.equal(account.effective.projectsPerAccount, 2);
     assert.equal(account.effective.backupsPerProject, 4);
+    assert.equal(account.effective.requestsPerMonthPerOrganization, 5000);
     assert.equal(account.workspaces[0].effective.backupsPerProject, 4);
 
     const invalidWorkspaceKey = await platform.handle(jsonRequest(
@@ -2003,6 +2301,8 @@ test("administrator quota overrides are durable, scoped, inherited, and audited"
             domainsPerProject: 2,
             releasesPerProject: 2,
             releaseStorageBytesPerProject: 4 * 1024 * 1024,
+            transferBytesPerMonthPerOrganization: 8 * 1024 * 1024,
+            requestsPerMinutePerProject: 25,
           },
         },
       },
@@ -2010,6 +2310,9 @@ test("administrator quota overrides are durable, scoped, inherited, and audited"
     assert.equal(workspace.inherited.backupsPerProject, 4);
     assert.equal(workspace.effective.projectsPerOrganization, 1);
     assert.equal(workspace.effective.domainsPerProject, 2);
+    assert.equal(workspace.effective.requestsPerMonthPerOrganization, 5000);
+    assert.equal(workspace.effective.transferBytesPerMonthPerOrganization, 8 * 1024 * 1024);
+    assert.equal(workspace.effective.requestsPerMinutePerProject, 25);
 
     const effectiveDashboard = await payload(platform, jsonRequest("/api/dashboard", {
       cookie: customer.cookie,
@@ -2046,6 +2349,9 @@ test("administrator quota overrides are durable, scoped, inherited, and audited"
     assert.equal(detail.limits.domainsPerProject, 2);
     assert.equal(detail.limits.releasesPerProject, 2);
     assert.equal(detail.limits.backupsPerProject, 4);
+    assert.equal(detail.limits.requestsPerMonthPerOrganization, 5000);
+    assert.equal(detail.limits.transferBytesPerMonthPerOrganization, 8 * 1024 * 1024);
+    assert.equal(detail.limits.requestsPerMinutePerProject, 25);
     const backups = await payload(platform, jsonRequest(`/api/projects/${project.project.id}/backups`, {
       cookie: customer.cookie,
     }));
@@ -2054,7 +2360,7 @@ test("administrator quota overrides are durable, scoped, inherited, and audited"
     const control = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
     assert.equal(control.prepare(
       "SELECT count(*) AS count FROM clank_platform_quota_overrides WHERE scope_id IN (?, ?)",
-    ).get(customer.user.id, workspaceId).count, 7);
+    ).get(customer.user.id, workspaceId).count, 10);
     const audits = control.prepare(
       "SELECT metadata FROM clank_platform_audit WHERE action = 'quota.update' ORDER BY id",
     ).all();
@@ -2072,6 +2378,9 @@ test("administrator quota overrides are durable, scoped, inherited, and audited"
     assert.equal(persisted.effective.projectsPerAccount, 2);
     assert.equal(persisted.workspaces[0].effective.projectsPerOrganization, 1);
     assert.equal(persisted.workspaces[0].effective.backupsPerProject, 4);
+    assert.equal(persisted.workspaces[0].effective.requestsPerMonthPerOrganization, 5000);
+    assert.equal(persisted.workspaces[0].effective.transferBytesPerMonthPerOrganization, 8 * 1024 * 1024);
+    assert.equal(persisted.workspaces[0].effective.requestsPerMinutePerProject, 25);
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
@@ -4079,8 +4388,16 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /\.brand-lockup\{display:inline-flex;align-items:center;gap:9px;/);
     assert.match(signedInHtml, /class="icon-sprite"[^>]*><defs>\s*<symbol id="nav-icon-overview"/);
     assert.match(signedInHtml, /\.nav-icon\{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex:0 0 18px;/);
-    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 13);
+    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 14);
     assert.doesNotMatch(signedInHtml, /<span class="nav-icon">[^<]/);
+    assert.match(signedInHtml, /id="nav-usage" href="\/usage"/);
+    assert.match(signedInHtml, /class="table mobile-card-table usage-table"/);
+    assert.match(signedInHtml, /Transparent metering boundary/);
+    const consoleScript = signedInHtml.match(
+      /<script nonce="[^"]+">([\s\S]+)<\/script><\/body><\/html>/,
+    );
+    assert(consoleScript);
+    assert.doesNotThrow(() => new Function(consoleScript[1]));
     assert.match(signedInHtml, /Build it\./);
     assert.match(signedInHtml, /aria-label="Project navigation"/);
     assert.match(signedInHtml, /data-project-tab="deployments"/);
@@ -4109,6 +4426,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     for (const path of [
       "/login",
       "/overview",
+      "/usage",
       "/projects",
       "/workspaces",
       "/workspaces/personal/people",
@@ -4140,6 +4458,12 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInActivityHtml, /<section id="overview-page" hidden>/);
     assert.match(signedInActivityHtml, /<section id="activity-page">/);
     assert.match(signedInActivityHtml, /id="nav-activity"[^>]+aria-current="page"/);
+    const signedInUsage = await platform.handle(jsonRequest("/usage", { cookie: signedInCookie }));
+    const signedInUsageHtml = await signedInUsage.text();
+    assert.match(signedInUsageHtml, /<title>Usage · Clank<\/title>/);
+    assert.match(signedInUsageHtml, /<section id="overview-page" hidden>/);
+    assert.match(signedInUsageHtml, /<section id="usage-page">/);
+    assert.match(signedInUsageHtml, /id="nav-usage"[^>]+aria-current="page"/);
     const signedInProject = await platform.handle(jsonRequest(
       "/projects/my-todo/domains",
       { cookie: signedInCookie },

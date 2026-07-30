@@ -87,6 +87,23 @@ The final certification result and exact test counts belong in the pull request 
   52 documentation files and 28 package exports; packed consumer conformance; and package,
   current-tree, and reachable-history credential scans.
 
+## 2026-07-30 usage and abuse-controls phase
+
+- [x] Added an atomic, durable UTC-month ledger for admitted requests and known transfer plus
+  bounded per-project UTC-minute windows and retained totals for deleted projects.
+- [x] Enforced account/workspace traffic overrides at managed ingress with exact concurrent
+  request admission, stable retryable errors, fail-closed policy failures, and no application
+  path, header, cookie, IP, query, body, or identity retention.
+- [x] Added a stable member-authorized usage API, `clank usage`, legacy quota-table migration,
+  bounded history pruning, transparent partial-history state, and explicit metering caveats.
+- [x] Added a server-rendered Usage view with responsive project/resource reporting; verified
+  populated desktop and 390px layouts, mobile navigation, authenticated refresh, accessibility
+  semantics, no horizontal page overflow, and no Clank page console errors.
+- [x] Re-certified all 260 tests at 86.02% line, 74.09% branch, and 85.32% function coverage;
+  53 documentation files, 160 local links, 30 declaration files, and 28 package exports; packed
+  consumer conformance; and package, current-tree, and reachable-history credential scans.
+- [x] Kept the current Railway topology unchanged and did not publish an npm package.
+
 ## 2026-07-26 follow-up
 
 - [x] Merged the complete 2026-07-25 security and release-certification pass into `main`.

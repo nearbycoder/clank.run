@@ -94,6 +94,10 @@ const COMMANDS = Object.freeze({
     usage: "clank activity [--org <id>] [--limit <count>] [--before <cursor>] [--json]",
     summary: "Read the workspace audit feed.",
   },
+  usage: {
+    usage: "clank usage [directory] [--org <id>] [--month YYYY-MM] [--json]",
+    summary: "Inspect transparent monthly workspace usage and enforced traffic limits.",
+  },
   token: {
     usage: "clank token <create|list|revoke>",
     summary: "Manage scoped automation tokens.",
@@ -163,6 +167,7 @@ const VALUE_OPTIONS = Object.freeze({
   project: ["slug", "org", "confirm"],
   activity: ["org", "limit", "before"],
   audit: ["org", "limit", "before"],
+  usage: ["org", "month"],
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "output"],
   preview: ["ttl", "confirm"],
@@ -180,6 +185,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   project: ["acknowledge-data-loss"],
   activity: ["json"],
   audit: ["json"],
+  usage: ["json"],
   deploy: ["dry-run", "json"],
   preview: ["json", "acknowledge-data-loss"],
   releases: ["allow-rollback-loss"],
@@ -209,6 +215,7 @@ export async function run(command, args) {
       case "project": return await projectCommand(args);
       case "activity":
       case "audit": return await activity(args);
+      case "usage": return await usageCommand(args);
       case "token": return await tokenCommand(args);
       case "domain": return await domainCommand(args);
       case "deploy": return await deploy(args);
@@ -400,6 +407,7 @@ Platform:
   clank project link <project-id>      Link this directory
   clank project delete [project-id] --confirm="delete-site <slug>" --acknowledge-data-loss
   clank activity [--org=<id>] [--limit=100] [--before=<cursor>] [--json]
+  clank usage [directory] [--org=<id>] [--month=YYYY-MM] [--json]
   clank token create                    Create a scoped token for the linked project
   clank token list                      List active CLI and project tokens
   clank token revoke <token-id>         Revoke a token
@@ -1175,6 +1183,90 @@ async function activity(args) {
   if (payload.nextBefore) {
     console.log(`More events: clank activity --before=${payload.nextBefore}`);
   }
+}
+
+async function usageCommand(args) {
+  const directories = positionals(args);
+  if (directories.length > 1) {
+    throw new CliError("Usage: clank usage [directory] [--org <id>] [--month YYYY-MM] [--json]");
+  }
+  const root = resolve(directories[0] ?? ".");
+  const profile = await requireProfile();
+  let organizationId = option(args, "org");
+  if (!organizationId) {
+    const link = await readLink(root);
+    if (link) {
+      if (link.server !== profile.server) {
+        throw new CliError(`This directory is linked to ${link.server}; log in there or pass --org explicitly.`);
+      }
+      const detail = await platformRequest(
+        profile.server,
+        `/api/projects/${encodeURIComponent(link.projectId)}`,
+        { token: profile.token },
+      );
+      organizationId = detail.project.organizationId;
+    } else {
+      const dashboard = await platformRequest(profile.server, "/api/dashboard", {
+        token: profile.token,
+      });
+      if (dashboard.organizations.length !== 1) {
+        throw new CliError(
+          "Pass --org <workspace-id>, or run this command in a linked project directory.",
+          "WORKSPACE_REQUIRED",
+        );
+      }
+      organizationId = dashboard.organizations[0].id;
+    }
+  }
+  if (!organizationId) {
+    throw new CliError("The selected project does not belong to a workspace.", "WORKSPACE_REQUIRED");
+  }
+  const search = new URLSearchParams({ organizationId });
+  const month = option(args, "month");
+  if (month && !/^\d{4}-(?:0[1-9]|1[0-2])$/u.test(month)) {
+    throw new CliError("--month must use YYYY-MM.", "INVALID_USAGE_MONTH");
+  }
+  if (month) search.set("month", month);
+  const payload = await platformRequest(profile.server, `/api/usage?${search}`, {
+    token: profile.token,
+  });
+  if (flag(args, "json")) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  const completeness = payload.period.complete
+    ? payload.period.current ? "current partial month" : "complete month"
+    : "partial history";
+  console.log(`${payload.workspace.name} · ${payload.period.key} UTC · ${completeness}`);
+  console.log(
+    `Requests: ${formatCliNumber(payload.usage.requests)} / ${formatCliNumber(payload.limits.requests)}`
+    + ` · ${formatCliNumber(payload.usage.rejectedRequests)} rejected`,
+  );
+  console.log(
+    `Known transfer: ${formatCliBytes(payload.usage.knownTransferBytes)}`
+    + ` / ${formatCliBytes(payload.limits.knownTransferBytes)}`,
+  );
+  console.log(
+    `Project rate ceiling: ${formatCliNumber(payload.limits.requestsPerMinutePerProject)} requests/minute`,
+  );
+  console.log(
+    `Current resources: ${formatCliNumber(payload.resources.projects)} projects`
+    + ` · ${formatCliNumber(payload.resources.previews)} previews`
+    + ` · ${formatCliNumber(payload.resources.domains)} domains`
+    + ` · ${formatCliBytes(payload.resources.releaseStorageBytes)} release storage`,
+  );
+  for (const project of payload.projects) {
+    console.log(
+      `${project.slug}${project.deleted ? " (deleted)" : ""}`
+      + `  ${formatCliNumber(project.requests)} requests`
+      + `  ${formatCliBytes(project.knownTransferBytes)} known transfer`
+      + `  ${formatCliNumber(project.rejectedRequests)} rejected`,
+    );
+  }
+  if (!payload.period.complete) {
+    console.log(`History before ${new Date(payload.period.trackingStartedAt).toISOString()} may be incomplete.`);
+  }
+  console.log("Known transfer counts request bodies and responses that declare Content-Length; no prices or invoices are calculated.");
 }
 
 async function tokenCommand(args) {
@@ -2184,6 +2276,22 @@ function formatDuration(milliseconds) {
   return milliseconds < 1_000
     ? `${Math.round(milliseconds)}ms`
     : `${(milliseconds / 1_000).toFixed(1)}s`;
+}
+
+function formatCliNumber(value) {
+  return Number(value ?? 0).toLocaleString("en-US");
+}
+
+function formatCliBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let amount = bytes;
+  let unit = 0;
+  while (amount >= 1_000 && unit < units.length - 1) {
+    amount /= 1_000;
+    unit++;
+  }
+  return `${amount.toFixed(unit === 0 || amount >= 100 ? 0 : amount >= 10 ? 1 : 2)} ${units[unit]}`;
 }
 
 function formatCommand(command) {
