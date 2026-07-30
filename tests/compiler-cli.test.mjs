@@ -74,6 +74,35 @@ function runFrameworkBuild() {
   });
 }
 
+async function linkFramework(target) {
+  await mkdir(join(target, "node_modules", "@clank.run"), { recursive: true });
+  await symlink(
+    fileURLToPath(repository),
+    join(target, "node_modules", "@clank.run", "framework"),
+    "dir",
+  );
+}
+
+function runNodeTests(cwd, testPath = "tests/app.contract.mjs") {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      "--disable-warning=ExperimentalWarning",
+      "--test",
+      testPath,
+    ], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => stdout += chunk);
+    child.stderr.on("data", (chunk) => stderr += chunk);
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0
+      ? resolve({ stdout, stderr })
+      : reject(new Error(`Generated tests exited with ${code}.\n${stdout}\n${stderr}`)));
+  });
+}
+
 test("public compiler CLI builds TSX and copies static assets", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-"));
   const input = join(root, "src");
@@ -1031,6 +1060,7 @@ test("create scaffolds a named, buildable authenticated application", async () =
     assert.equal(packageJson.devDependencies["@tailwindcss/cli"], "^4.2.4");
     assert.match(packageJson.scripts.build, /--tailwind=src\/styles\.css/);
     assert.equal(packageJson.scripts.dev, "clank dev");
+    assert.match(packageJson.scripts.test, /node --disable-warning=ExperimentalWarning --test/u);
     assert.equal(packageJson.scripts.doctor, "clank doctor");
     assert.equal(packageJson.scripts["jobs:worker"], "clank jobs worker");
     assert.equal(packageJson.scripts["jobs:scheduler"], "clank jobs scheduler");
@@ -1051,11 +1081,18 @@ test("create scaffolds a named, buildable authenticated application", async () =
     assert.match(gitignore, /\.clank/);
     assert.match(readme, /# Team Tasks/);
     assert.match(agentGuide, /Never edit, rename, or remove an applied migration/);
+    assert.equal(
+      JSON.parse(await readFile(join(target, "fixtures", "default.json"), "utf8")).protocol,
+      "clank-fixture/1",
+    );
+    assert.match(await readFile(join(target, "tests", "app.contract.mjs"), "utf8"), /keeps fixture data private/u);
 
     await runCli(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "server.js"), "utf8"), /Team Tasks/);
     assert.match(await readFile(join(target, "dist", "jobs.js"), "utf8"), /runJobProcess/);
     assert.match(await readFile(join(target, "dist", "view.js"), "utf8"), /Team Tasks/);
+    await linkFramework(target);
+    await runNodeTests(target);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1086,11 +1123,14 @@ test("create supports the minimal full-stack template and rejects unknown templa
     assert.match(view, /const projectTitle = "Small Start"/u);
     assert.match(view, />\{projectTitle\}</u);
     assert.match(view, /agentId="starter-counter"/u);
+    assert.match(await readFile(join(target, "tests", "app.contract.mjs"), "utf8"), /deterministic hydration/u);
     assert.match(readme, /clank login\nnpm run deploy/u);
 
     await runCli(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "server.js"), "utf8"), /Small Start/u);
     assert.match(await readFile(join(target, "dist", "view.js"), "utf8"), /starter-counter/u);
+    await linkFramework(target);
+    await runNodeTests(target);
 
     const invalid = await runCliResult([
       "create",
@@ -1122,6 +1162,9 @@ test("template discovery and create expose safe agent-readable contracts", async
     );
     assert.equal(catalog.templates[0].recommended, true);
     assert.equal(catalog.templates[0].features.includes("mcp-oauth"), true);
+    assert.equal(catalog.templates[0].features.includes("deterministic-fixture"), true);
+    assert.equal(catalog.templates[0].features.includes("app-contract-tests"), true);
+    assert.equal(catalog.templates[1].features.includes("app-contract-tests"), true);
     assert.equal(catalog.templates[1].features.includes("mcp-oauth"), false);
 
     const humanCatalog = await runCliOutput(["templates"]);
@@ -1143,9 +1186,12 @@ test("template discovery and create expose safe agent-readable contracts", async
     assert.equal(result.project.directory, target);
     assert.equal(result.project.frameworkDependency, `^${frameworkVersion}`);
     assert.equal(result.template.id, "auth-todo");
+    assert.equal(result.commands.test, "npm test");
     assert.equal(result.commands.login, "clank login");
     assert.equal(result.commands.deploy, "npm run deploy");
     assert.equal(result.files.length > 10, true);
+    assert.equal(result.files.some((entry) => entry.path === "fixtures/default.json"), true);
+    assert.equal(result.files.some((entry) => entry.path === "tests/app.contract.mjs"), true);
     assert.deepEqual(
       result.files.map((entry) => entry.path),
       result.files.map((entry) => entry.path).toSorted(),

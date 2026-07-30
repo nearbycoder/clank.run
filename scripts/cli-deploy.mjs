@@ -40,6 +40,8 @@ const PROJECT_TEMPLATES = Object.freeze([
       "live-sync",
       "tailwind",
       "mcp-oauth",
+      "deterministic-fixture",
+      "app-contract-tests",
       "migrations",
       "deployment",
     ]),
@@ -54,6 +56,7 @@ const PROJECT_TEMPLATES = Object.freeze([
       "ssr",
       "hydration",
       "tailwind",
+      "app-contract-tests",
       "health-check",
       "deployment",
     ]),
@@ -573,6 +576,7 @@ async function generateProject(args) {
   console.log(`Generated ${blueprint.name}: ${created} files written, ${unchanged} unchanged.`);
   console.log(`Plan ${plan.digest}`);
   console.log(`Next: cd ${target} && npm install && npm run dev`);
+  console.log("Test: npm test");
   console.log("Check: npm run doctor");
 }
 
@@ -675,6 +679,7 @@ async function createProject(args) {
     commands: {
       install: "npm install",
       dev: "npm run dev",
+      test: "npm test",
       doctor: "npm run doctor",
       login: "clank login",
       deploy: "npm run deploy",
@@ -686,6 +691,7 @@ async function createProject(args) {
   }
   console.log(`Created ${title} in ${target}`);
   console.log(`Next: cd ${positional[0] ?? "."} && npm install && npm run dev`);
+  console.log("Test: npm test");
   console.log("Check: npm run doctor");
   console.log("Deploy: clank login && npm run deploy");
 }

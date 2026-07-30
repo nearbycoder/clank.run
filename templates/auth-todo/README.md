@@ -19,6 +19,16 @@ last good server running.
 The build compiles `src/styles.css` with the local Tailwind CLI and serves the resulting static
 `dist/styles.css`; production does not load Tailwind from a browser CDN.
 
+Run the application-owned contract suite at any time:
+
+```sh
+npm test
+```
+
+It loads `fixtures/default.json` into an isolated in-memory database, verifies the agent action
+manifest, ownership isolation, stored field values, and server rendering. Fixtures are synthetic
+test inputs and are not included in the deployment artifact.
+
 Todo creation also enqueues an `events` job in the same database transaction. Run a local worker
 in a second terminal to process it without blocking requests:
 
@@ -32,7 +42,7 @@ web, worker, and scheduler processes automatically.
 ## Check and deploy
 
 ```sh
-npm run build
+npm test
 npm run doctor
 npm run deploy:check
 clank login

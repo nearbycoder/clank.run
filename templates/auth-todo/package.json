@@ -5,6 +5,8 @@
   "scripts": {
     "build": "clank build src dist --tailwind=src/styles.css",
     "dev": "clank dev",
+    "test": "npm run build && node --disable-warning=ExperimentalWarning --test tests/app.contract.mjs",
+    "test:watch": "npm run build && node --disable-warning=ExperimentalWarning --test --watch tests/app.contract.mjs",
     "start": "node --disable-warning=ExperimentalWarning dist/server.js",
     "jobs:worker": "clank jobs worker",
     "jobs:scheduler": "clank jobs scheduler",

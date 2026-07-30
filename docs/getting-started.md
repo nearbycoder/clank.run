@@ -65,7 +65,8 @@ npm install
 - validated queries and mutations with inferred TypeScript types;
 - Tailwind utility styling;
 - an initial immutable database migration;
-- health checks and deterministic deployment configuration; and
+- health checks and deterministic deployment configuration;
+- a deterministic synthetic fixture and application-owned backend/SSR contract test; and
 - `README.md` and `AGENTS.md` instructions for people and coding agents.
 
 The generated `package.json` has one application dependency:
@@ -96,6 +97,10 @@ This is the structure of the app created from npm, not the structure of the Clan
 
 ```text
 my-app/
+├── fixtures/
+│   └── default.json     deterministic synthetic test state
+├── tests/
+│   └── app.contract.mjs backend, agent manifest, isolation, and SSR contract
 ├── src/
 │   ├── backend.ts       auth, schema, queries, mutations, and durable jobs
 │   ├── jobs.ts          independent worker/scheduler process entry
@@ -112,6 +117,9 @@ my-app/
 ```
 
 Start in `src/view.tsx` when changing what the app looks like. Put trusted data rules in `src/backend.ts`, browser coordination in `src/app.tsx`, and HTTP or SSR behavior in `src/server.tsx`. Never hand-edit `dist/`; Clank generates it.
+
+Run `npm test` before and after a change. It builds the app and exercises the app-owned contract
+against an isolated database; fixture files are never included in a deployment.
 
 ## Everyday commands
 

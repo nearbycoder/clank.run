@@ -276,6 +276,10 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `generateAppFiles(blueprint, options?)`: return deterministic full-stack application files.
 - `createAppPlan(blueprint, options?)`: checksum every generated file and return a `clank-plan/1` review artifact.
 - `explainApp(blueprint)`: summarize identity, data, routes, services, deployment requirements, and warnings.
+- Blueprint fixtures: `AppFixtureDefinition`, `AppFixtureUserDefinition`,
+  `AppFixtureRecordDefinition`, and `AppFixtureValue` describe bounded synthetic states. Normalized
+  `AppFixture`, `AppFixtureUser`, and `AppFixtureRecord` values are frozen, included in plan
+  checksums, written under `fixtures/`, and exercised by the generated app-owned test.
 
 - `s`: runtime schema builders and JSON Schema generation. Includes string, email, URL, date, date-time, number, boolean, literal, enum, array, record, object, optional, nullable, default, refinement, union, and numeric/boolean coercion.
 - `ValidationError`: aggregate issues with paths.

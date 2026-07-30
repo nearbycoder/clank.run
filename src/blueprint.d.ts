@@ -87,6 +87,43 @@ export interface AppDeploymentDefinition {
     customDomains?: boolean;
     env?: Record<string, string>;
 }
+export type AppFixtureValue = string | number | boolean | null | {
+    ref: string;
+};
+export interface AppFixtureUserDefinition {
+    email: string;
+    role?: string;
+    profile?: {
+        name?: string;
+    };
+}
+export interface AppFixtureRecordDefinition {
+    owner?: string;
+    values: Record<string, AppFixtureValue>;
+}
+export interface AppFixtureDefinition {
+    description?: string;
+    users?: Record<string, AppFixtureUserDefinition>;
+    records?: Record<string, Record<string, AppFixtureRecordDefinition>>;
+}
+export interface AppFixtureUser {
+    email: string;
+    role: string;
+    profile: {
+        name?: string;
+    };
+}
+export interface AppFixtureRecord {
+    owner: string;
+    values: Record<string, AppFixtureValue>;
+}
+export interface AppFixture {
+    protocol: "clank-fixture/1";
+    name: string;
+    description: string;
+    users: Record<string, AppFixtureUser>;
+    records: Record<string, Record<string, AppFixtureRecord>>;
+}
 export interface AppBlueprintInput {
     protocol?: "clank-app/1";
     name: string;
@@ -104,6 +141,7 @@ export interface AppBlueprintInput {
     actions?: Record<string, AppActionDefinition>;
     migrations?: readonly AppMigrationDefinition[];
     services?: Record<string, AppServiceDefinition>;
+    fixtures?: Record<string, AppFixtureDefinition>;
     deployment?: AppDeploymentDefinition;
 }
 export interface AppBlueprint extends AppBlueprintInput {
@@ -119,6 +157,7 @@ export interface AppBlueprint extends AppBlueprintInput {
     actions: Record<string, AppActionDefinition>;
     migrations: readonly AppMigrationDefinition[];
     services: Record<string, AppServiceDefinition>;
+    fixtures: Record<string, AppFixture>;
     deployment: Required<Omit<AppDeploymentDefinition, "region">> & {
         region?: string;
     };
@@ -138,6 +177,7 @@ export interface AppPlan {
         actions: number;
         services: number;
         migrations: number;
+        fixtures: number;
     };
     warnings: readonly string[];
     files: readonly {

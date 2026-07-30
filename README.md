@@ -68,6 +68,7 @@ The generated app is already a working product—not an empty component. It incl
 - live updates across tabs and browsers;
 - Tailwind-compatible styling;
 - an authenticated, app-specific MCP server;
+- deterministic synthetic fixtures and an application-owned contract test;
 - an immutable initial migration and deterministic deployment contract; and
 - focused `README.md` and `AGENTS.md` instructions.
 
@@ -144,6 +145,7 @@ applications do not need a separate runtime compiler or bundler.
 | UI | Typed compiler-powered TSX, automatic reactive expressions and props, keyed lists, stable text nodes, lifecycle/context, forms, dialogs, tabs, disclosures, pagination, directives, `Show`, `For`, `Switch`, lazy components |
 | Forms | Schema validation, typed fields, accessible control/error props, touched/dirty state, cross-field rules, cancellation, server errors, invalid-focus behavior, reset, agent-readable manifests |
 | AI | Web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface with secret-value redaction |
+| Generated verification | Blueprint-derived synthetic fixture users and related records, real backend seeding, ownership isolation, exact agent-manifest parity, and per-route SSR smoke tests with Node's built-in test runner |
 | Routing | Parameters, optional segments, wildcards, repeated query values, async loaders, aborts, guards, redirects, titles, links, history navigation |
 | Full stack | Inferred schemas, documents, arguments, and results; branded IDs; query and mutation functions; zero-codegen typed API references |
 | Auth | Email/password sessions, scrypt hashing, secure cookies, CSRF, roles, revocation, default auth UI, SSR boot state |

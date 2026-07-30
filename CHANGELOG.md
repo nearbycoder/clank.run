@@ -4,6 +4,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- AI blueprints now own bounded `clank-fixture/1` synthetic states and generated Node contract
+  tests. Fixtures validate users, roles, values, references, creation order, and private ownership;
+  generated suites exercise the real backend, exact agent manifest, isolated visibility, and every
+  SSR route without shipping test data in deployment artifacts. Built-in authenticated and minimal
+  starters also include discoverable `npm test` contracts.
 - Added an integrated `clank dev` supervisor that runs the deployment-configured build and entry,
   watches relevant project files, health-checks replacements on private loopback ports, atomically
   swaps the local proxy, reloads connected browsers, preserves the last good process after build or

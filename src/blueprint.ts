@@ -109,6 +109,49 @@ export interface AppDeploymentDefinition {
   env?: Record<string, string>;
 }
 
+export type AppFixtureValue =
+  | string
+  | number
+  | boolean
+  | null
+  | { ref: string };
+
+export interface AppFixtureUserDefinition {
+  email: string;
+  role?: string;
+  profile?: { name?: string };
+}
+
+export interface AppFixtureRecordDefinition {
+  owner?: string;
+  values: Record<string, AppFixtureValue>;
+}
+
+export interface AppFixtureDefinition {
+  description?: string;
+  users?: Record<string, AppFixtureUserDefinition>;
+  records?: Record<string, Record<string, AppFixtureRecordDefinition>>;
+}
+
+export interface AppFixtureUser {
+  email: string;
+  role: string;
+  profile: { name?: string };
+}
+
+export interface AppFixtureRecord {
+  owner: string;
+  values: Record<string, AppFixtureValue>;
+}
+
+export interface AppFixture {
+  protocol: "clank-fixture/1";
+  name: string;
+  description: string;
+  users: Record<string, AppFixtureUser>;
+  records: Record<string, Record<string, AppFixtureRecord>>;
+}
+
 export interface AppBlueprintInput {
   protocol?: "clank-app/1";
   name: string;
@@ -126,6 +169,7 @@ export interface AppBlueprintInput {
   actions?: Record<string, AppActionDefinition>;
   migrations?: readonly AppMigrationDefinition[];
   services?: Record<string, AppServiceDefinition>;
+  fixtures?: Record<string, AppFixtureDefinition>;
   deployment?: AppDeploymentDefinition;
 }
 
@@ -142,6 +186,7 @@ export interface AppBlueprint extends AppBlueprintInput {
   actions: Record<string, AppActionDefinition>;
   migrations: readonly AppMigrationDefinition[];
   services: Record<string, AppServiceDefinition>;
+  fixtures: Record<string, AppFixture>;
   deployment: Required<Omit<AppDeploymentDefinition, "region">> & { region?: string };
 }
 
@@ -161,6 +206,7 @@ export interface AppPlan {
     actions: number;
     services: number;
     migrations: number;
+    fixtures: number;
   };
   warnings: readonly string[];
   files: readonly {
@@ -223,6 +269,8 @@ export function generateAppFiles(
         scripts: {
           build: "clank build src dist --tailwind=src/styles.css",
           dev: "clank dev",
+          test: "npm run build && node --disable-warning=ExperimentalWarning --test tests/app.contract.mjs",
+          "test:watch": "npm run build && node --disable-warning=ExperimentalWarning --test --watch tests/app.contract.mjs",
           start: "node --disable-warning=ExperimentalWarning dist/server.js",
           plan: "clank plan",
           generate: "clank generate .",
@@ -308,7 +356,17 @@ export function generateAppFiles(
       path: "src/services.ts",
       contents: servicesSource(app),
     },
+    {
+      path: "tests/app.contract.mjs",
+      contents: generatedTestSource(app),
+    },
   ];
+  for (const fixture of Object.values(app.fixtures)) {
+    files.push({
+      path: `fixtures/${fileName(fixture.name)}.json`,
+      contents: json(fixture),
+    });
+  }
   for (const migration of app.migrations) {
     files.push({
       path: `migrations/${migration.id}_${fileName(migration.name)}.sql`,
@@ -374,6 +432,225 @@ ${drivers}
 `;
 }
 
+function generatedTestSource(app: AppBlueprint): string {
+  const nodeProtocol = "node:";
+  const actions = Object.entries(app.entities).flatMap(([entityName, entity]) =>
+    generatedEntityActions(app, entityName, entity).map((action) => ({
+      path: `${entityName}.${action.localName}`,
+      entity: entityName,
+      behavior: action.behavior,
+      roles: action.roles,
+    })));
+  const contract = {
+    app: {
+      name: app.name,
+      defaultRole: Object.keys(app.auth.roles)[0],
+    },
+    actions,
+    entities: Object.fromEntries(Object.entries(app.entities).map(([name, entity]) => [name, {
+      ownership: entity.ownership,
+      displayField: entity.displayField,
+      completionField: entity.completionField ?? null,
+    }])),
+    routes: app.routes.map((route) => ({
+      path: route.path,
+      label: humanize(route.view),
+      roles: typeof route.access === "object" ? route.access.roles ?? [] : [],
+    })),
+    fixtures: Object.values(app.fixtures).map((fixture) => ({
+      name: fixture.name,
+      file: `../fixtures/${fileName(fixture.name)}.json`,
+      order: fixtureRecordOrder(fixture, app.entities),
+    })),
+  };
+  return `import test from "${nodeProtocol}test";
+import assert from "${nodeProtocol}assert/strict";
+import { readFile } from "${nodeProtocol}fs/promises";
+import { openBackend, renderToString } from "@clank.run/framework";
+import { backend } from "../dist/backend.js";
+import { AppView } from "../dist/view.js";
+
+const contract = ${sourceLiteral(contract, 2)};
+const password = "fixture-password-123";
+
+test("agent manifest exposes the generated backend contract", async () => {
+  const runtime = await openBackend(backend, { path: ":memory:", wal: false });
+  try {
+    const response = await runtime.handle(new Request("https://fixture.test/__clank/manifest"));
+    assert.equal(response.status, 200);
+    const manifest = await response.json();
+    const actual = manifest.functions
+      .filter((entry) => entry.agent)
+      .map((entry) => entry.name)
+      .sort();
+    assert.deepEqual(actual, contract.actions.map((action) => action.path).sort());
+  } finally {
+    runtime.close();
+  }
+});
+
+for (const route of contract.routes) {
+  test(\`server-rendered route \${route.path}\`, async () => {
+    const props = {
+      route: route.path,
+      user: {
+        id: "fixture_user",
+        email: "fixture@example.invalid",
+        emailVerified: true,
+        role: route.roles[0] ?? contract.app.defaultRole,
+        profile: { name: "Fixture User" },
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      version: 0,
+      connected: true,
+      pending: false,
+      error: "",
+      logout: () => {},
+    };
+    for (const [entityName, entity] of Object.entries(contract.entities)) {
+      props[\`\${entityName}Records\`] = [];
+      props[\`\${entityName}Version\`] = 0;
+      props[\`\${entityName}Create\`] = async () => true;
+      if (entity.completionField) props[\`\${entityName}Toggle\`] = async () => true;
+      props[\`\${entityName}Remove\`] = async () => true;
+    }
+    const html = await renderToString(AppView(props));
+    assert.match(html, new RegExp(escapeRegExp(contract.app.name)));
+    assert.match(html, new RegExp(escapeRegExp(route.label)));
+  });
+}
+
+for (const fixtureContract of contract.fixtures) {
+  test(\`fixture \${fixtureContract.name} seeds valid, isolated application data\`, async () => {
+    const fixture = JSON.parse(await readFile(new URL(fixtureContract.file, import.meta.url), "utf8"));
+    assert.equal(fixture.protocol, "clank-fixture/1");
+    assert.equal(fixture.name, fixtureContract.name);
+    const runtime = await openBackend(backend, { path: ":memory:", wal: false });
+    try {
+      const users = {};
+      for (const [name, definition] of Object.entries(fixture.users)) {
+        users[name] = await register(runtime, definition);
+        runtime.auth.setRole(users[name].user.id, definition.role);
+      }
+      const created = {};
+      for (const key of fixtureContract.order) {
+        const separator = key.indexOf(".");
+        const entityName = key.slice(0, separator);
+        const recordName = key.slice(separator + 1);
+        const definition = fixture.records[entityName][recordName];
+        const owner = users[definition.owner];
+        const action = actionFor(entityName, "create");
+        setActionRole(runtime, owner.user.id, action, fixture.users[definition.owner].role);
+        const caller = await runtime.caller(authRequest("/", owner.cookie));
+        const input = resolveValues(definition.values, created);
+        created[key] = caller.mutation(action.path, input).value;
+      }
+      restoreRoles(runtime, users, fixture.users);
+
+      for (const [entityName, records] of Object.entries(fixture.records)) {
+        const action = actionFor(entityName, "list");
+        for (const [recordName, definition] of Object.entries(records)) {
+          const owner = users[definition.owner];
+          setActionRole(runtime, owner.user.id, action, fixture.users[definition.owner].role);
+          const caller = await runtime.caller(authRequest("/", owner.cookie));
+          const visible = caller.query(action.path, {}).value;
+          const stored = visible.find((entry) => entry._id === created[\`\${entityName}.\${recordName}\`]);
+          assert.ok(stored, \`\${entityName}.\${recordName} must be visible to its fixture owner\`);
+          const expected = resolveValues(definition.values, created);
+          for (const [field, value] of Object.entries(expected)) assert.deepEqual(stored[field], value);
+        }
+      }
+      restoreRoles(runtime, users, fixture.users);
+
+      const outsider = await register(runtime, {
+        email: outsiderEmail(fixture),
+        role: contract.app.defaultRole,
+        profile: { name: "Fixture Outsider" },
+      });
+      for (const [entityName, entity] of Object.entries(contract.entities)) {
+        const action = actionFor(entityName, "list");
+        setActionRole(runtime, outsider.user.id, action, contract.app.defaultRole);
+        const caller = await runtime.caller(authRequest("/", outsider.cookie));
+        const visible = caller.query(action.path, {}).value;
+        const fixtureCount = Object.keys(fixture.records[entityName] ?? {}).length;
+        assert.equal(
+          visible.length,
+          entity.ownership === "public" ? fixtureCount : 0,
+          \`\${entityName} ownership visibility\`,
+        );
+      }
+    } finally {
+      runtime.close();
+    }
+  });
+}
+
+function actionFor(entity, behavior) {
+  const action = contract.actions.find((entry) => entry.entity === entity && entry.behavior === behavior);
+  assert.ok(action, \`Missing generated \${behavior} action for \${entity}\`);
+  return action;
+}
+
+function setActionRole(runtime, userId, action, fallback) {
+  runtime.auth.setRole(userId, action.roles[0] ?? fallback);
+}
+
+function restoreRoles(runtime, users, definitions) {
+  for (const [name, user] of Object.entries(users)) runtime.auth.setRole(user.user.id, definitions[name].role);
+}
+
+function outsiderEmail(fixture) {
+  const used = new Set(Object.values(fixture.users).map((user) => user.email.toLowerCase()));
+  let suffix = 0;
+  while (true) {
+    const candidate = \`outsider-\${fixture.name}\${suffix ? \`-\${suffix}\` : ""}@example.invalid\`.toLowerCase();
+    if (!used.has(candidate)) return candidate;
+    suffix++;
+  }
+}
+
+function resolveValues(values, created) {
+  return Object.fromEntries(Object.entries(values).map(([field, value]) => [
+    field,
+    value && typeof value === "object" ? created[value.ref] : value,
+  ]));
+}
+
+function authRequest(path, cookie, body) {
+  return new Request(\`https://fixture.test\${path}\`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: {
+      ...(body === undefined ? {} : {
+        "content-type": "application/json",
+        origin: "https://fixture.test",
+      }),
+      ...(cookie ? { cookie } : {}),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+}
+
+async function register(runtime, definition) {
+  const response = await runtime.handle(authRequest("/__clank/auth/register", undefined, {
+    email: definition.email,
+    password,
+    profile: definition.profile,
+  }));
+  const payload = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(payload));
+  return {
+    cookie: response.headers.get("set-cookie").split(";", 1)[0],
+    user: payload.user,
+  };
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^\${}()|[\\]\\\\]/gu, "\\\\$&");
+}
+`;
+}
+
 export async function createAppPlan(
   input: AppBlueprintInput | AppBlueprint,
   options: { frameworkVersion?: string; frameworkDependency?: string } = {},
@@ -399,6 +676,7 @@ export async function createAppPlan(
       actions: Object.keys(blueprint.actions).length,
       services: Object.keys(blueprint.services).length,
       migrations: blueprint.migrations.length + 1,
+      fixtures: Object.keys(blueprint.fixtures).length,
     },
     warnings,
     files: plannedFiles,
@@ -478,6 +756,17 @@ npm run deploy
 \`clank login\` defaults to https://clank.run; pass \`--server\` only for an explicitly
 self-hosted control plane. The first deployment creates and links the remote project
 automatically. See \`AGENTS.md\` for the file map and invariants an agent should preserve.
+
+## Test
+
+\`\`\`sh
+npm test
+\`\`\`
+
+The generated suite builds the application, loads every deterministic fixture under
+\`fixtures/\` into an isolated in-memory database, verifies the exact agent manifest,
+checks ownership isolation, and server-renders every declared route. Fixture data is
+test-only and is never included in a deployment artifact.
 `;
 }
 
@@ -489,6 +778,8 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 ## Working commands
 
 - \`npm run dev\` builds, starts, watches, health-swaps, and browser-reloads the app at http://127.0.0.1:3000.
+- \`npm test\` builds and runs the generated app contract against isolated in-memory databases.
+- \`npm run test:watch\` reruns the generated contract while application tests are being edited.
 - \`npm run build\` compiles \`src/\` into \`dist/\`.
 - \`npm run doctor\` performs local readiness diagnostics.
 - \`npm run deploy:check\` builds and verifies a deterministic artifact without login or upload.
@@ -504,6 +795,8 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 - \`src/server.tsx\`: routes, SSR, CSP, static files, and API wiring.
 - \`src/service-requirements.ts\`: normalized external capability contract.
 - \`src/services.ts\`: local development drivers and production provisioning boundary.
+- \`fixtures/\`: deterministic, non-production example users and records owned by the blueprint.
+- \`tests/app.contract.mjs\`: application-owned backend, fixture, isolation, manifest, and SSR contract.
 - \`migrations/\`: immutable, ordered SQL history.
 - \`clank.deploy.json\`: build, artifact, database, health, and public environment contract.
 - \`.clank/\`: local plans, artifacts, and project link; never commit it.
@@ -521,10 +814,12 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 - Add stable \`agentId\` and useful \`agentLabel\` values to important controls without exposing secret values.
 - Keep the health route cheap and independent of optional external services.
 - Do not hand-edit \`dist/\`; it is generated by \`npm run build\`.
+- Keep fixtures deterministic, synthetic, and secret-free. Use \`.example.invalid\` identities and
+  never copy production data into \`fixtures/\`.
 
 ## Definition of done
 
-Run \`npm run build\`, \`npm run doctor\`, and \`npm run deploy:check\`. For UI changes, verify registration/login and the main interaction in a browser. For data changes, verify a fresh database and an existing migrated database. For backend changes, compare agent-enabled \`GET /__clank/manifest\` paths with authenticated \`tools/list\`, verify the contract revision changed, reconnect an existing MCP session, and verify the narrowest OAuth scope that can perform the action.
+Run \`npm test\`, \`npm run doctor\`, and \`npm run deploy:check\`. For UI changes, verify registration/login and the main interaction in a browser. For data changes, update the deterministic fixtures and verify a fresh database plus an existing migrated database. For backend changes, compare agent-enabled \`GET /__clank/manifest\` paths with authenticated \`tools/list\`, verify the contract revision changed, reconnect an existing MCP session, and verify the narrowest OAuth scope that can perform the action.
 `;
 }
 
@@ -543,6 +838,7 @@ export function explainApp(input: AppBlueprintInput | AppBlueprint): string {
     `Authentication: ${app.auth.required ? "required" : "optional"}; organizations ${app.auth.organizations ? "enabled" : "disabled"}.`,
     `Data: ${Object.keys(app.entities).length} entities, ${app.relationships.length} relationships, ${app.deployment.database}.`,
     `Interface: ${app.routes.length} routes and ${Object.keys(app.actions).length} declared actions.`,
+    `Verification: ${Object.keys(app.fixtures).length} deterministic fixture${Object.keys(app.fixtures).length === 1 ? "" : "s"} plus generated backend and SSR contract tests.`,
     `Operations: ${app.deployment.scale} scale, ${app.deployment.isolation} isolation, health at ${app.deployment.healthPath}.`,
   ];
   for (const [name, entity] of Object.entries(app.entities)) {
@@ -782,6 +1078,12 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     };
   }
 
+  const fixtures = normalizeFixtures(input.fixtures, {
+    slug,
+    entities,
+    roles,
+  });
+
   const deployment = object(input.deployment ?? {}, "deployment");
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(record(deployment.env ?? {}, "deployment.env"))) {
@@ -806,6 +1108,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     actions,
     migrations,
     services,
+    fixtures,
     deployment: {
       database: enumValue(deployment.database ?? "sqlite", ["sqlite", "postgres"], "deployment.database"),
       scale: enumValue(deployment.scale ?? "single", ["single", "horizontal"], "deployment.scale"),
@@ -833,6 +1136,15 @@ function normalizeField(raw: unknown, path: string): AppFieldDefinition {
   const min = optionalFinite(field.min, `${path}.min`);
   const max = optionalFinite(field.max, `${path}.max`);
   if (min !== undefined && max !== undefined && min > max) throw new TypeError(`${path}.min cannot exceed max.`);
+  if (
+    type === "number"
+    && field.integer === true
+    && min !== undefined
+    && max !== undefined
+    && Math.ceil(min) > Math.floor(max)
+  ) {
+    throw new TypeError(`${path} has no integer value between min and max.`);
+  }
   const output: AppFieldDefinition = {
     type,
     ...(field.description === undefined ? {} : { description: text(field.description, `${path}.description`, 1, 300) }),
@@ -855,15 +1167,491 @@ function normalizeField(raw: unknown, path: string): AppFieldDefinition {
   return output;
 }
 
+function normalizeFixtures(
+  raw: AppBlueprintInput["fixtures"],
+  app: {
+    slug: string;
+    entities: Record<string, AppEntityDefinition>;
+    roles: Record<string, AppRoleDefinition>;
+  },
+): Record<string, AppFixture> {
+  fixtureEntityOrder(app.entities);
+  const supplied = record(raw ?? {}, "fixtures");
+  const inputs = Object.keys(supplied).length
+    ? supplied
+    : { default: defaultFixtureDefinition(app) };
+  if (Object.keys(inputs).length > 20) throw new TypeError("fixtures must contain at most 20 named fixtures.");
+  const fixtures: Record<string, AppFixture> = {};
+  const fixturePaths = new Set<string>();
+  for (const [fixtureName, fixtureRaw] of Object.entries(inputs)) {
+    identifier(fixtureName, "fixture");
+    const fixturePath = fileName(fixtureName);
+    if (fixturePaths.has(fixturePath)) {
+      throw new TypeError(`Fixture names must generate unique file names; ${fixtureName} conflicts with another fixture.`);
+    }
+    fixturePaths.add(fixturePath);
+    const fixture = object(fixtureRaw, `fixtures.${fixtureName}`);
+    const userInputs = record(fixture.users ?? {}, `fixtures.${fixtureName}.users`);
+    if (Object.keys(userInputs).length === 0) {
+      throw new TypeError(`fixtures.${fixtureName}.users requires at least one synthetic user.`);
+    }
+    if (Object.keys(userInputs).length > 10) {
+      throw new TypeError(`fixtures.${fixtureName}.users must contain at most 10 users.`);
+    }
+    const users: Record<string, AppFixtureUser> = {};
+    const emails = new Set<string>();
+    for (const [userName, userRaw] of Object.entries(userInputs)) {
+      identifier(userName, "fixture user");
+      const user = object(userRaw, `fixtures.${fixtureName}.users.${userName}`);
+      const email = fixtureEmail(user.email, `fixtures.${fixtureName}.users.${userName}.email`);
+      const normalizedEmail = email.toLowerCase();
+      if (emails.has(normalizedEmail)) {
+        throw new TypeError(`fixtures.${fixtureName}.users email addresses must be unique.`);
+      }
+      emails.add(normalizedEmail);
+      const role = user.role === undefined
+        ? Object.keys(app.roles)[0]!
+        : text(user.role, `fixtures.${fixtureName}.users.${userName}.role`, 1, 100);
+      if (!Object.hasOwn(app.roles, role)) {
+        throw new TypeError(`fixtures.${fixtureName}.users.${userName} references unknown role ${role}.`);
+      }
+      const profile: { name?: string } = {};
+      const profileInput = record(user.profile ?? {}, `fixtures.${fixtureName}.users.${userName}.profile`);
+      if (Object.keys(profileInput).some((key) => key !== "name")) {
+        throw new TypeError(`fixtures.${fixtureName}.users.${userName}.profile only supports name.`);
+      }
+      for (const [key, value] of Object.entries(profileInput)) {
+        identifier(key, "fixture profile");
+        profile.name = text(value, `fixtures.${fixtureName}.users.${userName}.profile.${key}`, 0, 120);
+      }
+      users[userName] = { email, role, profile };
+    }
+
+    const records: Record<string, Record<string, AppFixtureRecord>> = {};
+    let recordCount = 0;
+    for (const [entityName, entityRecordsRaw] of Object.entries(
+      record(fixture.records ?? {}, `fixtures.${fixtureName}.records`),
+    )) {
+      const entity = app.entities[entityName];
+      if (!entity) {
+        throw new TypeError(`fixtures.${fixtureName}.records references unknown entity ${entityName}.`);
+      }
+      const entityRecords: Record<string, AppFixtureRecord> = {};
+      for (const [recordName, recordRaw] of Object.entries(
+        record(entityRecordsRaw, `fixtures.${fixtureName}.records.${entityName}`),
+      )) {
+        identifier(recordName, "fixture record");
+        recordCount++;
+        if (recordCount > 100) {
+          throw new TypeError(`fixtures.${fixtureName}.records must contain at most 100 records.`);
+        }
+        const fixtureRecord = object(
+          recordRaw,
+          `fixtures.${fixtureName}.records.${entityName}.${recordName}`,
+        );
+        const owner = fixtureRecord.owner === undefined
+          ? Object.keys(users)[0]!
+          : text(
+            fixtureRecord.owner,
+            `fixtures.${fixtureName}.records.${entityName}.${recordName}.owner`,
+            1,
+            100,
+          );
+        if (!Object.hasOwn(users, owner)) {
+          throw new TypeError(
+            `fixtures.${fixtureName}.records.${entityName}.${recordName} references unknown owner ${owner}.`,
+          );
+        }
+        const valuesInput = record(
+          fixtureRecord.values,
+          `fixtures.${fixtureName}.records.${entityName}.${recordName}.values`,
+        );
+        const values: Record<string, AppFixtureValue> = {};
+        for (const fieldName of Object.keys(valuesInput)) {
+          if (!Object.hasOwn(entity.fields, fieldName)) {
+            throw new TypeError(
+              `fixtures.${fixtureName}.records.${entityName}.${recordName}.values references unknown field ${fieldName}.`,
+            );
+          }
+        }
+        for (const [fieldName, field] of Object.entries(entity.fields)) {
+          if (!Object.hasOwn(valuesInput, fieldName)) {
+            if (field.required !== false && !Object.hasOwn(field, "default")) {
+              throw new TypeError(
+                `fixtures.${fixtureName}.records.${entityName}.${recordName}.values requires ${fieldName}.`,
+              );
+            }
+            continue;
+          }
+          values[fieldName] = normalizeFixtureValue(
+            valuesInput[fieldName],
+            field,
+            `fixtures.${fixtureName}.records.${entityName}.${recordName}.values.${fieldName}`,
+          );
+        }
+        entityRecords[recordName] = { owner, values };
+      }
+      records[entityName] = entityRecords;
+    }
+    const normalized: AppFixture = {
+      protocol: "clank-fixture/1",
+      name: fixtureName,
+      description: fixture.description === undefined
+        ? `Deterministic ${fixtureName} application fixture.`
+        : text(fixture.description, `fixtures.${fixtureName}.description`, 1, 500),
+      users,
+      records,
+    };
+    validateFixtureReferences(normalized, app.entities);
+    fixtureRecordOrder(normalized, app.entities);
+    fixtures[fixtureName] = normalized;
+  }
+  return fixtures;
+}
+
+function defaultFixtureDefinition(app: {
+  slug: string;
+  entities: Record<string, AppEntityDefinition>;
+  roles: Record<string, AppRoleDefinition>;
+}): AppFixtureDefinition {
+  const order = fixtureEntityOrder(app.entities);
+  const completed = new Set<string>();
+  const records: Record<string, Record<string, AppFixtureRecordDefinition>> = {};
+  for (const entityName of order) {
+    const entity = app.entities[entityName];
+    const values: Record<string, AppFixtureValue> = {};
+    for (const [fieldName, field] of Object.entries(entity.fields)) {
+      if (Object.hasOwn(field, "default") || field.required === false) continue;
+      if (field.type === "reference") {
+        if (completed.has(field.entity!)) values[fieldName] = { ref: `${field.entity}.primary` };
+        else if (field.nullable) values[fieldName] = null;
+        else {
+          throw new TypeError(
+            `Cannot generate a deterministic fixture for required reference ${entityName}.${fieldName}.`,
+          );
+        }
+        continue;
+      }
+      values[fieldName] = fixtureFieldSample(entityName, fieldName, field);
+    }
+    records[entityName] = {
+      primary: {
+        owner: "primary",
+        values,
+      },
+    };
+    completed.add(entityName);
+  }
+  return {
+    description: "Deterministic smoke-test data generated from the application blueprint.",
+    users: {
+      primary: {
+        email: `fixture@${app.slug}.example.invalid`,
+        role: Object.keys(app.roles)[0],
+        profile: { name: "Fixture User" },
+      },
+    },
+    records,
+  };
+}
+
+function fixtureEntityOrder(entities: Record<string, AppEntityDefinition>): string[] {
+  const output: string[] = [];
+  const remaining = new Set(Object.keys(entities));
+  while (remaining.size) {
+    let changed = false;
+    for (const entityName of [...remaining]) {
+      const dependencies = Object.values(entities[entityName].fields)
+        .filter((field) =>
+          field.type === "reference"
+          && field.required !== false
+          && !field.nullable
+          && !Object.hasOwn(field, "default"))
+        .map((field) => field.entity!);
+      if (dependencies.some((dependency) => remaining.has(dependency))) continue;
+      output.push(entityName);
+      remaining.delete(entityName);
+      changed = true;
+    }
+    if (!changed) {
+      throw new TypeError(
+        `Required entity references must be acyclic so records can be created: ${[...remaining].join(", ")}.`,
+      );
+    }
+  }
+  return output;
+}
+
+function fixtureFieldSample(
+  entityName: string,
+  fieldName: string,
+  field: AppFieldDefinition,
+): AppFixtureValue {
+  const label = `${humanize(entityName.replace(/s$/u, ""))} ${humanize(fieldName)}`;
+  if (field.nullable) return null;
+  switch (field.type) {
+    case "string":
+    case "text":
+      return boundedFixtureString(label, field, `${entityName}.${fieldName}`);
+    case "email":
+      return boundedFixtureEmail(field, `${entityName}.${fieldName}`);
+    case "url":
+      return `https://example.invalid/${encodeURIComponent(entityName)}/${encodeURIComponent(fieldName)}`;
+    case "date":
+      return "2026-01-15";
+    case "datetime":
+      return "2026-01-15T12:00:00.000Z";
+    case "enum":
+      return field.values![0];
+    case "number": {
+      const lower = field.min ?? 0;
+      const upper = field.max ?? Math.max(lower, 1);
+      if (!field.integer) return Math.min(Math.max(1, lower), upper);
+      const integerLower = Math.ceil(lower);
+      const integerUpper = Math.floor(upper);
+      if (integerLower > integerUpper) {
+        throw new TypeError(`${entityName}.${fieldName} has no integer value within its fixture range.`);
+      }
+      return Math.min(Math.max(1, integerLower), integerUpper);
+    }
+    case "boolean":
+      return false;
+    case "reference":
+      throw new TypeError(`Reference fixture values must be resolved after entity ordering.`);
+  }
+}
+
+function boundedFixtureString(
+  label: string,
+  field: AppFieldDefinition,
+  path: string,
+): string {
+  const minimum = Math.max(0, Math.ceil(field.min ?? 0));
+  const maximum = Math.max(0, Math.floor(field.max ?? Math.max(minimum, label.length)));
+  if (minimum > maximum) throw new TypeError(`${path} has no string length valid for a fixture.`);
+  if (minimum > 4_096) {
+    throw new TypeError(`${path}.min must not exceed 4096 for deterministic fixture generation.`);
+  }
+  let output = label.slice(0, maximum);
+  if (output.length < minimum) output += "x".repeat(minimum - output.length);
+  return output;
+}
+
+function boundedFixtureEmail(field: AppFieldDefinition, path: string): string {
+  const minimum = Math.max(0, Math.ceil(field.min ?? 0));
+  const maximum = Math.max(0, Math.floor(field.max ?? 320));
+  if (minimum > 4_096) {
+    throw new TypeError(`${path}.min must not exceed 4096 for deterministic fixture generation.`);
+  }
+  const suffix = "@example.invalid";
+  const localLength = Math.max(1, minimum - suffix.length);
+  const value = `${"f".repeat(localLength)}${suffix}`;
+  if (value.length > maximum) throw new TypeError(`${path} has no email length valid for a fixture.`);
+  return value;
+}
+
+function fixtureEmail(value: unknown, path: string): string {
+  const email = text(value, path, 3, 320).toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) throw new TypeError(`${path} must be a valid email address.`);
+  return email;
+}
+
+function normalizeFixtureValue(
+  value: unknown,
+  field: AppFieldDefinition,
+  path: string,
+): AppFixtureValue {
+  if (value === null) {
+    if (!field.nullable) throw new TypeError(`${path} cannot be null.`);
+    return null;
+  }
+  if (field.type === "reference") {
+    const reference = object(value, path);
+    if (Object.keys(reference).length !== 1 || typeof reference.ref !== "string") {
+      throw new TypeError(`${path} must be an object containing only a fixture ref.`);
+    }
+    return { ref: fixtureReference(reference.ref, path) };
+  }
+  if (typeof value === "object" || !["string", "number", "boolean"].includes(typeof value)) {
+    throw new TypeError(`${path} must be a JSON scalar.`);
+  }
+  if (field.type === "number") {
+    if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError(`${path} must be finite.`);
+    if (field.integer && !Number.isInteger(value)) throw new TypeError(`${path} must be an integer.`);
+    if (field.min !== undefined && value < field.min) throw new TypeError(`${path} must be at least ${field.min}.`);
+    if (field.max !== undefined && value > field.max) throw new TypeError(`${path} must be at most ${field.max}.`);
+    return value;
+  }
+  if (field.type === "boolean") {
+    if (typeof value !== "boolean") throw new TypeError(`${path} must be boolean.`);
+    return value;
+  }
+  if (typeof value !== "string") throw new TypeError(`${path} must be a string.`);
+  if (
+    ["string", "text", "email"].includes(field.type)
+    && field.min !== undefined
+    && value.length < field.min
+  ) throw new TypeError(`${path} is shorter than ${field.min}.`);
+  if (
+    ["string", "text", "email"].includes(field.type)
+    && field.max !== undefined
+    && value.length > field.max
+  ) throw new TypeError(`${path} is longer than ${field.max}.`);
+  if (field.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) {
+    throw new TypeError(`${path} must be a valid email address.`);
+  }
+  if (field.type === "url") {
+    let url: URL;
+    try { url = new URL(value); }
+    catch { throw new TypeError(`${path} must be an absolute URL.`); }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new TypeError(`${path} must use http or https.`);
+    }
+  }
+  if (field.type === "date" && !validFixtureDate(value)) {
+    throw new TypeError(`${path} must use YYYY-MM-DD.`);
+  }
+  if (
+    field.type === "datetime"
+    && (!/^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/u.test(value) || !Number.isFinite(Date.parse(value)))
+  ) {
+    throw new TypeError(`${path} must be an ISO 8601 date-time with a timezone.`);
+  }
+  if (field.type === "enum" && !field.values!.includes(value)) {
+    throw new TypeError(`${path} must be one of: ${field.values!.join(", ")}.`);
+  }
+  return value;
+}
+
+function fixtureReference(value: string, path: string): string {
+  const parts = value.split(".");
+  if (parts.length !== 2 || parts.some((part) => !NAME.test(part))) {
+    throw new TypeError(`${path}.ref must use entity.record syntax.`);
+  }
+  return value;
+}
+
+function validateFixtureReferences(
+  fixture: AppFixture,
+  entities: Record<string, AppEntityDefinition>,
+): void {
+  for (const [entityName, entityRecords] of Object.entries(fixture.records)) {
+    for (const [recordName, record] of Object.entries(entityRecords)) {
+      for (const [fieldName, value] of Object.entries(record.values)) {
+        if (!value || typeof value !== "object") continue;
+        const [targetEntity, targetRecord] = value.ref.split(".");
+        const field = entities[entityName].fields[fieldName];
+        if (field.type !== "reference" || field.entity !== targetEntity) {
+          throw new TypeError(
+            `fixtures.${fixture.name}.records.${entityName}.${recordName}.${fieldName} must reference ${field.entity}.`,
+          );
+        }
+        const referenced = fixture.records[targetEntity]?.[targetRecord];
+        if (!referenced) {
+          throw new TypeError(
+            `fixtures.${fixture.name}.records.${entityName}.${recordName}.${fieldName} references missing ${value.ref}.`,
+          );
+        }
+        if (entities[targetEntity].ownership !== "public" && referenced.owner !== record.owner) {
+          throw new TypeError(
+            `fixtures.${fixture.name} reference ${entityName}.${recordName} → ${value.ref} must use the same owner.`,
+          );
+        }
+      }
+    }
+  }
+}
+
+function fixtureRecordOrder(
+  fixture: AppFixture,
+  entities: Record<string, AppEntityDefinition>,
+): string[] {
+  const records = new Map<string, AppFixtureRecord>();
+  for (const [entityName, entityRecords] of Object.entries(fixture.records)) {
+    for (const [recordName, record] of Object.entries(entityRecords)) {
+      records.set(`${entityName}.${recordName}`, record);
+    }
+  }
+  const output: string[] = [];
+  const remaining = new Set(records.keys());
+  while (remaining.size) {
+    let changed = false;
+    for (const key of [...remaining]) {
+      const record = records.get(key)!;
+      const dependencies = Object.values(record.values)
+        .filter((value): value is { ref: string } => !!value && typeof value === "object")
+        .map((value) => value.ref);
+      if (dependencies.some((dependency) => remaining.has(dependency))) continue;
+      output.push(key);
+      remaining.delete(key);
+      changed = true;
+    }
+    if (!changed) {
+      throw new TypeError(
+        `fixtures.${fixture.name} record references must be acyclic: ${[...remaining].join(", ")}.`,
+      );
+    }
+  }
+  for (const key of output) {
+    const entityName = key.split(".", 1)[0];
+    if (!entities[entityName]) throw new TypeError(`Unknown fixture entity ${entityName}.`);
+  }
+  return output;
+}
+
+function validFixtureDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
 function validateDefault(field: AppFieldDefinition, value: string | number | boolean | null, path: string): void {
   if (value === null) {
     if (!field.nullable) throw new TypeError(`${path}.default cannot be null unless nullable is true.`);
     return;
   }
-  if (field.type === "number" && typeof value !== "number") throw new TypeError(`${path}.default must be a number.`);
-  if (field.type === "boolean" && typeof value !== "boolean") throw new TypeError(`${path}.default must be a boolean.`);
-  if (!["number", "boolean"].includes(field.type) && typeof value !== "string") throw new TypeError(`${path}.default must be a string.`);
-  if (field.type === "enum" && !field.values!.includes(value as string)) throw new TypeError(`${path}.default is not an enum member.`);
+  if (field.type === "reference") throw new TypeError(`${path}.default cannot provide a reference ID.`);
+  if (field.type === "number") {
+    if (typeof value !== "number") throw new TypeError(`${path}.default must be a number.`);
+    if (field.integer && !Number.isInteger(value)) throw new TypeError(`${path}.default must be an integer.`);
+    if (field.min !== undefined && value < field.min) throw new TypeError(`${path}.default must be at least ${field.min}.`);
+    if (field.max !== undefined && value > field.max) throw new TypeError(`${path}.default must be at most ${field.max}.`);
+    return;
+  }
+  if (field.type === "boolean") {
+    if (typeof value !== "boolean") throw new TypeError(`${path}.default must be a boolean.`);
+    return;
+  }
+  if (typeof value !== "string") throw new TypeError(`${path}.default must be a string.`);
+  if (["string", "text", "email"].includes(field.type) && field.min !== undefined && value.length < field.min) {
+    throw new TypeError(`${path}.default must contain at least ${field.min} characters.`);
+  }
+  if (["string", "text", "email"].includes(field.type) && field.max !== undefined && value.length > field.max) {
+    throw new TypeError(`${path}.default must contain at most ${field.max} characters.`);
+  }
+  if (field.type === "enum" && !field.values!.includes(value)) {
+    throw new TypeError(`${path}.default is not an enum member.`);
+  }
+  if (field.type === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) {
+    throw new TypeError(`${path}.default must be a valid email address.`);
+  }
+  if (field.type === "url") {
+    let url: URL;
+    try { url = new URL(value); }
+    catch { throw new TypeError(`${path}.default must be an absolute URL.`); }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new TypeError(`${path}.default must use http or https.`);
+    }
+  }
+  if (field.type === "date" && !validFixtureDate(value)) {
+    throw new TypeError(`${path}.default must use YYYY-MM-DD.`);
+  }
+  if (
+    field.type === "datetime"
+    && (!/^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/u.test(value) || !Number.isFinite(Date.parse(value)))
+  ) {
+    throw new TypeError(`${path}.default must be an ISO 8601 date-time with a timezone.`);
+  }
 }
 
 function normalizeRelationshipReference(

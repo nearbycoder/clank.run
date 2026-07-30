@@ -213,6 +213,53 @@ export default {
       capabilities: ["send"],
     },
   },
+  fixtures: {
+    review: {
+      description: "A project with related work for deterministic app contract tests.",
+      users: {
+        primary: {
+          email: "owner@example.invalid",
+          role: "owner",
+          profile: { name: "Fixture Owner" },
+        },
+      },
+      records: {
+        projects: {
+          launch: {
+            owner: "primary",
+            values: { name: "Launch" },
+          },
+        },
+        tasks: {
+          ship: {
+            owner: "primary",
+            values: {
+              title: "Ship the workspace",
+              projectId: { ref: "projects.launch" },
+            },
+          },
+        },
+        notes: {
+          context: {
+            owner: "primary",
+            values: {
+              body: "Review the generated fixture contract.",
+              projectId: { ref: "projects.launch" },
+            },
+          },
+        },
+        gates: {
+          security: {
+            owner: "primary",
+            values: {
+              title: "Security review",
+              projectId: { ref: "projects.launch" },
+            },
+          },
+        },
+      },
+    },
+  },
   deployment: {
     database: "sqlite",
     scale: "single",
