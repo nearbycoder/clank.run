@@ -83,11 +83,24 @@ export type DeploymentOperationLease = Omit<ClaimedDeploymentOperation, "leaseTo
  */
 export type DeploymentPlacementMode = "portable" | "stateful";
 
+export class DeploymentCapacityError extends Error {
+  readonly code = "PINNED_CAPACITY_UNAVAILABLE";
+
+  constructor() {
+    super(
+      "The pinned stateful deployment node does not have enough process capacity for this generation.",
+    );
+    this.name = "DeploymentCapacityError";
+  }
+}
+
 export interface DesiredDeployment {
   projectId: string;
   desiredReleaseId: string | null;
   desiredState: "running" | "stopped";
   placementMode: DeploymentPlacementMode;
+  /** Process slots reserved on the assigned node. */
+  capacityUnits: number;
   nodeRequirements: Readonly<{
     endpoint: boolean;
     labels: Readonly<Record<string, string>>;
@@ -135,6 +148,11 @@ export interface DeploymentOrchestrator {
      * requirements; a pinned stateful placement cannot change them.
      */
     nodeRequirements?: DeploymentNodeRequirements;
+    /**
+     * Process slots required by this deployment. Defaults to one for a new
+     * placement and inherits the durable value on later generations.
+     */
+    capacityUnits?: number;
     /** Selects the sensitive runtime capsule contract for the reconcile operation. */
     runtimeProtocol?: "clank-runtime/1";
   }): Promise<DesiredDeployment>;
@@ -198,59 +216,76 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
     region?: string,
     excluded?: string,
     requirements = normalizedNodeRequirements(),
+    capacityUnits = 1,
+    projectId?: string,
   ): string | null => {
     const now = Date.now();
     const rows = internal.prepare(`SELECT n.*,
-        (SELECT count(*) FROM clank_deployment_placements p WHERE p.assigned_node_id = n.id) AS used
+        (SELECT coalesce(sum(p.capacity_units), 0)
+          FROM clank_deployment_placements p
+          WHERE p.assigned_node_id = n.id
+            ${projectId ? "AND p.project_id != ?" : ""}) AS used
       FROM clank_deployment_nodes n
       WHERE n.status = 'active' AND n.expires_at > ?
         ${region ? "AND n.region = ?" : ""}
         ${excluded ? "AND n.id != ?" : ""}
       ORDER BY (CAST(used AS REAL) / n.capacity), used, n.id`)
-      .all(...[now, ...(region ? [region] : []), ...(excluded ? [excluded] : [])]);
+      .all(...[
+        ...(projectId ? [projectId] : []),
+        now,
+        ...(region ? [region] : []),
+        ...(excluded ? [excluded] : []),
+      ]);
     const available = rows.find((row) =>
-      Number(row.used) < Number(row.capacity)
+      Number(row.used) + capacityUnits <= Number(row.capacity)
       && nodeMeetsRequirements(row, requirements));
     return available ? String(available.id) : null;
   };
 
   const reassignExpired = () => {
     const now = Date.now();
-    const placements = internal.prepare(`SELECT p.project_id, p.assigned_node_id, p.region,
-        p.requires_endpoint, p.required_labels
-      FROM clank_deployment_placements p
-      LEFT JOIN clank_deployment_nodes n ON n.id = p.assigned_node_id
-      WHERE p.desired_state = 'running'
-        AND (
-          p.assigned_node_id IS NULL
-          OR (
+    internal.transaction((changes) => {
+      const placements = internal.prepare(`SELECT p.project_id, p.assigned_node_id, p.region,
+          p.requires_endpoint, p.required_labels, p.capacity_units
+        FROM clank_deployment_placements p
+        LEFT JOIN clank_deployment_nodes n ON n.id = p.assigned_node_id
+        WHERE p.desired_state = 'running'
+          AND (
+            p.assigned_node_id IS NULL
+            OR (
             p.placement_mode = 'portable'
-            AND (n.id IS NULL OR n.expires_at <= ? OR n.status = 'offline')
+              AND (n.id IS NULL OR n.expires_at <= ? OR n.status = 'offline')
+            )
           )
-        )`).all(now);
-    for (const placement of placements) {
-      const next = chooseNode(
-        placement.region === null ? undefined : String(placement.region),
-        placement.assigned_node_id === null ? undefined : String(placement.assigned_node_id),
-        nodeRequirementsFromRow(placement),
-      );
-      internal.prepare("UPDATE clank_deployment_placements SET assigned_node_id = ?, updated_at = ? WHERE project_id = ?")
-        .run(next, now, placement.project_id);
-      internal.prepare(`UPDATE clank_deployment_operations SET node_id = ?, updated_at = ?
-        WHERE project_id = ? AND state IN ('queued', 'retry')`).run(next, now, placement.project_id);
-    }
-    const expiredOperations = internal.prepare(`SELECT o.id, p.assigned_node_id
-      FROM clank_deployment_operations o
-      JOIN clank_deployment_placements p ON p.project_id = o.project_id
-      WHERE o.state = 'leased' AND o.lease_expires_at <= ?
-        AND (o.node_id IS NOT p.assigned_node_id)`).all(now);
-    for (const operation of expiredOperations) {
-      internal.prepare(`UPDATE clank_deployment_operations
-        SET state = 'retry', node_id = ?, lease_token_hash = NULL, lease_expires_at = NULL,
-          next_attempt_at = ?, updated_at = ?
-        WHERE id = ? AND state = 'leased' AND lease_expires_at <= ?`)
-        .run(operation.assigned_node_id, now, now, operation.id, now);
-    }
+        ORDER BY p.updated_at, p.project_id`).all(now);
+      for (const placement of placements) {
+        const next = chooseNode(
+          placement.region === null ? undefined : String(placement.region),
+          placement.assigned_node_id === null ? undefined : String(placement.assigned_node_id),
+          nodeRequirementsFromRow(placement),
+          Number(placement.capacity_units),
+          String(placement.project_id),
+        );
+        internal.prepare("UPDATE clank_deployment_placements SET assigned_node_id = ?, updated_at = ? WHERE project_id = ?")
+          .run(next, now, placement.project_id);
+        internal.prepare(`UPDATE clank_deployment_operations SET node_id = ?, updated_at = ?
+          WHERE project_id = ? AND state IN ('queued', 'retry')`).run(next, now, placement.project_id);
+        changes.record("__orchestration", String(placement.project_id));
+      }
+      const expiredOperations = internal.prepare(`SELECT o.id, p.assigned_node_id
+        FROM clank_deployment_operations o
+        JOIN clank_deployment_placements p ON p.project_id = o.project_id
+        WHERE o.state = 'leased' AND o.lease_expires_at <= ?
+          AND (o.node_id IS NOT p.assigned_node_id)`).all(now);
+      for (const operation of expiredOperations) {
+        internal.prepare(`UPDATE clank_deployment_operations
+          SET state = 'retry', node_id = ?, lease_token_hash = NULL, lease_expires_at = NULL,
+            next_attempt_at = ?, updated_at = ?
+          WHERE id = ? AND state = 'leased' AND lease_expires_at <= ?`)
+          .run(operation.assigned_node_id, now, now, operation.id, now);
+        changes.record("__orchestration", String(operation.id));
+      }
+    });
   };
 
   const orchestrator: DeploymentOrchestrator = {
@@ -306,10 +341,11 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         endpoint,
         labels: JSON.stringify(labels),
       };
-      assertAssignedNodeRequirements(internal, id, region, proposed);
       const token = `clnka_${randomToken(32)}`;
       const now = Date.now();
       internal.transaction((changes) => {
+        assertAssignedNodeRequirements(internal, id, region, proposed);
+        assertAssignedNodeCapacity(internal, id, capacity);
         internal.prepare(`INSERT INTO clank_deployment_nodes
           (id, token_hash, region, endpoint, capacity, labels, status, heartbeat_at, expires_at, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
@@ -336,24 +372,43 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
     async heartbeat(idInput, token, heartbeat = {}) {
       ensureOpen();
       const id = nodeId(idInput);
-      const row = await verifyNode(id, token);
-      const capacity = heartbeat.capacity === undefined
-        ? Number(row.capacity)
-        : integerRange(heartbeat.capacity, "capacity", 1, 100_000);
-      const labels = heartbeat.labels === undefined
-        ? JSON.parse(String(row.labels))
-        : normalizedLabels(heartbeat.labels);
-      if (heartbeat.labels !== undefined) {
-        assertAssignedNodeRequirements(internal, id, String(row.region), {
-          endpoint: row.endpoint === null ? null : String(row.endpoint),
-          labels: JSON.stringify(labels),
-        });
-      }
+      await verifyNode(id, token);
+      const tokenHash = await digest(token);
       const now = Date.now();
-      internal.prepare(`UPDATE clank_deployment_nodes SET capacity = ?, labels = ?, heartbeat_at = ?,
-        expires_at = ?, status = CASE WHEN status = 'offline' THEN 'active' ELSE status END, updated_at = ?
-        WHERE id = ?`).run(capacity, JSON.stringify(labels), now, now + nodeTtlMs, now, id);
-      return nodeFromRow(internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id)!);
+      return internal.transaction((changes) => {
+        const row = internal.prepare(
+          "SELECT * FROM clank_deployment_nodes WHERE id = ? AND token_hash = ?",
+        ).get(id, tokenHash);
+        if (!row) throw new Error("Deployment node authentication failed.");
+        const capacity = heartbeat.capacity === undefined
+          ? Number(row.capacity)
+          : integerRange(heartbeat.capacity, "capacity", 1, 100_000);
+        const labels = heartbeat.labels === undefined
+          ? JSON.parse(String(row.labels))
+          : normalizedLabels(heartbeat.labels);
+        if (heartbeat.labels !== undefined) {
+          assertAssignedNodeRequirements(internal, id, String(row.region), {
+            endpoint: row.endpoint === null ? null : String(row.endpoint),
+            labels: JSON.stringify(labels),
+          });
+        }
+        assertAssignedNodeCapacity(internal, id, capacity);
+        internal.prepare(`UPDATE clank_deployment_nodes SET capacity = ?, labels = ?, heartbeat_at = ?,
+          expires_at = ?, status = CASE WHEN status = 'offline' THEN 'active' ELSE status END, updated_at = ?
+          WHERE id = ? AND token_hash = ?`).run(
+          capacity,
+          JSON.stringify(labels),
+          now,
+          now + nodeTtlMs,
+          now,
+          id,
+          tokenHash,
+        );
+        changes.record("__orchestration", id);
+        return nodeFromRow(
+          internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id)!,
+        );
+      });
     },
     async drainNode(idInput, token, draining = true) {
       ensureOpen();
@@ -430,66 +485,88 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         throw new TypeError("A stopped deployment cannot select a runtimeProtocol.");
       }
       reassignExpired();
-      const existing = internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id = ?").get(projectId);
-      const storedPlacementMode = existing
-        ? String(existing.placement_mode) as DeploymentPlacementMode
-        : null;
-      const placementMode = input.placementMode ?? storedPlacementMode ?? "portable";
-      if (placementMode !== "portable" && placementMode !== "stateful") {
-        throw new TypeError("placementMode must be portable or stateful.");
-      }
-      if (storedPlacementMode && input.placementMode && input.placementMode !== storedPlacementMode) {
-        throw new TypeError("A deployment placementMode cannot change after it is created.");
-      }
-      const storedNodeRequirements = existing
-        ? nodeRequirementsFromRow(existing)
-        : null;
-      const nodeRequirements = input.nodeRequirements === undefined
-        ? storedNodeRequirements ?? normalizedNodeRequirements()
-        : normalizedNodeRequirements(input.nodeRequirements);
-      if (
-        placementMode === "stateful"
-        && existing?.assigned_node_id !== null
-        && existing?.assigned_node_id !== undefined
-        && storedNodeRequirements
-        && !sameNodeRequirements(nodeRequirements, storedNodeRequirements)
-      ) {
-        throw new TypeError("Pinned stateful deployment nodeRequirements cannot change.");
-      }
-      const storedRegion = existing?.region === null || existing?.region === undefined
-        ? null
-        : String(existing.region);
-      const desiredRegion = input.region === undefined ? storedRegion : region;
-      if (
-        placementMode === "stateful"
-        && existing?.assigned_node_id !== null
-        && existing?.assigned_node_id !== undefined
-        && input.region !== undefined
-        && desiredRegion !== storedRegion
-      ) {
-        throw new TypeError("A pinned stateful deployment region cannot change.");
-      }
-      const generation = existing ? Number(existing.generation) + 1 : 1;
-      const assignedNodeId = state === "running"
-        ? placementMode === "stateful"
+      const now = Date.now();
+      const allocation = internal.transaction((changes) => {
+        const existing = internal.prepare(
+          "SELECT * FROM clank_deployment_placements WHERE project_id = ?",
+        ).get(projectId);
+        const capacityUnits = integerRange(
+          input.capacityUnits === undefined
+            ? Number(existing?.capacity_units ?? 1)
+            : input.capacityUnits,
+          "capacityUnits",
+          1,
+          100_000,
+        );
+        const storedPlacementMode = existing
+          ? String(existing.placement_mode) as DeploymentPlacementMode
+          : null;
+        const placementMode = input.placementMode ?? storedPlacementMode ?? "portable";
+        if (placementMode !== "portable" && placementMode !== "stateful") {
+          throw new TypeError("placementMode must be portable or stateful.");
+        }
+        if (storedPlacementMode && input.placementMode && input.placementMode !== storedPlacementMode) {
+          throw new TypeError("A deployment placementMode cannot change after it is created.");
+        }
+        const storedNodeRequirements = existing
+          ? nodeRequirementsFromRow(existing)
+          : null;
+        const nodeRequirements = input.nodeRequirements === undefined
+          ? storedNodeRequirements ?? normalizedNodeRequirements()
+          : normalizedNodeRequirements(input.nodeRequirements);
+        if (
+          placementMode === "stateful"
           && existing?.assigned_node_id !== null
           && existing?.assigned_node_id !== undefined
-          ? String(existing.assigned_node_id)
-          : chooseNode(desiredRegion ?? undefined, undefined, nodeRequirements)
-        : existing?.assigned_node_id === null || existing?.assigned_node_id === undefined
+          && storedNodeRequirements
+          && !sameNodeRequirements(nodeRequirements, storedNodeRequirements)
+        ) {
+          throw new TypeError("Pinned stateful deployment nodeRequirements cannot change.");
+        }
+        const storedRegion = existing?.region === null || existing?.region === undefined
           ? null
-          : String(existing.assigned_node_id);
-      const now = Date.now();
-      internal.transaction((changes) => {
+          : String(existing.region);
+        const desiredRegion = input.region === undefined ? storedRegion : region;
+        if (
+          placementMode === "stateful"
+          && existing?.assigned_node_id !== null
+          && existing?.assigned_node_id !== undefined
+          && input.region !== undefined
+          && desiredRegion !== storedRegion
+        ) {
+          throw new TypeError("A pinned stateful deployment region cannot change.");
+        }
+        const generation = existing ? Number(existing.generation) + 1 : 1;
+        const assignedNodeId = state === "running"
+          ? placementMode === "stateful"
+            && existing?.assigned_node_id !== null
+            && existing?.assigned_node_id !== undefined
+            ? assignedStatefulNode(
+                internal,
+                String(existing.assigned_node_id),
+                projectId,
+                capacityUnits,
+              )
+            : chooseNode(
+                desiredRegion ?? undefined,
+                undefined,
+                nodeRequirements,
+                capacityUnits,
+                projectId,
+              )
+          : existing?.assigned_node_id === null || existing?.assigned_node_id === undefined
+            ? null
+            : String(existing.assigned_node_id);
         internal.prepare(`INSERT INTO clank_deployment_placements
           (project_id, desired_release_id, desired_state, placement_mode, requires_endpoint,
-           required_labels, assigned_node_id, region, generation,
+           required_labels, capacity_units, assigned_node_id, region, generation,
            observed_release_id, observed_state, observed_generation, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'unknown', 0, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'unknown', 0, ?)
           ON CONFLICT(project_id) DO UPDATE SET desired_release_id = excluded.desired_release_id,
             desired_state = excluded.desired_state, placement_mode = excluded.placement_mode,
             requires_endpoint = excluded.requires_endpoint,
             required_labels = excluded.required_labels,
+            capacity_units = excluded.capacity_units,
             assigned_node_id = excluded.assigned_node_id,
             region = excluded.region, generation = excluded.generation, updated_at = excluded.updated_at`)
           .run(
@@ -499,13 +576,16 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
             placementMode,
             nodeRequirements.endpoint ? 1 : 0,
             JSON.stringify(nodeRequirements.labels),
+            capacityUnits,
             assignedNodeId,
             desiredRegion,
             generation,
             now,
           );
         changes.record("__orchestration", projectId);
+        return { assignedNodeId, desiredRegion, generation };
       });
+      const { assignedNodeId, desiredRegion, generation } = allocation;
       await orchestrator.enqueue({
         projectId,
         action: "reconcile",
@@ -790,6 +870,7 @@ function createTables(internal: SQLiteInternal): void {
     placement_mode TEXT NOT NULL DEFAULT 'portable' CHECK (placement_mode IN ('portable', 'stateful')),
     requires_endpoint INTEGER NOT NULL DEFAULT 0 CHECK (requires_endpoint IN (0, 1)),
     required_labels TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(required_labels)),
+    capacity_units INTEGER NOT NULL DEFAULT 1 CHECK (capacity_units > 0),
     assigned_node_id TEXT REFERENCES clank_deployment_nodes(id) ON DELETE SET NULL,
     region TEXT,
     generation INTEGER NOT NULL CHECK (generation > 0),
@@ -812,6 +893,12 @@ function createTables(internal: SQLiteInternal): void {
     internal.exec(`ALTER TABLE clank_deployment_placements
       ADD COLUMN required_labels TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(required_labels))`);
   }
+  if (!placementColumns.some((column) => String(column.name) === "capacity_units")) {
+    internal.exec(`ALTER TABLE clank_deployment_placements
+      ADD COLUMN capacity_units INTEGER NOT NULL DEFAULT 1 CHECK (capacity_units > 0)`);
+  }
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_deployment_placements_node
+    ON clank_deployment_placements (assigned_node_id)`);
   const operationsTable = internal.prepare(`SELECT sql FROM sqlite_master
     WHERE type = 'table' AND name = 'clank_deployment_operations'`).get();
   if (!operationsTable) {
@@ -913,6 +1000,7 @@ function desiredFromRow(row: Record<string, unknown>): DesiredDeployment {
     desiredReleaseId: row.desired_release_id === null ? null : String(row.desired_release_id),
     desiredState: String(row.desired_state) as DesiredDeployment["desiredState"],
     placementMode: String(row.placement_mode) as DeploymentPlacementMode,
+    capacityUnits: Number(row.capacity_units),
     nodeRequirements: nodeRequirementsFromRow(row),
     assignedNodeId: row.assigned_node_id === null ? null : String(row.assigned_node_id),
     generation: Number(row.generation),
@@ -1008,6 +1096,51 @@ function assertAssignedNodeRequirements(
       throw new TypeError("A node cannot remove a capability required by an assigned placement.");
     }
   }
+}
+
+function assignedCapacity(
+  internal: SQLiteInternal,
+  nodeId: string,
+  excludedProjectId?: string,
+): number {
+  const row = internal.prepare(`SELECT coalesce(sum(capacity_units), 0) AS used
+    FROM clank_deployment_placements
+    WHERE assigned_node_id = ?
+      ${excludedProjectId ? "AND project_id != ?" : ""}`).get(
+    nodeId,
+    ...(excludedProjectId ? [excludedProjectId] : []),
+  );
+  return Number(row?.used ?? 0);
+}
+
+function assertAssignedNodeCapacity(
+  internal: SQLiteInternal,
+  id: string,
+  capacity: number,
+): void {
+  if (assignedCapacity(internal, id) > capacity) {
+    throw new TypeError(
+      "A node cannot reduce capacity below the process slots reserved by assigned placements.",
+    );
+  }
+}
+
+function assignedStatefulNode(
+  internal: SQLiteInternal,
+  nodeId: string,
+  projectId: string,
+  capacityUnits: number,
+): string {
+  const node = internal.prepare(
+    "SELECT capacity FROM clank_deployment_nodes WHERE id = ?",
+  ).get(nodeId);
+  if (!node) {
+    throw new TypeError("A pinned stateful deployment node no longer exists.");
+  }
+  if (assignedCapacity(internal, nodeId, projectId) + capacityUnits > Number(node.capacity)) {
+    throw new DeploymentCapacityError();
+  }
+  return nodeId;
 }
 
 function secureEndpoint(input: string): string {

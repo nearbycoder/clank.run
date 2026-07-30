@@ -420,7 +420,9 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
   `GET /api/projects/<id>/jobs?state=&queue=&limit=`,
   `POST /api/projects/<id>/jobs/<job-id>/cancel`, and
   `POST /api/projects/<id>/jobs/<job-id>/retry`. Responses omit arguments, results, error text,
-  owner/group identity, worker identity, and lease tokens.
+  owner/group identity, worker identity, and lease tokens. Provider projects use the identical
+  contract through an exact-generation authenticated private control route and fail closed with
+  `PROVIDER_JOBS_UNAVAILABLE` during node or generation instability.
 - Types: `JobDefinition`, `JobHandlerContext`, `JobPublisher`, `JobHandle`, `StoredJob`, `JobEvent`,
   `JobStats`, `JobRetryOptions`, `CronDefinition`, `JobWorkerOptions`, `JobSchedulerOptions`,
   `JobRetentionOptions`.

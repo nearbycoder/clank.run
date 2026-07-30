@@ -1731,6 +1731,27 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
   let activeProviderGeneration = null;
   let providerSnapshotFault = null;
   let providerDiagnosticsFault = null;
+  let providerJobsFault = null;
+  const providerJobId = `job_${"a".repeat(32)}`;
+  let providerJob = {
+    id: providerJobId,
+    name: "sync.todo",
+    queue: "default",
+    state: "queued",
+    priority: 0,
+    attempt: 0,
+    maxAttempts: 3,
+    runAt: 1_850_000_000_000,
+    scheduledAt: null,
+    cron: null,
+    createdAt: 1_750_000_000_000,
+    updatedAt: 1_750_000_000_000,
+    startedAt: null,
+    completedAt: null,
+    leaseUntil: null,
+    cancelRequested: false,
+    hasError: false,
+  };
   const providerServer = createServer((request, response) => {
     if (request.url?.startsWith("/v1/clank/control/")) {
       const authorized = /^Bearer clnkc_[A-Za-z0-9_-]{32,}$/u.test(
@@ -1808,6 +1829,80 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
           "cache-control": "private, no-store",
           "content-length": String(Buffer.byteLength(body)),
           "content-type": "application/vnd.clank.provider-diagnostics+json",
+          "x-clank-release-id": activeProviderReleaseId,
+          "x-clank-runtime-generation": String(activeProviderGeneration),
+        });
+        response.end(body);
+        return;
+      }
+      if (request.url.includes("/jobs")) {
+        const mutation = new RegExp(
+          `/jobs/(${providerJobId})/(cancel|retry)$`,
+          "u",
+        ).exec(request.url);
+        let payload;
+        if (mutation && request.method === "POST") {
+          request.resume();
+          const action = mutation[2];
+          providerJob = {
+            ...providerJob,
+            state: action === "cancel" ? "cancelled" : "queued",
+            attempt: action === "retry" ? 0 : providerJob.attempt,
+            completedAt: action === "cancel" ? Date.now() : null,
+            cancelRequested: action === "cancel",
+            updatedAt: Date.now(),
+          };
+          payload = {
+            mutation: {
+              changed: true,
+              reason: "changed",
+              job: providerJob,
+            },
+          };
+        } else {
+          const counts = {
+            queued: 0,
+            running: 0,
+            retry: 0,
+            succeeded: 0,
+            dead: 0,
+            cancelled: 0,
+          };
+          counts[providerJob.state] = 1;
+          payload = {
+            snapshot: {
+              available: true,
+              configured: true,
+              compatibility: "ready",
+              health: "healthy",
+              alertDueAfterMs: 300_000,
+              stats: {
+                ...counts,
+                due: 0,
+                oldestDueAt: null,
+                overdue: 0,
+                expiredLeases: 0,
+                scheduleErrors: 0,
+              },
+              jobs: [providerJob],
+              schedules: [],
+              scheduleCount: 0,
+            },
+          };
+        }
+        const body = JSON.stringify({
+          protocol: "clank-provider-jobs/1",
+          projectId: request.url.split("/")[4],
+          releaseId: providerJobsFault === "release"
+            ? "release_stale_provider_jobs"
+            : activeProviderReleaseId,
+          generation: activeProviderGeneration,
+          ...payload,
+        });
+        response.writeHead(200, {
+          "cache-control": "private, no-store",
+          "content-length": String(Buffer.byteLength(body)),
+          "content-type": "application/vnd.clank.provider-jobs+json",
           "x-clank-release-id": activeProviderReleaseId,
           "x-clank-runtime-generation": String(activeProviderGeneration),
         });
@@ -1914,7 +2009,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
         id: "provider-placement-one",
         region: "local",
         endpoint: providerOrigin,
-        capacity: 2,
+        capacity: 5,
       },
       provider: {
         kind: "http",
@@ -1967,7 +2062,9 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     }));
     const artifact = await appArtifact(source, "remote", [
       ["0001_remote.sql", "CREATE TABLE remote_items (id TEXT PRIMARY KEY);\n"],
-    ]);
+    ], false, {
+      jobs: { workers: 2, scheduler: true },
+    });
     const pending = await deploy(
       platform,
       created.project.id,
@@ -2024,6 +2121,15 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       /^clnkc_/u,
     );
     assert.equal("leaseToken" in reconciliations[0].operation, false);
+    const providerFleet = await payload(platform, jsonRequest(
+      "/api/admin/runners",
+      { cookie: owner.cookie },
+    ));
+    assert.equal(providerFleet.nodes[0].capacity, 5);
+    assert.equal(providerFleet.nodes[0].capacityUsed, 4);
+    assert.equal(providerFleet.nodes[0].capacityAvailable, 1);
+    assert.equal(providerFleet.summary.capacityUsed, 4);
+    assert.equal(providerFleet.summary.capacityAvailable, 1);
 
     const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
       token: owner.accessToken,
@@ -2259,18 +2365,41 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       `/api/projects/${created.project.id}/jobs`,
       { token: owner.accessToken },
     ));
-    assert.equal(remoteJobs.available, false);
-    assert.equal(remoteJobs.compatibility, "remote_unavailable");
-    const remoteJobMutation = await platform.handle(jsonRequest(
-      `/api/projects/${created.project.id}/jobs/job_${"a".repeat(32)}/cancel`,
+    assert.equal(remoteJobs.available, true);
+    assert.equal(remoteJobs.compatibility, "ready");
+    assert.equal(remoteJobs.jobs[0].id, providerJobId);
+    assert.equal("payload" in remoteJobs.jobs[0], false);
+    const remoteJobMutation = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/jobs/${providerJobId}/cancel`,
       {
         method: "POST",
         token: owner.accessToken,
         body: {},
       },
     ));
-    assert.equal(remoteJobMutation.status, 409);
-    assert.equal((await remoteJobMutation.json()).error.code, "PROVIDER_JOBS_PENDING");
+    assert.equal(remoteJobMutation.job.state, "cancelled");
+    const remoteJobRetry = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/jobs/${providerJobId}/retry`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: {},
+      },
+    ));
+    assert.equal(remoteJobRetry.job.state, "queued");
+    providerJobsFault = "release";
+    const rejectedProviderJobs = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}/jobs`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(rejectedProviderJobs.status, 503);
+    assert.equal(
+      (await rejectedProviderJobs.json()).error.code,
+      "PROVIDER_JOBS_UNAVAILABLE",
+    );
+    providerJobsFault = null;
+    assert.ok(observedProviderErrors.some((error) =>
+      error.message === "Provider job control transport failed."));
     const consoleResponse = await platform.handle(jsonRequest("/overview", {
       cookie: owner.cookie,
     }));

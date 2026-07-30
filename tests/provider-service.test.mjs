@@ -16,8 +16,12 @@ import { createDeploymentBundle } from "../dist/deploy.js";
 import { openDeploymentProviderDataStore } from "../dist/provider-data.js";
 import {
   deploymentProviderDiagnosticsPath,
+  deploymentProviderJobMutationPath,
+  deploymentProviderJobsPath,
   deploymentProviderSnapshotPath,
   DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE,
+  DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE,
+  DEPLOYMENT_PROVIDER_JOBS_PROTOCOL,
   DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
   DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
   openDeploymentProviderService,
@@ -65,6 +69,14 @@ test("provider service orders durable data, deferred jobs, ingress, stop, and re
       persisted.includes("clankc_provider-service-control-token"),
       false,
     );
+    const providerData = await fixture.data.inspect("project_service_01");
+    const providerDatabaseFile = join(
+      fixture.providerRoot,
+      "projects",
+      "project_service_01",
+      providerData.databasePath,
+    );
+    seedJobsDatabase(providerDatabaseFile);
     const expectedSnapshot = await first.service.snapshot("project_service_01");
     assert.equal(expectedSnapshot.generation, 1);
     const snapshotPath = deploymentProviderSnapshotPath("project_service_01");
@@ -173,6 +185,94 @@ test("provider service orders durable data, deferred jobs, ingress, stop, and re
       (await first.service.diagnostics("project_service_01", 0)).logs,
       [],
     );
+    const jobsPath = deploymentProviderJobsPath("project_service_01");
+    assert.equal((await first.service.handle(new Request(
+      "https://provider.example/v1/clank/control/project_service_01/jobs/not-a-job/cancel",
+    ))).status, 404);
+    assert.equal((await first.service.handle(new Request(
+      `https://provider.example${jobsPath}`,
+    ))).status, 404);
+    const remoteJobs = await first.service.handle(new Request(
+      `https://provider.example${jobsPath}?queue=default&limit=10&alertDueAfterMs=60000`,
+      {
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+        },
+      },
+    ));
+    assert.equal(remoteJobs.status, 200);
+    assert.equal(
+      remoteJobs.headers.get("content-type"),
+      DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE,
+    );
+    const jobs = await remoteJobs.json();
+    assert.equal(jobs.protocol, DEPLOYMENT_PROVIDER_JOBS_PROTOCOL);
+    assert.equal(jobs.projectId, "project_service_01");
+    assert.equal(jobs.releaseId, "release_service_01");
+    assert.equal(jobs.generation, 1);
+    assert.equal(jobs.snapshot.compatibility, "ready");
+    assert.equal(jobs.snapshot.jobs[0].id, "job_0123456789abcdef0123456789abcdef");
+    assert.equal("payload" in jobs.snapshot.jobs[0], false);
+    assert.equal("result" in jobs.snapshot.jobs[0], false);
+    assert.equal("error" in jobs.snapshot.jobs[0], false);
+
+    const cancelBody = JSON.stringify({});
+    const remoteCancel = await first.service.handle(new Request(
+      `https://provider.example${deploymentProviderJobMutationPath(
+        "project_service_01",
+        "job_0123456789abcdef0123456789abcdef",
+        "cancel",
+      )}`,
+      {
+        method: "POST",
+        body: cancelBody,
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+          "content-length": String(Buffer.byteLength(cancelBody)),
+          "content-type": "application/json",
+        },
+      },
+    ));
+    assert.equal(remoteCancel.status, 200);
+    assert.equal((await remoteCancel.json()).mutation.job.state, "cancelled");
+
+    const retryBody = JSON.stringify({ runAt: 1_750_000_000_000 });
+    const remoteRetry = await first.service.handle(new Request(
+      `https://provider.example${deploymentProviderJobMutationPath(
+        "project_service_01",
+        "job_0123456789abcdef0123456789abcdef",
+        "retry",
+      )}`,
+      {
+        method: "POST",
+        body: retryBody,
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+          "content-length": String(Buffer.byteLength(retryBody)),
+          "content-type": "application/json",
+        },
+      },
+    ));
+    assert.equal(remoteRetry.status, 200);
+    const retried = await remoteRetry.json();
+    assert.equal(retried.mutation.job.state, "queued");
+    assert.equal(retried.mutation.job.runAt, 1_750_000_000_000);
+    const outsideSidecar = join(fixture.root, "outside-provider-wal");
+    await writeFile(outsideSidecar, "not a provider database sidecar");
+    await symlink(outsideSidecar, `${providerDatabaseFile}-wal`);
+    assert.equal((await first.service.handle(new Request(
+      `https://provider.example${jobsPath}`,
+      {
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+        },
+      },
+    ))).status, 503);
+    await rm(`${providerDatabaseFile}-wal`, { force: true });
     assert.equal(await (await first.service.handle(new Request(
       "https://provider.example/v1/clank/apps/project_service_01",
     ))).text(), "fake ingress");
@@ -1015,4 +1115,72 @@ async function sqliteSnapshot(root, value) {
   database.prepare("INSERT INTO seed (value) VALUES (?)").run(value);
   database.close();
   return new Uint8Array(await readFile(filename));
+}
+
+function seedJobsDatabase(filename) {
+  const database = new DatabaseSync(filename);
+  database.exec(`CREATE TABLE clank_jobs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    queue TEXT NOT NULL,
+    state TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    result TEXT,
+    error TEXT,
+    owner_id TEXT,
+    priority INTEGER NOT NULL,
+    group_key TEXT,
+    attempts INTEGER NOT NULL,
+    max_attempts INTEGER NOT NULL,
+    timeout_ms INTEGER NOT NULL,
+    run_at INTEGER NOT NULL,
+    idempotency_key TEXT,
+    scheduled_at INTEGER,
+    cron_name TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    started_at INTEGER,
+    completed_at INTEGER,
+    lease_token TEXT,
+    lease_owner TEXT,
+    lease_until INTEGER,
+    cancel_requested INTEGER NOT NULL
+  );
+  CREATE TABLE clank_job_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL,
+    event TEXT NOT NULL,
+    details TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE clank_job_schedules (
+    name TEXT PRIMARY KEY,
+    job_name TEXT NOT NULL,
+    expression TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    concurrency TEXT NOT NULL,
+    starting_deadline_ms INTEGER NOT NULL,
+    max_catch_up INTEGER NOT NULL,
+    definition_hash TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    next_run_at INTEGER NOT NULL,
+    last_scheduled_at INTEGER,
+    last_error TEXT,
+    lease_token TEXT,
+    lease_owner TEXT,
+    lease_until INTEGER,
+    updated_at INTEGER NOT NULL
+  )`);
+  database.prepare(`INSERT INTO clank_jobs (
+    id, name, queue, state, payload, priority, attempts, max_attempts,
+    timeout_ms, run_at, created_at, updated_at, cancel_requested
+  ) VALUES (?, 'sync.todo', 'default', 'queued', '{"secret":"hidden"}', 0, 0, 3,
+    30000, ?, ?, ?, 0)`).run(
+    "job_0123456789abcdef0123456789abcdef",
+    1_750_000_000_000,
+    1_750_000_000_000,
+    1_750_000_000_000,
+  );
+  database.close();
 }

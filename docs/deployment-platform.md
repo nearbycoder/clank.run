@@ -117,6 +117,9 @@ Rules:
 - `jobs.workers` controls independent processes; `jobs.concurrency` controls handlers per worker.
 - `jobs.queues` is an optional allowlist and `jobs.scheduler` enables one independently leased
   cron scheduler.
+- Provider placement reserves one runner process slot for the web process, one for each worker,
+  and one for the scheduler. A release waits without partial activation when no matching node has
+  the complete slot demand.
 
 ## Artifact protocol
 

@@ -392,6 +392,15 @@ or cancelled jobs, clears the old result/error and lease, resets attempts, and e
 validated stored payload. Both actions append a payload-free job event and a control-plane audit
 event.
 
+Local projects operate the SQLite file directly under the project lock. Provider-hosted projects
+use the same API and CLI through an authenticated private provider route bound to the exact active
+project, release, generation, node, and allowlisted origin. The provider resolves only its own
+validated active database path. The control plane bounds the request and response, refuses
+redirects and content encoding, validates every public field, and rechecks the generation after
+transfer. Job payloads, results, error text, lease credentials, application secrets, and the
+provider control credential never cross this interface. A provider transition or offline pinned
+node returns the fixed retryable `PROVIDER_JOBS_UNAVAILABLE` error instead of reading stale data.
+
 The API reports one of four compatibility states:
 
 | State | Meaning |

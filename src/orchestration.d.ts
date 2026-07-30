@@ -71,11 +71,17 @@ export type DeploymentOperationLease = Omit<ClaimedDeploymentOperation, "leaseTo
  * one node identity so node-local data is never failed over implicitly.
  */
 export type DeploymentPlacementMode = "portable" | "stateful";
+export declare class DeploymentCapacityError extends Error {
+    readonly code = "PINNED_CAPACITY_UNAVAILABLE";
+    constructor();
+}
 export interface DesiredDeployment {
     projectId: string;
     desiredReleaseId: string | null;
     desiredState: "running" | "stopped";
     placementMode: DeploymentPlacementMode;
+    /** Process slots reserved on the assigned node. */
+    capacityUnits: number;
     nodeRequirements: Readonly<{
         endpoint: boolean;
         labels: Readonly<Record<string, string>>;
@@ -122,6 +128,11 @@ export interface DeploymentOrchestrator {
          * requirements; a pinned stateful placement cannot change them.
          */
         nodeRequirements?: DeploymentNodeRequirements;
+        /**
+         * Process slots required by this deployment. Defaults to one for a new
+         * placement and inherits the durable value on later generations.
+         */
+        capacityUnits?: number;
         /** Selects the sensitive runtime capsule contract for the reconcile operation. */
         runtimeProtocol?: "clank-runtime/1";
     }): Promise<DesiredDeployment>;

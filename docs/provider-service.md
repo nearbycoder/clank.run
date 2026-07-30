@@ -233,6 +233,32 @@ filesystem-capacity data. A Docker stats failure keeps bounded logs available wi
 `statisticsAvailable: false`; a control-transport failure does not interrupt public application
 traffic.
 
+### Remote job-control boundary
+
+The same binding exposes a payload-free operational view and two conditional mutations:
+
+```http
+GET  /v1/clank/control/<project-id>/jobs?state=&queue=&limit=&alertDueAfterMs=
+POST /v1/clank/control/<project-id>/jobs/<job-id>/cancel
+POST /v1/clank/control/<project-id>/jobs/<job-id>/retry
+Authorization: Bearer <generation-control-token>
+Accept: application/vnd.clank.provider-jobs+json
+```
+
+The service resolves the validated active database path inside that provider project's private
+directory. Inspection opens SQLite read-only and returns only counts, stable job metadata, cron
+metadata, and error presence. Mutation bodies are declared-length JSON capped at 1 KiB; cancel
+accepts `{}` and retry accepts only an optional bounded `runAt`. Conditional SQL and an immediate
+transaction preserve worker races and append a payload-free event. Arguments, stored payloads,
+results, error text, owners, groups, worker identities, lease tokens, filesystem paths, and
+credentials are never returned.
+
+Responses use `clank-provider-jobs/1`, exact project/release/generation identity, declared length,
+`private, no-store`, and a 512 KiB aggregate ceiling. The built-in control plane independently
+validates the entire public schema and rechecks placement after transfer. Job controls serialize
+with provider lifecycle work, so they cannot cross a generation transition or read a deleted,
+stopped, or stale database.
+
 Use `rollback(request)` and `delete(request)` rather than reaching into the provider data store
 beneath a live service:
 

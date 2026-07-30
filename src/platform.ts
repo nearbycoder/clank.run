@@ -29,6 +29,7 @@ import {
   type BackupVerification,
 } from "./recovery.ts";
 import {
+  DeploymentCapacityError,
   openDeploymentOrchestrator,
   type DeploymentOrchestrator,
 } from "./orchestration.ts";
@@ -48,8 +49,12 @@ import {
 } from "./provider-docker.ts";
 import {
   deploymentProviderDiagnosticsPath,
+  deploymentProviderJobMutationPath,
+  deploymentProviderJobsPath,
   deploymentProviderSnapshotPath,
   DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE,
+  DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE,
+  DEPLOYMENT_PROVIDER_JOBS_PROTOCOL,
   DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
 } from "./provider-service.ts";
 import {
@@ -63,6 +68,10 @@ import {
 import {
   inspectPlatformJobs,
   mutatePlatformJob,
+  parsePlatformJobMutation,
+  parsePlatformJobSnapshot,
+  type PlatformJobMutation,
+  type PlatformJobSnapshot,
 } from "./platform-jobs.ts";
 import {
   createPlatformInvitationDeliveryScheduler,
@@ -1904,6 +1913,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           endpoint: true,
           labels: providerPlacement.labels,
         },
+        capacityUnits: providerRuntimeCapacityUnits(config),
         ...(providerPlacement.region ? { region: providerPlacement.region } : {}),
         runtimeProtocol: DEPLOYMENT_RUNTIME_PROTOCOL,
       });
@@ -1930,6 +1940,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
           WHERE project_id = ? AND generation = ? AND release_id = ?`)
           .run(project.id, generation, release.id);
+      }
+      if (error instanceof DeploymentCapacityError) {
+        throw new PlatformError(
+          409,
+          "PROVIDER_CAPACITY_UNAVAILABLE",
+          "The pinned provider node needs more process slots for this release.",
+        );
       }
       throw error;
     }
@@ -2398,6 +2415,200 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       clearTimeout(timer);
     }
   };
+
+  const requestProviderJobsControl = async (
+    project: ProjectRow,
+    release: ReleaseRow,
+    requestOptions: {
+      kind: "snapshot" | "mutation";
+      path: string;
+      search?: Readonly<Record<string, string>>;
+      body?: string;
+    },
+  ): Promise<PlatformJobSnapshot | PlatformJobMutation> => {
+    if (!providerPlacement) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_PLACEMENT_DISABLED",
+        "Provider placement is not enabled on this platform.",
+      );
+    }
+    const maximum = requestOptions.kind === "snapshot"
+      ? 512 * 1024
+      : 64 * 1024;
+    const encodedBody = requestOptions.body === undefined
+      ? undefined
+      : new TextEncoder().encode(requestOptions.body);
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      Math.min(5_000, providerPlacement.activationTimeoutMs),
+    );
+    let runtime!: { generation: number; nodeId: string };
+    let origin!: string;
+    let controlUrl!: URL;
+    let response: Response | undefined;
+    try {
+      runtime = exactProviderRuntime(project, release);
+      origin = exactProviderOrigin(project, runtime.nodeId);
+      controlUrl = new URL(requestOptions.path, `${origin}/`);
+      for (const [name, value] of Object.entries(requestOptions.search ?? {})) {
+        controlUrl.searchParams.set(name, value);
+      }
+      response = await fetch(controlUrl.href, {
+        method: encodedBody ? "POST" : "GET",
+        redirect: "error",
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        signal: controller.signal,
+        ...(encodedBody ? { body: encodedBody } : {}),
+        headers: {
+          accept: DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE,
+          "accept-encoding": "identity",
+          authorization: `Bearer ${providerControlToken(
+            masterKey,
+            project.id,
+            runtime.generation,
+          )}`,
+          ...(encodedBody
+            ? {
+                "content-length": String(encodedBody.byteLength),
+                "content-type": "application/json",
+              }
+            : {}),
+        },
+      });
+      if (
+        response.status !== 200
+        || response.redirected
+        || response.url !== controlUrl.href
+      ) {
+        await response.body?.cancel();
+        throw new Error(`Provider job control returned status ${response.status}.`);
+      }
+      const contentLength = response.headers.get("content-length");
+      if (
+        response.headers.get("content-type") !== DEPLOYMENT_PROVIDER_JOBS_MEDIA_TYPE
+        || response.headers.has("content-encoding")
+        || !contentLength
+        || !/^[1-9][0-9]*$/u.test(contentLength)
+      ) {
+        await response.body?.cancel();
+        throw new Error("Provider job control response metadata is invalid.");
+      }
+      const expectedBytes = Number(contentLength);
+      if (
+        !Number.isSafeInteger(expectedBytes)
+        || expectedBytes > maximum
+        || response.headers.get("x-clank-release-id") !== release.id
+        || response.headers.get("x-clank-runtime-generation")
+          !== String(runtime.generation)
+      ) {
+        await response.body?.cancel();
+        throw new Error("Provider job control response identity is invalid.");
+      }
+      const bytes = await readBoundedResponseBytes(
+        response,
+        expectedBytes,
+        maximum,
+      );
+      const result = providerJobsControlPayload(
+        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+        requestOptions.kind,
+        {
+          projectId: project.id,
+          releaseId: release.id,
+          generation: runtime.generation,
+        },
+      );
+      const currentProject = projectById(storage.internal, project.id);
+      const currentRelease = releaseById(storage.internal, release.id);
+      if (!currentProject || !currentRelease) {
+        throw new Error("Provider job control project state changed.");
+      }
+      const confirmed = exactProviderRuntime(currentProject, currentRelease);
+      const confirmedOrigin = exactProviderOrigin(
+        currentProject,
+        confirmed.nodeId,
+      );
+      if (
+        confirmed.generation !== runtime.generation
+        || confirmed.nodeId !== runtime.nodeId
+        || confirmedOrigin !== origin
+      ) {
+        throw new Error("Provider job control generation changed during transfer.");
+      }
+      return result;
+    } catch (error) {
+      try {
+        options.onError?.(new Error(
+          "Provider job control transport failed.",
+          { cause: error },
+        ));
+      } catch {
+        // Operator diagnostics cannot affect the fixed public failure.
+      }
+      throw new PlatformError(
+        503,
+        "PROVIDER_JOBS_UNAVAILABLE",
+        "The exact provider generation could not complete the job operation.",
+        1,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const fetchProviderJobs = async (
+    project: ProjectRow,
+    release: ReleaseRow,
+    filters: {
+      alertDueAfterMs: number;
+      state?: JobState;
+      queue?: string;
+      limit: number;
+    },
+  ): Promise<PlatformJobSnapshot> => requestProviderJobsControl(
+    project,
+    release,
+    {
+      kind: "snapshot",
+      path: deploymentProviderJobsPath(project.id),
+      search: {
+        alertDueAfterMs: String(filters.alertDueAfterMs),
+        limit: String(filters.limit),
+        ...(filters.state === undefined ? {} : { state: filters.state }),
+        ...(filters.queue === undefined ? {} : { queue: filters.queue }),
+      },
+    },
+  ) as Promise<PlatformJobSnapshot>;
+
+  const mutateProviderJob = async (
+    project: ProjectRow,
+    release: ReleaseRow,
+    input: {
+      id: string;
+      action: "cancel" | "retry";
+      runAt?: number;
+    },
+  ): Promise<PlatformJobMutation> => requestProviderJobsControl(
+    project,
+    release,
+    {
+      kind: "mutation",
+      path: deploymentProviderJobMutationPath(
+        project.id,
+        input.id,
+        input.action,
+      ),
+      body: JSON.stringify(
+        input.action === "retry" && input.runAt !== undefined
+          ? { runAt: input.runAt }
+          : {},
+      ),
+    },
+  ) as Promise<PlatformJobMutation>;
 
   const fetchProviderSnapshot = async (
     project: ProjectRow,
@@ -4038,11 +4249,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         await requirePlatformAdmin(storage, request);
         const now = Date.now();
         const placementCounts = new Map(
-          storage.internal.prepare(`SELECT assigned_node_id AS node_id, count(*) AS count
+          storage.internal.prepare(`SELECT assigned_node_id AS node_id, count(*) AS count,
+              coalesce(sum(capacity_units), 0) AS capacity_used
             FROM clank_deployment_placements
             WHERE assigned_node_id IS NOT NULL
             GROUP BY assigned_node_id`).all()
-            .map((row) => [String(row.node_id), Number(row.count)]),
+            .map((row) => [String(row.node_id), {
+              projects: Number(row.count),
+              capacityUsed: Number(row.capacity_used),
+            }]),
         );
         const operationCounts = new Map<string, Record<string, number>>();
         for (const row of storage.internal.prepare(`SELECT node_id, state, count(*) AS count
@@ -4056,7 +4271,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         const nodes = orchestrator.listNodes().map((node) => ({
           ...node,
-          assignedProjects: placementCounts.get(node.id) ?? 0,
+          assignedProjects: placementCounts.get(node.id)?.projects ?? 0,
+          capacityUsed: placementCounts.get(node.id)?.capacityUsed ?? 0,
+          capacityAvailable: node.status === "offline"
+            ? 0
+            : Math.max(
+                0,
+                node.capacity - (placementCounts.get(node.id)?.capacityUsed ?? 0),
+              ),
           operations: {
             queued: operationCounts.get(node.id)?.queued ?? 0,
             leased: operationCounts.get(node.id)?.leased ?? 0,
@@ -4093,6 +4315,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             capacity: nodes
               .filter((node) => node.status !== "offline")
               .reduce((total, node) => total + node.capacity, 0),
+            capacityUsed: nodes.reduce(
+              (total, node) => total + node.capacityUsed,
+              0,
+            ),
+            capacityAvailable: nodes.reduce(
+              (total, node) => total + node.capacityAvailable,
+              0,
+            ),
             assignedProjects: nodes.reduce(
               (total, node) => total + node.assignedProjects,
               0,
@@ -5410,17 +5640,44 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         ) {
           throw new PlatformError(422, "INVALID_JOB_FILTER", "Invalid job queue filter.");
         }
-        const databasePath = project.placement === "local"
-          ? await projectJobsDatabasePath(paths.projects, project)
-          : null;
-        const snapshot = await inspectPlatformJobs({
-          databasePath,
-          remote: project.placement === "provider",
-          alertDueAfterMs: jobAlertDueAfterMs,
-          ...(state === undefined ? {} : { state }),
-          ...(queue === null ? {} : { queue: boundedString(queue, "queue", 1, 128) }),
-          limit: queryInteger(url.searchParams.get("limit"), "limit", 100, 1, 100),
-        });
+        const limit = queryInteger(
+          url.searchParams.get("limit"),
+          "limit",
+          100,
+          1,
+          100,
+        );
+        const normalizedQueue = queue === null
+          ? undefined
+          : boundedString(queue, "queue", 1, 128);
+        let snapshot: PlatformJobSnapshot;
+        if (project.placement === "provider" && project.activeReleaseId) {
+          const release = releaseById(storage.internal, project.activeReleaseId);
+          if (!release) {
+            throw new PlatformError(
+              409,
+              "PROVIDER_RELEASE_STATE_INVALID",
+              "The active provider release is unavailable.",
+            );
+          }
+          snapshot = await fetchProviderJobs(project, release, {
+            alertDueAfterMs: jobAlertDueAfterMs,
+            ...(state === undefined ? {} : { state }),
+            ...(normalizedQueue === undefined ? {} : { queue: normalizedQueue }),
+            limit,
+          });
+        } else {
+          const databasePath = project.placement === "local"
+            ? await projectJobsDatabasePath(paths.projects, project)
+            : null;
+          snapshot = await inspectPlatformJobs({
+            databasePath,
+            alertDueAfterMs: jobAlertDueAfterMs,
+            ...(state === undefined ? {} : { state }),
+            ...(normalizedQueue === undefined ? {} : { queue: normalizedQueue }),
+            limit,
+          });
+        }
         return api({
           ok: true,
           ...snapshot,
@@ -5438,26 +5695,59 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         exact(input, jobMutationMatch[2] === "retry" ? ["runAt"] : []);
         const mutation = await withProjectLock(project.id, async () => {
           const current = accessibleProject(storage.internal, project.id, principal, "jobs").project;
+          const action = jobMutationMatch[2] as "cancel" | "retry";
+          const runAt = action === "retry" && input.runAt !== undefined
+            ? integerInRange(input.runAt, "runAt", 0, Number.MAX_SAFE_INTEGER)
+            : undefined;
+          let compatibility: PlatformJobSnapshot;
+          let result: PlatformJobMutation;
           if (current.placement === "provider") {
-            throw new PlatformError(
-              409,
-              "PROVIDER_JOBS_PENDING",
-              "Provider-hosted job operations require a remote diagnostics transport.",
-            );
+            const release = current.activeReleaseId
+              ? releaseById(storage.internal, current.activeReleaseId)
+              : null;
+            if (!release) {
+              throw new PlatformError(
+                409,
+                "DATABASE_UNAVAILABLE",
+                "Deploy the provider project before operating jobs.",
+              );
+            }
+            compatibility = await fetchProviderJobs(current, release, {
+              alertDueAfterMs: jobAlertDueAfterMs,
+              limit: 1,
+            });
+            if (compatibility.compatibility === "ready") {
+              result = await mutateProviderJob(current, release, {
+                id: jobMutationMatch[1]!,
+                action,
+                ...(runAt === undefined ? {} : { runAt }),
+              });
+            } else {
+              result = { changed: false, reason: "not_found", job: null };
+            }
+          } else {
+            if (!current.databasePath) {
+              throw new PlatformError(
+                409,
+                "DATABASE_UNAVAILABLE",
+                "Deploy the project before operating jobs.",
+              );
+            }
+            const databasePath = await projectJobsDatabasePath(paths.projects, current);
+            compatibility = await inspectPlatformJobs({
+              databasePath,
+              alertDueAfterMs: jobAlertDueAfterMs,
+              limit: 1,
+            });
+            result = compatibility.compatibility === "ready"
+              ? await mutatePlatformJob({
+                  databasePath,
+                  id: jobMutationMatch[1]!,
+                  action,
+                  ...(runAt === undefined ? {} : { runAt }),
+                })
+              : { changed: false, reason: "not_found", job: null };
           }
-          if (!current.databasePath) {
-            throw new PlatformError(
-              409,
-              "DATABASE_UNAVAILABLE",
-              "Deploy the project before operating jobs.",
-            );
-          }
-          const databasePath = await projectJobsDatabasePath(paths.projects, current);
-          const compatibility = await inspectPlatformJobs({
-            databasePath,
-            alertDueAfterMs: jobAlertDueAfterMs,
-            limit: 1,
-          });
           if (compatibility.compatibility === "upgrade_required") {
             throw new PlatformError(
               409,
@@ -5472,14 +5762,6 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               "This deployment has not configured durable jobs.",
             );
           }
-          const result = await mutatePlatformJob({
-            databasePath: databasePath!,
-            id: jobMutationMatch[1]!,
-            action: jobMutationMatch[2] as "cancel" | "retry",
-            ...(jobMutationMatch[2] === "retry" && input.runAt !== undefined
-              ? { runAt: integerInRange(input.runAt, "runAt", 0, Number.MAX_SAFE_INTEGER) }
-              : {}),
-          });
           if (result.reason === "not_found") {
             throw new PlatformError(404, "JOB_NOT_FOUND", "Job not found.");
           }
@@ -11222,6 +11504,44 @@ function providerRuntimeEnvironment(
     CLANK_MANAGED_INGRESS: "1",
     TRUST_PROXY: "1",
   };
+}
+
+function providerJobsControlPayload(
+  value: unknown,
+  kind: "snapshot" | "mutation",
+  expected: {
+    projectId: string;
+    releaseId: string;
+    generation: number;
+  },
+): PlatformJobSnapshot | PlatformJobMutation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Provider job control payload is invalid.");
+  }
+  const prototype = Object.getPrototypeOf(value);
+  const input = value as Record<string, unknown>;
+  const payloadField = kind === "snapshot" ? "snapshot" : "mutation";
+  const fields = ["protocol", "projectId", "releaseId", "generation", payloadField];
+  if (
+    (prototype !== Object.prototype && prototype !== null)
+    || Object.keys(input).length !== fields.length
+    || Object.keys(input).some((field) => !fields.includes(field))
+    || input.protocol !== DEPLOYMENT_PROVIDER_JOBS_PROTOCOL
+    || input.projectId !== expected.projectId
+    || input.releaseId !== expected.releaseId
+    || input.generation !== expected.generation
+  ) {
+    throw new TypeError("Provider job control payload identity is invalid.");
+  }
+  return kind === "snapshot"
+    ? parsePlatformJobSnapshot(input.snapshot)
+    : parsePlatformJobMutation(input.mutation);
+}
+
+function providerRuntimeCapacityUnits(
+  config: DeploymentBundle["config"],
+): number {
+  return 1 + (config.jobs?.workers ?? 0) + (config.jobs?.scheduler ? 1 : 0);
 }
 
 function encryptProviderEnvironment(

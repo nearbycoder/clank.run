@@ -295,10 +295,22 @@ the result beside managed-ingress traffic metrics. Provider network and block co
 cumulative only for the current runtime generation; they are operational signals, not billing
 records or filesystem-capacity measurements.
 
-Control-plane job inspection still returns `remote_unavailable`, and job mutations return
-`PROVIDER_JOBS_PENDING`, until the job-specific SQLite diagnostics/mutation contract is carried
-across this private boundary. Provider filesystem capacity and automatic failover from node-local
-SQLite remain operator responsibilities.
+Job inspection, cancellation, and retry now use a separate generation-bound provider control
+contract. The provider opens only the exact active application database, returns the same bounded
+payload-free records as a local project, and accepts only conditional cancel/retry mutations.
+The control plane refuses redirects and encoded responses, checks declared length, media type,
+release, generation, and response schema, then rechecks the pinned placement after the transfer.
+The control credential remains memory-derived and never enters a job response, application
+ingress, or audit metadata.
+
+Runner capacity is measured in process slots, not project count. A release reserves one slot for
+the web process plus one for every configured worker and scheduler. Placement selection and
+failover commit under the same SQLite write transaction, and a node cannot heartbeat or re-enroll
+with less capacity than its existing reservations. Portable placements wait for a node with
+enough matching slots and may move after node loss. Provider projects remain `stateful`: their
+node-local SQLite data stays pinned and fails closed until that node identity returns or an
+operator restores an encrypted backup through an explicit recovery workflow. Provider filesystem
+and block-device capacity remain operator responsibilities.
 
 An inexpensive single-host installation needs none of this configuration and incurs no additional
 runner, bucket, or volume cost. Existing local projects and their databases are never relocated.

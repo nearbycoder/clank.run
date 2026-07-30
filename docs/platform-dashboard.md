@@ -74,12 +74,12 @@ installation. The cursor-paginated account directory exposes only operational id
 metadata and supports bounded email/name search. CLI bearer tokens cannot open these APIs.
 
 When the optional runner coordinator is enabled, the same view includes the **Deployment runner
-fleet**. It reports node health, region, labels, capacity, assigned placement, heartbeat, queued
-work, and pending enrollments. An operator can create a recent-auth-gated one-time enrollment,
-drain/reactivate a node, revoke an unused enrollment, or revoke a node credential after exact
-confirmation. The panel explicitly reports that ordinary projects remain locally supervised until
-remote secret, data, ingress, backup, and rollback placement is implemented. See
-[Deployment runner fleet](runner-fleet.md).
+fleet**. It reports node health, region, labels, total/used/free process slots, assigned projects,
+heartbeat, queued work, and pending enrollments. An operator can create a recent-auth-gated
+one-time enrollment, drain/reactivate a node, revoke an unused enrollment, or revoke a node
+credential after exact confirmation. Local projects remain supervised on the control-plane host;
+only projects created explicitly with provider placement reserve remote slots. See [Deployment
+runner fleet](runner-fleet.md).
 
 The **Limits…** action on every account opens the durable capacity editor. Operators can set
 account-wide workspace and project capacity, then select any workspace owned by that account to

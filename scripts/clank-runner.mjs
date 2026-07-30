@@ -33,7 +33,7 @@ First enrollment:
 
 Optional environment:
   CLANK_RUNNER_REGION              Placement region (default: local)
-  CLANK_RUNNER_CAPACITY            Placement capacity (default: 10)
+  CLANK_RUNNER_CAPACITY            Process-slot capacity (default: 10)
   CLANK_RUNNER_ENDPOINT            Private operator endpoint metadata
   CLANK_RUNNER_LABELS              Comma-separated key=value labels
   CLANK_RUNNER_CREDENTIALS         Private credential file

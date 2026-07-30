@@ -207,6 +207,16 @@ test("stateful placements pin one node identity across generations, stops, and n
       }),
       /region cannot change/u,
     );
+    await assert.rejects(
+      test.orchestrator.setDesired({
+        projectId: "project_stateful",
+        releaseId: "release-stateful-4",
+        state: "running",
+        capacityUnits: 3,
+      }),
+      /does not have enough process capacity/u,
+    );
+    assert.equal(test.orchestrator.desired("project_stateful").capacityUnits, 1);
     assert.equal((await test.orchestrator.authenticateNode("node-stateful-a", recoveredNodeA.token)).id, "node-stateful-a");
     await assert.rejects(
       test.orchestrator.authenticateNode("node-stateful-a", nodeA.token),
@@ -248,6 +258,70 @@ test("an initially unassigned stateful placement binds once when capacity appear
     assert.equal(
       test.orchestrator.desired("project_stateful_waiting").assignedNodeId,
       "node-stateful-first",
+    );
+  } finally {
+    await test.close();
+  }
+});
+
+test("placement uses process capacity units and portable failover waits for sufficient capacity", async () => {
+  const test = await fixture();
+  try {
+    const nodeA = await test.orchestrator.registerNode({
+      id: "node-capacity-a",
+      region: "us-central",
+      capacity: 4,
+    });
+    const nodeB = await test.orchestrator.registerNode({
+      id: "node-capacity-b",
+      region: "us-central",
+      capacity: 2,
+    });
+    const desired = await test.orchestrator.setDesired({
+      projectId: "project_capacity",
+      releaseId: "release-capacity-1",
+      state: "running",
+      capacityUnits: 3,
+    });
+    assert.equal(desired.assignedNodeId, "node-capacity-a");
+    assert.equal(desired.capacityUnits, 3);
+
+    const second = await test.orchestrator.setDesired({
+      projectId: "project_capacity_second",
+      releaseId: "release-capacity-2",
+      state: "running",
+      capacityUnits: 2,
+    });
+    assert.equal(second.assignedNodeId, "node-capacity-b");
+    await assert.rejects(
+      test.orchestrator.heartbeat(nodeB.node.id, nodeB.token, { capacity: 1 }),
+      /cannot reduce capacity below the process slots reserved/u,
+    );
+    await assert.rejects(
+      test.orchestrator.registerNode({
+        id: nodeA.node.id,
+        region: "us-central",
+        capacity: 2,
+      }),
+      /cannot reduce capacity below the process slots reserved/u,
+    );
+
+    test.orchestrator.revokeNode(nodeA.node.id);
+    assert.equal(test.orchestrator.desired("project_capacity").assignedNodeId, null);
+    assert.equal((await test.orchestrator.claim(nodeB.node.id, nodeB.token)).some(
+      (operation) => operation.projectId === "project_capacity",
+    ), false);
+
+    const nodeC = await test.orchestrator.registerNode({
+      id: "node-capacity-c",
+      region: "us-central",
+      capacity: 3,
+    });
+    const claims = await test.orchestrator.claim(nodeC.node.id, nodeC.token, 10);
+    assert.equal(claims.some((operation) => operation.projectId === "project_capacity"), true);
+    assert.equal(
+      test.orchestrator.desired("project_capacity").assignedNodeId,
+      "node-capacity-c",
     );
   } finally {
     await test.close();
@@ -686,6 +760,7 @@ test("legacy placement rows migrate to portable mode without losing desired stat
       desiredReleaseId: "legacy_release",
       desiredState: "running",
       placementMode: "portable",
+      capacityUnits: 1,
       nodeRequirements: { endpoint: false, labels: {} },
       assignedNodeId: null,
       generation: 7,
