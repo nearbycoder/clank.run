@@ -42,6 +42,11 @@ import {
   type StorageDiagnosticProject,
 } from "./platform-storage.ts";
 import {
+  inspectPlatformJobs,
+  mutatePlatformJob,
+} from "./platform-jobs.ts";
+import type { JobState } from "./jobs.ts";
+import {
   createDomainManager,
   createManagedIngress,
   inspectDomainRouting,
@@ -112,6 +117,14 @@ export interface PlatformBackupOptions {
    * an isolated catalog and chunk namespace automatically.
    */
   objects?: Omit<BackupObjectRepositoryOptions, "repositoryId">;
+}
+
+export interface PlatformJobOperationsOptions {
+  /**
+   * A due job becomes an operator alert after waiting this long.
+   * Defaults to 5 minutes.
+   */
+  alertDueAfterMs?: number;
 }
 
 type PlatformQuotaKey =
@@ -216,6 +229,7 @@ export interface ClankPlatformOptions {
   accessTokenLifetimeMs?: number;
   limits?: PlatformLimits;
   backups?: PlatformBackupOptions;
+  jobs?: PlatformJobOperationsOptions;
   ingress?: {
     enabled?: boolean;
     baseDomain?: string;
@@ -336,7 +350,14 @@ interface PlatformImpersonation {
 }
 
 type OrganizationRole = "owner" | "admin" | "developer" | "viewer";
-type ProjectPermission = "read" | "deploy" | "rollback" | "secrets" | "tokens" | "audit";
+type ProjectPermission =
+  | "read"
+  | "deploy"
+  | "rollback"
+  | "jobs"
+  | "secrets"
+  | "tokens"
+  | "audit";
 
 interface ProjectAccess {
   project: ProjectRow;
@@ -495,6 +516,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     ),
   });
   const backupObjects = normalizePlatformBackupObjects(options.backups?.objects);
+  const jobAlertDueAfterMs = integerInRange(
+    options.jobs?.alertDueAfterMs ?? 5 * 60_000,
+    "jobs.alertDueAfterMs",
+    1_000,
+    30 * 24 * 60 * 60_000,
+  );
   const limits = Object.freeze({
     organizationsPerAccount: integerInRange(
       options.limits?.organizationsPerAccount ?? 5,
@@ -2918,6 +2945,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? "rollback"
           : operation.startsWith("backups") && request.method !== "GET"
             ? "rollback"
+          : operation.startsWith("jobs") && request.method !== "GET"
+            ? "jobs"
           : operation.startsWith("domains") && request.method !== "GET"
             ? "tokens"
           : operation === "secrets" || operation.startsWith("secrets/")
@@ -2963,6 +2992,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           access: {
             role: access.role,
             canDelete: principal.projectId === null && (access.role === "owner" || access.role === "admin"),
+            canOperateJobs: roleAllows(access.role, "jobs")
+              && (!principal.projectId || principal.permissions.includes("jobs")),
           },
           limits: publicLimits(effective, options.maxArtifactBytes, limits.metricRetentionDays),
           usage: { domains: domainCount, ...releaseUsage },
@@ -3175,6 +3206,126 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         } finally {
           manager.close();
         }
+      }
+      if (operation === "jobs" && request.method === "GET") {
+        for (const key of url.searchParams.keys()) {
+          if (!["state", "queue", "limit"].includes(key)) {
+            throw new PlatformError(422, "INVALID_JOB_FILTER", `Unknown job filter: ${key}.`);
+          }
+          if (url.searchParams.getAll(key).length !== 1) {
+            throw new PlatformError(422, "INVALID_JOB_FILTER", `Job filter ${key} must appear once.`);
+          }
+        }
+        const rawState = url.searchParams.get("state");
+        const state = rawState === null
+          ? undefined
+          : boundedString(rawState, "state", 1, 16) as JobState;
+        if (
+          state !== undefined
+          && !["queued", "running", "retry", "succeeded", "dead", "cancelled"].includes(state)
+        ) {
+          throw new PlatformError(422, "INVALID_JOB_FILTER", "Invalid job state filter.");
+        }
+        const queue = url.searchParams.get("queue");
+        if (
+          queue !== null
+          && (
+            queue.length < 1
+            || queue.length > 128
+            || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(queue)
+          )
+        ) {
+          throw new PlatformError(422, "INVALID_JOB_FILTER", "Invalid job queue filter.");
+        }
+        const databasePath = await projectJobsDatabasePath(paths.projects, project);
+        const snapshot = await inspectPlatformJobs({
+          databasePath,
+          alertDueAfterMs: jobAlertDueAfterMs,
+          ...(state === undefined ? {} : { state }),
+          ...(queue === null ? {} : { queue: boundedString(queue, "queue", 1, 128) }),
+          limit: queryInteger(url.searchParams.get("limit"), "limit", 100, 1, 100),
+        });
+        return api({
+          ok: true,
+          ...snapshot,
+          privacy: {
+            arguments: "hidden",
+            results: "hidden",
+            errors: "presence_only",
+            identities: "hidden",
+          },
+        });
+      }
+      const jobMutationMatch = /^jobs\/(job_[a-f0-9]{32})\/(cancel|retry)$/.exec(operation);
+      if (jobMutationMatch && request.method === "POST") {
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, jobMutationMatch[2] === "retry" ? ["runAt"] : []);
+        const mutation = await withProjectLock(project.id, async () => {
+          const current = accessibleProject(storage.internal, project.id, principal, "jobs").project;
+          if (!current.databasePath) {
+            throw new PlatformError(
+              409,
+              "DATABASE_UNAVAILABLE",
+              "Deploy the project before operating jobs.",
+            );
+          }
+          const databasePath = await projectJobsDatabasePath(paths.projects, current);
+          const compatibility = await inspectPlatformJobs({
+            databasePath,
+            alertDueAfterMs: jobAlertDueAfterMs,
+            limit: 1,
+          });
+          if (compatibility.compatibility === "upgrade_required") {
+            throw new PlatformError(
+              409,
+              "JOB_SCHEMA_UPGRADE_REQUIRED",
+              "Redeploy with the current Clank framework before operating jobs.",
+            );
+          }
+          if (!compatibility.configured) {
+            throw new PlatformError(
+              409,
+              "JOBS_NOT_CONFIGURED",
+              "This deployment has not configured durable jobs.",
+            );
+          }
+          const result = await mutatePlatformJob({
+            databasePath: databasePath!,
+            id: jobMutationMatch[1]!,
+            action: jobMutationMatch[2] as "cancel" | "retry",
+            ...(jobMutationMatch[2] === "retry" && input.runAt !== undefined
+              ? { runAt: integerInRange(input.runAt, "runAt", 0, Number.MAX_SAFE_INTEGER) }
+              : {}),
+          });
+          if (result.reason === "not_found") {
+            throw new PlatformError(404, "JOB_NOT_FOUND", "Job not found.");
+          }
+          if (result.reason === "invalid_state") {
+            throw new PlatformError(
+              409,
+              "JOB_STATE_CONFLICT",
+              jobMutationMatch[2] === "cancel"
+                ? "Only queued, retrying, or running jobs can be cancelled."
+                : "Only dead or cancelled jobs can be retried.",
+            );
+          }
+          audit(
+            storage.internal,
+            principal.userId,
+            principal.tokenId,
+            current.id,
+            `job.${jobMutationMatch[2]}`,
+            {
+              jobId: result.job!.id,
+              name: result.job!.name,
+              queue: result.job!.queue,
+              state: result.job!.state,
+              ...(jobMutationMatch[2] === "retry" ? { runAt: result.job!.runAt } : {}),
+            },
+          );
+          return result;
+        });
+        return api({ ok: true, job: mutation.job });
       }
       if (operation === "tokens" && request.method === "POST") {
         const input = plainObject(await readJsonRequest(request, 16 * 1024));
@@ -6483,6 +6634,15 @@ async function projectBackupManager(
   });
 }
 
+async function projectJobsDatabasePath(
+  projectsRoot: string,
+  project: ProjectRow,
+): Promise<string | null> {
+  if (!project.databasePath) return null;
+  const dataRoot = await projectDataDirectory(projectsRoot, project.id);
+  return safeProjectDataPath(dataRoot, project.databasePath);
+}
+
 function publicBackupManifest(backup: BackupManifest): Omit<BackupManifest, "source"> {
   const { source: _privateDatabasePath, ...manifest } = backup;
   return manifest;
@@ -7175,6 +7335,7 @@ const PLATFORM_PROJECT_SECTIONS = new Set([
   "deployments",
   "backups",
   "logs",
+  "jobs",
   "settings",
 ]);
 
@@ -7308,6 +7469,7 @@ const PROJECT_PERMISSIONS: readonly ProjectPermission[] = [
   "read",
   "deploy",
   "rollback",
+  "jobs",
   "secrets",
   "tokens",
   "audit",
@@ -7349,7 +7511,9 @@ function validateOrganizationRole(value: string, allowOwner: boolean): Organizat
 
 function roleAllows(role: OrganizationRole, permission: ProjectPermission): boolean {
   if (role === "owner" || role === "admin") return true;
-  if (role === "developer") return ["read", "deploy", "rollback", "audit"].includes(permission);
+  if (role === "developer") {
+    return ["read", "deploy", "rollback", "jobs", "audit"].includes(permission);
+  }
   return permission === "read";
 }
 

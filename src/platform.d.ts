@@ -46,6 +46,13 @@ export interface PlatformBackupOptions {
      */
     objects?: Omit<BackupObjectRepositoryOptions, "repositoryId">;
 }
+export interface PlatformJobOperationsOptions {
+    /**
+     * A due job becomes an operator alert after waiting this long.
+     * Defaults to 5 minutes.
+     */
+    alertDueAfterMs?: number;
+}
 export interface ClankPlatformOptions {
     dataDirectory: string;
     publicUrl: string;
@@ -98,6 +105,7 @@ export interface ClankPlatformOptions {
     accessTokenLifetimeMs?: number;
     limits?: PlatformLimits;
     backups?: PlatformBackupOptions;
+    jobs?: PlatformJobOperationsOptions;
     ingress?: {
         enabled?: boolean;
         baseDomain?: string;

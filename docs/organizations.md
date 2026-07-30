@@ -72,6 +72,8 @@ Project tokens contain an organization ID, project ID, explicit permission set, 
 4. the current organization role permits the operation; and
 5. the token permission set permits the operation.
 
-Available permissions are `read`, `deploy`, `rollback`, `secrets`, `tokens`, and `audit`. The default CI scope is `read,deploy`.
+Available permissions are `read`, `deploy`, `rollback`, `jobs`, `secrets`, `tokens`, and `audit`.
+The default CI scope is `read,deploy`; a queue operator can instead receive the narrower
+`read,jobs` scope.
 
 A stolen project token cannot list organizations, create or permanently delete projects, administer membership, read another project, or expand its own scope. With `audit`, it can read only its own project's history; current membership and role are still re-evaluated. The workspace activity feed is available to owners, administrators, and developers, while viewers receive no workspace events and cannot select an organization feed. Permanent deletion requires an account-wide token and a current owner/admin role even when a project token contains `tokens`. Account-wide device tokens remain appropriate for the interactive CLI, but should not be copied into CI.

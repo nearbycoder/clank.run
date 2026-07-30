@@ -107,8 +107,9 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, resolved `.hostingProfile`,
   `.runnerKind`, and async `.close()`.
 - Runners: dependency-free process runner or constrained Docker runner.
-- Types: `ClankPlatformOptions`, `PlatformBackupOptions`, `PlatformLimits`, `PlatformHostingProfile`,
-  `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`.
+- Types: `ClankPlatformOptions`, `PlatformBackupOptions`, `PlatformJobOperationsOptions`,
+  `PlatformLimits`, `PlatformHostingProfile`, `PlatformRunnerOptions`, `ProcessRunnerOptions`,
+  `DockerRunnerOptions`.
 
 ## Object storage
 
@@ -274,6 +275,13 @@ details.
   metadata.
 - `JobRuntime`: `.enqueue`, `.publisher`, `.get`, `.list`, `.events`, `.stats`, `.cancel`, `.retry`,
   `.purge`, `.workOnce`, `.scheduleOnce`, `.startWorker`, `.startScheduler`, `.close`.
+- `openPlatform({ jobs: { alertDueAfterMs } })`: sets the hosted overdue-work alert threshold
+  without changing application retry or scheduling policy.
+- Hosted job API:
+  `GET /api/projects/<id>/jobs?state=&queue=&limit=`,
+  `POST /api/projects/<id>/jobs/<job-id>/cancel`, and
+  `POST /api/projects/<id>/jobs/<job-id>/retry`. Responses omit arguments, results, error text,
+  owner/group identity, worker identity, and lease tokens.
 - Types: `JobDefinition`, `JobHandlerContext`, `JobPublisher`, `JobHandle`, `StoredJob`, `JobEvent`,
   `JobStats`, `JobRetryOptions`, `CronDefinition`, `JobWorkerOptions`, `JobSchedulerOptions`,
   `JobRetentionOptions`.

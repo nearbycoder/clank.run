@@ -263,6 +263,155 @@ test("clank jobs launches the configured provider-neutral process with bounded w
   }
 });
 
+test("clank jobs inspects and operates a linked project without exposing application payloads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-platform-jobs-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const jobId = `job_${"a".repeat(32)}`;
+  const observed = [];
+  const server = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    observed.push({
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+      body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined,
+    });
+    response.writeHead(200, { "content-type": "application/json" });
+    if (request.method === "POST") {
+      response.end(JSON.stringify({
+        ok: true,
+        job: { id: jobId, name: "mail.send", queue: "email", state: "dead" },
+      }));
+      return;
+    }
+    response.end(JSON.stringify({
+      ok: true,
+      compatibility: "ready",
+      health: "attention",
+      stats: {
+        queued: 0,
+        retry: 0,
+        running: 0,
+        dead: 1,
+        overdue: 0,
+        expiredLeases: 0,
+        scheduleErrors: 0,
+      },
+      scheduleCount: 0,
+      jobs: [{
+        id: jobId,
+        name: "mail.send",
+        queue: "email",
+        state: "dead",
+        attempt: 3,
+        maxAttempts: 3,
+        runAt: 1_700_000_000_000,
+        completedAt: 1_700_000_001_000,
+        hasError: true,
+      }],
+      privacy: {
+        arguments: "hidden",
+        results: "hidden",
+        errors: "presence_only",
+        identities: "hidden",
+      },
+    }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}/`;
+  try {
+    await mkdir(join(project, ".clank"), { recursive: true });
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_platform_jobs_test_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    await writeFile(join(project, ".clank", "project.json"), JSON.stringify({
+      version: 1,
+      server: platform,
+      projectId: "project_jobs_test",
+    }));
+
+    const listed = await runCliResult([
+      "jobs",
+      "list",
+      "--state=dead",
+      "--queue=email",
+      "--limit=5",
+      "--json",
+    ], project, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(listed.code, 0, listed.stderr);
+    const parsed = JSON.parse(listed.stdout);
+    assert.equal(parsed.jobs[0].id, jobId);
+    assert.equal("args" in parsed.jobs[0], false);
+    assert.equal("error" in parsed.jobs[0], false);
+    assert.deepEqual(observed[0], {
+      method: "GET",
+      url: "/api/projects/project_jobs_test/jobs?limit=5&state=dead&queue=email",
+      authorization: "Bearer clnk_platform_jobs_test_token",
+      body: undefined,
+    });
+
+    const cancelled = await runCliResult(["jobs", "cancel", jobId], project, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(cancelled.code, 0, cancelled.stderr);
+    assert.match(cancelled.stdout, /Cancellation requested/);
+    assert.deepEqual(observed[1], {
+      method: "POST",
+      url: `/api/projects/project_jobs_test/jobs/${jobId}/cancel`,
+      authorization: "Bearer clnk_platform_jobs_test_token",
+      body: {},
+    });
+
+    const invalid = await runCliResult(["jobs", "list", "--state=secret"], project, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(invalid.code, 1);
+    assert.match(invalid.stderr, /--state must be one of/);
+    assert.equal(observed.length, 2);
+    const ignoredStatusLimit = await runCliResult(["jobs", "status", "--limit=2"], project, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(ignoredStatusLimit.code, 1);
+    assert.match(ignoredStatusLimit.stderr, /--limit applies only/);
+    const ignoredMutationFilter = await runCliResult(
+      ["jobs", "retry", jobId, "--state=dead"],
+      project,
+      {
+        ...process.env,
+        CLANK_HOME: home,
+      },
+    );
+    assert.equal(ignoredMutationFilter.code, 1);
+    assert.match(ignoredMutationFilter.stderr, /--state, --queue, and --limit apply only/);
+    assert.equal(observed.length, 2);
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("deployment CLI rejects malformed credential state without exposing it", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-config-"));
   const canary = "credential-canary-must-stay-private";

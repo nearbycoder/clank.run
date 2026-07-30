@@ -36,6 +36,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   local copies, retain a usable local copy after upload failure, verify the complete remote copy,
   apply retention across both locations, survive restarts, and are erased with platform-managed
   project storage.
+- Deployed projects now have a responsive Jobs console plus `clank jobs status|list|cancel|retry`.
+  The bounded API reports queue health, overdue work, expired leases, dead letters, and cron
+  schedule state; cancellation/retry use conditional live-database transitions and durable audit
+  events.
 
 ### Fixed
 
@@ -69,6 +73,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   type, length, and SHA-256, then recheck AES-GCM, plaintext length/digest, and SQLite integrity
   before restore. The platform persists its backup namespace and logical root and refuses startup
   after repository configuration drifts or disappears.
+- Hosted job inspection omits arguments, results, error text, owner/group identity, worker
+  identity, and lease credentials. Mutations require the dedicated `jobs` permission, remain
+  blocked during support impersonation, serialize with deployment/data operations, and never place
+  application payloads in platform audit metadata.
 
 ## 0.9.4 - 2026-07-28
 

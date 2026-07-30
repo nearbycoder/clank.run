@@ -127,7 +127,7 @@ applications do not need a separate runtime compiler or bundler.
 
 | Build the interface | Own the backend | Ship the product |
 | --- | --- | --- |
-| Signals, computed values, effects, stores, resources, typed TSX, keyed lists, forms, dialogs, tabs, routing, Tailwind CSS, SSR, and hydration | Runtime schemas, inferred API clients, auth, roles, owned documents, SQLite indexes, atomic mutations, live queries, files, email, jobs, and webhooks | Interactive CLI, browser-approved login, project provisioning, secrets, migrations, backups, health gates, rolling activation, metrics, logs, custom domains, and rollback |
+| Signals, computed values, effects, stores, resources, typed TSX, keyed lists, forms, dialogs, tabs, routing, Tailwind CSS, SSR, and hydration | Runtime schemas, inferred API clients, auth, roles, owned documents, SQLite indexes, atomic mutations, live queries, files, email, jobs, and webhooks | Interactive CLI, browser-approved login, project provisioning, secrets, migrations, backups, job/cron operations, health gates, rolling activation, metrics, logs, custom domains, and rollback |
 
 <details>
 <summary><strong>Explore the complete framework feature map</strong></summary>

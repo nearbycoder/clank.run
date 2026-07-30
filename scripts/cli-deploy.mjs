@@ -63,8 +63,8 @@ const COMMANDS = Object.freeze({
     summary: "Rebuild when source files change.",
   },
   jobs: {
-    usage: "clank jobs <worker|scheduler> [directory] [--concurrency <count>] [--queues <queue,...>]",
-    summary: "Run a provider-neutral background worker or cron scheduler.",
+    usage: "clank jobs <worker|scheduler|status|list|cancel|retry> [directory|job-id] [--state <state>] [--queue <name>] [--limit <count>] [--json]",
+    summary: "Run job processes or inspect and operate a linked project's private queue.",
   },
   doctor: {
     usage: "clank doctor [directory] [--json]",
@@ -161,7 +161,7 @@ const VALUE_OPTIONS = Object.freeze({
   audit: ["org", "limit", "before"],
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "output"],
-  jobs: ["concurrency", "queues"],
+  jobs: ["concurrency", "queues", "state", "queue", "limit"],
   releases: ["confirm"],
   logs: ["limit"],
   rollback: ["confirm"],
@@ -179,6 +179,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   releases: ["allow-rollback-loss"],
   rollback: ["restore-data"],
   doctor: ["json"],
+  jobs: ["json"],
 });
 
 export async function run(command, args) {
@@ -367,6 +368,11 @@ Build and agents:
   clank watch [src] [dist]             Rebuild when source files change
   clank jobs worker [directory]        Run durable jobs outside the web process
   clank jobs scheduler [directory]     Run the leased cron scheduler
+  clank jobs status                    Show linked-project queue health
+  clank jobs list [--state=dead] [--queue=email]
+                                        List safe operational job metadata
+  clank jobs cancel <job-id>           Request cancellation
+  clank jobs retry <job-id>            Retry a dead or cancelled job
 
 Platform:
   clank login                          Authorize with https://clank.run
@@ -698,8 +704,19 @@ async function doctor(args) {
 
 async function jobsCommand(args) {
   const [role, directory = ".", ...extra] = positionals(args);
+  if (["status", "list", "cancel", "retry"].includes(role)) {
+    return platformJobsCommand(role, positionals(args).slice(1), args);
+  }
   if (role !== "worker" && role !== "scheduler") {
-    throw new CliError("Usage: clank jobs <worker|scheduler> [directory]");
+    throw new CliError("Usage: clank jobs <worker|scheduler|status|list|cancel|retry>");
+  }
+  if (
+    option(args, "state") !== undefined
+    || option(args, "queue") !== undefined
+    || option(args, "limit") !== undefined
+    || flag(args, "json")
+  ) {
+    throw new CliError("--state, --queue, --limit, and --json apply only to hosted job operations.");
   }
   if (extra.length > 0) {
     throw new CliError("clank jobs accepts at most a role and directory.");
@@ -764,6 +781,113 @@ async function jobsCommand(args) {
     });
   });
   return signal;
+}
+
+async function platformJobsCommand(command, values, args) {
+  const { profile, link } = await linkedContext(process.cwd());
+  const base = `/api/projects/${encodeURIComponent(link.projectId)}/jobs`;
+  if (command === "status" || command === "list") {
+    if (values.length > 0) {
+      throw new CliError(
+        `Usage: clank jobs ${command}`
+        + (command === "list" ? " [--state <state>] [--queue <name>] [--limit <count>]" : ""),
+      );
+    }
+    const state = option(args, "state");
+    const validStates = ["queued", "running", "retry", "succeeded", "dead", "cancelled"];
+    if (state !== undefined && !validStates.includes(state)) {
+      throw new CliError(`--state must be one of ${validStates.join(", ")}.`);
+    }
+    if (command === "status" && state !== undefined) {
+      throw new CliError("--state applies only to clank jobs list.");
+    }
+    const queue = option(args, "queue");
+    if (
+      queue !== undefined
+      && (
+        queue.length < 1
+        || queue.length > 128
+        || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(queue)
+      )
+    ) {
+      throw new CliError("--queue must be a portable queue name no longer than 128 characters.");
+    }
+    if (command === "status" && queue !== undefined) {
+      throw new CliError("--queue applies only to clank jobs list.");
+    }
+    if (command === "status" && option(args, "limit") !== undefined) {
+      throw new CliError("--limit applies only to clank jobs list.");
+    }
+    const limit = positiveIntegerOption(args, "limit", command === "status" ? 1 : 100, 100);
+    const search = new URLSearchParams({ limit: String(limit) });
+    if (state) search.set("state", state);
+    if (queue) search.set("queue", queue);
+    const payload = await platformRequest(profile.server, `${base}?${search}`, {
+      token: profile.token,
+    });
+    if (flag(args, "json")) {
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+    if (command === "status") {
+      console.log(`Job health: ${payload.health}`);
+      console.log(`Compatibility: ${payload.compatibility}`);
+      console.log(`Queued: ${payload.stats.queued} · retrying: ${payload.stats.retry} · running: ${payload.stats.running}`);
+      console.log(`Dead: ${payload.stats.dead} · overdue: ${payload.stats.overdue} · expired leases: ${payload.stats.expiredLeases}`);
+      console.log(`Schedules: ${payload.scheduleCount} · errors recorded: ${payload.stats.scheduleErrors}`);
+      return;
+    }
+    if (payload.compatibility !== "ready") {
+      console.log(
+        payload.compatibility === "not_deployed"
+          ? "Jobs are unavailable until the first deployment."
+          : payload.compatibility === "not_configured"
+            ? "This deployment has not configured durable jobs."
+            : "Redeploy with the current Clank framework before inspecting jobs.",
+      );
+      return;
+    }
+    if (!payload.jobs.length) {
+      console.log(state ? `No ${state} jobs.` : "No retained jobs.");
+      return;
+    }
+    for (const job of payload.jobs) {
+      const timing = job.completedAt ?? job.runAt;
+      console.log(
+        `${job.id}  ${job.state.padEnd(9)}  ${job.queue.padEnd(12)}  `
+        + `${String(job.attempt).padStart(2)}/${job.maxAttempts}  `
+        + `${new Date(timing).toISOString()}  ${job.name}`,
+      );
+    }
+    console.log("Payloads, results, error text, and identities are intentionally hidden.");
+    return;
+  }
+  if (
+    option(args, "state") !== undefined
+    || option(args, "queue") !== undefined
+    || option(args, "limit") !== undefined
+  ) {
+    throw new CliError("--state, --queue, and --limit apply only to clank jobs list.");
+  }
+  if (values.length !== 1) throw new CliError(`Usage: clank jobs ${command} <job-id>`);
+  const id = values[0];
+  if (!/^job_[a-f0-9]{32}$/u.test(id)) throw new CliError("Job ID is invalid.");
+  const payload = await platformRequest(
+    profile.server,
+    `${base}/${encodeURIComponent(id)}/${command}`,
+    {
+      method: "POST",
+      token: profile.token,
+      body: {},
+    },
+  );
+  if (flag(args, "json")) {
+    console.log(JSON.stringify(payload, null, 2));
+  } else {
+    console.log(command === "cancel"
+      ? `Cancellation requested for ${id}. Current state: ${payload.job.state}.`
+      : `Queued ${id} for retry.`);
+  }
 }
 
 async function login(args) {

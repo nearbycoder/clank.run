@@ -49,6 +49,9 @@ void openPlatform({
       chunkBytes: 8 * 1024 * 1024,
     },
   },
+  jobs: {
+    alertDueAfterMs: 5 * 60_000,
+  },
 });
 
 void openBackupManager({

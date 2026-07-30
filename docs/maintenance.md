@@ -49,6 +49,16 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Kept the current Railway production service on its existing local volume; no bucket or
   additional paid resource was provisioned.
 
+## 2026-07-30 job operations phase
+
+- [x] Added per-project queue health, bounded job/schedule inspection, dead-letter and overdue
+  attention state, and explicit undeployed/unconfigured/upgrade compatibility states.
+- [x] Added conditional cancel/retry controls across the browser, API, and linked-project CLI.
+- [x] Kept payloads, results, error bodies, user/group identities, worker identities, and lease
+  credentials outside every hosted response and control-plane audit record.
+- [x] Preserved the zero-dependency, per-project SQLite queue and added no Railway service,
+  database, or paid monitoring resource.
+
 ## 2026-07-26 follow-up
 
 - [x] Merged the complete 2026-07-25 security and release-certification pass into `main`.

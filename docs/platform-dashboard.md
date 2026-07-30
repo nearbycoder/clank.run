@@ -26,6 +26,7 @@ The console uses normal, refresh-safe URLs rather than keeping navigation only i
 | `/projects/<project-slug>/deployments` | Immutable releases and storage lifecycle |
 | `/projects/<project-slug>/backups` | Scheduled and manual encrypted backups |
 | `/projects/<project-slug>/logs` | Redacted runtime logs |
+| `/projects/<project-slug>/jobs` | Private queue health, cron schedules, cancellation, and retry |
 | `/projects/<project-slug>/settings` | Administrative and destructive project controls |
 
 Links update browser history, Back/Forward restores the matching view, and every listed URL can be
@@ -52,7 +53,7 @@ use at least 44-pixel touch targets. Summary cards stay in two columns on ordina
 collapse to one column on extra-narrow screens.
 Each project URL loads shared project metadata plus only the selected view's bounded dataset. For
 example, opening Performance requests metrics but does not also download domains, releases,
-backups, and logs.
+backups, jobs, and logs.
 
 The workspace Activity view shows append-only API history across every organization where the current owner, administrator, or developer role permits audit access. Events identify their action, target, actor, timestamp, and expandable safe metadata. Pagination uses a descending event-ID cursor, so concurrent new events do not duplicate or skip older pages. Deleted projects remain named and visibly marked as deleted.
 
@@ -83,7 +84,25 @@ and stop events remain attributed to the real operator.
 The operator view keeps the latest 25 start/stop records visible with the real operator, target,
 reason, timestamp, and planned expiry; the durable audit table remains the source of truth.
 
-Each project has performance, deployments, domains, logs, backups, and settings views. The project header shows its production URL, runtime state, workspace, and current role. Performance identifies the active production release, presents the exact `clank deploy` next step when no release exists, and supports `15m`, `1h`, `24h`, `7d`, and `30d` metric windows. It includes the complete time window (including idle buckets), previous-period changes, p50/p90/p95/p99 and maximum latency, peak request rate, status classes, HTTP methods, non-overlapping latency buckets, and request/response byte detail. Domains walks through ownership, routing, and TLS eligibility independently so a DNS failure is not reported as a certificate failure. Deployments shows enforced artifact count/byte usage and can remove inactive runtime files while retaining release metadata and audit history. Backups exposes the automatic cadence and next run, retained encrypted restore points, last scheduler failure, and manual create/verify controls. Settings makes operational identity and database provisioning state visible, then gives owners and administrators a confirmation-gated way to permanently delete the project and reclaim its quota. A project without a first deployment reports that its isolated database will be provisioned on first deploy instead of failing the whole screen.
+Each project has performance, deployments, domains, logs, jobs, backups, and settings views. The
+project header shows its production URL, runtime state, workspace, and current role. Performance
+identifies the active production release, presents the exact `clank deploy` next step when no
+release exists, and supports `15m`, `1h`, `24h`, `7d`, and `30d` metric windows. It includes the
+complete time window (including idle buckets), previous-period changes, p50/p90/p95/p99 and maximum
+latency, peak request rate, status classes, HTTP methods, non-overlapping latency buckets, and
+request/response byte detail. Domains walks through ownership, routing, and TLS eligibility
+independently so a DNS failure is not reported as a certificate failure. Deployments shows enforced
+artifact count/byte usage and can remove inactive runtime files while retaining release metadata
+and audit history. Jobs shows bounded queue counts, overdue work, expired leases, dead letters,
+safe job metadata, and cron state. Authorized owners, administrators, and developers can request a
+conditional cancellation or retry; viewer and support-impersonation sessions remain read-only.
+Arguments, results, error text, application identities, worker identities, and lease credentials
+never enter the dashboard response. Backups exposes the automatic cadence and next run, retained
+encrypted restore points, last scheduler failure, and manual create/verify controls. Settings makes
+operational identity and database provisioning state visible, then gives owners and administrators
+a confirmation-gated way to permanently delete the project and reclaim its quota. A project
+without a first deployment reports that its isolated database will be provisioned on first deploy
+instead of failing the whole screen.
 
 The dashboard uses the same organization membership and project-permission checks as the CLI. API values are inserted with DOM `textContent` or attributes rather than HTML parsing. The page has a nonce-bound script, restrictive CSP, no-store responses, framing denial, and no third-party assets.
 
@@ -244,7 +263,7 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `DELETE /api/organizations/:id/invitations/:invitationId` — revoke an active invitation.
 - `PATCH /api/organizations/:id/members/:userId` — change a member role with last-owner and owner-only protections.
 - `DELETE /api/organizations/:id/members/:userId` — leave or administratively remove membership and revoke workspace-scoped credentials.
-- `GET /api/projects/:id` — project status, usage, current organization role, and whether the principal may delete the project.
+- `GET /api/projects/:id` — project status, usage, current organization role, and whether the principal may delete the project or operate jobs.
 - `DELETE /api/projects/:id` — owner/admin-only permanent deletion with `{ "confirmation": "delete-site <slug>", "acknowledgeDataLoss": true }`.
 - `GET /api/projects/:id/metrics?range=15m|1h|24h|7d|30d` — bounded current/previous summaries, comparisons, and complete downsampled points.
 - `GET /api/projects/:id/domains` — ownership, routing, observed DNS, TLS state, project limit, and reconciliation status.
@@ -258,6 +277,12 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `POST /api/projects/:id/backups/:backupId/restore` — confirmation-gated restore with an automatic safety copy.
 - `GET /api/projects/:id/releases` — release history, artifact availability, cleanup protection, and count/byte usage.
 - `DELETE /api/projects/:id/releases/:releaseId` — confirmation-gated inactive artifact and rollback-snapshot cleanup.
+- `GET /api/projects/:id/jobs?state=&queue=&limit=` — bounded, payload-free queue state,
+  schedule metadata, and attention counters.
+- `POST /api/projects/:id/jobs/:jobId/cancel` — conditionally cancel queued/retrying work or
+  request cooperative cancellation of a running job; requires `jobs`.
+- `POST /api/projects/:id/jobs/:jobId/retry` — conditionally return a dead or cancelled job to
+  the queue; requires `jobs`.
 - `GET /_clank/tls/ask?token=…&domain=…` — private Caddy permission lookup; not a customer API.
 
 Browser mutations require same-origin session authentication and CSRF. CLI calls use bearer tokens, whose organization role and project scope are re-evaluated on every request.

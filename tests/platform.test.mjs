@@ -2944,8 +2944,8 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     const developerDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
       token: developer.accessToken,
     }));
-    assert.deepEqual(ownerDetail.access, { role: "owner", canDelete: true });
-    assert.deepEqual(developerDetail.access, { role: "developer", canDelete: false });
+    assert.deepEqual(ownerDetail.access, { role: "owner", canDelete: true, canOperateJobs: true });
+    assert.deepEqual(developerDetail.access, { role: "developer", canDelete: false, canOperateJobs: true });
 
     const developerDenied = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
       method: "DELETE",
@@ -2979,7 +2979,7 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     const adminDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
       token: developer.accessToken,
     }));
-    assert.deepEqual(adminDetail.access, { role: "admin", canDelete: true });
+    assert.deepEqual(adminDetail.access, { role: "admin", canDelete: true, canOperateJobs: true });
     const missingCsrf = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
       method: "DELETE",
       cookie: owner.cookie,
@@ -3894,15 +3894,17 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /\.brand-lockup\{display:inline-flex;align-items:center;gap:9px;/);
     assert.match(signedInHtml, /class="icon-sprite"[^>]*><defs>\s*<symbol id="nav-icon-overview"/);
     assert.match(signedInHtml, /\.nav-icon\{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex:0 0 18px;/);
-    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 11);
+    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 12);
     assert.doesNotMatch(signedInHtml, /<span class="nav-icon">[^<]/);
     assert.match(signedInHtml, /Build it\./);
     assert.match(signedInHtml, /aria-label="Project navigation"/);
     assert.match(signedInHtml, /data-project-tab="deployments"/);
+    assert.match(signedInHtml, /data-project-tab="jobs"/);
     assert.match(signedInHtml, /aria-controls="sidebar"/);
     assert.match(signedInHtml, /id="sidebar-scrim"[^>]+aria-label="Close navigation"/);
     assert.match(signedInHtml, /class="table mobile-card-table release-table"/);
     assert.match(signedInHtml, /class="table mobile-card-table backup-table"/);
+    assert.match(signedInHtml, /class="table mobile-card-table job-table"/);
     assert.match(signedInHtml, /class="table admin-user-table mobile-card-table"/);
     assert.match(signedInHtml, /class="button-label">Refresh<\/span><span class="button-icon" aria-hidden="true">↻<\/span>/);
     assert.match(signedInHtml, /\.topbar \.button\{min-width:44px;height:44px;padding:0 12px;line-height:1\}/);
@@ -3931,6 +3933,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       "/projects/my-todo/deployments",
       "/projects/my-todo/backups",
       "/projects/my-todo/logs",
+      "/projects/my-todo/jobs",
       "/projects/my-todo/settings",
     ]) {
       const routed = await platform.handle(jsonRequest(path, { cookie: signedInCookie }));
