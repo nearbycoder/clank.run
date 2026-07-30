@@ -61,6 +61,12 @@ Device codes expire after ten minutes by default. Access tokens expire after 90 
 
 Self-registration defaults to `bootstrap`: only the first account can register. Operators may explicitly choose public or disabled registration.
 
+Owners and administrators invite everyone else from **Workspace → People**. Configure a mail
+driver to turn invitation creation into automatic email delivery; without one, Clank visibly keeps
+the copy-once token workflow. Pending mail is durable across restarts, leased across control-plane
+instances, and encrypted only until it is sent or invalidated. Read
+[Invitations and email delivery](invitations.md) for setup and guarantees.
+
 Version 0.7.0 preserves existing Proact accounts, sessions, platform records, and CLI links while moving all writes to Clank names. Review [Renaming from Proact](renaming-from-proact.md) before upgrading a hosted control plane.
 
 ## Deployment configuration

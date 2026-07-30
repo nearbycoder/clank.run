@@ -49,9 +49,17 @@ same key-oriented model.
 
 ## Email
 
-`openFileEmailService` writes a development outbox without sending mail. `createHttpEmailService` sends a normalized JSON envelope to an HTTPS delivery service with timeouts, bounded retries, bearer credentials, and idempotency keys.
+`openFileEmailService` writes a development outbox without sending mail.
+`createHttpEmailService` sends a normalized JSON envelope to any HTTPS delivery gateway with
+timeouts, bounded retries, bearer credentials, and idempotency keys.
+`createResendEmailService` maps the same envelope to Resend's HTTPS API directly, including
+provider-specific recipient and tag bounds, without adding its SDK as a dependency.
 
 Email validation rejects header injection and reserved transport headers. Verification, recovery, and MFA callbacks from `defineAuth` can call either driver.
+
+The deployment control plane can use the same contract for its durable invitation outbox. Read
+[Invitations and email delivery](invitations.md) for provider setup, recipient behavior, retry
+leases, encrypted pending tokens, and the manual fallback.
 
 ## Durable jobs and cron
 

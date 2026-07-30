@@ -18,6 +18,9 @@ import {
 import { parseDeploymentConfig } from "../dist/deploy.js";
 
 const IMAGE = `clank-test@sha256:${"a".repeat(64)}`;
+// Keep synthetic runtime listeners below Linux's default ephemeral range so
+// parallel test traffic cannot claim a probed port before the fixture binds it.
+const TEST_PORT_BASE = 25_100;
 
 test("provider Docker launcher keeps application secrets outside the Docker client boundary", async () => {
   const fixture = await dockerFixture("boundary");
@@ -25,8 +28,8 @@ test("provider Docker launcher keeps application secrets outside the Docker clie
   process.env.CLANK_TEST_UNRELATED_HOST_SECRET = "must-not-reach-docker";
   try {
     const launcher = await fixture.open({
-      portStart: 45_100,
-      portEnd: 45_105,
+      portStart: TEST_PORT_BASE,
+      portEnd: TEST_PORT_BASE + 5,
     });
     const controller = new AbortController();
     const prepared = await fixture.prepared({
@@ -43,7 +46,7 @@ test("provider Docker launcher keeps application secrets outside the Docker clie
     assert.equal(candidate.protocol, DEPLOYMENT_PROVIDER_DOCKER_PROTOCOL);
     assert.equal(candidate.projectId, prepared.projectId);
     assert.equal(candidate.generation, 1);
-    assert.match(candidate.upstream, /^http:\/\/127\.0\.0\.1:4510[0-5]$/u);
+    assert.match(candidate.upstream, /^http:\/\/127\.0\.0\.1:2510[0-5]$/u);
 
     const runtime = await fetch(`${candidate.upstream}/environment`).then((response) =>
       response.json());
@@ -190,8 +193,8 @@ test("provider Docker launcher starts bounded workers and scheduler without publ
   const fixture = await dockerFixture("jobs", { jobs: true });
   try {
     const launcher = await fixture.open({
-      portStart: 45_110,
-      portEnd: 45_112,
+      portStart: TEST_PORT_BASE + 10,
+      portEnd: TEST_PORT_BASE + 12,
     });
     const candidate = await launcher.launch({
       prepared: await fixture.prepared(),
@@ -230,8 +233,8 @@ test("provider diagnostics bound output and fail a malformed resource sample clo
   const errors = [];
   try {
     const launcher = await fixture.open({
-      portStart: 45_106,
-      portEnd: 45_109,
+      portStart: TEST_PORT_BASE + 6,
+      portEnd: TEST_PORT_BASE + 9,
       onError(error) {
         errors.push(error);
       },
@@ -293,8 +296,8 @@ test("provider Docker launcher defers background work until durable activation",
   const fixture = await dockerFixture("deferred-jobs", { jobs: true });
   try {
     const launcher = await fixture.open({
-      portStart: 45_115,
-      portEnd: 45_117,
+      portStart: TEST_PORT_BASE + 15,
+      portEnd: TEST_PORT_BASE + 17,
     });
     const signal = new AbortController().signal;
     const candidate = await launcher.launch({
@@ -332,8 +335,8 @@ test("provider Docker launcher never starts deferred jobs after the web candidat
   const fixture = await dockerFixture("deferred-web-failure", { jobs: true });
   try {
     const launcher = await fixture.open({
-      portStart: 45_118,
-      portEnd: 45_119,
+      portStart: TEST_PORT_BASE + 18,
+      portEnd: TEST_PORT_BASE + 19,
     });
     const signal = new AbortController().signal;
     const candidate = await launcher.launch({
@@ -379,8 +382,8 @@ test("provider Docker launcher cleans exact-owner orphans and failed candidates"
       }),
     );
     const launcher = await fixture.open({
-      portStart: 45_120,
-      portEnd: 45_122,
+      portStart: TEST_PORT_BASE + 20,
+      portEnd: TEST_PORT_BASE + 22,
       fetch: async () => new Response("unhealthy", { status: 503 }),
     });
     const startupAudit = await fixture.audit();
@@ -416,8 +419,8 @@ test("provider Docker launcher converges an uncertain create by exact deployment
   });
   try {
     const launcher = await fixture.open({
-      portStart: 45_123,
-      portEnd: 45_124,
+      portStart: TEST_PORT_BASE + 23,
+      portEnd: TEST_PORT_BASE + 24,
     });
     await assert.rejects(
       launcher.launch({
@@ -467,8 +470,8 @@ test("provider Docker launcher rejects mutable images, unsafe roots, capacity ov
       /dockerEnvironment contains an invalid entry/iu,
     );
     const containerBounded = await fixture.open({
-      portStart: 45_128,
-      portEnd: 45_129,
+      portStart: TEST_PORT_BASE + 28,
+      portEnd: TEST_PORT_BASE + 29,
       maxRuntimes: 10,
       maxContainers: 2,
     });
@@ -492,8 +495,8 @@ test("provider Docker launcher rejects mutable images, unsafe roots, capacity ov
     assert.equal((await fixture.audit()).filter((entry) => entry.command === "create").length, 0);
     await containerBounded.close();
     const launcher = await fixture.open({
-      portStart: 45_130,
-      portEnd: 45_131,
+      portStart: TEST_PORT_BASE + 30,
+      portEnd: TEST_PORT_BASE + 31,
       maxRuntimes: 1,
     });
     const first = await launcher.launch({
@@ -549,8 +552,8 @@ test("provider Docker launcher cannot publish a candidate across close", async (
       healthStarted = resolve;
     });
     const launcher = await fixture.open({
-      portStart: 45_140,
-      portEnd: 45_141,
+      portStart: TEST_PORT_BASE + 40,
+      portEnd: TEST_PORT_BASE + 41,
       fetch: async (_url, options) => {
         healthStarted();
         return new Promise((_resolve, reject) => {

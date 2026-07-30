@@ -33,7 +33,13 @@ clank token list
 clank token revoke <token-id>
 ```
 
-Invitation tokens are hashed at rest, expire after seven days by default, are bound to the invited email address, and can be accepted once. The token is returned only by the create response, so copy it immediately and deliver it through the operator's trusted channel. Listing pending invitations never returns a token or hash, and only authorized administrators receive pending-invitation metadata. Historical invitation events remain auditable, but developer activity feeds redact recipient email fields.
+Invitation tokens are hashed at rest, expire after seven days by default, are bound to the invited
+email address, and can be accepted once. The token is returned only by the create response. A
+configured platform queues it for automatic email delivery and also exposes the copy-once fallback;
+an unconfigured platform requires manual delivery through the operator's trusted channel. Listing
+pending invitations never returns a token, hash, or ciphertext, and only authorized administrators
+receive pending-invitation metadata. Historical invitation events remain auditable, but developer
+activity feeds redact recipient email fields.
 
 Clank has two invitation scopes:
 
@@ -44,7 +50,19 @@ Clank has two invitation scopes:
 
 Reissuing an invitation for the same workspace and normalized email atomically revokes every older active token. Existing members cannot be reinvited; change their role directly instead. A workspace can retain at most 100 active invitations, and owners or administrators can revoke one before it is accepted. These mutations are recorded in workspace activity.
 
-The browser console exposes the complete flow under **People**. An account below its owned-workspace quota can create and immediately select a workspace there. Workspace owners and administrators issue workspace invitations; allowlisted platform administrators also see **Personal workspace only** in the access selector. A signed-in recipient can paste a workspace token into **Join another workspace**; personal invitations are only for new-account registration. A recipient without an account chooses **Use invitation** on the sign-in screen and supplies the invited email, a new password, and the token. Clank creates the account and atomically applies exactly the invitation's selected scope even when public signup is closed. The page shows workspace and personal pending invitations separately by access, and reveals a newly created token only in the current page state. Member removal immediately revokes the removed account's organization- and project-scoped tokens. The last owner cannot leave or be demoted, and an administrator cannot grant, change, or remove an owner.
+The browser console exposes the complete flow under **People**. An account below its
+owned-workspace quota can create and immediately select a workspace there. Workspace owners and
+administrators issue workspace invitations; allowlisted platform administrators also see
+**Personal workspace only** in the access selector. Email links prefill the correct invitation form
+without putting the token in an HTTP request. A signed-in recipient confirms **Join another
+workspace**; personal invitations are only for new-account registration. A recipient without an
+account supplies the invited email and a new password. Clank creates the account and atomically
+applies exactly the invitation's selected scope even when public signup is closed. The page shows
+workspace and personal pending invitations separately by access and delivery state, and reveals a
+newly created token only in the current page state. Member removal immediately revokes the removed
+account's organization- and project-scoped tokens. The last owner cannot leave or be demoted, and
+an administrator cannot grant, change, or remove an owner. See
+[Invitations and email delivery](invitations.md) for mail setup and retry behavior.
 
 ## Organization API
 

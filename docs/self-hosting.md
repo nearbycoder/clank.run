@@ -21,6 +21,12 @@ configured worker/scheduler processes for each active project.
 | `CLANK_PLATFORM_DATA` | `.clank-platform` | Persistent root |
 | `CLANK_PLATFORM_MASTER_KEY` | generated file | Base64/base64url 32-byte key |
 | `CLANK_SIGNUP` | `bootstrap` | `bootstrap`, `public`, or `disabled` |
+| `CLANK_RESEND_API_KEY` | none | Enable direct Resend invitation email; mutually exclusive with the gateway URL |
+| `CLANK_EMAIL_DELIVERY_URL` | none | Enable a provider-neutral HTTPS invitation gateway |
+| `CLANK_EMAIL_DELIVERY_TOKEN` | none | Optional bearer credential for the HTTPS gateway |
+| `CLANK_EMAIL_FROM` | none | Required sender address when invitation email is enabled |
+| `CLANK_EMAIL_FROM_NAME` | `Clank` | Invitation sender display name |
+| `CLANK_EMAIL_REPLY_TO` | none | Optional invitation reply-to address |
 | `CLANK_HOSTING_PROFILE` | `isolated` in production; `trusted` otherwise | Declared application trust boundary |
 | `CLANK_RUNNER` | selected by hosting profile | `process` or `docker` |
 | `CLANK_DOCKER_IMAGE` | Node image | Pin by digest in production |
@@ -95,6 +101,13 @@ Embedders calling `openPlatform()` directly should pass infrastructure listeners
 `reservedAppPorts`.
 
 `bootstrap` permits one initial account and then closes ordinary registration. Its SQLite claim is shared by control-plane processes using the same data directory. `disabled` blocks ordinary registration immediately. In both modes, an owner/admin-issued invitation can still create only its bound email account through **Use invitation**; revoke outstanding invitations before disabling all intended onboarding.
+
+Invitation email is optional and uses the existing control database, so it adds no queue service.
+Configure one provider plus `CLANK_EMAIL_FROM`; otherwise the People page and CLI remain in
+explicit manual-token mode. Removing a provider configuration cancels pending outbox entries and
+erases their ciphertext; reissue those invitations if they still need delivery. Read
+[Invitations and email delivery](invitations.md) for retry, concurrency, lease, and provider request
+settings.
 
 Monthly request and transfer controls require managed ingress. Keep supervised application ports
 on loopback or a private network; traffic routed directly to those ports is neither metered nor

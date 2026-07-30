@@ -189,6 +189,7 @@ export function createHttpEmailService(options: {
         try {
           const response = await fetcher(url, {
             method: "POST",
+            redirect: "error",
             signal: controller.signal,
             headers: {
               "content-type": "application/json",
@@ -200,15 +201,107 @@ export function createHttpEmailService(options: {
             body: JSON.stringify(normalized),
           });
           if (response.ok) {
-            const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+            const payload = await boundedReceipt(response);
             return {
               id: typeof payload.id === "string" ? payload.id : crypto.randomUUID(),
               acceptedAt: Date.now(),
               provider: new URL(url).hostname,
             };
           }
+          await response.body?.cancel().catch(() => undefined);
           const retryable = response.status === 429 || response.status >= 500;
           lastError = new Error(`Email service returned ${response.status}.`);
+          if (!retryable) throw new PermanentDeliveryError(lastError.message);
+          if (attempt === retries) throw lastError;
+        } catch (error) {
+          if (error instanceof PermanentDeliveryError) throw error;
+          lastError = error;
+          if (attempt === retries) throw error;
+        } finally {
+          clearTimeout(timeout);
+        }
+        await retryDelay(attempt);
+      }
+      throw lastError;
+    },
+  };
+}
+
+/**
+ * Sends email through Resend's HTTPS API without adding a runtime dependency.
+ * The API key is kept in the Authorization header and idempotency keys are
+ * forwarded so durable workers can safely retry an uncertain response.
+ */
+export function createResendEmailService(options: {
+  apiKey: string;
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+  retries?: number;
+  apiUrl?: string;
+}): EmailService {
+  const apiKey = boundedText(options.apiKey, "apiKey", 8, 4_096);
+  if (/[\r\n\0]/u.test(apiKey)) throw new TypeError("apiKey is invalid.");
+  const apiUrl = secureHttpUrl(options.apiUrl ?? "https://api.resend.com/emails", "Resend API URL");
+  const fetcher = options.fetch ?? globalThis.fetch;
+  if (!fetcher) throw new Error("fetch is not available.");
+  const timeoutMs = positiveInteger(options.timeoutMs ?? 10_000, "timeoutMs");
+  const retries = integerRange(options.retries ?? 2, "retries", 0, 10);
+  return {
+    async send(message) {
+      const normalized = normalizeEmailMessage(message);
+      if (normalized.to.length > 50) throw new TypeError("Resend accepts at most 50 recipients.");
+      const tags = normalized.tags ? resendTags(normalized.tags) : undefined;
+      let lastError: unknown;
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(new Error("Email delivery timed out.")), timeoutMs);
+        try {
+          const response = await fetcher(apiUrl, {
+            method: "POST",
+            redirect: "error",
+            signal: controller.signal,
+            headers: {
+              authorization: `Bearer ${apiKey}`,
+              "content-type": "application/json",
+              accept: "application/json",
+              ...(normalized.idempotencyKey
+                ? { "idempotency-key": normalized.idempotencyKey }
+                : {}),
+            },
+            body: JSON.stringify({
+              from: providerEmailAddress(normalized.from),
+              to: normalized.to.map(providerEmailAddress),
+              subject: normalized.subject,
+              ...(normalized.text === undefined ? {} : { text: normalized.text }),
+              ...(normalized.html === undefined ? {} : { html: normalized.html }),
+              ...(normalized.replyTo ? { reply_to: providerEmailAddress(normalized.replyTo) } : {}),
+              ...(normalized.headers ? { headers: normalized.headers } : {}),
+              ...(tags
+                ? {
+                    tags: Object.entries(tags).map(([name, value]) => ({
+                      name,
+                      value,
+                    })),
+                  }
+                : {}),
+            }),
+          });
+          if (response.ok) {
+            const payload = await boundedReceipt(response);
+            return {
+              id: typeof payload.id === "string" ? payload.id : crypto.randomUUID(),
+              acceptedAt: Date.now(),
+              provider: "resend",
+            };
+          }
+          const errorPayload = await boundedReceipt(response);
+          const retryable = response.status === 429
+            || response.status >= 500
+            || (
+              response.status === 409
+              && errorPayload.name === "concurrent_idempotent_requests"
+            );
+          lastError = new Error(`Resend returned ${response.status}.`);
           if (!retryable) throw new PermanentDeliveryError(lastError.message);
           if (attempt === retries) throw lastError;
         } catch (error) {
@@ -781,10 +874,12 @@ function ensureJobType(type: string, handlers: Record<string, JobHandler>): void
 
 function normalizeEmailMessage(message: EmailMessage): EmailMessage {
   if (!message || typeof message !== "object") throw new TypeError("Email message is required.");
+  const subject = boundedText(message.subject, "subject", 1, 998);
+  if (/[\r\n\0]/u.test(subject)) throw new TypeError("subject contains invalid control characters.");
   const normalized = {
     from: emailAddress(message.from, "from"),
     to: message.to.map((address, index) => emailAddress(address, `to.${index}`)),
-    subject: boundedText(message.subject, "subject", 1, 998),
+    subject,
     ...(message.text === undefined ? {} : { text: boundedText(message.text, "text", 0, 10 * 1024 * 1024) }),
     ...(message.html === undefined ? {} : { html: boundedText(message.html, "html", 0, 10 * 1024 * 1024) }),
     ...(message.replyTo ? { replyTo: emailAddress(message.replyTo, "replyTo") } : {}),
@@ -803,10 +898,61 @@ function emailAddress(value: EmailAddress, name: string): EmailAddress {
   if (!value || typeof value !== "object") throw new TypeError(`${name} email address is required.`);
   const email = boundedText(value.email, `${name}.email`, 3, 254).trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) throw new TypeError(`${name}.email is invalid.`);
+  const displayName = value.name ? boundedText(value.name, `${name}.name`, 1, 200) : undefined;
+  if (displayName && /[\r\n\0]/u.test(displayName)) {
+    throw new TypeError(`${name}.name contains invalid control characters.`);
+  }
   return {
     email,
-    ...(value.name ? { name: boundedText(value.name, `${name}.name`, 1, 200) } : {}),
+    ...(displayName ? { name: displayName } : {}),
   };
+}
+
+function providerEmailAddress(value: EmailAddress): string {
+  if (!value.name) return value.email;
+  const name = value.name.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"");
+  return `"${name}" <${value.email}>`;
+}
+
+async function boundedReceipt(response: Response): Promise<Record<string, unknown>> {
+  if (!response.body) return {};
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > 64 * 1024) {
+    await response.body.cancel().catch(() => undefined);
+    return {};
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > 64 * 1024) {
+        await reader.cancel().catch(() => undefined);
+        return {};
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (!total) return {};
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    const value = JSON.parse(new TextDecoder().decode(bytes));
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function cleanHeaders(value: Record<string, string>): Record<string, string> {
@@ -829,6 +975,20 @@ function cleanTags(value: Record<string, string>): Record<string, string> {
   for (const [name, tag] of Object.entries(value)) {
     if (!/^[A-Za-z0-9_.-]{1,64}$/u.test(name)) throw new TypeError(`Invalid tag name: ${name}`);
     output[name] = boundedText(tag, `tags.${name}`, 0, 200);
+  }
+  return output;
+}
+
+function resendTags(value: Record<string, string>): Record<string, string> {
+  const output: Record<string, string> = {};
+  for (const [name, tag] of Object.entries(value)) {
+    if (!/^[A-Za-z0-9_-]{1,256}$/u.test(name)) {
+      throw new TypeError(`Invalid Resend tag name: ${name}`);
+    }
+    if (!/^[A-Za-z0-9_-]{1,256}$/u.test(tag)) {
+      throw new TypeError(`Invalid Resend tag value: ${name}`);
+    }
+    output[name] = tag;
   }
   return output;
 }

@@ -180,6 +180,18 @@ Invitation tokens are email-bound, single-use, expiring, hashed at rest, and ret
 
 Reissuing for one scope/email atomically revokes older active tokens, existing workspace members must use the explicit role-change path, and both each workspace and the platform-wide personal scope are capped at 100 active invitations. A personal invitation is rejected when its email already has an account. Pending addresses are returned only to their authorized administrators; developer audit responses also redact workspace-invitation recipient email fields, including for older stored events. Creation, revocation, acceptance, role changes, and removals are audited; removal also revokes organization/project-scoped credentials.
 
+Optional invitation email uses a transactional control-database outbox. The ordinary invitation
+record remains hash-only; the outbox holds an AES-256-GCM token envelope only while delivery can
+still run. Creation and enqueue commit atomically, control-plane instances claim work through
+expiring SQLite leases, and every provider attempt reuses an invitation-scoped idempotency key.
+Successful send, acceptance, replacement, revocation, or expiry erases the ciphertext. Stale
+worker leases are reclaimable, while lease-token fencing prevents a late response from restoring a
+cancelled delivery. Provider error details reach only the private operator error hook; tenant
+responses expose a generic queued, retrying, sent, failed, or manual state. Invite URLs carry the
+token in a browser fragment and scrub it immediately, keeping it out of HTTP request targets and
+referrers. Email already accepted by a provider cannot be recalled, but revocation makes its token
+invalid.
+
 CLI flow follows [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628/): hashed high-entropy device codes, short expiry, rate limiting, visible client identity/code, same-origin CSRF approval, throttled polling, and single use.
 
 Bearer tokens are returned once and hashed at rest. Follow [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750): TLS, no tokens in URLs/logs, revocation, and rotation. Account tokens can create or administer organizations according to membership; project tokens are restricted to one project and explicit `read`, `deploy`, `rollback`, `jobs`, `secrets`, `tokens`, and `audit` permissions.
