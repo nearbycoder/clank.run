@@ -7882,11 +7882,17 @@ async function projectBackupManager(
       ? {
           objects: {
             ...objects,
-            repositoryId: project.id,
+            repositoryId: backupRepositoryId(project.id),
           },
         }
       : {}),
   });
+}
+
+function backupRepositoryId(projectId: string): string {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(projectId)
+    ? projectId
+    : `project-${syncHash(projectId)}`;
 }
 
 async function projectJobsDatabasePath(

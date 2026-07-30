@@ -155,6 +155,8 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `DeploymentOrchestrator.setDesired({ placementMode })`: `portable` placements may move after node
   loss; `stateful` placements durably reserve one node identity and fail closed instead of moving
   node-local data implicitly.
+- `DeploymentOrchestrator.setDesired({ nodeRequirements })`: persists endpoint and exact-label
+  capability requirements so initial and delayed placement select only compatible nodes.
 - Types: `DeploymentCoordinatorHandler`, `DeploymentCoordinatorHandlerOptions`,
   `DeploymentCoordinatorClient`, `DeploymentCoordinatorClientOptions`,
   `DeploymentArtifact`, `DeploymentArtifactRequest`, `DeploymentArtifactProvider`,

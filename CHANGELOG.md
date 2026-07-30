@@ -9,6 +9,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Deployment desired state now distinguishes portable from stateful placement. Stateful projects
   reserve one node identity across releases, stopped state, expiry, and credential revocation;
   unsafe implicit failover, mode changes, and pinned-region changes are rejected.
+- Desired placement can durably require a private node endpoint and exact capability labels.
+  Delayed placement keeps those constraints, and assigned nodes cannot shed required capabilities
+  through heartbeat or credential rotation.
 
 - A complete zero-dependency `@clank.run/framework/provider-service` composition now binds
   independently verified runtime capsules, durable operation/generation/fence intent, provider
@@ -120,6 +123,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- Object-backed project backups now map URL-safe project IDs that begin with `-` or `_` to a stable
+  portable repository identity, instead of intermittently rejecting valid generated projects.
 - Docker application environment is now delivered through one inert, name-only encoded envelope
   that the in-container Node bootstrap deletes before importing application code. Application
   variables such as `DOCKER_HOST`, `LD_PRELOAD`, proxy settings, and TLS settings can no longer

@@ -254,6 +254,112 @@ test("an initially unassigned stateful placement binds once when capacity appear
   }
 });
 
+test("durable node requirements select capable nodes and cannot be shed while assigned", async () => {
+  const test = await fixture();
+  try {
+    const artifactNode = await test.orchestrator.registerNode({
+      id: "node-artifact-only",
+      region: "us-central",
+      capacity: 2,
+      labels: { provider: "artifact" },
+    });
+    const providerNode = await test.orchestrator.registerNode({
+      id: "node-provider",
+      region: "us-central",
+      endpoint: "https://provider.internal.example",
+      capacity: 2,
+      labels: { isolation: "docker", provider: "http" },
+    });
+    const desired = await test.orchestrator.setDesired({
+      projectId: "project_capabilities",
+      releaseId: "release-capabilities-1",
+      state: "running",
+      region: "us-central",
+      placementMode: "stateful",
+      nodeRequirements: {
+        endpoint: true,
+        labels: { provider: "http", isolation: "docker" },
+      },
+      runtimeProtocol: "clank-runtime/1",
+    });
+    assert.equal(desired.assignedNodeId, "node-provider");
+    assert.deepEqual(desired.nodeRequirements, {
+      endpoint: true,
+      labels: { isolation: "docker", provider: "http" },
+    });
+    assert.equal((await test.orchestrator.claim(artifactNode.node.id, artifactNode.token)).length, 0);
+
+    await assert.rejects(
+      test.orchestrator.heartbeat(providerNode.node.id, providerNode.token, {
+        labels: { isolation: "docker" },
+      }),
+      /cannot remove a capability/u,
+    );
+    await assert.rejects(
+      test.orchestrator.registerNode({
+        id: "node-provider",
+        region: "us-central",
+        capacity: 2,
+        labels: { isolation: "docker", provider: "http" },
+      }),
+      /cannot remove a capability/u,
+    );
+    await assert.rejects(
+      test.orchestrator.setDesired({
+        projectId: "project_capabilities",
+        releaseId: "release-capabilities-2",
+        state: "running",
+        nodeRequirements: { endpoint: true, labels: { provider: "http" } },
+      }),
+      /nodeRequirements cannot change/u,
+    );
+
+    const [claim] = await test.orchestrator.claim(providerNode.node.id, providerNode.token);
+    assert.equal(claim.projectId, "project_capabilities");
+  } finally {
+    await test.close();
+  }
+});
+
+test("queued placement requirements remain enforced when matching capacity appears", async () => {
+  const test = await fixture();
+  try {
+    const desired = await test.orchestrator.setDesired({
+      projectId: "project_waiting_for_provider",
+      releaseId: "release-waiting-for-provider",
+      state: "running",
+      placementMode: "stateful",
+      nodeRequirements: { endpoint: true, labels: { provider: "http" } },
+      runtimeProtocol: "clank-runtime/1",
+    });
+    assert.equal(desired.assignedNodeId, null);
+
+    const wrong = await test.orchestrator.registerNode({
+      id: "node-wrong-capability",
+      region: "us-central",
+      endpoint: "https://wrong.internal.example",
+      labels: { provider: "artifact" },
+    });
+    assert.equal((await test.orchestrator.claim(wrong.node.id, wrong.token)).length, 0);
+    assert.equal(test.orchestrator.desired("project_waiting_for_provider").assignedNodeId, null);
+
+    const right = await test.orchestrator.registerNode({
+      id: "node-right-capability",
+      region: "us-central",
+      endpoint: "https://right.internal.example",
+      labels: { provider: "http" },
+    });
+    const [claim] = await test.orchestrator.claim(right.node.id, right.token);
+    assert.equal(claim.projectId, "project_waiting_for_provider");
+    assert.equal(
+      test.orchestrator.desired("project_waiting_for_provider").assignedNodeId,
+      "node-right-capability",
+    );
+  } finally {
+    await test.close();
+  }
+});
+
 test("node placement, desired generations, operation retries, and stale-worker fencing are durable", async () => {
   const test = await fixture();
   try {
@@ -278,6 +384,7 @@ test("node placement, desired generations, operation retries, and stale-worker f
     });
     assert.equal(desired.assignedNodeId, "node-b");
     assert.equal(desired.placementMode, "portable");
+    assert.deepEqual(desired.nodeRequirements, { endpoint: false, labels: {} });
     assert.equal(desired.generation, 1);
     assert.equal((await test.orchestrator.claim("node-a", nodeA.token)).length, 0);
 
@@ -414,6 +521,7 @@ test("legacy placement rows migrate to portable mode without losing desired stat
       desiredReleaseId: "legacy_release",
       desiredState: "running",
       placementMode: "portable",
+      nodeRequirements: { endpoint: false, labels: {} },
       assignedNodeId: null,
       generation: 7,
       observedReleaseId: null,

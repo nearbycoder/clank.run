@@ -25,6 +25,10 @@ const desired = await orchestrator.setDesired({
   state: "running",
   region: "iad",
   placementMode: "stateful",
+  nodeRequirements: {
+    endpoint: true,
+    labels: { provider: "http", isolation: "docker" },
+  },
 });
 
 const [operation] = await orchestrator.claim(agent.node.id, agent.token);
@@ -47,6 +51,13 @@ Changing a placement mode is rejected. A pinned region cannot change after a nod
 Re-enrolling the same node ID restores its ability to claim the pinned work with a new credential.
 Moving a stateful placement requires a separate, verified backup/restore workflow rather than a
 placement update.
+
+`nodeRequirements` is stored beside desired state, not evaluated only at the first API call.
+`endpoint: true` excludes nodes that have not registered a private provider origin, while `labels`
+requires exact capability values. This matters when a deployment waits for capacity: a later
+artifact-only runner cannot accidentally claim runtime work. Assigned nodes cannot remove a
+required label or endpoint during credential rotation or heartbeat. Pinned stateful requirements
+become immutable after the first node is selected.
 
 ## Authenticated HTTP transport
 

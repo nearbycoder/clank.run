@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -247,6 +247,20 @@ test("scheduled backup failures are reported privately and retried without expos
 test("platform object backups survive restarts, bind repository identity, and clean up with a project", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-object-backup-"));
   const seed = await seedDatabaseProject(root, "object-backup@example.com");
+  const portableEdgeProjectId = `_${seed.projectId}`;
+  await rename(
+    join(seed.dataDirectory, "projects", seed.projectId),
+    join(seed.dataDirectory, "projects", portableEdgeProjectId),
+  );
+  const seededControl = new DatabaseSync(join(seed.dataDirectory, "control.sqlite"));
+  seededControl.exec("PRAGMA foreign_keys = OFF");
+  seededControl.prepare("UPDATE clank_platform_projects SET id = ? WHERE id = ?")
+    .run(portableEdgeProjectId, seed.projectId);
+  seededControl.close();
+  seed.projectId = portableEdgeProjectId;
+  const objectRepositoryId = `project-${createHash("sha256")
+    .update(seed.projectId)
+    .digest("base64url")}`;
   const objects = memoryObjectStore();
   const objectOptions = {
     namespace: "platform-recovery-v1",
@@ -276,7 +290,7 @@ test("platform object backups survive restarts, bind repository identity, and cl
     assert.equal(listed.automation.storage, "object");
     assert.equal(listed.backups[0].id, created.backup.id);
     assert.ok([...objects.values.keys()].some(
-      (key) => key === `recovery/${seed.projectId}/catalog.json`,
+      (key) => key === `recovery/${objectRepositoryId}/catalog.json`,
     ));
     assert.equal(
       (await readdir(join(
@@ -338,7 +352,7 @@ test("platform object backups survive restarts, bind repository identity, and cl
       },
     }));
     assert.equal(
-      [...objects.values.keys()].some((key) => key.startsWith(`recovery/${seed.projectId}/`)),
+      [...objects.values.keys()].some((key) => key.startsWith(`recovery/${objectRepositoryId}/`)),
       false,
     );
   } finally {
