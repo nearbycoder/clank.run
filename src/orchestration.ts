@@ -42,7 +42,7 @@ export interface NodeSession {
 
 export interface DeploymentOperationInput {
   projectId: string;
-  action: "reconcile" | "deploy" | "rollback" | "restart" | "stop";
+  action: "reconcile" | "deploy" | "rollback" | "restart" | "stop" | "delete";
   payload?: unknown;
   idempotencyKey: string;
   nodeId?: string;
@@ -812,25 +812,26 @@ function createTables(internal: SQLiteInternal): void {
     internal.exec(`ALTER TABLE clank_deployment_placements
       ADD COLUMN required_labels TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(required_labels))`);
   }
-  internal.exec(`CREATE TABLE IF NOT EXISTS clank_deployment_operations (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    action TEXT NOT NULL CHECK (action IN ('reconcile', 'deploy', 'rollback', 'restart', 'stop')),
-    payload TEXT NOT NULL CHECK (json_valid(payload)),
-    state TEXT NOT NULL CHECK (state IN ('queued', 'leased', 'retry', 'succeeded', 'failed', 'cancelled')),
-    node_id TEXT REFERENCES clank_deployment_nodes(id) ON DELETE SET NULL,
-    attempts INTEGER NOT NULL CHECK (attempts >= 0),
-    max_attempts INTEGER NOT NULL CHECK (max_attempts > 0),
-    fence INTEGER NOT NULL CHECK (fence >= 0),
-    lease_token_hash TEXT,
-    lease_expires_at INTEGER,
-    next_attempt_at INTEGER NOT NULL,
-    idempotency_key TEXT NOT NULL UNIQUE,
-    result TEXT CHECK (result IS NULL OR json_valid(result)),
-    error TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`);
+  const operationsTable = internal.prepare(`SELECT sql FROM sqlite_master
+    WHERE type = 'table' AND name = 'clank_deployment_operations'`).get();
+  if (!operationsTable) {
+    createDeploymentOperationsTable(internal);
+  } else if (!String(operationsTable.sql).includes("'delete'")) {
+    internal.transaction(() => {
+      internal.exec(`ALTER TABLE clank_deployment_operations
+        RENAME TO clank_deployment_operations_legacy`);
+      createDeploymentOperationsTable(internal);
+      internal.exec(`INSERT INTO clank_deployment_operations
+        (id, project_id, action, payload, state, node_id, attempts, max_attempts, fence,
+         lease_token_hash, lease_expires_at, next_attempt_at, idempotency_key, result, error,
+         created_at, updated_at)
+        SELECT id, project_id, action, payload, state, node_id, attempts, max_attempts, fence,
+          lease_token_hash, lease_expires_at, next_attempt_at, idempotency_key, result, error,
+          created_at, updated_at
+        FROM clank_deployment_operations_legacy`);
+      internal.exec("DROP TABLE clank_deployment_operations_legacy");
+    });
+  }
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_deployment_project_fences (
     project_id TEXT PRIMARY KEY,
     fence INTEGER NOT NULL CHECK (fence > 0),
@@ -846,6 +847,30 @@ function createTables(internal: SQLiteInternal): void {
       updated_at = MAX(clank_deployment_project_fences.updated_at, excluded.updated_at)`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_deployment_operations_ready ON clank_deployment_operations (node_id, state, next_attempt_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_deployment_operations_project ON clank_deployment_operations (project_id, created_at)");
+}
+
+function createDeploymentOperationsTable(internal: SQLiteInternal): void {
+  internal.exec(`CREATE TABLE clank_deployment_operations (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (
+      action IN ('reconcile', 'deploy', 'rollback', 'restart', 'stop', 'delete')
+    ),
+    payload TEXT NOT NULL CHECK (json_valid(payload)),
+    state TEXT NOT NULL CHECK (state IN ('queued', 'leased', 'retry', 'succeeded', 'failed', 'cancelled')),
+    node_id TEXT REFERENCES clank_deployment_nodes(id) ON DELETE SET NULL,
+    attempts INTEGER NOT NULL CHECK (attempts >= 0),
+    max_attempts INTEGER NOT NULL CHECK (max_attempts > 0),
+    fence INTEGER NOT NULL CHECK (fence >= 0),
+    lease_token_hash TEXT,
+    lease_expires_at INTEGER,
+    next_attempt_at INTEGER NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    result TEXT CHECK (result IS NULL OR json_valid(result)),
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`);
 }
 
 function nodeFromRow(row: Record<string, unknown>, now = Date.now()): DeploymentNode {

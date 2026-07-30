@@ -14,7 +14,7 @@ import type {
 } from "./provider-runtime.js";
 import type {
   DeploymentProvider,
-  DeploymentProviderOperation,
+  DeploymentProviderLifecycleRequest,
 } from "./provider.js";
 
 export declare const DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL: "clank-provider-service/1";
@@ -38,14 +38,8 @@ export interface DeploymentProviderServiceState {
   readonly updatedAt: number;
 }
 
-export interface DeploymentProviderServiceLifecycleRequest {
-  readonly operation: DeploymentProviderOperation;
-  /** Exact current provider-data generation being changed. */
-  readonly generation: number;
-  /** Exact human/operator confirmation required by the data boundary. */
-  readonly confirmation: string;
-  readonly signal: AbortSignal;
-}
+export type DeploymentProviderServiceLifecycleRequest =
+  DeploymentProviderLifecycleRequest;
 
 export interface DeploymentProviderServiceOptions {
   /** Existing private provider root shared by the injected data and runtime components. */

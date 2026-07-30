@@ -13,8 +13,11 @@ import {
 import {
   createDeploymentProviderHandler,
   createHttpDeploymentProvider,
+  DEPLOYMENT_PROVIDER_DELETE_PATH,
   DEPLOYMENT_PROVIDER_RECONCILE_PATH,
+  DEPLOYMENT_PROVIDER_ROLLBACK_PATH,
   DeploymentProviderError,
+  executeDeploymentProvider,
   openProviderDeploymentAgent,
   reconcileDeploymentProvider,
 } from "../dist/provider.js";
@@ -241,6 +244,80 @@ test("portable provider reconciliation validates desired state, artifact integri
   } finally {
     await fixture.close();
   }
+});
+
+test("provider lifecycle execution derives confirmations and strips coordinator authority", async () => {
+  const received = [];
+  const provider = {
+    kind: "docker",
+    async reconcile() {
+      throw new Error("lifecycle operations must not reconcile");
+    },
+    async rollback(request) {
+      received.push({ action: "rollback", request });
+    },
+    async delete(request) {
+      received.push({ action: "delete", request });
+    },
+  };
+  const rollback = claimedOperation({
+    action: "rollback",
+    payload: { generation: 9 },
+  });
+  const context = (operation) => ({
+    operation,
+    signal: new AbortController().signal,
+    async artifact() {
+      throw new Error("lifecycle operations must not fetch artifacts");
+    },
+    async runtime() {
+      throw new Error("lifecycle operations must not fetch runtime capsules");
+    },
+    async observe() {
+      throw new Error("lifecycle operations do not publish desired-state observations");
+    },
+  });
+
+  assert.deepEqual(
+    await executeDeploymentProvider(provider, rollback, context(rollback)),
+    { provider: "docker", action: "rollback", generation: 9 },
+  );
+  assert.equal(received[0].request.confirmation, "rollback project_provider_01 9");
+  assert.equal(received[0].request.operation.fence, rollback.fence);
+  assert.equal("leaseToken" in received[0].request.operation, false);
+  assert.equal("nodeId" in received[0].request.operation, false);
+
+  const deletion = claimedOperation({
+    id: "op_provider_delete_01",
+    action: "delete",
+    payload: { generation: 10 },
+    fence: 8,
+  });
+  assert.deepEqual(
+    await executeDeploymentProvider(provider, deletion, context(deletion)),
+    { provider: "docker", action: "delete", generation: 10 },
+  );
+  assert.equal(received[1].request.confirmation, "delete project_provider_01");
+  assert.equal(received[1].request.operation.id, deletion.id);
+
+  const injected = claimedOperation({
+    action: "rollback",
+    payload: {
+      generation: 9,
+      confirmation: "rollback another_project 1",
+    },
+  });
+  await assert.rejects(
+    executeDeploymentProvider(provider, injected, context(injected)),
+    /Unknown field confirmation/u,
+  );
+  await assert.rejects(
+    executeDeploymentProvider({
+      kind: "limited",
+      async reconcile() {},
+    }, rollback, context(rollback)),
+    /does not support rollback/u,
+  );
 });
 
 test("provider deployment agent composes enrollment, fixed results, observation, and drain", async () => {
@@ -488,6 +565,87 @@ test("HTTP provider bridge carries runtime capsules only in the bounded request 
   }
 });
 
+test("HTTP provider bridge carries fenced rollback and deletion without bodies or confirmations", async () => {
+  const received = [];
+  const handler = createDeploymentProviderHandler({
+    kind: "docker",
+    async reconcile() {},
+    async rollback(request) {
+      received.push({ action: "rollback", request });
+    },
+    async delete(request) {
+      received.push({ action: "delete", request });
+    },
+  }, { token: providerToken });
+  const calls = [];
+  const provider = createHttpDeploymentProvider({
+    baseUrl: "http://127.0.0.1:9876",
+    token: providerToken,
+    retries: 0,
+    async fetch(url, init) {
+      calls.push({ url: String(url), init });
+      return handler.handle(new Request(url, init));
+    },
+  });
+
+  await provider.rollback(providerLifecycleInput("rollback", 12));
+  await provider.delete(providerLifecycleInput("delete", 13));
+  assert.deepEqual(calls.map((call) => call.url), [
+    `http://127.0.0.1:9876${DEPLOYMENT_PROVIDER_ROLLBACK_PATH}`,
+    `http://127.0.0.1:9876${DEPLOYMENT_PROVIDER_DELETE_PATH}`,
+  ]);
+  for (const { init } of calls) {
+    assert.equal(init.body, undefined);
+    assert.equal(init.redirect, "error");
+    assert.equal(init.headers.has("content-type"), false);
+    assert.equal(init.headers.has("x-clank-content-sha256"), false);
+    assert.equal([...init.headers].flat().join("\n").includes("confirmation"), false);
+  }
+  assert.equal(received[0].request.confirmation, "rollback project_provider_01 12");
+  assert.equal(received[1].request.confirmation, "delete project_provider_01");
+  assert.equal("leaseToken" in received[0].request.operation, false);
+
+  let retryAttempts = 0;
+  const retrying = createHttpDeploymentProvider({
+    baseUrl: "http://127.0.0.1:9876",
+    token: providerToken,
+    retries: 1,
+    async fetch(url, init) {
+      retryAttempts += 1;
+      if (retryAttempts === 1) return new Response(null, { status: 503 });
+      return handler.handle(new Request(url, init));
+    },
+  });
+  await retrying.rollback(providerLifecycleInput("rollback", 14));
+  assert.equal(retryAttempts, 2);
+  assert.equal(received[2].request.operation.id, "op_provider_rollback_14");
+
+  const body = await handler.handle(new Request(
+    `http://127.0.0.1${DEPLOYMENT_PROVIDER_ROLLBACK_PATH}`,
+    {
+      method: "POST",
+      headers: providerLifecycleWireHeaders("rollback", providerToken, 12),
+      body: "caller-controlled-confirmation",
+    },
+  ));
+  assert.equal(body.status, 400);
+  assert.equal((await body.json()).error, "UNEXPECTED_BODY");
+
+  const unsupported = createDeploymentProviderHandler({
+    kind: "limited",
+    async reconcile() {},
+  }, { token: providerToken });
+  const missingCapability = await unsupported.handle(new Request(
+    `http://127.0.0.1${DEPLOYMENT_PROVIDER_DELETE_PATH}`,
+    {
+      method: "POST",
+      headers: providerLifecycleWireHeaders("delete", providerToken, 13),
+    },
+  ));
+  assert.equal(missingCapability.status, 501);
+  assert.equal((await missingCapability.json()).error, "ACTION_UNSUPPORTED");
+});
+
 test("HTTP provider bridge authenticates, bounds, retries, and keeps provider failures private", async () => {
   const fixture = await releaseFixture();
   const privateErrors = [];
@@ -597,6 +755,11 @@ test("provider handler closes browser and method surfaces and rejects unexpected
     kind: "test",
     async reconcile() {},
   }, { token: providerToken });
+  assert.deepEqual(handler.paths, [
+    DEPLOYMENT_PROVIDER_RECONCILE_PATH,
+    DEPLOYMENT_PROVIDER_ROLLBACK_PATH,
+    DEPLOYMENT_PROVIDER_DELETE_PATH,
+  ]);
   assert.equal((await handler.handle(new Request("http://127.0.0.1/other"))).status, 404);
   const method = await handler.handle(new Request(
     `http://127.0.0.1${DEPLOYMENT_PROVIDER_RECONCILE_PATH}`,
@@ -847,4 +1010,33 @@ function providerWireHeaders(fixture, token) {
     headers.set("x-clank-release-id", "release_provider_01");
   }
   return headers;
+}
+
+function providerLifecycleInput(action, generation) {
+  return {
+    operation: {
+      id: `op_provider_${action}_${generation}`,
+      projectId: "project_provider_01",
+      fence: generation,
+      attempt: 2,
+      maxAttempts: 10,
+    },
+    generation,
+    confirmation: action === "rollback"
+      ? `rollback project_provider_01 ${generation}`
+      : "delete project_provider_01",
+    signal: new AbortController().signal,
+  };
+}
+
+function providerLifecycleWireHeaders(action, token, generation) {
+  return new Headers({
+    authorization: `Bearer ${token}`,
+    "x-clank-operation-id": `op_provider_${action}_${generation}`,
+    "x-clank-operation-fence": String(generation),
+    "x-clank-operation-attempt": "2",
+    "x-clank-operation-max-attempts": "10",
+    "x-clank-project-id": "project_provider_01",
+    "x-clank-generation": String(generation),
+  });
 }

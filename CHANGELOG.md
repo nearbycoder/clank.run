@@ -22,6 +22,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   of requiring callers to reach beneath a live runtime boundary. Both operations revoke traffic,
   drain requests, stop every writer, persist restart-safe destructive intent, and resume safely
   when a process exits after the data commit point.
+- Provider agents and the authenticated HTTP bridge now carry canonical `rollback` and `delete`
+  operations to those lifecycle methods. Confirmations are derived after lease validation,
+  request bodies are forbidden, coordinator credentials never cross the provider boundary, and
+  existing operation tables migrate in place without losing history or fence high-water marks.
 - Docker runtime launch can defer workers and the scheduler until `activate()` runs after provider
   data commits. Provider data validation has a cleanup hook that must quiesce an exposed candidate
   before uncommitted SQLite rollback and leaves recovery journaled when cleanup is uncertain.

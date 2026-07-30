@@ -24,6 +24,8 @@ import {
 } from "./runtime-placement.ts";
 
 export const DEPLOYMENT_PROVIDER_RECONCILE_PATH = "/v1/clank/reconcile";
+export const DEPLOYMENT_PROVIDER_ROLLBACK_PATH = "/v1/clank/rollback";
+export const DEPLOYMENT_PROVIDER_DELETE_PATH = "/v1/clank/delete";
 
 export interface DeploymentProviderOperation {
   readonly id: string;
@@ -58,6 +60,15 @@ export interface DeploymentProviderRequest {
   readonly signal: AbortSignal;
 }
 
+export interface DeploymentProviderLifecycleRequest {
+  readonly operation: DeploymentProviderOperation;
+  /** Exact current provider-data generation being changed. */
+  readonly generation: number;
+  /** Derived confirmation; never accepted from an operation payload. */
+  readonly confirmation: string;
+  readonly signal: AbortSignal;
+}
+
 /**
  * The portable infrastructure boundary. A provider must converge the project
  * to the requested generation and make repeated operation/fence pairs safe.
@@ -66,6 +77,10 @@ export interface DeploymentProvider {
   /** Stable, non-secret adapter name used in bounded operation results. */
   readonly kind: string;
   reconcile(request: DeploymentProviderRequest): Promise<void>;
+  /** Optional fenced destructive lifecycle capability. */
+  rollback?(request: DeploymentProviderLifecycleRequest): Promise<unknown>;
+  /** Optional fenced destructive lifecycle capability. */
+  delete?(request: DeploymentProviderLifecycleRequest): Promise<unknown>;
 }
 
 export interface ProviderDeploymentAgentOptions
@@ -101,6 +116,11 @@ export interface DeploymentProviderHandlerOptions {
 
 export interface DeploymentProviderHandler {
   readonly path: typeof DEPLOYMENT_PROVIDER_RECONCILE_PATH;
+  readonly paths: readonly [
+    typeof DEPLOYMENT_PROVIDER_RECONCILE_PATH,
+    typeof DEPLOYMENT_PROVIDER_ROLLBACK_PATH,
+    typeof DEPLOYMENT_PROVIDER_DELETE_PATH,
+  ];
   handle(request: Request): Promise<Response>;
 }
 
@@ -133,8 +153,60 @@ export async function openProviderDeploymentAgent(
       }),
     }),
     async execute(operation, context) {
-      return reconcileDeploymentProvider(options.provider, operation, context);
+      return executeDeploymentProvider(options.provider, operation, context);
     },
+  });
+}
+
+/**
+ * Dispatches canonical reconcile and destructive lifecycle operations without
+ * passing node credentials, operation lease tokens, or caller confirmations.
+ */
+export async function executeDeploymentProvider(
+  provider: DeploymentProvider,
+  operation: ClaimedDeploymentOperation,
+  context: DeploymentExecutionContext,
+): Promise<
+  | {
+      provider: string;
+      generation: number;
+      releaseId: string | null;
+      state: "running" | "stopped";
+    }
+  | {
+      provider: string;
+      action: "rollback" | "delete";
+      generation: number;
+    }
+> {
+  if (operation.action === "reconcile") {
+    return reconcileDeploymentProvider(provider, operation, context);
+  }
+  if (operation.action !== "rollback" && operation.action !== "delete") {
+    throw new TypeError("Portable deployment providers accept only reconcile, rollback, or delete operations.");
+  }
+  const action = operation.action;
+  const execute = provider[action];
+  if (typeof execute !== "function") {
+    throw new TypeError(`Deployment provider does not support ${action}.`);
+  }
+  const payload = lifecycleState(operation.payload, action);
+  const requestOperation = providerOperation(operation, context);
+  const confirmation = action === "rollback"
+    ? `rollback ${requestOperation.projectId} ${payload.generation}`
+    : `delete ${requestOperation.projectId}`;
+  throwIfAborted(context.signal);
+  await execute.call(provider, Object.freeze({
+    operation: requestOperation,
+    generation: payload.generation,
+    confirmation,
+    signal: context.signal,
+  }));
+  throwIfAborted(context.signal);
+  return Object.freeze({
+    provider: providerKind(provider.kind),
+    action,
+    generation: payload.generation,
   });
 }
 
@@ -157,13 +229,7 @@ export async function reconcileDeploymentProvider(
     throw new TypeError("Portable deployment providers accept only reconcile operations.");
   }
   const desired = desiredState(operation.payload);
-  const requestOperation = Object.freeze({
-    id: safeIdentifier(operation.id, "operation ID"),
-    projectId: safeIdentifier(operation.projectId, "project ID"),
-    fence: positiveInteger(context.operation.fence, "operation fence"),
-    attempt: positiveInteger(context.operation.attempts, "operation attempt"),
-    maxAttempts: positiveInteger(context.operation.maxAttempts, "operation maxAttempts"),
-  });
+  const requestOperation = providerOperation(operation, context);
   let artifact: DeploymentProviderArtifact | null = null;
   let runtime: DeploymentRuntimeCapsule | null = null;
   if (desired.state === "running") {
@@ -209,7 +275,11 @@ export async function reconcileDeploymentProvider(
 export function createHttpDeploymentProvider(
   options: HttpDeploymentProviderOptions,
 ): DeploymentProvider {
-  const endpoint = providerEndpoint(options.baseUrl);
+  const endpoints = Object.freeze({
+    reconcile: providerEndpoint(options.baseUrl, DEPLOYMENT_PROVIDER_RECONCILE_PATH),
+    rollback: providerEndpoint(options.baseUrl, DEPLOYMENT_PROVIDER_ROLLBACK_PATH),
+    delete: providerEndpoint(options.baseUrl, DEPLOYMENT_PROVIDER_DELETE_PATH),
+  });
   const token = highEntropyToken(options.token, "token");
   const request = options.fetch ?? fetch;
   const timeoutMs = integer(options.timeoutMs ?? 60_000, "timeoutMs", 100, 10 * 60_000);
@@ -221,6 +291,74 @@ export function createHttpDeploymentProvider(
     1024 * 1024,
   );
 
+  const send = async (
+    action: "reconcile" | "rollback" | "delete",
+    headers: Headers,
+    body: BodyInit | undefined,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      throwIfAborted(signal);
+      const controller = new AbortController();
+      const aborted = () => controller.abort(signal.reason);
+      signal.addEventListener("abort", aborted, { once: true });
+      const timer = setTimeout(
+        () => controller.abort(new Error("Deployment provider request timed out.")),
+        timeoutMs,
+      );
+      try {
+        const response = await request(endpoints[action], {
+          method: "POST",
+          headers,
+          body,
+          redirect: "error",
+          signal: controller.signal,
+        });
+        if (response.status === 204) {
+          await discardResponse(response, maxResponseBytes);
+          return;
+        }
+        await discardResponse(response, maxResponseBytes);
+        if (attempt < retries && retryableStatus(response.status)) {
+          await retryDelay(attempt, signal);
+          continue;
+        }
+        throw new DeploymentProviderError(
+          response.status >= 400 && response.status <= 599 ? response.status : 502,
+          "PROVIDER_REJECTED",
+          `Deployment provider rejected ${action}.`,
+        );
+      } catch (error) {
+        if (error instanceof DeploymentProviderError) throw error;
+        if (signal.aborted) throw signal.reason ?? error;
+        if (attempt < retries) {
+          await retryDelay(attempt, signal);
+          continue;
+        }
+        if (controller.signal.aborted) {
+          throw new DeploymentProviderError(
+            504,
+            "PROVIDER_TIMEOUT",
+            `Deployment provider ${action} timed out.`,
+          );
+        }
+        throw new DeploymentProviderError(
+          502,
+          "PROVIDER_UNAVAILABLE",
+          "Deployment provider is unavailable.",
+        );
+      } finally {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", aborted);
+      }
+    }
+    throw new DeploymentProviderError(
+      502,
+      "PROVIDER_UNAVAILABLE",
+      "Deployment provider is unavailable.",
+    );
+  };
+
   const provider: DeploymentProvider = {
     kind: "http",
     async reconcile(input: DeploymentProviderRequest) {
@@ -231,62 +369,25 @@ export function createHttpDeploymentProvider(
         : normalized.artifact
           ? requestBody(normalized.artifact.bytes)
           : undefined;
-      for (let attempt = 0; attempt <= retries; attempt += 1) {
-        throwIfAborted(normalized.signal);
-        const controller = new AbortController();
-        const aborted = () => controller.abort(normalized.signal.reason);
-        normalized.signal.addEventListener("abort", aborted, { once: true });
-        const timer = setTimeout(
-          () => controller.abort(new Error("Deployment provider request timed out.")),
-          timeoutMs,
-        );
-        try {
-          const response = await request(endpoint, {
-            method: "POST",
-            headers,
-            body,
-            redirect: "error",
-            signal: controller.signal,
-          });
-          if (response.status === 204) {
-            await discardResponse(response, maxResponseBytes);
-            return;
-          }
-          await discardResponse(response, maxResponseBytes);
-          if (attempt < retries && retryableStatus(response.status)) {
-            await retryDelay(attempt, normalized.signal);
-            continue;
-          }
-          throw new DeploymentProviderError(
-            response.status >= 400 && response.status <= 599 ? response.status : 502,
-            "PROVIDER_REJECTED",
-            "Deployment provider rejected reconciliation.",
-          );
-        } catch (error) {
-          if (error instanceof DeploymentProviderError) throw error;
-          if (normalized.signal.aborted) throw normalized.signal.reason ?? error;
-          if (attempt < retries) {
-            await retryDelay(attempt, normalized.signal);
-            continue;
-          }
-          if (controller.signal.aborted) {
-            throw new DeploymentProviderError(
-              504,
-              "PROVIDER_TIMEOUT",
-              "Deployment provider reconciliation timed out.",
-            );
-          }
-          throw new DeploymentProviderError(
-            502,
-            "PROVIDER_UNAVAILABLE",
-            "Deployment provider is unavailable.",
-          );
-        } finally {
-          clearTimeout(timer);
-          normalized.signal.removeEventListener("abort", aborted);
-        }
-      }
-      throw new DeploymentProviderError(502, "PROVIDER_UNAVAILABLE", "Deployment provider is unavailable.");
+      await send("reconcile", headers, body, normalized.signal);
+    },
+    async rollback(input) {
+      const normalized = providerLifecycleRequest(input, "rollback");
+      await send(
+        "rollback",
+        providerLifecycleHeaders(normalized, token),
+        undefined,
+        normalized.signal,
+      );
+    },
+    async delete(input) {
+      const normalized = providerLifecycleRequest(input, "delete");
+      await send(
+        "delete",
+        providerLifecycleHeaders(normalized, token),
+        undefined,
+        normalized.signal,
+      );
     },
   };
   return Object.freeze(provider);
@@ -322,11 +423,17 @@ export function createDeploymentProviderHandler(
     }
   };
 
+  const paths = Object.freeze([
+    DEPLOYMENT_PROVIDER_RECONCILE_PATH,
+    DEPLOYMENT_PROVIDER_ROLLBACK_PATH,
+    DEPLOYMENT_PROVIDER_DELETE_PATH,
+  ] as const);
   const handler: DeploymentProviderHandler = {
     path: DEPLOYMENT_PROVIDER_RECONCILE_PATH,
+    paths,
     async handle(request: Request) {
       const url = new URL(request.url);
-      if (url.pathname !== DEPLOYMENT_PROVIDER_RECONCILE_PATH) {
+      if (!paths.some((path) => url.pathname === path)) {
         return providerProblem(404, "NOT_FOUND", "Deployment provider endpoint not found.");
       }
       if (request.method !== "POST") {
@@ -341,6 +448,63 @@ export function createDeploymentProviderHandler(
         const supplied = bearerToken(request);
         if (!await tokensEqual(supplied, token)) {
           throw new ProviderRequestError(401, "AUTH_DENIED", "Deployment provider authentication failed.");
+        }
+        if (url.pathname !== DEPLOYMENT_PROVIDER_RECONCILE_PATH) {
+          const action = url.pathname === DEPLOYMENT_PROVIDER_ROLLBACK_PATH
+            ? "rollback"
+            : "delete";
+          const execute = provider[action];
+          if (typeof execute !== "function") {
+            throw new ProviderRequestError(
+              501,
+              "ACTION_UNSUPPORTED",
+              `Deployment provider does not support ${action}.`,
+            );
+          }
+          const lifecycle = providerLifecycleRequestHeaders(
+            request.headers,
+            request.signal,
+            action,
+          );
+          if (
+            request.headers.has("content-type")
+            || request.headers.has("x-clank-content-sha256")
+            || request.headers.has("x-clank-desired-state")
+            || request.headers.has("x-clank-release-id")
+            || request.headers.has("x-clank-runtime-protocol")
+          ) {
+            throw new ProviderRequestError(
+              400,
+              "UNEXPECTED_BODY",
+              `Deployment provider ${action} cannot include release content.`,
+            );
+          }
+          const length = contentLength(request.headers);
+          if (length !== null && length !== 0) {
+            throw new ProviderRequestError(
+              400,
+              "UNEXPECTED_BODY",
+              `Deployment provider ${action} cannot include a request body.`,
+            );
+          }
+          await requireEmptyBody(request.body, action);
+          throwIfAborted(request.signal);
+          try {
+            await execute.call(provider, lifecycle);
+          } catch (error) {
+            if (request.signal.aborted) throw error;
+            report(error);
+            throw new ProviderRequestError(
+              500,
+              "PROVIDER_FAILED",
+              `Deployment provider ${action} failed.`,
+            );
+          }
+          throwIfAborted(request.signal);
+          return new Response(null, {
+            status: 204,
+            headers: providerHeadersBase(),
+          });
         }
         const parsed = providerRequestHeaders(request.headers);
         const desired = parsed.desired;
@@ -516,6 +680,37 @@ function assertRuntimeBindings(
   }
 }
 
+function providerOperation(
+  operation: ClaimedDeploymentOperation,
+  context: DeploymentExecutionContext,
+): DeploymentProviderOperation {
+  if (
+    context.operation.id !== operation.id
+    || context.operation.projectId !== operation.projectId
+    || context.operation.action !== operation.action
+  ) {
+    throw new TypeError("Deployment execution context does not match its operation.");
+  }
+  return Object.freeze({
+    id: safeIdentifier(operation.id, "operation ID"),
+    projectId: safeIdentifier(operation.projectId, "project ID"),
+    fence: positiveInteger(context.operation.fence, "operation fence"),
+    attempt: positiveInteger(context.operation.attempts, "operation attempt"),
+    maxAttempts: positiveInteger(context.operation.maxAttempts, "operation maxAttempts"),
+  });
+}
+
+function lifecycleState(
+  value: unknown,
+  action: "rollback" | "delete",
+): Readonly<{ generation: number }> {
+  const input = plainObject(value, `${action} payload`);
+  exact(input, ["generation"]);
+  return Object.freeze({
+    generation: positiveInteger(input.generation, `${action} generation`),
+  });
+}
+
 function desiredState(value: unknown): DeploymentProviderDesiredState {
   const input = plainObject(value, "reconcile payload");
   exact(
@@ -595,6 +790,52 @@ async function providerRequest(input: DeploymentProviderRequest): Promise<Deploy
   });
 }
 
+function providerLifecycleRequest(
+  input: DeploymentProviderLifecycleRequest,
+  action: "rollback" | "delete",
+): DeploymentProviderLifecycleRequest {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(`Provider ${action} request is required.`);
+  }
+  exact(input as unknown as Record<string, unknown>, [
+    "operation",
+    "generation",
+    "confirmation",
+    "signal",
+  ]);
+  const operationInput = plainObject(input.operation, `${action} operation`);
+  exact(operationInput, ["id", "projectId", "fence", "attempt", "maxAttempts"]);
+  const operation = Object.freeze({
+    id: safeIdentifier(operationInput.id, "operation ID"),
+    projectId: safeIdentifier(operationInput.projectId, "project ID"),
+    fence: positiveInteger(operationInput.fence, "operation fence"),
+    attempt: positiveInteger(operationInput.attempt, "operation attempt"),
+    maxAttempts: positiveInteger(operationInput.maxAttempts, "operation maxAttempts"),
+  });
+  if (operation.attempt > operation.maxAttempts) {
+    throw new TypeError(`Provider ${action} operation attempt exceeds maxAttempts.`);
+  }
+  const generation = positiveInteger(input.generation, `${action} generation`);
+  const confirmation = typeof input.confirmation === "string"
+    ? input.confirmation
+    : "";
+  const expected = action === "rollback"
+    ? `rollback ${operation.projectId} ${generation}`
+    : `delete ${operation.projectId}`;
+  if (confirmation !== expected) {
+    throw new TypeError(`confirmation must equal "${expected}".`);
+  }
+  if (!(input.signal instanceof AbortSignal)) {
+    throw new TypeError("signal must be an AbortSignal.");
+  }
+  return Object.freeze({
+    operation,
+    generation,
+    confirmation,
+    signal: input.signal,
+  });
+}
+
 function providerHeaders(input: DeploymentProviderRequest, token: string): Headers {
   const headers = new Headers({
     authorization: `Bearer ${token}`,
@@ -621,6 +862,21 @@ function providerHeaders(input: DeploymentProviderRequest, token: string): Heade
     }
   }
   return headers;
+}
+
+function providerLifecycleHeaders(
+  input: DeploymentProviderLifecycleRequest,
+  token: string,
+): Headers {
+  return new Headers({
+    authorization: `Bearer ${token}`,
+    "x-clank-operation-id": input.operation.id,
+    "x-clank-operation-fence": String(input.operation.fence),
+    "x-clank-operation-attempt": String(input.operation.attempt),
+    "x-clank-operation-max-attempts": String(input.operation.maxAttempts),
+    "x-clank-project-id": input.operation.projectId,
+    "x-clank-generation": String(input.generation),
+  });
 }
 
 function desiredStateFromHeaders(headers: Headers): DeploymentProviderDesiredState {
@@ -663,6 +919,32 @@ function providerRequestHeaders(headers: Headers): {
   }
 }
 
+function providerLifecycleRequestHeaders(
+  headers: Headers,
+  signal: AbortSignal,
+  action: "rollback" | "delete",
+): DeploymentProviderLifecycleRequest {
+  try {
+    const operation = operationFromHeaders(headers);
+    const generation = headerInteger(headers, "x-clank-generation");
+    return providerLifecycleRequest({
+      operation,
+      generation,
+      confirmation: action === "rollback"
+        ? `rollback ${operation.projectId} ${generation}`
+        : `delete ${operation.projectId}`,
+      signal,
+    }, action);
+  } catch (error) {
+    if (error instanceof ProviderRequestError) throw error;
+    throw new ProviderRequestError(
+      400,
+      "INVALID_REQUEST",
+      `Deployment provider ${action} request is invalid.`,
+    );
+  }
+}
+
 function contentDigestHeader(headers: Headers, code: "ARTIFACT_INVALID" | "RUNTIME_INVALID"): string {
   const digest = requiredHeader(headers, "x-clank-content-sha256");
   if (!/^[a-f0-9]{64}$/u.test(digest)) {
@@ -677,7 +959,12 @@ function contentDigestHeader(headers: Headers, code: "ARTIFACT_INVALID" | "RUNTI
   return digest;
 }
 
-function providerEndpoint(input: string): string {
+function providerEndpoint(
+  input: string,
+  path: typeof DEPLOYMENT_PROVIDER_RECONCILE_PATH
+    | typeof DEPLOYMENT_PROVIDER_ROLLBACK_PATH
+    | typeof DEPLOYMENT_PROVIDER_DELETE_PATH,
+): string {
   const url = new URL(input);
   if (url.username || url.password || url.search || url.hash) {
     throw new TypeError("Deployment provider baseUrl cannot contain credentials, query, or fragment.");
@@ -686,7 +973,7 @@ function providerEndpoint(input: string): string {
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     throw new TypeError("Deployment provider baseUrl must use HTTPS or loopback HTTP.");
   }
-  url.pathname = `${url.pathname.replace(/\/+$/u, "")}${DEPLOYMENT_PROVIDER_RECONCILE_PATH}`;
+  url.pathname = `${url.pathname.replace(/\/+$/u, "")}${path}`;
   return url.toString();
 }
 
@@ -816,6 +1103,27 @@ async function readBytes(
     offset += chunk.byteLength;
   }
   return output;
+}
+
+async function requireEmptyBody(
+  stream: ReadableStream<Uint8Array> | null,
+  action: "rollback" | "delete",
+): Promise<void> {
+  if (!stream) return;
+  const reader = stream.getReader();
+  try {
+    const first = await reader.read();
+    if (!first.done) {
+      await reader.cancel();
+      throw new ProviderRequestError(
+        400,
+        "UNEXPECTED_BODY",
+        `Deployment provider ${action} cannot include a request body.`,
+      );
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function discardResponse(response: Response, limit: number): Promise<void> {

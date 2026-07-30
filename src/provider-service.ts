@@ -18,7 +18,7 @@ import {
 } from "./provider-runtime.ts";
 import {
   type DeploymentProvider,
-  type DeploymentProviderOperation,
+  type DeploymentProviderLifecycleRequest,
   type DeploymentProviderRequest,
 } from "./provider.ts";
 import {
@@ -48,14 +48,8 @@ export interface DeploymentProviderServiceState {
   readonly updatedAt: number;
 }
 
-export interface DeploymentProviderServiceLifecycleRequest {
-  readonly operation: DeploymentProviderOperation;
-  /** Exact current provider-data generation being changed. */
-  readonly generation: number;
-  /** Exact human/operator confirmation required by the data boundary. */
-  readonly confirmation: string;
-  readonly signal: AbortSignal;
-}
+export type DeploymentProviderServiceLifecycleRequest =
+  DeploymentProviderLifecycleRequest;
 
 export interface DeploymentProviderServiceOptions {
   /** Existing private provider root shared by the injected data and runtime components. */

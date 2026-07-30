@@ -1414,7 +1414,11 @@ function deploymentOperation(value: unknown): DeploymentOperation {
   return {
     id: string(input.id, "operation.id"),
     projectId: string(input.projectId, "operation.projectId"),
-    action: enumeration(input.action, "operation.action", ["reconcile", "deploy", "rollback", "restart", "stop"] as const),
+    action: enumeration(
+      input.action,
+      "operation.action",
+      ["reconcile", "deploy", "rollback", "restart", "stop", "delete"] as const,
+    ),
     state: enumeration(
       input.state,
       "operation.state",

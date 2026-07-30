@@ -35,7 +35,7 @@ export interface NodeSession {
 }
 export interface DeploymentOperationInput {
     projectId: string;
-    action: "reconcile" | "deploy" | "rollback" | "restart" | "stop";
+  action: "reconcile" | "deploy" | "rollback" | "restart" | "stop" | "delete";
     payload?: unknown;
     idempotencyKey: string;
     nodeId?: string;
