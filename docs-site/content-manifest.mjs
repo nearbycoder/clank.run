@@ -69,6 +69,7 @@ export const groups = [
       ["distributed-deployment", "docs/distributed-deployment.md"],
       ["runtime-placement", "docs/runtime-placement.md"],
       ["provider-adapters", "docs/provider-adapters.md"],
+      ["provider-data-lifecycle", "docs/provider-data-lifecycle.md"],
       ["railway", "docs/railway.md"],
       ["self-hosting", "docs/self-hosting.md"],
       ["releases", "docs/releases.md"]

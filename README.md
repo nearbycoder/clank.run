@@ -194,7 +194,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 
 | Start | Build | Operate | Verify |
 | --- | --- | --- | --- |
-| [Getting started](docs/getting-started.md)<br>[Application recipes](docs/application-recipes.md)<br>[AI blueprints](docs/blueprints.md)<br>[CLI](docs/cli.md) | [Reactivity](docs/reactivity.md)<br>[Rendering](docs/rendering.md)<br>[Forms](docs/forms.md)<br>[Routing](docs/routing.md)<br>[Full stack](docs/full-stack.md)<br>[Durable jobs and cron](docs/jobs-and-cron.md)<br>[Tailwind](docs/tailwind.md) | [Deployment](docs/deployment-platform.md)<br>[Preview environments](docs/preview-environments.md)<br>[Usage and limits](docs/usage-and-limits.md)<br>[Runner fleet](docs/runner-fleet.md)<br>[Runtime placement](docs/runtime-placement.md)<br>[Provider adapters](docs/provider-adapters.md)<br>[Dashboard and domains](docs/platform-dashboard.md)<br>[Migrations](docs/migrations.md)<br>[Backups](docs/recovery.md)<br>[Self-hosting](docs/self-hosting.md)<br>[Railway](docs/railway.md) | [Agent protocol](docs/agent-protocol.md)<br>[Per-app MCP](docs/per-app-mcp.md)<br>[Authentication](docs/authentication.md)<br>[Threat model](docs/threat-model.md)<br>[ASVS verification](docs/security-asvs.md)<br>[Conformance](docs/conformance.md) |
+| [Getting started](docs/getting-started.md)<br>[Application recipes](docs/application-recipes.md)<br>[AI blueprints](docs/blueprints.md)<br>[CLI](docs/cli.md) | [Reactivity](docs/reactivity.md)<br>[Rendering](docs/rendering.md)<br>[Forms](docs/forms.md)<br>[Routing](docs/routing.md)<br>[Full stack](docs/full-stack.md)<br>[Durable jobs and cron](docs/jobs-and-cron.md)<br>[Tailwind](docs/tailwind.md) | [Deployment](docs/deployment-platform.md)<br>[Preview environments](docs/preview-environments.md)<br>[Usage and limits](docs/usage-and-limits.md)<br>[Runner fleet](docs/runner-fleet.md)<br>[Runtime placement](docs/runtime-placement.md)<br>[Provider adapters](docs/provider-adapters.md)<br>[Provider data lifecycle](docs/provider-data-lifecycle.md)<br>[Dashboard and domains](docs/platform-dashboard.md)<br>[Migrations](docs/migrations.md)<br>[Backups](docs/recovery.md)<br>[Self-hosting](docs/self-hosting.md)<br>[Railway](docs/railway.md) | [Agent protocol](docs/agent-protocol.md)<br>[Per-app MCP](docs/per-app-mcp.md)<br>[Authentication](docs/authentication.md)<br>[Threat model](docs/threat-model.md)<br>[ASVS verification](docs/security-asvs.md)<br>[Conformance](docs/conformance.md) |
 
 <details>
 <summary><strong>Complete documentation index</strong></summary>
@@ -212,6 +212,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [One-time enrollment and deployment runner fleet operations](docs/runner-fleet.md)
 - [Integrity-checked remote runtime placement capsules](docs/runtime-placement.md)
 - [Portable deployment provider adapters and HTTP bridge](docs/provider-adapters.md)
+- [Crash-safe provider SQLite and release lifecycle](docs/provider-data-lifecycle.md)
 - [Isolated, expiring preview environments](docs/preview-environments.md)
 - [Transparent usage accounting and traffic limits](docs/usage-and-limits.md)
 - [Managed ingress, custom domains, and external PostgreSQL](docs/data-plane.md)

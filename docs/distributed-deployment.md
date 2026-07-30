@@ -170,8 +170,10 @@ durable completion results. `openProviderDeploymentAgent()` verifies the capsule
 its project, release, and generation before provider code can see it. The provider is a trusted
 application compute boundary because it necessarily receives application secrets and data.
 
-The built-in platform does not select this protocol yet. Provider-side snapshot, restore, deletion,
-migration, health, rollback, and ingress activation must be complete before remote placement is
+The built-in platform does not select this protocol yet. The packaged [provider data
+lifecycle](provider-data-lifecycle.md) covers local snapshot, restore, deletion, migrations,
+rollback, fencing, and crash recovery. Isolated launch, private health, node pinning, independent
+backup replication, and ingress activation must be integrated before hosted remote placement is
 enabled. See [Remote runtime placement](runtime-placement.md).
 
 ## Platform behavior

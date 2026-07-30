@@ -6,6 +6,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- A zero-dependency provider data lifecycle now consumes independently verified
+  `clank-runtime/1` capsules, stages immutable releases, initializes/preserves/replaces
+  project-isolated SQLite, applies immutable migrations, exports consistent snapshots, retains
+  one rollback generation, and requires exact confirmations for rollback and deletion. Durable
+  apply/rollback journals recover crashes around the atomic metadata commit point, while
+  generation/fence high-water marks reject stale work.
 - A versioned `clank-runtime/1` binary capsule now binds one desired project generation to its
   verified release, final process environment, SQLite initialization/preservation/replacement
   intent, optional integrity-checked snapshot, and managed-ingress identity. The codec has strict
@@ -92,6 +98,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Security
 
+- Provider data metadata is exact-field decoded, size-bounded, project-bound, owner-only, and
+  confined to typed data/generation/recovery paths. Unsafe permissions, symbolic-link storage,
+  conflicting capsule/desired-state bindings, changed database paths, stale fences, and corrupted
+  state relationships fail closed. Runtime environment values and ingress tokens remain
+  memory-only, and committed cleanup can never roll database bytes back under newer metadata.
 - Runtime capsules require the exact current node and operation lease, use canonical stored desired
   state, recheck the lease after capsule loading, verify whole-body and nested section digests, and
   bind project/release/generation at the provider hop. Application secrets, SQLite bytes, and

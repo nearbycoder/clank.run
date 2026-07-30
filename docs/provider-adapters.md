@@ -177,6 +177,12 @@ Every adapter must satisfy all of these rules:
 10. Test retry after commit, lease loss, stale fences, abort, health failure, partial ingress
     switch, restart from durable state, and provider outage.
 
+`openDeploymentProviderDataStore()` implements the provider-owned portion of rules 1, 2, 5, 6,
+and 9 for immutable releases plus SQLite. It independently binds runtime capsules to desired
+state, applies migrations behind a consistent safety snapshot, commits metadata atomically,
+retains one rollback generation, and journals interrupted apply and rollback work. See
+[Provider data lifecycle](provider-data-lifecycle.md) before writing a runtime adapter.
+
 ## What is and is not portable yet
 
 The provider contract, HTTP bridge, runner command, release and runtime transport, object storage,
@@ -187,11 +193,13 @@ surface.
 The built-in control plane still activates its ordinary hosted projects through its local
 supervisor. Enabling enrollment or starting `clank-runner` does not silently relocate existing
 projects. A fully remote installation must deliberately connect desired-state creation, runtime
-capsule creation, provider-side application data lifecycle, health routing, TLS/edge routing, log
-and metric collection, and deletion/backup policy. The capsule is not selected by the built-in
-platform until provider snapshot/restore/delete and ingress activation are implemented and tested.
-Clank refuses to pretend those data and security boundaries are solved by uploading code alone.
+capsule creation, the packaged provider data lifecycle, isolated runtime launch and health,
+TLS/edge routing, log and metric collection, and independent backup policy. The capsule is not
+selected by the built-in platform until ingress activation and the complete cross-node recovery
+path are integrated and tested. Clank refuses to pretend those data and security boundaries are
+solved by uploading code alone.
 
-See [Remote runtime placement](runtime-placement.md) for the exact body, trust boundary, and
-activation gate. The eventual provider integration should consume the same contract rather than
-adding provider-specific logic to application code or the control database.
+See [Remote runtime placement](runtime-placement.md) for the exact body and trust boundary, then
+[Provider data lifecycle](provider-data-lifecycle.md) for its safe local consumption. The eventual
+provider integration should consume these contracts rather than adding provider-specific logic to
+application code or the control database.

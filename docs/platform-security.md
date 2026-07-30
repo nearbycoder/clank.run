@@ -86,9 +86,11 @@ failure bodies, independently verifies artifact or capsule bytes, and exposes on
 provider failures. Secret values stay out of headers. Its exact retries are safe only when
 provider code persists the operation/fence idempotency rule.
 
-The built-in control plane does not activate remote runtime placement until provider-side
-snapshot/restore/delete, migration, rollback, health, and ingress switching are implemented. See
-[Remote runtime placement](runtime-placement.md).
+The built-in control plane does not activate remote runtime placement yet. Provider-side
+snapshot/restore/delete, migration, rollback, fencing, and crash recovery are package-supported;
+isolated launch, private health, stateful node pinning, independent recovery replication, and
+ingress switching still require end-to-end integration. See [Provider data
+lifecycle](provider-data-lifecycle.md) and [Remote runtime placement](runtime-placement.md).
 
 ## Authentication
 

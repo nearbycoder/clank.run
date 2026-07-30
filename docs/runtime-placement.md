@@ -158,19 +158,19 @@ protocol selector, provider verification, authenticated HTTP forwarding, public 
 packaged-runner limits are implemented and tested.
 
 The built-in control plane deliberately does **not** select `clank-runtime/1` for hosted projects
-yet. Remote activation remains closed until the provider data lifecycle can:
+yet. The package-supported [provider data lifecycle](provider-data-lifecycle.md) now stages code
+without persisting secrets; initializes, preserves, replaces, snapshots, rolls back, and deletes
+per-project SQLite data; applies immutable migrations; retains one rollback generation; and
+recovers interrupted apply and rollback journals.
 
-1. stage code and environment without exposing secrets;
-2. initialize, preserve, replace, snapshot, restore, and delete per-project SQLite data;
-3. run migrations and health checks before traffic changes;
-4. atomically publish and revoke ingress routes;
-5. retain rollback-safe generations; and
-6. prove backup/restore and deletion behavior during retries, crashes, and lease loss.
+Remote activation remains closed until that lifecycle is bound end to end to an isolated runtime
+launcher, private health check, atomic ingress publish/revoke, stateful node pinning, encrypted
+recovery replication, and lease-loss/traffic-switch certification.
 
 Until those controls land, enabling a runner fleet does not move existing applications or their
 data. The current single-host deployment path stays unchanged and no additional Railway service,
 volume, database, or object store is required.
 
-Continue with [Deployment provider adapters](provider-adapters.md), [Durable distributed
-deployment](distributed-deployment.md), [Recovery](recovery.md), and [Platform
-security](platform-security.md).
+Continue with [Provider data lifecycle](provider-data-lifecycle.md), [Deployment provider
+adapters](provider-adapters.md), [Durable distributed deployment](distributed-deployment.md),
+[Recovery](recovery.md), and [Platform security](platform-security.md).
