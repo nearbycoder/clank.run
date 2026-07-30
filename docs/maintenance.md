@@ -86,8 +86,46 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   SSR/hydration, exact mutations, live and request/response refresh, reference selection, form
   resets, transactional relationship restriction, development replacement, responsive layout,
   browser diagnostics, and live-stream shutdown all passed.
-- [ ] Record PR checks, CodeQL, merge SHA, post-merge docs deployment, Railway activation, and
-  production health.
+- [x] Recorded [PR #108](https://github.com/nearbycoder/clank.run/pull/108): Node 22.16,
+  Node 24, packaged conformance, JavaScript/TypeScript analysis, and CodeQL passed before squash
+  merge `e6704be3d4302d711f6b090d467846c6d5a1b01a`. Post-merge CodeQL run `30565255558`
+  passed. CI run `30565255578` passed on controlled attempt 2 after attempt 1 completed all 233
+  tests but a GitHub-hosted runner retained an orphan handle until the job timeout; the identical
+  retry exited normally in 1m49s with no source change.
+- [x] Gated docs deployment run `30566642514` passed. Railway deployment
+  `0976a419-1dfa-4911-b30b-c22ffe08b9ba` activated the exact merge through `/railway.json`,
+  passed database readiness, and removed the prior generation only after success. The control
+  plane and docs liveness/readiness endpoints returned HTTP 200.
+- [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
+
+## 2026-07-30 generated tests and fixtures phase
+
+- [x] Added normalized, frozen `clank-fixture/1` blueprint states with bounded synthetic users,
+  roles, profile names, entities, records, scalar values, and stable `entity.record` references.
+- [x] Generated a safe deterministic default fixture when none is declared, including valid
+  field-type samples, default omission, required-reference creation order, and related same-owner
+  records.
+- [x] Rejected invalid field/default values, missing or cross-owner references, reference cycles,
+  impossible required-reference schemas, generated fixture-path collisions, unknown contract
+  names, and excessive fixture/user/record counts before writing files.
+- [x] Added generated app-owned Node tests for exact agent-manifest parity, real backend creation
+  and reads, resolved reference values, private/public ownership visibility, and every declared SSR
+  route.
+- [x] Added deterministic fixture/contract tests to the authenticated built-in starter and an SSR
+  contract to the minimal starter; exposed `npm test` in template metadata, create JSON results,
+  generated READMEs, and agent guides.
+- [x] Kept fixtures and tests outside the deployment include allowlist, documented that they are
+  synthetic non-production source inputs, and added no runtime dependency or test framework.
+- [x] Passed the complete local gate: 335 tests, 86.34% line / 75.18% branch / 87.12% function
+  coverage, 59 Markdown files, 252 local links, 54 indexed guides, 35 synchronized declaration
+  files, 33 package exports, all nine packed-release scenarios, package/current-tree and reachable
+  history credential scans, workflow-policy checks, and a 214-file npm allowlist.
+- [x] Browser-certified a freshly generated five-route app on desktop and 390 px mobile:
+  registration, SSR/hydration, related-record creation through real mutations, reference
+  selection, navigation, responsive layout without horizontal overflow, and browser diagnostics
+  all passed.
+- [ ] Record PR checks, CodeQL, merge SHA, gated docs deployment, exact Railway activation, and
+  public production health.
 - [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 version 0.10.0 release phase

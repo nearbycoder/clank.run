@@ -17,10 +17,13 @@ last good server running.
 The build compiles `src/styles.css` with the local Tailwind CLI and serves the resulting static
 `dist/styles.css`; production does not load Tailwind from a browser CDN.
 
+`npm test` builds and verifies deterministic server-rendered hydration content with Node's built-in
+test runner.
+
 ## Check and deploy
 
 ```sh
-npm run build
+npm test
 npm run doctor
 npm run deploy:check
 clank login

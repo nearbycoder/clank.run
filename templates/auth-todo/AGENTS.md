@@ -8,6 +8,8 @@ This is a Clank full-stack application. Keep the safe path short, the generated 
 - `npm run jobs:worker` builds and starts a durable background worker.
 - `npm run jobs:scheduler` builds and starts the cron scheduler.
 - `npm run build` compiles `src/` into `dist/`.
+- `npm test` builds and runs the application-owned contract against an isolated database.
+- `npm run test:watch` reruns that contract while tests are being edited.
 - `npm run doctor` performs local readiness diagnostics.
 - `npm run deploy:check` builds and verifies a deterministic artifact without login or upload.
 - `npm run deploy` builds, creates/links the project when needed, migrates, health-checks, and activates it.
@@ -20,6 +22,8 @@ This is a Clank full-stack application. Keep the safe path short, the generated 
 - `src/view.tsx`: accessible UI and stable agent-addressable controls.
 - `src/app.tsx`: hydration, auth client, live query, and browser interactions.
 - `src/server.tsx`: routes, SSR, CSP, static files, and API wiring.
+- `fixtures/`: deterministic synthetic application states; never production data.
+- `tests/app.contract.mjs`: manifest, backend, ownership, fixture, and SSR contract.
 - `migrations/`: immutable ordered SQL history.
 - `clank.deploy.json`: build, artifact, database, health, jobs, and public environment contract.
 - `.clank/`: local artifacts and project link; never commit it.
@@ -42,7 +46,8 @@ This is a Clank full-stack application. Keep the safe path short, the generated 
 - Keep stable `agentId` and useful `agentLabel` values on important controls.
 - Keep `/healthz` cheap and independent of optional external services.
 - Do not hand-edit `dist/`; it is generated.
+- Keep fixtures deterministic, secret-free, and limited to `.example.invalid` identities.
 
 ## Definition of done
 
-Run `npm run build`, `npm run doctor`, and `npm run deploy:check`. For UI changes, verify registration/login and todo creation in a browser. For data changes, verify both a fresh database and an existing migrated database. For backend changes, connect to `/__clank/mcp`, inspect `tools/list`, and verify the narrowest OAuth scope that can perform the action.
+Run `npm test`, `npm run doctor`, and `npm run deploy:check`. For UI changes, verify registration/login and todo creation in a browser. For data changes, update the deterministic fixture and verify both a fresh database and an existing migrated database. For backend changes, connect to `/__clank/mcp`, inspect `tools/list`, and verify the narrowest OAuth scope that can perform the action.

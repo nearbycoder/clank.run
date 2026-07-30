@@ -209,6 +209,40 @@ const multiEntityApp = {
       operation: "delete",
     },
   },
+  fixtures: {
+    review: {
+      users: {
+        primary: {
+          email: "owner@example.invalid",
+          role: "owner",
+          profile: { name: "Fixture Owner" },
+        },
+      },
+      records: {
+        projects: {
+          launch: { owner: "primary", values: { name: "Launch" } },
+        },
+        tasks: {
+          ship: {
+            owner: "primary",
+            values: { title: "Ship", projectId: { ref: "projects.launch" } },
+          },
+        },
+        notes: {
+          context: {
+            owner: "primary",
+            values: { body: "Context", projectId: { ref: "projects.launch" } },
+          },
+        },
+        gates: {
+          security: {
+            owner: "primary",
+            values: { title: "Security", projectId: { ref: "projects.launch" } },
+          },
+        },
+      },
+    },
+  },
   services: {
     mail: {
       kind: "email",
@@ -230,7 +264,12 @@ test("app blueprints normalize, validate references, remain immutable, and expla
   assert.equal(app.protocol, "clank-app/1");
   assert.equal(app.slug, "focused-tasks");
   assert.equal(app.entities.tasks.fields.done.default, false);
+  assert.equal(app.fixtures.default.protocol, "clank-fixture/1");
+  assert.equal(app.fixtures.default.users.primary.email, "fixture@focused-tasks.example.invalid");
+  assert.equal(app.fixtures.default.records.tasks.primary.values.title, "Task Title");
+  assert.equal(Object.hasOwn(app.fixtures.default.records.tasks.primary.values, "done"), false);
   assert.equal(Object.isFrozen(app.entities.tasks.fields), true);
+  assert.equal(Object.isFrozen(app.fixtures.default.records.tasks.primary.values), true);
   assert.match(explainApp(app), /Organization ownership requires/);
   assert.throws(() => {
     app.entities.tasks.fields.title.type = "boolean";
@@ -303,6 +342,114 @@ test("app blueprints normalize, validate references, remain immutable, and expla
   }), /typed API reference protocol/u);
 });
 
+test("explicit fixtures validate users, field values, ownership, references, and seed order", () => {
+  const app = defineApp({
+    ...multiEntityApp,
+    fixtures: {
+      review: {
+        description: "A review-ready delivery state.",
+        users: {
+          primary: {
+            email: "owner@example.invalid",
+            role: "owner",
+            profile: { name: "Owner" },
+          },
+          teammate: {
+            email: "member@example.invalid",
+            role: "member",
+            profile: { name: "Member" },
+          },
+        },
+        records: {
+          projects: {
+            launch: { owner: "primary", values: { name: "Launch" } },
+          },
+          tasks: {
+            ship: {
+              owner: "primary",
+              values: { title: "Ship", projectId: { ref: "projects.launch" } },
+            },
+          },
+          notes: {
+            context: {
+              owner: "primary",
+              values: { body: "Review context", projectId: { ref: "projects.launch" } },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(Object.keys(app.fixtures), ["review"]);
+  assert.equal(app.fixtures.review.records.tasks.ship.values.projectId.ref, "projects.launch");
+
+  assert.throws(() => defineApp({
+    ...multiEntityApp,
+    fixtures: {
+      broken: {
+        users: { primary: { email: "owner@example.invalid", role: "owner" } },
+        records: {
+          projects: { launch: { values: { name: "Launch" } } },
+          tasks: { ship: { values: { title: "Ship", projectId: { ref: "projects.missing" } } } },
+        },
+      },
+    },
+  }), /references missing projects\.missing/u);
+  assert.throws(() => defineApp({
+    ...multiEntityApp,
+    fixtures: {
+      broken: {
+        users: {
+          primary: { email: "owner@example.invalid", role: "owner" },
+          teammate: { email: "member@example.invalid", role: "member" },
+        },
+        records: {
+          projects: { launch: { owner: "primary", values: { name: "Launch" } } },
+          tasks: {
+            ship: {
+              owner: "teammate",
+              values: { title: "Ship", projectId: { ref: "projects.launch" } },
+            },
+          },
+        },
+      },
+    },
+  }), /must use the same owner/u);
+  assert.throws(() => defineApp({
+    ...todoist,
+    fixtures: {
+      broken: {
+        users: { primary: { email: "owner@example.invalid", role: "owner" } },
+        records: { tasks: { invalid: { values: { title: "", priority: "urgent" } } } },
+      },
+    },
+  }), /shorter than 1/u);
+  assert.throws(() => defineApp({
+    name: "Circular records",
+    description: "Required references cannot be created.",
+    auth: { roles: { member: { description: "Member.", permissions: ["app.use"] } } },
+    entities: {
+      left: {
+        description: "Left.",
+        displayField: "name",
+        fields: {
+          name: { type: "string" },
+          rightId: { type: "reference", entity: "right" },
+        },
+      },
+      right: {
+        description: "Right.",
+        displayField: "name",
+        fields: {
+          name: { type: "string" },
+          leftId: { type: "reference", entity: "left" },
+        },
+      },
+    },
+    routes: [{ path: "/", view: "Left", entity: "left" }],
+  }), /Required entity references must be acyclic/u);
+});
+
 test("TypeScript blueprint modules are statically parsed without executing code", () => {
   const source = `
     import type { AppBlueprintInput } from "@clank.run/framework/blueprint";
@@ -344,6 +491,7 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.match(first.digest, /^[a-f0-9]{64}$/);
   assert.ok(first.files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
   assert.ok(first.warnings.some((warning) => warning.includes("Organization")));
+  assert.equal(first.summary.fixtures, 1);
   const files = generateAppFiles(todoist, { frameworkVersion: version });
   assert.deepEqual(files.map((file) => file.path), [...files.map((file) => file.path)].sort());
   assert.match(files.find((file) => file.path === "src/backend.ts").contents, /by_priority/);
@@ -367,7 +515,13 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.equal(packageJson.devDependencies.tailwindcss, "^4.2.4");
   assert.equal(packageJson.devDependencies["@tailwindcss/cli"], "^4.2.4");
   assert.match(packageJson.scripts.build, /--tailwind=src\/styles\.css/);
+  assert.match(packageJson.scripts.test, /node --disable-warning=ExperimentalWarning --test/u);
+  assert.equal(packageJson.scripts["test:watch"].includes("--watch"), true);
   assert.match(files.find((file) => file.path === "AGENTS.md").contents, /npm run deploy:check/);
+  const fixture = JSON.parse(files.find((file) => file.path === "fixtures/default.json").contents);
+  assert.equal(fixture.protocol, "clank-fixture/1");
+  assert.equal(fixture.records.tasks.primary.values.title, "Task Title");
+  assert.match(files.find((file) => file.path === "tests/app.contract.mjs").contents, /ownership visibility/u);
   const readme = files.find((file) => file.path === "README.md").contents;
   assert.match(readme, /Focused Tasks/);
   assert.match(readme, /clank login\n/u);
@@ -466,7 +620,7 @@ test("plan, explain, and generate CLI commands create a buildable app without bl
     assert.equal(savedPlan.digest, parsedPlan.digest);
 
     const repeated = await run(["generate", target, `--blueprint=${source}`]);
-    assert.match(repeated.stdout, /0 files written, 15 unchanged/);
+    assert.match(repeated.stdout, /0 files written, 17 unchanged/);
     await run(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "backend.js"), "utf8"), /by_priority/);
   } finally {
@@ -572,6 +726,7 @@ test("generated multi-route backends enforce roles and transactional relationshi
     assert.match(browser, /records_notes = signal/u);
     assert.match(browser, /client\.query\(client\.api\["notes"\]\["list"\]\)/u);
     assert.doesNotMatch(browser, /client\.live\(client\.api\["notes"\]/u);
+    await runNodeTests(target, "tests/app.contract.mjs");
   } finally {
     runtime?.close();
     await rm(root, { recursive: true, force: true });
@@ -627,5 +782,25 @@ function run(args, cwd = repository) {
     child.once("exit", (code) => code === 0
       ? resolve({ stdout, stderr })
       : reject(new Error(`CLI exited with ${code}.\n${stdout}\n${stderr}`)));
+  });
+}
+
+function runNodeTests(cwd, testPath) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      "--disable-warning=ExperimentalWarning",
+      "--test",
+      testPath,
+    ], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => stdout += chunk);
+    child.stderr.on("data", (chunk) => stderr += chunk);
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0
+      ? resolve({ stdout, stderr })
+      : reject(new Error(`Generated tests exited with ${code}.\n${stdout}\n${stderr}`)));
   });
 }

@@ -1,0 +1,25 @@
+{
+  "protocol": "clank-fixture/1",
+  "name": "default",
+  "description": "Deterministic private Todo smoke-test data.",
+  "users": {
+    "primary": {
+      "email": "fixture@example.invalid",
+      "role": "member",
+      "profile": {
+        "name": "Fixture User"
+      }
+    }
+  },
+  "records": {
+    "todos": {
+      "first": {
+        "owner": "primary",
+        "values": {
+          "title": "Verify the generated app",
+          "done": false
+        }
+      }
+    }
+  }
+}

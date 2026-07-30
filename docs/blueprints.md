@@ -111,6 +111,35 @@ export default {
       capabilities: ["delayed", "retry"],
     },
   },
+  fixtures: {
+    review: {
+      description: "A stable state for app and agent contract tests.",
+      users: {
+        primary: {
+          email: "owner@example.invalid",
+          role: "owner",
+          profile: { name: "Fixture Owner" },
+        },
+      },
+      records: {
+        projects: {
+          launch: {
+            owner: "primary",
+            values: { name: "Launch" },
+          },
+        },
+        tasks: {
+          ship: {
+            owner: "primary",
+            values: {
+              title: "Ship the application",
+              projectId: { ref: "projects.launch" },
+            },
+          },
+        },
+      },
+    },
+  },
   deployment: {
     database: "sqlite",
     scale: "single",
@@ -161,6 +190,13 @@ npm run dev
 certifies the artifact without uploading it; `npm run deploy` creates or links the remote project,
 runs migrations, verifies health, and activates the release.
 
+Run the generated application contract independently:
+
+```sh
+npm test
+npm run test:watch
+```
+
 ## What generation executes
 
 Generation is no longer a single-table mock-up. The baseline includes:
@@ -176,7 +212,9 @@ Generation is no longer a single-table mock-up. The baseline includes:
 - live subscriptions for `realtime: true` entities and mutation-triggered request/response refresh
   for `realtime: false` entities;
 - service requirement validation, local development drivers, health checks, and a fail-closed
-  production provisioning boundary; and
+  production provisioning boundary;
+- deterministic synthetic fixtures plus application-owned backend, ownership, manifest, and SSR
+  tests using Node's built-in test runner; and
 - built-in auth, SQLite, migrations, Tailwind compilation, CSP, observability, graceful shutdown,
   and the per-app OAuth/MCP server.
 
@@ -186,6 +224,83 @@ entity's display field.
 
 The generated files remain normal TypeScript. Regeneration is an architectural starting point,
 not a reason to overwrite deliberate application code.
+
+## Fixtures and generated tests
+
+Every blueprint produces at least one `clank-fixture/1` document under `fixtures/` and one
+application-owned `tests/app.contract.mjs`. If `fixtures` is omitted, Clank derives a bounded
+`default` fixture from the entity fields, defaults, roles, and references. Generated values are
+stable across machines and repeated plans.
+
+Declare named fixtures when the product state matters:
+
+```ts
+fixtures: {
+  empty: {
+    users: {
+      primary: {
+        email: "member@example.invalid",
+        role: "member",
+        profile: { name: "Fixture Member" },
+      },
+    },
+    records: {},
+  },
+  review: {
+    description: "Related project and task records.",
+    users: {
+      primary: {
+        email: "owner@example.invalid",
+        role: "owner",
+        profile: { name: "Fixture Owner" },
+      },
+    },
+    records: {
+      projects: {
+        launch: {
+          owner: "primary",
+          values: { name: "Launch" },
+        },
+      },
+      tasks: {
+        ship: {
+          owner: "primary",
+          values: {
+            title: "Ship",
+            projectId: { ref: "projects.launch" },
+          },
+        },
+      },
+    },
+  },
+},
+```
+
+Users and records have stable aliases. A reference uses `{ ref: "entity.record" }`; the test loader
+creates referenced records first and replaces the alias with the real runtime ID. Required
+references must therefore be acyclic. Private referenced records must use the same fixture owner,
+matching the generated database's authorization boundary.
+
+Normalization rejects unknown users, roles, entities, fields, records, invalid scalar values,
+invalid enum/date/email/URL values, cross-owner private references, cyclic record references,
+duplicate generated fixture paths, more than 20 fixtures, more than 10 users per fixture, or more
+than 100 records per fixture. Profiles currently support the generated auth profile's optional
+`name` field.
+
+The generated suite:
+
+- compares agent-enabled `GET /__clank/manifest` paths with every generated backend function;
+- registers fixture users and calls the app's real create/list actions against an isolated
+  in-memory database;
+- resolves references, then verifies every supplied field value;
+- proves private records are invisible to a separately registered account while public data
+  remains visible; and
+- server-renders every declared route with its allowed role.
+
+Fixtures are not migrations, seed scripts, passwords, or production snapshots. The deployment
+allowlist contains only `dist/` and `migrations/`, so `fixtures/` and `tests/` remain local and in
+source control. Keep identities under `.example.invalid`, use synthetic values, and never paste
+customer or production data into a fixture.
 
 ## Entities and ownership
 
@@ -320,6 +435,8 @@ The important files are:
 | `src/server.tsx` | route SSR, role checks, CSP, health, services, static files, and API/MCP routing |
 | `src/service-requirements.ts` | normalized external service contract |
 | `src/services.ts` | local drivers and production service boundary |
+| `fixtures/*.json` | deterministic, synthetic, non-production app states |
+| `tests/app.contract.mjs` | application-owned manifest, backend, isolation, fixture, and SSR checks |
 | `migrations/` | immutable SQL history plus the canonical blueprint metadata |
 | `AGENTS.md` | commands, file map, invariants, and definition of done for coding agents |
 
@@ -334,9 +451,10 @@ literal with comments, trailing commas, and an optional `satisfies` or `as const
 calls, computed properties, template expressions, environment reads, runtime imports, and
 arbitrary statements are rejected.
 
-Relationship references, role names, action/entity alignment, behavior/operation compatibility,
-route collisions, cascade cycles, service capabilities, migrations, deployment environment names,
-and generated type collisions are validated before any files are written.
+Relationship and fixture references, fixture ownership and values, role names, action/entity
+alignment, behavior/operation compatibility, route collisions, cascade cycles, required-reference
+creation cycles, service capabilities, migrations, deployment environment names, and generated
+type collisions are validated before any files are written.
 
 This means an AI can prepare a TypeScript-assisted contract without gaining implicit local-code
 execution during review or generation. Generated source is still code and must pass ordinary
