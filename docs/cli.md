@@ -298,6 +298,8 @@ clank preview list
 clank preview remove feature-auth \
   --confirm="delete-preview feature-auth" \
   --acknowledge-data-loss
+clank preview github configure owner/repository
+clank preview github status
 ```
 
 Preview deploys use the production link without replacing it. Each normalized name has a separate,
@@ -305,6 +307,18 @@ expiring URL, SQLite database, releases, secrets, jobs, logs, and MCP endpoint. 
 refreshes its TTL and deploys a new release. Production data and secrets are never copied, and the
 preview consumes an ordinary account/workspace project slot. See
 [Preview environments](preview-environments.md).
+
+`preview github configure` binds the linked project to the repository's immutable GitHub ID and
+writes deploy plus cleanup workflows. Public repository IDs are resolved automatically; private
+repositories pass `--repository-id=<id> --cleanup-ref=refs/heads/<trusted-branch>`. The workflows
+are limited to that default/trusted base branch and exchange GitHub Actions OIDC for a
+one-time, 15-minute, `pull-N`-restricted identity, so there is no Clank deployment secret to add
+to GitHub. Configuration requires an isolated/provider runtime and owner/admin access.
+
+The `--github`, `--project`, and `--server` flags emitted into those workflows are CI transport
+inputs, not a replacement for interactive login. Outside GitHub Actions, `--github` fails before
+contacting the platform. The returned credential is kept in memory, is never saved to
+`CLANK_HOME`, and cannot deploy the production project.
 
 ## Status and rollback
 

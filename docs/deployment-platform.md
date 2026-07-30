@@ -196,6 +196,14 @@ recovery, so an expired runtime is deleted rather than restarted. The background
 same durable lock and path-safe complete deletion path as a manual removal. See
 [Preview environments](preview-environments.md) for the CLI, API, CI, and retention contracts.
 
+GitHub pull-request automation uses workload identity rather than a long-lived deployment secret.
+`clank preview github configure <owner/repository>` binds an immutable GitHub repository ID and
+exact deploy/cleanup workflow paths, then generates pinned workflows. The public exchange accepts
+only GitHub-signed RS256 OIDC tokens for the configured repository, workflow, event, ref, and
+control-plane audience. A JWT ID is single-use, and the resulting token expires after 15 minutes
+with authority over exactly one `pull-N` preview. Federation is refused for a trusted in-process
+runtime because pull-request code requires provider/container isolation.
+
 ## Site deletion
 
 Owners and organization administrators can permanently reclaim a site slot from the dashboard or CLI:

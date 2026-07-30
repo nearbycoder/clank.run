@@ -4,6 +4,17 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.11.0 - 2026-07-30
+
+- Added secretless GitHub pull-request previews. `clank preview github configure` binds an
+  immutable repository ID, generates commit-SHA-pinned deploy and trusted-base cleanup workflows,
+  and exchanges GitHub Actions OIDC for a one-time, 15-minute token scoped to exactly one
+  `pull-N` preview.
+- GitHub preview federation verifies the fixed issuer/JWKS, RS256 signature, audience, repository
+  name and ID, workflow path/SHA, event, ref, time window, and replay-resistant JWT ID. It is
+  refused without HTTPS and provider/container isolation; production and sibling projects remain
+  inaccessible, cleanup revokes every temporary preview token, and no raw identity or credential
+  is persisted or audited.
 - Provider-hosted projects now expose the same bounded job status/list/cancel/retry API and CLI as
   local projects through a private `clank-provider-jobs/1` control contract. The transport binds
   exact node/release/generation identity, validates all query/body/response bounds and schemas,
