@@ -483,6 +483,251 @@ test("artifact transfer rechecks the operation lease after provider work", async
   }
 });
 
+test("runtime capsules require the exact authenticated operation lease and are never cacheable", async () => {
+  const bytes = new TextEncoder().encode("sensitive-runtime-capsule");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  let providerRequest;
+  const test = await fixture({}, {
+    runtime: {
+      async load(request) {
+        providerRequest = request;
+        return { bytes, sha256: digest };
+      },
+    },
+  });
+  try {
+    const session = await test.client.register(registrationToken, {
+      id: "runner-runtime-01",
+      region: "local",
+    });
+    await test.orchestrator.setDesired({
+      projectId: "project_runtime",
+      releaseId: "release-runtime-1",
+      state: "running",
+      region: "local",
+      runtimeProtocol: "clank-runtime/1",
+    });
+    const [operation] = await test.client.claim(session.node.id, session.token, 1);
+    const runtime = await test.client.runtime(session.node.id, session.token, {
+      ...operation,
+      payload: { releaseId: "attacker-selected-release" },
+    });
+    assert.deepEqual(runtime.bytes, bytes);
+    assert.equal(runtime.sha256, digest);
+    assert.equal(providerRequest.operation.id, operation.id);
+    assert.equal(providerRequest.operation.payload.releaseId, "release-runtime-1");
+    assert.equal(providerRequest.operation.payload.runtimeProtocol, "clank-runtime/1");
+    assert.equal("leaseToken" in providerRequest.operation, false);
+    assert.equal(Object.isFrozen(providerRequest.operation), true);
+    assert.equal(providerRequest.signal.aborted, false);
+
+    const direct = await test.handler.handle(new Request(
+      "http://127.0.0.1:4200/api/runner/v1/runtime",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.token}`,
+          "content-type": "application/json",
+          "x-clank-node-id": session.node.id,
+        },
+        body: JSON.stringify({ operation }),
+      },
+    ));
+    assert.equal(direct.status, 200);
+    assert.equal(direct.headers.get("cache-control"), "private, no-store");
+    assert.equal(direct.headers.get("content-type"), "application/vnd.clank.runtime");
+    assert.equal(direct.headers.get("x-clank-content-sha256"), digest);
+
+    const other = await test.client.register(registrationToken, {
+      id: "runner-runtime-02",
+      region: "local",
+    });
+    await assert.rejects(
+      test.client.runtime(other.node.id, other.token, operation),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 403
+        && error.code === "NODE_SCOPE_DENIED",
+    );
+
+    assert.equal(await test.client.complete(session.node.id, session.token, operation), true);
+    await assert.rejects(
+      test.client.runtime(session.node.id, session.token, operation),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 409
+        && error.code === "STALE_OPERATION",
+    );
+    assert.equal(test.privateErrors.length, 0);
+  } finally {
+    await test.close();
+  }
+});
+
+test("runtime transport fails closed on provider, response integrity, and size errors", async () => {
+  const bytes = new TextEncoder().encode("tampered-runtime");
+  const badDigest = "0".repeat(64);
+  const providerTest = await fixture({}, {
+    runtime: {
+      async load() {
+        return { bytes, sha256: badDigest };
+      },
+    },
+  });
+  try {
+    const session = await providerTest.client.register(registrationToken, {
+      id: "runner-bad-runtime-01",
+      region: "local",
+    });
+    await providerTest.orchestrator.enqueue({
+      projectId: "project_bad_runtime",
+      action: "deploy",
+      idempotencyKey: "bad-runtime-provider",
+      nodeId: session.node.id,
+    });
+    const [operation] = await providerTest.client.claim(session.node.id, session.token, 1);
+    await assert.rejects(
+      providerTest.client.runtime(session.node.id, session.token, operation),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 500
+        && error.code === "COORDINATOR_FAILED",
+    );
+    assert.match(String(providerTest.privateErrors[0]), /digest mismatch/u);
+  } finally {
+    await providerTest.close();
+  }
+
+  const operation = {
+    id: "op_runtime_client",
+    projectId: "project_runtime_client",
+    action: "deploy",
+    state: "leased",
+    payload: null,
+    nodeId: "runner-runtime-client",
+    attempts: 1,
+    maxAttempts: 10,
+    fence: 1,
+    nextAttemptAt: Date.now(),
+    leaseExpiresAt: Date.now() + 10_000,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    leaseToken: "clnko_runtime_client_123456789012345678901234",
+  };
+  const integrityClient = createDeploymentCoordinatorClient({
+    baseUrl: "http://127.0.0.1:4200",
+    maxRuntimeBytes: 1_024,
+    fetch: async () => new Response(bytes, {
+      status: 200,
+      headers: {
+        "content-length": String(bytes.byteLength),
+        "content-type": "application/vnd.clank.runtime",
+        "x-clank-content-sha256": badDigest,
+      },
+    }),
+  });
+  await assert.rejects(
+    integrityClient.runtime(
+      operation.nodeId,
+      "clnka_runtime_client_123456789012345678901234",
+      operation,
+    ),
+    (error) => error instanceof DeploymentCoordinatorError
+      && error.status === 502
+      && error.code === "RUNTIME_INTEGRITY_FAILED",
+  );
+
+  const oversized = new Uint8Array(1_025);
+  const boundedClient = createDeploymentCoordinatorClient({
+    baseUrl: "http://127.0.0.1:4200",
+    maxRuntimeBytes: 1_024,
+    fetch: async () => new Response(oversized, {
+      status: 200,
+      headers: {
+        "content-length": "1",
+        "content-type": "application/vnd.clank.runtime",
+        "x-clank-content-sha256": createHash("sha256").update(oversized).digest("hex"),
+      },
+    }),
+  });
+  await assert.rejects(
+    boundedClient.runtime(
+      operation.nodeId,
+      "clnka_runtime_client_123456789012345678901234",
+      operation,
+    ),
+    (error) => error instanceof DeploymentCoordinatorError
+      && error.status === 502
+      && error.code === "RUNTIME_TOO_LARGE",
+  );
+
+  const providerBound = await fixture({}, {
+    maxRuntimeBytes: 1_024,
+    runtime: {
+      async load() {
+        return {
+          bytes: oversized,
+          sha256: createHash("sha256").update(oversized).digest("hex"),
+        };
+      },
+    },
+  });
+  try {
+    const session = await providerBound.client.register(registrationToken, {
+      id: "runner-large-runtime-01",
+      region: "local",
+    });
+    await providerBound.orchestrator.enqueue({
+      projectId: "project_large_runtime",
+      action: "deploy",
+      idempotencyKey: "large-runtime-provider",
+      nodeId: session.node.id,
+    });
+    const [claimed] = await providerBound.client.claim(session.node.id, session.token, 1);
+    await assert.rejects(
+      providerBound.client.runtime(session.node.id, session.token, claimed),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 413
+        && error.code === "RUNTIME_TOO_LARGE",
+    );
+  } finally {
+    await providerBound.close();
+  }
+});
+
+test("runtime transfer rechecks the operation lease after provider work", async () => {
+  const bytes = new TextEncoder().encode("slow-runtime-provider");
+  const test = await fixture({ operationLeaseMs: 100 }, {
+    runtime: {
+      async load() {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return {
+          bytes,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+        };
+      },
+    },
+  });
+  try {
+    const session = await test.client.register(registrationToken, {
+      id: "runner-expired-runtime-01",
+      region: "local",
+    });
+    await test.orchestrator.enqueue({
+      projectId: "project_expired_runtime",
+      action: "deploy",
+      idempotencyKey: "expired-runtime-provider",
+      nodeId: session.node.id,
+    });
+    const [operation] = await test.client.claim(session.node.id, session.token, 1);
+    await assert.rejects(
+      test.client.runtime(session.node.id, session.token, operation),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 409
+        && error.code === "STALE_OPERATION",
+    );
+  } finally {
+    await test.close();
+  }
+});
+
 test("coordinator transport is bounded, JSON-only, and fail-closed", async () => {
   const test = await fixture();
   try {
@@ -544,6 +789,18 @@ test("coordinator transport is bounded, JSON-only, and fail-closed", async () =>
       },
     ));
     assert.equal(unknown.status, 404);
+    const closedRuntime = await test.handler.handle(new Request(
+      "http://127.0.0.1:4200/api/runner/v1/runtime",
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${registrationToken}`,
+          "content-type": "application/json",
+        },
+        body: "{}",
+      },
+    ));
+    assert.equal(closedRuntime.status, 404);
     assert.equal(test.privateErrors.length, 0);
   } finally {
     await test.close();
@@ -598,10 +855,17 @@ test("platform runner endpoints remain closed unless enrollment is configured", 
 test("deployment agent enrolls, executes, observes, persists credentials, and drains", async () => {
   const artifactBytes = new TextEncoder().encode("deployment-agent-release");
   const artifactSha256 = createHash("sha256").update(artifactBytes).digest("hex");
+  const runtimeBytes = new TextEncoder().encode("deployment-agent-runtime");
+  const runtimeSha256 = createHash("sha256").update(runtimeBytes).digest("hex");
   const test = await fixture({ operationLeaseMs: 500 }, {
     artifact: {
       async load() {
         return { bytes: artifactBytes, sha256: artifactSha256 };
+      },
+    },
+    runtime: {
+      async load() {
+        return { bytes: runtimeBytes, sha256: runtimeSha256 };
       },
     },
   });
@@ -629,6 +893,9 @@ test("deployment agent enrolls, executes, observes, persists credentials, and dr
         const artifact = await context.artifact();
         assert.deepEqual(artifact.bytes, artifactBytes);
         assert.equal(artifact.sha256, artifactSha256);
+        const runtime = await context.runtime();
+        assert.deepEqual(runtime.bytes, runtimeBytes);
+        assert.equal(runtime.sha256, runtimeSha256);
         assert.equal(await context.observe({
           generation: payload.generation,
           releaseId: payload.releaseId,

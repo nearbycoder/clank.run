@@ -45,6 +45,8 @@ Optional environment:
   CLANK_RUNNER_CONTROL_TIMEOUT_MS  Control request deadline (default: 10000)
   CLANK_RUNNER_ARTIFACT_TIMEOUT_MS Artifact deadline (default: 60000)
   CLANK_RUNNER_MAX_ARTIFACT_BYTES Artifact ceiling (default: 104857600)
+  CLANK_RUNNER_RUNTIME_TIMEOUT_MS  Runtime capsule deadline (default: 120000)
+  CLANK_RUNNER_MAX_RUNTIME_BYTES  Runtime capsule ceiling (default: 805306368)
   CLANK_PROVIDER_TIMEOUT_MS        Provider deadline (default: 60000)
   CLANK_PROVIDER_RETRIES           Exact reconciliation retries (default: 2)
 
@@ -86,6 +88,18 @@ const client = createDeploymentCoordinatorClient({
     100 * 1024 * 1024,
     1_024,
     1024 * 1024 * 1024,
+  ),
+  runtimeTimeoutMs: number(
+    process.env.CLANK_RUNNER_RUNTIME_TIMEOUT_MS,
+    120_000,
+    100,
+    30 * 60_000,
+  ),
+  maxRuntimeBytes: number(
+    process.env.CLANK_RUNNER_MAX_RUNTIME_BYTES,
+    768 * 1024 * 1024,
+    1_024,
+    2 * 1024 * 1024 * 1024,
   ),
 });
 const provider = createHttpDeploymentProvider({

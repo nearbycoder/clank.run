@@ -107,6 +107,8 @@ export interface DeploymentOrchestrator {
     releaseId: string | null;
     state: "running" | "stopped";
     region?: string;
+    /** Selects the sensitive runtime capsule contract for the reconcile operation. */
+    runtimeProtocol?: "clank-runtime/1";
   }): Promise<DesiredDeployment>;
   desired(projectId: string): DesiredDeployment | null;
   observe(nodeId: string, token: string, input: {
@@ -355,10 +357,30 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
       ensureOpen();
       const projectId = safeName(input.projectId, "projectId", 128);
       const region = input.region ? safeName(input.region, "region", 100) : null;
+      const state = input.state;
+      if (state !== "running" && state !== "stopped") {
+        throw new TypeError("state must be running or stopped.");
+      }
+      const releaseId = input.releaseId === null
+        ? null
+        : safeName(input.releaseId, "releaseId", 128);
+      if (state === "running" && releaseId === null) {
+        throw new TypeError("A running deployment requires a releaseId.");
+      }
+      if (state === "stopped" && releaseId !== null) {
+        throw new TypeError("A stopped deployment cannot select a releaseId.");
+      }
+      const runtimeProtocol = input.runtimeProtocol;
+      if (runtimeProtocol !== undefined && runtimeProtocol !== "clank-runtime/1") {
+        throw new TypeError("runtimeProtocol is unsupported.");
+      }
+      if (state === "stopped" && runtimeProtocol !== undefined) {
+        throw new TypeError("A stopped deployment cannot select a runtimeProtocol.");
+      }
       reassignExpired();
       const existing = internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id = ?").get(projectId);
       const generation = existing ? Number(existing.generation) + 1 : 1;
-      const assignedNodeId = input.state === "running"
+      const assignedNodeId = state === "running"
         ? chooseNode(region ?? undefined)
         : existing?.assigned_node_id === null || existing?.assigned_node_id === undefined
           ? null
@@ -372,13 +394,18 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
           ON CONFLICT(project_id) DO UPDATE SET desired_release_id = excluded.desired_release_id,
             desired_state = excluded.desired_state, assigned_node_id = excluded.assigned_node_id,
             region = excluded.region, generation = excluded.generation, updated_at = excluded.updated_at`)
-          .run(projectId, input.releaseId, input.state, assignedNodeId, region, generation, now);
+          .run(projectId, releaseId, state, assignedNodeId, region, generation, now);
         changes.record("__orchestration", projectId);
       });
       await orchestrator.enqueue({
         projectId,
         action: "reconcile",
-        payload: { releaseId: input.releaseId, state: input.state, generation },
+        payload: {
+          releaseId,
+          state,
+          generation,
+          ...(runtimeProtocol ? { runtimeProtocol } : {}),
+        },
         idempotencyKey: `reconcile:${projectId}:${generation}`,
         ...(assignedNodeId ? { nodeId: assignedNodeId } : {}),
         ...(region ? { region } : {}),

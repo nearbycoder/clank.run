@@ -138,6 +138,7 @@ test("node placement, desired generations, operation retries, and stale-worker f
       releaseId: "release-1",
       state: "running",
       region: "us-central",
+      runtimeProtocol: "clank-runtime/1",
     });
     assert.equal(desired.assignedNodeId, "node-b");
     assert.equal(desired.generation, 1);
@@ -145,6 +146,7 @@ test("node placement, desired generations, operation retries, and stale-worker f
 
     const [firstClaim] = await test.orchestrator.claim("node-b", nodeB.token);
     assert.equal(firstClaim.action, "reconcile");
+    assert.equal(firstClaim.payload.runtimeProtocol, "clank-runtime/1");
     assert.equal(firstClaim.fence, 1);
     assert.equal((await test.orchestrator.authenticateOperation(firstClaim)).id, firstClaim.id);
     const retry = await test.orchestrator.fail(firstClaim, new Error("runtime temporarily unavailable"));
@@ -204,5 +206,41 @@ test("node placement, desired generations, operation retries, and stale-worker f
   } finally {
     test.database.close();
     await rm(test.root, { recursive: true, force: true });
+  }
+});
+
+test("desired deployment validation rejects inconsistent release and runtime state before persistence", async () => {
+  const test = await fixture();
+  try {
+    await assert.rejects(
+      test.orchestrator.setDesired({
+        projectId: "project_invalid_running",
+        releaseId: null,
+        state: "running",
+      }),
+      /requires a releaseId/u,
+    );
+    await assert.rejects(
+      test.orchestrator.setDesired({
+        projectId: "project_invalid_stopped",
+        releaseId: "release_not_allowed",
+        state: "stopped",
+      }),
+      /cannot select a releaseId/u,
+    );
+    await assert.rejects(
+      test.orchestrator.setDesired({
+        projectId: "project_invalid_runtime",
+        releaseId: "release_invalid_runtime",
+        state: "running",
+        runtimeProtocol: "clank-runtime/2",
+      }),
+      /runtimeProtocol is unsupported/u,
+    );
+    assert.equal(test.orchestrator.desired("project_invalid_running"), null);
+    assert.equal(test.orchestrator.desired("project_invalid_stopped"), null);
+    assert.equal(test.orchestrator.desired("project_invalid_runtime"), null);
+  } finally {
+    await test.close();
   }
 });

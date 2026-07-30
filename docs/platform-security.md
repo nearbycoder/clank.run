@@ -52,6 +52,15 @@ SHA-256, and the platform reads retained archives through an owner/mode/inode-va
 file descriptor. Archives are retained only while remote enrollment is enabled, counted against
 release storage, and contain neither platform-managed secrets nor application database files.
 
+The separate runtime-capsule call is available only when a coordinator runtime source is
+configured and still requires the exact current node and operation lease. It carries the final
+application environment, SQLite placement intent/optional snapshot, and ingress token only in a
+bounded `private, no-store` body. Both hops verify the whole digest and the provider adapter binds
+the decoded project, release, and generation to canonical desired state. The provider is therefore
+a trusted application compute boundary; compromise there can expose placed application data and
+secrets. The platform master key, browser/CLI credentials, node credential, and operation token
+never enter the capsule.
+
 The built-in deployment-agent loop keeps the enrollment token separate from the per-node
 credential and needs enrollment authority only when no usable node credential exists. Its file
 store rejects symbolic links, non-regular and oversized files, group/world-readable permissions,
@@ -68,12 +77,18 @@ Private execution and transport errors go to the node's operator hook; the defau
 message contains no exception detail.
 
 The `DeploymentProvider` wrapper gives provider code only the operation ID, project ID, monotonic
-fence, attempt counters, desired generation/state/release, verified artifact, and abort signal.
-Node credentials and operation lease tokens do not cross that boundary. The optional HTTP bridge
-uses a separate high-entropy bearer token, refuses redirects and non-loopback plaintext HTTP,
-bounds requests and failure bodies, independently verifies artifact bytes and config, and exposes
-only generic provider failures. Its exact retries are safe only when provider code persists the
-operation/fence idempotency rule.
+fence, attempt counters, desired generation/state/release, verified deployment content, and abort
+signal. A runtime-selected request intentionally adds the verified application environment,
+database placement, and ingress identity needed to launch that project. Node credentials and
+operation lease tokens do not cross the boundary. The optional HTTP bridge uses a separate
+high-entropy bearer token, refuses redirects and non-loopback plaintext HTTP, bounds requests and
+failure bodies, independently verifies artifact or capsule bytes, and exposes only generic
+provider failures. Secret values stay out of headers. Its exact retries are safe only when
+provider code persists the operation/fence idempotency rule.
+
+The built-in control plane does not activate remote runtime placement until provider-side
+snapshot/restore/delete, migration, rollback, health, and ingress switching are implemented. See
+[Remote runtime placement](runtime-placement.md).
 
 ## Authentication
 

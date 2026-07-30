@@ -36,6 +36,10 @@ export interface DeploymentCoordinatorHandlerOptions {
     artifact?: DeploymentArtifactProvider;
     /** Maximum artifact returned by the provider. Defaults to 100 MiB. */
     maxArtifactBytes?: number;
+    /** Optional sensitive runtime capsule source, scoped to a current operation lease. */
+    runtime?: DeploymentRuntimeProvider;
+    /** Maximum runtime capsule returned by the provider. Defaults to 768 MiB. */
+    maxRuntimeBytes?: number;
     /** Receives private unexpected failures. */
     onError?: (error: unknown) => void;
 }
@@ -55,6 +59,10 @@ export interface DeploymentCoordinatorClientOptions {
     maxArtifactBytes?: number;
     /** Artifact-transfer deadline. Defaults to 60 seconds. */
     artifactTimeoutMs?: number;
+    /** Maximum runtime capsule body. Defaults to 768 MiB. */
+    maxRuntimeBytes?: number;
+    /** Runtime-capsule transfer deadline. Defaults to 120 seconds. */
+    runtimeTimeoutMs?: number;
 }
 export interface DeploymentArtifact {
     readonly bytes: Uint8Array;
@@ -67,6 +75,17 @@ export interface DeploymentArtifactRequest {
 export interface DeploymentArtifactProvider {
     load(request: DeploymentArtifactRequest): Promise<DeploymentArtifact | null>;
 }
+export interface DeploymentRuntimeArtifact {
+    readonly bytes: Uint8Array;
+    readonly sha256: string;
+}
+export interface DeploymentRuntimeRequest {
+    readonly operation: DeploymentOperationLease;
+    readonly signal: AbortSignal;
+}
+export interface DeploymentRuntimeProvider {
+    load(request: DeploymentRuntimeRequest): Promise<DeploymentRuntimeArtifact | null>;
+}
 export interface DeploymentCoordinatorClient {
     register(registrationToken: string, input: DeploymentNodeInput): Promise<NodeSession>;
     authenticate(nodeId: string, token: string): Promise<DeploymentNode>;
@@ -77,6 +96,7 @@ export interface DeploymentCoordinatorClient {
     drain(nodeId: string, token: string, draining?: boolean): Promise<DeploymentNode>;
     claim(nodeId: string, token: string, limit?: number): Promise<ClaimedDeploymentOperation[]>;
     artifact(nodeId: string, token: string, operation: ClaimedDeploymentOperation): Promise<DeploymentArtifact>;
+    runtime?(nodeId: string, token: string, operation: ClaimedDeploymentOperation): Promise<DeploymentRuntimeArtifact>;
     renew(nodeId: string, token: string, operation: ClaimedDeploymentOperation): Promise<ClaimedDeploymentOperation | null>;
     complete(nodeId: string, token: string, operation: ClaimedDeploymentOperation, result?: unknown): Promise<boolean>;
     fail(nodeId: string, token: string, operation: ClaimedDeploymentOperation, error: unknown): Promise<DeploymentOperation>;
@@ -99,6 +119,11 @@ export interface DeploymentExecutionContext {
     readonly signal: AbortSignal;
     /** Downloads and verifies the content-addressed release for this current lease. */
     artifact(): Promise<DeploymentArtifact>;
+    /**
+     * Downloads a no-store runtime capsule containing final environment, code,
+     * database placement intent, and ingress identity for this current lease.
+     */
+    runtime(): Promise<DeploymentRuntimeArtifact>;
     /** Reports generation-fenced desired state for this operation's project. */
     observe(input: {
         generation: number;

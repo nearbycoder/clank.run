@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,11 @@ import {
   openProviderDeploymentAgent,
   reconcileDeploymentProvider,
 } from "../dist/provider.js";
+import {
+  createDeploymentRuntimeCapsule,
+  DEPLOYMENT_RUNTIME_MEDIA_TYPE,
+  DEPLOYMENT_RUNTIME_PROTOCOL,
+} from "../dist/runtime-placement.js";
 
 const providerToken = "clank-provider-test-token-12345678901234567890";
 const execFileAsync = promisify(execFile);
@@ -75,6 +81,73 @@ test("portable provider reconciliation verifies releases and strips coordinator 
       releaseId: "release_provider_01",
       state: "running",
     });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("portable provider reconciliation verifies and binds sensitive runtime capsules", async () => {
+  const fixture = await releaseFixture();
+  const runtime = await runtimeFixture(fixture, 6);
+  const operation = claimedOperation({
+    payload: {
+      releaseId: "release_provider_01",
+      state: "running",
+      generation: 6,
+      runtimeProtocol: DEPLOYMENT_RUNTIME_PROTOCOL,
+    },
+  });
+  let received;
+  let observed;
+  try {
+    await reconcileDeploymentProvider({
+      kind: "microvm",
+      async reconcile(request) {
+        received = request;
+      },
+    }, operation, {
+      operation,
+      signal: new AbortController().signal,
+      async artifact() {
+        throw new Error("legacy artifact transport must not be used");
+      },
+      async runtime() {
+        return { bytes: runtime.bytes, sha256: runtime.sha256 };
+      },
+      async observe(input) {
+        observed = input;
+        return true;
+      },
+    });
+    assert.equal(received.runtime.manifest.environment.APP_SECRET, "runtime-secret-canary");
+    assert.equal(received.runtime.manifest.projectId, operation.projectId);
+    assert.equal(received.artifact.sha256, fixture.digest);
+    assert.equal(received.artifact, received.runtime.artifact);
+    assert.equal("leaseToken" in received.operation, false);
+    assert.deepEqual(observed, {
+      generation: 6,
+      releaseId: "release_provider_01",
+      state: "running",
+    });
+
+    const mismatched = await runtimeFixture(fixture, 7);
+    await assert.rejects(
+      reconcileDeploymentProvider({ kind: "microvm", async reconcile() {} }, operation, {
+        operation,
+        signal: new AbortController().signal,
+        async artifact() {
+          throw new Error("legacy artifact transport must not be used");
+        },
+        async runtime() {
+          return { bytes: mismatched.bytes, sha256: mismatched.sha256 };
+        },
+        async observe() {
+          return true;
+        },
+      }),
+      (error) => /does not match the desired placement/u.test(error.message)
+        && !error.message.includes("runtime-secret-canary"),
+    );
   } finally {
     await fixture.close();
   }
@@ -331,6 +404,90 @@ test("HTTP provider bridge carries a verified binary artifact through the portab
   }
 });
 
+test("HTTP provider bridge carries runtime capsules only in the bounded request body", async () => {
+  const fixture = await releaseFixture();
+  const runtime = await runtimeFixture(fixture, 3);
+  let received;
+  let wireHeaders;
+  const handler = createDeploymentProviderHandler({
+    kind: "microvm",
+    async reconcile(request) {
+      received = request;
+    },
+  }, { token: providerToken });
+  const provider = createHttpDeploymentProvider({
+    baseUrl: "http://127.0.0.1:9876",
+    token: providerToken,
+    retries: 0,
+    async fetch(url, init) {
+      wireHeaders = new Headers(init.headers);
+      return handler.handle(new Request(url, init));
+    },
+  });
+  try {
+    await provider.reconcile({
+      ...providerInput(fixture),
+      desired: {
+        generation: 3,
+        releaseId: "release_provider_01",
+        state: "running",
+        runtimeProtocol: DEPLOYMENT_RUNTIME_PROTOCOL,
+      },
+      artifact: runtime.artifact,
+      runtime,
+    });
+    assert.equal(wireHeaders.get("content-type"), DEPLOYMENT_RUNTIME_MEDIA_TYPE);
+    assert.equal(wireHeaders.get("x-clank-runtime-protocol"), DEPLOYMENT_RUNTIME_PROTOCOL);
+    assert.equal(wireHeaders.get("x-clank-content-sha256"), runtime.sha256);
+    assert.equal([...wireHeaders].flat().join("\n").includes("runtime-secret-canary"), false);
+    assert.equal(received.runtime.sha256, runtime.sha256);
+    assert.equal(received.runtime.manifest.environment.APP_SECRET, "runtime-secret-canary");
+    assert.equal(received.artifact.sha256, fixture.digest);
+
+    const tampered = new Uint8Array(runtime.bytes);
+    tampered[tampered.byteLength - 1] ^= 1;
+    const tamperedHeaders = new Headers(wireHeaders);
+    tamperedHeaders.set(
+      "x-clank-content-sha256",
+      createHash("sha256").update(tampered).digest("hex"),
+    );
+    const rejected = await handler.handle(new Request(
+      `http://127.0.0.1${DEPLOYMENT_PROVIDER_RECONCILE_PATH}`,
+      {
+        method: "POST",
+        headers: tamperedHeaders,
+        body: tampered,
+      },
+    ));
+    assert.equal(rejected.status, 400);
+    assert.equal((await rejected.json()).error, "RUNTIME_INVALID");
+
+    const boundedHandler = createDeploymentProviderHandler({
+      kind: "microvm",
+      async reconcile() {
+        throw new Error("oversized runtime must not reach provider");
+      },
+    }, {
+      token: providerToken,
+      maxRuntimeBytes: 1_024,
+    });
+    const oversizedHeaders = new Headers(wireHeaders);
+    oversizedHeaders.set("content-length", "2048");
+    const oversized = await boundedHandler.handle(new Request(
+      `http://127.0.0.1${DEPLOYMENT_PROVIDER_RECONCILE_PATH}`,
+      {
+        method: "POST",
+        headers: oversizedHeaders,
+        body: runtime.bytes,
+      },
+    ));
+    assert.equal(oversized.status, 413);
+    assert.equal((await oversized.json()).error, "RUNTIME_TOO_LARGE");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("HTTP provider bridge authenticates, bounds, retries, and keeps provider failures private", async () => {
   const fixture = await releaseFixture();
   const privateErrors = [];
@@ -536,6 +693,7 @@ test("packaged runner has useful non-secret help and rejects arguments before ne
   });
   assert.match(help.stdout, /Usage: clank-runner/u);
   assert.match(help.stdout, /CLANK_PROVIDER_URL/u);
+  assert.match(help.stdout, /CLANK_RUNNER_MAX_RUNTIME_BYTES/u);
   assert.match(help.stdout, /--check/u);
   assert.match(help.stdout, /remove CLANK_RUNNER_REGISTRATION_TOKEN/u);
   assert.equal(help.stdout.includes(providerToken), false);
@@ -602,6 +760,27 @@ async function releaseFixture() {
       await rm(root, { recursive: true, force: true });
     },
   };
+}
+
+function runtimeFixture(fixture, generation) {
+  return createDeploymentRuntimeCapsule({
+    projectId: "project_provider_01",
+    releaseId: "release_provider_01",
+    generation,
+    environment: {
+      APP_SECRET: "runtime-secret-canary",
+      NODE_ENV: "production",
+    },
+    database: {
+      path: "app.sqlite",
+      mode: "preserve",
+    },
+    ingress: {
+      route: "/projects/project_provider_01",
+      token: "clanki_provider_ingress_123456789012345678901234",
+    },
+    artifact: fixture.bytes,
+  });
 }
 
 function claimedOperation(overrides = {}) {

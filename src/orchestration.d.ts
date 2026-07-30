@@ -96,6 +96,8 @@ export interface DeploymentOrchestrator {
         releaseId: string | null;
         state: "running" | "stopped";
         region?: string;
+        /** Selects the sensitive runtime capsule contract for the reconcile operation. */
+        runtimeProtocol?: "clank-runtime/1";
     }): Promise<DesiredDeployment>;
     desired(projectId: string): DesiredDeployment | null;
     observe(nodeId: string, token: string, input: {

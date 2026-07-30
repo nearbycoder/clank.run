@@ -67,6 +67,7 @@ export const groups = [
       ["organizations", "docs/organizations.md"],
       ["runner-fleet", "docs/runner-fleet.md"],
       ["distributed-deployment", "docs/distributed-deployment.md"],
+      ["runtime-placement", "docs/runtime-placement.md"],
       ["provider-adapters", "docs/provider-adapters.md"],
       ["railway", "docs/railway.md"],
       ["self-hosting", "docs/self-hosting.md"],

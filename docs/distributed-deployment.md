@@ -88,6 +88,7 @@ already leased work expire for safe reclamation.
 | `drain` | Stop new placement while preserving current work |
 | `claim` | Bounded ready-operation claim with a fresh token and increasing fence |
 | `artifact` | Download the exact content-addressed release bound to a current operation lease |
+| `runtime` | Download the exact sensitive runtime capsule bound to a current operation lease |
 | `renew` | Extend one still-current operation lease |
 | `complete` | Commit a bounded JSON result only for the current node/token/fence |
 | `fail` | Store a bounded safe error and schedule retry or terminal failure |
@@ -154,6 +155,24 @@ The artifact contains deployable code and declared non-secret configuration. Pla
 secrets and application databases are not added to it. Delivering those to another host requires
 the separately authenticated secret and data-plane contracts; never place them in an operation
 payload or release archive.
+
+## Sensitive runtime transfer
+
+An explicitly selected `clank-runtime/1` reconcile operation uses the separate `runtime` call. It
+binds the verified release to one project's final environment, SQLite placement intent and
+optional snapshot, and managed-ingress identity. The coordinator and runner apply the same exact
+node/operation lease, canonical-payload selection, post-load lease recheck, no-store, length,
+digest, deadline, HTTPS, and redirect-refusal controls as artifact transfer, with an independent
+larger byte ceiling.
+
+Runtime values stay in the binary response body. They are never operation JSON, URLs, headers, or
+durable completion results. `openProviderDeploymentAgent()` verifies the capsule again and binds
+its project, release, and generation before provider code can see it. The provider is a trusted
+application compute boundary because it necessarily receives application secrets and data.
+
+The built-in platform does not select this protocol yet. Provider-side snapshot, restore, deletion,
+migration, health, rollback, and ingress activation must be complete before remote placement is
+enabled. See [Remote runtime placement](runtime-placement.md).
 
 ## Platform behavior
 

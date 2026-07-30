@@ -28,9 +28,12 @@ Any known cross-tenant access, authentication bypass, remote code execution acro
   agents, and the generic loop handles credentials, heartbeat, claims, renewal, settlement, and
   drain. Current leases can retrieve a verified content-addressed release, and the portable
   provider contract plus authenticated HTTP bridge strip coordinator credentials and standardize
-  fenced runtime reconciliation. The built-in supervisor does not yet delegate release activation
-  through it. Remote execution still needs provider-side Docker/VM/microVM mutation, scoped secret
-  delivery, remote application storage, and edge routing.
+  fenced runtime reconciliation. An opt-in runtime capsule can bind final application secrets,
+  SQLite placement, and ingress identity to an exact desired project/release/generation without
+  putting those values in operation metadata or headers. The built-in supervisor does not yet
+  delegate release activation through it. Remote execution still needs provider-side
+  Docker/VM/microVM mutation, atomic snapshot/restore/delete, migration and rollback, and edge
+  activation before the platform can safely select that protocol.
 - The control-plane catalog uses SQLite. It supports durable coordination on one shared transactional store, not globally distributed consensus.
 - Built-in application data and live queries are SQLite-first. The external PostgreSQL driver/provisioner is available, but generated backend tables do not transparently switch engines.
 - Managed ingress performs exact-host HTTP proxying, automatically reconciles customer DNS routing with durable bounded leases, and supplies a restricted Caddy certificate-permission lookup. It does not itself issue or store certificates, change customer DNS, provide a WAF/DDoS edge, or proxy WebSocket upgrades. Put it behind the documented production edge.
