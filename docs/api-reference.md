@@ -91,9 +91,11 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 ## Deployment platform
 
 - `openPlatform(options)`: browser dashboard, workspace people/invitation administration and activity, device authorization, tokens, projects, transactionally enforced limits, ingress metrics, DNS/domain lifecycle, TLS eligibility, encrypted secrets, role-filtered audit, release transaction, logs, rollback, and supervision.
-- `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, async `.close()`.
+- `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, resolved `.hostingProfile`,
+  `.runnerKind`, and async `.close()`.
 - Runners: dependency-free process runner or constrained Docker runner.
-- Types: `ClankPlatformOptions`, `PlatformLimits`, `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`.
+- Types: `ClankPlatformOptions`, `PlatformLimits`, `PlatformHostingProfile`,
+  `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`.
 
 ## Managed data plane
 

@@ -12,6 +12,17 @@ Runner choice changes the code boundary:
 
 Never operate the process runner as a public code sandbox.
 
+The packaged production entry point defaults to `CLANK_HOSTING_PROFILE=isolated`, which selects
+Docker and rejects a process runner. `CLANK_HOSTING_PROFILE=trusted` is an explicit low-cost
+self-hosting acknowledgement: it permits process execution but refuses `CLANK_SIGNUP=public`.
+Bootstrap, disabled registration, and email-bound invitations remain available for operators who
+personally trust every deployer. Invalid or misspelled runner/profile values are startup errors.
+
+Programmatic `openPlatform()` callers can declare the same profile. An `isolated` runtime rejects
+anything other than the Docker runner and reports the resolved profile and runner kind for private
+operator diagnostics. The profile is a policy assertion; it does not turn a container into a VM or
+replace daemon hardening, network policy, resource limits, image pinning, or host monitoring.
+
 ## Authentication
 
 Browser accounts inherit Clank's scrypt passwords, hardened cookies, CSRF, generic login errors, expiry, idle timeout, verification, recovery, email-code MFA, WebAuthn passkeys, and revocation.

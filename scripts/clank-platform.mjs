@@ -2,6 +2,7 @@
 import { access, rename } from "node:fs/promises";
 import { openPlatform } from "../dist/platform.js";
 import { serve } from "../dist/node.js";
+import { resolvePlatformHosting } from "./platform-hosting.mjs";
 
 process.umask(0o077);
 
@@ -20,7 +21,8 @@ const signup = signupSetting === "public"
   : signupSetting === "disabled"
     ? false
     : "bootstrap";
-const runner = environment("CLANK_RUNNER", "PROACT_RUNNER") === "docker"
+const hosting = resolvePlatformHosting(process.env, signupSetting);
+const runner = hosting.runnerKind === "docker"
   ? {
       kind: "docker",
       executable: environment("CLANK_DOCKER_EXECUTABLE", "PROACT_DOCKER_EXECUTABLE"),
@@ -54,6 +56,7 @@ const platform = await openPlatform({
   dataDirectory,
   publicUrl,
   startupRecovery: "background",
+  hostingProfile: hosting.hostingProfile,
   platformAdminEmails: list(process.env.CLANK_PLATFORM_ADMIN_EMAILS),
   runner,
   signup,
@@ -105,7 +108,11 @@ const server = await serve(platform, {
 
 console.log(`Clank deployment platform: ${publicUrl}`);
 console.log(`Platform data: ${platform.dataDirectory}`);
+console.log(`Hosting profile: ${platform.hostingProfile}`);
 console.log(`Runner: ${runner.kind}`);
+if (platform.hostingProfile === "trusted") {
+  console.warn("Trusted hosting profile: deployed applications share the control-plane Unix trust boundary.");
+}
 console.log(`Managed ingress: ${ingressEnabled ? "enabled" : "disabled"}`);
 console.log(`Automatic backups: ${backupInterval === "0" ? "disabled" : "enabled"}`);
 

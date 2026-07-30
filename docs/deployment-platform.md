@@ -233,17 +233,33 @@ The local default creates a `0600` master-key file. Production should provide `C
 
 ## Runners
 
-The process runner is dependency-free and appropriate only when every app is trusted by the host operator.
+Production `clank-platform` defaults to the `isolated` hosting profile. That profile selects Docker
+when `CLANK_RUNNER` is unset and refuses to start with the process runner. Development defaults to
+the `trusted` profile for a zero-setup local experience.
+
+The process runner is dependency-free and appropriate only when every deployer and application is
+trusted by the host operator. It must be selected deliberately in production:
+
+```sh
+CLANK_HOSTING_PROFILE=trusted CLANK_RUNNER=process clank-platform
+```
+
+The packaged control plane refuses public signup in this profile. Bootstrap and email-bound
+invitations remain available for a personal host or explicitly trusted cohort.
 
 The Docker runner adds read-only root, capability dropping, no-new-privileges, non-root execution, PID/memory/CPU limits, a temporary filesystem, and narrow release/data mounts:
 
 ```sh
+CLANK_HOSTING_PROFILE=isolated \
 CLANK_RUNNER=docker \
 CLANK_DOCKER_IMAGE=node:22-bookworm-slim \
 clank-platform
 ```
 
-Containers improve isolation but are not perfect hostile-code sandboxes. High-risk public multi-tenancy should use microVMs or dedicated nodes, strict egress policy, image digests, and secret mounts or an external secret broker.
+Invalid runner/profile values and an isolated/process mismatch fail before storage or a listener is
+opened. Containers improve isolation but are not perfect hostile-code sandboxes. High-risk public
+multi-tenancy should use microVMs or dedicated nodes, strict egress policy, image digests, and
+secret mounts or an external secret broker.
 
 ## API outline
 

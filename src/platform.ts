@@ -68,6 +68,7 @@ export interface DockerRunnerOptions {
 }
 
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
+export type PlatformHostingProfile = "trusted" | "isolated";
 
 export interface PlatformLimits {
   /** Maximum organizations created by one account. Defaults to 5. */
@@ -163,6 +164,11 @@ export interface ClankPlatformOptions {
   appPortEnd?: number;
   /** Listener or infrastructure ports that application runtimes must never use. */
   reservedAppPorts?: readonly number[];
+  /**
+   * Declares the application-code trust boundary. "isolated" requires the
+   * Docker runner. Defaults from the selected runner for programmatic callers.
+   */
+  hostingProfile?: PlatformHostingProfile;
   runner?: PlatformRunnerOptions;
   /** Defaults to "bootstrap": only the first platform account may self-register. */
   signup?: boolean | "bootstrap";
@@ -204,6 +210,8 @@ export interface PlatformRuntime {
   readonly handle: (request: Request) => Promise<Response>;
   readonly publicUrl: string;
   readonly dataDirectory: string;
+  readonly hostingProfile: PlatformHostingProfile;
+  readonly runnerKind: "process" | "docker";
   close(): Promise<void>;
 }
 
@@ -359,6 +367,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   // The platform is a dedicated control-plane process. A private umask keeps
   // SQLite journals, backups, logs, and generated launchers owner-readable only.
   (globalThis as any).process.umask?.(0o077);
+  const runner: PlatformRunnerOptions = options.runner ?? { kind: "process" };
+  const hostingProfile = options.hostingProfile ?? (runner.kind === "docker" ? "isolated" : "trusted");
+  if (hostingProfile !== "trusted" && hostingProfile !== "isolated") {
+    throw new TypeError('hostingProfile must be "trusted" or "isolated".');
+  }
+  if (hostingProfile === "isolated" && runner.kind !== "docker") {
+    throw new TypeError('hostingProfile "isolated" requires a Docker runner.');
+  }
   const platformBrandAssets = new Map<string, { bytes: Uint8Array; contentType: string }>(await Promise.all([
     ["/favicon.ico", "../brand/favicon.ico", "image/x-icon"],
     ["/apple-touch-icon.png", "../brand/apple-touch-icon.png", "image/png"],
@@ -888,7 +904,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           : {}),
       };
       const child = await spawnRelease(
-        options.runner ?? { kind: "process" },
+        runner,
         release,
         dataRoot,
         port,
@@ -987,7 +1003,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const { dataRoot, environment } = await releaseLaunchContext(project, release, secrets, port);
     await assertPortAvailable(port);
     const child = await spawnRelease(
-      options.runner ?? { kind: "process" },
+      runner,
       release,
       dataRoot,
       port,
@@ -2233,7 +2249,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ...await platformMemoryDiagnostics(
             storage.internal,
             active,
-            options.runner?.kind ?? "process",
+            runner.kind ?? "process",
           ),
         });
       }
@@ -3255,6 +3271,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     handle,
     publicUrl,
     dataDirectory: paths.root,
+    hostingProfile,
+    runnerKind: runner.kind ?? "process",
     async close() {
       if (closed) return;
       closed = true;
