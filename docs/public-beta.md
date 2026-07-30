@@ -44,7 +44,8 @@ Any known cross-tenant access, authentication bypass, remote code execution acro
   points, remote runner artifacts, and its quota, slug, port, and domains. It does not discover or
   erase external databases, manual/provider-retained copies, or edge certificate storage.
   Operators need a cross-system retention and erasure runbook.
-- Tailwind's browser build is for development; production apps should compile and serve CSS.
+- Generated apps compile and serve Tailwind CSS in production. The browser build remains only in
+  standalone visual examples that are explicitly development-only.
 - Passkey support accepts `none` attestation and does not perform enterprise authenticator attestation policy.
 - Application-specific authorization, privacy, retention, moderation, payments, regulatory compliance, and abuse prevention are not inferred by the framework.
 

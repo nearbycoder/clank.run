@@ -127,6 +127,15 @@ export interface PlatformJobOperationsOptions {
   alertDueAfterMs?: number;
 }
 
+export interface PlatformPreviewOptions {
+  /** Default lifetime for a preview environment. Defaults to 7 days. */
+  defaultTtlMs?: number;
+  /** Longest lifetime a caller may request. Defaults to 30 days. */
+  maxTtlMs?: number;
+  /** Expired-preview cleanup cadence. Defaults to 5 minutes; false disables background cleanup. */
+  cleanupIntervalMs?: number | false;
+}
+
 type PlatformQuotaKey =
   | "organizationsPerAccount"
   | "projectsPerAccount"
@@ -230,6 +239,7 @@ export interface ClankPlatformOptions {
   limits?: PlatformLimits;
   backups?: PlatformBackupOptions;
   jobs?: PlatformJobOperationsOptions;
+  previews?: PlatformPreviewOptions;
   ingress?: {
     enabled?: boolean;
     baseDomain?: string;
@@ -300,6 +310,9 @@ interface ProjectRow {
   port: number;
   activeReleaseId: string | null;
   databasePath: string | null;
+  parentProjectId: string | null;
+  previewName: string | null;
+  previewExpiresAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -411,6 +424,9 @@ const DEFAULT_BACKUP_MAX_DATABASE_BYTES = 10 * 1024 * 1024 * 1024;
 const BACKUP_CONCURRENCY = 2;
 const DEFAULT_RELEASES_PER_PROJECT = 50;
 const DEFAULT_RELEASE_STORAGE_BYTES = 20 * 1024 * 1024 * 1024;
+const DEFAULT_PREVIEW_TTL_MS = 7 * 24 * 60 * 60_000;
+const DEFAULT_PREVIEW_MAX_TTL_MS = 30 * 24 * 60 * 60_000;
+const DEFAULT_PREVIEW_CLEANUP_INTERVAL_MS = 5 * 60_000;
 const MAX_PENDING_INVITATIONS_PER_ORGANIZATION = 100;
 const MAX_PENDING_PERSONAL_INVITATIONS = 100;
 const BOOTSTRAP_CLAIM_MS = 5 * 60_000;
@@ -522,6 +538,26 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     1_000,
     30 * 24 * 60 * 60_000,
   );
+  const previewMaxTtlMs = integerInRange(
+    options.previews?.maxTtlMs ?? DEFAULT_PREVIEW_MAX_TTL_MS,
+    "previews.maxTtlMs",
+    60_000,
+    365 * 24 * 60 * 60_000,
+  );
+  const previewDefaultTtlMs = integerInRange(
+    options.previews?.defaultTtlMs ?? DEFAULT_PREVIEW_TTL_MS,
+    "previews.defaultTtlMs",
+    60_000,
+    previewMaxTtlMs,
+  );
+  const previewCleanupIntervalMs = options.previews?.cleanupIntervalMs === false
+    ? false
+    : integerInRange(
+        options.previews?.cleanupIntervalMs ?? DEFAULT_PREVIEW_CLEANUP_INTERVAL_MS,
+        "previews.cleanupIntervalMs",
+        1_000,
+        24 * 60 * 60_000,
+      );
   const limits = Object.freeze({
     organizationsPerAccount: integerInRange(
       options.limits?.organizationsPerAccount ?? 5,
@@ -1797,29 +1833,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     };
   });
 
-  const deleteProject = async (
-    principal: TokenPrincipal,
-    projectId: string,
-    confirmation: string,
-    acknowledgeDataLoss: boolean,
-  ): Promise<Record<string, unknown>> => withProjectLock(projectId, async () => {
-    const access = accessibleProject(storage.internal, projectId, principal, "tokens");
-    if (principal.projectId) {
-      throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project-scoped tokens cannot delete a site.");
-    }
-    requireOrganizationAdministration(access.role);
-    const project = access.project;
-    const expected = `delete-site ${project.slug}`;
-    if (confirmation !== expected) {
-      throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
-    }
-    if (!acknowledgeDataLoss) {
-      throw new PlatformError(
-        400,
-        "DATA_LOSS_ACKNOWLEDGEMENT_REQUIRED",
-        "Explicitly acknowledge permanent application data loss.",
-      );
-    }
+  const destroyProject = async (
+    project: ProjectRow,
+    actor: { userId: string; tokenId: string | null },
+    action: "project.delete" | "preview.delete" | "preview.expire",
+  ): Promise<Record<string, unknown>> => {
     const activeRelease = project.activeReleaseId
       ? releaseById(storage.internal, project.activeReleaseId)
       : null;
@@ -1874,11 +1892,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (Number(result.changes) !== 1) {
           throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
         }
-        audit(storage.internal, principal.userId, principal.tokenId, project.id, "project.delete", {
+        audit(storage.internal, actor.userId, actor.tokenId, project.id, action, {
           projectId: project.id,
           organizationId: project.organizationId,
           name: project.name,
           slug: project.slug,
+          parentProjectId: project.parentProjectId,
+          previewName: project.previewName,
           revokedTokens,
           ...summary,
         });
@@ -1897,11 +1917,105 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       organizationId: project.organizationId,
       name: project.name,
       slug: project.slug,
+      kind: project.parentProjectId ? "preview" : "production",
+      parentProjectId: project.parentProjectId,
+      previewName: project.previewName,
       deletedAt,
       revokedTokens,
       ...summary,
     };
+  };
+
+  const deleteProject = async (
+    principal: TokenPrincipal,
+    projectId: string,
+    confirmation: string,
+    acknowledgeDataLoss: boolean,
+  ): Promise<Record<string, unknown>> => withProjectLock(projectId, async () => {
+    const access = accessibleProject(storage.internal, projectId, principal, "tokens");
+    if (principal.projectId) {
+      throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project-scoped tokens cannot delete a site.");
+    }
+    requireOrganizationAdministration(access.role);
+    const project = access.project;
+    if (project.parentProjectId) {
+      throw new PlatformError(
+        409,
+        "PREVIEW_DELETE_REQUIRED",
+        "Delete preview environments through their parent project's preview endpoint.",
+      );
+    }
+    const previewCount = Number(storage.internal.prepare(
+      "SELECT count(*) AS count FROM clank_platform_projects WHERE parent_project_id = ?",
+    ).get(project.id)?.count ?? 0);
+    if (previewCount > 0) {
+      throw new PlatformError(
+        409,
+        "PREVIEWS_EXIST",
+        `Remove this site's ${previewCount} preview environment${previewCount === 1 ? "" : "s"} before deleting it.`,
+      );
+    }
+    const expected = `delete-site ${project.slug}`;
+    if (confirmation !== expected) {
+      throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
+    }
+    if (!acknowledgeDataLoss) {
+      throw new PlatformError(
+        400,
+        "DATA_LOSS_ACKNOWLEDGEMENT_REQUIRED",
+        "Explicitly acknowledge permanent application data loss.",
+      );
+    }
+    return destroyProject(project, principal, "project.delete");
   });
+
+  let previewCleanupTimer: ReturnType<typeof setTimeout> | undefined;
+  let previewCleanupFlight: Promise<void> | undefined;
+  const cleanupExpiredPreviews = async (): Promise<void> => {
+    if (closed || previewCleanupIntervalMs === false || previewCleanupFlight) return;
+    const expiredIds = storage.internal.prepare(`SELECT id FROM clank_platform_projects
+      WHERE parent_project_id IS NOT NULL AND preview_expires_at <= ?
+      ORDER BY preview_expires_at LIMIT 25`).all(Date.now()).map((row) => String(row.id));
+    await Promise.all(expiredIds.map(async (projectId) => {
+      try {
+        await withProjectLock(projectId, async () => {
+          const preview = projectById(storage.internal, projectId);
+          if (
+            !preview
+            || !preview.parentProjectId
+            || preview.previewExpiresAt === null
+            || preview.previewExpiresAt > Date.now()
+          ) return;
+          await destroyProject(
+            preview,
+            { userId: preview.ownerId, tokenId: null },
+            "preview.expire",
+          );
+        });
+      } catch (error) {
+        if (!closed) {
+          try { options.onError?.(error); } catch { /* Operator reporting must not break preview cleanup. */ }
+        }
+      }
+    }));
+  };
+  const schedulePreviewCleanup = (delayMs = previewCleanupIntervalMs as number): void => {
+    if (closed || previewCleanupIntervalMs === false || previewCleanupTimer) return;
+    previewCleanupTimer = setTimeout(() => {
+      previewCleanupTimer = undefined;
+      const flight = cleanupExpiredPreviews();
+      previewCleanupFlight = flight;
+      void flight.catch((error) => {
+        if (!closed) {
+          try { options.onError?.(error); } catch { /* Operator reporting must not break preview cleanup. */ }
+        }
+      }).finally(() => {
+        if (previewCleanupFlight === flight) previewCleanupFlight = undefined;
+        schedulePreviewCleanup();
+      });
+    }, delayMs);
+    previewCleanupTimer.unref?.();
+  };
 
   const readiness = (): Response => {
     try {
@@ -2852,7 +2966,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           : storage.internal.prepare(`SELECT DISTINCT p.* FROM clank_platform_projects p
               LEFT JOIN clank_platform_memberships m
                 ON m.organization_id = p.organization_id AND m.user_id = ?
-              WHERE m.user_id IS NOT NULL OR p.owner_id = ? ORDER BY p.created_at`)
+              WHERE p.parent_project_id IS NULL
+                AND (m.user_id IS NOT NULL OR p.owner_id = ?) ORDER BY p.created_at`)
               .all(principal.userId, principal.userId);
         const usageRows = storage.internal.prepare(`SELECT organization_id, count(*) AS count
           FROM clank_platform_projects WHERE organization_id IN (
@@ -2936,6 +3051,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const operation = matched[2] ?? "";
       const requiredPermission: ProjectPermission = !operation && request.method === "DELETE"
         ? "tokens"
+        : operation.startsWith("previews") && request.method !== "GET"
+          ? "deploy"
         : operation.startsWith("releases/")
         && request.method === "DELETE"
         ? "rollback"
@@ -2998,6 +3115,211 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           limits: publicLimits(effective, options.maxArtifactBytes, limits.metricRetentionDays),
           usage: { domains: domainCount, ...releaseUsage },
         });
+      }
+      if (operation === "previews" && request.method === "GET") {
+        if (project.parentProjectId) {
+          throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Preview environments cannot own nested previews.");
+        }
+        const now = Date.now();
+        const previews = storage.internal.prepare(`SELECT * FROM clank_platform_projects
+          WHERE parent_project_id = ? AND preview_expires_at > ?
+          ORDER BY created_at`).all(project.id, now).map((row) => {
+          const preview = projectRow(row);
+          const release = preview.activeReleaseId ? releaseById(storage.internal, preview.activeReleaseId) : null;
+          return {
+            ...projectPayload(preview),
+            url: appUrlTemplate.replaceAll("{slug}", preview.slug)
+              .replaceAll("{port}", String(active.get(preview.id)?.port ?? preview.port)),
+            runtimeStatus: active.has(preview.id) ? "online" : release ? "degraded" : "not_deployed",
+            activeRelease: release ? publicRelease(release) : null,
+          };
+        });
+        return api({
+          ok: true,
+          previews,
+          policy: {
+            defaultTtlMs: previewDefaultTtlMs,
+            maxTtlMs: previewMaxTtlMs,
+            isolatedData: true,
+            copiesProductionData: false,
+            countsTowardProjectQuota: true,
+          },
+        });
+      }
+      if (operation === "previews" && request.method === "POST") {
+        if (principal.projectId) {
+          throw new PlatformError(
+            403,
+            "TOKEN_SCOPE_DENIED",
+            "Project-scoped tokens cannot create preview environments.",
+          );
+        }
+        if (project.parentProjectId) {
+          throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Preview environments cannot own nested previews.");
+        }
+        if (!project.organizationId) {
+          throw new PlatformError(409, "ORGANIZATION_REQUIRED", "Move this legacy site into a workspace before creating previews.");
+        }
+        const input = plainObject(await readJsonRequest(request, 16 * 1024));
+        exact(input, ["name", "ttlHours"]);
+        const previewName = normalizePreviewName(input.name);
+        const ttlMs = input.ttlHours === undefined
+          ? previewDefaultTtlMs
+          : integerInRange(
+              input.ttlHours,
+              "ttlHours",
+              1,
+              Math.floor(previewMaxTtlMs / (60 * 60_000)),
+            ) * 60 * 60_000;
+        const result = await withProjectLock(project.id, async () => {
+          const current = projectById(storage.internal, project.id);
+          if (!current || current.parentProjectId) {
+            throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
+          }
+          const now = Date.now();
+          const expiresAt = now + ttlMs;
+          const existingRow = storage.internal.prepare(`SELECT * FROM clank_platform_projects
+            WHERE parent_project_id = ? AND preview_name = ?`).get(current.id, previewName);
+          if (existingRow) {
+            const existingId = projectRow(existingRow).id;
+            const refreshed = await withProjectLock(existingId, async () => {
+              const existing = projectById(storage.internal, existingId);
+              if (
+                !existing
+                || existing.parentProjectId !== current.id
+                || existing.previewName !== previewName
+              ) return null;
+              storage.internal.transaction((changes) => {
+                storage.internal.prepare(`UPDATE clank_platform_projects
+                  SET preview_expires_at = ?, updated_at = ? WHERE id = ?`)
+                  .run(expiresAt, now, existing.id);
+                changes.record("__platform", current.organizationId ?? current.id);
+              });
+              audit(storage.internal, principal.userId, principal.tokenId, existing.id, "preview.refresh", {
+                organizationId: current.organizationId,
+                parentProjectId: current.id,
+                previewName,
+                expiresAt,
+              });
+              return { preview: projectById(storage.internal, existing.id)!, created: false };
+            });
+            if (refreshed) return refreshed;
+          }
+          const id = await randomId(18);
+          const slug = previewProjectSlug(current.slug, previewName, id);
+          let port = 0;
+          try {
+            storage.internal.transaction((changes) => {
+              const accountLimits = accountQuotas(storage.internal, principal.userId, quotaDefaults);
+              const organizationLimits = workspaceQuotas(
+                storage.internal,
+                current.organizationId!,
+                quotaDefaults,
+              );
+              const accountCount = Number(storage.internal.prepare(
+                "SELECT count(*) AS count FROM clank_platform_projects WHERE owner_id = ?",
+              ).get(principal.userId)?.count ?? 0);
+              if (accountCount >= accountLimits.projectsPerAccount) {
+                throw new PlatformError(
+                  409,
+                  "ACCOUNT_PROJECT_LIMIT_REACHED",
+                  `This account has reached its ${accountLimits.projectsPerAccount}-site limit.`,
+                );
+              }
+              const organizationCount = Number(storage.internal.prepare(
+                "SELECT count(*) AS count FROM clank_platform_projects WHERE organization_id = ?",
+              ).get(current.organizationId)?.count ?? 0);
+              if (organizationCount >= organizationLimits.projectsPerOrganization) {
+                throw new PlatformError(
+                  409,
+                  "PROJECT_LIMIT_REACHED",
+                  `This organization has reached its ${organizationLimits.projectsPerOrganization}-site limit.`,
+                );
+              }
+              port = allocatePort(storage.internal, appPortStart, appPortEnd, reservedAppPorts);
+              storage.internal.prepare(`INSERT INTO clank_platform_projects
+                (id, owner_id, organization_id, name, slug, port, active_release_id, database_path,
+                  parent_project_id, preview_name, preview_expires_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`)
+                .run(
+                  id,
+                  principal.userId,
+                  current.organizationId,
+                  `${current.name} · ${previewName}`,
+                  slug,
+                  port,
+                  current.id,
+                  previewName,
+                  expiresAt,
+                  now,
+                  now,
+                );
+              changes.record("__platform", current.organizationId!);
+            });
+          } catch (error) {
+            if (error instanceof PlatformError) throw error;
+            if (safeError(error).toLowerCase().includes("unique")) {
+              throw new PlatformError(409, "PREVIEW_UNAVAILABLE", "That preview name is unavailable.");
+            }
+            throw error;
+          }
+          const preview = projectById(storage.internal, id)!;
+          audit(storage.internal, principal.userId, principal.tokenId, id, "preview.create", {
+            organizationId: current.organizationId,
+            parentProjectId: current.id,
+            previewName,
+            slug,
+            port,
+            expiresAt,
+            isolatedData: true,
+          });
+          return { preview, created: true };
+        });
+        return api({
+          ok: true,
+          created: result.created,
+          preview: {
+            ...projectPayload(result.preview),
+            url: appUrlTemplate.replaceAll("{slug}", result.preview.slug)
+              .replaceAll("{port}", String(result.preview.port)),
+            runtimeStatus: result.preview.activeReleaseId ? "degraded" : "not_deployed",
+          },
+        }, result.created ? 201 : 200);
+      }
+      const previewDeleteMatch = /^previews\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
+      if (previewDeleteMatch && request.method === "DELETE") {
+        if (principal.projectId) {
+          throw new PlatformError(
+            403,
+            "TOKEN_SCOPE_DENIED",
+            "Project-scoped tokens cannot delete preview environments.",
+          );
+        }
+        if (project.parentProjectId) {
+          throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Use the production project's preview endpoint.");
+        }
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["confirmation", "acknowledgeDataLoss"]);
+        const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
+        if (input.acknowledgeDataLoss !== true) {
+          throw new PlatformError(
+            400,
+            "DATA_LOSS_ACKNOWLEDGEMENT_REQUIRED",
+            "Explicitly acknowledge permanent preview data loss.",
+          );
+        }
+        const deleted = await withProjectLock(previewDeleteMatch[1]!, async () => {
+          const preview = projectById(storage.internal, previewDeleteMatch[1]!);
+          if (!preview || preview.parentProjectId !== project.id || !preview.previewName) {
+            throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
+          }
+          const expected = `delete-preview ${preview.previewName}`;
+          if (confirmation !== expected) {
+            throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
+          }
+          return destroyProject(preview, principal, "preview.delete");
+        });
+        return api({ ok: true, preview: deleted });
       }
       if (operation === "releases" && request.method === "GET") {
         const effective = projectQuotas(storage.internal, project, quotaDefaults);
@@ -3576,9 +3898,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     });
   };
 
+  if (previewCleanupIntervalMs !== false) await cleanupExpiredPreviews();
   const projects = storage.internal.prepare(
-    "SELECT * FROM clank_platform_projects WHERE active_release_id IS NOT NULL",
-  ).all().map(projectRow);
+    `SELECT * FROM clank_platform_projects
+      WHERE active_release_id IS NOT NULL
+        AND (parent_project_id IS NULL OR preview_expires_at > ?)`,
+  ).all(Date.now()).map(projectRow);
   const startupRecovery = Promise.all(projects.map(async (project) => {
     const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
     if (!release) return;
@@ -3594,6 +3919,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   if (options.startupRecovery !== "background") await startupRecovery;
   else void startupRecovery.catch((error) => options.onError?.(error));
   scheduleDomainReconciliation();
+  schedulePreviewCleanup();
   backupScheduler.start();
 
   return {
@@ -3608,6 +3934,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (domainRecheckTimer) clearTimeout(domainRecheckTimer);
       domainRecheckTimer = undefined;
       await domainRecheckFlight?.catch(() => undefined);
+      if (previewCleanupTimer) clearTimeout(previewCleanupTimer);
+      previewCleanupTimer = undefined;
+      await previewCleanupFlight?.catch(() => undefined);
       await backupScheduler.close();
       for (const state of restartState.values()) {
         state.cancelled = true;
@@ -3812,6 +4141,9 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     port INTEGER NOT NULL UNIQUE,
     active_release_id TEXT,
     database_path TEXT,
+    parent_project_id TEXT REFERENCES clank_platform_projects(id) ON DELETE RESTRICT,
+    preview_name TEXT,
+    preview_expires_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`);
@@ -3819,7 +4151,22 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   if (!projectColumns.some((column) => column.name === "organization_id")) {
     internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN organization_id TEXT");
   }
+  if (!projectColumns.some((column) => column.name === "parent_project_id")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN parent_project_id TEXT REFERENCES clank_platform_projects(id) ON DELETE RESTRICT");
+  }
+  if (!projectColumns.some((column) => column.name === "preview_name")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN preview_name TEXT");
+  }
+  if (!projectColumns.some((column) => column.name === "preview_expires_at")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN preview_expires_at INTEGER");
+  }
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_projects_org ON clank_platform_projects (organization_id, created_at)");
+  internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_platform_projects_preview_name
+    ON clank_platform_projects (parent_project_id, preview_name)
+    WHERE parent_project_id IS NOT NULL`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_projects_preview_expiry
+    ON clank_platform_projects (preview_expires_at)
+    WHERE parent_project_id IS NOT NULL`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_domains (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
@@ -4289,6 +4636,15 @@ function projectRow(row: Record<string, unknown>): ProjectRow {
     port: Number(row.port),
     activeReleaseId: row.active_release_id === null ? null : String(row.active_release_id),
     databasePath: row.database_path === null ? null : String(row.database_path),
+    parentProjectId: row.parent_project_id === null || row.parent_project_id === undefined
+      ? null
+      : String(row.parent_project_id),
+    previewName: row.preview_name === null || row.preview_name === undefined
+      ? null
+      : String(row.preview_name),
+    previewExpiresAt: row.preview_expires_at === null || row.preview_expires_at === undefined
+      ? null
+      : Number(row.preview_expires_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -4375,6 +4731,10 @@ function projectPayload(project: ProjectRow): Record<string, unknown> {
     port: project.port,
     activeReleaseId: project.activeReleaseId,
     databasePath: project.databasePath,
+    kind: project.parentProjectId ? "preview" : "production",
+    parentProjectId: project.parentProjectId,
+    previewName: project.previewName,
+    previewExpiresAt: project.previewExpiresAt,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };
@@ -5758,7 +6118,8 @@ function dashboardPayload(
     : internal.prepare(`SELECT DISTINCT p.* FROM clank_platform_projects p
         LEFT JOIN clank_platform_memberships m
           ON m.organization_id = p.organization_id AND m.user_id = ?
-        WHERE m.user_id IS NOT NULL OR p.owner_id = ? ORDER BY p.created_at`).all(principal.userId, principal.userId);
+        WHERE p.parent_project_id IS NULL
+          AND (m.user_id IS NOT NULL OR p.owner_id = ?) ORDER BY p.created_at`).all(principal.userId, principal.userId);
   const projects = projectRows.map((source) => {
     const project = projectRow(source);
     const effective = projectQuotas(internal, project, defaults);
@@ -7333,6 +7694,7 @@ const PLATFORM_PROJECT_SECTIONS = new Set([
   "performance",
   "domains",
   "deployments",
+  "previews",
   "backups",
   "logs",
   "jobs",
@@ -7439,6 +7801,25 @@ function normalizeSlug(value: unknown): string {
   const slug = trimBoundaryHyphens(String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-"));
   if (!PROJECT_SLUG.test(slug)) throw new PlatformError(422, "INVALID_SLUG", "Project slug must use 1-48 lowercase letters, numbers, or interior hyphens.");
   return slug;
+}
+
+function normalizePreviewName(value: unknown): string {
+  const name = trimBoundaryHyphens(String(value).trim().toLowerCase().replace(/[^a-z0-9]+/g, "-"));
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,28}[a-z0-9])?$/u.test(name)) {
+    throw new PlatformError(
+      422,
+      "INVALID_PREVIEW_NAME",
+      "Preview name must use 1-30 lowercase letters, numbers, or interior hyphens.",
+    );
+  }
+  return name;
+}
+
+function previewProjectSlug(parentSlug: string, previewName: string, projectId: string): string {
+  const suffix = `-${previewName}-${projectId.slice(0, 6).toLowerCase()}`;
+  const available = 48 - suffix.length;
+  const parent = trimBoundaryHyphens(parentSlug.slice(0, Math.max(1, available)));
+  return `${parent}${suffix}`;
 }
 
 function trimTrailingSlashes(value: string): string {

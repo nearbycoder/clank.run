@@ -10,7 +10,8 @@
       "clank",
       "build",
       "src",
-      "dist"
+      "dist",
+      "--tailwind=src/styles.css"
     ]
   },
   "database": {

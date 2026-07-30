@@ -166,6 +166,16 @@ test("blueprint plans and generated files are deterministic and checksummed", as
     files.find((file) => file.path === "src/server.tsx").contents,
     /imports: \{ "@clank\.run\/framework": "\/_clank\/index\.js" \}/,
   );
+  assert.match(files.find((file) => file.path === "src/server.tsx").contents, /href="\/styles\.css"/);
+  assert.doesNotMatch(
+    files.find((file) => file.path === "src/server.tsx").contents,
+    /@tailwindcss\/browser|cdn\.jsdelivr\.net/,
+  );
+  assert.match(files.find((file) => file.path === "src/styles.css").contents, /@import "tailwindcss"/);
+  const packageJson = JSON.parse(files.find((file) => file.path === "package.json").contents);
+  assert.equal(packageJson.devDependencies.tailwindcss, "^4.2.4");
+  assert.equal(packageJson.devDependencies["@tailwindcss/cli"], "^4.2.4");
+  assert.match(packageJson.scripts.build, /--tailwind=src\/styles\.css/);
   assert.match(files.find((file) => file.path === "AGENTS.md").contents, /npm run deploy:check/);
   assert.match(files.find((file) => file.path === "README.md").contents, /Focused Tasks/);
 });
@@ -194,7 +204,7 @@ test("plan, explain, and generate CLI commands create a buildable app without bl
     assert.equal(savedPlan.digest, parsedPlan.digest);
 
     const repeated = await run(["generate", target, `--blueprint=${source}`]);
-    assert.match(repeated.stdout, /0 files written, 13 unchanged/);
+    assert.match(repeated.stdout, /0 files written, 14 unchanged/);
     await run(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "backend.js"), "utf8"), /by_priority/);
   } finally {

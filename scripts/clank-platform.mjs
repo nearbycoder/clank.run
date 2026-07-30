@@ -43,6 +43,7 @@ const customDomainAddresses = list(environment("CLANK_CUSTOM_DOMAIN_ADDRESSES", 
 const ingressEnabled = environment("CLANK_INGRESS", "PROACT_INGRESS") === "1" || Boolean(ingressBaseDomain);
 const domainRecheckInterval = process.env.CLANK_DOMAIN_RECHECK_INTERVAL_MS;
 const backupInterval = process.env.CLANK_BACKUP_INTERVAL_MS;
+const previewCleanupInterval = process.env.CLANK_PREVIEW_CLEANUP_INTERVAL_MS;
 const runnerArtifactStorage = resolveRunnerArtifactStorage(process.env);
 const backupStorage = resolveBackupStorage(process.env);
 if (runnerArtifactStorage && !process.env.CLANK_RUNNER_REGISTRATION_TOKEN) {
@@ -134,6 +135,13 @@ const platform = await openPlatform({
   jobs: {
     alertDueAfterMs: number(process.env.CLANK_JOB_ALERT_DUE_AFTER_MS, 5 * 60_000),
   },
+  previews: {
+    defaultTtlMs: number(process.env.CLANK_PREVIEW_DEFAULT_TTL_MS, 7 * 24 * 60 * 60_000),
+    maxTtlMs: number(process.env.CLANK_PREVIEW_MAX_TTL_MS, 30 * 24 * 60 * 60_000),
+    cleanupIntervalMs: previewCleanupInterval === "0"
+      ? false
+      : number(previewCleanupInterval, 5 * 60_000),
+  },
   ...(ingress ? { ingress } : {}),
   onError: (error) => console.error("[platform]", error),
 });
@@ -163,6 +171,7 @@ console.log(`Remote runner enrollment: ${process.env.CLANK_RUNNER_REGISTRATION_T
 console.log(`Runner artifact storage: ${runnerArtifactStorage ? "object" : "local"}`);
 console.log(`Encrypted backup storage: ${backupStorage ? "object" : "local"}`);
 console.log(`Automatic backups: ${backupInterval === "0" ? "disabled" : "enabled"}`);
+console.log(`Preview cleanup: ${previewCleanupInterval === "0" ? "disabled" : "enabled"}`);
 
 let closing;
 const close = async () => {

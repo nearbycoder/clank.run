@@ -2876,6 +2876,191 @@ test("organizations enforce RBAC, invitations, membership revocation, and projec
   }
 });
 
+test("preview environments are isolated, quota-bound, refreshable, removable, and expired on startup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-previews-"));
+  const dataDirectory = join(root, "platform");
+  const platformOptions = {
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4761,
+    appPortEnd: 4765,
+    signup: true,
+    backups: { intervalMs: false },
+    previews: { cleanupIntervalMs: false },
+    limits: {
+      projectsPerAccount: 4,
+      projectsPerOrganization: 4,
+    },
+  };
+  let platform = await openPlatform(platformOptions);
+  let closed = false;
+  try {
+    const owner = await authorizeCli(platform, "previews@example.com");
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
+      token: owner.accessToken,
+    }));
+    const organizationId = dashboard.organizations[0].id;
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: {
+        name: "Preview Parent",
+        slug: "preview-parent",
+        organizationId,
+      },
+    }), 201);
+    const projectId = created.project.id;
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/secrets`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { values: { PRODUCTION_ONLY: "never-copy-this" } },
+    }));
+    const artifact = await appArtifact(join(root, "artifact"), "preview-test", [
+      ["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);"],
+    ]);
+    const productionDeploy = await deploy(
+      platform,
+      projectId,
+      owner.accessToken,
+      artifact,
+      "preview_production_0001",
+    );
+    assert.equal(productionDeploy.response.status, 201, JSON.stringify(productionDeploy.body));
+
+    const previewCreated = await payload(platform, jsonRequest(`/api/projects/${projectId}/previews`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Feature Accounts", ttlHours: 48 },
+    }), 201);
+    assert.equal(previewCreated.created, true);
+    assert.equal(previewCreated.preview.kind, "preview");
+    assert.equal(previewCreated.preview.parentProjectId, projectId);
+    assert.equal(previewCreated.preview.previewName, "feature-accounts");
+    const previewId = previewCreated.preview.id;
+    const firstExpiry = previewCreated.preview.previewExpiresAt;
+
+    const refreshed = await payload(platform, jsonRequest(`/api/projects/${projectId}/previews`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "feature-accounts", ttlHours: 72 },
+    }));
+    assert.equal(refreshed.created, false);
+    assert.equal(refreshed.preview.id, previewId);
+    assert.ok(refreshed.preview.previewExpiresAt > firstExpiry);
+
+    const nested = await platform.handle(jsonRequest(`/api/projects/${previewId}/previews`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "nested" },
+    }));
+    assert.equal(nested.status, 409);
+    assert.equal((await nested.json()).error.code, "PREVIEW_PARENT_REQUIRED");
+
+    const previewSecrets = await payload(platform, jsonRequest(`/api/projects/${previewId}/secrets`, {
+      token: owner.accessToken,
+    }));
+    assert.deepEqual(previewSecrets.secrets, []);
+    const previewDeploy = await deploy(
+      platform,
+      previewId,
+      owner.accessToken,
+      artifact,
+      "preview_feature_accounts_0001",
+    );
+    assert.equal(previewDeploy.response.status, 201, JSON.stringify(previewDeploy.body));
+
+    const productionDatabase = new DatabaseSync(
+      join(dataDirectory, "projects", projectId, "data", "app.sqlite"),
+    );
+    const previewDatabase = new DatabaseSync(
+      join(dataDirectory, "projects", previewId, "data", "app.sqlite"),
+    );
+    productionDatabase.prepare("INSERT INTO items (value) VALUES (?)").run("production");
+    assert.equal(productionDatabase.prepare("SELECT count(*) AS count FROM items").get().count, 1);
+    assert.equal(previewDatabase.prepare("SELECT count(*) AS count FROM items").get().count, 0);
+    productionDatabase.close();
+    previewDatabase.close();
+
+    const projects = await payload(platform, jsonRequest("/api/projects", {
+      token: owner.accessToken,
+    }));
+    assert.deepEqual(projects.projects.map((project) => project.id), [projectId]);
+    assert.equal(projects.usage[organizationId], 2);
+    const listed = await payload(platform, jsonRequest(`/api/projects/${projectId}/previews`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(listed.previews.length, 1);
+    assert.equal(listed.policy.copiesProductionData, false);
+    assert.equal(listed.policy.countsTowardProjectQuota, true);
+
+    const parentDelete = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: "delete-site preview-parent",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    assert.equal(parentDelete.status, 409);
+    assert.equal((await parentDelete.json()).error.code, "PREVIEWS_EXIST");
+
+    const manual = await payload(platform, jsonRequest(`/api/projects/${projectId}/previews`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "manual" },
+    }), 201);
+    const wrongConfirmation = await platform.handle(jsonRequest(
+      `/api/projects/${projectId}/previews/${manual.preview.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: "delete-preview wrong",
+          acknowledgeDataLoss: true,
+        },
+      },
+    ));
+    assert.equal(wrongConfirmation.status, 400);
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/previews/${manual.preview.id}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: "delete-preview manual",
+        acknowledgeDataLoss: true,
+      },
+    }));
+
+    await platform.close();
+    closed = true;
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    control.prepare("UPDATE clank_platform_projects SET preview_expires_at = ? WHERE id = ?")
+      .run(Date.now() - 1, previewId);
+    control.close();
+
+    platform = await openPlatform({
+      ...platformOptions,
+      previews: { cleanupIntervalMs: 1_000 },
+    });
+    closed = false;
+    const afterExpiry = await payload(platform, jsonRequest(`/api/projects/${projectId}/previews`, {
+      token: owner.accessToken,
+    }));
+    assert.deepEqual(afterExpiry.previews, []);
+    await assert.rejects(stat(join(dataDirectory, "projects", previewId)), { code: "ENOENT" });
+    const audit = await payload(platform, jsonRequest(
+      `/api/audit?organizationId=${organizationId}&limit=100`,
+      { token: owner.accessToken },
+    ));
+    assert.ok(audit.events.some((event) => event.action === "preview.create"));
+    assert.ok(audit.events.some((event) => event.action === "preview.refresh"));
+    assert.ok(audit.events.some((event) => event.action === "preview.delete"));
+    assert.ok(audit.events.some((event) => event.action === "preview.expire"));
+  } finally {
+    if (!closed) await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("site deletion is admin-only, path-safe, auditable, and releases every managed resource", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-site-delete-"));
   const dataDirectory = join(root, "platform");
@@ -3894,15 +4079,17 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /\.brand-lockup\{display:inline-flex;align-items:center;gap:9px;/);
     assert.match(signedInHtml, /class="icon-sprite"[^>]*><defs>\s*<symbol id="nav-icon-overview"/);
     assert.match(signedInHtml, /\.nav-icon\{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex:0 0 18px;/);
-    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 12);
+    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 13);
     assert.doesNotMatch(signedInHtml, /<span class="nav-icon">[^<]/);
     assert.match(signedInHtml, /Build it\./);
     assert.match(signedInHtml, /aria-label="Project navigation"/);
     assert.match(signedInHtml, /data-project-tab="deployments"/);
+    assert.match(signedInHtml, /data-project-tab="previews"/);
     assert.match(signedInHtml, /data-project-tab="jobs"/);
     assert.match(signedInHtml, /aria-controls="sidebar"/);
     assert.match(signedInHtml, /id="sidebar-scrim"[^>]+aria-label="Close navigation"/);
     assert.match(signedInHtml, /class="table mobile-card-table release-table"/);
+    assert.match(signedInHtml, /class="table mobile-card-table preview-table"/);
     assert.match(signedInHtml, /class="table mobile-card-table backup-table"/);
     assert.match(signedInHtml, /class="table mobile-card-table job-table"/);
     assert.match(signedInHtml, /class="table admin-user-table mobile-card-table"/);
@@ -3931,6 +4118,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       "/projects/my-todo/performance",
       "/projects/my-todo/domains",
       "/projects/my-todo/deployments",
+      "/projects/my-todo/previews",
       "/projects/my-todo/backups",
       "/projects/my-todo/logs",
       "/projects/my-todo/jobs",

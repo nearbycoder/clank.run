@@ -11,6 +11,9 @@ npm run dev
 
 Open http://127.0.0.1:3000.
 
+The build compiles `src/styles.css` with the local Tailwind CLI and serves the resulting static
+`dist/styles.css`; production does not load Tailwind from a browser CDN.
+
 ## Check and deploy
 
 ```sh

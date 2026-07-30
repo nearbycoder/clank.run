@@ -219,7 +219,10 @@ and contract-freshness checklist.
 
 ## Use Tailwind
 
-The starter is already configured for Tailwind utility classes, so you can edit `class` values in TSX immediately. Clank does not wrap or reinterpret Tailwind; classes are emitted as normal HTML attributes. For a compiled production stylesheet, follow [Tailwind CSS](tailwind.md).
+The starter is already configured for Tailwind utility classes and compiles `src/styles.css` to
+`dist/styles.css` during every build. You can edit `class` values in TSX immediately; Clank does
+not wrap or reinterpret them, and production serves the static stylesheet without a browser CDN.
+For the compiler contract and standalone-binary option, see [Tailwind CSS](tailwind.md).
 
 ## Build with an agent
 

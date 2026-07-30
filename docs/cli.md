@@ -39,9 +39,11 @@ npm run dev
 
 The generated app includes auth, an owned Todo table, a transactional background job, SSR,
 hydration, live updates, Tailwind, a health route, deployment configuration, its first migration, a
-human `README.md`, and an agent-oriented `AGENTS.md`. Its only dependency is the official
-`@clank.run/framework` package, which has no transitive dependencies. The exact CLI runtime is
-still embedded into deployment artifacts, so the platform never runs an install hook.
+human `README.md`, and an agent-oriented `AGENTS.md`. Its only runtime dependency is the official
+`@clank.run/framework` package, which has no transitive dependencies. Tailwind and its CLI are
+local build-only development dependencies; compiled CSS is included in the artifact. The exact
+Clank runtime is still embedded into deployment artifacts, so the platform never runs an install
+hook.
 
 Until a Clank version is published, or while changing the framework and an app together, point the scaffold at the current checkout:
 
@@ -187,6 +189,23 @@ Deployment validates config, runs the local build without a shell, packages incl
 `--dry-run` is deliberately offline: it builds and writes a verified artifact without reading a login, creating a project, or contacting a platform. `--json` suppresses human progress output and emits one `clank-deploy-result/1` document with artifact, release, URL, and timing data.
 
 Before upload the CLI stores a non-secret attempt record in `.clank/deploy-attempt.json`. If the connection fails after the platform may have accepted the artifact, the next identical deploy within 24 hours reuses the same idempotency key and converges on the original release. A definitive platform response clears the record.
+
+## Preview environments
+
+```sh
+clank preview deploy feature-auth
+clank preview deploy pull-482 --ttl=48 --json
+clank preview list
+clank preview remove feature-auth \
+  --confirm="delete-preview feature-auth" \
+  --acknowledge-data-loss
+```
+
+Preview deploys use the production link without replacing it. Each normalized name has a separate,
+expiring URL, SQLite database, releases, secrets, jobs, logs, and MCP endpoint. Repeating a name
+refreshes its TTL and deploys a new release. Production data and secrets are never copied, and the
+preview consumes an ordinary account/workspace project slot. See
+[Preview environments](preview-environments.md).
 
 ## Status and rollback
 

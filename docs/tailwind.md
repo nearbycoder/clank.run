@@ -1,6 +1,7 @@
 # Tailwind CSS
 
-Clank preserves class strings exactly and keeps styling outside its reactive kernel. Tailwind scans ordinary TSX such as:
+Clank preserves class strings exactly and keeps styling outside its reactive kernel. Tailwind scans
+ordinary TSX such as:
 
 ```tsx
 <button
@@ -11,38 +12,49 @@ Clank preserves class strings exactly and keeps styling outside its reactive ker
 </button>
 ```
 
-## Zero-install development
+## Generated production pipeline
 
-The example uses Tailwind v4's browser build:
-
-```html
-<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-<style type="text/tailwindcss">
-  @theme { --color-brand: #ff6b4a; }
-  body { @apply bg-slate-50 text-slate-900; }
-</style>
-```
-
-Tailwind documents the Play CDN as a development-only option. It is ideal for this zero-install demo, but production should serve compiled CSS. See the official [Play CDN guide](https://tailwindcss.com/docs/installation/play-cdn).
-
-When using the browser build with a Content Security Policy, allow the exact CDN script origin and the development-time style injection it performs. The authenticated example uses a per-response script nonce and limits the exception to `style-src 'unsafe-inline'`. Compiled production CSS can remove both CDN access and that style exception.
-
-## Production without project packages
-
-Use Tailwind's standalone CLI executable, then create:
+Both built-in templates and AI blueprint output include:
 
 ```css
 /* src/styles.css */
 @import "tailwindcss";
+@source "./**/*.{ts,tsx}";
 ```
 
-Compile it to a static file with the standalone binary for your platform:
+and build with:
 
 ```sh
-./tailwindcss -i ./src/styles.css -o ./public/styles.css --watch
+clank build src dist --tailwind=src/styles.css
 ```
 
-Then link `/styles.css` from HTML. The official [Tailwind CLI guide](https://tailwindcss.com/docs/installation/tailwind-cli) notes that a standalone executable is available for users who do not want a Node package install.
+Clank first compiles TypeScript/TSX and copies static source files. It then invokes the project's
+local `@tailwindcss/cli` directly with an argument array and `shell: false`, writes to a temporary
+file, and atomically replaces `dist/styles.css` only after a successful minified build. Generated
+servers link `/styles.css` and use `style-src 'self'`; they do not allow or load a Tailwind browser
+CDN.
+
+The generated app declares `tailwindcss` and `@tailwindcss/cli` as build-only development
+dependencies. The application runtime still has one zero-transitive-dependency framework package,
+and Clank includes only compiled CSS in the deployment artifact. The platform does not run
+`npm install` or any remote build hook.
+
+This follows Tailwind's official [CLI installation](https://tailwindcss.com/docs/installation/tailwind-cli)
+model. Versions are intentionally declared in the generated `package.json` so dependency updates
+remain visible and reviewable.
+
+## Standalone CLI without project packages
+
+Tailwind also publishes a standalone executable. Set its path for the same Clank build:
+
+```sh
+CLANK_TAILWIND_EXECUTABLE=./tailwindcss \
+  clank build src dist --tailwind=src/styles.css
+```
+
+The configured value is executed directly without a shell. If neither a local CLI module nor the
+configured standalone executable exists, the build fails before deployment instead of shipping an
+uncompiled stylesheet.
 
 ## Static class discovery
 
@@ -56,8 +68,20 @@ const tone = danger ? "bg-red-600" : "bg-emerald-600";
 const tone = `bg-${color}-600`;
 ```
 
-Reactive `classList` keys are also static strings and are discoverable. If a class truly comes from external data, map the allowed values to complete class names or configure the Tailwind source/safelist mechanism.
+Reactive `classList` keys are also static strings and are discoverable. If a class truly comes from
+external data, map the allowed values to complete class names or configure Tailwind's source
+mechanism explicitly.
 
-## Why there is no Clank plugin
+## Development-only browser examples
 
-Tailwind needs source files containing class strings and an HTML file containing its generated stylesheet. Clank supplies both without transforming the class attribute, so an adapter would add dependency and indirection without adding capability.
+Some standalone HTML examples in this repository still use Tailwind's browser build so they can be
+opened without installing anything. Tailwind documents that path for development only. Generated
+apps, blueprint output, preview deploys, and production releases all use the compiled pipeline
+above.
+
+## Why there is no Clank Tailwind plugin
+
+Tailwind needs source files containing class strings and an HTML document linking its generated
+stylesheet. Clank supplies both without transforming `class` or `classList`. The `--tailwind`
+compiler option is orchestration—not a CSS reimplementation—so Tailwind behavior stays standard
+and its output remains inspectable.

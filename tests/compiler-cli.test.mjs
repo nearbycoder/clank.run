@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { access, lstat, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { join } from "node:path";
@@ -13,6 +13,19 @@ const repository = new URL("..", import.meta.url);
 const frameworkVersion = JSON.parse(
   await readFile(fileURLToPath(new URL("package.json", repository)), "utf8"),
 ).version;
+
+async function fakeTailwind(root) {
+  const executable = join(root, "fake-tailwind.mjs");
+  await writeFile(executable, `#!/usr/bin/env node
+import { readFile, writeFile } from "node:fs/promises";
+const input = process.argv[process.argv.indexOf("-i") + 1];
+const output = process.argv[process.argv.indexOf("-o") + 1];
+const source = await readFile(input, "utf8");
+await writeFile(output, "/* compiled Tailwind test output */\\n" + source.replace('@import "tailwindcss";', ""));
+`);
+  await chmod(executable, 0o700);
+  return executable;
+}
 
 function runCli(args, cwd = repository) {
   return new Promise((resolve, reject) => {
@@ -831,6 +844,9 @@ test("create scaffolds a named, buildable authenticated application", async () =
     const agentGuide = await readFile(join(target, "AGENTS.md"), "utf8");
     assert.equal(packageJson.name, "team-tasks");
     assert.equal(packageJson.dependencies["@clank.run/framework"], `^${frameworkVersion}`);
+    assert.equal(packageJson.devDependencies.tailwindcss, "^4.2.4");
+    assert.equal(packageJson.devDependencies["@tailwindcss/cli"], "^4.2.4");
+    assert.match(packageJson.scripts.build, /--tailwind=src\/styles\.css/);
     assert.match(packageJson.scripts.dev, /dist\/server\.js/);
     assert.equal(packageJson.scripts.doctor, "clank doctor");
     assert.equal(packageJson.scripts["jobs:worker"], "clank jobs worker");
@@ -840,6 +856,8 @@ test("create scaffolds a named, buildable authenticated application", async () =
     assert.doesNotMatch(view, /__PROJECT_TITLE__/);
     assert.doesNotMatch(JSON.stringify(packageJson), /__CLANK_VERSION__/);
     assert.match(server, /title: "Team Tasks"/);
+    assert.match(server, /href="\/styles\.css"/);
+    assert.doesNotMatch(server, /@tailwindcss\/browser|cdn\.jsdelivr\.net/);
     assert.match(jobs, /runJobProcess/);
     assert.match(server, /imports: \{ "@clank\.run\/framework": "\/_clank\/index\.js" \}/);
     assert.match(view, />Team Tasks</);
@@ -877,6 +895,7 @@ test("create supports the minimal full-stack template and rejects unknown templa
     const readme = await readFile(join(target, "README.md"), "utf8");
     assert.equal(packageJson.name, "small-start");
     assert.equal(packageJson.dependencies["@clank.run/framework"], `^${frameworkVersion}`);
+    assert.equal(packageJson.devDependencies.tailwindcss, "^4.2.4");
     assert.match(server, /title: "Small Start"/u);
     assert.match(view, />Small Start</u);
     assert.match(view, /agentId="starter-counter"/u);
@@ -932,6 +951,7 @@ test("create can use this checkout without a published package and dry-run deplo
 
     const sentinel = join(root, "artifact-sentinel");
     const artifactPath = join(target, "verified.clank.gz");
+    const tailwind = await fakeTailwind(root);
     await writeFile(sentinel, "do not replace");
     await symlink(sentinel, artifactPath);
     const dryRun = await runCliOutput([
@@ -942,6 +962,7 @@ test("create can use this checkout without a published package and dry-run deplo
     ], target, {
       ...process.env,
       CLANK_HOME: home,
+      CLANK_TAILWIND_EXECUTABLE: tailwind,
     });
     const result = JSON.parse(dryRun.stdout);
     assert.equal(result.protocol, "clank-deploy-result/1");
@@ -1001,6 +1022,12 @@ test("deploy retries reuse a persisted idempotency key after an ambiguous networ
   const platform = `http://127.0.0.1:${address.port}/`;
   try {
     await mkdir(home);
+    const tailwind = await fakeTailwind(root);
+    const environment = {
+      ...process.env,
+      CLANK_HOME: home,
+      CLANK_TAILWIND_EXECUTABLE: tailwind,
+    };
     await runCli(["create", target], repository);
     await mkdir(join(target, ".clank"), { recursive: true });
     await writeFile(join(home, "config.json"), JSON.stringify({
@@ -1019,17 +1046,11 @@ test("deploy retries reuse a persisted idempotency key after an ambiguous networ
       projectId: "project_retry_test",
     }));
 
-    const first = await runCliResult(["deploy", "--json"], target, {
-      ...process.env,
-      CLANK_HOME: home,
-    });
+    const first = await runCliResult(["deploy", "--json"], target, environment);
     assert.equal(first.code, 1);
     await access(join(target, ".clank", "deploy-attempt.json"));
 
-    const second = await runCliResult(["deploy", "--json"], target, {
-      ...process.env,
-      CLANK_HOME: home,
-    });
+    const second = await runCliResult(["deploy", "--json"], target, environment);
     assert.equal(second.code, 0, second.stderr);
     const deployed = JSON.parse(second.stdout);
     assert.equal(deployed.release.id, "release_retry_test");
@@ -1037,6 +1058,171 @@ test("deploy retries reuse a persisted idempotency key after an ambiguous networ
     assert.equal(requests, 2);
     assert.equal(keys[0], keys[1]);
     await assert.rejects(access(join(target, ".clank", "deploy-attempt.json")), (error) => error.code === "ENOENT");
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("preview CLI deploys, lists, and removes an isolated linked environment", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-preview-"));
+  const home = join(root, "home");
+  const target = join(root, "preview-app");
+  const observed = [];
+  const expiresAt = Date.now() + 24 * 60 * 60_000;
+  const preview = {
+    id: "preview_cli_test",
+    kind: "preview",
+    parentProjectId: "project_preview_parent",
+    previewName: "feature-auth",
+    previewExpiresAt: expiresAt,
+    slug: "preview-app-feature-auth",
+    runtimeStatus: "online",
+    url: "https://preview-app-feature-auth.apps.example.test",
+  };
+  const server = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = chunks.length ? Buffer.concat(chunks) : null;
+    observed.push({
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+      contentType: request.headers["content-type"],
+      body: request.headers["content-type"] === "application/json" && body
+        ? JSON.parse(body.toString("utf8"))
+        : undefined,
+    });
+    response.setHeader("content-type", "application/json");
+    if (
+      request.method === "POST"
+      && request.url === "/api/projects/project_preview_parent/previews"
+    ) {
+      response.writeHead(201);
+      response.end(JSON.stringify({ ok: true, created: true, preview }));
+      return;
+    }
+    if (
+      request.method === "POST"
+      && request.url === "/api/projects/preview_cli_test/releases"
+    ) {
+      response.writeHead(201);
+      response.end(JSON.stringify({
+        ok: true,
+        release: {
+          id: "release_preview_cli",
+          digest: request.headers["x-clank-content-sha256"],
+          url: preview.url,
+        },
+      }));
+      return;
+    }
+    if (
+      request.method === "GET"
+      && request.url === "/api/projects/project_preview_parent/previews"
+    ) {
+      response.writeHead(200);
+      response.end(JSON.stringify({ ok: true, previews: [preview] }));
+      return;
+    }
+    if (
+      request.method === "DELETE"
+      && request.url === "/api/projects/project_preview_parent/previews/preview_cli_test"
+    ) {
+      response.writeHead(200);
+      response.end(JSON.stringify({ ok: true, preview: { ...preview, deletedAt: Date.now() } }));
+      return;
+    }
+    response.writeHead(404);
+    response.end(JSON.stringify({ error: { code: "NOT_FOUND", message: "Not found." } }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}`;
+  const tailwind = await fakeTailwind(root);
+  const environment = {
+    ...process.env,
+    CLANK_HOME: home,
+    CLANK_TAILWIND_EXECUTABLE: tailwind,
+  };
+  try {
+    await mkdir(home);
+    await runCli(["create", target], repository);
+    await mkdir(join(target, ".clank"), { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_preview_test_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    await writeFile(join(target, ".clank", "project.json"), JSON.stringify({
+      version: 1,
+      server: platform,
+      projectId: "project_preview_parent",
+    }));
+
+    const deployed = await runCliResult([
+      "preview",
+      "deploy",
+      "feature-auth",
+      "--ttl=24",
+      "--json",
+    ], target, environment);
+    assert.equal(deployed.code, 0, deployed.stderr);
+    const result = JSON.parse(deployed.stdout);
+    assert.equal(result.protocol, "clank-preview-result/1");
+    assert.equal(result.preview.id, preview.id);
+    assert.equal(result.preview.expiresAt, expiresAt);
+    assert.equal(result.release.url, preview.url);
+
+    const listed = await runCliResult(["preview", "list", "--json"], target, environment);
+    assert.equal(listed.code, 0, listed.stderr);
+    assert.equal(JSON.parse(listed.stdout).previews[0].previewName, "feature-auth");
+
+    const removed = await runCliResult([
+      "preview",
+      "remove",
+      "feature-auth",
+      "--confirm=delete-preview feature-auth",
+      "--acknowledge-data-loss",
+      "--json",
+    ], target, environment);
+    assert.equal(removed.code, 0, removed.stderr);
+    assert.equal(JSON.parse(removed.stdout).preview.id, preview.id);
+
+    assert.deepEqual(observed.map(({ method, url }) => ({ method, url })), [{
+      method: "POST",
+      url: "/api/projects/project_preview_parent/previews",
+    }, {
+      method: "POST",
+      url: "/api/projects/preview_cli_test/releases",
+    }, {
+      method: "GET",
+      url: "/api/projects/project_preview_parent/previews",
+    }, {
+      method: "GET",
+      url: "/api/projects/project_preview_parent/previews",
+    }, {
+      method: "DELETE",
+      url: "/api/projects/project_preview_parent/previews/preview_cli_test",
+    }]);
+    assert.deepEqual(observed[0].body, { name: "feature-auth", ttlHours: 24 });
+    assert.equal(observed[1].contentType, "application/vnd.clank.deploy+gzip");
+    assert.deepEqual(observed[4].body, {
+      confirmation: "delete-preview feature-auth",
+      acknowledgeDataLoss: true,
+    });
+    assert.ok(observed.every((request) =>
+      request.authorization === "Bearer clnk_preview_test_token"));
   } finally {
     await new Promise((resolve, reject) =>
       server.close((error) => error ? reject(error) : resolve()));
@@ -1064,6 +1250,47 @@ test("compiler CLI refuses overlapping input and output directories before delet
   assert.notEqual(code, 0);
   assert.equal(await readFile(sentinel, "utf8"), "export const keep = true;");
   await rm(root, { recursive: true, force: true });
+});
+
+test("compiler builds Tailwind atomically through an explicit shell-free executable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-tailwind-"));
+  const input = join(root, "src");
+  const output = join(root, "dist");
+  try {
+    await mkdir(join(input, "styles"), { recursive: true });
+    await writeFile(join(input, "app.tsx"), "export const className = 'bg-slate-950 text-white';\n");
+    await writeFile(join(input, "styles", "tailwind.css"), '@import "tailwindcss";\n@source "../**/*.tsx";\n');
+    const executable = await fakeTailwind(root);
+    const built = await runCliResult([
+      "build",
+      "src",
+      "dist",
+      "--tailwind=src/styles/tailwind.css",
+    ], root, {
+      ...process.env,
+      CLANK_TAILWIND_EXECUTABLE: executable,
+    });
+    assert.equal(built.code, 0, built.stderr);
+    assert.match(await readFile(join(output, "styles.css"), "utf8"), /compiled Tailwind test output/);
+    assert.doesNotMatch(await readFile(join(output, "styles.css"), "utf8"), /@import "tailwindcss"/);
+    assert.match(await readFile(join(output, "app.js"), "utf8"), /bg-slate-950 text-white/);
+    assert.deepEqual(
+      (await readdir(output))
+        .filter((name) => name.includes(".clank-build-")),
+      [],
+    );
+
+    const outside = await runCliResult([
+      "build",
+      "src",
+      "dist",
+      "--tailwind=../outside.css",
+    ], root, process.env);
+    assert.equal(outside.code, 1);
+    assert.match(outside.stderr, /Tailwind input must be inside the compiler input directory/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("framework builds are safe to run concurrently and remove stale outputs", async () => {
