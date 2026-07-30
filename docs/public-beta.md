@@ -21,6 +21,9 @@ Any known cross-tenant access, authentication bypass, remote code execution acro
   refuses public signup. Production defaults to the `isolated` Docker profile, but public
   multi-tenancy still preferably uses dedicated VMs or microVMs.
 - Distributed leases, desired state, worker authentication, durable operations, and fencing are implemented, but the built-in process supervisor is not a turnkey multi-region HA control plane. Operate one active supervisor per project/data directory until leader election and remote runner integration are deployed.
+- The optional remote-node HTTP transport removes direct control-database access from deployment
+  agents, but the built-in supervisor does not yet delegate release activation through it. Remote
+  execution still needs a runtime adapter plus shared or remote release/application storage.
 - The control-plane catalog uses SQLite. It supports durable coordination on one shared transactional store, not globally distributed consensus.
 - Built-in application data and live queries are SQLite-first. The external PostgreSQL driver/provisioner is available, but generated backend tables do not transparently switch engines.
 - Managed ingress performs exact-host HTTP proxying, automatically reconciles customer DNS routing with durable bounded leases, and supplies a restricted Caddy certificate-permission lookup. It does not itself issue or store certificates, change customer DNS, provide a WAF/DDoS edge, or proxy WebSocket upgrades. Put it behind the documented production edge.

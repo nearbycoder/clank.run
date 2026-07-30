@@ -35,6 +35,7 @@
     "./observability": { "types": "./dist/observability.d.ts", "import": "./dist/observability.js" },
     "./recovery": { "types": "./dist/recovery.d.ts", "import": "./dist/recovery.js" },
     "./orchestration": { "types": "./dist/orchestration.d.ts", "import": "./dist/orchestration.js" },
+    "./runner": { "types": "./dist/runner.d.ts", "import": "./dist/runner.js" },
     "./data-plane": { "types": "./dist/data-plane.d.ts", "import": "./dist/data-plane.js" },
     "./forms": { "types": "./dist/forms.d.ts", "import": "./dist/forms.js" },
     "./ui": { "types": "./dist/ui.d.ts", "import": "./dist/ui.js" },

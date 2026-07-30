@@ -27,6 +27,8 @@ configured worker/scheduler processes for each active project.
 | `CLANK_APP_MEMORY` | `512m` | Container memory |
 | `CLANK_APP_CPUS` | `1` | Container CPUs |
 | `CLANK_APP_PIDS` | `128` | Container PID limit |
+| `CLANK_RUNNER_REGISTRATION_TOKEN` | none | Enables authenticated remote-node enrollment and coordination |
+| `CLANK_RUNNER_MAX_REQUEST_BYTES` | `131072` | Remote-node protocol request limit |
 | `CLANK_APP_PORT_START` | `4300` | Port-range start |
 | `CLANK_APP_PORT_END` | `4999` | Port-range end |
 | `CLANK_APP_URL_TEMPLATE` | loopback with `{port}` | Public app URL pattern |
@@ -93,6 +95,27 @@ and use dedicated nodes or microVMs for hostile workloads.
 
 Unknown profile or runner values are fatal. This is intentional: a misspelled isolation setting
 must never fall back to process execution.
+
+## Optional remote-node coordination
+
+Keep the runner API disabled on a single-host installation. To let deployment nodes coordinate
+without direct control-database access, create a separate enrollment secret:
+
+```sh
+export CLANK_RUNNER_REGISTRATION_TOKEN="$(openssl rand -base64 48)"
+```
+
+This enables only `/api/runner/v1/*` on the control-plane hostname. It does not expose the secret in
+the dashboard and does not grant browser, CLI, project, or application access. A node exchanges the
+enrollment secret for its own `clnka_...` credential; the control database stores only its digest.
+Use the enrollment secret only during node provisioning, then retain it in operator secret storage
+for deliberate rotation or replacement.
+
+The coordinator transport is useful on one host, a private network, or multiple runner hosts. It
+does not by itself make local SQLite data or release directories available on another machine. The
+current built-in supervisor still owns application activation; use the protocol as the secure
+control boundary for a runner integration and follow
+[Durable distributed deployment](distributed-deployment.md).
 
 ## Production start
 

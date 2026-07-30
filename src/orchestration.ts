@@ -85,6 +85,8 @@ export interface DeploymentOrchestrator {
   renewLease(lease: DistributedLease, ttlMs?: number): Promise<DistributedLease | null>;
   releaseLease(lease: DistributedLease): Promise<boolean>;
   registerNode(input: DeploymentNodeInput): Promise<NodeSession>;
+  /** Verifies a node credential without extending its heartbeat lease. */
+  authenticateNode(nodeId: string, token: string): Promise<DeploymentNode>;
   heartbeat(nodeId: string, token: string, input?: {
     capacity?: number;
     labels?: Record<string, string>;
@@ -250,6 +252,14 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         node: nodeFromRow(internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id)!),
         token,
       };
+    },
+    async authenticateNode(idInput, token) {
+      ensureOpen();
+      const row = await verifyNode(nodeId(idInput), token);
+      if (Number(row.expires_at) <= Date.now() || String(row.status) === "offline") {
+        throw new Error("Deployment node lease is expired.");
+      }
+      return nodeFromRow(row);
     },
     async heartbeat(idInput, token, heartbeat = {}) {
       ensureOpen();
@@ -609,7 +619,11 @@ function normalizedLabels(input: Record<string, string>): Record<string, string>
   const entries = Object.entries(input);
   if (entries.length > 100) throw new TypeError("A deployment node may have at most 100 labels.");
   for (const [name, value] of entries) {
-    output[safeName(name, "label name", 100)] = bounded(value, `label ${name}`, 0, 200);
+    const normalizedName = safeName(name, "label name", 100);
+    if (["__proto__", "constructor", "prototype"].includes(normalizedName)) {
+      throw new TypeError("Deployment node label name is reserved.");
+    }
+    output[normalizedName] = bounded(value, `label ${name}`, 0, 200);
   }
   return output;
 }

@@ -97,6 +97,20 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - Types: `ClankPlatformOptions`, `PlatformLimits`, `PlatformHostingProfile`,
   `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`.
 
+## Remote deployment coordination
+
+- `createDeploymentCoordinatorHandler(orchestrator, options)`: optional versioned HTTP boundary for
+  deployment-node enrollment, heartbeat, draining, operation claims, renewal, settlement, and
+  desired-state observation.
+- `createDeploymentCoordinatorClient(options)`: HTTPS/loopback-only, redirect-refusing, bounded
+  remote-node client.
+- `DEPLOYMENT_COORDINATOR_PREFIX`: fixed `/api/runner/v1` protocol namespace.
+- `DeploymentCoordinatorError`: safe client error with HTTP `status` and stable `code`.
+- `DeploymentOrchestrator.authenticateNode(id, token)`: verifies the current node credential and
+  heartbeat lease without extending it.
+- Types: `DeploymentCoordinatorHandler`, `DeploymentCoordinatorHandlerOptions`,
+  `DeploymentCoordinatorClient`, `DeploymentCoordinatorClientOptions`.
+
 ## Managed data plane
 
 - `createManagedIngress(options)`: exact-host reverse proxy with fixed upstream origins, bounded streaming request bodies, hop-header stripping, safe retries, circuits, health, and request observation.
