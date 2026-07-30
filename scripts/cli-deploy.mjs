@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chmod, cp, lstat, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname, platform as operatingSystem } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,16 +30,42 @@ const PROJECT_TEMPLATES = Object.freeze([
     id: "auth-todo",
     title: "Authenticated Todo",
     summary: "Auth, private SQLite data, SSR, hydration, Tailwind, and live sync.",
+    recommended: true,
+    features: Object.freeze([
+      "authentication",
+      "private-sqlite",
+      "durable-jobs",
+      "ssr",
+      "hydration",
+      "live-sync",
+      "tailwind",
+      "mcp-oauth",
+      "migrations",
+      "deployment",
+    ]),
   }),
   Object.freeze({
     id: "minimal",
     title: "Minimal full-stack",
     summary: "A small SSR and hydrated TypeScript app with Tailwind and deployment.",
+    recommended: false,
+    features: Object.freeze([
+      "reactivity",
+      "ssr",
+      "hydration",
+      "tailwind",
+      "health-check",
+      "deployment",
+    ]),
   }),
 ]);
 const COMMANDS = Object.freeze({
+  templates: {
+    usage: "clank templates [--json]",
+    summary: "List built-in app starters and their exact capabilities.",
+  },
   create: {
-    usage: "clank create <directory> [--template <auth-todo|minimal>] [--name <name>] [--framework <version|local|spec>]",
+    usage: "clank create <directory> [--template <auth-todo|minimal>] [--name <name>] [--framework <version|local|spec>] [--json]",
     summary: "Create a deploy-ready full-stack app from a built-in template.",
   },
   plan: {
@@ -180,6 +206,8 @@ const VALUE_OPTIONS = Object.freeze({
 });
 const BOOLEAN_OPTIONS = Object.freeze({
   help: ["json"],
+  templates: ["json"],
+  create: ["json"],
   generate: ["force"],
   logout: ["local"],
   project: ["acknowledge-data-loss"],
@@ -201,6 +229,7 @@ export async function run(command, args) {
     switch (command) {
       case "help": return help(args);
       case "version": return version();
+      case "templates": return templates(args);
       case "create": return await createProject(args);
       case "plan": return await blueprintPlan(args);
       case "generate": return await generateProject(args);
@@ -296,7 +325,7 @@ export async function runInteractive(options = {}) {
     if (action.id === "create") {
       output("\nChoose a template:\n");
       PROJECT_TEMPLATES.forEach((entry, index) =>
-        output(`  ${index + 1}) ${entry.title}${index === 0 ? " (recommended)" : ""}\n     ${entry.summary}\n`));
+        output(`  ${index + 1}) ${entry.title}${entry.recommended ? " (recommended)" : ""}\n     ${entry.summary}\n`));
       const template = await choose("\nTemplate [1]: ", PROJECT_TEMPLATES);
       let target;
       while (!target) {
@@ -370,6 +399,7 @@ Run clank help for the complete command list.`);
   console.log(`Clank ${packageJson.version}
 
 Start:
+  clank templates                      List built-in app starters
   clank create <directory>             Create a deploy-ready full-stack app
   clank doctor [directory]             Check build and deployment readiness
   clank deploy [directory]             Create, link, and deploy a project
@@ -439,6 +469,37 @@ Use clank help --json and clank doctor --json for agent-readable output.
 
 Deployment configuration is explicit in clank.deploy.json. No server-side
 package hooks are run, and no secrets are read from the project directory.`);
+}
+
+function templates(args) {
+  if (positionals(args).length > 0) {
+    throw new CliError(
+      "clank templates does not accept positional arguments.",
+      "TOO_MANY_ARGUMENTS",
+    );
+  }
+  const catalog = {
+    protocol: "clank-template-catalog/1",
+    version: packageJson.version,
+    defaultTemplate: PROJECT_TEMPLATES.find((entry) => entry.recommended)?.id
+      ?? PROJECT_TEMPLATES[0]?.id
+      ?? null,
+    templates: PROJECT_TEMPLATES.map((entry) => ({ ...entry })),
+  };
+  if (flag(args, "json")) {
+    console.log(JSON.stringify(catalog, null, 2));
+    return;
+  }
+  console.log(`Clank ${packageJson.version} built-in templates`);
+  for (const template of catalog.templates) {
+    console.log(
+      `\n${template.id}${template.recommended ? " (recommended)" : ""}\n`
+      + `  ${template.title} — ${template.summary}\n`
+      + `  Includes: ${template.features.join(", ")}\n`
+      + `  Create: clank create my-app --template=${template.id}`,
+    );
+  }
+  console.log("\nUse clank templates --json for the stable agent-readable catalog.");
 }
 
 async function blueprintPlan(args) {
@@ -525,33 +586,102 @@ async function blueprintPath(value) {
 
 async function createProject(args) {
   const positional = positionals(args);
+  if (positional.length > 1) {
+    throw new CliError(
+      "clank create accepts exactly one project directory.",
+      "TOO_MANY_ARGUMENTS",
+    );
+  }
   const target = resolve(positional[0] ?? ".");
-  const name = option(args, "name") ?? basename(target);
+  const requestedName = option(args, "name");
+  const title = displayName(requestedName ?? basename(target), requestedName !== undefined);
+  const dependency = frameworkDependency(args);
   const template = option(args, "template") ?? "auth-todo";
-  if (!PROJECT_TEMPLATES.some((entry) => entry.id === template)) {
+  const templateDefinition = PROJECT_TEMPLATES.find((entry) =>
+    entry.id === template);
+  if (!templateDefinition) {
     throw new CliError(
       `Unknown template: ${template}. Choose ${PROJECT_TEMPLATES.map((entry) => entry.id).join(" or ")}.`,
       "UNKNOWN_TEMPLATE",
     );
   }
+  let targetStats;
+  try {
+    targetStats = await lstat(target);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (targetStats && (targetStats.isSymbolicLink() || !targetStats.isDirectory())) {
+    throw new CliError(
+      `Target must be a real directory, not a file or symbolic link: ${target}`,
+      "UNSAFE_TARGET",
+    );
+  }
   await mkdir(target, { recursive: true });
-  const entries = await import("node:fs/promises").then(({ readdir }) => readdir(target));
-  if (entries.length) throw new CliError(`Target directory is not empty: ${target}`);
+  targetStats = await lstat(target);
+  if (targetStats.isSymbolicLink() || !targetStats.isDirectory()) {
+    throw new CliError(
+      `Target must be a real directory, not a file or symbolic link: ${target}`,
+      "UNSAFE_TARGET",
+    );
+  }
+  const entries = await readdir(target);
+  if (entries.length) {
+    throw new CliError(
+      `Target directory is not empty: ${target}`,
+      "TARGET_NOT_EMPTY",
+    );
+  }
   await cp(join(packageRoot, "templates", template), target, { recursive: true });
   await rename(join(target, "gitignore.txt"), join(target, ".gitignore"));
-  await replaceInFile(join(target, "package.json"), "__PROJECT_NAME__", packageName(name));
+  await replaceInFile(join(target, "package.json"), "__PROJECT_NAME__", packageName(title));
   await replaceInFile(
     join(target, "package.json"),
     '"__CLANK_DEPENDENCY__"',
-    JSON.stringify(frameworkDependency(args)),
+    JSON.stringify(dependency),
   );
-  await replaceInFile(join(target, "src", "server.tsx"), "__PROJECT_TITLE__", displayName(name));
-  await replaceInFile(join(target, "src", "view.tsx"), "__PROJECT_TITLE__", displayName(name));
-  await replaceInFile(join(target, "README.md"), "__PROJECT_TITLE__", displayName(name));
-  console.log(`Created ${displayName(name)} in ${target}`);
+  await replaceInFile(
+    join(target, "src", "server.tsx"),
+    "__PROJECT_TITLE_JSON__",
+    JSON.stringify(title),
+  );
+  await replaceInFile(
+    join(target, "src", "view.tsx"),
+    "__PROJECT_TITLE_JSON__",
+    JSON.stringify(title),
+  );
+  await replaceInFile(
+    join(target, "README.md"),
+    "__PROJECT_TITLE__",
+    markdownText(title),
+  );
+  const result = {
+    protocol: "clank-create-result/1",
+    ok: true,
+    project: {
+      name: title,
+      packageName: packageName(title),
+      directory: target,
+      frameworkDependency: dependency,
+    },
+    template: { ...templateDefinition },
+    files: await scaffoldFiles(target),
+    commands: {
+      install: "npm install",
+      dev: "npm run dev",
+      doctor: "npm run doctor",
+      login: "clank login",
+      deploy: "npm run deploy",
+    },
+  };
+  if (flag(args, "json")) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`Created ${title} in ${target}`);
   console.log(`Next: cd ${positional[0] ?? "."} && npm install && npm run dev`);
   console.log("Check: npm run doctor");
-  console.log("Deploy: clank login && clank deploy");
+  console.log("Deploy: clank login && npm run deploy");
 }
 
 async function doctor(args) {
@@ -2302,6 +2432,42 @@ function inside(parent, child) {
   return path === "" || (!path.startsWith("..") && !isAbsolute(path));
 }
 
+async function scaffoldFiles(root, directory = root) {
+  const files = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new CliError(
+        `Generated template contains a symbolic link: ${relative(root, path)}`,
+        "UNSAFE_TEMPLATE",
+      );
+    }
+    if (entry.isDirectory()) {
+      files.push(...await scaffoldFiles(root, path));
+      continue;
+    }
+    if (!entry.isFile()) {
+      throw new CliError(
+        `Generated template contains an unsupported entry: ${relative(root, path)}`,
+        "UNSAFE_TEMPLATE",
+      );
+    }
+    const bytes = await readFile(path);
+    const digest = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", bytes),
+    );
+    files.push({
+      path: relative(root, path).replaceAll("\\", "/"),
+      bytes: bytes.byteLength,
+      sha256: [...digest]
+        .map((value) => value.toString(16).padStart(2, "0"))
+        .join(""),
+    });
+  }
+  return files.sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+}
+
 async function replaceInFile(path, search, replacement) {
   await writeFile(path, (await readFile(path, "utf8")).replaceAll(search, replacement));
 }
@@ -2324,8 +2490,37 @@ function trimBoundaryHyphens(value) {
   return value.slice(start, end);
 }
 
-function displayName(value) {
-  return value.trim().replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) || "Clank App";
+function displayName(value, preserveCase = false) {
+  if (
+    typeof value !== "string"
+    || value.length > 512
+    || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
+  ) {
+    throw new CliError(
+      "Project name must be ordinary text with at most 100 characters.",
+      "INVALID_PROJECT_NAME",
+    );
+  }
+  const normalized = value
+    .trim()
+    .replace(/[-_]+/gu, " ")
+    .replace(/\s+/gu, " ");
+  if (!normalized || [...normalized].length > 100) {
+    throw new CliError(
+      "Project name must contain from 1 to 100 visible characters.",
+      "INVALID_PROJECT_NAME",
+    );
+  }
+  return preserveCase
+    ? normalized
+    : normalized.replace(/\b\w/gu, (letter) => letter.toUpperCase());
+}
+
+function markdownText(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function randomToken() {

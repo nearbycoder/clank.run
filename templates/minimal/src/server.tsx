@@ -12,6 +12,7 @@ import { StarterView } from "./view.tsx";
 const environment = (globalThis as unknown as {
   process?: { env?: Record<string, string | undefined> };
 }).process?.env;
+const projectTitle = __PROJECT_TITLE_JSON__;
 const root = decodeURIComponent(new URL("./", import.meta.url).pathname);
 const frameworkRoot = decodeURIComponent(new URL("../node_modules/@clank.run/framework/dist/", import.meta.url).pathname);
 const appFiles = staticFiles(root);
@@ -26,7 +27,7 @@ const app = createApp()
   .get("/", async () => {
     const nonce = crypto.randomUUID().replaceAll("-", "");
     const page = await renderDocument(<StarterView />, {
-      title: "__PROJECT_TITLE__",
+      title: projectTitle,
       bodyClass: "m-0 bg-slate-50 antialiased",
       nonce,
       head: (
@@ -72,4 +73,4 @@ const server = await serve(app, {
   allowedHosts: environment?.ALLOWED_HOSTS?.split(",").map((host) => host.trim()).filter(Boolean),
 });
 
-console.log(`__PROJECT_TITLE__: ${server.url}`);
+console.log(`${projectTitle}: ${server.url}`);

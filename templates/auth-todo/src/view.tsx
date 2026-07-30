@@ -2,6 +2,8 @@
 import { For, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
 import type { Todo } from "./backend.ts";
 
+const projectTitle = __PROJECT_TITLE_JSON__;
+
 export interface TodoViewProps {
   user: AuthUser<DefaultAuthProfile>;
   todos: Todo[];
@@ -27,7 +29,7 @@ export function TodoView(props: TodoViewProps) {
       <header class="flex items-start justify-between gap-6">
         <div>
           <p class="text-xs font-bold uppercase tracking-[.2em] text-emerald-600">Clank deployed app</p>
-          <h1 class="mt-2 text-4xl font-semibold tracking-tight">__PROJECT_TITLE__</h1>
+          <h1 class="mt-2 text-4xl font-semibold tracking-tight">{projectTitle}</h1>
           <p class="mt-3 text-slate-500">
             Private to {props.user.profile.name || props.user.email}.
             {props.connected ? " Live sync connected." : " Reconnecting…"}

@@ -27,6 +27,16 @@ Run `clank` by itself in an interactive terminal to choose a template and follow
 clank
 ```
 
+Agents and scripts can discover the same starters without parsing prose:
+
+```sh
+clank templates --json
+clank create my-app --json
+```
+
+The first command returns template capabilities; the second returns the exact generated file
+manifest and next commands.
+
 Bare `clank` prints the full command reference when standard input is not interactive, so it never blocks an agent or CI job waiting for a prompt.
 
 Prefer a project-local CLI? Install the same package in an existing project and run its binary through npm:

@@ -6,6 +6,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- `clank templates --json` now exposes the versioned `clank-template-catalog/1` starter catalog,
+  and `clank create --json` returns a `clank-create-result/1` project/file/next-command manifest.
+  Scaffold names are now length/control bounded and inserted into TypeScript, TSX, and Markdown
+  with context-safe encoding instead of raw placeholder replacement.
 - Provider-hosted runtimes now expose a generation-bound private diagnostics surface. The complete
   provider keeps a 128 KiB/1,000-entry in-memory output tail, samples all current
   web/worker/scheduler containers through one bounded Docker stats call, and reports memory,

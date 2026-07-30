@@ -191,6 +191,15 @@ test("CLI help is command-aware, agent-readable, and never executes the target c
     assert.equal(parsed.protocol, "clank-cli-help/1");
     assert.equal(parsed.command, "doctor");
     assert.match(parsed.usage, /--json/);
+    const completeHelp = JSON.parse((await runCliOutput([
+      "help",
+      "--json",
+    ], repository, {
+      ...process.env,
+      CLANK_HOME: root,
+    })).stdout);
+    assert.ok(completeHelp.commands.some((entry) =>
+      entry.name === "templates" && entry.usage.includes("--json")));
 
     const typo = await runCliResult(["depoy"], repository, {
       ...process.env,
@@ -1016,12 +1025,14 @@ test("create scaffolds a named, buildable authenticated application", async () =
     assert.doesNotMatch(server, /__PROJECT_TITLE__/);
     assert.doesNotMatch(view, /__PROJECT_TITLE__/);
     assert.doesNotMatch(JSON.stringify(packageJson), /__CLANK_VERSION__/);
-    assert.match(server, /title: "Team Tasks"/);
+    assert.match(server, /const projectTitle = "Team Tasks"/);
+    assert.match(server, /title: projectTitle/);
     assert.match(server, /href="\/styles\.css"/);
     assert.doesNotMatch(server, /@tailwindcss\/browser|cdn\.jsdelivr\.net/);
     assert.match(jobs, /runJobProcess/);
     assert.match(server, /imports: \{ "@clank\.run\/framework": "\/_clank\/index\.js" \}/);
-    assert.match(view, />Team Tasks</);
+    assert.match(view, /const projectTitle = "Team Tasks"/);
+    assert.match(view, />\{projectTitle\}</);
     assert.match(view, /<For each=\{props\.todos\} by="_id"/);
     assert.equal(tsconfig.compilerOptions.allowImportingTsExtensions, true);
     assert.match(gitignore, /\.clank/);
@@ -1048,7 +1059,7 @@ test("create supports the minimal full-stack template and rejects unknown templa
       "--name=Small Start",
     ]);
     assert.equal(created.code, 0, created.stderr);
-    assert.match(created.stdout, /Deploy: clank login && clank deploy/u);
+    assert.match(created.stdout, /Deploy: clank login && npm run deploy/u);
 
     const packageJson = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
     const server = await readFile(join(target, "src", "server.tsx"), "utf8");
@@ -1057,8 +1068,10 @@ test("create supports the minimal full-stack template and rejects unknown templa
     assert.equal(packageJson.name, "small-start");
     assert.equal(packageJson.dependencies["@clank.run/framework"], `^${frameworkVersion}`);
     assert.equal(packageJson.devDependencies.tailwindcss, "^4.2.4");
-    assert.match(server, /title: "Small Start"/u);
-    assert.match(view, />Small Start</u);
+    assert.match(server, /const projectTitle = "Small Start"/u);
+    assert.match(server, /title: projectTitle/u);
+    assert.match(view, /const projectTitle = "Small Start"/u);
+    assert.match(view, />\{projectTitle\}</u);
     assert.match(view, /agentId="starter-counter"/u);
     assert.match(readme, /clank login\nnpm run deploy/u);
 
@@ -1074,6 +1087,99 @@ test("create supports the minimal full-stack template and rejects unknown templa
     assert.equal(invalid.code, 1);
     assert.match(invalid.stderr, /Unknown template: unknown/u);
     assert.match(invalid.stderr, /auth-todo or minimal/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("template discovery and create expose safe agent-readable contracts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-create-agent-"));
+  const target = join(root, "agent-safe");
+  try {
+    const catalog = JSON.parse((await runCliOutput([
+      "templates",
+      "--json",
+    ])).stdout);
+    assert.equal(catalog.protocol, "clank-template-catalog/1");
+    assert.equal(catalog.version, frameworkVersion);
+    assert.equal(catalog.defaultTemplate, "auth-todo");
+    assert.deepEqual(
+      catalog.templates.map((entry) => entry.id),
+      ["auth-todo", "minimal"],
+    );
+    assert.equal(catalog.templates[0].recommended, true);
+    assert.equal(catalog.templates[0].features.includes("mcp-oauth"), true);
+    assert.equal(catalog.templates[1].features.includes("mcp-oauth"), false);
+
+    const humanCatalog = await runCliOutput(["templates"]);
+    assert.match(humanCatalog.stdout, /auth-todo \(recommended\)/u);
+    assert.match(humanCatalog.stdout, /clank create my-app --template=minimal/u);
+
+    const dangerousTitle = 'Agent "</script>" {Tasks} & Co';
+    const created = await runCliOutput([
+      "create",
+      target,
+      "--template=auth-todo",
+      `--name=${dangerousTitle}`,
+      "--json",
+    ]);
+    const result = JSON.parse(created.stdout);
+    assert.equal(result.protocol, "clank-create-result/1");
+    assert.equal(result.ok, true);
+    assert.equal(result.project.name, dangerousTitle);
+    assert.equal(result.project.directory, target);
+    assert.equal(result.project.frameworkDependency, `^${frameworkVersion}`);
+    assert.equal(result.template.id, "auth-todo");
+    assert.equal(result.commands.login, "clank login");
+    assert.equal(result.commands.deploy, "npm run deploy");
+    assert.equal(result.files.length > 10, true);
+    assert.deepEqual(
+      result.files.map((entry) => entry.path),
+      result.files.map((entry) => entry.path).toSorted(),
+    );
+    assert.equal(
+      result.files.every((entry) =>
+        Number.isSafeInteger(entry.bytes)
+        && entry.bytes > 0
+        && /^[a-f0-9]{64}$/u.test(entry.sha256)),
+      true,
+    );
+
+    const server = await readFile(join(target, "src", "server.tsx"), "utf8");
+    const view = await readFile(join(target, "src", "view.tsx"), "utf8");
+    const readme = await readFile(join(target, "README.md"), "utf8");
+    assert.match(server, /const projectTitle = "Agent \\"<\/script>\\" \{Tasks\} & Co"/u);
+    assert.match(server, /title: projectTitle/u);
+    assert.match(view, /\{projectTitle\}/u);
+    assert.doesNotMatch(server + view, /__PROJECT_TITLE/u);
+    assert.match(readme, /Agent "&lt;\/script&gt;" \{Tasks\} &amp; Co/u);
+    await runCli(["build", "src", "dist"], target);
+    assert.match(
+      await readFile(join(target, "dist", "server.js"), "utf8"),
+      /Agent \\"<\/script>\\" \{Tasks\} & Co/u,
+    );
+
+    const invalid = await runCliResult([
+      "create",
+      join(root, "too-long"),
+      `--name=${"x".repeat(101)}`,
+      "--json",
+    ]);
+    assert.equal(invalid.code, 1);
+    assert.equal(JSON.parse(invalid.stderr).error.code, "INVALID_PROJECT_NAME");
+
+    const symlinkDestination = join(root, "symlink-destination");
+    const symlinkTarget = join(root, "symlink-target");
+    await mkdir(symlinkDestination);
+    await symlink(symlinkDestination, symlinkTarget);
+    const unsafeTarget = await runCliResult([
+      "create",
+      symlinkTarget,
+      "--json",
+    ]);
+    assert.equal(unsafeTarget.code, 1);
+    assert.equal(JSON.parse(unsafeTarget.stderr).error.code, "UNSAFE_TARGET");
+    assert.deepEqual(await readdir(symlinkDestination), []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
