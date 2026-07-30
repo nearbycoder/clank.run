@@ -172,6 +172,25 @@ clank activity --json
 
 `clank audit` is an alias. The feed is newest first and includes the event ID, action, target, actor, timestamp, and safe audit metadata. `--json` prints the complete stable response for agents and automation. Owners, administrators, and developers can read events for their current organizations; viewers cannot. A project-scoped token needs `audit` permission and receives only that project's events.
 
+## Workspace usage
+
+```sh
+clank usage
+clank usage --month=2026-07
+clank usage --org=<organization-id>
+clank usage --org=<organization-id> --month=2026-07 --json
+```
+
+The command reports monthly admitted requests, known transfer, rejected requests, the per-project
+rate ceiling, current resources, and a production/preview project breakdown. In a linked directory
+it selects that project's workspace. Outside one, it selects the only accessible workspace or
+requires `--org` when the choice is ambiguous.
+
+Months are UTC and constrained to the platform's retention window. Human output calls out partial
+pre-upgrade history and the declared-response-byte boundary. `--json` returns the stable
+`clank-usage/1` API document without calculating prices or invoices. See
+[Usage accounting and traffic limits](usage-and-limits.md).
+
 ## Deploy and inspect
 
 ```sh

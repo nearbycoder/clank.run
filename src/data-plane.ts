@@ -29,7 +29,30 @@ export interface IngressRequestMetric {
   requestBytes: number;
   responseBytes: number;
   recordedAt: number;
+  /** True only when the request passed the configured admission policy. */
+  admitted: boolean;
 }
+
+export interface IngressAdmissionRequest {
+  projectId: string;
+  routeId: string;
+  method: string;
+  requestBytes: number;
+  recordedAt: number;
+}
+
+export type IngressAdmissionDecision =
+  | { allowed: true }
+  | {
+      allowed: false;
+      code: string;
+      message: string;
+      retryAfterSeconds: number;
+    };
+
+export type IngressAdmissionPolicy = (
+  request: Readonly<IngressAdmissionRequest>,
+) => IngressAdmissionDecision | void | Promise<IngressAdmissionDecision | void>;
 
 export function createManagedIngress(options: {
   routes: IngressRouteStore | (() => readonly IngressRoute[] | Promise<readonly IngressRoute[]>);
@@ -41,6 +64,11 @@ export function createManagedIngress(options: {
   allowedUpstreamHosts?: readonly string[];
   circuitFailures?: number;
   circuitResetMs?: number;
+  /**
+   * Optional durable capacity/rate policy. It receives no path, headers,
+   * cookies, IP address, query string, or body content.
+   */
+  admitRequest?: IngressAdmissionPolicy;
   onRequest?: (metric: IngressRequestMetric) => void | Promise<void>;
 }): ManagedIngress {
   const fetcher = options.fetch ?? globalThis.fetch;
@@ -138,9 +166,15 @@ export function createManagedIngress(options: {
       };
       try {
       const startedAt = performance.now();
+      const recordedAt = Date.now();
       let requestBytes = 0;
+      let admitted = options.admitRequest === undefined;
       const observed = (response: Response): Response => {
-        const declaredResponseBytes = Number(response.headers.get("content-length"));
+        const declaredResponseBytes = request.method === "HEAD"
+          || response.status === 204
+          || response.status === 304
+          ? 0
+          : Number(response.headers.get("content-length"));
         const metric: IngressRequestMetric = {
           projectId: route.projectId,
           routeId: route.id,
@@ -151,7 +185,8 @@ export function createManagedIngress(options: {
           responseBytes: Number.isSafeInteger(declaredResponseBytes) && declaredResponseBytes >= 0
             ? declaredResponseBytes
             : 0,
-          recordedAt: Date.now(),
+          recordedAt,
+          admitted,
         };
         try {
           const pending = options.onRequest?.(Object.freeze(metric));
@@ -186,6 +221,41 @@ export function createManagedIngress(options: {
           return finish(observed(ingressProblem(413, "REQUEST_TOO_LARGE", `Request exceeds ${maxBodyBytes} bytes.`)));
         }
         body = read.body;
+      }
+      if (options.admitRequest) {
+        let decision: IngressAdmissionDecision | void;
+        let denial: Exclude<IngressAdmissionDecision, { allowed: true }> | undefined;
+        try {
+          decision = await options.admitRequest(Object.freeze({
+            projectId: route.projectId,
+            routeId: route.id,
+            method: knownHttpMethod(request.method),
+            requestBytes,
+            recordedAt,
+          }));
+          if (decision !== undefined) {
+            if (!decision || typeof decision !== "object" || Array.isArray(decision)) {
+              throw new TypeError("Ingress admission decision is invalid.");
+            }
+            if (decision.allowed === false) denial = normalizeAdmissionDenial(decision);
+            else if (decision.allowed !== true) {
+              throw new TypeError("Ingress admission decision is invalid.");
+            }
+          }
+        } catch {
+          return finish(observed(ingressProblem(
+            503,
+            "ADMISSION_UNAVAILABLE",
+            "Application admission policy is temporarily unavailable.",
+            { "retry-after": "1" },
+          )));
+        }
+        if (denial) {
+          return finish(observed(ingressProblem(429, denial.code, denial.message, {
+            "retry-after": String(denial.retryAfterSeconds),
+          })));
+        }
+        admitted = true;
       }
       // Assign the path after parsing the trusted origin. Passing a path such
       // as //attacker.example directly to new URL(path, base) would otherwise
@@ -946,6 +1016,33 @@ function bounded(value: string, name: string, minimum: number, maximum: number):
     throw new TypeError(`${name} must contain ${minimum} to ${maximum} characters.`);
   }
   return value;
+}
+
+function normalizeAdmissionDenial(
+  value: Exclude<IngressAdmissionDecision, { allowed: true }>,
+): Exclude<IngressAdmissionDecision, { allowed: true }> {
+  if (!/^[A-Z][A-Z0-9_]{2,63}$/u.test(value.code)) {
+    throw new TypeError("Ingress admission denial code is invalid.");
+  }
+  if (
+    typeof value.message !== "string"
+    || value.message.length < 1
+    || value.message.length > 200
+    || /[\u0000-\u001f\u007f]/u.test(value.message)
+  ) {
+    throw new TypeError("Ingress admission denial message is invalid.");
+  }
+  return {
+    allowed: false,
+    code: value.code,
+    message: value.message,
+    retryAfterSeconds: integerRange(
+      value.retryAfterSeconds,
+      "admission retryAfterSeconds",
+      1,
+      31 * 24 * 60 * 60,
+    ),
+  };
 }
 
 function integerRange(value: number, name: string, minimum: number, maximum: number): number {

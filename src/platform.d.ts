@@ -28,6 +28,14 @@ export interface PlatformLimits {
     releasesPerProject?: number;
     /** Maximum retained release and pre-deploy snapshot bytes per project. Defaults to 20 GiB. */
     releaseStorageBytesPerProject?: number;
+    /** Maximum admitted requests per UTC month in one workspace. Defaults to 5,000,000. */
+    requestsPerMonthPerOrganization?: number;
+    /** Maximum known ingress plus declared-response bytes per UTC month in one workspace. Defaults to 100 GiB. */
+    transferBytesPerMonthPerOrganization?: number;
+    /** Maximum admitted requests per project in one UTC minute. Defaults to 3,000. */
+    requestsPerMinutePerProject?: number;
+    /** Retention for monthly usage records. Defaults to 24 months. */
+    usageRetentionMonths?: number;
 }
 export interface PlatformBackupOptions {
     /** Encrypted backup cadence. Defaults to 24 hours; false disables automatic backups. */

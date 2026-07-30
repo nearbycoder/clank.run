@@ -296,6 +296,7 @@ Device/public:
 Browser session:
 
 - `GET /api/dashboard`
+- `GET /api/usage?organizationId=<id>&month=YYYY-MM` — retained workspace usage and effective traffic limits;
 - `GET|POST /api/admin/invitations` and `DELETE /api/admin/invitations/:id` — browser-only platform administrator control of personal signup invitations;
 - `GET /api/audit?limit=100&before=<event-id>&organizationId=<id>` — role-filtered workspace history that survives project deletion;
 - project status, metrics, releases, logs, and domains;
@@ -309,6 +310,7 @@ Browser session:
 Bearer:
 
 - account and token listing/revocation;
+- workspace usage through an account-wide or matching workspace token; project tokens are denied;
 - project creation/listing/status;
 - owner/admin-only permanent project deletion using an account-wide token;
 - release upload/history/rollback;

@@ -73,6 +73,10 @@ configured worker/scheduler processes for each active project.
 | `CLANK_METRICS_RETENTION_DAYS` | `30` | Ingress metric retention, 1–365 days |
 | `CLANK_MAX_RELEASES_PER_PROJECT` | `50` | Retained runtime-artifact count per site |
 | `CLANK_MAX_RELEASE_STORAGE_BYTES_PER_PROJECT` | `21474836480` | Uncompressed release files plus pre-deploy snapshots retained per site |
+| `CLANK_MAX_REQUESTS_PER_MONTH_PER_ORGANIZATION` | `5000000` | Admitted managed-ingress requests per workspace UTC month |
+| `CLANK_MAX_TRANSFER_BYTES_PER_MONTH_PER_ORGANIZATION` | `107374182400` | Known request plus declared-response bytes per workspace UTC month |
+| `CLANK_MAX_REQUESTS_PER_MINUTE_PER_PROJECT` | `3000` | Admitted managed-ingress requests per project UTC minute |
+| `CLANK_USAGE_RETENTION_MONTHS` | `24` | Monthly usage retention, 1–120 months |
 | `CLANK_ALLOW_UNSAFE_MIGRATIONS` | `0` | Operator approval for unrestricted SQL |
 | `ALLOWED_HOSTS` | loopback | Exact host allowlist |
 | `TRUST_PROXY` | `0` | Trust forwarded client/protocol |
@@ -83,6 +87,12 @@ Embedders calling `openPlatform()` directly should pass infrastructure listeners
 `reservedAppPorts`.
 
 `bootstrap` permits one initial account and then closes ordinary registration. Its SQLite claim is shared by control-plane processes using the same data directory. `disabled` blocks ordinary registration immediately. In both modes, an owner/admin-issued invitation can still create only its bound email account through **Use invitation**; revoke outstanding invitations before disabling all intended onboarding.
+
+Monthly request and transfer controls require managed ingress. Keep supervised application ports
+on loopback or a private network; traffic routed directly to those ports is neither metered nor
+limited. The transfer ledger includes request bodies and only responses with a declared
+`Content-Length`, so streamed-response cost ceilings still belong at the application or public
+edge. See [Usage accounting and traffic limits](usage-and-limits.md).
 
 ## Choose the hosting trust boundary
 

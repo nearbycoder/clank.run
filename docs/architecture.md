@@ -16,7 +16,7 @@ backend.ts  inferred schema/functions, SQLite documents, RPC, live queries
 jobs.ts     typed durable jobs, fenced workers, retries, retention, cron scheduling
 deploy.ts   deterministic artifact config, packaging, verification, extraction
 migrations.ts immutable SQL ledger, backup, restore, transactional application
-platform.ts device auth, projects, secrets, audit, releases, supervision
+platform.ts device auth, projects, usage, limits, secrets, audit, releases, supervision
 provider.ts credential-free infrastructure reconciliation and HTTP bridge
 security.ts shared URL, origin, validation-redaction, and bounded JSON helpers
 ssr.ts      escaped HTML rendering, document templates, serialized state
@@ -81,6 +81,12 @@ SSR executes the same component tree without a DOM. Dynamic regions and keyed li
 The deployment config is normalized before its build runs. The CLI executes the build command as an argument array, walks only explicit include roots, rejects links and sensitive paths, and creates a deterministic gzip document with individual file hashes. It vendors the current Clank package so execution does not depend on mutable global installation state.
 
 The control plane hashes device and access credentials, intersects organization role with project-token scope on every request, stores encrypted secrets and audit metadata in its own SQLite database, and allocates a persistent project data directory. Release directories are immutable after extraction except for a platform-generated launcher.
+
+Managed application requests pass through exact-host ingress. A metadata-minimal admission callback
+resolves inherited workspace limits and atomically verifies/increments the UTC monthly workspace
+and minute project ledgers before proxying upstream. Declared response bytes are added after
+response headers; streamed sizes remain unknown. The fixed-dimension ledger powers the Usage UI,
+API, and CLI without retaining request identity or content.
 
 A deployment takes the project lock, verifies and extracts a staged artifact, snapshots SQLite,
 applies immutable migrations, starts a candidate process group, and waits for health. Code-only

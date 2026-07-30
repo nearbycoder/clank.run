@@ -112,6 +112,19 @@ const platform = await openPlatform({
       process.env.CLANK_MAX_RELEASE_STORAGE_BYTES_PER_PROJECT,
       20 * 1024 * 1024 * 1024,
     ),
+    requestsPerMonthPerOrganization: number(
+      process.env.CLANK_MAX_REQUESTS_PER_MONTH_PER_ORGANIZATION,
+      5_000_000,
+    ),
+    transferBytesPerMonthPerOrganization: number(
+      process.env.CLANK_MAX_TRANSFER_BYTES_PER_MONTH_PER_ORGANIZATION,
+      100 * 1024 * 1024 * 1024,
+    ),
+    requestsPerMinutePerProject: number(
+      process.env.CLANK_MAX_REQUESTS_PER_MINUTE_PER_PROJECT,
+      3_000,
+    ),
+    usageRetentionMonths: number(process.env.CLANK_USAGE_RETENTION_MONTHS, 24),
   },
   backups: {
     intervalMs: backupInterval === "0"

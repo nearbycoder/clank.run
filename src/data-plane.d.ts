@@ -28,7 +28,25 @@ export interface IngressRequestMetric {
     requestBytes: number;
     responseBytes: number;
     recordedAt: number;
+    /** True only when the request passed the configured admission policy. */
+    admitted: boolean;
 }
+export interface IngressAdmissionRequest {
+    projectId: string;
+    routeId: string;
+    method: string;
+    requestBytes: number;
+    recordedAt: number;
+}
+export type IngressAdmissionDecision = {
+    allowed: true;
+} | {
+    allowed: false;
+    code: string;
+    message: string;
+    retryAfterSeconds: number;
+};
+export type IngressAdmissionPolicy = (request: Readonly<IngressAdmissionRequest>) => IngressAdmissionDecision | void | Promise<IngressAdmissionDecision | void>;
 export declare function createManagedIngress(options: {
     routes: IngressRouteStore | (() => readonly IngressRoute[] | Promise<readonly IngressRoute[]>);
     fetch?: typeof fetch;
@@ -39,6 +57,11 @@ export declare function createManagedIngress(options: {
     allowedUpstreamHosts?: readonly string[];
     circuitFailures?: number;
     circuitResetMs?: number;
+    /**
+     * Optional durable capacity/rate policy. It receives no path, headers,
+     * cookies, IP address, query string, or body content.
+     */
+    admitRequest?: IngressAdmissionPolicy;
     onRequest?: (metric: IngressRequestMetric) => void | Promise<void>;
 }): ManagedIngress;
 export interface DomainChallenge {
