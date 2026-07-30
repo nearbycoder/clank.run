@@ -130,12 +130,14 @@ This registry intentionally does not:
 - issue TLS certificates.
 
 A complete provider composes it with
-`openDeploymentProviderDataStore()`, an isolated launcher, private candidate health, the standard
-deployment provider, and the runner agent. Keep the prepared environment and plaintext ingress
-token memory-only. Publish traffic only after the provider data commit succeeds.
+`openDeploymentProviderDataStore()`, the package-supported
+`openDockerDeploymentRuntimeLauncher()` or a stronger isolated launcher, the standard deployment
+provider, and the runner agent. Keep the prepared environment and plaintext ingress token
+memory-only. Publish traffic only after the provider data commit succeeds.
 
 On provider restart the in-memory registry begins empty and returns generic unavailable responses.
-The future hosted activation integration must reset/reconcile the node's desired generation before
+The Docker reference launcher likewise removes exact-owner orphan containers instead of adopting
+them. The hosted activation integration must reset/reconcile the node's desired generation before
 restoring traffic; it must not infer a live process from old control-plane observation alone.
 
 ## Shutdown
@@ -146,5 +148,6 @@ fail closed while leaving process termination policy with the launcher.
 
 Continue with [Managed ingress and external data](data-plane.md),
 [Provider data lifecycle](provider-data-lifecycle.md),
+[Provider Docker runtime](provider-docker-runtime.md),
 [Deployment provider adapters](provider-adapters.md), and
 [Remote runtime placement](runtime-placement.md).

@@ -51,6 +51,8 @@ test("provider data stages isolated releases, migrates SQLite, snapshots, and ro
           "provider-secret-must-remain-memory-only",
         );
         assert.equal(prepared.ingress.route, "/v1/clank/apps/project_data_01");
+        assert.equal(prepared.config.entry, "dist/server.js");
+        assert.equal(prepared.config.database.path, "app.sqlite");
         assert.equal(await exists(join(prepared.releaseDirectory, "dist", "server.js")), true);
         assert.deepEqual(columns(prepared.databasePath, "todo"), ["id", "title"]);
       },

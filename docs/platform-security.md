@@ -87,12 +87,13 @@ provider failures. Secret values stay out of headers. Its exact retries are safe
 provider code persists the operation/fence idempotency rule.
 
 The built-in control plane does not activate remote runtime placement yet. Provider-side
-snapshot/restore/delete, migration, rollback, fencing, crash recovery, exact private ingress,
-generation overlap, revocation, and draining are package-supported. Isolated launch, candidate
-health, stateful node pinning, independent recovery replication, restart reconciliation, and
-control-plane ingress switching still require end-to-end integration. See [Provider data
-lifecycle](provider-data-lifecycle.md), [Provider runtime
-ingress](provider-runtime-ingress.md), and [Remote runtime placement](runtime-placement.md).
+snapshot/restore/delete, migration, rollback, fencing, crash recovery, isolated Docker launch,
+private candidate health, exact-owner orphan cleanup, restart fail-closure, exact private ingress,
+generation overlap, revocation, and draining are package-supported. Stateful node pinning,
+independent recovery replication, and control-plane ingress switching still require end-to-end
+integration. See [Provider data lifecycle](provider-data-lifecycle.md), [Provider Docker
+runtime](provider-docker-runtime.md), [Provider runtime ingress](provider-runtime-ingress.md), and
+[Remote runtime placement](runtime-placement.md).
 
 ## Authentication
 
@@ -219,6 +220,11 @@ Docker client's environment and arguments. The container bootstrap decodes and d
 application import. Application variables therefore cannot act as host-side Docker, loader, proxy,
 or TLS controls, and no secret value appears in Docker CLI arguments. Privileged host/container
 administrators can still inspect runtime environment state.
+
+The remote provider Docker launcher uses a stricter one-shot stdin bootstrap, so its capsule
+environment never becomes Docker container configuration. It also requires an immutable image and
+non-root uid/gid by default, bounds combined container count, and verifies exact-owner cleanup on
+startup, uncertain create, stop, and close. See [Provider Docker runtime](provider-docker-runtime.md).
 
 Also pin image digests, patch the kernel/runtime, apply seccomp/AppArmor/SELinux, restrict network egress, protect the Docker socket, set disk quotas, isolate customer tiers, and prefer microVMs for hostile code.
 

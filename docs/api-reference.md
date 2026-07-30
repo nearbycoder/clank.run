@@ -176,6 +176,18 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   `ProviderDeploymentAgentOptions`, `HttpDeploymentProviderOptions`,
   `DeploymentProviderHandler`, and `DeploymentProviderHandlerOptions`.
 
+## Provider Docker runtime
+
+- `openDockerDeploymentRuntimeLauncher(options)`: exact-owner orphan cleanup, immutable-image
+  Docker launch, private health, worker/scheduler topology, generation fencing, stop, and shutdown.
+- `launch({ prepared, signal })`: starts the config embedded in verified provider data and returns
+  a non-secret loopback candidate.
+- `commit(candidate)`: marks the exact healthy candidate active after provider data commits.
+- `inspect()`, `stop(projectId, generation?)`, `forget(projectId, generation)`, and `close()`:
+  non-secret state, verified container removal, deletion cleanup, and fail-closed shutdown.
+- Types: `DockerDeploymentRuntimeLauncherOptions`, `DockerDeploymentRuntimeCandidate`,
+  `DockerDeploymentRuntimeState`, `DockerDeploymentRuntimeLauncher`.
+
 ## Managed data plane
 
 - `createManagedIngress(options)`: exact-host reverse proxy with fixed upstream origins, bounded

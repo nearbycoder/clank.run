@@ -70,6 +70,7 @@ export const groups = [
       ["runtime-placement", "docs/runtime-placement.md"],
       ["provider-adapters", "docs/provider-adapters.md"],
       ["provider-data-lifecycle", "docs/provider-data-lifecycle.md"],
+      ["provider-docker-runtime", "docs/provider-docker-runtime.md"],
       ["provider-runtime-ingress", "docs/provider-runtime-ingress.md"],
       ["railway", "docs/railway.md"],
       ["self-hosting", "docs/self-hosting.md"],

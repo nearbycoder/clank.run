@@ -183,21 +183,26 @@ and 9 for immutable releases plus SQLite. It independently binds runtime capsule
 state, applies migrations behind a consistent safety snapshot, commits metadata atomically,
 retains one rollback generation, and journals interrupted apply and rollback work. See
 [Provider data lifecycle](provider-data-lifecycle.md) before writing a runtime adapter.
+`openDockerDeploymentRuntimeLauncher()` supplies the zero-dependency reference implementation for
+rules 3, 5, 7, and private candidate health, including web/job process topology, resource bounds,
+owner-scoped orphan cleanup, and restart fail-closure. See
+[Provider Docker runtime](provider-docker-runtime.md).
 Use [Provider runtime ingress](provider-runtime-ingress.md) for the authenticated private traffic,
 generation overlap, revocation, and draining portion of rules 4 and 8.
 
 ## What is and is not portable yet
 
 The provider contract, HTTP bridge, runner command, release and runtime transport, object storage,
-leases, credentials, fencing, provider data lifecycle, and provider-private runtime ingress are
-implemented and package-supported. They remove provider SDKs from Clank and give Docker, VM,
-microVM, Nomad, Kubernetes, or hosted adapters the same narrow surface.
+leases, credentials, fencing, provider data lifecycle, isolated Docker launcher, and
+provider-private runtime ingress are implemented and package-supported. They remove provider SDKs
+from Clank and give Docker, VM, microVM, Nomad, Kubernetes, or hosted adapters the same narrow
+surface.
 
 The built-in control plane still activates its ordinary hosted projects through its local
 supervisor. Enabling enrollment or starting `clank-runner` does not silently relocate existing
 projects. A fully remote installation must deliberately connect desired-state creation, runtime
-capsule creation, the packaged provider data and ingress lifecycles, isolated runtime launch and
-health, TLS/edge routing, log and metric collection, and independent backup policy. The capsule is not
+capsule creation, the packaged provider data, Docker, and ingress lifecycles, TLS/edge routing,
+log and metric collection, and independent backup policy. The capsule is not
 selected by the built-in platform until ingress activation and the complete cross-node recovery
 path are integrated and tested. Clank refuses to pretend those data and security boundaries are
 solved by uploading code alone.
@@ -205,4 +210,5 @@ solved by uploading code alone.
 See [Remote runtime placement](runtime-placement.md) for the exact body and trust boundary, then
 [Provider data lifecycle](provider-data-lifecycle.md) for its safe local consumption. The eventual
 provider integration should also consume [Provider runtime ingress](provider-runtime-ingress.md)
-rather than adding provider-specific logic to application code or the control database.
+rather than adding provider-specific logic to application code or the control database. Use
+[Provider Docker runtime](provider-docker-runtime.md) as the reference process boundary.

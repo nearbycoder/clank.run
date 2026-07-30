@@ -169,10 +169,13 @@ without persisting secrets; initializes, preserves, replaces, snapshots, rolls b
 per-project SQLite data; applies immutable migrations; retains one rollback generation; and
 recovers interrupted apply and rollback journals.
 
-Remote activation remains closed until the implemented data and ingress contracts are bound end
-to end to an isolated runtime launcher, atomic control-plane publish/revoke, stateful node pinning,
-encrypted recovery replication, restart reconciliation, and lease-loss/traffic-switch
-certification.
+The package-supported [Provider Docker runtime](provider-docker-runtime.md) starts the exact
+verified web/job topology in bounded containers, health-checks it privately, keeps runtime secrets
+out of Docker configuration, removes scoped orphans, and forces desired-state replay after restart.
+
+Remote activation remains closed until the implemented data, launcher, and ingress contracts are
+bound end to end to atomic control-plane publish/revoke, stateful node pinning, encrypted recovery
+replication, and lease-loss/traffic-switch certification.
 
 Until those controls land, enabling a runner fleet does not move existing applications or their
 data. The current single-host deployment path stays unchanged and no additional Railway service,
@@ -181,5 +184,6 @@ volume, database, or object store is required.
 Continue with [Provider data lifecycle](provider-data-lifecycle.md), [Deployment provider
 adapters](provider-adapters.md), [Durable distributed deployment](distributed-deployment.md),
 [Managed ingress and external data](data-plane.md), [Recovery](recovery.md),
-[Provider runtime ingress](provider-runtime-ingress.md), and
+[Provider runtime ingress](provider-runtime-ingress.md),
+[Provider Docker runtime](provider-docker-runtime.md), and
 [Platform security](platform-security.md).
