@@ -129,11 +129,18 @@ await extractDeploymentBundle(bundle, stagingDirectory);
 ```
 
 `clank-platform` automatically retains the original compressed, content-addressed upload for new
-releases when remote-node enrollment is enabled. The archive is stored separately from the runtime
-directory, owner-only, inode-checked, digest-checked on every read, included in release storage
-quota accounting, and removed with release cleanup. No extra copy is retained while remote
-enrollment is disabled, so the default single-host topology keeps its existing disk cost. Releases
-created before enrollment was enabled need a redeploy before a remote node can fetch them.
+releases when remote-node enrollment is enabled. Local retention is owner-only, inode-checked, and
+digest-checked. An operator can instead configure the framework's S3-compatible `ObjectStore`;
+each release then records a stable repository namespace and exact key, and every leased download
+is independently size- and digest-verified. Cleanup and site deletion remove the matching object.
+A missing or changed namespace fails closed rather than treating a different bucket or prefix as
+the old repository.
+
+Both modes remain in release quota accounting. No extra copy is retained while remote enrollment
+is disabled, so the default single-host topology keeps its existing disk cost. Existing local
+releases remain local after object storage is enabled, and releases created before enrollment was
+enabled need a redeploy before a remote node can fetch them. See
+[Object storage](object-storage.md) for environment configuration and failure boundaries.
 
 The artifact contains deployable code and declared non-secret configuration. Platform-managed
 secrets and application databases are not added to it. Delivering those to another host requires

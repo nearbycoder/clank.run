@@ -1,3 +1,4 @@
+import type { ObjectStore } from "./object-storage.js";
 export interface ProcessRunnerOptions {
     kind?: "process";
 }
@@ -68,6 +69,18 @@ export interface ClankPlatformOptions {
         maxRequestBytes?: number;
         /** Maximum content-addressed release transferred to a current node lease. */
         maxArtifactBytes?: number;
+        /**
+         * Optional provider-neutral repository for original release uploads.
+         * Omit it to retain owner-only files under dataDirectory.
+         */
+        artifacts?: {
+            /**
+             * Stable operator-selected repository identity persisted with each release.
+             * Changing it does not silently reinterpret objects from an older store.
+             */
+            namespace: string;
+            store: ObjectStore;
+        };
     };
     /** Defaults to "bootstrap": only the first platform account may self-register. */
     signup?: boolean | "bootstrap";

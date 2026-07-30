@@ -57,6 +57,7 @@ import {
   trustedClientAddress,
 } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
+import type { ObjectStore } from "./object-storage.ts";
 
 export interface ProcessRunnerOptions {
   kind?: "process";
@@ -183,6 +184,18 @@ export interface ClankPlatformOptions {
     maxRequestBytes?: number;
     /** Maximum content-addressed release transferred to a current node lease. */
     maxArtifactBytes?: number;
+    /**
+     * Optional provider-neutral repository for original release uploads.
+     * Omit it to retain owner-only files under dataDirectory.
+     */
+    artifacts?: {
+      /**
+       * Stable operator-selected repository identity persisted with each release.
+       * Changing it does not silently reinterpret objects from an older store.
+       */
+      namespace: string;
+      store: ObjectStore;
+    };
   };
   /** Defaults to "bootstrap": only the first platform account may self-register. */
   signup?: boolean | "bootstrap";
@@ -277,6 +290,8 @@ interface ReleaseRow {
   artifactBytes: number;
   runtimeBytes: number;
   runnerArtifactBytes: number;
+  runnerArtifactStore: string;
+  runnerArtifactKey: string | null;
   snapshotBytes: number;
   storageBytes: number;
   artifactAvailable: boolean;
@@ -537,6 +552,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const appPortEnd = integerInRange(options.appPortEnd ?? 4999, "appPortEnd", 1024, 65535);
   if (appPortStart > appPortEnd) throw new TypeError("appPortStart cannot exceed appPortEnd.");
   const reservedAppPorts = normalizeReservedAppPorts(options.reservedAppPorts);
+  const runnerArtifactObjects = normalizeRunnerArtifactObjects(
+    options.deploymentAgents?.artifacts,
+  );
   const paths = await prepareDirectories(options.dataDirectory);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
@@ -579,6 +597,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               paths.projects,
               release,
               signal,
+              runnerArtifactObjects,
             );
           },
         },
@@ -1262,14 +1281,21 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       projectQuotas(storage.internal, project, quotaDefaults),
     );
     const releaseId = await randomId(18);
+    const runnerArtifactStore = runnerArtifactBytes > 0 && runnerArtifactObjects
+      ? runnerArtifactObjects.namespace
+      : "local";
+    const runnerArtifactKey = runnerArtifactBytes > 0 && runnerArtifactObjects
+      ? runnerReleaseObjectKey(project.id, releaseId, digest)
+      : null;
     const releaseDirectory = await newReleaseDirectory(paths.projects, project.id, releaseId);
     const previousReleaseId = project.activeReleaseId;
     const createdAt = Date.now();
     storage.internal.prepare(`INSERT INTO clank_platform_releases
       (id, project_id, previous_release_id, status, digest, artifact_bytes, runtime_bytes, runner_artifact_bytes,
+       runner_artifact_store, runner_artifact_key,
        snapshot_bytes, storage_bytes, artifact_available, framework_version, node_version,
        config, directory, backup_path, idempotency_key, created_at)
-      VALUES (?, ?, ?, 'staging', ?, ?, ?, ?, 0, ?, 1, ?, ?, ?, ?, NULL, ?, ?)`)
+      VALUES (?, ?, ?, 'staging', ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?, ?, ?, NULL, ?, ?)`)
       .run(
         releaseId,
         project.id,
@@ -1278,6 +1304,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         bytes.byteLength,
         bundleStorageBytes,
         runnerArtifactBytes,
+        runnerArtifactStore,
+        runnerArtifactKey,
         bundleStorageBytes + runnerArtifactBytes + databaseStorageBytes,
         bundle.provenance.frameworkVersion,
         bundle.provenance.nodeVersion,
@@ -1299,7 +1327,46 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     let activatedResult: Record<string, unknown> | undefined;
     try {
       if (runnerArtifactBytes > 0) {
-        await writeRunnerReleaseArtifact(paths.projects, project.id, releaseId, bytes);
+        try {
+          await writeRunnerReleaseArtifact(
+            paths.projects,
+            {
+              projectId: project.id,
+              releaseId,
+              digest,
+              bytes: runnerArtifactBytes,
+              store: runnerArtifactStore,
+              key: runnerArtifactKey,
+            },
+            bytes,
+            runnerArtifactObjects,
+          );
+        } catch (error) {
+          try { options.onError?.(error); } catch { /* Reporting must not expose provider failures. */ }
+          let cleanupSucceeded = true;
+          try {
+            const failedRelease = releaseById(storage.internal, releaseId);
+            if (!failedRelease) throw new Error("Failed release metadata is unavailable.");
+            await deleteReleaseStorage(paths.projects, failedRelease, runnerArtifactObjects);
+            storage.internal.prepare(`UPDATE clank_platform_releases
+              SET artifact_available = 0, runtime_bytes = 0, runner_artifact_bytes = 0,
+                runner_artifact_key = NULL, snapshot_bytes = 0, storage_bytes = 0,
+                backup_path = NULL
+              WHERE id = ? AND project_id = ?`).run(releaseId, project.id);
+          } catch (cleanupError) {
+            cleanupSucceeded = false;
+            try { options.onError?.(cleanupError); } catch { /* Reporting must not alter recovery. */ }
+          }
+          throw new PlatformError(
+            502,
+            cleanupSucceeded
+              ? "RELEASE_ARTIFACT_STORE_FAILED"
+              : "RELEASE_ARTIFACT_STORE_RECOVERY_FAILED",
+            cleanupSucceeded
+              ? "The original release could not be retained safely."
+              : "The original release could not be retained and automatic cleanup failed.",
+          );
+        }
       }
       await extractDeploymentBundle(bundle, releaseDirectory);
       const dataRoot = await projectDataDirectory(paths.projects, project.id);
@@ -1494,7 +1561,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (error === preMigrationCapacityRejection) {
         let cleanupSucceeded = true;
         try {
-          await deleteReleaseStorage(paths.projects, project.id, releaseId);
+          const rejectedRelease = releaseById(storage.internal, releaseId);
+          if (!rejectedRelease) throw new Error("Rejected release metadata is unavailable.");
+          await deleteReleaseStorage(paths.projects, rejectedRelease, runnerArtifactObjects);
           storage.internal.prepare(
             "DELETE FROM clank_platform_releases WHERE id = ? AND project_id = ?",
           ).run(releaseId, project.id);
@@ -1653,7 +1722,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         "This release is the active release's immediate rollback target. Explicitly allow rollback loss to remove it.",
       );
     }
-    await deleteReleaseStorage(paths.projects, project.id, release.id);
+    await deleteReleaseStorage(paths.projects, release, runnerArtifactObjects);
     if (rollbackProtected && activeRelease?.backupPath) {
       await deleteReleaseSnapshot(paths.projects, project.id, activeRelease.id);
     }
@@ -1714,7 +1783,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     cancelRestart(project.id);
     await stopProject(project.id);
     try {
-      await deleteProjectStorage(paths.projects, project.id);
+      await deleteProjectStorage(paths.projects, project.id, async () => {
+        await deleteProjectRunnerArtifacts(
+          storage.internal,
+          project.id,
+          runnerArtifactObjects,
+        );
+      });
     } catch (error) {
       try { options.onError?.(error); } catch { /* Operator reporting must not alter recovery. */ }
       if (activeRelease) {
@@ -3655,6 +3730,8 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     artifact_bytes INTEGER NOT NULL,
     runtime_bytes INTEGER NOT NULL DEFAULT 0,
     runner_artifact_bytes INTEGER NOT NULL DEFAULT 0,
+    runner_artifact_store TEXT NOT NULL DEFAULT 'local',
+    runner_artifact_key TEXT,
     snapshot_bytes INTEGER NOT NULL DEFAULT 0,
     storage_bytes INTEGER NOT NULL DEFAULT 0,
     artifact_available INTEGER NOT NULL DEFAULT 1,
@@ -3687,6 +3764,12 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   if (!releaseColumns.some((column) => column.name === "runner_artifact_bytes")) {
     internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN runner_artifact_bytes INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!releaseColumns.some((column) => column.name === "runner_artifact_store")) {
+    internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN runner_artifact_store TEXT NOT NULL DEFAULT 'local'");
+  }
+  if (!releaseColumns.some((column) => column.name === "runner_artifact_key")) {
+    internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN runner_artifact_key TEXT");
   }
   internal.exec("DROP INDEX IF EXISTS proact_platform_releases_project");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_releases_project ON clank_platform_releases (project_id, created_at)");
@@ -4028,6 +4111,12 @@ function releaseRow(row: Record<string, unknown>): ReleaseRow {
     artifactBytes: Number(row.artifact_bytes),
     runtimeBytes: Number(row.runtime_bytes ?? row.artifact_bytes),
     runnerArtifactBytes: Number(row.runner_artifact_bytes ?? 0),
+    runnerArtifactStore: row.runner_artifact_store === undefined
+      ? "local"
+      : String(row.runner_artifact_store),
+    runnerArtifactKey: row.runner_artifact_key === null || row.runner_artifact_key === undefined
+      ? null
+      : String(row.runner_artifact_key),
     snapshotBytes: Number(row.snapshot_bytes ?? 0),
     storageBytes: Number(row.storage_bytes ?? row.artifact_bytes),
     artifactAvailable: Number(row.artifact_available ?? 1) === 1,
@@ -5567,6 +5656,14 @@ function publicRelease(release: ReleaseRow): Record<string, unknown> {
     artifactBytes: release.artifactBytes,
     storageBytes: release.storageBytes,
     artifactAvailable: release.artifactAvailable,
+    runnerArtifact: {
+      bytes: release.runnerArtifactBytes,
+      storage: release.runnerArtifactBytes === 0
+        ? "none"
+        : release.runnerArtifactStore === "local"
+          ? "local"
+          : "object",
+    },
     frameworkVersion: release.frameworkVersion,
     nodeVersion: release.nodeVersion,
     createdAt: release.createdAt,
@@ -6352,13 +6449,88 @@ async function newReleaseDirectory(projectsRoot: string, projectId: string, rele
   return directory;
 }
 
+interface RunnerArtifactObjects {
+  namespace: string;
+  store: ObjectStore;
+}
+
+interface RunnerArtifactDescriptor {
+  projectId: string;
+  releaseId: string;
+  digest: string;
+  bytes: number;
+  store: string;
+  key: string | null;
+}
+
+function normalizeRunnerArtifactObjects(
+  configured: { namespace: string; store: ObjectStore } | undefined,
+): RunnerArtifactObjects | null {
+  if (!configured) return null;
+  const namespace = boundedString(configured.namespace, "deploymentAgents.artifacts.namespace", 1, 128);
+  if (
+    namespace === "local"
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(namespace)
+  ) {
+    throw new TypeError(
+      "deploymentAgents.artifacts.namespace must be a portable non-local identifier.",
+    );
+  }
+  const store = configured.store;
+  if (
+    !store
+    || typeof store !== "object"
+    || typeof store.put !== "function"
+    || typeof store.get !== "function"
+    || typeof store.stat !== "function"
+    || typeof store.delete !== "function"
+  ) {
+    throw new TypeError("deploymentAgents.artifacts.store must implement ObjectStore.");
+  }
+  return Object.freeze({ namespace, store });
+}
+
+function runnerReleaseObjectKey(projectId: string, releaseId: string, digest: string): string {
+  assertReleaseStorageIdentifiers(projectId, releaseId);
+  if (!/^[a-f0-9]{64}$/u.test(digest)) throw new Error("Release artifact digest is invalid.");
+  return `runner-artifacts/${projectId}/${releaseId}/${digest}.clank.gz`;
+}
+
 async function writeRunnerReleaseArtifact(
   projectsRoot: string,
-  projectId: string,
-  releaseId: string,
+  artifact: RunnerArtifactDescriptor,
   bytes: Uint8Array,
+  objects: RunnerArtifactObjects | null,
 ): Promise<void> {
-  assertReleaseStorageIdentifiers(projectId, releaseId);
+  assertReleaseStorageIdentifiers(artifact.projectId, artifact.releaseId);
+  if (artifact.store !== "local") {
+    if (
+      !objects
+      || artifact.store !== objects.namespace
+      || artifact.key !== runnerReleaseObjectKey(
+        artifact.projectId,
+        artifact.releaseId,
+        artifact.digest,
+      )
+    ) {
+      throw new Error("Release artifact object repository does not match its metadata.");
+    }
+    const metadata = await objects.store.put(artifact.key, bytes, {
+      contentType: "application/vnd.clank.deploy+gzip",
+    });
+    if (
+      metadata.key !== artifact.key
+      || metadata.size !== artifact.bytes
+      || metadata.sha256 !== artifact.digest
+      || metadata.contentType !== "application/vnd.clank.deploy+gzip"
+    ) {
+      throw new Error("Release artifact object repository returned inconsistent metadata.");
+    }
+    return;
+  }
+  if (artifact.key !== null) {
+    throw new Error("Local release artifact metadata contains an unexpected object key.");
+  }
   const fsName = "node:fs/promises";
   const pathName = "node:path";
   const [fs, path] = await Promise.all([
@@ -6375,7 +6547,7 @@ async function writeRunnerReleaseArtifact(
     }>,
     import(pathName) as unknown as Promise<{ join(...segments: string[]): string }>,
   ]);
-  const projectRoot = await safeChildPath(projectsRoot, projectId);
+  const projectRoot = await safeChildPath(projectsRoot, artifact.projectId);
   await requireRealDirectory(projectsRoot);
   await requireRealDirectory(projectRoot);
   const directory = path.join(projectRoot, "artifacts");
@@ -6385,10 +6557,13 @@ async function writeRunnerReleaseArtifact(
     if ((error as { code?: string }).code !== "EEXIST") throw error;
     await requireRealDirectory(directory);
   }
-  const target = await safeChildPath(projectsRoot, `${projectId}/artifacts/${releaseId}.clank.gz`);
+  const target = await safeChildPath(
+    projectsRoot,
+    `${artifact.projectId}/artifacts/${artifact.releaseId}.clank.gz`,
+  );
   const temporary = await safeChildPath(
     projectsRoot,
-    `${projectId}/artifacts/.${releaseId}.${crypto.randomUUID()}.tmp`,
+    `${artifact.projectId}/artifacts/.${artifact.releaseId}.${crypto.randomUUID()}.tmp`,
   );
   try {
     await fs.writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
@@ -6403,9 +6578,35 @@ async function readRunnerReleaseArtifact(
   projectsRoot: string,
   release: ReleaseRow,
   signal: AbortSignal,
+  objects: RunnerArtifactObjects | null,
 ): Promise<{ bytes: Uint8Array; sha256: string } | null> {
   assertReleaseStorageIdentifiers(release.projectId, release.id);
   if (signal.aborted) return null;
+  if (release.runnerArtifactStore !== "local") {
+    const expectedKey = runnerReleaseObjectKey(release.projectId, release.id, release.digest);
+    if (
+      !objects
+      || objects.namespace !== release.runnerArtifactStore
+      || release.runnerArtifactKey !== expectedKey
+    ) return null;
+    const stored = await objects.store.get(expectedKey);
+    if (!stored || signal.aborted) return null;
+    if (
+      stored.metadata.key !== expectedKey
+      || stored.metadata.size !== release.runnerArtifactBytes
+      || stored.metadata.size !== release.artifactBytes
+      || stored.metadata.sha256 !== release.digest
+      || stored.metadata.contentType !== "application/vnd.clank.deploy+gzip"
+      || stored.bytes.byteLength !== stored.metadata.size
+      || await deploymentDigest(stored.bytes) !== release.digest
+    ) {
+      throw new Error("Stored deployment runner object failed integrity verification.");
+    }
+    return { bytes: stored.bytes, sha256: release.digest };
+  }
+  if (release.runnerArtifactKey !== null) {
+    throw new Error("Stored local deployment artifact metadata is inconsistent.");
+  }
   const parents = await releaseStorageParents(projectsRoot, release.projectId);
   if (!parents.artifacts) return null;
   const target = await safeChildPath(
@@ -6479,30 +6680,47 @@ async function readRunnerReleaseArtifact(
 
 async function deleteReleaseStorage(
   projectsRoot: string,
-  projectId: string,
-  releaseId: string,
+  release: ReleaseRow,
+  objects: RunnerArtifactObjects | null,
 ): Promise<void> {
-  assertReleaseStorageIdentifiers(projectId, releaseId);
+  assertReleaseStorageIdentifiers(release.projectId, release.id);
   const fsName = "node:fs/promises";
   const fs = await import(fsName) as unknown as {
     rm(path: string, options: { recursive?: boolean; force: true }): Promise<void>;
   };
-  const parents = await releaseStorageParents(projectsRoot, projectId);
+  const parents = await releaseStorageParents(projectsRoot, release.projectId);
+  const targets: Array<{ path: string; recursive?: boolean }> = [];
   if (parents.releases) {
-    const releaseDirectory = await safeChildPath(
-      projectsRoot,
-      `${projectId}/releases/${releaseId}`,
-    );
-    await fs.rm(releaseDirectory, { recursive: true, force: true });
+    targets.push({
+      path: await safeChildPath(
+        projectsRoot,
+        `${release.projectId}/releases/${release.id}`,
+      ),
+      recursive: true,
+    });
   }
   if (parents.artifacts) {
-    const artifact = await safeChildPath(
-      projectsRoot,
-      `${projectId}/artifacts/${releaseId}.clank.gz`,
-    );
-    await fs.rm(artifact, { force: true });
+    targets.push({
+      path: await safeChildPath(
+        projectsRoot,
+        `${release.projectId}/artifacts/${release.id}.clank.gz`,
+      ),
+    });
   }
-  if (parents.backups) await deleteReleaseSnapshotFiles(projectsRoot, projectId, releaseId);
+  if (parents.backups) {
+    const backupPath = await safeChildPath(
+      projectsRoot,
+      `${release.projectId}/backups/${release.id}.sqlite`,
+    );
+    targets.push(
+      { path: backupPath },
+      { path: `${backupPath}-wal` },
+      { path: `${backupPath}-shm` },
+    );
+  }
+  await deleteRunnerReleaseObject(release, objects);
+  await Promise.all(targets.map((target) =>
+    fs.rm(target.path, { ...(target.recursive ? { recursive: true } : {}), force: true })));
 }
 
 function assertReleaseStorageIdentifiers(projectId: string, releaseId: string): void {
@@ -6514,6 +6732,7 @@ function assertReleaseStorageIdentifiers(projectId: string, releaseId: string): 
 async function deleteProjectStorage(
   projectsRoot: string,
   projectId: string,
+  beforeRemove?: () => Promise<void>,
 ): Promise<void> {
   if (!/^[A-Za-z0-9_-]{8,128}$/u.test(projectId)) {
     throw new Error("Project storage identifier is invalid.");
@@ -6524,8 +6743,41 @@ async function deleteProjectStorage(
   };
   await requireRealDirectory(projectsRoot);
   const projectRoot = await safeChildPath(projectsRoot, projectId);
-  if (!await requireRealDirectory(projectRoot, true)) return;
+  const projectExists = await requireRealDirectory(projectRoot, true);
+  await beforeRemove?.();
+  if (!projectExists) return;
   await fs.rm(projectRoot, { recursive: true, force: true });
+}
+
+async function deleteRunnerReleaseObject(
+  release: ReleaseRow,
+  objects: RunnerArtifactObjects | null,
+): Promise<void> {
+  if (release.runnerArtifactBytes <= 0 || release.runnerArtifactStore === "local") return;
+  const expectedKey = runnerReleaseObjectKey(release.projectId, release.id, release.digest);
+  if (
+    !objects
+    || objects.namespace !== release.runnerArtifactStore
+    || release.runnerArtifactKey !== expectedKey
+  ) {
+    throw new Error(
+      "Release artifact belongs to an unavailable object repository; storage metadata was preserved.",
+    );
+  }
+  await objects.store.delete(expectedKey);
+}
+
+async function deleteProjectRunnerArtifacts(
+  internal: SQLiteInternal,
+  projectId: string,
+  objects: RunnerArtifactObjects | null,
+): Promise<void> {
+  const releases = internal.prepare(
+    `SELECT * FROM clank_platform_releases
+      WHERE project_id = ? AND runner_artifact_bytes > 0 AND runner_artifact_store <> 'local'
+      ORDER BY created_at`,
+  ).all(projectId).map(releaseRow);
+  for (const release of releases) await deleteRunnerReleaseObject(release, objects);
 }
 
 async function deleteReleaseSnapshot(

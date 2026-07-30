@@ -245,6 +245,49 @@ async function deploy(platform, projectId, token, artifact, key) {
   return { response, body: await response.json() };
 }
 
+function memoryObjectStore() {
+  const values = new Map();
+  const calls = [];
+  return {
+    values,
+    calls,
+    store: Object.freeze({
+      kind: "memory",
+      async put(key, input, options = {}) {
+        const bytes = new Uint8Array(input instanceof Uint8Array ? input : new Uint8Array(input));
+        const now = Date.now();
+        const current = values.get(key);
+        const metadata = Object.freeze({
+          key,
+          size: bytes.byteLength,
+          sha256: await deploymentDigest(bytes),
+          contentType: options.contentType ?? "application/octet-stream",
+          createdAt: current?.metadata.createdAt ?? now,
+          updatedAt: now,
+        });
+        values.set(key, { metadata, bytes });
+        calls.push({ operation: "put", key });
+        return metadata;
+      },
+      async get(key) {
+        calls.push({ operation: "get", key });
+        const value = values.get(key);
+        return value
+          ? { metadata: value.metadata, bytes: new Uint8Array(value.bytes) }
+          : null;
+      },
+      async stat(key) {
+        calls.push({ operation: "stat", key });
+        return values.get(key)?.metadata ?? null;
+      },
+      async delete(key) {
+        calls.push({ operation: "delete", key });
+        return values.delete(key);
+      },
+    }),
+  };
+}
+
 test("platform retains and serves exact release artifacts only to their leased deployment node", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-runner-artifacts-"));
   const dataDirectory = join(root, "platform");
@@ -328,6 +371,348 @@ test("platform retains and serves exact release artifacts only to their leased d
       (error) => error?.status === 500 && error?.code === "COORDINATOR_FAILED",
     );
     assert.match(String(errors.at(-1)), /unsafe or inconsistent/u);
+  } finally {
+    orchestrator?.close();
+    control?.close();
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("platform can retain, verify, clean, and delete runner artifacts through an object store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-object-artifacts-"));
+  const dataDirectory = join(root, "platform");
+  const repository = memoryObjectStore();
+  const runnerRegistrationToken = "clank_platform_object_artifact_registration_123456";
+  const errors = [];
+  const platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4892,
+    appPortEnd: 4893,
+    deploymentAgents: {
+      registrationToken: runnerRegistrationToken,
+      maxArtifactBytes: 4 * 1024 * 1024,
+      artifacts: {
+        namespace: "test-release-objects-v1",
+        store: repository.store,
+      },
+    },
+    backups: { intervalMs: false },
+    onError: (error) => errors.push(error),
+  });
+  let control;
+  let orchestrator;
+  try {
+    const owner = await authorizeCli(platform, "object-artifact-platform@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Object artifacts", slug: "object-artifacts" },
+    }), 201);
+    const migrations = [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]];
+    const firstArtifact = await appArtifact(join(root, "app"), "object-release-one", migrations);
+    const first = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      firstArtifact,
+      "object-artifact-release-0001",
+    );
+    assert.equal(first.response.status, 201, JSON.stringify(first.body));
+    assert.deepEqual(first.body.release.runnerArtifact, {
+      bytes: firstArtifact.byteLength,
+      storage: "object",
+    });
+    const secondArtifact = await appArtifact(join(root, "app"), "object-release-two", migrations);
+    const second = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      secondArtifact,
+      "object-artifact-release-0002",
+    );
+    assert.equal(second.response.status, 201, JSON.stringify(second.body));
+    assert.equal(repository.values.size, 2);
+    await assert.rejects(
+      stat(join(dataDirectory, "projects", created.project.id, "artifacts")),
+      (error) => error.code === "ENOENT",
+    );
+
+    const rows = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
+    const retained = rows.prepare(`SELECT id, runner_artifact_store, runner_artifact_key
+      FROM clank_platform_releases WHERE project_id = ? ORDER BY created_at`).all(created.project.id);
+    rows.close();
+    assert.equal(retained.length, 2);
+    assert.ok(retained.every((row) => row.runner_artifact_store === "test-release-objects-v1"));
+    assert.ok(retained.every((row) => (
+      typeof row.runner_artifact_key === "string"
+      && row.runner_artifact_key.startsWith(`runner-artifacts/${created.project.id}/`)
+    )));
+
+    control = await openSQLite(defineDatabase({}), {
+      path: join(dataDirectory, "control.sqlite"),
+    });
+    orchestrator = openDeploymentOrchestrator(control);
+    const client = createDeploymentCoordinatorClient({
+      baseUrl: "http://127.0.0.1:4200",
+      fetch: (url, init) => platform.handle(new Request(url, init)),
+      maxArtifactBytes: 4 * 1024 * 1024,
+    });
+    const session = await client.register(runnerRegistrationToken, {
+      id: "runner-object-artifact-01",
+      region: "local",
+    });
+    await orchestrator.enqueue({
+      projectId: created.project.id,
+      action: "deploy",
+      payload: { releaseId: second.body.release.id },
+      idempotencyKey: "object-artifact-operation",
+      nodeId: session.node.id,
+    });
+    const [operation] = await client.claim(session.node.id, session.token, 1);
+    const downloaded = await client.artifact(session.node.id, session.token, operation);
+    assert.equal(Buffer.from(downloaded.bytes).equals(secondArtifact), true);
+
+    const activeKey = retained.find((row) => row.id === second.body.release.id).runner_artifact_key;
+    repository.values.get(activeKey).bytes[0] ^= 0xff;
+    await assert.rejects(
+      client.artifact(session.node.id, session.token, operation),
+      (error) => error?.status === 500 && error?.code === "COORDINATOR_FAILED",
+    );
+    assert.match(String(errors.at(-1)), /integrity verification/u);
+
+    await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/releases/${first.body.release.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: `delete-release object-artifacts ${first.body.release.id}`,
+          allowRollbackLoss: true,
+        },
+      },
+    ));
+    assert.equal(repository.values.size, 1);
+
+    orchestrator.close();
+    orchestrator = undefined;
+    control.close();
+    control = undefined;
+    await payload(platform, jsonRequest(`/api/projects/${created.project.id}`, {
+      method: "DELETE",
+      token: owner.accessToken,
+      body: {
+        confirmation: "delete-site object-artifacts",
+        acknowledgeDataLoss: true,
+      },
+    }));
+    assert.equal(repository.values.size, 0);
+    assert.equal(
+      repository.calls.filter((call) => call.operation === "delete").length,
+      2,
+    );
+  } finally {
+    orchestrator?.close();
+    control?.close();
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("platform cleans an inconsistent object write without leaking provider details or quota", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-object-write-failure-"));
+  const repository = memoryObjectStore();
+  const errors = [];
+  const inconsistentStore = Object.freeze({
+    ...repository.store,
+    async put(key, bytes, options) {
+      const metadata = await repository.store.put(key, bytes, options);
+      return { ...metadata, sha256: "0".repeat(64) };
+    },
+  });
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4894,
+    appPortEnd: 4895,
+    deploymentAgents: {
+      registrationToken: "clank_platform_object_failure_registration_123456",
+      maxArtifactBytes: 4 * 1024 * 1024,
+      artifacts: {
+        namespace: "inconsistent-release-objects-v1",
+        store: inconsistentStore,
+      },
+    },
+    backups: { intervalMs: false },
+    onError: (error) => errors.push(error),
+  });
+  try {
+    const owner = await authorizeCli(platform, "object-write-failure@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Object failure", slug: "object-failure" },
+    }), 201);
+    const artifact = await appArtifact(
+      join(root, "app"),
+      "object-write-failure",
+      [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]],
+    );
+    const failed = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      artifact,
+      "object-artifact-failure-0001",
+    );
+    assert.equal(failed.response.status, 422);
+    assert.equal(failed.body.error.code, "DEPLOYMENT_FAILED");
+    assert.equal(
+      failed.body.error.message,
+      "The original release could not be retained safely.",
+    );
+    assert.equal(repository.values.size, 0);
+    assert.ok(repository.calls.some((call) => call.operation === "delete"));
+    assert.match(String(errors[0]), /inconsistent metadata/u);
+
+    const releases = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/releases`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(releases.usage, { releases: 0, storageBytes: 0 });
+    assert.equal(releases.releases.length, 1);
+    assert.equal(releases.releases[0].status, "failed");
+    assert.equal(releases.releases[0].artifactAvailable, false);
+    assert.equal(releases.releases[0].storageBytes, 0);
+    assert.deepEqual(releases.releases[0].runnerArtifact, {
+      bytes: 0,
+      storage: "none",
+    });
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a changed object repository namespace cannot reinterpret an existing release", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-object-namespace-"));
+  const dataDirectory = join(root, "platform");
+  const repository = memoryObjectStore();
+  const registrationToken = "clank_platform_object_namespace_registration_123456";
+  const baseOptions = {
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4896,
+    appPortEnd: 4897,
+    backups: { intervalMs: false },
+  };
+  let platform = await openPlatform({
+    ...baseOptions,
+    deploymentAgents: {
+      registrationToken,
+      artifacts: {
+        namespace: "original-release-objects-v1",
+        store: repository.store,
+      },
+    },
+  });
+  let control;
+  let orchestrator;
+  try {
+    const owner = await authorizeCli(platform, "object-namespace@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Object namespace", slug: "object-namespace" },
+    }), 201);
+    const artifact = await appArtifact(
+      join(root, "app"),
+      "object-namespace",
+      [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]],
+    );
+    const deployed = await deploy(
+      platform,
+      created.project.id,
+      owner.accessToken,
+      artifact,
+      "object-namespace-release-0001",
+    );
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    await platform.close();
+    const state = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    state.prepare(
+      "UPDATE clank_platform_projects SET active_release_id = NULL WHERE id = ?",
+    ).run(created.project.id);
+    state.close();
+
+    repository.calls.length = 0;
+    platform = await openPlatform({
+      ...baseOptions,
+      deploymentAgents: {
+        registrationToken,
+        artifacts: {
+          namespace: "different-release-objects-v1",
+          store: repository.store,
+        },
+      },
+    });
+    control = await openSQLite(defineDatabase({}), {
+      path: join(dataDirectory, "control.sqlite"),
+    });
+    orchestrator = openDeploymentOrchestrator(control);
+    const client = createDeploymentCoordinatorClient({
+      baseUrl: "http://127.0.0.1:4200",
+      fetch: (url, init) => platform.handle(new Request(url, init)),
+    });
+    const session = await client.register(registrationToken, {
+      id: "runner-object-namespace-01",
+      region: "local",
+    });
+    await orchestrator.enqueue({
+      projectId: created.project.id,
+      action: "deploy",
+      payload: { releaseId: deployed.body.release.id },
+      idempotencyKey: "object-namespace-operation",
+      nodeId: session.node.id,
+    });
+    const [operation] = await client.claim(session.node.id, session.token, 1);
+    await assert.rejects(
+      client.artifact(session.node.id, session.token, operation),
+      (error) => error?.status === 404 && error?.code === "ARTIFACT_NOT_FOUND",
+    );
+    assert.equal(
+      repository.calls.filter((call) => call.operation === "get").length,
+      0,
+      "a mismatched namespace must be rejected before contacting the configured store",
+    );
+    const cleanup = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}/releases/${deployed.body.release.id}`,
+      {
+        method: "DELETE",
+        token: owner.accessToken,
+        body: {
+          confirmation: `delete-release object-namespace ${deployed.body.release.id}`,
+          allowRollbackLoss: false,
+        },
+      },
+    ));
+    assert.equal(cleanup.status, 500);
+    assert.equal((await cleanup.json()).error.code, "PLATFORM_ERROR");
+    assert.equal(
+      repository.calls.filter((call) => call.operation === "delete").length,
+      0,
+      "cleanup must preserve an object whose repository identity is unavailable",
+    );
+    const releases = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/releases`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(releases.releases[0].artifactAvailable, true);
+    assert.ok(releases.releases[0].storageBytes > 0);
   } finally {
     orchestrator?.close();
     control?.close();
@@ -3412,11 +3797,15 @@ test("legacy release rows upgrade to conservative storage accounting in place", 
     assert.equal(releases.releases[0].storageBytes, 321);
 
     const upgraded = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
-    const row = upgraded.prepare(`SELECT runtime_bytes, snapshot_bytes, storage_bytes, artifact_available
+    const row = upgraded.prepare(`SELECT runtime_bytes, runner_artifact_bytes, runner_artifact_store,
+        runner_artifact_key, snapshot_bytes, storage_bytes, artifact_available
       FROM clank_platform_releases WHERE id = ?`).get(legacyReleaseId);
     upgraded.close();
     assert.deepEqual({ ...row }, {
       runtime_bytes: 321,
+      runner_artifact_bytes: 0,
+      runner_artifact_store: "local",
+      runner_artifact_key: null,
       snapshot_bytes: 0,
       storage_bytes: 321,
       artifact_available: 1,

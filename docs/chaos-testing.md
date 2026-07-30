@@ -11,6 +11,7 @@ Clank tests failures as state-machine behavior, not only happy-path output. The 
 | Node tampers with a leased artifact request or the lease expires during storage I/O | The coordinator selects the canonical stored release and rechecks the lease before returning bytes | Runner and platform tests |
 | Retained artifact permissions, size, or digest are changed | No release bytes leave the control plane; only a generic failure crosses the protocol boundary | Runner and platform tests |
 | Local/S3 object bytes, metadata, response size, or request timing are hostile | The adapter refuses unsafe files, redirects, incomplete metadata, digest mismatch, oversized streams, and expired deadlines | Object-storage tests |
+| Remote release object write is inconsistent, stored bytes are changed, or the repository identity changes | Failed writes are cleaned without consuming quota; leased reads rehash bytes; a mismatched namespace is rejected before store access; release/site cleanup targets recorded keys | Platform object-repository and runner tests |
 | Completion response is lost | A possibly committed success is not converted into an explicit failure/retry | Runner tests |
 | Encrypted backup is corrupted | Authentication fails before replacement; the live database remains unchanged | Chaos and recovery tests |
 | Application upstream becomes unreachable | Requests fail generically, the circuit opens, and a later probe recovers | Chaos and data-plane tests |

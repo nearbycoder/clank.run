@@ -108,6 +108,9 @@ mutually untrusted applications.
 
 The provider-neutral object layer has atomic local and S3-compatible implementations. Both retain
 bounded metadata and verify exact size plus SHA-256; the remote adapter signs complete single-chunk
-requests with SigV4 and refuses redirects. Local storage remains the default, and platform release
-and recovery repositories move onto the object contract in explicit incremental phases so enabling
-an adapter never silently provisions or bills a managed bucket.
+requests with SigV4 and refuses redirects. Local storage remains the default. When remote runner
+enrollment explicitly configures an object repository, new original release uploads use it while
+runtime directories, application databases, migration snapshots, and recovery backups stay local.
+Every release records the repository namespace and exact object key so a configuration change
+cannot silently reinterpret older data. Recovery backups move onto the same portability boundary
+in a separate incremental phase; no adapter silently provisions or bills a managed bucket.

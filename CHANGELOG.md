@@ -27,6 +27,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   zero-dependency S3-compatible adapter. The S3 subset signs exact single-chunk payloads with SigV4,
   supports virtual-hosted and path-style endpoints plus temporary credentials, bounds retries,
   deadlines, and error bodies, and rehashes every downloaded object.
+- Remote deployment enrollment can retain original release uploads in a configured `ObjectStore`
+  instead of the control-plane volume. Each release persists its repository namespace and exact
+  content-addressed key; leased reads, release cleanup, project deletion, legacy local releases,
+  quota accounting, and provider failures are verified end to end.
 
 ### Fixed
 
@@ -53,6 +57,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Remote object storage refuses insecure non-loopback endpoints, embedded credentials, redirects,
   unsigned payloads, dotted virtual-host ambiguity, unsafe keys, oversized streams, and incomplete
   or inconsistent Clank integrity metadata. Provider response bodies never become public errors.
+- Failed or ambiguous release-object writes are cleaned before their quota reservation is released.
+  A repository namespace mismatch refuses reads and deletion rather than silently interpreting an
+  old release through a newly configured bucket or prefix.
 
 ## 0.9.4 - 2026-07-28
 

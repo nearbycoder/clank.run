@@ -107,6 +107,9 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `ObjectStoreError`: stable `status` and `code` without provider response details.
 - Types: `ObjectStore`, `ObjectMetadata`, `StoredObject`, `LocalObjectStoreOptions`,
   `S3ObjectStoreOptions`.
+- `openPlatform({ deploymentAgents: { artifacts: { namespace, store } } })`: retains each new
+  remote-runner upload under a persisted repository identity and content-addressed key. Existing
+  local releases remain readable; mismatched repositories fail closed.
 
 ## Remote deployment coordination
 
