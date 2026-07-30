@@ -10,6 +10,8 @@ import {
     type DeploymentRuntimeCapsule,
 } from "./runtime-placement.js";
 export declare const DEPLOYMENT_PROVIDER_RECONCILE_PATH = "/v1/clank/reconcile";
+export declare const DEPLOYMENT_PROVIDER_ROLLBACK_PATH = "/v1/clank/rollback";
+export declare const DEPLOYMENT_PROVIDER_DELETE_PATH = "/v1/clank/delete";
 export interface DeploymentProviderOperation {
     readonly id: string;
     readonly projectId: string;
@@ -39,6 +41,14 @@ export interface DeploymentProviderRequest {
     readonly runtime?: DeploymentRuntimeCapsule | null;
     readonly signal: AbortSignal;
 }
+export interface DeploymentProviderLifecycleRequest {
+    readonly operation: DeploymentProviderOperation;
+    /** Exact current provider-data generation being changed. */
+    readonly generation: number;
+    /** Derived confirmation; never accepted from an operation payload. */
+    readonly confirmation: string;
+    readonly signal: AbortSignal;
+}
 /**
  * The portable infrastructure boundary. A provider must converge the project
  * to the requested generation and make repeated operation/fence pairs safe.
@@ -47,6 +57,10 @@ export interface DeploymentProvider {
     /** Stable, non-secret adapter name used in bounded operation results. */
     readonly kind: string;
     reconcile(request: DeploymentProviderRequest): Promise<void>;
+    /** Optional fenced destructive lifecycle capability. */
+    rollback?(request: DeploymentProviderLifecycleRequest): Promise<unknown>;
+    /** Optional fenced destructive lifecycle capability. */
+    delete?(request: DeploymentProviderLifecycleRequest): Promise<unknown>;
 }
 export interface ProviderDeploymentAgentOptions extends Omit<DeploymentAgentOptions, "execute" | "node"> {
     node: DeploymentNodeInput;
@@ -77,6 +91,11 @@ export interface DeploymentProviderHandlerOptions {
 }
 export interface DeploymentProviderHandler {
     readonly path: typeof DEPLOYMENT_PROVIDER_RECONCILE_PATH;
+    readonly paths: readonly [
+        typeof DEPLOYMENT_PROVIDER_RECONCILE_PATH,
+        typeof DEPLOYMENT_PROVIDER_ROLLBACK_PATH,
+        typeof DEPLOYMENT_PROVIDER_DELETE_PATH,
+    ];
     handle(request: Request): Promise<Response>;
 }
 export declare class DeploymentProviderError extends Error {
@@ -89,6 +108,20 @@ export declare class DeploymentProviderError extends Error {
  * verified, credential-free desired-state request.
  */
 export declare function openProviderDeploymentAgent(options: ProviderDeploymentAgentOptions): Promise<DeploymentAgentRuntime>;
+/**
+ * Dispatches canonical reconcile and destructive lifecycle operations without
+ * passing node credentials, operation lease tokens, or caller confirmations.
+ */
+export declare function executeDeploymentProvider(provider: DeploymentProvider, operation: ClaimedDeploymentOperation, context: DeploymentExecutionContext): Promise<{
+    provider: string;
+    generation: number;
+    releaseId: string | null;
+    state: "running" | "stopped";
+} | {
+    provider: string;
+    action: "rollback" | "delete";
+    generation: number;
+}>;
 /**
  * Validates one canonical reconcile operation. This is exported so custom
  * agent loops can use the same contract without reimplementing its checks.

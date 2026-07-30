@@ -168,18 +168,23 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 
 ## Deployment providers
 
-- `openProviderDeploymentAgent(options)`: validates canonical desired-state operations, verifies
-  running artifacts, strips coordinator credentials before adapter execution, and reports only the
-  matching generation after provider convergence.
+- `openProviderDeploymentAgent(options)`: validates canonical desired-state plus rollback/delete
+  operations, verifies running artifacts, derives destructive confirmations, strips coordinator
+  credentials before adapter execution, and returns only fixed non-secret results.
+- `executeDeploymentProvider(provider, operation, context)`: reusable dispatcher for reconcile,
+  rollback, and delete operations.
 - `reconcileDeploymentProvider(provider, operation, context)`: reusable validation/execution
-  boundary for custom agent loops.
+  boundary for custom reconcile-only agent loops.
 - `createHttpDeploymentProvider(options)`: HTTPS/loopback-only binary client with a separate bearer
   token, redirect refusal, deadlines, exact idempotent retries, and bounded failure responses.
-- `createDeploymentProviderHandler(provider, options)`: authenticated
-  `POST /v1/clank/reconcile` bridge that independently bounds, hashes, and decodes every artifact.
-- `DEPLOYMENT_PROVIDER_RECONCILE_PATH`: fixed `/v1/clank/reconcile` provider protocol path.
+- `createDeploymentProviderHandler(provider, options)`: authenticated fixed-path bridge that
+  independently bounds, hashes, and decodes reconcile content while requiring empty-body,
+  generation/fence-bound rollback and deletion.
+- `DEPLOYMENT_PROVIDER_RECONCILE_PATH`, `DEPLOYMENT_PROVIDER_ROLLBACK_PATH`, and
+  `DEPLOYMENT_PROVIDER_DELETE_PATH`: fixed provider protocol paths.
 - `DeploymentProviderError`: stable HTTP `status` and `code` without a provider response body.
-- Types: `DeploymentProvider`, `DeploymentProviderRequest`, `DeploymentProviderOperation`,
+- Types: `DeploymentProvider`, `DeploymentProviderRequest`,
+  `DeploymentProviderLifecycleRequest`, `DeploymentProviderOperation`,
   `DeploymentProviderDesiredState`, `DeploymentProviderArtifact`,
   `ProviderDeploymentAgentOptions`, `HttpDeploymentProviderOptions`,
   `DeploymentProviderHandler`, and `DeploymentProviderHandlerOptions`.

@@ -556,6 +556,68 @@ test("existing operation fences seed the durable per-project sequence", async ()
   }
 });
 
+test("operation action migration preserves history and enables provider deletion", async () => {
+  const test = await fixture();
+  try {
+    const node = await test.orchestrator.registerNode({
+      id: "node-operation-migration",
+      region: "us-central",
+    });
+    test.orchestrator.close();
+    const internal = test.database[SQLITE_INTERNAL];
+    internal.exec("DROP TABLE clank_deployment_operations");
+    internal.exec(`CREATE TABLE clank_deployment_operations (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK (
+        action IN ('reconcile', 'deploy', 'rollback', 'restart', 'stop')
+      ),
+      payload TEXT NOT NULL CHECK (json_valid(payload)),
+      state TEXT NOT NULL CHECK (
+        state IN ('queued', 'leased', 'retry', 'succeeded', 'failed', 'cancelled')
+      ),
+      node_id TEXT REFERENCES clank_deployment_nodes(id) ON DELETE SET NULL,
+      attempts INTEGER NOT NULL CHECK (attempts >= 0),
+      max_attempts INTEGER NOT NULL CHECK (max_attempts > 0),
+      fence INTEGER NOT NULL CHECK (fence >= 0),
+      lease_token_hash TEXT,
+      lease_expires_at INTEGER,
+      next_attempt_at INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      result TEXT CHECK (result IS NULL OR json_valid(result)),
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`);
+    internal.prepare(`INSERT INTO clank_deployment_operations
+      (id, project_id, action, payload, state, node_id, attempts, max_attempts, fence,
+       lease_token_hash, lease_expires_at, next_attempt_at, idempotency_key, result, error,
+       created_at, updated_at)
+      VALUES ('op_legacy_stop', 'project_operation_migration', 'stop', '{}', 'succeeded',
+        NULL, 1, 3, 6, NULL, NULL, 1, 'legacy-stop-operation', '{}', NULL, 1, 1)`)
+      .run();
+
+    const reopened = openDeploymentOrchestrator(test.database);
+    assert.equal(reopened.operation("op_legacy_stop").action, "stop");
+    const deletion = await reopened.enqueue({
+      projectId: "project_operation_migration",
+      action: "delete",
+      payload: { generation: 4 },
+      idempotencyKey: "provider-delete-operation",
+      nodeId: node.node.id,
+    });
+    const [claim] = await reopened.claim(node.node.id, node.token, 1);
+    assert.equal(claim.id, deletion.operation.id);
+    assert.equal(claim.action, "delete");
+    assert.deepEqual(claim.payload, { generation: 4 });
+    assert.equal(claim.fence, 7);
+    reopened.close();
+  } finally {
+    test.database.close();
+    await rm(test.root, { recursive: true, force: true });
+  }
+});
+
 test("desired deployment validation rejects inconsistent release and runtime state before persistence", async () => {
   const test = await fixture();
   try {

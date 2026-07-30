@@ -204,6 +204,13 @@ durable completion results. `openProviderDeploymentAgent()` verifies the capsule
 its project, release, and generation before provider code can see it. The provider is a trusted
 application compute boundary because it necessarily receives application secrets and data.
 
+Provider lifecycle operations use the same authenticated claim and project-wide fence sequence.
+Their canonical payload contains only the exact current `generation`. The provider agent derives
+`rollback <project> <generation>` or `delete <project>` after lease validation; callers cannot
+inject a confirmation string, and neither artifact/runtime downloads nor desired-state
+observations occur. Existing operation tables are migrated transactionally to add the explicit
+`delete` action while preserving queued work, history, and fence seeding.
+
 The built-in platform does not select this protocol yet. The packaged [complete provider
 service](provider-service.md) composes independently verified capsules, local snapshot/migration
 recovery, isolated Docker health and deferred jobs, durable fencing, stopped state, exact private
@@ -221,8 +228,9 @@ The built-in platform acquires a durable `project:<id>` lease in addition to its
 only the fenced `execute` function; Clank handles enrollment, durable node credentials, startup
 heartbeat, un-draining, bounded claims, concurrency, lease renewal, desired-state observations,
 settlement, and graceful drain. Prefer `openProviderDeploymentAgent` for infrastructure work: it
-accepts only canonical reconcile operations, independently verifies the artifact, removes
-coordinator credentials, and exposes the smaller `DeploymentProvider` contract documented in
+accepts canonical reconcile/rollback/delete operations, independently verifies release content,
+derives lifecycle confirmations, removes coordinator credentials, and exposes the smaller
+`DeploymentProvider` contract documented in
 [Deployment provider adapters](provider-adapters.md).
 
 ```ts

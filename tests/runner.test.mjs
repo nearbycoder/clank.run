@@ -146,6 +146,23 @@ test("authenticated deployment nodes coordinate placement and fenced operations 
     }), true);
     assert.equal(await test.client.complete(session.node.id, session.token, renewed), false);
 
+    const deletion = await test.orchestrator.enqueue({
+      projectId: "project_remote_one",
+      action: "delete",
+      payload: { generation: desired.generation },
+      idempotencyKey: "remote-provider-delete",
+      nodeId: session.node.id,
+    });
+    const [deleteClaim] = await test.client.claim(session.node.id, session.token, 1);
+    assert.equal(deleteClaim.id, deletion.operation.id);
+    assert.equal(deleteClaim.action, "delete");
+    assert.deepEqual(deleteClaim.payload, { generation: desired.generation });
+    assert.equal(deleteClaim.fence, 2);
+    assert.equal(
+      await test.client.complete(session.node.id, session.token, deleteClaim),
+      true,
+    );
+
     assert.equal(await test.client.observe(session.node.id, session.token, {
       projectId: desired.projectId,
       generation: desired.generation,

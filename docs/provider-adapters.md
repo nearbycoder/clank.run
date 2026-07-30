@@ -27,6 +27,12 @@ const provider: DeploymentProvider = {
       signal: request.signal,
     });
   },
+  async rollback(request) {
+    await providerService.rollback(request);
+  },
+  async delete(request) {
+    await providerService.delete(request);
+  },
 };
 ```
 
@@ -70,11 +76,16 @@ const agent = await openProviderDeploymentAgent({
 });
 ```
 
-The wrapper accepts only canonical `reconcile` operations, validates the desired payload, and
-downloads either the legacy artifact or the explicitly selected runtime capsule only for a running
-state. It independently verifies the bytes and binds a capsule to the operation's exact project,
-release, and generation before calling the provider, then reports the matching generation as
-observed. A rejected stale observation fails the operation instead of claiming success.
+The wrapper accepts canonical `reconcile`, `rollback`, and `delete` operations. Reconcile validates
+desired state and downloads either the legacy artifact or explicitly selected runtime capsule only
+for a running state. It independently verifies the bytes, binds a capsule to the exact project,
+release, and generation, then reports the matching generation as observed. A rejected stale
+observation fails the operation instead of claiming success.
+
+Rollback/delete payloads contain only the exact current generation. The wrapper derives the
+required confirmation after validating the canonical operation lease, never downloads release
+content, and never publishes a desired-state observation. Node identity, node credentials, and
+operation lease tokens are removed before every provider call.
 
 The operation result sent back to the control plane is fixed to provider kind, generation,
 release ID, and state. Provider return values, exception details, credentials, paths, and runtime
@@ -106,12 +117,15 @@ const handler = createDeploymentProviderHandler(provider, {
 });
 ```
 
-The fixed path is `POST /v1/clank/reconcile`. Legacy running requests carry
+The fixed paths are `POST /v1/clank/reconcile`, `POST /v1/clank/rollback`, and
+`POST /v1/clank/delete`. Legacy running reconcile requests carry
 `application/vnd.clank.deploy+gzip`; runtime requests carry `application/vnd.clank.runtime`.
 Both are exact binary bytes, not base64 JSON. Bounded headers identify the project, operation,
 fence, attempt, generation, desired state, release, protocol, and body SHA-256. Secret values,
 SQLite bytes, and ingress tokens stay only in the runtime body. Stopped requests carry no body,
-release, protocol, or digest. A successful provider returns `204`.
+release, protocol, or digest. Rollback/delete carry only the bounded operation identity, project,
+fence, attempt, and generation headers. Their bodies and content headers are forbidden, and the
+handler derives the exact confirmation locally. A successful provider returns `204`.
 
 Both sides require a separate 32–512 character bearer token. Non-loopback clients require HTTPS,
 refuse redirects, apply deadlines and body limits, discard bounded failure bodies, and retry only
@@ -196,11 +210,11 @@ activation, retry-after-commit recovery, and fail-closed shutdown. See
 
 ## What is and is not portable yet
 
-The provider contract, HTTP bridge, runner command, release and runtime transport, object storage,
-leases, credentials, fencing, provider data lifecycle, isolated Docker launcher,
-provider-private runtime ingress, and complete Docker provider composition are implemented and
-package-supported. They remove provider SDKs from Clank and give Docker, VM, microVM, Nomad,
-Kubernetes, or hosted adapters the same narrow surface.
+The provider contract, reconcile/rollback/delete HTTP bridge, runner command, release and runtime
+transport, object storage, leases, credentials, fencing, provider data lifecycle, isolated Docker
+launcher, provider-private runtime ingress, and complete Docker provider composition are
+implemented and package-supported. They remove provider SDKs from Clank and give Docker, VM,
+microVM, Nomad, Kubernetes, or hosted adapters the same narrow surface.
 
 The built-in control plane still activates its ordinary hosted projects through its local
 supervisor. Enabling enrollment or starting `clank-runner` does not silently relocate existing

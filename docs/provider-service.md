@@ -52,10 +52,11 @@ const reconciliation = createDeploymentProviderHandler(service, {
 });
 ```
 
-Mount `reconciliation.handle(request)` only at its fixed authenticated
-`POST /v1/clank/reconcile` path. Route the provider-private application path to
-`service.handle(request)`. Terminate TLS in front of both, restrict network admission to the
-runner and managed edge respectively, and never expose application loopback ports.
+Mount `reconciliation.handle(request)` only at its fixed authenticated `POST`
+`/v1/clank/reconcile`, `/v1/clank/rollback`, and `/v1/clank/delete` paths. Route the
+provider-private application path to `service.handle(request)`. Terminate TLS in front of both,
+restrict network admission to the runner and managed edge respectively, and never expose
+application loopback ports.
 
 Pass the service directly to `openProviderDeploymentAgent()` for an in-process runner, or run the
 packaged `clank-runner` against the authenticated provider handler. No provider SDK, npm
@@ -165,10 +166,13 @@ the Docker runtime boundary, then waits for in-flight per-project reconciliation
 failed drain or unproven container cleanup rejects shutdown and is sent only to the private
 diagnostic hook.
 
-These service methods are the provider-local safety boundary. The control plane must still preserve
-an encrypted recovery point, deactivate public managed ingress, allocate the lifecycle operation
-and fence, update desired/observed placement, and reconcile the selected release after rollback.
-Do not call raw provider-data `rollback()` or `delete()` beneath a running service.
+These service methods are the provider-local safety boundary. `openProviderDeploymentAgent()` and
+the authenticated provider bridge can now deliver canonical rollback/delete operations to them
+without sharing coordinator credentials or accepting caller confirmation strings. The built-in
+control plane must still preserve an encrypted recovery point, deactivate public managed ingress,
+allocate that lifecycle operation and fence, update desired/observed placement, and reconcile the
+selected release after rollback. Do not call raw provider-data `rollback()` or `delete()` beneath
+a running service.
 
 ## Trust and operating boundary
 
