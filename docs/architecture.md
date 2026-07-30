@@ -105,3 +105,9 @@ application data remain separate contracts. The included child-process superviso
 processes in memory and therefore runs as one active leader per project/data directory. Child
 processes support trusted operation, while Docker adds a constrained container boundary for
 mutually untrusted applications.
+
+The provider-neutral object layer has atomic local and S3-compatible implementations. Both retain
+bounded metadata and verify exact size plus SHA-256; the remote adapter signs complete single-chunk
+requests with SigV4 and refuses redirects. Local storage remains the default, and platform release
+and recovery repositories move onto the object contract in explicit incremental phases so enabling
+an adapter never silently provisions or bills a managed bucket.

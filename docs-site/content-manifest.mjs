@@ -39,6 +39,7 @@ export const groups = [
       ["server", "docs/server.md"],
       ["jobs-and-cron", "docs/jobs-and-cron.md"],
       ["services", "docs/services.md"],
+      ["object-storage", "docs/object-storage.md"],
       ["observability", "docs/observability.md"],
       ["data-plane", "docs/data-plane.md"]
     ]

@@ -41,7 +41,11 @@ The registry gives humans and agents one deterministic place to inspect configur
 - signed capabilities bind one key, one operation, and one expiry; and
 - the built-in HTTP handler supports signed `PUT`, `GET`, and `HEAD`.
 
-The `FileStore` interface is the compatibility target for a future remote object-storage driver. Application code should store file keys and metadata, not local paths.
+Application code should store file keys and metadata, not local paths. The lower-level
+`ObjectStore` contract now has both atomic local and S3-compatible implementations; use it for
+provider-neutral server storage and read [Object storage](object-storage.md) for setup, integrity,
+cost, and threat boundaries. `FileStore` adds expiring application HTTP capabilities on top of the
+same key-oriented model.
 
 ## Email
 
@@ -70,6 +74,7 @@ process contract, deployment configuration, failure behavior, and operations gui
 ## Production boundaries
 
 Local files and a SQLite job database are appropriate when every role shares one durable host
-volume. Independent nodes with private disks need compatible remote object storage and a shared
-transactional job/database topology. Service capabilities are part of the blueprint so the
-deployment platform can refuse an incomplete production plan instead of silently degrading.
+volume. Independent nodes with private disks can use `createS3ObjectStore` for durable objects, but
+still need a shared transactional job/database topology. Service capabilities are part of the
+blueprint so the deployment platform can refuse an incomplete production plan instead of silently
+degrading.

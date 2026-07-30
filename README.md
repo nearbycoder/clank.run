@@ -145,6 +145,7 @@ applications do not need a separate runtime compiler or bundler.
 | Live sync | Auth-partitioned Fetch RPC and cache, EventSource streams, session revocation, automatic invalidation, SSR seeding, multi-tab synchronization |
 | SSR | Async string rendering, full-document templates, safe state serialization, CSP nonces, context and keyed lists, marker-based DOM-preserving hydration |
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |
+| Object storage | Atomic owner-only local objects plus zero-dependency S3-compatible storage with SigV4, bounded retries, deadlines, and verified SHA-256 |
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, Tailwind Play CDN and compiled Tailwind CSS compatibility |
 | Deploy | Browser console, workspaces and RBAC, activity feeds, ingress metrics, enforced quotas, custom DNS/TLS onboarding, deterministic artifacts, encrypted secrets, immutable migrations, SQLite backups, storage-backed readiness, health-gated releases, logs, audit, rollback |
 | Hosting safety | Explicit trusted/isolated profiles, isolated production default, constrained Docker runner, bounded artifacts, resource ceilings, and fail-closed runner configuration |
@@ -204,6 +205,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [AI-first contracts](docs/ai-first.md)
 - [Organizations, RBAC, invitations, and scoped tokens](docs/organizations.md)
 - [Service drivers for files, email, jobs, and webhooks](docs/services.md)
+- [Atomic local and S3-compatible object storage](docs/object-storage.md)
 - [Typed durable queues, worker processes, and cron](docs/jobs-and-cron.md)
 - [Structured logs, traces, metrics, and health](docs/observability.md)
 - [Durable distributed deployment and agent fencing](docs/distributed-deployment.md)

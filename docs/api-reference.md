@@ -97,6 +97,17 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - Types: `ClankPlatformOptions`, `PlatformLimits`, `PlatformHostingProfile`,
   `PlatformRunnerOptions`, `ProcessRunnerOptions`, `DockerRunnerOptions`.
 
+## Object storage
+
+- `openLocalObjectStore(options)`: atomic, owner-only, no-follow local object envelopes with
+  verified metadata, length, and SHA-256.
+- `createS3ObjectStore(options)`: zero-dependency S3-compatible `HEAD`/`GET`/`PUT`/`DELETE` adapter
+  with SigV4 payload signing, virtual-hosted or path-style URLs, retries, deadlines, response
+  bounds, and independent download integrity checks.
+- `ObjectStoreError`: stable `status` and `code` without provider response details.
+- Types: `ObjectStore`, `ObjectMetadata`, `StoredObject`, `LocalObjectStoreOptions`,
+  `S3ObjectStoreOptions`.
+
 ## Remote deployment coordination
 
 - `createDeploymentCoordinatorHandler(orchestrator, options)`: optional versioned HTTP boundary for
