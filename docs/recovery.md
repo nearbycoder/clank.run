@@ -5,6 +5,12 @@ Clank distinguishes deployment rollback from database recovery:
 - a release rollback changes application code and can optionally restore the immediately preceding migration snapshot;
 - a recovery backup is an independently retained, encrypted, integrity-verified SQLite snapshot.
 
+Remote runtime providers can obtain a generation-bound consistent export through
+`openDeploymentProviderDataStore().snapshot(projectId)`. Feed that byte stream into the encrypted
+recovery repository; the provider store's immediate rollback snapshot is intentionally local,
+single-generation, and not a disaster-recovery copy. See [Provider data
+lifecycle](provider-data-lifecycle.md).
+
 ## Application API
 
 ```ts

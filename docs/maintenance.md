@@ -49,6 +49,26 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Kept the current Railway production service on its existing local volume; no bucket or
   additional paid resource was provisioned.
 
+## 2026-07-30 provider data lifecycle phase
+
+- [x] Added an independently verified and desired-state-bound provider consumer for
+  `clank-runtime/1`, with project-isolated data, staging, generations, recovery, metadata, and
+  monotonic fence high-water marks.
+- [x] Added SQLite initialize/preserve/replace modes, immutable release migrations, bounded
+  consistent snapshot export, one-generation rollback, exact confirmed deletion, and memory-only
+  delivery of environment and ingress secrets.
+- [x] Made apply and rollback crash-recoverable around an atomic metadata commit point, preserved
+  referenced recovery bytes during retry, rejected corrupted path/state relationships and storage
+  links, and pruned unreferenced provider-owned artifacts.
+- [x] Kept hosted runtime selection closed until isolated launch, private health, stateful node
+  pinning, encrypted recovery replication, and atomic ingress activation are integrated.
+- [x] Re-certified all 277 tests at 85.96% line, 74.39% branch, and 85.78% function
+  coverage; 56 documentation files, 195 local links, 32 declaration files, and 30 package
+  exports; packed consumer conformance; and package, current-tree, and reachable-history security
+  scans.
+- [ ] Record GitHub CI, CodeQL, merge, and post-merge evidence after the phase PR passes.
+- [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
 ## 2026-07-30 remote runtime transport phase
 
 - [x] Added a deterministic, bounded runtime capsule that binds final environment, verified code,

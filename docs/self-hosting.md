@@ -158,15 +158,17 @@ export CLANK_PROVIDER_TOKEN="$(your-secret-manager read runtime-provider)"
 clank-runner
 ```
 
-The operator still supplies the provider-side Docker/VM/microVM mutation, atomic application data
-lifecycle, and edge routing; local SQLite data is never placed in the non-secret release transfer.
-The separate runtime capsule can carry final environment, SQLite placement, and ingress identity,
-but the current built-in supervisor keeps it inactive until snapshot/restore/delete, rollback, and
-traffic switching are complete. Use the protocol as the secure boundary for a deliberate runner
-integration and follow
+The operator still supplies the provider-side Docker/VM/microVM mutation and edge routing; local
+SQLite data is never placed in the non-secret release transfer. The separate runtime capsule can
+carry final environment, SQLite placement, and ingress identity, and the packaged provider data
+lifecycle safely consumes its release/database portion. The current built-in supervisor keeps the
+capsule inactive until isolated launch, node pinning, independent recovery, and traffic switching
+are integrated. Use the protocol as the secure boundary for a deliberate runner integration and
+follow
 [Deployment runner fleet](runner-fleet.md),
 [Remote runtime placement](runtime-placement.md),
-[Deployment provider adapters](provider-adapters.md) and
+[Deployment provider adapters](provider-adapters.md),
+[Provider data lifecycle](provider-data-lifecycle.md), and
 [Durable distributed deployment](distributed-deployment.md).
 
 ### Optional off-host release uploads
