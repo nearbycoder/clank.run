@@ -261,8 +261,40 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   SSR opened directly on the requested route without an auth/overview flash, process-slot
   reservations and offline stateful demand rendered correctly, navigation stayed available,
   no horizontal overflow occurred, and no exception, error, or failed request was observed.
-- [ ] Record PR checks, CodeQL, merge, gated docs deployment, exact Railway activation, and public
-  production health.
+- [x] Recorded [PR #112](https://github.com/nearbycoder/clank.run/pull/112): Node 22.16,
+  Node 24, packaged conformance, JavaScript/TypeScript analysis, and CodeQL passed before squash
+  merge `e01f8b06573a6910bbf0ce0375c11bad1f0ab3a0`; post-merge CI run `30580045185`,
+  CodeQL run `30580045124`, and gated docs deployment `30580224427` passed.
+- [x] Railway deployment `1b13564b-cf43-416e-a5b2-7f36b656e140` activated that exact merge,
+  passed database-backed readiness, left only one active generation after rollout, and served
+  healthy control-plane and documentation endpoints.
+- [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
+
+## 2026-07-30 GitHub pull-request preview phase
+
+- [x] Added an owner/admin-managed binding to GitHub's immutable repository ID, exact deploy and
+  cleanup workflow paths, and an explicit trusted cleanup branch ref.
+- [x] Added fixed-endpoint GitHub Actions OIDC verification with strict RS256, issuer, HTTPS
+  audience, repository, workflow, workflow SHA, event, ref, time, signature, bounded-JWKS, and
+  one-time JWT ID checks.
+- [x] Exchanged valid identities for memory-only, 15-minute tokens restricted to one derived
+  `pull-N` preview; those tokens cannot read or deploy production, reach siblings, manage secrets,
+  or mint credentials, and binding removal or preview deletion revokes them.
+- [x] Added `clank preview github configure|status|disconnect`, public-repository ID/default-branch
+  resolution, explicit private-repository configuration, symlink-safe atomic workflow output, and
+  pinned least-privilege deploy/cleanup workflows without static Clank secrets.
+- [x] Kept untrusted pull-request code out of the trusted cleanup job and refused federation unless
+  the public origin is HTTPS and the runtime boundary is isolated or provider placed.
+- [x] Browser-certified the server-rendered project preview route on desktop and a 375px viewport:
+  the direct reload showed no auth/overview view, the GitHub state and command were readable,
+  inactive pages remained hidden, navigation stayed usable, and no horizontal overflow or Clank
+  console warning/error occurred.
+- [x] Passed the complete local gate: 355 tests at 86.45% line / 75.24% branch / 87.53% function
+  coverage, 60 Markdown files, 262 local links, 55 indexed guides, 37 synchronized declarations,
+  34 package exports, a 220-file publish allowlist, all nine packed-release conformance scenarios,
+  and package/current-tree/reachable-history credential scans.
+- [ ] Record PR checks, CodeQL, merge, release identity, gated docs deployment, exact Railway
+  activation, and public production health.
 - [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 provider diagnostics phase

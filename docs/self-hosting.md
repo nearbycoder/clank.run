@@ -146,6 +146,13 @@ and use dedicated nodes or microVMs for hostile workloads.
 Unknown profile or runner values are fatal. This is intentional: a misspelled isolation setting
 must never fall back to process execution.
 
+GitHub pull-request federation follows the same boundary. Binding
+`clank preview github configure` requires the externally visible `CLANK_PUBLIC_URL` to be an HTTPS
+origin and either the whole control plane to use `CLANK_HOSTING_PROFILE=isolated` or the bound
+project to use provider placement. The control plane fetches keys only from GitHub's fixed Actions
+OIDC JWKS endpoint; there is no issuer, key URL, algorithm, or static workflow-secret setting to
+weaken. Trusted process projects cannot opt out of this check.
+
 ## Optional remote-node coordination
 
 Keep the runner API disabled on a single-host installation. To let deployment nodes coordinate

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
+import { createSign, generateKeyPairSync } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   createDeploymentCoordinatorClient,
@@ -4869,6 +4870,273 @@ test("preview environments are isolated, quota-bound, refreshable, removable, an
   }
 });
 
+test("GitHub OIDC preview automation is isolated, one-time, pull-scoped, and secretless", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-github-preview-"));
+  const dataDirectory = join(root, "platform");
+  const fixture = githubOidcTestFixture();
+  const secureRequest = (
+    path,
+    { method = "GET", body, token, cookie, csrf } = {},
+  ) => new Request(`https://clank.test${path}`, {
+    method,
+    headers: {
+      ...(body === undefined ? {} : {
+        "content-type": "application/json",
+        origin: "https://clank.test",
+      }),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(cookie ? { cookie } : {}),
+      ...(csrf ? { "x-clank-csrf": csrf } : {}),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const platform = await openPlatform({
+    dataDirectory,
+    publicUrl: "https://clank.test",
+    appUrlTemplate: "https://{slug}.apps.clank.test",
+    appPortStart: 4840,
+    appPortEnd: 4845,
+    signup: true,
+    runner: {
+      kind: "docker",
+      executable: process.execPath,
+      image: "fake-image",
+    },
+    backups: { intervalMs: false },
+    previews: {
+      cleanupIntervalMs: false,
+      githubOidcFetch: async (url, init) => {
+        assert.equal(
+          url,
+          "https://token.actions.githubusercontent.com/.well-known/jwks",
+        );
+        assert.equal(init.credentials, "omit");
+        return githubJsonResponse({ keys: [fixture.jwk] }, url);
+      },
+    },
+    limits: {
+      projectsPerAccount: 5,
+      projectsPerOrganization: 5,
+    },
+  });
+  try {
+    const registered = await platform.handle(secureRequest("/__clank/auth/register", {
+      method: "POST",
+      body: {
+        email: "github-previews@example.com",
+        password: "correct horse battery staple",
+        profile: { name: "GitHub previews" },
+      },
+    }));
+    assert.equal(registered.status, 201);
+    const session = await registered.json();
+    const cookie = registered.headers.get("set-cookie").split(";", 1)[0];
+    const started = await payload(platform, secureRequest("/api/device/start", {
+      method: "POST",
+      body: { clientName: "GitHub preview test" },
+    }), 201);
+    await payload(platform, secureRequest("/api/device/approve", {
+      method: "POST",
+      body: { code: started.userCode },
+      cookie,
+      csrf: session.csrfToken,
+    }));
+    const owner = await payload(platform, secureRequest("/api/device/token", {
+      method: "POST",
+      body: { deviceCode: started.deviceCode },
+    }));
+    const parent = await payload(platform, secureRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "OIDC app", slug: "oidc-app" },
+    }), 201);
+    const projectId = parent.project.id;
+    const connected = await payload(platform, secureRequest(
+      `/api/projects/${projectId}/github-previews`,
+      {
+        method: "PUT",
+        token: owner.accessToken,
+        body: {
+          repository: "Nearby/App",
+          repositoryId: "92837465",
+          deployWorkflow: ".github/workflows/clank-preview.yml",
+          cleanupWorkflow: ".github/workflows/clank-preview-cleanup.yml",
+          cleanupRef: "refs/heads/main",
+        },
+      },
+    ));
+    assert.deepEqual(connected.binding, {
+      repository: "nearby/app",
+      repositoryId: "92837465",
+      deployWorkflow: ".github/workflows/clank-preview.yml",
+      cleanupWorkflow: ".github/workflows/clank-preview-cleanup.yml",
+      cleanupRef: "refs/heads/main",
+      createdAt: connected.binding.createdAt,
+      updatedAt: connected.binding.updatedAt,
+    });
+
+    const deployIdentity = fixture.token({
+      jti: "github-deploy-jti-0000001",
+      ref: "refs/pull/482/merge",
+      workflow_ref: "nearby/app/.github/workflows/clank-preview.yml@refs/pull/482/merge",
+    });
+    const exchanged = await payload(platform, secureRequest(
+      "/api/preview-identities/github",
+      {
+        method: "POST",
+        body: {
+          token: deployIdentity,
+          projectId,
+          operation: "deploy",
+          previewName: "pull-482",
+        },
+      },
+    ), 201);
+    assert.equal(exchanged.protocol, "clank-github-preview-identity/1");
+    assert.equal(exchanged.previewName, "pull-482");
+    assert.equal(exchanged.operation, "deploy");
+    assert.match(exchanged.accessToken, /^clnk_/u);
+
+    const replay = await platform.handle(secureRequest(
+      "/api/preview-identities/github",
+      {
+        method: "POST",
+        body: {
+          token: deployIdentity,
+          projectId,
+          operation: "deploy",
+          previewName: "pull-482",
+        },
+      },
+    ));
+    assert.equal(replay.status, 401);
+    assert.equal((await replay.json()).error.code, "INVALID_GITHUB_IDENTITY");
+
+    const wrongName = await platform.handle(secureRequest(
+      `/api/projects/${projectId}/previews`,
+      {
+        method: "POST",
+        token: exchanged.accessToken,
+        body: { name: "pull-481", ttlHours: 24 },
+      },
+    ));
+    assert.equal(wrongName.status, 403);
+    assert.equal((await wrongName.json()).error.code, "TOKEN_SCOPE_DENIED");
+    const created = await payload(platform, secureRequest(
+      `/api/projects/${projectId}/previews`,
+      {
+        method: "POST",
+        token: exchanged.accessToken,
+        body: { name: "pull-482", ttlHours: 24 },
+      },
+    ), 201);
+    const previewId = created.preview.id;
+    await payload(platform, secureRequest(`/api/projects/${previewId}`, {
+      token: exchanged.accessToken,
+    }));
+
+    const productionRead = await platform.handle(secureRequest(
+      `/api/projects/${projectId}`,
+      { token: exchanged.accessToken },
+    ));
+    assert.equal(productionRead.status, 403);
+    assert.equal((await productionRead.json()).error.code, "TOKEN_SCOPE_DENIED");
+
+    const productionDeploy = await platform.handle(secureRequest(
+      `/api/projects/${projectId}/releases`,
+      {
+        method: "POST",
+        token: exchanged.accessToken,
+        body: {},
+      },
+    ));
+    assert.equal(productionDeploy.status, 403);
+    assert.equal((await productionDeploy.json()).error.code, "TOKEN_SCOPE_DENIED");
+
+    const other = await payload(platform, secureRequest(
+      `/api/projects/${projectId}/previews`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { name: "pull-483", ttlHours: 24 },
+      },
+    ), 201);
+    const scopedList = await payload(platform, secureRequest(
+      `/api/projects/${projectId}/previews`,
+      { token: exchanged.accessToken },
+    ));
+    assert.deepEqual(
+      scopedList.previews.map((preview) => preview.previewName),
+      ["pull-482"],
+    );
+    const otherRead = await platform.handle(secureRequest(
+      `/api/projects/${other.preview.id}`,
+      { token: exchanged.accessToken },
+    ));
+    assert.equal(otherRead.status, 404);
+
+    const cleanupIdentity = fixture.token({
+      jti: "github-cleanup-jti-000001",
+      event_name: "pull_request_target",
+      ref: "refs/heads/main",
+      workflow_ref:
+        "nearby/app/.github/workflows/clank-preview-cleanup.yml@refs/heads/main",
+    });
+    const cleanup = await payload(platform, secureRequest(
+      "/api/preview-identities/github",
+      {
+        method: "POST",
+        body: {
+          token: cleanupIdentity,
+          projectId,
+          operation: "remove",
+          previewName: "pull-482",
+        },
+      },
+    ), 201);
+    await payload(platform, secureRequest(
+      `/api/projects/${projectId}/previews/${previewId}`,
+      {
+        method: "DELETE",
+        token: cleanup.accessToken,
+        body: {
+          confirmation: "delete-preview pull-482",
+          acknowledgeDataLoss: true,
+        },
+      },
+    ));
+    const deployTokenRevoked = await platform.handle(secureRequest(
+      `/api/projects/${projectId}/previews`,
+      { token: exchanged.accessToken },
+    ));
+    assert.equal(deployTokenRevoked.status, 401);
+    const otherStillPresent = await payload(platform, secureRequest(
+      `/api/projects/${projectId}/previews`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(
+      otherStillPresent.previews.map((preview) => preview.previewName),
+      ["pull-483"],
+    );
+
+    const database = await readFile(join(dataDirectory, "control.sqlite"));
+    assert.equal(database.includes(Buffer.from(deployIdentity)), false);
+    assert.equal(database.includes(Buffer.from("github-deploy-jti-0000001")), false);
+    assert.equal(database.includes(Buffer.from(exchanged.accessToken)), false);
+    const audit = await payload(platform, secureRequest(
+      `/api/projects/${projectId}/audit`,
+      { token: owner.accessToken },
+    ));
+    assert.ok(audit.events.some((event) => event.action === "github-preview.configure"));
+    assert.ok(audit.events.some((event) => event.action === "github-preview.exchange"));
+    assert.equal(JSON.stringify(audit).includes(deployIdentity), false);
+    assert.equal(JSON.stringify(audit).includes(exchanged.accessToken), false);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("site deletion is admin-only, path-safe, auditable, and releases every managed resource", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-site-delete-"));
   const dataDirectory = join(root, "platform");
@@ -6707,6 +6975,68 @@ test("platform reports unexpected failures privately without exposing exception 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+function githubOidcTestFixture() {
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const publicJwk = publicKey.export({ format: "jwk" });
+  const jwk = {
+    kty: "RSA",
+    use: "sig",
+    alg: "RS256",
+    kid: "github-platform-key-01",
+    n: publicJwk.n,
+    e: publicJwk.e,
+  };
+  return {
+    jwk,
+    token(overrides = {}) {
+      const now = Math.floor(Date.now() / 1_000);
+      const header = Buffer.from(JSON.stringify({
+        alg: "RS256",
+        typ: "JWT",
+        kid: jwk.kid,
+      })).toString("base64url");
+      const payload = Buffer.from(JSON.stringify({
+        iss: "https://token.actions.githubusercontent.com",
+        sub: "repo:nearby/app:pull_request",
+        aud: "https://clank.test",
+        iat: now,
+        nbf: now - 5,
+        exp: now + 5 * 60,
+        jti: "github-platform-jti-0001",
+        repository: "nearby/app",
+        repository_id: "92837465",
+        workflow_ref:
+          "nearby/app/.github/workflows/clank-preview.yml@refs/pull/482/merge",
+        workflow_sha: "b".repeat(40),
+        event_name: "pull_request",
+        ref: "refs/pull/482/merge",
+        run_id: "88221100",
+        run_attempt: 1,
+        ...overrides,
+      })).toString("base64url");
+      const signingInput = `${header}.${payload}`;
+      const signature = createSign("RSA-SHA256")
+        .update(signingInput)
+        .end()
+        .sign(privateKey, "base64url");
+      return `${signingInput}.${signature}`;
+    },
+  };
+}
+
+function githubJsonResponse(value, url) {
+  const body = JSON.stringify(value);
+  const response = new Response(body, {
+    status: 200,
+    headers: {
+      "content-length": String(Buffer.byteLength(body)),
+      "content-type": "application/json",
+    },
+  });
+  Object.defineProperty(response, "url", { value: url });
+  return response;
+}
 
 async function waitFor(check, timeout = 5_000) {
   const deadline = Date.now() + timeout;

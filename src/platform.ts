@@ -101,6 +101,13 @@ import {
 } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
 import type { ObjectStore } from "./object-storage.ts";
+import {
+  createGithubActionsOidcVerifier,
+  GithubActionsOidcError,
+  branchRef as githubBranchRefName,
+  repositoryName as githubRepositoryName,
+  workflowPathName as githubWorkflowPathName,
+} from "./github-oidc.ts";
 
 export interface ProcessRunnerOptions {
   kind?: "process";
@@ -177,6 +184,11 @@ export interface PlatformPreviewOptions {
   maxTtlMs?: number;
   /** Expired-preview cleanup cadence. Defaults to 5 minutes; false disables background cleanup. */
   cleanupIntervalMs?: number | false;
+  /**
+   * Optional fixed-endpoint transport for GitHub Actions OIDC signing keys.
+   * The issuer, JWKS URL, algorithms, claims, and response bounds remain enforced.
+   */
+  githubOidcFetch?: typeof fetch;
 }
 
 export type PlatformInvitationDeliveryOptions = InvitationDeliveryOptions;
@@ -481,6 +493,7 @@ interface TokenPrincipal {
   organizationId: string | null;
   projectId: string | null;
   permissions: readonly ProjectPermission[];
+  previewName: string | null;
   impersonation: PlatformImpersonation | null;
 }
 
@@ -503,7 +516,8 @@ type ProjectPermission =
   | "jobs"
   | "secrets"
   | "tokens"
-  | "audit";
+  | "audit"
+  | "previews";
 
 interface ProjectAccess {
   project: ProjectRow;
@@ -702,6 +716,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         1_000,
         24 * 60 * 60_000,
       );
+  const githubOidcVerifier = createGithubActionsOidcVerifier({
+    ...(options.previews?.githubOidcFetch
+      ? { fetch: options.previews.githubOidcFetch }
+      : {}),
+  });
   const limits = Object.freeze({
     organizationsPerAccount: integerInRange(
       options.limits?.organizationsPerAccount ?? 5,
@@ -4013,6 +4032,245 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         });
         return api({ ok: true, accessToken: rawToken, tokenType: "Bearer", expiresAt });
       }
+      if (url.pathname === "/api/preview-identities/github") {
+        if (request.method !== "POST" || url.search) {
+          throw new PlatformError(
+            404,
+            "NOT_FOUND",
+            "Preview identity endpoint not found.",
+          );
+        }
+        const input = plainObject(await readJsonRequest(request, 24 * 1024));
+        exact(input, ["token", "projectId", "operation", "previewName"]);
+        const projectId = boundedString(input.projectId, "projectId", 8, 128);
+        if (!/^[A-Za-z0-9_-]+$/u.test(projectId)) {
+          throw new PlatformError(422, "INVALID_INPUT", "projectId is invalid.");
+        }
+        if (input.operation !== "deploy" && input.operation !== "remove") {
+          throw new PlatformError(422, "INVALID_INPUT", "operation must be deploy or remove.");
+        }
+        const operation = input.operation;
+        const requestedPreview = input.previewName === undefined
+          ? undefined
+          : githubPullPreviewName(input.previewName);
+        if (operation === "remove" && requestedPreview === undefined) {
+          throw new PlatformError(
+            422,
+            "INVALID_INPUT",
+            "previewName is required for cleanup.",
+          );
+        }
+        const globalRetryAfter = await storage.rateLimits.consume(
+          "github-preview-oidc\nall",
+          300,
+          60_000,
+        );
+        if (globalRetryAfter !== undefined) {
+          throw new PlatformError(
+            429,
+            "RATE_LIMITED",
+            "Too many GitHub preview identity attempts.",
+            globalRetryAfter,
+          );
+        }
+        const retryAfter = await storage.rateLimits.consume(
+          `github-preview-oidc\n${projectId}`,
+          30,
+          60_000,
+        );
+        if (retryAfter !== undefined) {
+          throw new PlatformError(
+            429,
+            "RATE_LIMITED",
+            "Too many GitHub preview identity attempts.",
+            retryAfter,
+          );
+        }
+        const binding = storage.internal.prepare(`SELECT b.*, p.organization_id,
+            p.parent_project_id, p.placement, u.disabled, m.role
+          FROM clank_platform_github_preview_bindings b
+          JOIN clank_platform_projects p ON p.id = b.project_id
+          JOIN clank_auth_users u ON u.id = b.created_by
+          LEFT JOIN clank_platform_memberships m
+            ON m.organization_id = p.organization_id AND m.user_id = b.created_by
+          WHERE b.project_id = ?`).get(projectId);
+        if (
+          !binding
+          || binding.parent_project_id !== null
+          || binding.organization_id === null
+          || Number(binding.disabled) !== 0
+          || binding.role === null
+          || !roleAllows(
+            validateOrganizationRole(String(binding.role), true),
+            "previews",
+          )
+        ) {
+          throw new PlatformError(
+            401,
+            "INVALID_GITHUB_IDENTITY",
+            "The GitHub Actions identity is invalid or expired.",
+          );
+        }
+        const boundProject = projectById(storage.internal, projectId)!;
+        try {
+          requireFederatedPreviewIsolation(hostingProfile, boundProject, securePublicUrl);
+        } catch {
+          throw new PlatformError(
+            401,
+            "INVALID_GITHUB_IDENTITY",
+            "The GitHub Actions identity is invalid or expired.",
+          );
+        }
+        if (
+          typeof input.token !== "string"
+          || input.token.length < 100
+          || input.token.length > 16 * 1024
+        ) {
+          throw new PlatformError(
+            401,
+            "INVALID_GITHUB_IDENTITY",
+            "The GitHub Actions identity is invalid or expired.",
+          );
+        }
+        const rawIdentity = input.token;
+        let identity;
+        try {
+          identity = await githubOidcVerifier.verify(rawIdentity, {
+            audience: publicUrl,
+            repository: String(binding.repository),
+            repositoryId: String(binding.repository_id),
+            workflowPath: operation === "deploy"
+              ? String(binding.deploy_workflow)
+              : String(binding.cleanup_workflow),
+            eventName: operation === "deploy"
+              ? "pull_request"
+              : "pull_request_target",
+            operation,
+            ...(operation === "remove"
+              ? { ref: String(binding.cleanup_ref) }
+              : {}),
+            ...(requestedPreview === undefined
+              ? {}
+              : { previewName: requestedPreview }),
+          });
+        } catch (error) {
+          if (error instanceof GithubActionsOidcError) {
+            throw new PlatformError(
+              401,
+              "INVALID_GITHUB_IDENTITY",
+              "The GitHub Actions identity is invalid or expired.",
+            );
+          }
+          throw error;
+        }
+        const rawToken = `${TOKEN_PREFIX}${await randomToken(32)}`;
+        const tokenId = await randomId(18);
+        const now = Date.now();
+        const expiresAt = now + 15 * 60_000;
+        try {
+          storage.internal.transaction((changes) => {
+            const currentBinding = storage.internal.prepare(`SELECT b.*, p.organization_id,
+                p.parent_project_id, p.placement, u.disabled, m.role
+              FROM clank_platform_github_preview_bindings b
+              JOIN clank_platform_projects p ON p.id = b.project_id
+              JOIN clank_auth_users u ON u.id = b.created_by
+              LEFT JOIN clank_platform_memberships m
+                ON m.organization_id = p.organization_id AND m.user_id = b.created_by
+              WHERE b.project_id = ?`).get(projectId);
+            if (
+              !currentBinding
+              || currentBinding.parent_project_id !== null
+              || currentBinding.organization_id !== binding.organization_id
+              || currentBinding.created_by !== binding.created_by
+              || currentBinding.updated_at !== binding.updated_at
+              || currentBinding.placement !== binding.placement
+              || currentBinding.repository !== binding.repository
+              || currentBinding.repository_id !== binding.repository_id
+              || currentBinding.deploy_workflow !== binding.deploy_workflow
+              || currentBinding.cleanup_workflow !== binding.cleanup_workflow
+              || currentBinding.cleanup_ref !== binding.cleanup_ref
+              || Number(currentBinding.disabled) !== 0
+              || currentBinding.role === null
+              || !roleAllows(
+                validateOrganizationRole(String(currentBinding.role), true),
+                "previews",
+              )
+            ) {
+              throw new PlatformError(
+                401,
+                "INVALID_GITHUB_IDENTITY",
+                "The GitHub Actions identity is invalid or expired.",
+              );
+            }
+            storage.internal.prepare(
+              "DELETE FROM clank_platform_github_oidc_replay WHERE expires_at <= ?",
+            ).run(now);
+            storage.internal.prepare(
+              `DELETE FROM clank_platform_tokens
+                WHERE preview_name IS NOT NULL AND expires_at <= ?`,
+            ).run(now);
+            storage.internal.prepare(`INSERT INTO clank_platform_github_oidc_replay
+              (jti_hash, expires_at) VALUES (?, ?)`)
+              .run(
+                syncHash(`${identity.issuer}\0${identity.jti}`),
+                identity.expiresAt,
+              );
+            storage.internal.prepare(`INSERT INTO clank_platform_tokens
+              (id, token_hash, user_id, name, created_at, last_used_at, expires_at,
+               revoked_at, organization_id, project_id, permissions, preview_name)
+              VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?)`)
+              .run(
+                tokenId,
+                syncHash(rawToken),
+                binding.created_by,
+                `GitHub ${identity.previewName} run ${identity.runId}`.slice(0, 100),
+                now,
+                expiresAt,
+                binding.organization_id,
+                projectId,
+                JSON.stringify(["previews"]),
+                identity.previewName,
+              );
+            changes.record("__platform", String(binding.organization_id));
+          });
+        } catch (error) {
+          if (safeError(error).toLowerCase().includes("unique")) {
+            throw new PlatformError(
+              401,
+              "INVALID_GITHUB_IDENTITY",
+              "The GitHub Actions identity is invalid or expired.",
+            );
+          }
+          throw error;
+        }
+        audit(
+          storage.internal,
+          String(binding.created_by),
+          tokenId,
+          projectId,
+          "github-preview.exchange",
+          {
+            repository: identity.repository,
+            repositoryId: identity.repositoryId,
+            workflowSha: identity.workflowSha,
+            runId: identity.runId,
+            runAttempt: identity.runAttempt,
+            operation,
+            previewName: identity.previewName,
+            expiresAt,
+          },
+        );
+        return api({
+          ok: true,
+          protocol: "clank-github-preview-identity/1",
+          accessToken: rawToken,
+          tokenType: "Bearer",
+          expiresAt,
+          projectId,
+          previewName: identity.previewName,
+          operation,
+        }, 201);
+      }
       if (url.pathname === "/api/device/info" && request.method === "GET") {
         const auth = await requireBrowserAuth(storage.auth, request);
         rejectActiveImpersonation(storage.internal, request, auth);
@@ -4643,6 +4901,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             organizationId: principal.organizationId,
             projectId: principal.projectId,
             permissions: principal.permissions,
+            previewName: principal.previewName,
           },
         });
       }
@@ -4683,11 +4942,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (url.pathname === "/api/tokens" && request.method === "GET") {
         const tokenRows = principal.projectId
           ? storage.internal.prepare(`SELECT id, name, organization_id, project_id, permissions,
+              preview_name,
               created_at, last_used_at, expires_at
             FROM clank_platform_tokens
             WHERE user_id = ? AND id = ? AND revoked_at IS NULL AND expires_at > ?
             ORDER BY created_at DESC`).all(principal.userId, principal.tokenId, Date.now())
           : storage.internal.prepare(`SELECT id, name, organization_id, project_id, permissions,
+              preview_name,
               created_at, last_used_at, expires_at
             FROM clank_platform_tokens
             WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
@@ -4701,6 +4962,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           organizationId: row.organization_id === null ? null : String(row.organization_id),
           projectId: row.project_id === null ? null : String(row.project_id),
           permissions: parseProjectPermissions(row.permissions),
+          previewName: row.preview_name === null ? null : String(row.preview_name),
           current: String(row.id) === principal.tokenId,
         })) });
       }
@@ -5099,8 +5361,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const operation = matched[2] ?? "";
       const requiredPermission: ProjectPermission = !operation && request.method === "DELETE"
         ? "tokens"
-        : operation.startsWith("previews") && request.method !== "GET"
-          ? "deploy"
+        : operation.startsWith("previews")
+          ? "previews"
+        : operation === "github-previews"
+          ? request.method === "GET" ? "previews" : "tokens"
         : operation.startsWith("releases/")
         && request.method === "DELETE"
         ? "rollback"
@@ -5168,6 +5432,143 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           usage: { domains: domainCount, ...releaseUsage },
         });
       }
+      if (operation === "github-previews" && request.method === "GET") {
+        if (project.parentProjectId) {
+          throw new PlatformError(
+            409,
+            "PREVIEW_PARENT_REQUIRED",
+            "Configure GitHub previews on the production project.",
+          );
+        }
+        const binding = storage.internal.prepare(`SELECT repository, repository_id,
+            deploy_workflow, cleanup_workflow, cleanup_ref, created_at, updated_at
+          FROM clank_platform_github_preview_bindings WHERE project_id = ?`).get(project.id);
+        return api({
+          ok: true,
+          binding: binding ? githubPreviewBindingPayload(binding) : null,
+          policy: {
+            authentication: "github_actions_oidc",
+            staticSecretRequired: false,
+            pullRequestScoped: true,
+            isolatedRuntimeRequired: true,
+            eligible: federatedPreviewEligible(hostingProfile, project),
+          },
+        });
+      }
+      if (operation === "github-previews" && request.method === "PUT") {
+        if (project.parentProjectId) {
+          throw new PlatformError(
+            409,
+            "PREVIEW_PARENT_REQUIRED",
+            "Configure GitHub previews on the production project.",
+          );
+        }
+        requireFederatedPreviewIsolation(hostingProfile, project, securePublicUrl);
+        const input = plainObject(await readJsonRequest(request, 16 * 1024));
+        exact(input, [
+          "repository",
+          "repositoryId",
+          "deployWorkflow",
+          "cleanupWorkflow",
+          "cleanupRef",
+        ]);
+        let repository: string;
+        let deployWorkflow: string;
+        let cleanupWorkflow: string;
+        let cleanupRef: string;
+        try {
+          repository = githubRepositoryName(input.repository);
+          deployWorkflow = githubWorkflowPathName(input.deployWorkflow);
+          cleanupWorkflow = githubWorkflowPathName(input.cleanupWorkflow);
+          cleanupRef = githubBranchRefName(input.cleanupRef);
+        } catch {
+          throw new PlatformError(
+            422,
+            "INVALID_GITHUB_BINDING",
+            "GitHub repository, workflow path, or cleanup ref is invalid.",
+          );
+        }
+        const repositoryId = githubRepositoryId(input.repositoryId);
+        const now = Date.now();
+        storage.internal.transaction((changes) => {
+          storage.internal.prepare(`INSERT INTO clank_platform_github_preview_bindings
+            (project_id, repository, repository_id, deploy_workflow, cleanup_workflow,
+             cleanup_ref, created_by, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_id) DO UPDATE SET
+              repository = excluded.repository,
+              repository_id = excluded.repository_id,
+              deploy_workflow = excluded.deploy_workflow,
+              cleanup_workflow = excluded.cleanup_workflow,
+              cleanup_ref = excluded.cleanup_ref,
+              created_by = excluded.created_by,
+              updated_at = excluded.updated_at`)
+            .run(
+              project.id,
+              repository,
+              repositoryId,
+              deployWorkflow,
+              cleanupWorkflow,
+              cleanupRef,
+              principal.userId,
+              now,
+              now,
+            );
+          changes.record("__platform", project.organizationId ?? project.id);
+        });
+        audit(
+          storage.internal,
+          principal.userId,
+          principal.tokenId,
+          project.id,
+          "github-preview.configure",
+          {
+            repository,
+            repositoryId,
+            deployWorkflow,
+            cleanupWorkflow,
+            cleanupRef,
+            isolatedRuntime: true,
+          },
+        );
+        const binding = storage.internal.prepare(`SELECT repository, repository_id,
+            deploy_workflow, cleanup_workflow, cleanup_ref, created_at, updated_at
+          FROM clank_platform_github_preview_bindings WHERE project_id = ?`).get(project.id)!;
+        return api({ ok: true, binding: githubPreviewBindingPayload(binding) });
+      }
+      if (operation === "github-previews" && request.method === "DELETE") {
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["confirmation"]);
+        const binding = storage.internal.prepare(
+          "SELECT repository FROM clank_platform_github_preview_bindings WHERE project_id = ?",
+        ).get(project.id);
+        if (!binding) {
+          throw new PlatformError(404, "GITHUB_PREVIEW_NOT_FOUND", "GitHub previews are not connected.");
+        }
+        const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
+        const expected = `disconnect-github-previews ${String(binding.repository)}`;
+        if (confirmation !== expected) {
+          throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
+        }
+        storage.internal.transaction((changes) => {
+          storage.internal.prepare(
+            "DELETE FROM clank_platform_github_preview_bindings WHERE project_id = ?",
+          ).run(project.id);
+          storage.internal.prepare(`UPDATE clank_platform_tokens SET revoked_at = ?
+            WHERE project_id = ? AND preview_name IS NOT NULL AND revoked_at IS NULL`)
+            .run(Date.now(), project.id);
+          changes.record("__platform", project.organizationId ?? project.id);
+        });
+        audit(
+          storage.internal,
+          principal.userId,
+          principal.tokenId,
+          project.id,
+          "github-preview.disconnect",
+          { repository: String(binding.repository) },
+        );
+        return api({ ok: true, disconnected: true });
+      }
       if (operation === "previews" && request.method === "GET") {
         if (project.parentProjectId) {
           throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Preview environments cannot own nested previews.");
@@ -5175,8 +5576,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const now = Date.now();
         const previews = storage.internal.prepare(`SELECT * FROM clank_platform_projects
           WHERE parent_project_id = ? AND preview_expires_at > ?
-          ORDER BY created_at`).all(project.id, now).map((row) => {
-          const preview = projectRow(row);
+          ORDER BY created_at`).all(project.id, now)
+          .map((row) => projectRow(row))
+          .filter((preview) =>
+            principal.previewName === null || preview.previewName === principal.previewName)
+          .map((preview) => {
           const release = preview.activeReleaseId ? releaseById(storage.internal, preview.activeReleaseId) : null;
           return {
             ...projectPayload(preview),
@@ -5198,16 +5602,23 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             copiesProductionData: false,
             countsTowardProjectQuota: true,
           },
+          github: {
+            binding: (() => {
+              const row = storage.internal.prepare(`SELECT repository, repository_id,
+                  deploy_workflow, cleanup_workflow, cleanup_ref, created_at, updated_at
+                FROM clank_platform_github_preview_bindings WHERE project_id = ?`)
+                .get(project.id);
+              return row ? githubPreviewBindingPayload(row) : null;
+            })(),
+            authentication: "github_actions_oidc",
+            staticSecretRequired: false,
+            pullRequestScoped: true,
+            isolatedRuntimeRequired: true,
+            eligible: federatedPreviewEligible(hostingProfile, project),
+          },
         });
       }
       if (operation === "previews" && request.method === "POST") {
-        if (principal.projectId) {
-          throw new PlatformError(
-            403,
-            "TOKEN_SCOPE_DENIED",
-            "Project-scoped tokens cannot create preview environments.",
-          );
-        }
         if (project.parentProjectId) {
           throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Preview environments cannot own nested previews.");
         }
@@ -5217,6 +5628,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const input = plainObject(await readJsonRequest(request, 16 * 1024));
         exact(input, ["name", "ttlHours"]);
         const previewName = normalizePreviewName(input.name);
+        if (principal.previewName !== null && principal.previewName !== previewName) {
+          throw new PlatformError(
+            403,
+            "TOKEN_SCOPE_DENIED",
+            "This GitHub identity is bound to another pull-request preview.",
+          );
+        }
         const ttlMs = input.ttlHours === undefined
           ? previewDefaultTtlMs
           : integerInRange(
@@ -5346,13 +5764,6 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       const previewDeleteMatch = /^previews\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
       if (previewDeleteMatch && request.method === "DELETE") {
-        if (principal.projectId) {
-          throw new PlatformError(
-            403,
-            "TOKEN_SCOPE_DENIED",
-            "Project-scoped tokens cannot delete preview environments.",
-          );
-        }
         if (project.parentProjectId) {
           throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Use the production project's preview endpoint.");
         }
@@ -5366,17 +5777,30 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             "Explicitly acknowledge permanent preview data loss.",
           );
         }
-        const deleted = await withProjectLock(previewDeleteMatch[1]!, async () => {
-          const preview = projectById(storage.internal, previewDeleteMatch[1]!);
-          if (!preview || preview.parentProjectId !== project.id || !preview.previewName) {
-            throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
-          }
-          const expected = `delete-preview ${preview.previewName}`;
-          if (confirmation !== expected) {
-            throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
-          }
-          return destroyProject(preview, principal, "preview.delete");
-        });
+        const previewId = previewDeleteMatch[1]!;
+        const deleted = await withProjectLock(project.id, () =>
+          withProjectLock(previewId, async () => {
+            const preview = projectById(storage.internal, previewId);
+            if (
+              !preview
+              || preview.parentProjectId !== project.id
+              || !preview.previewName
+              || (
+                principal.previewName !== null
+                && preview.previewName !== principal.previewName
+              )
+            ) {
+              throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
+            }
+            const expected = `delete-preview ${preview.previewName}`;
+            if (confirmation !== expected) {
+              throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
+            }
+            storage.internal.prepare(`UPDATE clank_platform_tokens SET revoked_at = ?
+              WHERE project_id = ? AND preview_name = ? AND revoked_at IS NULL`)
+              .run(Date.now(), project.id, preview.previewName);
+            return destroyProject(preview, principal, "preview.delete");
+          }));
         return api({ ok: true, preview: deleted });
       }
       if (operation === "releases" && request.method === "GET") {
@@ -6250,7 +6674,8 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     revoked_at INTEGER,
     organization_id TEXT,
     project_id TEXT,
-    permissions TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(permissions))
+    permissions TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(permissions)),
+    preview_name TEXT CHECK (preview_name IS NULL OR length(preview_name) BETWEEN 6 AND 32)
   )`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_bootstrap_claim (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -6266,6 +6691,9 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   if (!tokenColumns.some((column) => column.name === "permissions")) {
     internal.exec("ALTER TABLE clank_platform_tokens ADD COLUMN permissions TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!tokenColumns.some((column) => column.name === "preview_name")) {
+    internal.exec("ALTER TABLE clank_platform_tokens ADD COLUMN preview_name TEXT");
   }
   internal.exec("DROP INDEX IF EXISTS proact_platform_tokens_user");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_tokens_user ON clank_platform_tokens (user_id)");
@@ -6514,6 +6942,33 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_projects_preview_expiry
     ON clank_platform_projects (preview_expires_at)
     WHERE parent_project_id IS NOT NULL`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_github_preview_bindings (
+    project_id TEXT PRIMARY KEY REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    repository TEXT NOT NULL,
+    repository_id TEXT NOT NULL,
+    deploy_workflow TEXT NOT NULL,
+    cleanup_workflow TEXT NOT NULL,
+    cleanup_ref TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
+  const githubPreviewBindingColumns = internal.prepare(
+    "PRAGMA table_info(clank_platform_github_preview_bindings)",
+  ).all();
+  if (!githubPreviewBindingColumns.some((column) => column.name === "cleanup_ref")) {
+    internal.exec(`ALTER TABLE clank_platform_github_preview_bindings
+      ADD COLUMN cleanup_ref TEXT NOT NULL DEFAULT 'refs/heads/main'`);
+  }
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_github_preview_repository
+    ON clank_platform_github_preview_bindings (repository_id, project_id)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_github_oidc_replay (
+    jti_hash TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
+  internal.prepare(
+    "DELETE FROM clank_platform_github_oidc_replay WHERE expires_at <= ?",
+  ).run(Date.now());
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_domains (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
@@ -6988,8 +7443,8 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
   const authorization = request.headers.get("authorization") ?? "";
   const matched = /^Bearer ((?:clnk|prct)_[A-Za-z0-9_-]{40,200})$/.exec(authorization);
   if (!matched) throw new PlatformError(401, "INVALID_TOKEN", "A valid CLI access token is required.");
-  const row = internal.prepare(`SELECT t.id, t.user_id, t.organization_id, t.project_id, t.permissions,
-      t.expires_at, t.revoked_at, u.email, u.disabled
+  const row = internal.prepare(`SELECT t.id, t.user_id, t.organization_id, t.project_id,
+      t.permissions, t.preview_name, t.expires_at, t.revoked_at, u.email, u.disabled
     FROM clank_platform_tokens t
     JOIN clank_auth_users u ON u.id = t.user_id
     WHERE t.token_hash = ?`).get(syncHash(matched[1]!));
@@ -7004,6 +7459,7 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
     organizationId: row.organization_id === null ? null : String(row.organization_id),
     projectId: row.project_id === null ? null : String(row.project_id),
     permissions: parseProjectPermissions(row.permissions),
+    previewName: row.preview_name === null ? null : String(row.preview_name),
     impersonation: null,
   };
 }
@@ -7029,6 +7485,7 @@ async function requirePlatformPrincipal(storage: PlatformDatabase, request: Requ
     organizationId: null,
     projectId: null,
     permissions: [],
+    previewName: null,
     impersonation,
   };
 }
@@ -7119,9 +7576,6 @@ function accessibleProject(
   principal: TokenPrincipal,
   permission: ProjectPermission,
 ): ProjectAccess {
-  if (principal.projectId && principal.projectId !== id) {
-    throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
-  }
   const row = internal.prepare(`SELECT p.*, COALESCE(m.role,
       CASE WHEN p.owner_id = ? THEN 'owner' ELSE NULL END) AS membership_role
     FROM clank_platform_projects p
@@ -7133,10 +7587,31 @@ function accessibleProject(
   }
   const project = projectRow(row);
   const role = validateOrganizationRole(String(row.membership_role), true);
+  const scopedPreview = Boolean(
+    principal.projectId
+    && principal.projectId !== id
+    && project.parentProjectId === principal.projectId
+    && principal.permissions.includes("previews")
+    && (
+      principal.previewName === null
+      || project.previewName === principal.previewName
+    ),
+  );
+  if (principal.projectId && principal.projectId !== id && !scopedPreview) {
+    throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
+  }
   if (principal.organizationId && project.organizationId !== principal.organizationId) {
     throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
   }
-  if (principal.projectId && !principal.permissions.includes(permission)) {
+  if (
+    principal.projectId
+    && !principal.permissions.includes(permission)
+    && !(
+      scopedPreview
+      && principal.permissions.includes("previews")
+      && (permission === "read" || permission === "deploy")
+    )
+  ) {
     throw new PlatformError(403, "TOKEN_SCOPE_DENIED", `This token cannot perform ${permission} operations.`);
   }
   if (!roleAllows(role, permission)) {
@@ -11115,6 +11590,68 @@ function normalizePreviewName(value: unknown): string {
   return name;
 }
 
+function githubPullPreviewName(value: unknown): string {
+  if (typeof value !== "string" || !/^pull-[1-9][0-9]{0,9}$/u.test(value)) {
+    throw new PlatformError(
+      422,
+      "INVALID_PREVIEW_NAME",
+      "GitHub preview names must use pull-<number>.",
+    );
+  }
+  return value;
+}
+
+function githubRepositoryId(value: unknown): string {
+  if (typeof value !== "string" || !/^[1-9][0-9]{0,19}$/u.test(value)) {
+    throw new PlatformError(
+      422,
+      "INVALID_GITHUB_REPOSITORY",
+      "repositoryId must be GitHub's immutable numeric repository ID.",
+    );
+  }
+  return value;
+}
+
+function githubPreviewBindingPayload(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    repository: String(row.repository),
+    repositoryId: String(row.repository_id),
+    deployWorkflow: String(row.deploy_workflow),
+    cleanupWorkflow: String(row.cleanup_workflow),
+    cleanupRef: String(row.cleanup_ref),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+function federatedPreviewEligible(
+  hostingProfile: PlatformHostingProfile,
+  project: ProjectRow,
+): boolean {
+  return hostingProfile === "isolated" || project.placement === "provider";
+}
+
+function requireFederatedPreviewIsolation(
+  hostingProfile: PlatformHostingProfile,
+  project: ProjectRow,
+  securePublicUrl: boolean,
+): void {
+  if (!securePublicUrl) {
+    throw new PlatformError(
+      409,
+      "GITHUB_OIDC_HTTPS_REQUIRED",
+      "GitHub preview federation requires an HTTPS control-plane URL.",
+    );
+  }
+  if (!federatedPreviewEligible(hostingProfile, project)) {
+    throw new PlatformError(
+      409,
+      "PREVIEW_ISOLATION_REQUIRED",
+      "GitHub pull-request code requires an isolated Docker or provider runtime.",
+    );
+  }
+}
+
 function previewProjectSlug(parentSlug: string, previewName: string, projectId: string): string {
   const suffix = `-${previewName}-${projectId.slice(0, 6).toLowerCase()}`;
   const available = 48 - suffix.length;
@@ -11154,6 +11691,7 @@ const PROJECT_PERMISSIONS: readonly ProjectPermission[] = [
   "secrets",
   "tokens",
   "audit",
+  "previews",
 ];
 
 function parseProjectPermissions(value: unknown): ProjectPermission[] {
@@ -11193,7 +11731,7 @@ function validateOrganizationRole(value: string, allowOwner: boolean): Organizat
 function roleAllows(role: OrganizationRole, permission: ProjectPermission): boolean {
   if (role === "owner" || role === "admin") return true;
   if (role === "developer") {
-    return ["read", "deploy", "rollback", "jobs", "audit"].includes(permission);
+    return ["read", "deploy", "rollback", "jobs", "audit", "previews"].includes(permission);
   }
   return permission === "read";
 }

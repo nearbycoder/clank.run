@@ -77,6 +77,17 @@ The first deploy creates and links the hosted project automatically. Every later
 checksummed artifact, backs up data, applies ordered migrations, health-checks the candidate, and
 keeps the prior release available if activation fails.
 
+For provider-isolated projects, one command adds secretless GitHub pull-request previews:
+
+```sh
+clank preview github configure owner/repository
+```
+
+It binds GitHub's immutable repository identity and writes pinned deploy/cleanup workflows. Each
+job exchanges GitHub Actions OIDC for a one-time, 15-minute token that can touch exactly one
+`pull-N` preview—never production or a sibling preview. No Clank token is stored in GitHub.
+[Read the pull-request preview contract →](docs/preview-environments.md#github-pull-request-previews)
+
 > Prefer a smaller starting point? Use `clank create my-app --template=minimal`.
 
 ## One application, one contract

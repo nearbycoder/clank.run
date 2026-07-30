@@ -145,8 +145,8 @@ const COMMANDS = Object.freeze({
     summary: "Build, package, migrate, and atomically deploy in one command.",
   },
   preview: {
-    usage: "clank preview <deploy|list|remove> [name] [directory] [--ttl <hours>] [--json]",
-    summary: "Deploy isolated, expiring environments without copying production data or secrets.",
+    usage: "clank preview <deploy|list|remove|github> [name] [directory] [--ttl <hours>] [--json]",
+    summary: "Deploy isolated previews manually or from secretless GitHub pull-request workflows.",
   },
   status: {
     usage: "clank status",
@@ -204,7 +204,16 @@ const VALUE_OPTIONS = Object.freeze({
   usage: ["org", "month"],
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "placement", "output"],
-  preview: ["ttl", "confirm"],
+  preview: [
+    "ttl",
+    "confirm",
+    "project",
+    "server",
+    "repository-id",
+    "deploy-workflow",
+    "cleanup-workflow",
+    "cleanup-ref",
+  ],
   jobs: ["concurrency", "queues", "state", "queue", "limit"],
   releases: ["confirm"],
   logs: ["limit"],
@@ -223,7 +232,13 @@ const BOOLEAN_OPTIONS = Object.freeze({
   audit: ["json"],
   usage: ["json"],
   deploy: ["dry-run", "json"],
-  preview: ["json", "acknowledge-data-loss"],
+  preview: [
+    "json",
+    "acknowledge-data-loss",
+    "github",
+    "no-workflows",
+    "force",
+  ],
   releases: ["allow-rollback-loss"],
   rollback: ["restore-data"],
   doctor: ["json"],
@@ -412,6 +427,9 @@ Start:
   clank dev [directory]                Build, run, and live-reload an app
   clank doctor [directory]             Check build and deployment readiness
   clank deploy [directory]             Create, link, and deploy a project
+  clank preview deploy <name>          Deploy an isolated expiring environment
+  clank preview github configure <owner/repository>
+                                        Add secretless GitHub pull-request previews
 
 Build and agents:
   clank dev [directory]                Build, supervise, and live-reload locally
@@ -1677,8 +1695,12 @@ async function deploy(args) {
 
 async function previewCommand(args) {
   const subcommand = args.shift();
+  if (subcommand === "github") return githubPreviewCommand(args);
   const values = positionals(args);
   if (subcommand === "list") {
+    if (flag(args, "github")) {
+      throw new CliError("GitHub federation is only valid for preview deploy and remove.");
+    }
     const root = resolve(values[0] ?? ".");
     const { profile, link } = await linkedContext(root);
     const payload = await platformRequest(
@@ -1702,9 +1724,14 @@ async function previewCommand(args) {
     return;
   }
   if (subcommand === "deploy") {
-    const name = values[0];
-    const root = resolve(values[1] ?? ".");
-    if (!name) throw new CliError("Usage: clank preview deploy <name> [directory] [--ttl <hours>] [--json]");
+    const github = flag(args, "github");
+    const requestedName = github ? undefined : values[0];
+    const root = resolve(github ? values[0] ?? "." : values[1] ?? ".");
+    if (!github && !requestedName) {
+      throw new CliError(
+        "Usage: clank preview deploy <name> [directory] [--ttl <hours>] [--json]",
+      );
+    }
     const json = flag(args, "json");
     const startedAt = performance.now();
     const config = await readDeploymentConfig(root);
@@ -1721,7 +1748,11 @@ async function previewCommand(args) {
     const packageMs = performance.now() - packageStartedAt;
     if (!json) console.log(`Packaged ${artifact.byteLength} bytes · ${digest.slice(0, 12)}`);
 
-    const { profile, link } = await linkedContext(root);
+    const context = github
+      ? await githubPreviewContext(args, "deploy")
+      : await linkedContext(root);
+    const { profile, link } = context;
+    const name = github ? context.previewName : requestedName;
     const ttl = option(args, "ttl");
     const created = await platformRequest(
       profile.server,
@@ -1783,6 +1814,7 @@ async function previewCommand(args) {
         url: payload.release.url ?? payload.release.directUrl,
       },
       artifact: { digest, bytes: artifact.byteLength },
+      identity: github ? "github_actions_oidc" : "cli_profile",
       timing: {
         buildMs: roundedMilliseconds(buildMs),
         packageMs: roundedMilliseconds(packageMs),
@@ -1802,14 +1834,24 @@ async function previewCommand(args) {
   }
   if (subcommand === "remove") {
     const name = values[0];
+    const github = flag(args, "github");
     const root = resolve(values[1] ?? ".");
-    const confirmation = option(args, "confirm");
-    if (!name || !confirmation || !flag(args, "acknowledge-data-loss")) {
+    const confirmation = github
+      ? name && `delete-preview ${name}`
+      : option(args, "confirm");
+    if (
+      !name
+      || !confirmation
+      || (!github && !flag(args, "acknowledge-data-loss"))
+    ) {
       throw new CliError(
         'Usage: clank preview remove <name> [directory] --confirm="delete-preview <name>" --acknowledge-data-loss',
       );
     }
-    const { profile, link } = await linkedContext(root);
+    const context = github
+      ? await githubPreviewContext(args, "remove", name)
+      : await linkedContext(root);
+    const { profile, link } = context;
     const listed = await platformRequest(
       profile.server,
       `/api/projects/${encodeURIComponent(link.projectId)}/previews`,
@@ -1830,7 +1872,624 @@ async function previewCommand(args) {
     else console.log(`Deleted preview ${name} (${preview.id}) and its isolated data.`);
     return;
   }
-  throw new CliError("Usage: clank preview <deploy|list|remove>");
+  throw new CliError("Usage: clank preview <deploy|list|remove|github>");
+}
+
+async function githubPreviewCommand(args) {
+  const action = args.shift();
+  const values = positionals(args);
+  if (action === "status") {
+    if (values.length > 1) {
+      throw new CliError("Usage: clank preview github status [directory] [--json]");
+    }
+    const root = resolve(values[0] ?? ".");
+    const { profile, link } = await linkedContext(root);
+    const result = await platformRequest(
+      profile.server,
+      `/api/projects/${encodeURIComponent(link.projectId)}/github-previews`,
+      { token: profile.token },
+    );
+    if (flag(args, "json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (!result.binding) {
+      console.log("GitHub pull-request previews are not connected.");
+      console.log(
+        `Runtime eligible: ${result.policy.eligible ? "yes" : "no"} · isolated runtime required`,
+      );
+      return;
+    }
+    console.log(`Repository: ${result.binding.repository} (${result.binding.repositoryId})`);
+    console.log(`Deploy workflow: ${result.binding.deployWorkflow}`);
+    console.log(`Cleanup workflow: ${result.binding.cleanupWorkflow}`);
+    console.log(`Trusted base ref: ${result.binding.cleanupRef}`);
+    console.log("Authentication: GitHub Actions OIDC · no static Clank token");
+    return;
+  }
+  if (action === "configure") {
+    if (values.length < 1 || values.length > 2) {
+      throw new CliError(
+        "Usage: clank preview github configure <owner/repository> [directory] [--repository-id <id> --cleanup-ref refs/heads/<branch>] [--no-workflows]",
+      );
+    }
+    const repository = githubRepository(values[0]);
+    const root = resolve(values[1] ?? ".");
+    const deployWorkflow = githubWorkflowPath(
+      option(args, "deploy-workflow") ?? ".github/workflows/clank-preview.yml",
+    );
+    const cleanupWorkflow = githubWorkflowPath(
+      option(args, "cleanup-workflow")
+        ?? ".github/workflows/clank-preview-cleanup.yml",
+    );
+    if (deployWorkflow === cleanupWorkflow) {
+      throw new CliError(
+        "Deploy and cleanup must use separate GitHub workflow files.",
+        "INVALID_GITHUB_WORKFLOW",
+      );
+    }
+    const repositoryIdentity = await resolveGithubRepository(
+      repository,
+      option(args, "repository-id"),
+    );
+    const cleanupRef = githubBranchRef(
+      option(args, "cleanup-ref") ?? repositoryIdentity.defaultRef,
+    );
+    const { profile, link } = await linkedContext(root);
+    const generated = flag(args, "no-workflows")
+      ? []
+      : githubPreviewWorkflows({
+        server: profile.server,
+        projectId: link.projectId,
+        deployWorkflow,
+        cleanupWorkflow,
+        cleanupRef,
+      });
+    for (const file of generated) {
+      await inspectGeneratedWorkflow(root, file, flag(args, "force"));
+    }
+    const connected = await platformRequest(
+      profile.server,
+      `/api/projects/${encodeURIComponent(link.projectId)}/github-previews`,
+      {
+        method: "PUT",
+        token: profile.token,
+        body: {
+          repository,
+          repositoryId: repositoryIdentity.repositoryId,
+          cleanupRef,
+          deployWorkflow,
+          cleanupWorkflow,
+        },
+      },
+    );
+    const writes = [];
+    for (const file of generated) {
+      writes.push(await writeGeneratedWorkflow(root, file, flag(args, "force")));
+    }
+    const result = {
+      protocol: "clank-github-preview-configuration/1",
+      ok: true,
+      projectId: link.projectId,
+      server: profile.server,
+      binding: connected.binding,
+      authentication: {
+        method: "github_actions_oidc",
+        staticSecretRequired: false,
+      },
+      workflows: writes,
+    };
+    if (flag(args, "json")) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    console.log(`Connected ${repository} to project ${link.projectId}.`);
+    console.log("Authentication: GitHub Actions OIDC (no Clank token or GitHub secret).");
+    for (const write of writes) {
+      console.log(`${write.changed ? "Wrote" : "Unchanged"} ${write.path}`);
+    }
+    console.log("Commit and push the workflow files to begin creating pull-request previews.");
+    return;
+  }
+  if (action === "disconnect") {
+    if (values.length > 1) {
+      throw new CliError(
+        'Usage: clank preview github disconnect [directory] --confirm="disconnect-github-previews <owner/repository>"',
+      );
+    }
+    const confirmation = option(args, "confirm");
+    if (!confirmation) {
+      throw new CliError(
+        'Pass --confirm="disconnect-github-previews <owner/repository>".',
+        "CONFIRMATION_REQUIRED",
+      );
+    }
+    const root = resolve(values[0] ?? ".");
+    const { profile, link } = await linkedContext(root);
+    const result = await platformRequest(
+      profile.server,
+      `/api/projects/${encodeURIComponent(link.projectId)}/github-previews`,
+      {
+        method: "DELETE",
+        token: profile.token,
+        body: { confirmation },
+      },
+    );
+    if (flag(args, "json")) console.log(JSON.stringify(result, null, 2));
+    else console.log("Disconnected GitHub pull-request previews and revoked their temporary identities.");
+    return;
+  }
+  throw new CliError("Usage: clank preview github <configure|status|disconnect>");
+}
+
+async function githubPreviewContext(args, operation, requestedPreviewName) {
+  if (process.env.GITHUB_ACTIONS !== "true") {
+    throw new CliError(
+      "--github can only exchange an identity inside GitHub Actions.",
+      "GITHUB_ACTIONS_REQUIRED",
+    );
+  }
+  const server = normalizeServer(option(args, "server") ?? DEFAULT_PLATFORM_SERVER);
+  const serverUrl = new URL(server);
+  if (serverUrl.protocol !== "https:" || server !== serverUrl.origin) {
+    throw new CliError(
+      "GitHub preview federation requires --server to be an HTTPS origin.",
+      "GITHUB_OIDC_HTTPS_REQUIRED",
+    );
+  }
+  const projectId = option(args, "project");
+  if (!projectId || !/^[A-Za-z0-9_-]{8,128}$/u.test(projectId)) {
+    throw new CliError(
+      "GitHub preview federation requires a valid --project <id>.",
+      "INVALID_PROJECT_ID",
+    );
+  }
+  if (
+    requestedPreviewName !== undefined
+    && !/^pull-[1-9][0-9]{0,9}$/u.test(requestedPreviewName)
+  ) {
+    throw new CliError(
+      "GitHub cleanup preview names must use pull-<number>.",
+      "INVALID_PREVIEW_NAME",
+    );
+  }
+  const identity = await requestGithubActionsOidcToken(server);
+  const exchanged = await platformRequest(
+    server,
+    "/api/preview-identities/github",
+    {
+      method: "POST",
+      body: {
+        token: identity,
+        projectId,
+        operation,
+        ...(requestedPreviewName === undefined
+          ? {}
+          : { previewName: requestedPreviewName }),
+      },
+    },
+  );
+  if (
+    exchanged.protocol !== "clank-github-preview-identity/1"
+    || exchanged.projectId !== projectId
+    || exchanged.operation !== operation
+    || typeof exchanged.accessToken !== "string"
+    || !/^pull-[1-9][0-9]{0,9}$/u.test(exchanged.previewName)
+    || (
+      requestedPreviewName !== undefined
+      && exchanged.previewName !== requestedPreviewName
+    )
+    || !Number.isSafeInteger(exchanged.expiresAt)
+    || exchanged.expiresAt <= Date.now()
+  ) {
+    throw new CliError(
+      "The platform returned an invalid GitHub preview identity.",
+      "INVALID_PLATFORM_RESPONSE",
+    );
+  }
+  return {
+    profile: {
+      server,
+      token: exchanged.accessToken,
+      expiresAt: exchanged.expiresAt,
+    },
+    link: { version: 1, server, projectId },
+    previewName: exchanged.previewName,
+  };
+}
+
+export async function requestGithubActionsOidcToken(
+  audience,
+  environment = process.env,
+  fetcher = fetch,
+) {
+  const requestUrlValue = environment.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const requestToken = environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (
+    typeof requestUrlValue !== "string"
+    || requestUrlValue.length < 20
+    || requestUrlValue.length > 4_096
+    || typeof requestToken !== "string"
+    || requestToken.length < 20
+    || requestToken.length > 16 * 1024
+    || /[^\x21-\x7e]/u.test(requestToken)
+  ) {
+    throw new CliError(
+      "GitHub did not provide an OIDC request identity. Grant the job id-token: write.",
+      "GITHUB_OIDC_UNAVAILABLE",
+    );
+  }
+  let requestUrl;
+  try {
+    requestUrl = new URL(requestUrlValue);
+  } catch {
+    throw new CliError("GitHub provided an invalid OIDC endpoint.", "GITHUB_OIDC_UNAVAILABLE");
+  }
+  if (
+    requestUrl.protocol !== "https:"
+    || requestUrl.username
+    || requestUrl.password
+    || requestUrl.hash
+    || (
+      requestUrl.hostname !== "token.actions.githubusercontent.com"
+      && !requestUrl.hostname.endsWith(".actions.githubusercontent.com")
+    )
+  ) {
+    throw new CliError("GitHub provided an invalid OIDC endpoint.", "GITHUB_OIDC_UNAVAILABLE");
+  }
+  requestUrl.searchParams.set("audience", audience);
+  const signal = AbortSignal.timeout(10_000);
+  let response;
+  try {
+    response = await fetcher(requestUrl, {
+      method: "GET",
+      redirect: "error",
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      signal,
+      headers: {
+        accept: "application/json",
+        "accept-encoding": "identity",
+        authorization: `Bearer ${requestToken}`,
+      },
+    });
+  } catch (error) {
+    if (signal.aborted || error?.name === "TimeoutError" || error?.name === "AbortError") {
+      throw new CliError("GitHub OIDC request timed out.", "GITHUB_OIDC_UNAVAILABLE");
+    }
+    throw new CliError("Could not request a GitHub OIDC identity.", "GITHUB_OIDC_UNAVAILABLE");
+  }
+  if (
+    response.status !== 200
+    || response.redirected
+    || response.url !== requestUrl.href
+    || response.headers.has("content-encoding")
+    || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
+  ) {
+    await response.body?.cancel();
+    throw new CliError("GitHub returned an invalid OIDC response.", "GITHUB_OIDC_UNAVAILABLE");
+  }
+  let payload;
+  try {
+    const bytes = await readResponseBytes(response, 32 * 1024);
+    payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new CliError("GitHub returned an invalid OIDC response.", "GITHUB_OIDC_UNAVAILABLE");
+  }
+  if (
+    !plainRecord(payload)
+    || Object.keys(payload).some((key) => key !== "value")
+    || typeof payload.value !== "string"
+    || payload.value.length < 100
+    || payload.value.length > 16 * 1024
+    || /[^A-Za-z0-9_.-]/u.test(payload.value)
+  ) {
+    throw new CliError("GitHub returned an invalid OIDC response.", "GITHUB_OIDC_UNAVAILABLE");
+  }
+  return payload.value;
+}
+
+function githubRepository(value) {
+  if (
+    typeof value !== "string"
+    || value.length > 201
+    || !/^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$/u
+      .test(value)
+  ) {
+    throw new CliError(
+      "GitHub repository must use owner/repository.",
+      "INVALID_GITHUB_REPOSITORY",
+    );
+  }
+  return value.toLowerCase();
+}
+
+function githubWorkflowPath(value) {
+  if (
+    typeof value !== "string"
+    || value.length > 200
+    || !/^\.github\/workflows\/[A-Za-z0-9][A-Za-z0-9_.-]{0,159}\.ya?ml$/u.test(value)
+  ) {
+    throw new CliError(
+      "GitHub workflow paths must be files directly under .github/workflows.",
+      "INVALID_GITHUB_WORKFLOW",
+    );
+  }
+  return value;
+}
+
+function githubBranchRef(value) {
+  if (
+    typeof value !== "string"
+    || value.length > 300
+    || !/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(value)
+    || value.includes("..")
+    || value.includes("//")
+    || value.includes("@{")
+    || value.includes("/.")
+    || value.endsWith("/")
+    || value.endsWith(".")
+    || value.endsWith(".lock")
+  ) {
+    throw new CliError(
+      "Pass the trusted base branch as --cleanup-ref=refs/heads/<branch>.",
+      "INVALID_GITHUB_REF",
+    );
+  }
+  return value;
+}
+
+async function resolveGithubRepository(repository, explicit) {
+  if (explicit !== undefined) {
+    if (!/^[1-9][0-9]{0,19}$/u.test(explicit)) {
+      throw new CliError(
+        "--repository-id must be GitHub's immutable numeric repository ID.",
+        "INVALID_GITHUB_REPOSITORY",
+      );
+    }
+    return {
+      repositoryId: explicit,
+      defaultRef: undefined,
+    };
+  }
+  const endpoint = `https://api.github.com/repos/${repository
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}`;
+  const signal = AbortSignal.timeout(10_000);
+  let response;
+  try {
+    response = await fetch(endpoint, {
+      method: "GET",
+      redirect: "error",
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      signal,
+      headers: {
+        accept: "application/vnd.github+json",
+        "accept-encoding": "identity",
+        "user-agent": `clank-cli/${packageJson.version}`,
+        "x-github-api-version": "2022-11-28",
+      },
+    });
+  } catch {
+    throw new CliError(
+      "Could not resolve the GitHub repository ID. Pass --repository-id <id> for private repositories.",
+      "GITHUB_REPOSITORY_LOOKUP_FAILED",
+    );
+  }
+  if (
+    response.status !== 200
+    || response.redirected
+    || response.url !== endpoint
+    || response.headers.has("content-encoding")
+    || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")
+  ) {
+    await response.body?.cancel();
+    throw new CliError(
+      "Could not resolve the GitHub repository ID. Pass --repository-id <id> for private repositories.",
+      "GITHUB_REPOSITORY_LOOKUP_FAILED",
+    );
+  }
+  let payload;
+  try {
+    payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
+      await readResponseBytes(response, 256 * 1024),
+    ));
+  } catch {
+    throw new CliError(
+      "GitHub returned an invalid repository response. Pass --repository-id <id>.",
+      "GITHUB_REPOSITORY_LOOKUP_FAILED",
+    );
+  }
+  if (
+    !plainRecord(payload)
+    || !Number.isSafeInteger(payload.id)
+    || payload.id < 1
+    || typeof payload.full_name !== "string"
+    || payload.full_name.toLowerCase() !== repository
+  ) {
+    throw new CliError(
+      "GitHub returned a mismatched repository. Pass --repository-id <id>.",
+      "GITHUB_REPOSITORY_LOOKUP_FAILED",
+    );
+  }
+  if (
+    typeof payload.default_branch !== "string"
+    || payload.default_branch.length < 1
+    || payload.default_branch.length > 280
+  ) {
+    throw new CliError(
+      "GitHub did not return a safe default branch. Pass --cleanup-ref=refs/heads/<branch>.",
+      "GITHUB_REPOSITORY_LOOKUP_FAILED",
+    );
+  }
+  return {
+    repositoryId: String(payload.id),
+    defaultRef: `refs/heads/${payload.default_branch}`,
+  };
+}
+
+function githubPreviewWorkflows(options) {
+  const project = shellSingleQuote(options.projectId);
+  const server = shellSingleQuote(options.server);
+  const packageSpec = shellSingleQuote(`@clank.run/framework@${packageJson.version}`);
+  const baseBranch = JSON.stringify(options.cleanupRef.slice("refs/heads/".length));
+  return [{
+    path: options.deployWorkflow,
+    contents: `# Generated by Clank. Re-run "clank preview github configure" to update.
+name: Clank pull-request preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [${baseBranch}]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: clank-preview-\${{ github.repository_id }}-\${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the pull-request merge revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Select supported Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install the locked dependency graph without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build and deploy the isolated preview
+        run: npx --no-install clank preview deploy --github --project=${project} --server=${server} --json
+`,
+  }, {
+    path: options.cleanupWorkflow,
+    contents: `# Generated by Clank. This trusted-base workflow never checks out pull-request code.
+name: Remove Clank pull-request preview
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [${baseBranch}]
+
+permissions:
+  contents: none
+  id-token: write
+
+concurrency:
+  group: clank-preview-\${{ github.repository_id }}-\${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Select supported Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Remove the isolated preview and its data
+        run: npm exec --yes --package=${packageSpec} -- clank preview remove 'pull-\${{ github.event.pull_request.number }}' --github --project=${project} --server=${server} --json
+`,
+  }];
+}
+
+async function inspectGeneratedWorkflow(root, file, force) {
+  const rootMetadata = await lstat(root);
+  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
+    throw new CliError("Workflow target must be a real project directory.", "UNSAFE_TARGET");
+  }
+  const destination = resolve(root, file.path);
+  if (!inside(root, destination)) {
+    throw new CliError("Generated workflow escaped the project.", "UNSAFE_TARGET");
+  }
+  await inspectWorkflowParents(root, file.path, false);
+  try {
+    const metadata = await lstat(destination);
+    if (metadata.isSymbolicLink() || !metadata.isFile()) {
+      throw new CliError(`Refusing unsafe workflow target: ${file.path}`, "UNSAFE_TARGET");
+    }
+    const existing = await readFile(destination, "utf8");
+    if (existing !== file.contents && !force) {
+      throw new CliError(
+        `Refusing to overwrite ${file.path}. Re-run with --force after reviewing it.`,
+        "WORKFLOW_EXISTS",
+      );
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
+async function writeGeneratedWorkflow(root, file, force) {
+  await inspectGeneratedWorkflow(root, file, force);
+  await inspectWorkflowParents(root, file.path, true);
+  const destination = resolve(root, file.path);
+  try {
+    if (await readFile(destination, "utf8") === file.contents) {
+      return { path: file.path, changed: false };
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const temporary = `${destination}.clank-${process.pid}-${crypto.randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, file.contents, {
+      encoding: "utf8",
+      mode: 0o644,
+      flag: "wx",
+    });
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+  return { path: file.path, changed: true };
+}
+
+async function inspectWorkflowParents(root, path, create) {
+  const parts = relative(root, resolve(root, dirname(path))).split(/[\\/]/u)
+    .filter(Boolean);
+  let current = root;
+  for (const part of parts) {
+    current = join(current, part);
+    let metadata;
+    try {
+      metadata = await lstat(current);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      if (!create) return;
+      await mkdir(current, { mode: 0o755 });
+      metadata = await lstat(current);
+    }
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+      throw new CliError(
+        `Refusing unsafe workflow directory: ${relative(root, current)}`,
+        "UNSAFE_TARGET",
+      );
+    }
+  }
+}
+
+function shellSingleQuote(value) {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
 async function status() {
@@ -2400,6 +3059,8 @@ function positionals(args) {
         "--force",
         "--allow-rollback-loss",
         "--acknowledge-data-loss",
+        "--github",
+        "--no-workflows",
         "--json",
       ].includes(argument)) index++;
       continue;

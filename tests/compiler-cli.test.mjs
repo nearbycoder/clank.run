@@ -1603,6 +1603,239 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
   }
 });
 
+test("GitHub preview CLI creates secretless workflows and manages the exact binding", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-github-preview-"));
+  const home = join(root, "home");
+  const target = join(root, "app");
+  const outside = join(root, "outside");
+  const observed = [];
+  const binding = {
+    repository: "nearby/app",
+    repositoryId: "92837465",
+    deployWorkflow: ".github/workflows/clank-preview.yml",
+    cleanupWorkflow: ".github/workflows/clank-preview-cleanup.yml",
+    cleanupRef: "refs/heads/main",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  const server = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
+    observed.push({
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+      body,
+    });
+    response.setHeader("content-type", "application/json");
+    if (
+      request.url === "/api/projects/project_github_preview/github-previews"
+      && request.method === "PUT"
+    ) {
+      response.writeHead(200);
+      response.end(JSON.stringify({ ok: true, binding }));
+      return;
+    }
+    if (
+      request.url === "/api/projects/project_github_preview/github-previews"
+      && request.method === "GET"
+    ) {
+      response.writeHead(200);
+      response.end(JSON.stringify({
+        ok: true,
+        binding,
+        policy: {
+          authentication: "github_actions_oidc",
+          staticSecretRequired: false,
+          pullRequestScoped: true,
+          isolatedRuntimeRequired: true,
+          eligible: true,
+        },
+      }));
+      return;
+    }
+    if (
+      request.url === "/api/projects/project_github_preview/github-previews"
+      && request.method === "DELETE"
+    ) {
+      response.writeHead(200);
+      response.end(JSON.stringify({ ok: true, disconnected: true }));
+      return;
+    }
+    response.writeHead(404);
+    response.end(JSON.stringify({ error: { code: "NOT_FOUND", message: "Not found." } }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}`;
+  const environment = { ...process.env, CLANK_HOME: home };
+  try {
+    await mkdir(home);
+    await mkdir(join(target, ".clank"), { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_github_config_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    await writeFile(join(target, ".clank", "project.json"), JSON.stringify({
+      version: 1,
+      server: platform,
+      projectId: "project_github_preview",
+    }));
+
+    const configured = await runCliResult([
+      "preview",
+      "github",
+      "configure",
+      "Nearby/App",
+      "--repository-id=92837465",
+      "--cleanup-ref=refs/heads/main",
+      "--json",
+    ], target, environment);
+    assert.equal(configured.code, 0, configured.stderr);
+    const result = JSON.parse(configured.stdout);
+    assert.equal(result.protocol, "clank-github-preview-configuration/1");
+    assert.equal(result.authentication.staticSecretRequired, false);
+    assert.deepEqual(result.workflows, [{
+      path: ".github/workflows/clank-preview.yml",
+      changed: true,
+    }, {
+      path: ".github/workflows/clank-preview-cleanup.yml",
+      changed: true,
+    }]);
+    const deploy = await readFile(
+      join(target, ".github", "workflows", "clank-preview.yml"),
+      "utf8",
+    );
+    const cleanup = await readFile(
+      join(target, ".github", "workflows", "clank-preview-cleanup.yml"),
+      "utf8",
+    );
+    assert.match(deploy, /pull_request:\n    types:/u);
+    assert.match(deploy, /branches: \["main"\]/u);
+    assert.doesNotMatch(deploy, /pull_request_target/u);
+    assert.match(deploy, /id-token: write/u);
+    assert.match(deploy, /persist-credentials: false/u);
+    assert.match(deploy, /--github --project='project_github_preview'/u);
+    assert.match(cleanup, /pull_request_target:/u);
+    assert.match(cleanup, /branches: \["main"\]/u);
+    assert.doesNotMatch(cleanup, /actions\/checkout/u);
+    assert.match(cleanup, /contents: none/u);
+    assert.match(cleanup, new RegExp(`@clank\\.run/framework@${frameworkVersion}`, "u"));
+    assert.doesNotMatch(`${deploy}\n${cleanup}`, /clnk_|secrets\./u);
+
+    const status = await runCliResult(
+      ["preview", "github", "status", "--json"],
+      target,
+      environment,
+    );
+    assert.equal(status.code, 0, status.stderr);
+    assert.equal(JSON.parse(status.stdout).binding.repositoryId, "92837465");
+    const disconnected = await runCliResult([
+      "preview",
+      "github",
+      "disconnect",
+      "--confirm=disconnect-github-previews nearby/app",
+      "--json",
+    ], target, environment);
+    assert.equal(disconnected.code, 0, disconnected.stderr);
+
+    assert.deepEqual(observed.map(({ method }) => method), ["PUT", "GET", "DELETE"]);
+    assert.ok(observed.every(({ authorization }) =>
+      authorization === "Bearer clnk_github_config_token"));
+    assert.deepEqual(observed[0].body, {
+      repository: "nearby/app",
+      repositoryId: "92837465",
+      cleanupRef: "refs/heads/main",
+      deployWorkflow: ".github/workflows/clank-preview.yml",
+      cleanupWorkflow: ".github/workflows/clank-preview-cleanup.yml",
+    });
+
+    const unsafe = join(root, "unsafe");
+    await mkdir(join(unsafe, ".clank"), { recursive: true });
+    await writeFile(join(unsafe, ".clank", "project.json"), JSON.stringify({
+      version: 1,
+      server: platform,
+      projectId: "project_github_preview",
+    }));
+    await symlink(outside, join(unsafe, ".github"), "dir");
+    const refused = await runCliResult([
+      "preview",
+      "github",
+      "configure",
+      "nearby/app",
+      "--repository-id=92837465",
+      "--cleanup-ref=refs/heads/main",
+      "--json",
+    ], unsafe, environment);
+    assert.equal(refused.code, 1);
+    assert.equal(JSON.parse(refused.stderr).error.code, "UNSAFE_TARGET");
+    assert.equal(observed.length, 3);
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("GitHub OIDC CLI transport pins the endpoint and keeps the bearer out of output", async () => {
+  const { requestGithubActionsOidcToken } = await import("../scripts/cli-deploy.mjs");
+  const jwt = "a".repeat(100);
+  const bearer = "github-request-bearer-0000000001";
+  let observed;
+  const value = await requestGithubActionsOidcToken(
+    "https://clank.run",
+    {
+      ACTIONS_ID_TOKEN_REQUEST_URL:
+        "https://token.actions.githubusercontent.com/oidc?job=preview",
+      ACTIONS_ID_TOKEN_REQUEST_TOKEN: bearer,
+    },
+    async (url, init) => {
+      observed = { url: String(url), init };
+      const body = JSON.stringify({ value: jwt });
+      const response = new Response(body, {
+        status: 200,
+        headers: {
+          "content-length": String(Buffer.byteLength(body)),
+          "content-type": "application/json",
+        },
+      });
+      Object.defineProperty(response, "url", { value: String(url) });
+      return response;
+    },
+  );
+  assert.equal(value, jwt);
+  assert.equal(
+    observed.url,
+    "https://token.actions.githubusercontent.com/oidc?job=preview&audience=https%3A%2F%2Fclank.run",
+  );
+  assert.equal(observed.init.redirect, "error");
+  assert.equal(observed.init.credentials, "omit");
+  assert.equal(observed.init.headers.authorization, `Bearer ${bearer}`);
+  await assert.rejects(
+    requestGithubActionsOidcToken(
+      "https://clank.run",
+      {
+        ACTIONS_ID_TOKEN_REQUEST_URL: "https://attacker.example/oidc",
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: bearer,
+      },
+      async () => assert.fail("An untrusted endpoint must not be fetched."),
+    ),
+    /invalid OIDC endpoint/u,
+  );
+});
+
 test("compiler CLI refuses overlapping input and output directories before deletion", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-overlap-"));
   const input = join(root, "src");

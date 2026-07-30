@@ -30,7 +30,80 @@ clank preview deploy pull-482 --ttl=24 --json
 ```
 
 The `clank-preview-result/1` document includes the preview ID, normalized name, parent project,
-expiration, release digest, URL, and build/upload timing.
+expiration, release digest, URL, identity method, and build/upload timing.
+
+## GitHub pull-request previews
+
+Connect a linked, provider-placed project once:
+
+```sh
+clank preview github configure nearbycoder/my-app
+git add .github/workflows/clank-preview.yml \
+  .github/workflows/clank-preview-cleanup.yml
+git commit -m "Deploy Clank pull-request previews"
+git push
+```
+
+For a public repository, the CLI resolves and binds GitHub's immutable numeric repository ID. For
+a private repository, or if public lookup is unavailable, provide it explicitly:
+
+```sh
+clank preview github configure nearbycoder/private-app \
+  --repository-id=123456789 \
+  --cleanup-ref=refs/heads/main
+```
+
+The trusted cleanup ref is resolved from a public repository's default branch. When the ID is
+provided explicitly, the ref is also explicit; this prevents a `pull_request_target` job from an
+untrusted target branch from receiving cleanup authority. Both generated workflows are restricted
+to pull requests targeting that branch.
+
+Configuration is owner/admin-only and fails unless the project uses a provider runtime or the
+self-hosted control plane declares an isolated hosting profile. This is intentional: a pull
+request can execute untrusted application build and runtime code.
+
+The command writes two workflow files by default:
+
+- `clank-preview.yml` runs for `pull_request` open, reopen, and synchronize events. It checks out
+  the merge revision, installs the committed dependency graph without lifecycle scripts, and
+  deploys `pull-<number>`.
+- `clank-preview-cleanup.yml` runs for `pull_request_target` close events. It is loaded from the
+  trusted base branch, never checks out pull-request code, and permanently removes that preview.
+
+Both workflows pin GitHub-maintained actions to full commit SHAs. They grant only the permissions
+they need. The deploy workflow receives `contents: read`; both receive `id-token: write`.
+
+No `CLANK_TOKEN`, GitHub secret, copied CLI profile, or `.clank/project.json` is placed in the
+repository. In each job, the CLI requests a GitHub OIDC JWT with the exact control-plane origin as
+its audience. Clank verifies GitHub's RS256 signature plus issuer, audience, immutable repository
+ID, repository name, workflow path, workflow SHA, event, ref, time window, and one-time JWT ID.
+It returns a 15-minute token restricted to the production parent and one derived `pull-N` child.
+That token cannot deploy production, inspect a sibling preview, manage secrets, or create tokens.
+The raw JWT, JWT ID, and returned token are not stored in workflow files, CLI config, or audit
+metadata.
+
+GitHub documents the [OIDC claims and request
+variables](https://docs.github.com/en/actions/reference/security/oidc). Clank binds
+`repository_id` rather than trusting a reusable owner/name subject, and also supports GitHub's
+immutable subject rollout without depending on either subject format.
+
+Inspect or disconnect the binding with:
+
+```sh
+clank preview github status
+clank preview github disconnect \
+  --confirm="disconnect-github-previews nearbycoder/my-app"
+```
+
+Disconnecting revokes every outstanding federated preview token. It does not delete committed
+workflow files or existing preview environments; remove those explicitly or allow TTL cleanup.
+Use `--no-workflows` when maintaining reviewed workflow files yourself, or
+`--deploy-workflow`/`--cleanup-workflow` to bind alternate files directly under
+`.github/workflows`. Existing files are never overwritten unless `--force` is explicit.
+
+Fork pull requests may not receive an OIDC token when repository policy withholds `id-token:
+write`. The workflow then fails closed without a Clank credential or deployment. Maintainers can
+review and rerun an allowed workflow; do not replace OIDC with a broadly scoped repository secret.
 
 ## Remove a preview
 
@@ -59,11 +132,17 @@ The authenticated API is:
 | `GET` | `/api/projects/:parentId/previews` | List unexpired previews and the effective TTL/isolation policy |
 | `POST` | `/api/projects/:parentId/previews` | Create or refresh `{ "name": string, "ttlHours"?: integer }` |
 | `DELETE` | `/api/projects/:parentId/previews/:previewId` | Permanently remove a preview after exact confirmation |
+| `GET` | `/api/projects/:parentId/github-previews` | Read the repository/workflow binding and isolation policy |
+| `PUT` | `/api/projects/:parentId/github-previews` | Owner/admin: bind an exact repository ID and two workflow paths |
+| `DELETE` | `/api/projects/:parentId/github-previews` | Owner/admin: disconnect and revoke federated preview tokens |
+| `POST` | `/api/preview-identities/github` | Exchange a verified, one-time GitHub Actions OIDC JWT |
 
-Creating, refreshing, and deleting previews requires deploy-capable workspace access and an
-account session or account CLI token. A project-scoped token cannot manage previews because it
-would not automatically gain authority over the newly isolated child project. Deploying a release
-to an existing preview uses the ordinary release API and authorization rules.
+Listing, creating, refreshing, and deleting previews requires preview-capable workspace access.
+Ordinary project tokens must explicitly include `previews`. Federated tokens receive only that
+permission and are additionally bound to one `preview_name`; the child read and release APIs
+recognize that binding without granting read or deploy access to the parent production project.
+Deploying a release to an existing preview otherwise uses the ordinary release API and
+authorization rules.
 
 ## Isolation and limits
 
@@ -98,6 +177,13 @@ Cleanup runs at startup before application recovery and then in bounded backgrou
 Expired previews are not restarted. Deletion uses the same path containment, encrypted-backup
 removal, remote-artifact cleanup, token revocation, process shutdown, and audit path as an explicit
 project deletion. Set `cleanupIntervalMs: false` only when an external operator owns expiration.
+
+GitHub federation additionally requires an HTTPS `publicUrl` and either
+`hostingProfile: "isolated"` or a project with `placement: "provider"`. Signing keys are fetched
+only from GitHub's fixed JWKS URL with bounded I/O, redirect refusal, an algorithm allowlist, and
+short caching. `previews.githubOidcFetch` exists solely to provide an equivalent fixed-endpoint
+transport in tests or controlled networking; it cannot change the trusted issuer, URL, algorithm,
+claim policy, or response bounds.
 
 ## CI naming
 

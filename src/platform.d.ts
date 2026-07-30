@@ -70,6 +70,11 @@ export interface PlatformPreviewOptions {
     maxTtlMs?: number;
     /** Expired-preview cleanup cadence. Defaults to 5 minutes; false disables background cleanup. */
     cleanupIntervalMs?: number | false;
+    /**
+     * Optional fixed-endpoint transport for GitHub Actions OIDC signing keys.
+     * The issuer, JWKS URL, algorithms, claims, and response bounds remain enforced.
+     */
+    githubOidcFetch?: typeof fetch;
 }
 export interface PlatformInvitationDeliveryOptions {
     email: EmailService;
