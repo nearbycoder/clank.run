@@ -136,6 +136,8 @@ export interface ClankPlatformOptions {
             activationTimeoutMs?: number;
             /** Maximum generated runtime capsule. Defaults to 768 MiB. */
             maxRuntimeBytes?: number;
+            /** Maximum provider SQLite snapshot. Defaults to 512 MiB. */
+            maxDatabaseBytes?: number;
         };
     };
     /** Defaults to "bootstrap": only the first platform account may self-register. */

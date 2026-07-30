@@ -38,8 +38,13 @@ import {
 } from "./runner.ts";
 import {
   createDeploymentRuntimeCapsule,
+  deploymentRuntimeDigest,
   DEPLOYMENT_RUNTIME_PROTOCOL,
 } from "./runtime-placement.ts";
+import {
+  deploymentProviderSnapshotPath,
+  DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
+} from "./provider-service.ts";
 import {
   createPlatformBackupScheduler,
   type PlatformBackupPolicy,
@@ -297,6 +302,8 @@ export interface ClankPlatformOptions {
       activationTimeoutMs?: number;
       /** Maximum generated runtime capsule. Defaults to 768 MiB. */
       maxRuntimeBytes?: number;
+      /** Maximum provider SQLite snapshot. Defaults to 512 MiB. */
+      maxDatabaseBytes?: number;
     };
   };
   /** Defaults to "bootstrap": only the first platform account may self-register. */
@@ -407,6 +414,7 @@ interface NormalizedProviderPlacement {
   allowedProviderHosts: readonly string[];
   activationTimeoutMs: number;
   maxRuntimeBytes: number;
+  maxDatabaseBytes: number;
 }
 
 interface ReleaseRow {
@@ -764,6 +772,23 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   if (providerPlacement && !ingressEnabled) {
     throw new TypeError("deploymentAgents.placement requires managed ingress.");
   }
+  const runnerArtifactLimit = options.deploymentAgents
+    ? integerInRange(
+        options.deploymentAgents.maxArtifactBytes ?? 100 * 1024 * 1024,
+        "deploymentAgents.maxArtifactBytes",
+        1_024,
+        1024 * 1024 * 1024,
+      )
+    : 0;
+  if (
+    providerPlacement
+    && providerPlacement.maxRuntimeBytes
+      < runnerArtifactLimit + providerPlacement.maxDatabaseBytes + 2 * 1024 * 1024 + 32
+  ) {
+    throw new TypeError(
+      "deploymentAgents.placement.maxRuntimeBytes must contain the artifact, database, and manifest limits.",
+    );
+  }
   const managedRunnerEnrollment = options.deploymentAgents?.managedEnrollment === true;
   if (
     options.deploymentAgents
@@ -794,9 +819,6 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     return response;
   };
   const orchestrator = openDeploymentOrchestrator(storage.database);
-  const runnerArtifactLimit = options.deploymentAgents
-    ? options.deploymentAgents.maxArtifactBytes ?? 100 * 1024 * 1024
-    : 0;
   const deploymentCoordinator = options.deploymentAgents
     ? createDeploymentCoordinatorHandler(orchestrator, {
         ...(options.deploymentAgents.registrationToken === undefined
@@ -886,15 +908,23 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                     environment,
                     database: {
                       path: release.config.database.path,
-                      mode: "preserve",
+                      mode: project.activeGeneration === null
+                        ? "initialize"
+                        : "preserve",
                     },
                     ingress: {
                       route: providerRuntimePath(project.id),
                       token: providerIngressToken(masterKey, project.id, desired.generation),
+                      controlToken: providerControlToken(
+                        masterKey,
+                        project.id,
+                        desired.generation,
+                      ),
                     },
                     artifact: artifact.bytes,
                   }, {
                     maxArtifactBytes: runnerArtifactLimit,
+                    maxDatabaseBytes: providerPlacement.maxDatabaseBytes,
                     maxCapsuleBytes: providerPlacement.maxRuntimeBytes,
                   });
                   return { bytes: capsule.bytes, sha256: capsule.sha256 };
@@ -1213,16 +1243,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       return withProjectLock(projectId, async () => {
         const project = projectById(storage.internal, projectId);
         if (!project?.databasePath) throw new Error("Scheduled backup database is unavailable.");
-        const effective = projectQuotas(storage.internal, project, quotaDefaults);
-        const manager = await projectBackupManager(paths.projects, project, masterKey, {
-          ...backupPolicy,
-          maxBackups: effective.backupsPerProject,
-        }, backupObjects);
-        try {
-          return await manager.create({ reason: "automatic scheduled backup" });
-        } finally {
-          manager.close();
-        }
+        return createEncryptedProjectBackup(
+          project,
+          "automatic scheduled backup",
+        );
       });
     },
     onError: options.onError,
@@ -1560,6 +1584,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       generation,
       nodeId: node.id,
     });
+    backupScheduler.registerProject(project.id);
     const activatedProject = projectById(storage.internal, project.id)!;
     const activatedRelease = releaseById(storage.internal, release.id)!;
     return releasePayload(activatedProject, activatedRelease, appUrlTemplate);
@@ -1835,6 +1860,193 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       generation: project.activeGeneration,
       nodeId: project.providerNodeId,
     };
+  };
+
+  const exactProviderOrigin = (
+    project: ProjectRow,
+    nodeId: string,
+  ): string => {
+    const node = orchestrator.listNodes().find((entry) => entry.id === nodeId);
+    if (!node?.endpoint || node.status !== "active" || !project.providerOrigin) {
+      throw new PlatformError(
+        503,
+        "PROVIDER_ENDPOINT_UNAVAILABLE",
+        "The assigned provider is not online with its active endpoint.",
+        1,
+      );
+    }
+    const origin = providerIngressOrigin(
+      node.endpoint,
+      providerPlacement!.allowedProviderHosts,
+    );
+    if (origin !== project.providerOrigin) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_ENDPOINT_CHANGED",
+        "The assigned provider endpoint changed after this generation was activated.",
+      );
+    }
+    return origin;
+  };
+
+  const fetchProviderSnapshot = async (
+    project: ProjectRow,
+    release: ReleaseRow,
+  ): Promise<{ bytes: Uint8Array; sha256: string }> => {
+    if (!providerPlacement) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_PLACEMENT_DISABLED",
+        "Provider placement is not enabled on this platform.",
+      );
+    }
+    const runtime = exactProviderRuntime(project, release);
+    const origin = exactProviderOrigin(project, runtime.nodeId);
+    const snapshotUrl = new URL(
+      deploymentProviderSnapshotPath(project.id),
+      `${origin}/`,
+    ).href;
+    const maximum = Math.min(
+      backupPolicy.maxDatabaseBytes,
+      providerPlacement.maxDatabaseBytes,
+    );
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      providerPlacement.activationTimeoutMs,
+    );
+    let response: Response | undefined;
+    try {
+      response = await fetch(snapshotUrl, {
+        method: "GET",
+        redirect: "error",
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        signal: controller.signal,
+        headers: {
+          accept: DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
+          "accept-encoding": "identity",
+          authorization: `Bearer ${providerControlToken(
+            masterKey,
+            project.id,
+            runtime.generation,
+          )}`,
+        },
+      });
+      if (
+        response.status !== 200
+        || response.redirected
+        || response.url !== snapshotUrl
+      ) {
+        await response.body?.cancel();
+        throw new Error(`Provider snapshot returned status ${response.status}.`);
+      }
+      const contentLength = response.headers.get("content-length");
+      if (
+        response.headers.get("content-type") !== DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE
+        || response.headers.has("content-encoding")
+        || !contentLength
+        || !/^[1-9][0-9]*$/u.test(contentLength)
+      ) {
+        await response.body?.cancel();
+        throw new Error("Provider snapshot response metadata is invalid.");
+      }
+      const expectedBytes = Number(contentLength);
+      const expectedSha256 = response.headers.get("x-clank-content-sha256") ?? "";
+      if (
+        !Number.isSafeInteger(expectedBytes)
+        || expectedBytes < 16
+        || expectedBytes > maximum
+        || !/^[a-f0-9]{64}$/u.test(expectedSha256)
+        || response.headers.get("x-clank-release-id") !== release.id
+        || response.headers.get("x-clank-runtime-generation")
+          !== String(runtime.generation)
+      ) {
+        await response.body?.cancel();
+        throw new Error("Provider snapshot response identity is invalid.");
+      }
+      const bytes = await readBoundedResponseBytes(
+        response,
+        expectedBytes,
+        maximum,
+      );
+      if (await deploymentRuntimeDigest(bytes) !== expectedSha256) {
+        throw new Error("Provider snapshot response checksum is invalid.");
+      }
+      const currentProject = projectById(storage.internal, project.id);
+      const currentRelease = releaseById(storage.internal, release.id);
+      if (!currentProject || !currentRelease) {
+        throw new Error("Provider snapshot project state changed.");
+      }
+      const confirmed = exactProviderRuntime(currentProject, currentRelease);
+      const confirmedOrigin = exactProviderOrigin(
+        currentProject,
+        confirmed.nodeId,
+      );
+      if (
+        confirmed.generation !== runtime.generation
+        || confirmed.nodeId !== runtime.nodeId
+        || confirmedOrigin !== origin
+      ) {
+        throw new Error("Provider snapshot generation changed during transfer.");
+      }
+      return { bytes, sha256: expectedSha256 };
+    } catch (error) {
+      try {
+        options.onError?.(new Error(
+          "Provider snapshot transport failed.",
+          { cause: error },
+        ));
+      } catch {
+        // Operator diagnostics cannot affect the fixed public failure.
+      }
+      throw new PlatformError(
+        503,
+        "PROVIDER_BACKUP_UNAVAILABLE",
+        "The exact provider generation could not produce a verified backup snapshot.",
+        1,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const createEncryptedProjectBackup = async (
+    project: ProjectRow,
+    reason: string,
+    protectedBackupIds: readonly string[] = [],
+  ): Promise<BackupManifest> => {
+    const effective = projectQuotas(storage.internal, project, quotaDefaults);
+    const manager = await projectBackupManager(paths.projects, project, masterKey, {
+      ...backupPolicy,
+      maxBackups: effective.backupsPerProject,
+    }, backupObjects);
+    try {
+      if (project.placement === "local") {
+        return await manager.create({ reason, protectedBackupIds });
+      }
+      const release = project.activeReleaseId
+        ? releaseById(storage.internal, project.activeReleaseId)
+        : null;
+      if (!release || !project.databasePath) {
+        throw new PlatformError(
+          409,
+          "DATABASE_UNAVAILABLE",
+          "Deploy the project before creating a database backup.",
+        );
+      }
+      const snapshot = await fetchProviderSnapshot(project, release);
+      return await manager.createFromSnapshot({
+        bytes: snapshot.bytes,
+        sha256: snapshot.sha256,
+        source: project.databasePath.split("/").at(-1)!,
+        reason,
+        protectedBackupIds,
+      });
+    } finally {
+      manager.close();
+    }
   };
 
   const runProviderLifecycle = async (
@@ -4468,33 +4680,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           : boundedString(input.confirmation, "confirmation", 1, 200);
         return api({ ok: true, release: await rollback(principal, project, releaseId, restoreData, confirmation) });
       }
-      if (
-        operation.startsWith("backups")
-        && project.placement === "provider"
-        && !(operation === "backups" && request.method === "GET")
-      ) {
-        throw new PlatformError(
-          409,
-          "PROVIDER_BACKUP_PENDING",
-          "Provider-hosted backups are not enabled until a remote encrypted backup transport is configured.",
-        );
-      }
       if (operation === "backups" && request.method === "GET") {
         const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const automation = {
           ...backupScheduler.status(
             project.id,
-            project.placement === "local" && Boolean(project.databasePath),
+            Boolean(project.databasePath),
           ),
           maxBackups: effective.backupsPerProject,
-          storage: project.placement === "provider"
-            ? "provider_pending"
-            : backupObjects ? "object" : "local",
-          providerPending: project.placement === "provider",
+          storage: backupObjects ? "object" : "local",
+          source: project.placement,
+          providerPending: false,
         };
-        if (project.placement === "provider") {
-          return api({ ok: true, backups: [], automation });
-        }
         if (!project.databasePath) return api({ ok: true, backups: [], automation });
         const manager = await projectBackupManager(paths.projects, project, masterKey, {
           ...backupPolicy,
@@ -4519,16 +4716,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const backup = await withProjectLock(project.id, async () => {
           const current = projectById(storage.internal, project.id);
           if (!current) throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
-          const effective = projectQuotas(storage.internal, current, quotaDefaults);
-          const manager = await projectBackupManager(paths.projects, current, masterKey, {
-            ...backupPolicy,
-            maxBackups: effective.backupsPerProject,
-          }, backupObjects);
-          try {
-            return await manager.create({ reason });
-          } finally {
-            manager.close();
-          }
+          return createEncryptedProjectBackup(current, reason);
         });
         backupScheduler.recordBackup(project.id, backup);
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "backup.create", {
@@ -4540,6 +4728,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       const backupMatch = /^backups\/(bk_[A-Za-z0-9_-]{16,128})\/(verify|restore)$/.exec(operation);
       if (backupMatch && request.method === "POST") {
+        if (backupMatch[2] === "restore" && project.placement === "provider") {
+          throw new PlatformError(
+            409,
+            "PROVIDER_RESTORE_PENDING",
+            "Provider-hosted restore is not enabled until fenced restore generations are configured.",
+          );
+        }
         const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const manager = await projectBackupManager(paths.projects, project, masterKey, {
           ...backupPolicy,
@@ -8279,6 +8474,49 @@ function problem(status: number, code: string, message: string, retryAfter?: num
   return api({ ok: false, error: { code, message, ...(retryAfter ? { retryAfter } : {}) } }, status);
 }
 
+async function readBoundedResponseBytes(
+  response: Response,
+  expectedBytes: number,
+  maximumBytes: number,
+): Promise<Uint8Array> {
+  if (
+    !Number.isSafeInteger(expectedBytes)
+    || expectedBytes < 1
+    || expectedBytes > maximumBytes
+    || !response.body
+  ) {
+    throw new Error("Provider snapshot response body is invalid.");
+  }
+  const output = new Uint8Array(expectedBytes);
+  const reader = response.body.getReader();
+  let offset = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      if (
+        !(chunk.value instanceof Uint8Array)
+        || chunk.value.byteLength < 1
+        || offset + chunk.value.byteLength > expectedBytes
+        || offset + chunk.value.byteLength > maximumBytes
+      ) {
+        throw new Error("Provider snapshot response exceeds its declared bound.");
+      }
+      output.set(chunk.value, offset);
+      offset += chunk.value.byteLength;
+    }
+    if (offset !== expectedBytes) {
+      throw new Error("Provider snapshot response length is inconsistent.");
+    }
+    return output;
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function prepareDirectories(directory: string): Promise<{
   root: string;
   projects: string;
@@ -8725,14 +8963,18 @@ async function projectBackupManager(
   }
   const pathName = "node:path";
   const path = await import(pathName) as unknown as { join(...segments: string[]): string };
-  const dataRoot = await projectDataDirectory(projectsRoot, project.id);
-  const databasePath = await safeProjectDataPath(dataRoot, project.databasePath);
+  const databasePath = project.placement === "local"
+    ? await safeProjectDataPath(
+        await projectDataDirectory(projectsRoot, project.id),
+        project.databasePath,
+      )
+    : undefined;
   const material = new Uint8Array(masterKey.byteLength + project.id.length);
   material.set(masterKey);
   material.set(new TextEncoder().encode(project.id), masterKey.byteLength);
   const encryptionKey = new Uint8Array(await crypto.subtle.digest("SHA-256", material));
   return openBackupManager({
-    databasePath,
+    ...(databasePath ? { databasePath } : {}),
     repositoryDirectory: path.join(projectsRoot, project.id, "recovery"),
     encryptionKey,
     keyId: `project-${project.id.slice(0, 12)}`,
@@ -9213,7 +9455,7 @@ async function deleteProjectBackups(
   policy: PlatformBackupPolicy,
   objects: PlatformBackupObjects | null,
 ): Promise<void> {
-  if (project.placement === "provider" || !project.databasePath || !objects) return;
+  if (!project.databasePath || !objects) return;
   const manager = await projectBackupManager(
     projectsRoot,
     project,
@@ -9819,6 +10061,7 @@ function normalizeProviderPlacement(
     "allowedProviderHosts",
     "activationTimeoutMs",
     "maxRuntimeBytes",
+    "maxDatabaseBytes",
   ]);
   for (const field of Object.keys(input)) {
     if (!allowedFields.has(field)) {
@@ -9884,6 +10127,12 @@ function normalizeProviderPlacement(
       "deploymentAgents.placement.maxRuntimeBytes",
       1_024,
       2 * 1024 * 1024 * 1024,
+    ),
+    maxDatabaseBytes: integerInRange(
+      input.maxDatabaseBytes ?? 512 * 1024 * 1024,
+      "deploymentAgents.placement.maxDatabaseBytes",
+      1_024,
+      2 * 1024 * 1024 * 1024 - 2 * 1024 * 1024 - 100 * 1024 * 1024 - 32,
     ),
   });
 }
@@ -10037,6 +10286,21 @@ function providerIngressToken(
   if (!module) throw new Error("Node crypto module is unavailable.");
   return `clnki_${module.createHmac("sha256", masterKey)
     .update("clank-provider-ingress\0")
+    .update(projectId)
+    .update("\0")
+    .update(String(generation))
+    .digest("base64url")}`;
+}
+
+function providerControlToken(
+  masterKey: Uint8Array,
+  projectId: string,
+  generation: number,
+): string {
+  const module = (globalThis as any).process.getBuiltinModule?.("node:crypto");
+  if (!module) throw new Error("Node crypto module is unavailable.");
+  return `clnkc_${module.createHmac("sha256", masterKey)
+    .update("clank-provider-control\0")
     .update(projectId)
     .update("\0")
     .update(String(generation))

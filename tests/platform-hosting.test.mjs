@@ -137,6 +137,7 @@ test("provider placement is explicit, bounded, and local-by-choice", () => {
       CLANK_PROVIDER_ALLOWED_HOSTS: "provider.internal, provider.internal",
       CLANK_PROVIDER_ACTIVATION_TIMEOUT_MS: "45000",
       CLANK_RUNNER_MAX_RUNTIME_BYTES: "1048576",
+      CLANK_PROVIDER_MAX_DATABASE_BYTES: "524288",
     }),
     {
       default: "local",
@@ -148,6 +149,7 @@ test("provider placement is explicit, bounded, and local-by-choice", () => {
       allowedProviderHosts: ["provider.internal"],
       activationTimeoutMs: 45_000,
       maxRuntimeBytes: 1_048_576,
+      maxDatabaseBytes: 524_288,
     },
   );
   assert.throws(
@@ -163,6 +165,45 @@ test("provider placement is explicit, bounded, and local-by-choice", () => {
     }),
     /Duplicate CLANK_PROVIDER_LABELS/u,
   );
+});
+
+test("provider placement reserves capsule capacity for code, database, and metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-provider-capacity-"));
+  try {
+    await assert.rejects(
+      openPlatform({
+        dataDirectory: root,
+        publicUrl: "http://127.0.0.1:4200",
+        signup: true,
+        deploymentAgents: {
+          registrationToken: `registration-${"r".repeat(32)}`,
+          maxArtifactBytes: 256 * 1024,
+          placement: {
+            maxDatabaseBytes: 512 * 1024,
+            maxRuntimeBytes: 1024 * 1024,
+          },
+        },
+        ingress: { baseDomain: "apps.example.test" },
+      }),
+      /must contain the artifact, database, and manifest limits/u,
+    );
+    await assert.rejects(
+      openPlatform({
+        dataDirectory: root,
+        publicUrl: "http://127.0.0.1:4200",
+        signup: true,
+        deploymentAgents: {
+          registrationToken: `registration-${"r".repeat(32)}`,
+          maxArtifactBytes: "262144",
+          placement: {},
+        },
+        ingress: { baseDomain: "apps.example.test" },
+      }),
+      /deploymentAgents.maxArtifactBytes must be an integer/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("backup storage resolves bounded chunking over the shared S3 configuration", () => {

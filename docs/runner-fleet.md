@@ -149,9 +149,10 @@ is strongly recommended when control and runtime live on different volumes, but 
 that durability is needed.
 
 Provider placement is now implemented for explicit stateful projects. It does not relocate local
-projects, does not fail node-local SQLite over to another node, and does not yet provide remote
-database backups. See [Remote runtime placement](runtime-placement.md#enable-built-in-provider-placement)
-before enabling it.
+projects or fail node-local SQLite over to another node. Generation-bound backup creation,
+scheduling, listing, and verification use the ordinary encrypted recovery repository; fenced
+provider restore is not implemented yet. See [Remote runtime
+placement](runtime-placement.md#enable-built-in-provider-placement) before enabling it.
 
 For the underlying authentication, leases, artifacts, fencing, and agent loop, see
 [Durable distributed deployment](distributed-deployment.md). For the infrastructure mutation

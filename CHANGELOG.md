@@ -6,6 +6,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- The built-in control plane now creates, schedules, lists, and verifies encrypted backups for
+  provider-hosted projects. It binds export to the exact active pinned node/release/generation and
+  allowlisted origin, refuses redirects and encoded/unbounded/mismatched responses, rechecks
+  placement after transfer, and imports directly into local or S3-compatible encrypted recovery
+  without plaintext disk staging.
+- Brand-new provider projects now initialize their isolated SQLite database instead of incorrectly
+  requesting preservation of data that cannot exist. Later and retry generations preserve the
+  committed provider database.
 - Runtime capsules can carry a distinct provider-control credential, and the complete provider
   service now exposes a private, generation-bound consistent SQLite snapshot endpoint. The
   credential is retained only as an in-memory digest, never shares public-ingress authority, and
@@ -31,12 +39,6 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Desired placement can durably require a private node endpoint and exact capability labels.
   Delayed placement keeps those constraints, and assigned nodes cannot shed required capabilities
   through heartbeat or credential rotation.
-- Provider projects are excluded from local backup scheduling and report the unsupported remote
-  backup boundary without touching a nonexistent control-plane database. Backup mutations fail
-  closed until the remote encrypted backup transport is implemented. Job diagnostics and
-  mutations have the same explicit remote boundary instead of accidentally inspecting a local
-  path.
-
 - A complete zero-dependency `@clank.run/framework/provider-service` composition now binds
   independently verified runtime capsules, durable operation/generation/fence intent, provider
   data recovery and migrations, isolated Docker activation, stopped desired state, and
@@ -197,8 +199,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   state, recheck the lease after capsule loading, verify whole-body and nested section digests, and
   bind project/release/generation at the provider hop. Application secrets, SQLite bytes, and
   ingress tokens remain only in bounded HTTPS bodies and never enter URLs, headers, public
-  failures, or durable operation results. The built-in platform keeps remote activation disabled
-  until provider backup/restore/delete and ingress lifecycle controls are complete.
+  failures, or durable operation results. Built-in provider activation is explicit and
+  fail-closed; generation-bound backup and deletion are integrated, while provider restore awaits
+  a separately fenced replacement-generation path.
 - Managed runner enrollment stores only a high-entropy digest, caps active grants, requires a
   recent same-origin browser administrator session plus CSRF, rejects bearer/admin impersonation,
   expires automatically, reserves transactionally, commits once, rolls back failed registration,

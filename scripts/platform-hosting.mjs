@@ -87,6 +87,10 @@ export function resolveProviderPlacement(environment) {
       environment.CLANK_RUNNER_MAX_RUNTIME_BYTES,
       768 * 1024 * 1024,
     ),
+    maxDatabaseBytes: positiveNumber(
+      environment.CLANK_PROVIDER_MAX_DATABASE_BYTES,
+      512 * 1024 * 1024,
+    ),
   });
 }
 

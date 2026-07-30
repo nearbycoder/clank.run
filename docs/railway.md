@@ -143,6 +143,7 @@ local by default:
 CLANK_PROVIDER_DEFAULT_PLACEMENT=local
 CLANK_PROVIDER_REGION=railway-private
 CLANK_PROVIDER_ALLOWED_HOSTS=<private TLS provider hostname>
+CLANK_PROVIDER_MAX_DATABASE_BYTES=536870912
 ```
 
 Run `clank-provider` on the persistent provider volume and `clank-runner` with the same stable node
@@ -151,10 +152,11 @@ does not provide an HTTPS URL; put an authenticated TLS hop in front of any non-
 or keep runner, provider, and control components on one host during development. Clank rejects
 non-loopback cleartext origins.
 
-Do not enable provider placement for production databases yet: the control plane deliberately
-rejects remote backup mutations until its encrypted provider backup transport is implemented.
-Railway volume snapshots or another independently tested provider-host backup remain the
-operator's responsibility in this phase. See [Remote runtime
+Provider backup creation and scheduling now use the exact active private origin and immediately
+encrypt verified snapshots in the configured recovery repository. Use the S3-compatible mode below
+so losing either Railway volume does not also remove the recovery copy. Provider restore through
+the control plane is not implemented yet; Railway volume snapshots or another independently tested
+provider-host restore path remain the operator's responsibility in this phase. See [Remote runtime
 placement](runtime-placement.md#current-support-boundary).
 
 The same private bucket can hold encrypted database recovery points under a separate logical root:

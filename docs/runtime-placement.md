@@ -140,6 +140,7 @@ export CLANK_INGRESS_BASE_DOMAIN=apps.example.com
 export CLANK_PROVIDER_DEFAULT_PLACEMENT=local
 export CLANK_PROVIDER_REGION=us-central
 export CLANK_PROVIDER_ALLOWED_HOSTS=runtime.internal.example
+export CLANK_PROVIDER_MAX_DATABASE_BYTES=536870912
 ```
 
 `CLANK_PROVIDER_ALLOWED_HOSTS` is the comma-separated set of non-loopback node endpoint hostnames
@@ -196,6 +197,7 @@ await openPlatform({
       region: "us-central",
       labels: { tier: "stateful" },
       allowedProviderHosts: ["runtime.internal.example"],
+      maxDatabaseBytes: 512 * 1024 * 1024,
     },
   },
   ingress: { baseDomain: "apps.example.com" },
@@ -207,7 +209,8 @@ await openPlatform({
 For each provider generation, the control plane encrypts the final environment under its platform
 master key and retains the original content-addressed release. The environment is frozen before
 desired state changes, then decrypted only while producing the exact lease-scoped runtime capsule.
-Plaintext secrets and the generation-derived ingress token are not stored in the control database.
+Plaintext secrets and the generation-derived ingress/control tokens are not stored in the control
+database.
 
 Activation requires one exact tuple: project, release, desired generation, observed generation,
 observed state, assigned node, and allowlisted node endpoint. Only then does Clank commit the
@@ -266,11 +269,19 @@ deploy retry, code/data rollback, preview inheritance, and provider-confirmed de
 implemented and tested end to end. Enabling the coordinator alone still moves nothing; only a
 project created with `placement: "provider"` uses provider capacity.
 
-Provider-hosted encrypted backup/restore is not implemented yet. Scheduled local backups exclude
-provider projects, the Backups page reports the boundary, and mutating backup endpoints return
-`PROVIDER_BACKUP_PENDING` rather than reading a nonexistent local database. Do not use provider
-placement for production data until the provider host has an independent, tested backup policy.
-Control-plane job inspection likewise returns `remote_unavailable`, and job mutations return
+Provider-hosted backup creation, scheduling, listing, and verification are implemented. A separate
+generation-derived control credential authorizes one consistent SQLite export from the exact
+active release/generation. The control plane requires the pinned node's current allowlisted
+origin, refuses redirects and encoded responses, enforces deadline/length/media-type/identity
+bounds, rehashes the body, rechecks placement after transfer, and imports it directly into the
+encrypted local or S3-compatible recovery repository. The control token is never stored and does
+not authorize public application ingress. Provider generations created before this credential was
+added must be deployed once before their first managed backup.
+
+Provider restore remains closed with `PROVIDER_RESTORE_PENDING` until recovery bytes can be
+delivered through a new fenced replacement generation with a verified safety copy. Maintain an
+independently tested provider-host restore procedure until that phase ships. Control-plane job
+inspection likewise returns `remote_unavailable`, and job mutations return
 `PROVIDER_JOBS_PENDING`, until a bounded provider diagnostics transport exists. Provider
 application log streaming, per-runtime memory attribution, and provider disk telemetry also remain
 operator responsibilities; request/latency/transfer metrics at Clank's managed ingress continue to

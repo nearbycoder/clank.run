@@ -361,6 +361,64 @@ test("platform object backups survive restarts, bind repository identity, and cl
   }
 });
 
+test("automatic backup claims include deployed provider projects", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-provider-backup-scheduler-"));
+  const databasePath = join(root, "control.sqlite");
+  const database = new DatabaseSync(databasePath);
+  database.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE clank_platform_projects (
+      id TEXT PRIMARY KEY,
+      database_path TEXT,
+      placement TEXT NOT NULL
+    );
+    INSERT INTO clank_platform_projects (id, database_path, placement)
+      VALUES ('provider_project', 'app.sqlite', 'provider');
+  `);
+  const scheduler = createPlatformBackupScheduler({
+    internal: sqliteInternal(database),
+    policy: {
+      enabled: true,
+      intervalMs: 60_000,
+      batchSize: 1,
+      concurrency: 1,
+      maxBackups: 30,
+      maxAgeMs: 90 * 24 * 60 * 60_000,
+      maxDatabaseBytes: 512 * 1024 * 1024,
+    },
+    async createBackup(projectId) {
+      assert.equal(projectId, "provider_project");
+      return {
+        protocol: "clank-backup/1",
+        id: "bk_0000000000000_provider_scheduler",
+        source: "app.sqlite",
+        createdAt: Date.now(),
+        reason: "automatic scheduled backup",
+        databaseBytes: 4096,
+        databaseSha256: "0".repeat(64),
+        databaseRevision: null,
+        migrationCount: 0,
+        latestMigration: null,
+        encryption: { algorithm: "AES-256-GCM", keyId: "test" },
+      };
+    },
+  });
+  try {
+    scheduler.start();
+    await waitFor(() =>
+      scheduler.status("provider_project", true).lastBackupId
+        === "bk_0000000000000_provider_scheduler");
+    assert.equal(
+      scheduler.status("provider_project", true).lastError,
+      null,
+    );
+  } finally {
+    await scheduler.close();
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("durable backup claims prevent duplicate work and graceful close drains an active backup", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-backup-scheduler-"));
   const databasePath = join(root, "control.sqlite");
