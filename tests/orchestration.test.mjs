@@ -453,6 +453,109 @@ test("node placement, desired generations, operation retries, and stale-worker f
   }
 });
 
+test("operation fences increase across every operation for the same project", async () => {
+  const test = await fixture();
+  try {
+    const node = await test.orchestrator.registerNode({
+      id: "node-project-fences",
+      region: "us-central",
+      capacity: 4,
+    });
+    const first = await test.orchestrator.enqueue({
+      projectId: "project_fenced",
+      action: "deploy",
+      idempotencyKey: "project-fenced-deploy-0001",
+      nodeId: node.node.id,
+    });
+    const second = await test.orchestrator.enqueue({
+      projectId: "project_fenced",
+      action: "restart",
+      idempotencyKey: "project-fenced-restart-0002",
+      nodeId: node.node.id,
+    });
+    const other = await test.orchestrator.enqueue({
+      projectId: "project_other",
+      action: "deploy",
+      idempotencyKey: "project-other-deploy-0001",
+      nodeId: node.node.id,
+    });
+
+    const claims = await test.orchestrator.claim(node.node.id, node.token, 3);
+    const firstClaim = claims.find((operation) => operation.id === first.operation.id);
+    const secondClaim = claims.find((operation) => operation.id === second.operation.id);
+    const otherClaim = claims.find((operation) => operation.id === other.operation.id);
+    assert.equal(firstClaim.fence, 1);
+    assert.equal(secondClaim.fence, 2);
+    assert.equal(otherClaim.fence, 1);
+
+    const internal = test.database[SQLITE_INTERNAL];
+    internal.prepare(`UPDATE clank_deployment_operations
+      SET lease_expires_at = 0 WHERE id = ? AND fence = ?`)
+      .run(firstClaim.id, firstClaim.fence);
+    const [reclaimed] = await test.orchestrator.claim(node.node.id, node.token, 1);
+    assert.equal(reclaimed.id, firstClaim.id);
+    assert.equal(reclaimed.fence, 3);
+    assert.equal(await test.orchestrator.complete(firstClaim), false);
+    assert.equal(await test.orchestrator.complete(reclaimed), true);
+
+    test.orchestrator.close();
+    const reopened = openDeploymentOrchestrator(test.database, {
+      distributedLeaseMs: 5_000,
+      retryBaseMs: 10,
+    });
+    const third = await reopened.enqueue({
+      projectId: "project_fenced",
+      action: "stop",
+      idempotencyKey: "project-fenced-stop-0003",
+      nodeId: node.node.id,
+    });
+    const [thirdClaim] = await reopened.claim(node.node.id, node.token, 1);
+    assert.equal(thirdClaim.id, third.operation.id);
+    assert.equal(thirdClaim.fence, 4);
+    reopened.close();
+  } finally {
+    test.database.close();
+    await rm(test.root, { recursive: true, force: true });
+  }
+});
+
+test("existing operation fences seed the durable per-project sequence", async () => {
+  const test = await fixture();
+  try {
+    const node = await test.orchestrator.registerNode({
+      id: "node-fence-migration",
+      region: "us-central",
+    });
+    const existing = await test.orchestrator.enqueue({
+      projectId: "project_fence_migration",
+      action: "deploy",
+      idempotencyKey: "project-fence-migration-existing",
+      nodeId: node.node.id,
+    });
+    const internal = test.database[SQLITE_INTERNAL];
+    internal.prepare(`UPDATE clank_deployment_operations
+      SET state = 'succeeded', fence = 9, result = '{}'
+      WHERE id = ?`).run(existing.operation.id);
+    test.orchestrator.close();
+    internal.exec("DROP TABLE clank_deployment_project_fences");
+
+    const reopened = openDeploymentOrchestrator(test.database);
+    const next = await reopened.enqueue({
+      projectId: "project_fence_migration",
+      action: "restart",
+      idempotencyKey: "project-fence-migration-next",
+      nodeId: node.node.id,
+    });
+    const [claim] = await reopened.claim(node.node.id, node.token, 1);
+    assert.equal(claim.id, next.operation.id);
+    assert.equal(claim.fence, 10);
+    reopened.close();
+  } finally {
+    test.database.close();
+    await rm(test.root, { recursive: true, force: true });
+  }
+});
+
 test("desired deployment validation rejects inconsistent release and runtime state before persistence", async () => {
   const test = await fixture();
   try {

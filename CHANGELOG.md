@@ -123,6 +123,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- Deployment operation fences are now allocated from a durable per-project sequence instead of
+  restarting at one for each operation. Successive releases, concurrent claims, expired-lease
+  reclamation, and process restarts therefore preserve the provider's stale-writer ordering
+  contract; project deletion removes the matching sequence.
 - Object-backed project backups now map URL-safe project IDs that begin with `-` or `_` to a stable
   portable repository identity, instead of intermittently rejecting valid generated projects.
 - Docker application environment is now delivered through one inert, name-only encoded envelope

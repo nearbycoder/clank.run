@@ -117,7 +117,8 @@ reassigns eligible portable desired placement. A stateful placement stays pinned
 until its node identity is re-enrolled or an explicit backup/restore workflow moves it. The old
 runner can no longer authenticate, renew, complete,
 or observe work. A leased operation stays fenced until its lease expires, then becomes retryable on
-the replacement node with a higher fence. To reuse a revoked node ID, create and consume a new
+the replacement node with a higher fence. Fences increase across all operations for that project,
+so a later release can never restart at an older provider fence. To reuse a revoked node ID, create and consume a new
 one-time enrollment.
 
 Draining is graceful maintenance; revocation is credential invalidation. Do not use revocation as

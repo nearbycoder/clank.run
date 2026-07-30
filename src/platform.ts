@@ -2000,6 +2000,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           SET revoked_at = ?
           WHERE project_id = ? AND revoked_at IS NULL`).run(deletedAt, project.id).changes);
         storage.internal.prepare("DELETE FROM clank_deployment_operations WHERE project_id = ?").run(project.id);
+        storage.internal.prepare("DELETE FROM clank_deployment_project_fences WHERE project_id = ?").run(project.id);
         storage.internal.prepare("DELETE FROM clank_deployment_placements WHERE project_id = ?").run(project.id);
         const result = storage.internal.prepare("DELETE FROM clank_platform_projects WHERE id = ?").run(project.id);
         if (Number(result.changes) !== 1) {
