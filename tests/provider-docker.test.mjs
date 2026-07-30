@@ -175,13 +175,94 @@ test("provider Docker launcher starts bounded workers and scheduler without publ
   }
 });
 
+test("provider Docker launcher defers background work until durable activation", async () => {
+  const fixture = await dockerFixture("deferred-jobs", { jobs: true });
+  try {
+    const launcher = await fixture.open({
+      portStart: 45_115,
+      portEnd: 45_117,
+    });
+    const signal = new AbortController().signal;
+    const candidate = await launcher.launch({
+      prepared: await fixture.prepared(),
+      signal,
+      deferBackground: true,
+    });
+    assert.equal(launcher.inspect()[0].containers, 1);
+    assert.equal(
+      (await fixture.audit()).filter((entry) => entry.command === "start").length,
+      1,
+    );
+    assert.throws(
+      () => launcher.commit(candidate),
+      /background processes must be activated/iu,
+    );
+
+    const active = await launcher.activate(candidate, signal);
+    assert.equal(active.status, "active");
+    assert.equal(active.containers, 4);
+    assert.deepEqual(await launcher.activate(candidate, signal), active);
+    const starts = (await fixture.audit()).filter((entry) => entry.command === "start");
+    assert.equal(starts.length, 4);
+    assert.deepEqual(
+      starts.map((entry) => entry.runtimeEnvironment.CLANK_PROCESS_ROLE ?? "web").sort(),
+      ["scheduler", "web", "worker", "worker"],
+    );
+    await launcher.close();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("provider Docker launcher never starts deferred jobs after the web candidate fails", async () => {
+  const fixture = await dockerFixture("deferred-web-failure", { jobs: true });
+  try {
+    const launcher = await fixture.open({
+      portStart: 45_118,
+      portEnd: 45_119,
+    });
+    const signal = new AbortController().signal;
+    const candidate = await launcher.launch({
+      prepared: await fixture.prepared(),
+      signal,
+      deferBackground: true,
+    });
+    const [id] = await fixture.containerIds();
+    const state = JSON.parse(await readFile(
+      join(fixture.stateDirectory, `${id}.json`),
+      "utf8",
+    ));
+    process.kill(state.pid, "SIGKILL");
+    await waitUntil(() => launcher.inspect()[0]?.status === "failed");
+    await assert.rejects(
+      launcher.activate(candidate, signal),
+      /candidate has failed/u,
+    );
+    assert.equal(
+      (await fixture.audit()).filter((entry) => entry.command === "start").length,
+      1,
+    );
+    assert.deepEqual(launcher.inspect(), []);
+    await launcher.close();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("provider Docker launcher cleans exact-owner orphans and failed candidates", async () => {
   const fixture = await dockerFixture("recovery");
   try {
     const orphan = "f".repeat(64);
     await writeFile(
       join(fixture.stateDirectory, `${orphan}.json`),
-      JSON.stringify({ id: orphan, arguments: [], pid: null }),
+      JSON.stringify({
+        id: orphan,
+        arguments: [
+          "--label", "run.clank.managed=provider-runtime",
+          "--label", "run.clank.owner=test-recovery",
+        ],
+        pid: null,
+      }),
     );
     const launcher = await fixture.open({
       portStart: 45_120,
@@ -208,6 +289,41 @@ test("provider Docker launcher cleans exact-owner orphans and failed candidates"
     );
     assert.deepEqual(launcher.inspect(), []);
     assert.deepEqual(await fixture.containerIds(), []);
+    await launcher.close();
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("provider Docker launcher converges an uncertain create by exact deployment labels", async () => {
+  const fixture = await dockerFixture("uncertain-create", {
+    failCreateAfterSaveOnce: true,
+    failRemoveOnce: true,
+  });
+  try {
+    const launcher = await fixture.open({
+      portStart: 45_123,
+      portEnd: 45_124,
+    });
+    await assert.rejects(
+      launcher.launch({
+        prepared: await fixture.prepared(),
+        signal: new AbortController().signal,
+      }),
+      /Docker create failed/iu,
+    );
+    assert.deepEqual(launcher.inspect(), []);
+    assert.deepEqual(await fixture.containerIds(), []);
+    const audit = await fixture.audit();
+    assert.equal(
+      audit.filter((entry) =>
+        entry.command === "ls"
+        && entry.arguments.includes("label=run.clank.project=project_docker_01")
+        && entry.arguments.includes("label=run.clank.release=release_docker_01")
+        && entry.arguments.includes("label=run.clank.generation=1")).length >= 2,
+      true,
+    );
+    assert.equal(audit.filter((entry) => entry.command === "rm").length >= 2, true);
     await launcher.close();
   } finally {
     await fixture.close();
@@ -440,6 +556,12 @@ async function dockerFixture(name, options = {}) {
         dockerEnvironment: {
           CLANK_TEST_DOCKER_STATE: stateDirectory,
           CLANK_TEST_DOCKER_AUDIT: auditPath,
+          ...(options.failCreateAfterSaveOnce
+            ? { CLANK_TEST_DOCKER_FAIL_CREATE_AFTER_SAVE_ONCE: "1" }
+            : {}),
+          ...(options.failRemoveOnce
+            ? { CLANK_TEST_DOCKER_FAIL_REMOVE_ONCE: "1" }
+            : {}),
         },
         commandTimeoutMs: 5_000,
         stopTimeoutMs: 1_000,
@@ -475,6 +597,14 @@ async function dockerFixture(name, options = {}) {
       await rm(root, { recursive: true, force: true });
     },
   };
+}
+
+async function waitUntil(check) {
+  const deadline = Date.now() + 2_000;
+  while (!check()) {
+    if (Date.now() >= deadline) throw new Error("condition did not become true");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 const TEST_SERVER = `
@@ -529,6 +659,14 @@ const append = async (value) => {
 const statePath = (id) => join(stateDirectory, id + ".json");
 const load = async (id) => JSON.parse(await readFile(statePath(id), "utf8"));
 const save = async (state) => writeFile(statePath(state.id), JSON.stringify(state));
+const markerExists = async (name) => {
+  try {
+    await readFile(join(stateDirectory, name));
+    return true;
+  } catch {
+    return false;
+  }
+};
 const alive = (pid) => {
   if (!pid) return false;
   try {
@@ -541,8 +679,21 @@ const alive = (pid) => {
 
 if (operation === "ls") {
   const entries = await readdir(stateDirectory);
+  const filters = [];
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === "--filter") filters.push(args[index + 1]);
+  }
   for (const entry of entries.sort()) {
-    if (entry.endsWith(".json")) process.stdout.write(entry.slice(0, -5) + "\\n");
+    if (!entry.endsWith(".json")) continue;
+    const state = JSON.parse(await readFile(join(stateDirectory, entry), "utf8"));
+    const labels = new Set();
+    for (let index = 0; index < state.arguments.length; index++) {
+      if (state.arguments[index] === "--label") labels.add(state.arguments[index + 1]);
+    }
+    if (filters.every((filter) =>
+      filter.startsWith("label=") && labels.has(filter.slice("label=".length)))) {
+      process.stdout.write(entry.slice(0, -5) + "\\n");
+    }
   }
   await append({ command: "ls", arguments: args });
   process.exit(0);
@@ -562,6 +713,14 @@ if (operation === "create") {
       UNRELATED_HOST_SECRET: process.env.CLANK_TEST_UNRELATED_HOST_SECRET ?? null,
     },
   });
+  if (
+    process.env.CLANK_TEST_DOCKER_FAIL_CREATE_AFTER_SAVE_ONCE === "1"
+    && !(await markerExists(".create-failed-once"))
+  ) {
+    await writeFile(join(stateDirectory, ".create-failed-once"), "1");
+    process.stderr.write("synthetic uncertain create failure");
+    process.exit(42);
+  }
   process.stdout.write(id + "\\n");
   process.exit(0);
 }
@@ -624,6 +783,15 @@ if (operation === "stop") {
 
 if (operation === "rm") {
   const ids = args.slice(args.indexOf("--force") + 1);
+  if (
+    process.env.CLANK_TEST_DOCKER_FAIL_REMOVE_ONCE === "1"
+    && !(await markerExists(".remove-failed-once"))
+  ) {
+    await writeFile(join(stateDirectory, ".remove-failed-once"), "1");
+    await append({ command: "rm", arguments: args, failed: true });
+    process.stderr.write("synthetic remove failure");
+    process.exit(43);
+  }
   for (const id of ids) {
     try {
       const state = await load(id);

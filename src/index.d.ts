@@ -17,6 +17,7 @@ export * from "./runtime-placement.js";
 export * from "./provider-data.js";
 export * from "./provider-runtime.js";
 export * from "./provider-docker.js";
+export * from "./provider-service.js";
 export * from "./data-plane.js";
 export * from "./forms.js";
 export * from "./ui.js";

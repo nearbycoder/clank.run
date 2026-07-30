@@ -1,0 +1,950 @@
+import {
+  openDeploymentProviderDataStore,
+  type DeploymentProviderDataSnapshot,
+  type DeploymentProviderDataState,
+  type DeploymentProviderDataStore,
+  type PreparedDeploymentRuntimeData,
+} from "./provider-data.ts";
+import {
+  openDockerDeploymentRuntimeLauncher,
+  type DockerDeploymentRuntimeCandidate,
+  type DockerDeploymentRuntimeLauncher,
+  type DockerDeploymentRuntimeLauncherOptions,
+} from "./provider-docker.ts";
+import {
+  createDeploymentRuntimeIngress,
+  type DeploymentRuntimeIngress,
+  type DeploymentRuntimeIngressOptions,
+} from "./provider-runtime.ts";
+import {
+  type DeploymentProvider,
+  type DeploymentProviderRequest,
+} from "./provider.ts";
+import {
+  decodeDeploymentRuntimeCapsule,
+  DEPLOYMENT_RUNTIME_PROTOCOL,
+  deploymentRuntimeDigest,
+} from "./runtime-placement.ts";
+
+export const DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL = "clank-provider-service/1";
+
+export interface DeploymentProviderServiceState {
+  readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
+  readonly projectId: string;
+  readonly operationId: string;
+  readonly fence: number;
+  readonly generation: number;
+  readonly state: "running" | "stopped";
+  readonly releaseId: string | null;
+  readonly capsuleSha256: string | null;
+  readonly phase: "reconciling" | "running" | "stopped";
+  readonly updatedAt: number;
+}
+
+export interface DeploymentProviderServiceOptions {
+  /** Existing private provider root shared by the injected data and runtime components. */
+  rootDirectory: string;
+  data: DeploymentProviderDataStore;
+  runtimes: DockerDeploymentRuntimeLauncher;
+  ingress: DeploymentRuntimeIngress;
+  /** Stable provider kind reported to the coordinator. Defaults to `docker`. */
+  kind?: string;
+  /** Maximum route drain before reconciliation fails closed. Defaults to 30 seconds. */
+  drainTimeoutMs?: number;
+  /** Runtime database/snapshot verification bound. Defaults to 512 MiB. */
+  maxDatabaseBytes?: number;
+  /** Receives non-secret cleanup and infrastructure diagnostics. */
+  onError?: (error: unknown) => void;
+}
+
+export interface DockerDeploymentProviderServiceOptions {
+  rootDirectory: string;
+  owner: string;
+  image: string;
+  kind?: string;
+  drainTimeoutMs?: number;
+  data?: Omit<Parameters<typeof openDeploymentProviderDataStore>[0], "rootDirectory">;
+  docker?: Omit<
+    DockerDeploymentRuntimeLauncherOptions,
+    "rootDirectory" | "owner" | "image"
+  >;
+  ingress?: DeploymentRuntimeIngressOptions;
+  /** Default private diagnostic hook used by every component. */
+  onError?: (error: unknown) => void;
+}
+
+export interface DeploymentProviderService extends DeploymentProvider {
+  readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
+  /** Handles only the provider-private generation-bound runtime route. */
+  handle(request: Request): Promise<Response>;
+  /** Reads durable, non-secret desired-state progress for one project. */
+  inspect(projectId: string): Promise<DeploymentProviderServiceState | null>;
+  /** Creates a consistent provider-data snapshot for external encrypted backup. */
+  snapshot(projectId: string): Promise<DeploymentProviderDataSnapshot | null>;
+  /** Revokes traffic, drains requests, stops runtimes, and closes the service. */
+  close(): Promise<void>;
+}
+
+interface StoredServiceState extends DeploymentProviderServiceState {}
+
+interface NodeStats {
+  dev: number;
+  ino: number;
+  mode: number;
+  size: number;
+  uid?: number;
+  isDirectory(): boolean;
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+interface NodeFileHandle {
+  stat(): Promise<NodeStats>;
+  readFile(options: { encoding: "utf8" }): Promise<string>;
+  writeFile(value: Uint8Array): Promise<void>;
+  sync(): Promise<void>;
+  close(): Promise<void>;
+}
+
+interface NodeFs {
+  constants: { O_RDONLY: number; O_NOFOLLOW?: number };
+  chmod(path: string, mode: number): Promise<void>;
+  lstat(path: string): Promise<NodeStats>;
+  mkdir(path: string, options: { recursive?: boolean; mode?: number }): Promise<void>;
+  open(
+    path: string,
+    flags: string | number,
+    mode?: number,
+  ): Promise<NodeFileHandle>;
+  realpath(path: string): Promise<string>;
+  rename(from: string, to: string): Promise<void>;
+  rm(path: string, options: { force?: boolean }): Promise<void>;
+}
+
+interface NodePath {
+  dirname(path: string): string;
+  join(...parts: string[]): string;
+  relative(from: string, to: string): string;
+  resolve(...parts: string[]): string;
+}
+
+const IDENTIFIER = /^[A-Za-z0-9_-]{1,128}$/u;
+const KIND = /^[a-z][a-z0-9-]{0,63}$/u;
+const DIGEST = /^[a-f0-9]{64}$/u;
+const MAX_STATE_BYTES = 64 * 1024;
+const MAX_PROVIDER_DATABASE_BYTES =
+  2 * 1024 * 1024 * 1024 - 2 * 1024 * 1024 - 100 * 1024 * 1024 - 32;
+
+/**
+ * Composes provider data, an isolated Docker launcher, and private ingress into
+ * one fenced desired-state provider. Application secrets remain only in the
+ * verified capsule and transient runtime activation plan.
+ */
+export async function openDeploymentProviderService(
+  options: DeploymentProviderServiceOptions,
+): Promise<DeploymentProviderService> {
+  if (!options || typeof options !== "object") {
+    throw new TypeError("Deployment provider service options are required.");
+  }
+  const fs = await nodeFs();
+  const path = await nodePath();
+  const root = await privateDirectory(
+    fs,
+    path.resolve(nonEmpty(options.rootDirectory, "rootDirectory")),
+    "rootDirectory",
+  );
+  const serviceDirectory = path.join(root, "service");
+  await ensurePrivateDirectory(fs, serviceDirectory, "provider service directory");
+  requireInside(path, root, await fs.realpath(serviceDirectory), "provider service directory");
+  const kind = pattern(options.kind ?? "docker", "kind", KIND);
+  const drainTimeoutMs = integer(
+    options.drainTimeoutMs ?? 30_000,
+    "drainTimeoutMs",
+    100,
+    5 * 60_000,
+  );
+  const maxDatabaseBytes = integer(
+    options.maxDatabaseBytes ?? 512 * 1024 * 1024,
+    "maxDatabaseBytes",
+    1_024,
+    MAX_PROVIDER_DATABASE_BYTES,
+  );
+  const data = requiredComponent(options.data, "data", [
+    "apply",
+    "inspect",
+    "snapshot",
+  ]);
+  const runtimes = requiredComponent(options.runtimes, "runtimes", [
+    "launch",
+    "activate",
+    "inspect",
+    "stop",
+    "close",
+  ]);
+  const ingress = requiredComponent(options.ingress, "ingress", [
+    "activate",
+    "inspect",
+    "handle",
+    "deactivate",
+    "close",
+  ]);
+  const tails = new Map<string, Promise<void>>();
+  let closed = false;
+
+  const report = (error: unknown): void => {
+    try {
+      options.onError?.(error);
+    } catch {
+      // Diagnostics cannot affect deployment state.
+    }
+  };
+
+  const exclusive = async <Value>(
+    projectId: string,
+    task: () => Promise<Value>,
+  ): Promise<Value> => {
+    const prior = tails.get(projectId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = prior.then(() => current);
+    tails.set(projectId, tail);
+    await prior;
+    try {
+      return await task();
+    } finally {
+      release();
+      if (tails.get(projectId) === tail) tails.delete(projectId);
+    }
+  };
+
+  const statePath = (projectId: string): string =>
+    path.join(serviceDirectory, `${identifier(projectId, "projectId")}.json`);
+
+  const readProjectState = async (
+    projectId: string,
+  ): Promise<StoredServiceState | null> =>
+    serviceState(await readPrivateJson(fs, statePath(projectId)), projectId);
+
+  const writeProjectState = async (state: StoredServiceState): Promise<void> => {
+    await atomicWriteJson(fs, path, statePath(state.projectId), state);
+  };
+
+  const quiesce = async (projectId: string): Promise<void> => {
+    const bindings = ingress.inspect()
+      .filter((binding) => binding.projectId === projectId)
+      .sort((left, right) => right.generation - left.generation);
+    for (const binding of bindings) {
+      const result = await ingress.deactivate(
+        projectId,
+        binding.generation,
+        drainTimeoutMs,
+      );
+      if (!result.drained) {
+        throw new Error("Provider runtime traffic did not drain before its deadline.");
+      }
+    }
+    const active = runtimes.inspect()
+      .filter((runtime) => runtime.projectId === projectId)
+      .sort((left, right) => right.generation - left.generation);
+    for (const runtime of active) {
+      await runtimes.stop(projectId, runtime.generation);
+    }
+    if (runtimes.inspect().some((runtime) => runtime.projectId === projectId)) {
+      throw new Error("Provider runtime cleanup could not be verified.");
+    }
+  };
+
+  const cleanupCandidate = async (
+    candidate: DockerDeploymentRuntimeCandidate | null,
+    expected?: Pick<
+      PreparedDeploymentRuntimeData,
+      "projectId" | "generation"
+    > | null,
+  ): Promise<void> => {
+    const identity = candidate ?? expected;
+    if (!identity) return;
+    const failures: unknown[] = [];
+    try {
+      const result = await ingress.deactivate(
+        identity.projectId,
+        identity.generation,
+        drainTimeoutMs,
+      );
+      if (!result.drained) {
+        failures.push(new Error("Candidate traffic did not drain before cleanup."));
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await runtimes.stop(identity.projectId, identity.generation);
+      if (runtimes.inspect().some((runtime) =>
+        runtime.projectId === identity.projectId
+        && runtime.generation === identity.generation)) {
+        failures.push(new Error("Candidate runtime cleanup could not be verified."));
+      }
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length > 0) {
+      for (const failure of failures) report(failure);
+      throw new AggregateError(failures, "Provider candidate cleanup failed.");
+    }
+  };
+
+  const service: DeploymentProviderService = {
+    protocol: DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
+    kind,
+
+    async reconcile(requestInput) {
+      if (closed) throw new Error("Deployment provider service is closed.");
+      const request = await providerRequest(requestInput, maxDatabaseBytes);
+      return exclusive(request.operation.projectId, async () => {
+        if (closed) throw new Error("Deployment provider service is closed.");
+        throwIfAborted(request.signal);
+        const prior = await readProjectState(request.operation.projectId);
+        assertAccepted(prior, request);
+        let bootstrapData: DeploymentProviderDataState | null = null;
+        let bootstrapInspected = false;
+        if (!prior) {
+          await quiesce(request.operation.projectId);
+          bootstrapData = await data.inspect(request.operation.projectId);
+          bootstrapInspected = true;
+          assertAcceptedData(bootstrapData, request);
+        }
+        const intent = stateFor(request, "reconciling");
+        await writeProjectState(intent);
+        throwIfAborted(request.signal);
+
+        if (request.desired.state === "stopped") {
+          if (!bootstrapInspected) await quiesce(request.operation.projectId);
+          throwIfAborted(request.signal);
+          await writeProjectState(stateFor(request, "stopped"));
+          return;
+        }
+
+        const runtime = request.runtime!;
+        const liveRuntime = runtimes.inspect().filter((entry) =>
+          entry.projectId === request.operation.projectId);
+        const liveIngress = ingress.inspect().filter((entry) =>
+          entry.projectId === request.operation.projectId);
+        const exactRuntime = liveRuntime.length === 1
+          && liveRuntime[0].generation === request.desired.generation
+          && liveRuntime[0].releaseId === request.desired.releaseId
+          && liveRuntime[0].capsuleSha256 === runtime.sha256
+          && liveRuntime[0].status === "active";
+        const exactIngress = liveIngress.length === 1
+          && liveIngress[0].generation === request.desired.generation
+          && liveIngress[0].releaseId === request.desired.releaseId
+          && liveIngress[0].path === runtime.manifest.ingress.route
+          && liveIngress[0].latest;
+        const trustedRunningRetry = prior?.phase === "running"
+          && matchesState(prior, request)
+          && exactRuntime
+          && exactIngress;
+        if (!trustedRunningRetry && !bootstrapInspected) {
+          await quiesce(request.operation.projectId);
+        }
+        const existingData = bootstrapInspected
+          ? bootstrapData
+          : await data.inspect(request.operation.projectId);
+        if (trustedRunningRetry && !matchesData(existingData, request)) {
+          await quiesce(request.operation.projectId);
+        }
+        throwIfAborted(request.signal);
+
+        let prepared: PreparedDeploymentRuntimeData | null = null;
+        let candidate: DockerDeploymentRuntimeCandidate | null = null;
+        try {
+          const committed = await data.apply({
+            operation: request.operation,
+            desired: request.desired,
+            runtime,
+            signal: request.signal,
+          }, async (value) => {
+            prepared = value;
+            candidate = await runtimes.launch({
+              prepared: value,
+              signal: request.signal,
+              deferBackground: true,
+            });
+          }, async (value) => {
+            await cleanupCandidate(candidate, value);
+          });
+          if (!prepared || !candidate) {
+            throw new Error("Provider data validation did not produce a runtime candidate.");
+          }
+          if (
+            committed.projectId !== candidate.projectId
+            || committed.releaseId !== candidate.releaseId
+            || committed.generation !== candidate.generation
+            || committed.capsuleSha256 !== candidate.capsuleSha256
+          ) {
+            throw new Error("Provider data and runtime candidate do not match.");
+          }
+          const active = await runtimes.activate(candidate, request.signal);
+          throwIfAborted(request.signal);
+          await ingress.activate({
+            protocol: DEPLOYMENT_RUNTIME_PROTOCOL,
+            projectId: committed.projectId,
+            releaseId: committed.releaseId,
+            generation: committed.generation,
+            path: prepared.ingress.route,
+            token: prepared.ingress.token,
+            upstream: active.upstream,
+          });
+          throwIfAborted(request.signal);
+          await writeProjectState(stateFor(request, "running"));
+        } catch (error) {
+          try {
+            await cleanupCandidate(candidate, prepared);
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              "Provider reconciliation and candidate cleanup both failed.",
+            );
+          }
+          throw error;
+        } finally {
+          prepared = null;
+          candidate = null;
+        }
+      });
+    },
+
+    handle(request) {
+      return ingress.handle(request);
+    },
+
+    async inspect(projectIdInput) {
+      const projectId = identifier(projectIdInput, "projectId");
+      return exclusive(projectId, async () => {
+        const state = await readProjectState(projectId);
+        return state ? publicState(state) : null;
+      });
+    },
+
+    snapshot(projectId) {
+      return data.snapshot(identifier(projectId, "projectId"));
+    },
+
+    async close() {
+      if (closed) return;
+      closed = true;
+      const activeOperations = [...tails.values()];
+      const failures: unknown[] = [];
+      try {
+        const drained = await ingress.close(drainTimeoutMs);
+        if (!drained) failures.push(new Error("Provider ingress did not drain before shutdown."));
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await runtimes.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      await Promise.all(activeOperations);
+      for (const failure of failures) report(failure);
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "Deployment provider service failed to close cleanly.");
+      }
+    },
+  };
+  return Object.freeze(service);
+}
+
+/** Opens the complete zero-dependency Docker provider stack with secure defaults. */
+export async function openDockerDeploymentProviderService(
+  options: DockerDeploymentProviderServiceOptions,
+): Promise<DeploymentProviderService> {
+  if (!options || typeof options !== "object") {
+    throw new TypeError("Docker deployment provider service options are required.");
+  }
+  const data = await openDeploymentProviderDataStore({
+    ...(options.data ?? {}),
+    rootDirectory: options.rootDirectory,
+  });
+  let ingress: DeploymentRuntimeIngress | undefined;
+  let runtimes: DockerDeploymentRuntimeLauncher | undefined;
+  try {
+    runtimes = await openDockerDeploymentRuntimeLauncher({
+      ...(options.docker ?? {}),
+      rootDirectory: options.rootDirectory,
+      owner: options.owner,
+      image: options.image,
+      onError: options.docker?.onError ?? options.onError,
+    });
+    ingress = createDeploymentRuntimeIngress({
+      ...(options.ingress ?? {}),
+      onError: options.ingress?.onError ?? options.onError,
+    });
+    return await openDeploymentProviderService({
+      rootDirectory: options.rootDirectory,
+      data,
+      runtimes,
+      ingress,
+      kind: options.kind,
+      drainTimeoutMs: options.drainTimeoutMs,
+      maxDatabaseBytes: options.data?.maxDatabaseBytes,
+      onError: options.onError,
+    });
+  } catch (error) {
+    await Promise.allSettled([
+      ...(ingress ? [ingress.close(options.drainTimeoutMs)] : []),
+      ...(runtimes ? [runtimes.close()] : []),
+    ]);
+    throw error;
+  }
+}
+
+async function providerRequest(
+  input: DeploymentProviderRequest,
+  maxDatabaseBytes: number,
+): Promise<DeploymentProviderRequest> {
+  if (!input || typeof input !== "object") {
+    throw new TypeError("Provider request is required.");
+  }
+  const operation = input.operation;
+  if (!operation || typeof operation !== "object") {
+    throw new TypeError("Provider operation is required.");
+  }
+  const projectId = identifier(operation.projectId, "operation.projectId");
+  const id = identifier(operation.id, "operation.id");
+  const fence = positiveInteger(operation.fence, "operation.fence");
+  const attempt = positiveInteger(operation.attempt, "operation.attempt");
+  const maxAttempts = positiveInteger(operation.maxAttempts, "operation.maxAttempts");
+  if (attempt > maxAttempts) throw new TypeError("Provider operation attempt exceeds maxAttempts.");
+  if (!(input.signal instanceof AbortSignal)) {
+    throw new TypeError("Provider request signal must be an AbortSignal.");
+  }
+  const desired = input.desired;
+  if (!desired || typeof desired !== "object") {
+    throw new TypeError("Provider desired state is required.");
+  }
+  const generation = positiveInteger(desired.generation, "desired.generation");
+  if (desired.state !== "running" && desired.state !== "stopped") {
+    throw new TypeError("Provider desired state is invalid.");
+  }
+  let artifact = input.artifact;
+  let runtime = input.runtime ?? null;
+  if (desired.state === "stopped") {
+    if (
+      desired.releaseId !== null
+      || (desired.runtimeProtocol !== undefined && desired.runtimeProtocol !== null)
+      || input.runtime
+      || input.artifact
+    ) {
+      throw new TypeError("Stopped provider state cannot include release content.");
+    }
+  } else {
+    const releaseId = identifier(desired.releaseId, "desired.releaseId");
+    if (
+      desired.runtimeProtocol !== DEPLOYMENT_RUNTIME_PROTOCOL
+      || !input.runtime
+      || !(input.runtime.bytes instanceof Uint8Array)
+      || !DIGEST.test(input.runtime.sha256)
+      || await deploymentRuntimeDigest(input.runtime.bytes) !== input.runtime.sha256
+    ) {
+      throw new TypeError("Provider service requires a running runtime capsule.");
+    }
+    runtime = await decodeDeploymentRuntimeCapsule(
+      new Uint8Array(input.runtime.bytes),
+      {
+        maxDatabaseBytes,
+        maxCapsuleBytes:
+          2 * 1024 * 1024 + 100 * 1024 * 1024 + maxDatabaseBytes + 32,
+      },
+    );
+    if (
+      runtime.manifest?.protocol !== DEPLOYMENT_RUNTIME_PROTOCOL
+      || runtime.manifest.projectId !== projectId
+      || runtime.manifest.releaseId !== releaseId
+      || runtime.manifest.generation !== generation
+      || !input.artifact
+      || input.artifact.sha256 !== runtime.artifact?.sha256
+    ) {
+      throw new TypeError("Provider runtime capsule does not match desired state.");
+    }
+    artifact = runtime.artifact;
+  }
+  return Object.freeze({
+    operation: Object.freeze({ id, projectId, fence, attempt, maxAttempts }),
+    desired: Object.freeze({
+      generation,
+      releaseId: desired.state === "running"
+        ? identifier(desired.releaseId, "desired.releaseId")
+        : null,
+      state: desired.state,
+      runtimeProtocol: desired.state === "running" ? DEPLOYMENT_RUNTIME_PROTOCOL : null,
+    }),
+    artifact,
+    runtime,
+    signal: input.signal,
+  });
+}
+
+function assertAccepted(
+  prior: StoredServiceState | null,
+  request: DeploymentProviderRequest,
+): void {
+  if (!prior) return;
+  const capsuleSha256 = request.runtime?.sha256 ?? null;
+  const exact = prior.generation === request.desired.generation
+    && prior.state === request.desired.state
+    && prior.releaseId === request.desired.releaseId
+    && prior.capsuleSha256 === capsuleSha256;
+  if (request.desired.generation < prior.generation) {
+    throw new Error("Provider service generation is stale.");
+  }
+  if (request.desired.generation === prior.generation && !exact) {
+    throw new Error("Provider service generation conflicts with durable desired state.");
+  }
+  if (request.operation.fence < prior.fence) {
+    throw new Error("Provider service fence is stale.");
+  }
+  if (
+    request.operation.fence === prior.fence
+    && request.operation.id !== prior.operationId
+  ) {
+    throw new Error("Provider service operation conflicts with its durable fence.");
+  }
+}
+
+function assertAcceptedData(
+  state: DeploymentProviderDataState | null,
+  request: DeploymentProviderRequest,
+): void {
+  if (!state) return;
+  if (request.desired.generation < state.generation) {
+    throw new Error("Provider service generation is stale against provider data.");
+  }
+  if (request.desired.generation === state.generation) {
+    if (request.desired.state !== "running" || !matchesData(state, request)) {
+      throw new Error("Provider service generation conflicts with provider data.");
+    }
+    if (request.operation.fence < state.fence) {
+      throw new Error("Provider service fence is stale against provider data.");
+    }
+    return;
+  }
+  if (request.operation.fence <= state.fence) {
+    throw new Error("Provider service fence is stale against provider data.");
+  }
+}
+
+function stateFor(
+  request: DeploymentProviderRequest,
+  phase: StoredServiceState["phase"],
+): StoredServiceState {
+  return Object.freeze({
+    protocol: DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
+    projectId: request.operation.projectId,
+    operationId: request.operation.id,
+    fence: request.operation.fence,
+    generation: request.desired.generation,
+    state: request.desired.state,
+    releaseId: request.desired.releaseId,
+    capsuleSha256: request.runtime?.sha256 ?? null,
+    phase,
+    updatedAt: Date.now(),
+  });
+}
+
+function matchesData(
+  state: DeploymentProviderDataState | null,
+  request: DeploymentProviderRequest,
+): boolean {
+  return Boolean(
+    state
+    && state.projectId === request.operation.projectId
+    && state.releaseId === request.desired.releaseId
+    && state.generation === request.desired.generation
+    && state.capsuleSha256 === request.runtime?.sha256,
+  );
+}
+
+function matchesState(
+  state: StoredServiceState,
+  request: DeploymentProviderRequest,
+): boolean {
+  return state.generation === request.desired.generation
+    && state.state === request.desired.state
+    && state.releaseId === request.desired.releaseId
+    && state.capsuleSha256 === (request.runtime?.sha256 ?? null);
+}
+
+function serviceState(
+  value: unknown,
+  projectId: string,
+): StoredServiceState | null {
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Provider service state is invalid.");
+  }
+  const input = value as Record<string, unknown>;
+  const expected = [
+    "protocol",
+    "projectId",
+    "operationId",
+    "fence",
+    "generation",
+    "state",
+    "releaseId",
+    "capsuleSha256",
+    "phase",
+    "updatedAt",
+  ];
+  if (
+    Object.keys(input).length !== expected.length
+    || expected.some((key) => !Object.hasOwn(input, key))
+    || input.protocol !== DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL
+    || identifier(input.projectId, "state.projectId") !== projectId
+  ) {
+    throw new Error("Provider service state is invalid.");
+  }
+  const state = input.state;
+  const phase = input.phase;
+  if (
+    (state !== "running" && state !== "stopped")
+    || (phase !== "reconciling" && phase !== "running" && phase !== "stopped")
+    || (phase === "running" && state !== "running")
+    || (phase === "stopped" && state !== "stopped")
+  ) {
+    throw new Error("Provider service state phase is invalid.");
+  }
+  const releaseId = input.releaseId === null
+    ? null
+    : identifier(input.releaseId, "state.releaseId");
+  const capsuleSha256 = input.capsuleSha256 === null
+    ? null
+    : pattern(input.capsuleSha256, "state.capsuleSha256", DIGEST);
+  if (
+    (state === "running" && (!releaseId || !capsuleSha256))
+    || (state === "stopped" && (releaseId !== null || capsuleSha256 !== null))
+  ) {
+    throw new Error("Provider service state binding is invalid.");
+  }
+  return Object.freeze({
+    protocol: DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
+    projectId,
+    operationId: identifier(input.operationId, "state.operationId"),
+    fence: positiveInteger(input.fence, "state.fence"),
+    generation: positiveInteger(input.generation, "state.generation"),
+    state,
+    releaseId,
+    capsuleSha256,
+    phase,
+    updatedAt: positiveInteger(input.updatedAt, "state.updatedAt"),
+  });
+}
+
+function publicState(state: StoredServiceState): DeploymentProviderServiceState {
+  return Object.freeze({ ...state });
+}
+
+async function readPrivateJson(
+  fs: NodeFs,
+  filename: string,
+): Promise<unknown | null> {
+  let handle: NodeFileHandle;
+  try {
+    handle = await fs.open(
+      filename,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+    );
+  } catch (error) {
+    if (nodeCode(error) === "ENOENT") return null;
+    if (nodeCode(error) === "ELOOP") {
+      throw new Error("Provider service state must be a bounded regular file.");
+    }
+    throw error;
+  }
+  let encoded: string;
+  try {
+    const [opened, current] = await Promise.all([
+      handle.stat(),
+      fs.lstat(filename),
+    ]);
+    if (
+      current.isSymbolicLink()
+      || current.dev !== opened.dev
+      || current.ino !== opened.ino
+      || !opened.isFile()
+      || opened.size > MAX_STATE_BYTES
+      || (opened.mode & 0o077) !== 0
+      || !ownedByCurrentUser(opened)
+    ) {
+      throw new Error("Provider service state must be a private regular file.");
+    }
+    encoded = await handle.readFile({ encoding: "utf8" });
+  } finally {
+    await handle.close();
+  }
+  try {
+    return JSON.parse(encoded);
+  } catch {
+    throw new Error("Provider service state is invalid JSON.");
+  }
+}
+
+async function atomicWriteJson(
+  fs: NodeFs,
+  path: NodePath,
+  filename: string,
+  value: unknown,
+): Promise<void> {
+  const bytes = new TextEncoder().encode(`${JSON.stringify(value)}\n`);
+  if (bytes.byteLength > MAX_STATE_BYTES) {
+    throw new Error("Provider service state exceeds 65536 bytes.");
+  }
+  const temporary = `${filename}.tmp-${crypto.randomUUID()}`;
+  try {
+    const handle = await fs.open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(bytes);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.chmod(temporary, 0o600);
+    await fs.rename(temporary, filename);
+    await syncDirectory(fs, path.dirname(filename));
+  } catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+async function ensurePrivateDirectory(
+  fs: NodeFs,
+  directory: string,
+  label: string,
+): Promise<void> {
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const stats = await fs.lstat(directory);
+  if (
+    stats.isSymbolicLink()
+    || !stats.isDirectory()
+    || !ownedByCurrentUser(stats)
+  ) {
+    throw new Error(`${label} must be an owner-controlled real directory.`);
+  }
+  await fs.chmod(directory, 0o700);
+  await privateDirectory(fs, directory, label);
+}
+
+async function privateDirectory(
+  fs: NodeFs,
+  directory: string,
+  label: string,
+): Promise<string> {
+  const stats = await fs.lstat(directory);
+  if (
+    stats.isSymbolicLink()
+    || !stats.isDirectory()
+    || (stats.mode & 0o077) !== 0
+    || !ownedByCurrentUser(stats)
+  ) {
+    throw new Error(`${label} must be a private owner-controlled directory.`);
+  }
+  return fs.realpath(directory);
+}
+
+async function syncDirectory(fs: NodeFs, directory: string): Promise<void> {
+  const handle = await fs.open(directory, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+function requireInside(
+  path: NodePath,
+  parent: string,
+  child: string,
+  label: string,
+): void {
+  const relative = path.relative(parent, child);
+  if (!relative || relative === ".." || relative.startsWith(`..${separator()}`)) {
+    throw new Error(`${label} is outside its provider root.`);
+  }
+}
+
+function separator(): string {
+  return (globalThis as any).process.platform === "win32" ? "\\" : "/";
+}
+
+function ownedByCurrentUser(stats: NodeStats): boolean {
+  const getuid = (globalThis as any).process.getuid;
+  return typeof getuid !== "function" || stats.uid === getuid.call((globalThis as any).process);
+}
+
+function requiredComponent<Value>(
+  value: Value,
+  label: string,
+  methods: readonly string[],
+): Value {
+  if (!value || typeof value !== "object") {
+    throw new TypeError(`${label} component is required.`);
+  }
+  if (methods.some((method) =>
+    typeof (value as unknown as Record<string, unknown>)[method] !== "function")) {
+    throw new TypeError(`${label} component is invalid.`);
+  }
+  return value;
+}
+
+function identifier(value: unknown, label: string): string {
+  return pattern(value, label, IDENTIFIER);
+}
+
+function pattern(value: unknown, label: string, expression: RegExp): string {
+  if (typeof value !== "string" || !expression.test(value)) {
+    throw new TypeError(`${label} is invalid.`);
+  }
+  return value;
+}
+
+function nonEmpty(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.includes("\0")) {
+    throw new TypeError(`${label} must be a non-empty string.`);
+  }
+  return value;
+}
+
+function integer(value: unknown, label: string, minimum: number, maximum: number): number {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
+    throw new TypeError(`${label} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return value as number;
+}
+
+function positiveInteger(value: unknown, label: string): number {
+  return integer(value, label, 1, Number.MAX_SAFE_INTEGER);
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw signal.reason ?? new Error("Provider service operation was aborted.");
+  }
+}
+
+function nodeCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+async function nodeFs(): Promise<NodeFs> {
+  const name = "node:fs/promises";
+  return import(name) as unknown as Promise<NodeFs>;
+}
+
+async function nodePath(): Promise<NodePath> {
+  const name = "node:path";
+  return import(name) as unknown as Promise<NodePath>;
+}

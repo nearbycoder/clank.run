@@ -52,17 +52,23 @@ default.
 
 `owner` is an exact Docker label and must identify one launcher process. On open, Clank lists
 containers carrying both `run.clank.managed=provider-runtime` and that exact owner, forcibly
-removes them, and verifies cleanup before returning. It never adopts a process after restart.
-Choose a stable node-specific owner and never run two live launchers with the same owner.
+removes them, and verifies cleanup before returning. Every later stop also enumerates the exact
+owner/project/release/generation labels, so a container whose create result was ambiguous cannot
+disappear from tracking before removal is proven. It never adopts a process after restart. Choose
+a stable node-specific owner and never run two live launchers with the same owner.
 
 ## Reconcile data, runtime, and ingress
 
-SQLite migrations and restore require a stopped writer. Revoke and drain traffic, stop the current
-runtime, apply provider data, and launch the candidate only inside the store's private validation
-callback:
+Prefer the complete
+[`openDockerDeploymentProviderService()` composition](provider-service.md), which persists the
+desired generation/fence and implements this ordering. If building a custom provider, SQLite
+migrations and restore require a stopped writer. Revoke and drain traffic, stop the current
+runtime, apply provider data, and launch only the web candidate inside the store's private
+validation callback:
 
 ```ts
 let candidate: Awaited<ReturnType<typeof runtimes.launch>> | undefined;
+let preparedRuntime: PreparedDeploymentRuntimeData | undefined;
 
 await runtimeIngress.deactivate(
   request.operation.projectId,
@@ -77,22 +83,30 @@ try {
     runtime: request.runtime!,
     signal: request.signal,
   }, async (prepared) => {
+    preparedRuntime = prepared;
     candidate = await runtimes.launch({
       prepared,
       signal: request.signal,
+      deferBackground: true,
     });
+  }, async () => {
+    if (candidate) {
+      await runtimes.stop(candidate.projectId, candidate.generation);
+    }
   });
 
-  if (!candidate) throw new Error("The private candidate was not launched.");
-  const active = runtimes.commit(candidate);
+  if (!candidate || !preparedRuntime) {
+    throw new Error("The private candidate was not launched.");
+  }
+  const active = await runtimes.activate(candidate, request.signal);
 
   await runtimeIngress.activate({
     protocol: "clank-runtime/1",
     projectId: committed.projectId,
     releaseId: committed.releaseId,
     generation: committed.generation,
-    path: request.runtime!.manifest.ingress.route,
-    token: request.runtime!.manifest.ingress.token,
+    path: preparedRuntime.ingress.route,
+    token: preparedRuntime.ingress.token,
     upstream: active.upstream,
   });
 } catch (error) {
@@ -106,12 +120,18 @@ try {
 verified capsule. The launcher does not accept a second caller-supplied config, so an adapter
 cannot accidentally start a different entry or job topology from the one that was migrated.
 
-`launch()` starts the web container, waits for its configured health path, starts configured
-workers and the scheduler, and confirms every background container is running. The returned
-candidate contains only project, release, generation, capsule digest, and loopback origin.
-`commit()` changes only in-memory launcher state; call it after `data.apply()` commits and before
-publishing the exact ingress binding. If apply, abort, health, or background startup fails, Clank
-stops and removes the candidate containers and releases their port.
+Ordinary `launch()` starts the web container, workers, and scheduler, then confirms the complete
+topology. `deferBackground: true` starts and health-checks only the private web candidate while
+retaining a memory-only activation plan. After `data.apply()` commits, `activate()` starts every
+worker/scheduler, confirms they remain running, erases that plan, and atomically marks the runtime
+active. `commit()` remains available only for a non-deferred candidate. If apply, abort, health,
+background startup, or activation fails, Clank stops and removes the candidate containers and
+releases their port.
+
+Always pass the optional data-store discard callback when validation can start a process. It
+proves the candidate stopped before an uncommitted SQLite change is restored. A cleanup failure
+leaves the journal for restart recovery rather than rolling data back beneath a possibly live
+runtime.
 
 An exact live launch retry is idempotent. The exact last committed generation can also be
 relaunched after a deliberate stop, which is required to recover the prior generation after a
@@ -129,7 +149,8 @@ Clank does not pass application-named variables to the host Docker process and d
 3. writes one bounded base64url JSON envelope through container stdin;
 4. decodes and validates it inside the already-running Node process;
 5. destroys stdin, sets the application environment, and imports the verified relative entry; and
-6. releases the environment object after launch rather than retaining it in launcher inspection.
+6. retains it only in memory while background activation is deliberately deferred, then releases
+   it after activation or cleanup without exposing it through inspection.
 
 Names such as `DOCKER_HOST`, `LD_PRELOAD`, `NODE_OPTIONS`, proxy controls, and TLS controls can
 therefore neither redirect the host Docker client nor affect the container's Node loader before
@@ -195,5 +216,6 @@ inactive generation high-water mark.
 
 Continue with [Provider data lifecycle](provider-data-lifecycle.md),
 [Provider runtime ingress](provider-runtime-ingress.md),
+[Complete deployment provider service](provider-service.md),
 [Deployment provider adapters](provider-adapters.md), and
 [Remote runtime placement](runtime-placement.md).

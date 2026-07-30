@@ -16,6 +16,7 @@ export * from "./runtime-placement.ts";
 export * from "./provider-data.ts";
 export * from "./provider-runtime.ts";
 export * from "./provider-docker.ts";
+export * from "./provider-service.ts";
 export * from "./data-plane.ts";
 export * from "./forms.ts";
 export * from "./ui.ts";

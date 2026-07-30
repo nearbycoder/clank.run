@@ -47,6 +47,11 @@ export interface DockerDeploymentRuntimeLauncherOptions {
 export interface DockerDeploymentRuntimeLaunchInput {
   readonly prepared: PreparedDeploymentRuntimeData;
   readonly signal: AbortSignal;
+  /**
+   * Start only the private web candidate. Background workers and the scheduler
+   * are retained as a memory-only activation plan until `activate()`.
+   */
+  readonly deferBackground?: boolean;
 }
 
 export interface DockerDeploymentRuntimeCandidate {
@@ -74,6 +79,14 @@ export interface DockerDeploymentRuntimeLauncher {
   launch(
     input: DockerDeploymentRuntimeLaunchInput,
   ): Promise<DockerDeploymentRuntimeCandidate>;
+  /**
+   * Starts a deferred candidate's background topology and atomically marks the
+   * complete runtime active. Exact retries are idempotent.
+   */
+  activate(
+    candidate: DockerDeploymentRuntimeCandidate,
+    signal: AbortSignal,
+  ): Promise<DockerDeploymentRuntimeState>;
   /** Marks an exact healthy candidate active after provider data commits. */
   commit(
     candidate: DockerDeploymentRuntimeCandidate,
@@ -119,7 +132,16 @@ interface RuntimeRecord {
   launchedAt: number;
   containers: ContainerProcess[];
   plannedContainers: number;
+  deferredBackground: boolean;
+  pendingBackground: PendingBackgroundPlan | null;
   controller: AbortController;
+}
+
+interface PendingBackgroundPlan {
+  config: DeploymentConfig;
+  releaseDirectory: string;
+  dataDirectory: string;
+  environment: Readonly<Record<string, string>>;
 }
 
 interface DockerCommandResult {
@@ -291,6 +313,7 @@ export async function openDockerDeploymentRuntimeLauncher(
   };
 
   const removeRecord = async (record: RuntimeRecord, force = false): Promise<void> => {
+    record.pendingBackground = null;
     if (!record.controller.signal.aborted) {
       record.controller.abort(new Error("Docker deployment runtime stopped."));
     }
@@ -308,13 +331,16 @@ export async function openDockerDeploymentRuntimeLauncher(
         ], { allowFailure: true });
       }
       await docker(["container", "rm", "--force", ...ids], { allowFailure: true });
-      const remaining = new Set(await listOwnedContainers(docker, owner));
-      if (ids.some((id) => remaining.has(id))) {
-        throw new Error(`Docker runtime cleanup did not converge for ${runtimeLabel(record)}.`);
-      }
-      await Promise.allSettled(processes.map((process) =>
-        waitForChildExit(process.child, 2_000)));
     }
+    const exact = await listRuntimeContainers(docker, owner, record.candidate);
+    if (exact.length > 0) {
+      await docker(["container", "rm", "--force", ...exact], { allowFailure: true });
+    }
+    if ((await listRuntimeContainers(docker, owner, record.candidate)).length > 0) {
+      throw new Error(`Docker runtime cleanup did not converge for ${runtimeLabel(record)}.`);
+    }
+    await Promise.allSettled(processes.map((process) =>
+      waitForChildExit(process.child, 2_000)));
     const current = records.get(record.candidate.projectId);
     if (current === record) records.delete(record.candidate.projectId);
     candidates.delete(record.candidate);
@@ -451,6 +477,52 @@ export async function openDockerDeploymentRuntimeLauncher(
     }
   };
 
+  const startBackground = async (
+    record: RuntimeRecord,
+    plan: PendingBackgroundPlan,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const jobs = plan.config.jobs;
+    if (!jobs) return;
+    for (let instance = 0; instance < jobs.workers; instance++) {
+      if (closed) throw new Error("Docker deployment runtime launcher is closed.");
+      await launchContainer(record, {
+        ...plan,
+        role: "worker",
+        instance,
+        entry: jobs.entry,
+        exposePort: false,
+        signal,
+      });
+    }
+    if (jobs.scheduler) {
+      if (closed) throw new Error("Docker deployment runtime launcher is closed.");
+      await launchContainer(record, {
+        ...plan,
+        role: "scheduler",
+        instance: 0,
+        entry: jobs.entry,
+        exposePort: false,
+        signal,
+      });
+    }
+    await Promise.all(record.containers.slice(1).map((process) =>
+      waitForContainerRunning(docker, process.id, signal)));
+  };
+
+  const commitRecord = (record: RuntimeRecord): DockerDeploymentRuntimeState => {
+    if (record.status === "failed") {
+      throw new Error("Docker deployment runtime candidate has failed.");
+    }
+    record.status = "active";
+    highWater.set(record.candidate.projectId, {
+      generation: record.candidate.generation,
+      releaseId: record.candidate.releaseId,
+      capsuleSha256: record.candidate.capsuleSha256,
+    });
+    return publicState(record);
+  };
+
   const launcher: DockerDeploymentRuntimeLauncher = {
     async launch(input) {
       if (closed) throw new Error("Docker deployment runtime launcher is closed.");
@@ -459,6 +531,7 @@ export async function openDockerDeploymentRuntimeLauncher(
       }
       const prepared = await preparedRuntime(fs, path, root, input.prepared);
       const config = prepared.config;
+      const deferBackground = input.deferBackground === true;
       if (config.database.path !== prepared.databaseRelativePath) {
         throw new TypeError("Deployment database path does not match prepared provider data.");
       }
@@ -472,6 +545,7 @@ export async function openDockerDeploymentRuntimeLauncher(
             && existing.candidate.releaseId === prepared.releaseId
             && existing.candidate.capsuleSha256 === prepared.capsuleSha256
             && existing.status !== "failed"
+            && existing.deferredBackground === deferBackground
           ) {
             return existing.candidate;
           }
@@ -523,6 +597,8 @@ export async function openDockerDeploymentRuntimeLauncher(
           launchedAt: Date.now(),
           containers: [],
           plannedContainers,
+          deferredBackground: deferBackground,
+          pendingBackground: null,
           controller: new AbortController(),
         };
         records.set(prepared.projectId, record);
@@ -554,39 +630,14 @@ export async function openDockerDeploymentRuntimeLauncher(
             () => record.status === "failed",
           );
           if (closed) throw new Error("Docker deployment runtime launcher is closed.");
-          const jobs = config.jobs;
-          if (jobs) {
-            for (let instance = 0; instance < jobs.workers; instance++) {
-              if (closed) throw new Error("Docker deployment runtime launcher is closed.");
-              await launchContainer(record, {
-                config,
-                releaseDirectory: prepared.releaseDirectory,
-                dataDirectory: prepared.dataDirectory,
-                environment: prepared.environment,
-                role: "worker",
-                instance,
-                entry: jobs.entry,
-                exposePort: false,
-                signal: record.controller.signal,
-              });
-            }
-            if (jobs.scheduler) {
-              if (closed) throw new Error("Docker deployment runtime launcher is closed.");
-              await launchContainer(record, {
-                config,
-                releaseDirectory: prepared.releaseDirectory,
-                dataDirectory: prepared.dataDirectory,
-                environment: prepared.environment,
-                role: "scheduler",
-                instance: 0,
-                entry: jobs.entry,
-                exposePort: false,
-                signal: record.controller.signal,
-              });
-            }
-            await Promise.all(record.containers.slice(1).map((process) =>
-              waitForContainerRunning(docker, process.id, record.controller.signal)));
-          }
+          const background = {
+            config,
+            releaseDirectory: prepared.releaseDirectory,
+            dataDirectory: prepared.dataDirectory,
+            environment: prepared.environment,
+          };
+          if (deferBackground) record.pendingBackground = background;
+          else await startBackground(record, background, record.controller.signal);
           throwIfAborted(record.controller.signal);
           if (closed) throw new Error("Docker deployment runtime launcher is closed.");
           if (record.status === "failed") {
@@ -602,22 +653,59 @@ export async function openDockerDeploymentRuntimeLauncher(
       });
     },
 
+    async activate(candidate, signal) {
+      if (closed) throw new Error("Docker deployment runtime launcher is closed.");
+      if (!(signal instanceof AbortSignal)) {
+        throw new TypeError("signal must be an AbortSignal.");
+      }
+      const initial = candidates.get(candidate);
+      if (!initial) throw new Error("Docker deployment runtime candidate is unknown.");
+      return exclusive(initial.candidate.projectId, async () => {
+        if (closed) throw new Error("Docker deployment runtime launcher is closed.");
+        throwIfAborted(signal);
+        const record = candidates.get(candidate);
+        if (!record || records.get(record.candidate.projectId) !== record) {
+          throw new Error("Docker deployment runtime candidate is unknown.");
+        }
+        if (record.status === "active") return publicState(record);
+        if (record.status === "failed") {
+          await removeRecord(record);
+          throw new Error("Docker deployment runtime candidate has failed.");
+        }
+        const abortRuntime = (): void => {
+          record.controller.abort(
+            signal.reason ?? new Error("Deployment runtime activation aborted."),
+          );
+        };
+        signal.addEventListener("abort", abortRuntime, { once: true });
+        try {
+          const background = record.pendingBackground;
+          if (background) {
+            await startBackground(record, background, record.controller.signal);
+            record.pendingBackground = null;
+          }
+          throwIfAborted(record.controller.signal);
+          if (closed) throw new Error("Docker deployment runtime launcher is closed.");
+          return commitRecord(record);
+        } catch (error) {
+          await removeRecord(record);
+          throw error;
+        } finally {
+          signal.removeEventListener("abort", abortRuntime);
+        }
+      });
+    },
+
     commit(candidate) {
       if (closed) throw new Error("Docker deployment runtime launcher is closed.");
       const record = candidates.get(candidate);
       if (!record || records.get(record.candidate.projectId) !== record) {
         throw new Error("Docker deployment runtime candidate is unknown.");
       }
-      if (record.status === "failed") {
-        throw new Error("Docker deployment runtime candidate has failed.");
+      if (record.pendingBackground) {
+        throw new Error("Deferred Docker background processes must be activated before commit.");
       }
-      record.status = "active";
-      highWater.set(record.candidate.projectId, {
-        generation: record.candidate.generation,
-        releaseId: record.candidate.releaseId,
-        capsuleSha256: record.candidate.capsuleSha256,
-      });
-      return publicState(record);
+      return commitRecord(record);
     },
 
     inspect() {
@@ -845,6 +933,23 @@ async function listOwnedContainers(
   return listContainers(docker, [
     "label=run.clank.managed=provider-runtime",
     `label=run.clank.owner=${owner}`,
+  ]);
+}
+
+async function listRuntimeContainers(
+  docker: (
+    arguments_: readonly string[],
+    options?: { signal?: AbortSignal; allowFailure?: boolean },
+  ) => Promise<DockerCommandResult>,
+  owner: string,
+  candidate: DockerDeploymentRuntimeCandidate,
+): Promise<string[]> {
+  return listContainers(docker, [
+    "label=run.clank.managed=provider-runtime",
+    `label=run.clank.owner=${owner}`,
+    `label=run.clank.project=${candidate.projectId}`,
+    `label=run.clank.release=${candidate.releaseId}`,
+    `label=run.clank.generation=${candidate.generation}`,
   ]);
 }
 

@@ -88,6 +88,15 @@ export interface DeploymentProviderDataStore {
   apply(
     input: DeploymentProviderDataApplyInput,
     validate: (prepared: PreparedDeploymentRuntimeData) => Promise<void>,
+    /**
+     * Quiesces anything started by `validate` before an uncommitted database
+     * change is rolled back. If cleanup cannot be proven, recovery stays
+     * journaled and fails closed for a later retry.
+     */
+    discard?: (
+      prepared: PreparedDeploymentRuntimeData,
+      reason: unknown,
+    ) => Promise<void>,
   ): Promise<DeploymentProviderDataState>;
   inspect(projectId: string): Promise<DeploymentProviderDataState | null>;
   snapshot(projectId: string): Promise<DeploymentProviderDataSnapshot | null>;
@@ -443,8 +452,11 @@ export async function openDeploymentProviderDataStore(
   };
 
   const manager: DeploymentProviderDataStore = {
-    async apply(input, validate) {
+    async apply(input, validate, discard) {
       if (typeof validate !== "function") throw new TypeError("validate must be a function.");
+      if (discard !== undefined && typeof discard !== "function") {
+        throw new TypeError("discard must be a function.");
+      }
       const operation = providerOperation(input.operation);
       if (!(input.signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal.");
       throwIfAborted(input.signal);
@@ -496,15 +508,29 @@ export async function openDeploymentProviderDataStore(
             state.previous ? publicState(state.previous, false) : null,
             true,
           );
-          await validate(prepared);
-          throwIfAborted(input.signal);
-          if (operation.fence > state.active.fence) {
-            state = {
-              ...state,
-              active: { ...state.active, fence: operation.fence },
-            };
-            await atomicWriteJson(fs, path, locations.state, state);
-            await writeFence(fs, path, locations, operation.fence);
+          try {
+            await validate(prepared);
+            throwIfAborted(input.signal);
+            if (operation.fence > state.active.fence) {
+              state = {
+                ...state,
+                active: { ...state.active, fence: operation.fence },
+              };
+              await atomicWriteJson(fs, path, locations.state, state);
+              await writeFence(fs, path, locations, operation.fence);
+            }
+          } catch (error) {
+            if (discard) {
+              try {
+                await discard(prepared, error);
+              } catch (discardError) {
+                throw new AggregateError(
+                  [error, discardError],
+                  "Provider runtime validation and candidate cleanup both failed.",
+                );
+              }
+            }
+            throw error;
           }
           return publicStoredState(state);
         }
@@ -589,6 +615,7 @@ export async function openDeploymentProviderDataStore(
         }
 
         let committed = false;
+        let exposedPrepared: PreparedDeploymentRuntimeData | null = null;
         try {
           if (runtime.databaseSnapshot) {
             const incoming = path.join(locations.recovery, `${transactionId}.incoming.sqlite`);
@@ -633,6 +660,7 @@ export async function openDeploymentProviderDataStore(
             state ? publicState(state.active, Boolean(state.rollback)) : null,
             false,
           );
+          exposedPrepared = prepared;
           await validate(prepared);
           throwIfAborted(input.signal);
           const next: StoredState = {
@@ -654,6 +682,16 @@ export async function openDeploymentProviderDataStore(
           return publicStoredState(next);
         } catch (error) {
           if (!committed) {
+            if (discard && exposedPrepared) {
+              try {
+                await discard(exposedPrepared, error);
+              } catch (discardError) {
+                throw new AggregateError(
+                  [error, discardError],
+                  "Provider runtime candidate cleanup failed; database recovery remains journaled.",
+                );
+              }
+            }
             try {
               await rollbackJournal(locations, journal);
             } catch (rollbackError) {

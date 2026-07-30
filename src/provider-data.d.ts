@@ -76,6 +76,15 @@ export interface DeploymentProviderDataStore {
   apply(
     input: DeploymentProviderDataApplyInput,
     validate: (prepared: PreparedDeploymentRuntimeData) => Promise<void>,
+    /**
+     * Quiesces anything started by `validate` before an uncommitted database
+     * change is rolled back. If cleanup cannot be proven, recovery stays
+     * journaled and fails closed for a later retry.
+     */
+    discard?: (
+      prepared: PreparedDeploymentRuntimeData,
+      reason: unknown,
+    ) => Promise<void>,
   ): Promise<DeploymentProviderDataState>;
   inspect(projectId: string): Promise<DeploymentProviderDataState | null>;
   snapshot(projectId: string): Promise<DeploymentProviderDataSnapshot | null>;

@@ -236,6 +236,80 @@ test("provider data replacement and failed validation are rollback safe", async 
   }
 });
 
+test("provider data quiesces an exposed candidate before rollback", async () => {
+  const fixture = await providerFixture("discard");
+  try {
+    const migrations = [
+      ["0001_init.sql", "CREATE TABLE todo (id TEXT PRIMARY KEY, title TEXT NOT NULL);\n"],
+    ];
+    const firstRuntime = await fixture.runtime({
+      generation: 1,
+      releaseId: "release_discard_01",
+      mode: "initialize",
+      snapshot: await sqliteSnapshot(fixture.root, "original"),
+      migrations,
+    });
+    let databasePath;
+    await fixture.store.apply(providerInput(firstRuntime, 1), async (prepared) => {
+      databasePath = prepared.databasePath;
+    });
+    const secondRuntime = await fixture.runtime({
+      generation: 2,
+      releaseId: "release_discard_02",
+      mode: "replace",
+      snapshot: await sqliteSnapshot(fixture.root, "replacement"),
+      migrations,
+    });
+    const order = [];
+    await assert.rejects(
+      fixture.store.apply(
+        providerInput(secondRuntime, 2),
+        async () => {
+          order.push(`validate:${seedValue(databasePath)}`);
+          throw new Error("candidate-validation-failed");
+        },
+        async (_prepared, reason) => {
+          order.push(`discard:${seedValue(databasePath)}:${reason.message}`);
+        },
+      ),
+      /candidate-validation-failed/u,
+    );
+    order.push(`recovered:${seedValue(databasePath)}`);
+    assert.deepEqual(order, [
+      "validate:replacement",
+      "discard:replacement:candidate-validation-failed",
+      "recovered:original",
+    ]);
+
+    await assert.rejects(
+      fixture.store.apply(
+        providerInput(secondRuntime, 3),
+        async () => {
+          throw new Error("candidate-validation-failed-again");
+        },
+        async () => {
+          throw new Error("candidate-cleanup-unproven");
+        },
+      ),
+      /recovery remains journaled/u,
+    );
+    assert.equal(seedValue(databasePath), "replacement");
+    assert.equal(
+      await exists(join(
+        fixture.providerRoot,
+        "projects",
+        "project_data_01",
+        "journal.json",
+      )),
+      true,
+    );
+    assert.equal((await fixture.store.inspect("project_data_01")).generation, 1);
+    assert.equal(seedValue(databasePath), "original");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("provider data rejects stale, unbound, aborted, and conflicting requests", async () => {
   const fixture = await providerFixture("bindings");
   try {
