@@ -46,6 +46,11 @@ export interface DockerDeploymentRuntimeLauncherOptions {
 export interface DockerDeploymentRuntimeLaunchInput {
     readonly prepared: PreparedDeploymentRuntimeData;
     readonly signal: AbortSignal;
+    /**
+     * Start only the private web candidate. Background workers and the scheduler
+     * are retained as a memory-only activation plan until `activate()`.
+     */
+    readonly deferBackground?: boolean;
 }
 
 export interface DockerDeploymentRuntimeCandidate {
@@ -70,6 +75,11 @@ export interface DockerDeploymentRuntimeLauncher {
      * is delivered through container stdin and is not retained by the launcher.
      */
     launch(input: DockerDeploymentRuntimeLaunchInput): Promise<DockerDeploymentRuntimeCandidate>;
+    /**
+     * Starts a deferred candidate's background topology and atomically marks the
+     * complete runtime active. Exact retries are idempotent.
+     */
+    activate(candidate: DockerDeploymentRuntimeCandidate, signal: AbortSignal): Promise<DockerDeploymentRuntimeState>;
     /** Marks an exact healthy candidate active after provider data commits. */
     commit(candidate: DockerDeploymentRuntimeCandidate): DockerDeploymentRuntimeState;
     /** Returns non-secret in-memory runtime metadata. */

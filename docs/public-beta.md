@@ -31,11 +31,12 @@ Any known cross-tenant access, authentication bypass, remote code execution acro
   fenced runtime reconciliation. An opt-in runtime capsule can bind final application secrets,
   SQLite placement, and ingress identity to an exact desired project/release/generation without
   putting those values in operation metadata or headers. The built-in supervisor does not yet
-  delegate release activation through it. A package-supported provider lifecycle now covers
-  immutable staging, SQLite snapshot/restore/delete, migrations, one-generation rollback, fences,
-  and crash journals. Remote execution still needs provider-side Docker/VM/microVM launch, node
-  pinning, independent backup replication, and atomic edge activation before the platform can
-  safely select that protocol.
+  delegate release activation through it. A package-supported complete Docker provider now covers
+  immutable staging, SQLite snapshot/restore/delete, migrations, one-generation rollback, durable
+  operation/generation/fence state, isolated launch, deferred background activation, exact private
+  ingress, stopped state, and restart reconciliation. Remote execution still needs stateful node
+  pinning, independent backup replication, and atomic control-plane edge activation before the
+  platform can safely select that protocol.
 - The control-plane catalog uses SQLite. It supports durable coordination on one shared transactional store, not globally distributed consensus.
 - Built-in application data and live queries are SQLite-first. The external PostgreSQL driver/provisioner is available, but generated backend tables do not transparently switch engines.
 - Managed ingress performs exact-host HTTP proxying, automatically reconciles customer DNS routing with durable bounded leases, and supplies a restricted Caddy certificate-permission lookup. It does not itself issue or store certificates, change customer DNS, provide a WAF/DDoS edge, or proxy WebSocket upgrades. Put it behind the documented production edge.

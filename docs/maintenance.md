@@ -126,6 +126,26 @@ The final certification result and exact test counts belong in the pull request 
   guide, and agent JSON completed successfully.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 
+## 2026-07-30 complete provider service phase
+
+- [x] Added a zero-dependency high-level provider service that independently verifies runtime
+  capsules, persists exact owner-only operation/generation/fence intent, and composes provider
+  data, isolated Docker launch, stopped desired state, and private runtime ingress.
+- [x] Enforced drain-before-stop and journal-recovery-after-quiescence ordering, exact
+  response-lost retry, restart relaunch without process adoption, conflict fencing, ingress-last
+  activation, and reverse-order failed-candidate cleanup.
+- [x] Deferred workers and the scheduler until provider data commits, and added a data-store
+  discard hook that must prove candidate cleanup before uncommitted SQLite rollback or leave
+  recovery journaled.
+- [x] Added focused restart, retry-after-commit, activation failure, undrained traffic, same-fence
+  conflict, private metadata, deferred background, and cleanup-before-rollback coverage.
+- [x] Re-certified all 305 tests at 86.07% line, 74.84% branch, and 86.06% function
+  coverage; 59 documentation files, 246 local links, 35 declaration files, and 33 package
+  exports; packed consumer conformance; and package, current-tree, and reachable-history security
+  scans.
+- [ ] Record GitHub CI, CodeQL, merge, post-merge, and live documentation evidence.
+- [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
 ## 2026-07-30 isolated provider Docker runtime phase
 
 - [x] Added a zero-dependency reference launcher for the exact verified web, worker, and scheduler
@@ -136,16 +156,18 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Delivered the final application environment through bounded container stdin after Node
   startup, keeping capsule secrets out of Docker arguments, labels, host application variables,
   and persisted container environment metadata.
-- [x] Bound launch to the exact config returned by verified provider data, retained no environment
-  or ingress token, fenced conflicting/stale generations, and allowed exact committed-generation
-  restart for failed-rollout recovery.
+- [x] Bound launch to the exact config returned by verified provider data, exposed no environment
+  or ingress token through inspection, fenced conflicting/stale generations, and allowed exact
+  committed-generation restart for failed-rollout recovery.
 - [x] Added exact-owner startup orphan cleanup, uncertain-create cleanup, graceful verified stop,
   no process adoption after restart, and launch/health/close race fencing.
 - [x] Re-certified all 295 tests at 86.07% line, 74.66% branch, and 85.79% function
   coverage; 58 documentation files, 227 local links, 34 declaration files, and 32 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
-- [ ] Record GitHub CI, CodeQL, merge, post-merge, and live documentation evidence.
+- [x] Merged PR #91 as `2d0ea94203ab336b8ea836a6ae5b41e74ce36de1` after Node 22/24,
+  packaged-release conformance, and CodeQL passed; post-merge CI, CodeQL, docs deployment, human
+  guide, and agent JSON completed successfully.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 remote runtime transport phase

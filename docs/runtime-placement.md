@@ -173,9 +173,14 @@ The package-supported [Provider Docker runtime](provider-docker-runtime.md) star
 verified web/job topology in bounded containers, health-checks it privately, keeps runtime secrets
 out of Docker configuration, removes scoped orphans, and forces desired-state replay after restart.
 
-Remote activation remains closed until the implemented data, launcher, and ingress contracts are
-bound end to end to atomic control-plane publish/revoke, stateful node pinning, encrypted recovery
-replication, and lease-loss/traffic-switch certification.
+The package-supported [complete deployment provider service](provider-service.md) now binds data,
+deferred background activation, private ingress, durable operation/generation/fence state,
+response-lost retry, stopped desired state, and restart reconciliation end to end on one assigned
+provider node.
+
+Remote activation remains closed until the control plane opts projects into that service with
+atomic edge publish/revoke, stateful node pinning, encrypted recovery replication, and
+lease-loss/traffic-switch certification.
 
 Until those controls land, enabling a runner fleet does not move existing applications or their
 data. The current single-host deployment path stays unchanged and no additional Railway service,
@@ -185,5 +190,6 @@ Continue with [Provider data lifecycle](provider-data-lifecycle.md), [Deployment
 adapters](provider-adapters.md), [Durable distributed deployment](distributed-deployment.md),
 [Managed ingress and external data](data-plane.md), [Recovery](recovery.md),
 [Provider runtime ingress](provider-runtime-ingress.md),
-[Provider Docker runtime](provider-docker-runtime.md), and
+[Provider Docker runtime](provider-docker-runtime.md),
+[Complete deployment provider service](provider-service.md), and
 [Platform security](platform-security.md).

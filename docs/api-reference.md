@@ -180,13 +180,32 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 
 - `openDockerDeploymentRuntimeLauncher(options)`: exact-owner orphan cleanup, immutable-image
   Docker launch, private health, worker/scheduler topology, generation fencing, stop, and shutdown.
-- `launch({ prepared, signal })`: starts the config embedded in verified provider data and returns
-  a non-secret loopback candidate.
+- `launch({ prepared, signal, deferBackground? })`: starts the config embedded in verified
+  provider data and returns a non-secret loopback candidate. Deferred mode health-checks only web.
+- `activate(candidate, signal)`: starts a deferred candidate's workers/scheduler after provider
+  data commits, verifies them, releases the memory-only activation plan, and marks it active.
 - `commit(candidate)`: marks the exact healthy candidate active after provider data commits.
 - `inspect()`, `stop(projectId, generation?)`, `forget(projectId, generation)`, and `close()`:
   non-secret state, verified container removal, deletion cleanup, and fail-closed shutdown.
 - Types: `DockerDeploymentRuntimeLauncherOptions`, `DockerDeploymentRuntimeCandidate`,
   `DockerDeploymentRuntimeState`, `DockerDeploymentRuntimeLauncher`.
+
+## Complete deployment provider service
+
+- `openDockerDeploymentProviderService(options)`: opens provider data, exact-owner Docker cleanup
+  and launch, private runtime ingress, and durable service fencing with secure defaults.
+- `openDeploymentProviderService(options)`: composes injected data, Docker-runtime, and ingress
+  components for custom hosting and deterministic tests.
+- `reconcile(request)`: independently verifies the capsule, persists exact operation/fence intent,
+  drains before stopping a writer, recovers/stages/migrates data, defers jobs until commit,
+  activates ingress last, and supports exact retry after response loss or restart.
+- `handle(request)`: generation-bound private application ingress.
+- `inspect(projectId)`, `snapshot(projectId)`, and `close()`: non-secret durable progress,
+  consistent backup input, and revoke/drain/verified-stop shutdown.
+- `DeploymentProviderDataStore.apply(input, validate, discard?)`: optional cleanup hook runs before
+  uncommitted SQLite rollback; failed cleanup leaves the journal intact.
+- Types: `DeploymentProviderService`, `DeploymentProviderServiceOptions`,
+  `DockerDeploymentProviderServiceOptions`, and `DeploymentProviderServiceState`.
 
 ## Managed data plane
 

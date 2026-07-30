@@ -6,6 +6,16 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- A complete zero-dependency `@clank.run/framework/provider-service` composition now binds
+  independently verified runtime capsules, durable operation/generation/fence intent, provider
+  data recovery and migrations, isolated Docker activation, stopped desired state, and
+  generation-bound private ingress. Exact response-lost and restart retries recover without
+  process adoption; failed post-commit activation removes the candidate and remains retryable.
+- Docker runtime launch can defer workers and the scheduler until `activate()` runs after provider
+  data commits. Provider data validation has a cleanup hook that must quiesce an exposed candidate
+  before uncommitted SQLite rollback and leaves recovery journaled when cleanup is uncertain.
+- Docker cleanup now re-enumerates exact owner/project/release/generation labels before forgetting a
+  runtime, including when `docker create` persisted a container but reported failure.
 - A zero-dependency `@clank.run/framework/provider-docker` reference launcher now starts the exact
   verified web, worker, and scheduler topology inside resource-bounded Docker containers, checks
   private health over loopback, and exposes only non-secret candidate metadata. Immutable images,
@@ -123,6 +133,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Security
 
+- Provider-service metadata stores only exact non-secret desired-state bindings in bounded,
+  owner-only, no-follow, atomically replaced files. Capsules are rehashed and decoded before that
+  intent advances; lower generations/fences, conflicting same-generation capsules, and
+  same-fence operation substitution fail before infrastructure mutation. Reconciliation drains
+  before stopping a writer, defers background effects until commit, and activates ingress last.
 - The provider Docker launcher delivers the final application environment through bounded
   container stdin after Node starts. Secret values are absent from host Docker environment
   variables, command arguments, labels, and persisted container environment metadata; the

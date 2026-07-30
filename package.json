@@ -42,6 +42,7 @@
     "./provider-data": { "types": "./dist/provider-data.d.ts", "import": "./dist/provider-data.js" },
     "./provider-runtime": { "types": "./dist/provider-runtime.d.ts", "import": "./dist/provider-runtime.js" },
     "./provider-docker": { "types": "./dist/provider-docker.d.ts", "import": "./dist/provider-docker.js" },
+    "./provider-service": { "types": "./dist/provider-service.d.ts", "import": "./dist/provider-service.js" },
     "./data-plane": { "types": "./dist/data-plane.d.ts", "import": "./dist/data-plane.js" },
     "./forms": { "types": "./dist/forms.d.ts", "import": "./dist/forms.js" },
     "./ui": { "types": "./dist/ui.d.ts", "import": "./dist/ui.js" },

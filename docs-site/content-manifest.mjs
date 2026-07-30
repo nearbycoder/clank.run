@@ -72,6 +72,7 @@ export const groups = [
       ["provider-data-lifecycle", "docs/provider-data-lifecycle.md"],
       ["provider-docker-runtime", "docs/provider-docker-runtime.md"],
       ["provider-runtime-ingress", "docs/provider-runtime-ingress.md"],
+      ["provider-service", "docs/provider-service.md"],
       ["railway", "docs/railway.md"],
       ["self-hosting", "docs/self-hosting.md"],
       ["releases", "docs/releases.md"]

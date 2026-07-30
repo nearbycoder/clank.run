@@ -170,14 +170,12 @@ durable completion results. `openProviderDeploymentAgent()` verifies the capsule
 its project, release, and generation before provider code can see it. The provider is a trusted
 application compute boundary because it necessarily receives application secrets and data.
 
-The built-in platform does not select this protocol yet. The packaged [provider data
-lifecycle](provider-data-lifecycle.md) covers local snapshot, restore, deletion, migrations,
-rollback, fencing, and crash recovery. The packaged [provider runtime
-ingress](provider-runtime-ingress.md) covers exact private request binding, overlapping
-generations, revocation, and draining. Isolated launch, candidate health, node pinning, independent
-backup replication, restart reconciliation, and control-plane ingress activation must be
-integrated before hosted remote placement is enabled. See [Remote runtime
-placement](runtime-placement.md).
+The built-in platform does not select this protocol yet. The packaged [complete provider
+service](provider-service.md) composes independently verified capsules, local snapshot/migration
+recovery, isolated Docker health and deferred jobs, durable fencing, stopped state, exact private
+request binding, drain-before-stop, and restart reconciliation on one provider node. Stateful node
+pinning, independent backup replication, and control-plane ingress activation must be integrated
+before hosted remote placement is enabled. See [Remote runtime placement](runtime-placement.md).
 
 ## Platform behavior
 

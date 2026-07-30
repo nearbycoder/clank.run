@@ -150,6 +150,28 @@ stored immutable release and rechecks its exact file set, owners, modes, sizes, 
 against the capsule. A different capsule for the same generation or a changed stored release fails
 as a conflict.
 
+If validation starts a private candidate, pass the optional discard callback:
+
+```ts
+await data.apply(input, async (prepared) => {
+  candidate = await runtimes.launch({
+    prepared,
+    signal: input.signal,
+    deferBackground: true,
+  });
+}, async () => {
+  if (candidate) {
+    await runtimes.stop(candidate.projectId, candidate.generation);
+  }
+});
+```
+
+Clank invokes discard before restoring an uncommitted database whenever the prepared candidate
+was exposed to validation. If cleanup fails, the database stays at the journaled intermediate
+state and the operation fails closed. After the launcher removes the process, a later
+`inspect`, `apply`, or snapshot safely completes journal recovery. Background workers should be
+deferred until after apply commits; the complete provider service enforces both rules.
+
 The journal makes the filesystem transaction restart-safe:
 
 - before metadata commits, recovery restores the safety snapshot and removes the candidate;
@@ -207,8 +229,10 @@ issue TLS certificates, replicate recovery backups, or move a stateful project b
 The package-supported [Provider Docker runtime](provider-docker-runtime.md) now binds this prepared
 state to resource-bounded web, worker, and scheduler containers, private loopback health,
 exact-owner orphan cleanup, and fail-closed restart reconciliation. The built-in control plane
-still uses its local supervisor. Remote placement remains disabled until the next integration
-binds these lifecycles to:
+still uses its local supervisor. The [complete deployment provider
+service](provider-service.md) binds provider data, deferred Docker activation, durable
+generation/fence intent, and private ingress end to end. Remote placement remains disabled until
+the next integration binds that service to:
 
 - atomic ingress publish/revoke with generation and token checks;
 - durable provider-node pinning and rolling-update behavior;
@@ -218,4 +242,5 @@ binds these lifecycles to:
 Continue with [Remote runtime placement](runtime-placement.md), [Deployment provider
 adapters](provider-adapters.md), [Provider runtime ingress](provider-runtime-ingress.md),
 [Provider Docker runtime](provider-docker-runtime.md),
+[Complete deployment provider service](provider-service.md),
 [Managed ingress](data-plane.md), and [Backup and disaster recovery](recovery.md).

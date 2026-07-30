@@ -89,11 +89,14 @@ provider code persists the operation/fence idempotency rule.
 The built-in control plane does not activate remote runtime placement yet. Provider-side
 snapshot/restore/delete, migration, rollback, fencing, crash recovery, isolated Docker launch,
 private candidate health, exact-owner orphan cleanup, restart fail-closure, exact private ingress,
-generation overlap, revocation, and draining are package-supported. Stateful node pinning,
-independent recovery replication, and control-plane ingress switching still require end-to-end
-integration. See [Provider data lifecycle](provider-data-lifecycle.md), [Provider Docker
-runtime](provider-docker-runtime.md), [Provider runtime ingress](provider-runtime-ingress.md), and
-[Remote runtime placement](runtime-placement.md).
+generation overlap, revocation, and draining are package-supported. The complete provider service
+rehashes a capsule before advancing owner-only operation/generation/fence intent, drains before
+writer shutdown, recovers data only after quiescence, defers workers/schedulers until data commit,
+and activates ingress last. Stateful node pinning, independent recovery replication, and
+control-plane ingress switching still require end-to-end integration. See [Complete deployment
+provider service](provider-service.md), [Provider data lifecycle](provider-data-lifecycle.md),
+[Provider Docker runtime](provider-docker-runtime.md), [Provider runtime
+ingress](provider-runtime-ingress.md), and [Remote runtime placement](runtime-placement.md).
 
 ## Authentication
 
@@ -224,7 +227,10 @@ administrators can still inspect runtime environment state.
 The remote provider Docker launcher uses a stricter one-shot stdin bootstrap, so its capsule
 environment never becomes Docker container configuration. It also requires an immutable image and
 non-root uid/gid by default, bounds combined container count, and verifies exact-owner cleanup on
-startup, uncertain create, stop, and close. See [Provider Docker runtime](provider-docker-runtime.md).
+startup, uncertain create, stop, and close. Deferred activation keeps workers and schedulers
+stopped until provider data metadata commits, and the data discard hook proves candidate removal
+before uncommitted SQLite rollback. See [Provider Docker runtime](provider-docker-runtime.md) and
+[Complete deployment provider service](provider-service.md).
 
 Also pin image digests, patch the kernel/runtime, apply seccomp/AppArmor/SELinux, restrict network egress, protect the Docker socket, set disk quotas, isolate customer tiers, and prefer microVMs for hostile code.
 

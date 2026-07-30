@@ -135,6 +135,11 @@ A complete provider composes it with
 provider, and the runner agent. Keep the prepared environment and plaintext ingress token
 memory-only. Publish traffic only after the provider data commit succeeds.
 
+`openDockerDeploymentProviderService()` is the package-supported composition. It persists the
+desired operation/fence, drains before writer shutdown, defers jobs until data commit, activates
+this ingress last, and cleans a failed candidate in reverse order. Use the lower-level registry
+directly only when implementing another runtime boundary.
+
 On provider restart the in-memory registry begins empty and returns generic unavailable responses.
 The Docker reference launcher likewise removes exact-owner orphan containers instead of adopting
 them. The hosted activation integration must reset/reconcile the node's desired generation before
@@ -149,5 +154,6 @@ fail closed while leaving process termination policy with the launcher.
 Continue with [Managed ingress and external data](data-plane.md),
 [Provider data lifecycle](provider-data-lifecycle.md),
 [Provider Docker runtime](provider-docker-runtime.md),
+[Complete deployment provider service](provider-service.md),
 [Deployment provider adapters](provider-adapters.md), and
 [Remote runtime placement](runtime-placement.md).
