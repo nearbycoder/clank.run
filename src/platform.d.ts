@@ -53,6 +53,14 @@ export interface PlatformJobOperationsOptions {
      */
     alertDueAfterMs?: number;
 }
+export interface PlatformPreviewOptions {
+    /** Default lifetime for a preview environment. Defaults to 7 days. */
+    defaultTtlMs?: number;
+    /** Longest lifetime a caller may request. Defaults to 30 days. */
+    maxTtlMs?: number;
+    /** Expired-preview cleanup cadence. Defaults to 5 minutes; false disables background cleanup. */
+    cleanupIntervalMs?: number | false;
+}
 export interface ClankPlatformOptions {
     dataDirectory: string;
     publicUrl: string;
@@ -106,6 +114,7 @@ export interface ClankPlatformOptions {
     limits?: PlatformLimits;
     backups?: PlatformBackupOptions;
     jobs?: PlatformJobOperationsOptions;
+    previews?: PlatformPreviewOptions;
     ingress?: {
         enabled?: boolean;
         baseDomain?: string;

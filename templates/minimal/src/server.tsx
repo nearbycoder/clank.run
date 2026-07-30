@@ -38,7 +38,7 @@ const app = createApp()
               __html: JSON.stringify({ imports: { "@clank.run/framework": "/_clank/index.js" } }),
             }}
           />
-          <script nonce={nonce} src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" />
+          <link rel="stylesheet" href="/styles.css" />
         </>
       ),
       scripts: ["/app.js"],
@@ -48,8 +48,8 @@ const app = createApp()
         "cache-control": "no-store",
         "content-security-policy": [
           "default-src 'self'",
-          `script-src 'self' 'nonce-${nonce}' https://cdn.jsdelivr.net`,
-          "style-src 'self' 'unsafe-inline'",
+          `script-src 'self' 'nonce-${nonce}'`,
+          "style-src 'self'",
           "connect-src 'self'",
           "img-src 'self' data:",
           "base-uri 'self'",
@@ -62,6 +62,7 @@ const app = createApp()
   })
   .get("/app.js", ({ request }) => appFiles.handle(request))
   .get("/view.js", ({ request }) => appFiles.handle(request))
+  .get("/styles.css", ({ request }) => appFiles.handle(request))
   .get("/_clank/*", ({ request }) => frameworkFiles.handle(request));
 
 const server = await serve(app, {

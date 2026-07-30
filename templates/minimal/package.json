@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "clank build src dist",
-    "dev": "clank build src dist && node --disable-warning=ExperimentalWarning dist/server.js",
+    "build": "clank build src dist --tailwind=src/styles.css",
+    "dev": "clank build src dist --tailwind=src/styles.css && node --disable-warning=ExperimentalWarning dist/server.js",
     "start": "node --disable-warning=ExperimentalWarning dist/server.js",
     "doctor": "clank doctor",
     "deploy:check": "clank deploy --dry-run",
@@ -12,5 +12,9 @@
   },
   "dependencies": {
     "@clank.run/framework": "__CLANK_DEPENDENCY__"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.2.4",
+    "tailwindcss": "^4.2.4"
   }
 }

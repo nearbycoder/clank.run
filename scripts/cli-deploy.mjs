@@ -55,12 +55,12 @@ const COMMANDS = Object.freeze({
     summary: "Generate an app from a data-only blueprint.",
   },
   build: {
-    usage: "clank build [input=src] [output=dist] [--jsx-import-source=@clank.run/framework]",
-    summary: "Compile TypeScript and TSX and copy static files.",
+    usage: "clank build [input=src] [output=dist] [--jsx-import-source=@clank.run/framework] [--tailwind=src/styles.css]",
+    summary: "Compile TypeScript/TSX, copy static files, and optionally build Tailwind CSS.",
   },
   watch: {
-    usage: "clank watch [input=src] [output=dist] [--jsx-import-source=@clank.run/framework]",
-    summary: "Rebuild when source files change.",
+    usage: "clank watch [input=src] [output=dist] [--jsx-import-source=@clank.run/framework] [--tailwind=src/styles.css]",
+    summary: "Rebuild source and optional Tailwind CSS when files change.",
   },
   jobs: {
     usage: "clank jobs <worker|scheduler|status|list|cancel|retry> [directory|job-id] [--state <state>] [--queue <name>] [--limit <count>] [--json]",
@@ -105,6 +105,10 @@ const COMMANDS = Object.freeze({
   deploy: {
     usage: "clank deploy [directory] [--name <name>] [--slug <slug>] [--org <id>] [--dry-run] [--output <file>] [--json]",
     summary: "Build, package, migrate, and atomically deploy in one command.",
+  },
+  preview: {
+    usage: "clank preview <deploy|list|remove> [name] [directory] [--ttl <hours>] [--json]",
+    summary: "Deploy isolated, expiring environments without copying production data or secrets.",
   },
   status: {
     usage: "clank status",
@@ -161,6 +165,7 @@ const VALUE_OPTIONS = Object.freeze({
   audit: ["org", "limit", "before"],
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "output"],
+  preview: ["ttl", "confirm"],
   jobs: ["concurrency", "queues", "state", "queue", "limit"],
   releases: ["confirm"],
   logs: ["limit"],
@@ -176,6 +181,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   activity: ["json"],
   audit: ["json"],
   deploy: ["dry-run", "json"],
+  preview: ["json", "acknowledge-data-loss"],
   releases: ["allow-rollback-loss"],
   rollback: ["restore-data"],
   doctor: ["json"],
@@ -206,6 +212,7 @@ export async function run(command, args) {
       case "token": return await tokenCommand(args);
       case "domain": return await domainCommand(args);
       case "deploy": return await deploy(args);
+      case "preview": return await previewCommand(args);
       case "status": return await status(args);
       case "releases": return await releases(args);
       case "logs": return await logs(args);
@@ -1387,6 +1394,158 @@ async function deploy(args) {
     console.log(`Digest: ${result.release.digest}`);
     console.log(`URL: ${result.release.url}`);
   }
+}
+
+async function previewCommand(args) {
+  const subcommand = args.shift();
+  const values = positionals(args);
+  if (subcommand === "list") {
+    const root = resolve(values[0] ?? ".");
+    const { profile, link } = await linkedContext(root);
+    const payload = await platformRequest(
+      profile.server,
+      `/api/projects/${encodeURIComponent(link.projectId)}/previews`,
+      { token: profile.token },
+    );
+    if (flag(args, "json")) {
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+    if (!payload.previews.length) {
+      console.log("No active preview environments.");
+      return;
+    }
+    for (const preview of payload.previews) {
+      console.log(
+        `${preview.previewName}  ${preview.runtimeStatus}  ${preview.url}  expires ${new Date(preview.previewExpiresAt).toISOString()}`,
+      );
+    }
+    return;
+  }
+  if (subcommand === "deploy") {
+    const name = values[0];
+    const root = resolve(values[1] ?? ".");
+    if (!name) throw new CliError("Usage: clank preview deploy <name> [directory] [--ttl <hours>] [--json]");
+    const json = flag(args, "json");
+    const startedAt = performance.now();
+    const config = await readDeploymentConfig(root);
+    const buildStartedAt = performance.now();
+    if (config.build) await runBuild(config.build.command, root, { quiet: json });
+    const buildMs = performance.now() - buildStartedAt;
+    const packageStartedAt = performance.now();
+    const artifact = await createDeploymentBundle(root, config, {
+      frameworkRoot: packageRoot,
+      frameworkVersion: packageJson.version,
+      nodeVersion: process.version,
+    });
+    const digest = await deploymentDigest(artifact);
+    const packageMs = performance.now() - packageStartedAt;
+    if (!json) console.log(`Packaged ${artifact.byteLength} bytes · ${digest.slice(0, 12)}`);
+
+    const { profile, link } = await linkedContext(root);
+    const ttl = option(args, "ttl");
+    const created = await platformRequest(
+      profile.server,
+      `/api/projects/${encodeURIComponent(link.projectId)}/previews`,
+      {
+        method: "POST",
+        token: profile.token,
+        body: {
+          name,
+          ...(ttl === undefined
+            ? {}
+            : { ttlHours: positiveIntegerOption(args, "ttl", 168, 24 * 365) }),
+        },
+      },
+    );
+    const preview = created.preview;
+    const idempotencyKey = await deploymentAttempt(root, {
+      server: profile.server,
+      projectId: preview.id,
+      digest,
+    });
+    const uploadStartedAt = performance.now();
+    const { response, payload } = await fetchPlatformJson(
+      `${profile.server}/api/projects/${encodeURIComponent(preview.id)}/releases`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${profile.token}`,
+          "content-type": "application/vnd.clank.deploy+gzip",
+          "content-length": String(artifact.byteLength),
+          "x-clank-content-sha256": digest,
+          "x-clank-idempotency-key": idempotencyKey,
+        },
+        body: artifact,
+      },
+      PLATFORM_DEPLOY_TIMEOUT_MS,
+    );
+    await rm(deploymentAttemptPath(root), { force: true });
+    if (!response.ok) throw ApiError.from(payload, response.status);
+    const result = {
+      protocol: "clank-preview-result/1",
+      ok: true,
+      preview: {
+        id: preview.id,
+        name: preview.previewName,
+        parentProjectId: link.projectId,
+        expiresAt: preview.previewExpiresAt,
+        created: created.created,
+      },
+      release: {
+        id: payload.release.id,
+        digest: payload.release.digest,
+        url: payload.release.url ?? payload.release.directUrl,
+      },
+      artifact: { digest, bytes: artifact.byteLength },
+      timing: {
+        buildMs: roundedMilliseconds(buildMs),
+        packageMs: roundedMilliseconds(packageMs),
+        uploadAndActivateMs: roundedMilliseconds(performance.now() - uploadStartedAt),
+        totalMs: roundedMilliseconds(performance.now() - startedAt),
+      },
+    };
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`${created.created ? "Created" : "Refreshed"} preview ${result.preview.name}.`);
+      console.log(`Deployed release ${result.release.id} in ${formatDuration(result.timing.totalMs)}`);
+      console.log(`URL: ${result.release.url}`);
+      console.log(`Expires: ${new Date(result.preview.expiresAt).toISOString()}`);
+    }
+    return;
+  }
+  if (subcommand === "remove") {
+    const name = values[0];
+    const root = resolve(values[1] ?? ".");
+    const confirmation = option(args, "confirm");
+    if (!name || !confirmation || !flag(args, "acknowledge-data-loss")) {
+      throw new CliError(
+        'Usage: clank preview remove <name> [directory] --confirm="delete-preview <name>" --acknowledge-data-loss',
+      );
+    }
+    const { profile, link } = await linkedContext(root);
+    const listed = await platformRequest(
+      profile.server,
+      `/api/projects/${encodeURIComponent(link.projectId)}/previews`,
+      { token: profile.token },
+    );
+    const preview = listed.previews.find((candidate) => candidate.previewName === name);
+    if (!preview) throw new CliError(`Preview not found: ${name}`);
+    const payload = await platformRequest(
+      profile.server,
+      `/api/projects/${encodeURIComponent(link.projectId)}/previews/${encodeURIComponent(preview.id)}`,
+      {
+        method: "DELETE",
+        token: profile.token,
+        body: { confirmation, acknowledgeDataLoss: true },
+      },
+    );
+    if (flag(args, "json")) console.log(JSON.stringify(payload, null, 2));
+    else console.log(`Deleted preview ${name} (${preview.id}) and its isolated data.`);
+    return;
+  }
+  throw new CliError("Usage: clank preview <deploy|list|remove>");
 }
 
 async function status() {

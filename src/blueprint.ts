@@ -207,8 +207,8 @@ export function generateAppFiles(
         private: true,
         type: "module",
         scripts: {
-          build: "clank build src dist",
-          dev: "clank build src dist && node --disable-warning=ExperimentalWarning dist/server.js",
+          build: "clank build src dist --tailwind=src/styles.css",
+          dev: "clank build src dist --tailwind=src/styles.css && node --disable-warning=ExperimentalWarning dist/server.js",
           start: "node --disable-warning=ExperimentalWarning dist/server.js",
           plan: "clank plan",
           generate: "clank generate .",
@@ -217,6 +217,10 @@ export function generateAppFiles(
           deploy: "clank deploy",
         },
         dependencies: { "@clank.run/framework": frameworkDependency },
+        devDependencies: {
+          "@tailwindcss/cli": "^4.2.4",
+          tailwindcss: "^4.2.4",
+        },
       }),
     },
     {
@@ -248,7 +252,7 @@ export function generateAppFiles(
         version: 1,
         entry: "dist/server.js",
         include: ["dist", "migrations"],
-        build: { command: ["clank", "build", "src", "dist"] },
+        build: { command: ["clank", "build", "src", "dist", "--tailwind=src/styles.css"] },
         database: {
           path: app.deployment.database === "sqlite" ? "app.sqlite" : "app.sqlite",
           migrations: "migrations",
@@ -265,6 +269,10 @@ export function generateAppFiles(
     {
       path: "src/backend.ts",
       contents: backendSource(app),
+    },
+    {
+      path: "src/styles.css",
+      contents: '@import "tailwindcss";\n@source "./**/*.{ts,tsx}";\n',
     },
     {
       path: "src/view.tsx",
@@ -1011,7 +1019,7 @@ const app = createApp()
         head: (
           <>
             <script type="importmap" nonce={nonce} dangerouslySetInnerHTML={{ __html: JSON.stringify({ imports: { "@clank.run/framework": "/_clank/index.js" } }) }} />
-            <script nonce={nonce} src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4" />
+            <link rel="stylesheet" href="/styles.css" />
           </>
         ),
         state: { auth: bootAuth, records: initial.value, version: initial.version },
@@ -1023,8 +1031,8 @@ const app = createApp()
         "cache-control": "no-store",
         "content-security-policy": [
           "default-src 'self'",
-          \`script-src 'self' 'nonce-\${nonce}' https://cdn.jsdelivr.net\`,
-          "style-src 'self' 'unsafe-inline'",
+          \`script-src 'self' 'nonce-\${nonce}'\`,
+          "style-src 'self'",
           "connect-src 'self'",
           "img-src 'self' data:",
           "base-uri 'self'",
@@ -1037,6 +1045,7 @@ const app = createApp()
   })
   .get("/app.js", ({ request }) => appFiles.handle(request))
   .get("/view.js", ({ request }) => appFiles.handle(request))
+  .get("/styles.css", ({ request }) => appFiles.handle(request))
   .get("/_clank/*", ({ request }) => frameworkFiles.handle(request))
   .route("*", "*", ({ request }) => runtime.handle(request));
 

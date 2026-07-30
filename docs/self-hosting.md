@@ -63,6 +63,9 @@ configured worker/scheduler processes for each active project.
 | `CLANK_BACKUP_PREFIX` | `backups` | Logical backup root inside the object-store prefix |
 | `CLANK_BACKUP_CHUNK_BYTES` | `8388608` | Encrypted bytes per object, from 64 KiB through 64 MiB |
 | `CLANK_JOB_ALERT_DUE_AFTER_MS` | `300000` | Waiting time before due work raises a control-plane attention state |
+| `CLANK_PREVIEW_DEFAULT_TTL_MS` | `604800000` | Default preview lifetime |
+| `CLANK_PREVIEW_MAX_TTL_MS` | `2592000000` | Maximum preview lifetime callers may request |
+| `CLANK_PREVIEW_CLEANUP_INTERVAL_MS` | `300000` | Expired-preview cleanup cadence; `0` delegates cleanup to an external operator |
 | `CLANK_MAX_ORGANIZATIONS_PER_ACCOUNT` | `5` | Transactionally enforced account organization limit |
 | `CLANK_MAX_PROJECTS_PER_ACCOUNT` | `10` | Transactionally enforced account-wide site limit |
 | `CLANK_MAX_PROJECTS_PER_ORGANIZATION` | `10` | Transactionally enforced site limit |

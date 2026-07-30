@@ -174,6 +174,19 @@ clank releases delete <inactive-release-id> \
 
 Cleanup requires `rollback` permission. The active artifact is never removable. Add `--allow-rollback-loss` only when intentionally removing the active release's immediate predecessor; that removes the predecessor's runtime files and the active release's matching data-restore snapshot. Cleanup preserves release metadata and audit history.
 
+## Preview environments
+
+`clank preview deploy <name>` creates or refreshes an expiring child environment without changing
+the directory's production link. The child receives an independent project ID, hostname, port,
+database, migration ledger, releases, secrets, jobs, logs, metrics, backups, and token namespace.
+No production database rows or secret values are copied.
+
+Previews consume normal account/workspace project capacity, cannot contain nested previews, and
+are grouped under their parent in the control-plane UI. Startup cleanup runs before release
+recovery, so an expired runtime is deleted rather than restarted. The background cleaner uses the
+same durable lock and path-safe complete deletion path as a manual removal. See
+[Preview environments](preview-environments.md) for the CLI, API, CI, and retention contracts.
+
 ## Site deletion
 
 Owners and organization administrators can permanently reclaim a site slot from the dashboard or CLI:
@@ -185,6 +198,10 @@ clank project delete [project-id] \
 ```
 
 Deletion requires an account-wide browser session or CLI token. A project-scoped token is deliberately insufficient, including one with `tokens` permission. Browser deletion also passes the normal same-origin and CSRF checks. The exact slug-bound phrase and separate acknowledgement make accidental generic confirmation impossible.
+
+A production project with active preview children returns `PREVIEWS_EXIST`; delete or expire those
+environments first. This prevents a parent-row cascade from leaving a supervised child process or
+child storage outside the control database.
 
 The operation holds the same durable project lock used by deploy, rollback, release cleanup, and backup work. It rechecks current membership under that lock, stops the supervised application, validates that the platform project path and its parents are real directories rather than symbolic links, and removes the complete project root. Only then does one control-database transaction revoke active project tokens, remove orchestration placement/operation state, delete project metadata and its cascading domain/release/secret/log/metric/backup-schedule rows, and append a surviving `project.delete` audit event.
 

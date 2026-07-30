@@ -73,6 +73,20 @@ The final certification result and exact test counts belong in the pull request 
   coverage; 51 documentation files and 28 package exports; packed consumer conformance; and
   package, current-tree, and reachable-history credential scans.
 
+## 2026-07-30 previews and production styling phase
+
+- [x] Added isolated, quota-bound preview environments with separate application data, secrets,
+  releases, jobs, and MCP surfaces; production data and secrets are never cloned implicitly.
+- [x] Added create/refresh, list, deploy, confirmed removal, bounded expiry, startup cleanup,
+  audit history, CLI workflows, and a dedicated control-plane view.
+- [x] Replaced the template-time Tailwind browser runtime with the official local Tailwind CLI,
+  atomic production CSS output, strict path validation, shell-free execution, and tighter CSP.
+- [x] Verified a real Tailwind 4.2.4 compile from a clean installation and retained the
+  framework runtime's zero-dependency contract.
+- [x] Re-certified all 256 tests at 85.87% line, 74.00% branch, and 85.20% function coverage;
+  52 documentation files and 28 package exports; packed consumer conformance; and package,
+  current-tree, and reachable-history credential scans.
+
 ## 2026-07-26 follow-up
 
 - [x] Merged the complete 2026-07-25 security and release-certification pass into `main`.

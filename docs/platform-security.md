@@ -157,6 +157,9 @@ The generated local key is onboarding convenience, not protection from a comprom
 - Deploy migrations stop the app and take a pre-change snapshot; scheduled recovery points use SQLite's consistent online backup API and are encrypted and verified before publication.
 - Scheduled backup work uses expiring durable claims across control planes, and public metadata omits the host database path.
 - Per-project release count and byte quotas include extracted runtime files and pre-deploy snapshots; cleanup is contained to derived project/release paths.
+- Previews are independent project/data/token namespaces, never inherit production secrets or
+  database contents, cannot be nested, and consume the same account/workspace project quotas as
+  production. Expiration uses the complete locked project-deletion path before startup recovery.
 - Per-account and per-workspace quota overrides are validated against a fixed key/range registry,
   require a real browser administrator session plus CSRF, and are written with an append-only audit
   event. Workspace values override their owning account, which overrides installation defaults;

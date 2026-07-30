@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import { cp, mkdir, readFile, readdir, rename, rm, watch, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { compile } from "./compiler.mjs";
@@ -40,20 +41,28 @@ if (args.includes("--help") || args.includes("-h")) {
   console.log(`Clank compiler
 
 Usage:
-  clank build [input=src] [output=dist] [--jsx-import-source=@clank.run/framework]
-  clank watch [input=src] [output=dist] [--jsx-import-source=@clank.run/framework]
+  clank build [input=src] [output=dist] [--jsx-import-source=@clank.run/framework] [--tailwind=src/styles.css]
+  clank watch [input=src] [output=dist] [--jsx-import-source=@clank.run/framework] [--tailwind=src/styles.css]
 
-Compiles .ts and .tsx modules, copies static files, and installs no packages.`);
+Compiles .ts and .tsx modules, copies static files, and optionally invokes the local Tailwind CLI without a shell.`);
   process.exit(process.exitCode ?? 0);
 }
 
 for (const argument of args) {
-  if (argument.startsWith("--") && !argument.startsWith("--jsx-import-source=")) {
+  if (
+    argument.startsWith("--")
+    && !argument.startsWith("--jsx-import-source=")
+    && !argument.startsWith("--tailwind=")
+  ) {
     console.error(`clank: Unknown option ${argument} for clank ${command}.`);
     process.exit(1);
   }
   if (argument === "--jsx-import-source=") {
     console.error("clank: --jsx-import-source requires a value.");
+    process.exit(1);
+  }
+  if (argument === "--tailwind=") {
+    console.error("clank: --tailwind requires a stylesheet path.");
     process.exit(1);
   }
 }
@@ -66,6 +75,7 @@ const option = (name, fallback) => args.find((argument) => argument.startsWith(`
 const input = resolve(positionals[0] ?? "src");
 const output = resolve(positionals[1] ?? "dist");
 const jsxImportSource = option("jsx-import-source", "@clank.run/framework");
+const tailwindInput = option("tailwind", null);
 
 const inside = (parent, child) => {
   const path = relative(parent, child);
@@ -73,6 +83,11 @@ const inside = (parent, child) => {
 };
 if (inside(input, output) || inside(output, input)) {
   console.error("Input and output directories must not overlap.");
+  process.exit(1);
+}
+const resolvedTailwindInput = tailwindInput === null ? null : resolve(tailwindInput);
+if (resolvedTailwindInput && !inside(input, resolvedTailwindInput)) {
+  console.error("Tailwind input must be inside the compiler input directory.");
   process.exit(1);
 }
 
@@ -116,12 +131,56 @@ async function compileFile(path) {
   }
 }
 
+async function compileTailwind() {
+  if (!resolvedTailwindInput) return;
+  const configured = process.env.CLANK_TAILWIND_EXECUTABLE;
+  const executable = configured
+    ? (isAbsolute(configured) ? configured : resolve(configured))
+    : process.execPath;
+  const executableArguments = configured
+    ? []
+    : [resolve("node_modules", "@tailwindcss", "cli", "dist", "index.mjs")];
+  const target = join(output, "styles.css");
+  await writeTargetAtomically(target, (temporaryPath) => new Promise((resolvePromise, reject) => {
+    const child = spawn(executable, [
+      ...executableArguments,
+      "-i",
+      resolvedTailwindInput,
+      "-o",
+      temporaryPath,
+      "--minify",
+    ], {
+      cwd: process.cwd(),
+      stdio: "inherit",
+      shell: false,
+    });
+    child.once("error", (error) => {
+      if (error?.code === "ENOENT") {
+        reject(new Error(
+          "Tailwind CLI is unavailable. Run npm install or set CLANK_TAILWIND_EXECUTABLE to the standalone binary.",
+        ));
+      } else {
+        reject(error);
+      }
+    });
+    child.once("exit", (code, signal) => code === 0
+      ? resolvePromise()
+      : reject(new Error(
+          configured
+            ? `Tailwind build exited with ${code ?? signal}.`
+            : "Tailwind CLI is unavailable. Run npm install or set CLANK_TAILWIND_EXECUTABLE to the standalone binary.",
+        )));
+  }));
+}
+
 async function build() {
   const started = performance.now();
   await mkdir(output, { recursive: true });
   const files = await filesUnder(input);
   const expectedOutputs = new Set(files.map(outputFor));
+  if (resolvedTailwindInput) expectedOutputs.add(join(output, "styles.css"));
   await Promise.all(files.map(compileFile));
+  await compileTailwind();
   for (const path of await filesUnder(output)) {
     if (!path.includes(".clank-build-") && !expectedOutputs.has(path)) await rm(path, { force: true });
   }

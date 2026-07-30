@@ -46,6 +46,13 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - A zero-dependency authenticated HTTP provider bridge carries the original bounded binary release
   through a redirect-safe, retry-safe protocol, and the packaged `clank-runner` command connects
   that bridge to a remote control plane with persistent node credentials and graceful drain.
+- Projects now support isolated, expiring preview environments through the control-plane UI/API
+  and `clank preview deploy|list|remove`. Reusing a preview name refreshes its TTL and publishes a
+  normal atomic release without changing the production project link.
+- Generated templates and blueprint apps now compile minified Tailwind CSS during the ordinary
+  Clank build, serve a same-origin static stylesheet, and omit the development-only browser CDN.
+  `clank build --tailwind=<source>` can use the local CLI module or an explicitly configured
+  standalone executable.
 
 ### Fixed
 
@@ -87,6 +94,13 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   requires a distinct high-entropy token, HTTPS outside loopback, exact bounded headers and bodies,
   fresh artifact digest/config verification, no redirects, generic public failures, and private
   diagnostics.
+- Preview environments never inherit production databases or secrets, cannot be nested, count
+  toward existing account/workspace project limits, are hidden under their production parent, and
+  expire through the same path-safe storage, token-revocation, and audit lifecycle as manual
+  deletion.
+- Tailwind builds execute an exact local binary and argument array without a shell, restrict the
+  source to the compiler input tree, write output atomically, and fail deployment when the compiler
+  is unavailable instead of silently shipping unprocessed production CSS.
 
 ## 0.9.4 - 2026-07-28
 
