@@ -133,7 +133,7 @@ test("S3 object storage signs and verifies the portable object lifecycle", async
     accessKeyId: service.accessKeyId,
     secretAccessKey: service.secretAccessKey,
     sessionToken: service.sessionToken,
-    prefix: "installation-01",
+    prefix: "installation-01///",
     fetch: service.fetch,
     retries: 0,
     maxObjectBytes: 4_096,
@@ -235,6 +235,17 @@ test("S3 object storage rejects unsafe configuration and fails closed on corrupt
       secretAccessKey: "secret-access-key",
     }),
     /accessKeyId/u,
+  );
+  assert.throws(
+    () => createS3ObjectStore({
+      endpoint: "https://storage.example.test",
+      region: "auto",
+      bucket: "clank-bucket",
+      accessKeyId: "ACCESSKEY",
+      secretAccessKey: "secret-access-key",
+      prefix: "a".repeat(1_025),
+    }),
+    /prefix/u,
   );
 
   const corrupt = createS3ObjectStore({

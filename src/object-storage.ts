@@ -712,7 +712,12 @@ function s3Bucket(value: string): string {
 
 function objectPrefix(value: string | undefined): string {
   if (value === undefined || value === "") return "";
-  return objectKey(value.replace(/\/+$/u, ""));
+  if (typeof value !== "string" || value.length > 1_024) {
+    throw new TypeError("Object prefix is invalid.");
+  }
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return objectKey(value.slice(0, end));
 }
 
 function objectKey(value: string): string {
