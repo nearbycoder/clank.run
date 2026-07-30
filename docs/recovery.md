@@ -105,7 +105,11 @@ and is retried; it is never discarded merely because replication failed.
 
 ## Platform workflow
 
-Clank Deploy creates and verifies an encrypted backup for every deployed project every 24 hours by default. The schedule is durable: due work and expiring lease tokens live in the control database, so multiple control-plane processes cannot back up the same project concurrently. Existing databases are due when automation first starts; a newly deployed database is due after one interval. Manual backups reset the next scheduled time.
+Clank Deploy creates and verifies an encrypted backup for every deployed local or provider project
+every 24 hours by default. The schedule is durable: due work and expiring lease tokens live in the
+control database, so multiple control-plane processes cannot back up the same project concurrently.
+Existing databases are due when automation first starts; a newly deployed database is due after
+one interval. Manual backups reset the next scheduled time.
 
 ```sh
 clank backup create --reason "before bulk import"
@@ -115,7 +119,23 @@ clank backup restore <backup-id> \
   --confirm="restore-backup <project-slug> <backup-id>"
 ```
 
-Before a platform restore, Clank creates and verifies a safety backup of the current database, stops the application, restores the requested backup, and restarts the active release. If restore or restart fails, it attempts to restore the safety backup before reporting failure.
+For local placement, platform restore creates and verifies a safety backup of the current database,
+stops the application, restores the requested backup, and restarts the active release. If restore
+or restart fails, it attempts to restore the safety backup before reporting failure. Provider
+restore currently returns `PROVIDER_RESTORE_PENDING`; use backup create/list/verify now, but retain
+an independently tested provider-host restore procedure until fenced replacement generations are
+available.
+
+Provider backup creation requests a consistent snapshot only from the exact active pinned node,
+release, generation, and allowlisted origin. A separate derived control token is carried in the
+runtime capsule, retained only as an in-memory digest by the provider, and never shares public
+ingress authority. The control plane refuses redirects and encoded responses, requires exact
+length/media-type/digest/release/generation metadata, reads under a configured deadline and byte
+limit, rehashes the body, rechecks placement, and immediately imports it into the encrypted
+repository without plaintext disk staging. A provider generation created before snapshot-control
+support must be deployed once before its first managed backup. Snapshot import and create-time
+verification are bounded but memory-resident, so set `CLANK_PROVIDER_MAX_DATABASE_BYTES` below the
+control-plane memory headroom available while the configured backup concurrency is active.
 
 Backup creation, verification, and restore are audited. The `rollback` project permission is required for mutations; read access can list backup metadata.
 
@@ -130,12 +150,14 @@ Platform retention defaults to 30 backups and 90 days per project. Configure it 
 | `CLANK_BACKUP_MAX_COUNT` | `30` | Maximum retained backups per project |
 | `CLANK_BACKUP_MAX_AGE_MS` | `7776000000` | Maximum retained age |
 | `CLANK_BACKUP_MAX_DATABASE_BYTES` | `10737418240` | Maximum source database size |
+| `CLANK_PROVIDER_MAX_DATABASE_BYTES` | `536870912` | Provider export bound; the lower of this and the backup limit applies |
 | `CLANK_BACKUP_STORE` | `local` | Recovery repository: `local` or `s3` |
 | `CLANK_BACKUP_NAMESPACE` | none | Required stable physical-repository identity for `s3` |
 | `CLANK_BACKUP_PREFIX` | `backups` | Logical root inside the configured object-store prefix |
 | `CLANK_BACKUP_CHUNK_BYTES` | `8388608` | Encrypted bytes per object, from 64 KiB through 64 MiB |
 
-Disabling automation does not disable manual backup, verification, or restore. It also does not delete existing restore points.
+Disabling automation does not disable manual backup or verification, nor local restore. It also
+does not delete existing restore points.
 
 The `s3` mode uses the shared `CLANK_OBJECT_*` connection variables documented in
 [Object storage](object-storage.md). The platform records the namespace and logical root in its

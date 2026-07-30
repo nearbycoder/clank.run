@@ -91,18 +91,24 @@ frozen environment per generation, produces the capsule only for a current recon
 requires stateful endpoint/label placement, validates the provider endpoint against an exact HTTPS
 hostname allowlist, and publishes only when desired and observed project/release/generation/node
 all match. The public route overwrites every provider-binding header and derives its private token
-from the master key, project, and generation without storing it.
+from the master key, project, and generation without storing it. A distinct derived control token
+never enters public ingress and authorizes only a consistent snapshot of that same active
+generation.
 
 Provider rollback and deletion are separately fenced operations pinned to the exact active node.
 Deletion removes control metadata only after provider confirmation. Pending deploys retain staging
 state and their CLI idempotency key. A stale, unavailable, or mismatched provider fails closed
 without falling into the local supervisor or moving node-local SQLite.
 
-Independent provider recovery replication is still missing. Local backup scheduling excludes
-provider projects and their backup mutations return `PROVIDER_BACKUP_PENDING`; operators must
-establish a separate tested backup until Clank's encrypted provider transport lands. Provider
-hosts remain trusted compute and require private TLS, non-root isolated runtime execution, a
-protected Docker socket, disk/network policy, monitoring, and secret rotation after compromise.
+Provider backup creation requires the currently active pinned node and unchanged allowlisted
+origin, refuses redirects and content encodings, bounds time and bytes, verifies media type,
+release, generation, length, and SHA-256, then rechecks placement before direct in-memory
+encryption. No plaintext snapshot is staged on control-plane storage. Local backup storage remains
+the cheap default; use the S3-compatible repository to cross the control-volume failure domain.
+Provider restore is still closed until a fenced replacement generation and safety backup are
+integrated. Provider hosts remain trusted compute and require private TLS, non-root isolated
+runtime execution, a protected Docker socket, disk/network policy, monitoring, and secret rotation
+after compromise.
 See [Complete deployment provider service](provider-service.md), [Provider data
 lifecycle](provider-data-lifecycle.md), [Provider Docker
 runtime](provider-docker-runtime.md), [Provider runtime

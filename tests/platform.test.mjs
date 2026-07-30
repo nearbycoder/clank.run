@@ -1705,8 +1705,58 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
   const root = await mkdtemp(join(tmpdir(), "clank-platform-provider-placement-"));
   const dataDirectory = join(root, "platform");
   const source = join(root, "source");
+  const providerDatabasePath = join(root, "provider.sqlite");
+  const providerDatabase = new DatabaseSync(providerDatabasePath);
+  providerDatabase.exec(
+    "CREATE TABLE remote_state (value TEXT NOT NULL);"
+      + " INSERT INTO remote_state (value) VALUES ('provider snapshot plaintext canary');",
+  );
+  providerDatabase.close();
+  const providerSnapshot = new Uint8Array(await readFile(providerDatabasePath));
+  const providerSnapshotSha256 = await deploymentDigest(providerSnapshot);
   const providerRequests = [];
+  const providerControlRequests = [];
+  let activeProviderReleaseId = null;
+  let activeProviderGeneration = null;
+  let providerSnapshotFault = null;
   const providerServer = createServer((request, response) => {
+    if (request.url?.startsWith("/v1/clank/control/")) {
+      const authorized = /^Bearer clnkc_[A-Za-z0-9_-]{32,}$/u.test(
+        String(request.headers.authorization ?? ""),
+      );
+      providerControlRequests.push({
+        url: request.url,
+        method: request.method,
+        authorized,
+        accept: request.headers.accept,
+        acceptEncoding: request.headers["accept-encoding"],
+      });
+      if (
+        !authorized
+        || !activeProviderReleaseId
+        || activeProviderGeneration === null
+      ) {
+        response.writeHead(404, {
+          "content-type": "application/json",
+        });
+        response.end('{"error":{"code":"CONTROL_NOT_FOUND"}}');
+        return;
+      }
+      response.writeHead(200, {
+        "cache-control": "private, no-store",
+        "content-length": String(providerSnapshot.byteLength),
+        "content-type": "application/vnd.clank.provider-snapshot",
+        "x-clank-content-sha256": providerSnapshotFault === "digest"
+          ? "0".repeat(64)
+          : providerSnapshotSha256,
+        "x-clank-release-id": providerSnapshotFault === "release"
+          ? "release_stale_provider_snapshot"
+          : activeProviderReleaseId,
+        "x-clank-runtime-generation": String(activeProviderGeneration),
+      });
+      response.end(providerSnapshot);
+      return;
+    }
     providerRequests.push({
       url: request.url,
       projectId: request.headers["x-clank-project-id"],
@@ -1728,6 +1778,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
   assert.ok(providerAddress && typeof providerAddress === "object");
   const providerOrigin = `http://127.0.0.1:${providerAddress.port}`;
   const registrationToken = `runner-registration-${"r".repeat(32)}`;
+  const observedProviderErrors = [];
   const options = {
     dataDirectory,
     publicUrl: "http://127.0.0.1:4200",
@@ -1743,6 +1794,9 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     },
     ingress: {
       baseDomain: "apps.example.test",
+    },
+    onError(error) {
+      observedProviderErrors.push(error);
     },
   };
   let platform = await openPlatform(options);
@@ -1772,6 +1826,8 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
         kind: "http",
         async reconcile(request) {
           reconciliations.push(request);
+          activeProviderReleaseId = request.desired.releaseId;
+          activeProviderGeneration = request.desired.generation;
           if (reconciliations.length === 1) {
             await new Promise((resolve) => setTimeout(resolve, 1_200));
             resolveInitialReconcile();
@@ -1855,7 +1911,12 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       reconciliations[0].runtime.manifest.environment.PRIVATE_RUNTIME_SECRET,
       "provider-secret-canary",
     );
-    assert.equal(reconciliations[0].runtime.manifest.database.mode, "preserve");
+    assert.equal(reconciliations[0].runtime.manifest.database.mode, "initialize");
+    assert.equal(reconciliations[0].runtime.databaseSnapshot, null);
+    assert.match(
+      reconciliations[0].runtime.manifest.ingress.controlToken,
+      /^clnkc_/u,
+    );
     assert.equal("leaseToken" in reconciliations[0].operation, false);
 
     const dashboard = await payload(platform, jsonRequest("/api/dashboard", {
@@ -1870,19 +1931,91 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       { token: owner.accessToken },
     ));
     assert.deepEqual(backupBoundary.backups, []);
-    assert.equal(backupBoundary.automation.available, false);
-    assert.equal(backupBoundary.automation.providerPending, true);
-    assert.equal(backupBoundary.automation.storage, "provider_pending");
-    const backupDenied = await platform.handle(jsonRequest(
+    assert.equal(backupBoundary.automation.available, true);
+    assert.equal(backupBoundary.automation.providerPending, false);
+    assert.equal(backupBoundary.automation.storage, "local");
+    assert.equal(backupBoundary.automation.source, "provider");
+    const remoteBackup = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/backups`,
       {
         method: "POST",
         token: owner.accessToken,
-        body: { reason: "must stay remote" },
+        body: { reason: "provider recovery point" },
+      },
+    ), 201);
+    assert.equal(remoteBackup.backup.reason, "provider recovery point");
+    assert.equal(remoteBackup.backup.databaseSha256, providerSnapshotSha256);
+    assert.equal("source" in remoteBackup.backup, false);
+    assert.deepEqual(providerControlRequests, [{
+      url: `/v1/clank/control/${created.project.id}/snapshot`,
+      method: "GET",
+      authorized: true,
+      accept: "application/vnd.clank.provider-snapshot",
+      acceptEncoding: "identity",
+    }]);
+    const encryptedProviderBackup = await readFile(join(
+      dataDirectory,
+      "projects",
+      created.project.id,
+      "recovery",
+      remoteBackup.backup.id,
+      "database.enc",
+    ));
+    assert.equal(
+      encryptedProviderBackup.includes(Buffer.from("provider snapshot plaintext canary")),
+      false,
+    );
+    const verifiedProviderBackup = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/backups/${remoteBackup.backup.id}/verify`,
+      { method: "POST", token: owner.accessToken, body: {} },
+    ));
+    assert.equal(
+      verifiedProviderBackup.verification.databaseSha256,
+      providerSnapshotSha256,
+    );
+    const listedProviderBackups = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/backups`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(listedProviderBackups.backups[0].id, remoteBackup.backup.id);
+    providerSnapshotFault = "release";
+    const rejectedProviderBackup = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}/backups`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { reason: "reject stale provider bytes" },
       },
     ));
-    assert.equal(backupDenied.status, 409);
-    assert.equal((await backupDenied.json()).error.code, "PROVIDER_BACKUP_PENDING");
+    assert.equal(rejectedProviderBackup.status, 503);
+    const rejectedProviderPayload = await rejectedProviderBackup.json();
+    assert.equal(
+      rejectedProviderPayload.error.code,
+      "PROVIDER_BACKUP_UNAVAILABLE",
+    );
+    assert.doesNotMatch(
+      JSON.stringify(rejectedProviderPayload),
+      /release_stale_provider_snapshot|provider snapshot plaintext canary/u,
+    );
+    providerSnapshotFault = null;
+    assert.ok(observedProviderErrors.some((error) =>
+      error.message === "Provider snapshot transport failed."));
+    const providerRestorePending = await platform.handle(jsonRequest(
+      `/api/projects/${created.project.id}/backups/${remoteBackup.backup.id}/restore`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: {
+          confirmation:
+            `restore-backup remote-app ${remoteBackup.backup.id}`,
+        },
+      },
+    ));
+    assert.equal(providerRestorePending.status, 409);
+    assert.equal(
+      (await providerRestorePending.json()).error.code,
+      "PROVIDER_RESTORE_PENDING",
+    );
     const remoteJobs = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/jobs`,
       { token: owner.accessToken },
@@ -1949,6 +2082,12 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     const raw = await readFile(join(dataDirectory, "control.sqlite"));
     assert.equal(raw.includes(Buffer.from("provider-secret-canary")), false);
     assert.equal(raw.includes(Buffer.from(providerRequests[0].token)), false);
+    assert.equal(
+      raw.includes(Buffer.from(
+        reconciliations[0].runtime.manifest.ingress.controlToken,
+      )),
+      false,
+    );
 
     await platform.close();
     platform = await openPlatform(options);
@@ -1974,6 +2113,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     assert.equal(second.body.release.project.activeGeneration, 2);
     assert.equal(second.body.release.providerGeneration, 2);
     assert.equal(reconciliations.length, 2);
+    assert.equal(reconciliations[1].runtime.manifest.database.mode, "preserve");
 
     const rolledBack = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/rollback`,

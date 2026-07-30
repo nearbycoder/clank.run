@@ -228,12 +228,14 @@ projects. Configure `deploymentAgents.placement` (or
 `CLANK_PROVIDER_DEFAULT_PLACEMENT=local|provider`) and create the project with provider placement.
 The value `local` enables per-project selection while retaining the safe default.
 
-Provider backup/restore transport, application-log forwarding, provider disk/memory telemetry, and
-automatic failover from node-local SQLite are not implemented. A stateful project stays pinned and
-unavailable when its node is unavailable. Backup mutations fail closed with
-`PROVIDER_BACKUP_PENDING`; operators must not treat release-object retention as a database backup.
-See [Remote runtime placement](runtime-placement.md#current-support-boundary) for the precise
-boundary.
+Provider backup creation now uses the exact active node and generation-bound snapshot control
+credential, then immediately encrypts the verified bytes in the ordinary recovery repository.
+Scheduling, listing, and verification work for both local and provider placement. Provider restore,
+application-log forwarding, provider disk/memory telemetry, and automatic failover from node-local
+SQLite are not implemented. A stateful project stays pinned and unavailable when its node is
+unavailable, and restore fails closed with `PROVIDER_RESTORE_PENDING`. Operators must not treat
+release-object retention as a database backup. See [Remote runtime
+placement](runtime-placement.md#current-support-boundary) for the precise boundary.
 
 See [Remote runtime placement](runtime-placement.md) for operator configuration, exact body, and
 trust boundary, then [Provider data lifecycle](provider-data-lifecycle.md) for its safe
