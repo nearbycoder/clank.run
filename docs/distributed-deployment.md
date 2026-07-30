@@ -24,6 +24,7 @@ const desired = await orchestrator.setDesired({
   releaseId,
   state: "running",
   region: "iad",
+  placementMode: "stateful",
 });
 
 const [operation] = await orchestrator.claim(agent.node.id, agent.token);
@@ -32,6 +33,20 @@ const [operation] = await orchestrator.claim(agent.node.id, agent.token);
 An agent must renew a leased operation before expiry. Completion and failure compare the node, token digest, lease expiry, and fence. If a worker resumes after another worker has reclaimed the operation, its stale completion is rejected.
 
 Desired-state observations are generation checked. A late report for generation 4 cannot overwrite generation 5.
+
+`placementMode` makes the data-mobility contract explicit:
+
+- `portable` is the backward-compatible default. Clank may reassign it when a node expires or is
+  revoked.
+- `stateful` selects one node identity once and retains it across new releases, stopped state,
+  heartbeat expiry, and credential revocation. An unavailable node makes the placement unavailable;
+  Clank does not guess that another node has its SQLite data.
+
+Later desired generations inherit their durable mode and region when those fields are omitted.
+Changing a placement mode is rejected. A pinned region cannot change after a node has been selected.
+Re-enrolling the same node ID restores its ability to claim the pinned work with a new credential.
+Moving a stateful placement requires a separate, verified backup/restore workflow rather than a
+placement update.
 
 ## Authenticated HTTP transport
 
@@ -305,6 +320,8 @@ infrastructure.
 - Crashed workers leave leased operations that become reclaimable.
 - Expired nodes become offline for placement.
 - Draining nodes keep current work but receive no new desired placements or operation claims.
+- Portable placements may be reassigned after node loss. Stateful placements remain pinned and
+  fail closed until that node identity returns or an explicit recovery workflow moves the data.
 - Retry delay is exponential and bounded; exhausted operations enter `failed`.
 - Node capacity is placement based, deterministic, and region aware.
 

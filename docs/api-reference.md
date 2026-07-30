@@ -152,6 +152,9 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   heartbeat lease without extending it.
 - `DeploymentOrchestrator.authenticateOperation(operation)`: returns the canonical stored lease
   only when the exact node/token/fence/expiry tuple is current, without extending or settling it.
+- `DeploymentOrchestrator.setDesired({ placementMode })`: `portable` placements may move after node
+  loss; `stateful` placements durably reserve one node identity and fail closed instead of moving
+  node-local data implicitly.
 - Types: `DeploymentCoordinatorHandler`, `DeploymentCoordinatorHandlerOptions`,
   `DeploymentCoordinatorClient`, `DeploymentCoordinatorClientOptions`,
   `DeploymentArtifact`, `DeploymentArtifactRequest`, `DeploymentArtifactProvider`,
