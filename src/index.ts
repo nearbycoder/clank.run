@@ -6,6 +6,7 @@ export * from "./mcp.ts";
 export * from "./blueprint.ts";
 export * from "./webauthn.ts";
 export * from "./services.ts";
+export * from "./object-storage.ts";
 export * from "./observability.ts";
 export * from "./recovery.ts";
 export * from "./orchestration.ts";

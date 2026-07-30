@@ -32,6 +32,7 @@
     "./blueprint": { "types": "./dist/blueprint.d.ts", "import": "./dist/blueprint.js" },
     "./webauthn": { "types": "./dist/webauthn.d.ts", "import": "./dist/webauthn.js" },
     "./services": { "types": "./dist/services.d.ts", "import": "./dist/services.js" },
+    "./object-storage": { "types": "./dist/object-storage.d.ts", "import": "./dist/object-storage.js" },
     "./observability": { "types": "./dist/observability.d.ts", "import": "./dist/observability.js" },
     "./recovery": { "types": "./dist/recovery.d.ts", "import": "./dist/recovery.js" },
     "./orchestration": { "types": "./dist/orchestration.d.ts", "import": "./dist/orchestration.js" },

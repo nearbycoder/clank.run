@@ -23,6 +23,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   coordinator call. The platform optionally retains owner-only original uploads when remote
   enrollment is enabled, accounts for that storage, and verifies identity, node scope, lease fence,
   length, media type, and SHA-256 across the complete transfer.
+- A provider-neutral `ObjectStore` now includes atomic owner-only local envelopes and a
+  zero-dependency S3-compatible adapter. The S3 subset signs exact single-chunk payloads with SigV4,
+  supports virtual-hosted and path-style endpoints plus temporary credentials, bounds retries,
+  deadlines, and error bodies, and rehashes every downloaded object.
 
 ### Fixed
 
@@ -46,6 +50,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - A node credential alone cannot fetch a release: artifact access also requires its exact unexpired
   operation token and fence. The provider never receives that token, redirects remain disabled,
   and platform-managed secrets and databases are not included in retained release archives.
+- Remote object storage refuses insecure non-loopback endpoints, embedded credentials, redirects,
+  unsigned payloads, dotted virtual-host ambiguity, unsafe keys, oversized streams, and incomplete
+  or inconsistent Clank integrity metadata. Provider response bodies never become public errors.
 
 ## 0.9.4 - 2026-07-28
 
