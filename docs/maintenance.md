@@ -101,7 +101,7 @@ The final certification result and exact test counts belong in the pull request 
   overlap, fenced stale/conflicting activation, and revoked exact generations before draining.
 - [x] Kept process launch, sandboxing, SQLite mutation, control-plane routing, TLS, and restart
   reconciliation explicit rather than implying that a proxy creates those guarantees.
-- [x] Re-certified all 290 tests at 86.17% line, 74.79% branch, and 86.07% function
+- [x] Re-certified all 290 tests at 86.15% line, 74.76% branch, and 86.00% function
   coverage; 57 documentation files, 212 local links, 33 declaration files, and 31 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
