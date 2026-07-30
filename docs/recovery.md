@@ -121,10 +121,23 @@ clank backup restore <backup-id> \
 
 For local placement, platform restore creates and verifies a safety backup of the current database,
 stops the application, restores the requested backup, and restarts the active release. If restore
-or restart fails, it attempts to restore the safety backup before reporting failure. Provider
-restore currently returns `PROVIDER_RESTORE_PENDING`; use backup create/list/verify now, but retain
-an independently tested provider-host restore procedure until fenced replacement generations are
-available.
+or restart fails, it attempts to restore the safety backup before reporting failure.
+
+For provider placement, restore first authenticates the target and rejects it when its verified
+size exceeds the provider database limit. It then creates an encrypted safety backup from the exact
+active provider generation and freezes target ID, SHA-256, byte count, safety ID, current release,
+environment, and a new generation in the control database. Runtime loading authenticates and
+decrypts that exact target again, compares the frozen digest and size, and includes it only in the
+lease-scoped private capsule. The pinned provider drains the old writer, makes its own exact
+post-drain safety snapshot, replaces SQLite, applies the active release's current migrations,
+health-checks the deferred process topology, and publishes ingress last. A successful restore
+becomes the new active generation and preserves immediate provider data rollback.
+
+`PROVIDER_RESTORE_PENDING` is retryable: an identical request resumes the existing durable
+generation and does not create another safety backup. If the exact reconcile exhausts its retries,
+the same restore can allocate a higher fenced generation only after the target and original safety
+point verify again. Queue and completion are audited. Both recovery IDs remain retention-protected
+while the restore is pending.
 
 Provider backup creation requests a consistent snapshot only from the exact active pinned node,
 release, generation, and allowlisted origin. A separate derived control token is carried in the
@@ -136,6 +149,10 @@ repository without plaintext disk staging. A provider generation created before 
 support must be deployed once before its first managed backup. Snapshot import and create-time
 verification are bounded but memory-resident, so set `CLANK_PROVIDER_MAX_DATABASE_BYTES` below the
 control-plane memory headroom available while the configured backup concurrency is active.
+
+Provider restore is an intentional write pause, not a rolling database update. Its availability
+depends on the pinned stateful node and the configured recovery repository. Retain an independently
+tested provider-host and infrastructure recovery procedure for node or repository loss.
 
 Backup creation, verification, and restore are audited. The `rollback` project permission is required for mutations; read access can list backup metadata.
 

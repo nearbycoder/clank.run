@@ -190,10 +190,12 @@ Provider projects are stateful: node loss causes unavailability, never implicit 
 SQLite database. Manual and scheduled backup creation exports the exact active generation over the
 private provider origin and immediately encrypts it in the ordinary local or S3-compatible
 recovery repository. Listing and verification use that repository even while the provider is
-offline. Fenced provider restore is still pending, so establish and test an independent
-provider-host restore policy before production use. Prefer `CLANK_BACKUP_STORE=s3` when the
-control plane and provider have different volumes; otherwise the control-plane volume remains the
-backup failure domain.
+offline. Restore creates a new fenced generation on the pinned node after target verification and
+an encrypted safety backup, then drains the writer, replaces SQLite, applies current migrations,
+and publishes only after health succeeds. It is intentionally not zero-downtime. Maintain an
+independently tested provider-host restore policy before production use. Prefer
+`CLANK_BACKUP_STORE=s3` when the control plane and provider have different volumes; otherwise the
+control-plane volume remains the backup failure domain.
 
 Follow
 [Deployment runner fleet](runner-fleet.md),

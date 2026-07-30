@@ -105,10 +105,18 @@ origin, refuses redirects and content encodings, bounds time and bytes, verifies
 release, generation, length, and SHA-256, then rechecks placement before direct in-memory
 encryption. No plaintext snapshot is staged on control-plane storage. Local backup storage remains
 the cheap default; use the S3-compatible repository to cross the control-volume failure domain.
-Provider restore is still closed until a fenced replacement generation and safety backup are
-integrated. Provider hosts remain trusted compute and require private TLS, non-root isolated
-runtime execution, a protected Docker socket, disk/network policy, monitoring, and secret rotation
-after compromise.
+Provider restore authenticates the selected envelope, creates and verifies an encrypted safety
+backup, and persists only recovery IDs/digests/sizes beside the encrypted generation environment.
+The recovery bytes travel only inside the lease-scoped private runtime capsule. The provider
+independently verifies the capsule, revokes and drains the old writer, takes an exact local safety
+snapshot, replaces SQLite, reapplies current immutable migrations, validates a deferred candidate,
+and publishes ingress last. Pending retention protects both platform recovery points; a timeout
+resumes the same intent, while a failed exact operation can advance only through a new monotonic
+generation after target and safety re-verification. Restore intentionally pauses writes and is not
+a zero-downtime database operation.
+
+Provider hosts remain trusted compute and require private TLS, non-root isolated runtime execution,
+a protected Docker socket, disk/network policy, monitoring, and secret rotation after compromise.
 See [Complete deployment provider service](provider-service.md), [Provider data
 lifecycle](provider-data-lifecycle.md), [Provider Docker
 runtime](provider-docker-runtime.md), [Provider runtime

@@ -150,8 +150,9 @@ that durability is needed.
 
 Provider placement is now implemented for explicit stateful projects. It does not relocate local
 projects or fail node-local SQLite over to another node. Generation-bound backup creation,
-scheduling, listing, and verification use the ordinary encrypted recovery repository; fenced
-provider restore is not implemented yet. See [Remote runtime
+scheduling, listing, verification, and fenced restore use the ordinary encrypted recovery
+repository. Restore remains pinned to the current stateful node and intentionally pauses the
+writer while a replacement generation is validated. See [Remote runtime
 placement](runtime-placement.md#enable-built-in-provider-placement) before enabling it.
 
 For the underlying authentication, leases, artifacts, fencing, and agent loop, see

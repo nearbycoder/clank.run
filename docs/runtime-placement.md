@@ -278,10 +278,16 @@ encrypted local or S3-compatible recovery repository. The control token is never
 not authorize public application ingress. Provider generations created before this credential was
 added must be deployed once before their first managed backup.
 
-Provider restore remains closed with `PROVIDER_RESTORE_PENDING` until recovery bytes can be
-delivered through a new fenced replacement generation with a verified safety copy. Maintain an
-independently tested provider-host restore procedure until that phase ships. Control-plane job
-inspection likewise returns `remote_unavailable`, and job mutations return
+Provider restore verifies the selected encrypted recovery point, creates a provider snapshot as a
+second encrypted safety point, and freezes both identities plus target digest/size in a new
+generation. The runtime source re-authenticates the target and places its bytes only in the private
+capsule. The provider drains the old writer, makes an exact post-drain local safety snapshot,
+replaces SQLite, reapplies current migrations, health-checks, and publishes ingress last. A timeout
+returns `PROVIDER_RESTORE_PENDING`; retrying the same request resumes that generation without
+duplicating the safety point. Restore intentionally pauses writes and still depends on the pinned
+node.
+
+Control-plane job inspection returns `remote_unavailable`, and job mutations return
 `PROVIDER_JOBS_PENDING`, until a bounded provider diagnostics transport exists. Provider
 application log streaming, per-runtime memory attribution, and provider disk telemetry also remain
 operator responsibilities; request/latency/transfer metrics at Clank's managed ingress continue to

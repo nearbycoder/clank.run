@@ -17,6 +17,23 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 
 `npm run check` covers the build, dependency contract, coverage floors, documentation/declaration audit, packed-release conformance, deterministic chaos tests, package/current-tree/history credential scans, and workflow-policy checks. Browser review remains intentionally explicit because visual and interaction regressions need a rendered application.
 
+## 2026-07-30 provider restore control-plane phase
+
+- [x] Added durable replacement-generation intent binding the exact recovery ID, authenticated
+  digest, byte count, safety-backup ID, active release, frozen environment, and generation.
+- [x] Re-authenticated encrypted recovery bytes during private capsule loading and rechecked the
+  immutable generation record after the bounded read.
+- [x] Added target verification, provider safety-backup creation, pending retention protection,
+  post-drain provider safety, SQLite replacement, current migrations, health-gated publication,
+  timeout resume, failed-operation re-fencing, and queue/completion audit.
+- [x] Upgraded existing provider-generation tables in place while preserving old generations as
+  ordinary `preserve` intent.
+- [x] Passed the complete local gate: 325 tests, 85.94% line / 74.83% branch / 86.45%
+  function coverage, 59 Markdown files, 249 local links, declaration/export synchronization,
+  packed-release conformance, and current-tree/history credential scans.
+- [ ] Record GitHub CI/CodeQL evidence, merge SHA, and post-merge documentation result.
+- [x] Added no Railway service, volume, database, bucket, or other paid resource.
+
 ## 2026-07-30 provider backup control-plane phase
 
 - [x] Added exact active-node/generation provider snapshot consumption with private derived

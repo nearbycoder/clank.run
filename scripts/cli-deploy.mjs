@@ -1790,6 +1790,9 @@ async function backupCommand(args) {
     });
     console.log(`Restored ${payload.verification.id}`);
     console.log(`Safety backup: ${payload.safetyBackupId}`);
+    if (Number.isSafeInteger(payload.generation)) {
+      console.log(`Provider generation: ${payload.generation}`);
+    }
     return;
   }
   throw new CliError("Usage: clank backup <create|list|verify|restore>");

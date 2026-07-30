@@ -1712,8 +1712,8 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       + " INSERT INTO remote_state (value) VALUES ('provider snapshot plaintext canary');",
   );
   providerDatabase.close();
-  const providerSnapshot = new Uint8Array(await readFile(providerDatabasePath));
-  const providerSnapshotSha256 = await deploymentDigest(providerSnapshot);
+  let providerSnapshot = new Uint8Array(await readFile(providerDatabasePath));
+  let providerSnapshotSha256 = await deploymentDigest(providerSnapshot);
   const providerRequests = [];
   const providerControlRequests = [];
   let activeProviderReleaseId = null;
@@ -1800,6 +1800,23 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     },
   };
   let platform = await openPlatform(options);
+  await platform.close();
+  const legacyProviderControl = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+  legacyProviderControl.exec(`
+    ALTER TABLE clank_platform_provider_generations
+      RENAME TO clank_platform_provider_generations_current;
+    CREATE TABLE clank_platform_provider_generations (
+      project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+      generation INTEGER NOT NULL CHECK (generation > 0),
+      release_id TEXT NOT NULL,
+      encrypted_environment TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (project_id, generation)
+    ) WITHOUT ROWID;
+    DROP TABLE clank_platform_provider_generations_current;
+  `);
+  legacyProviderControl.close();
+  platform = await openPlatform(options);
   let agent;
   try {
     const client = createDeploymentCoordinatorClient({
@@ -1812,6 +1829,11 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     let resolveInitialReconcile;
     const initialReconcileCompleted = new Promise((resolve) => {
       resolveInitialReconcile = resolve;
+    });
+    let delayNextRestore = false;
+    let resolveDelayedRestore;
+    const delayedRestoreCompleted = new Promise((resolve) => {
+      resolveDelayedRestore = resolve;
     });
     agent = await openProviderDeploymentAgent({
       client,
@@ -1826,6 +1848,18 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
         kind: "http",
         async reconcile(request) {
           reconciliations.push(request);
+          if (
+            request.runtime.manifest.database.mode === "replace"
+            && delayNextRestore
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 1_200));
+            delayNextRestore = false;
+            resolveDelayedRestore();
+          }
+          if (request.runtime.manifest.database.mode === "replace") {
+            providerSnapshot = new Uint8Array(request.runtime.databaseSnapshot);
+            providerSnapshotSha256 = await deploymentDigest(providerSnapshot);
+          }
           activeProviderReleaseId = request.desired.releaseId;
           activeProviderGeneration = request.desired.generation;
           if (reconciliations.length === 1) {
@@ -2000,7 +2034,16 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     providerSnapshotFault = null;
     assert.ok(observedProviderErrors.some((error) =>
       error.message === "Provider snapshot transport failed."));
-    const providerRestorePending = await platform.handle(jsonRequest(
+    const currentProviderDatabase = new DatabaseSync(providerDatabasePath);
+    currentProviderDatabase.prepare(
+      "UPDATE remote_state SET value = ?",
+    ).run("provider current state before encrypted restore");
+    currentProviderDatabase.close();
+    providerSnapshot = new Uint8Array(await readFile(providerDatabasePath));
+    providerSnapshotSha256 = await deploymentDigest(providerSnapshot);
+    const safetySnapshotSha256 = providerSnapshotSha256;
+    delayNextRestore = true;
+    const pendingProviderRestore = await platform.handle(jsonRequest(
       `/api/projects/${created.project.id}/backups/${remoteBackup.backup.id}/restore`,
       {
         method: "POST",
@@ -2011,11 +2054,66 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
         },
       },
     ));
-    assert.equal(providerRestorePending.status, 409);
+    assert.equal(pendingProviderRestore.status, 503);
     assert.equal(
-      (await providerRestorePending.json()).error.code,
+      (await pendingProviderRestore.json()).error.code,
       "PROVIDER_RESTORE_PENDING",
     );
+    const failedRestoreControl = new DatabaseSync(
+      join(dataDirectory, "control.sqlite"),
+    );
+    const failedRestoreOperation = failedRestoreControl.prepare(
+      `UPDATE clank_deployment_operations
+        SET state = 'failed', error = 'simulated exhausted restore',
+          lease_token_hash = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE idempotency_key = ?`,
+    ).run(
+      Date.now(),
+      `reconcile:${created.project.id}:2`,
+    );
+    assert.equal(Number(failedRestoreOperation.changes), 1);
+    failedRestoreControl.close();
+    await delayedRestoreCompleted;
+    const providerRestore = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/backups/${remoteBackup.backup.id}/restore`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: {
+          confirmation:
+            `restore-backup remote-app ${remoteBackup.backup.id}`,
+        },
+      },
+    ));
+    assert.equal(
+      providerRestore.verification.databaseSha256,
+      remoteBackup.backup.databaseSha256,
+    );
+    assert.equal(providerRestore.generation, 3);
+    assert.equal(reconciliations.length, 3);
+    assert.equal(reconciliations[2].desired.releaseId, deployed.body.release.id);
+    assert.equal(reconciliations[2].desired.generation, 3);
+    assert.equal(reconciliations[2].runtime.manifest.database.mode, "replace");
+    assert.equal(
+      await deploymentDigest(reconciliations[2].runtime.databaseSnapshot),
+      remoteBackup.backup.databaseSha256,
+    );
+    assert.equal(providerSnapshotSha256, remoteBackup.backup.databaseSha256);
+    const backupsAfterRestore = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/backups`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(backupsAfterRestore.backups.length, 2);
+    const safetyBackup = backupsAfterRestore.backups.find((backup) =>
+      backup.id !== remoteBackup.backup.id);
+    assert.ok(safetyBackup);
+    assert.equal(providerRestore.safetyBackupId, safetyBackup.id);
+    assert.equal(
+      safetyBackup.reason,
+      `automatic safety copy before restoring ${remoteBackup.backup.id}`,
+    );
+    assert.equal(safetyBackup.databaseSha256, safetySnapshotSha256);
+    assert.equal(providerControlRequests.length, 3);
     const remoteJobs = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/jobs`,
       { token: owner.accessToken },
@@ -2052,7 +2150,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     );
     assert.equal(providerRequests[0].projectId, created.project.id);
     assert.equal(providerRequests[0].protocol, "clank-runtime/1");
-    assert.equal(providerRequests[0].generation, "1");
+    assert.equal(providerRequests[0].generation, "3");
     assert.match(providerRequests[0].token, /^clnki_/u);
 
     await payload(platform, jsonRequest(
@@ -2088,6 +2186,14 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       )),
       false,
     );
+    assert.equal(
+      raw.includes(Buffer.from("provider current state before encrypted restore")),
+      false,
+    );
+    assert.equal(
+      raw.includes(Buffer.from("provider snapshot plaintext canary")),
+      false,
+    );
 
     await platform.close();
     platform = await openPlatform(options);
@@ -2096,7 +2202,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     );
     assert.equal(afterRestart.status, 200);
     assert.equal(await afterRestart.text(), "remote response");
-    assert.equal(providerRequests.at(-1).generation, "1");
+    assert.equal(providerRequests.at(-1).generation, "3");
 
     const secondArtifact = await appArtifact(join(root, "source-second"), "remote-second", [
       ["0001_remote.sql", "CREATE TABLE remote_items (id TEXT PRIMARY KEY);\n"],
@@ -2110,10 +2216,10 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       "provider-placement-release-02",
     );
     assert.equal(second.response.status, 201, JSON.stringify(second.body));
-    assert.equal(second.body.release.project.activeGeneration, 2);
-    assert.equal(second.body.release.providerGeneration, 2);
-    assert.equal(reconciliations.length, 2);
-    assert.equal(reconciliations[1].runtime.manifest.database.mode, "preserve");
+    assert.equal(second.body.release.project.activeGeneration, 4);
+    assert.equal(second.body.release.providerGeneration, 4);
+    assert.equal(reconciliations.length, 4);
+    assert.equal(reconciliations[3].runtime.manifest.database.mode, "preserve");
 
     const rolledBack = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/rollback`,
@@ -2128,23 +2234,23 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       },
     ));
     assert.equal(rollbacks.length, 1);
-    assert.equal(rollbacks[0].generation, 2);
+    assert.equal(rollbacks[0].generation, 4);
     assert.equal(
       rollbacks[0].confirmation,
-      `rollback ${created.project.id} 2`,
+      `rollback ${created.project.id} 4`,
     );
-    assert.equal(rolledBack.release.project.activeGeneration, 3);
-    assert.equal(rolledBack.release.providerGeneration, 3);
+    assert.equal(rolledBack.release.project.activeGeneration, 5);
+    assert.equal(rolledBack.release.providerGeneration, 5);
     assert.equal(rolledBack.release.id, deployed.body.release.id);
-    assert.equal(reconciliations.length, 3);
-    assert.equal(reconciliations[2].desired.releaseId, deployed.body.release.id);
-    assert.equal(reconciliations[2].desired.generation, 3);
+    assert.equal(reconciliations.length, 5);
+    assert.equal(reconciliations[4].desired.releaseId, deployed.body.release.id);
+    assert.equal(reconciliations[4].desired.generation, 5);
 
     const afterRollback = await platform.handle(
       new Request("https://remote-app.apps.example.test/after-rollback"),
     );
     assert.equal(afterRollback.status, 200);
-    assert.equal(providerRequests.at(-1).generation, "3");
+    assert.equal(providerRequests.at(-1).generation, "5");
 
     const cleanedSecond = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/releases/${second.body.release.id}`,
@@ -2170,7 +2276,55 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       WHERE project_id = ? AND release_id = ?`).get(
       created.project.id,
       deployed.body.release.id,
-    ).count), 2);
+    ).count), 4);
+    const restoreGenerations = retained.prepare(`SELECT generation, database_mode,
+        restore_backup_id, restore_database_sha256, restore_database_bytes,
+        safety_backup_id
+      FROM clank_platform_provider_generations
+      WHERE project_id = ? AND generation IN (2, 3)
+      ORDER BY generation`).all(created.project.id);
+    assert.deepEqual(restoreGenerations.map((row) => ({ ...row })), [{
+      generation: 2,
+      database_mode: "replace",
+      restore_backup_id: remoteBackup.backup.id,
+      restore_database_sha256: remoteBackup.backup.databaseSha256,
+      restore_database_bytes: remoteBackup.backup.databaseBytes,
+      safety_backup_id: safetyBackup.id,
+    }, {
+      generation: 3,
+      database_mode: "replace",
+      restore_backup_id: remoteBackup.backup.id,
+      restore_database_sha256: remoteBackup.backup.databaseSha256,
+      restore_database_bytes: remoteBackup.backup.databaseBytes,
+      safety_backup_id: safetyBackup.id,
+    }]);
+    const restoreAudit = retained.prepare(`SELECT metadata
+      FROM clank_platform_audit
+      WHERE project_id = ? AND action = 'backup.restore'
+      ORDER BY id DESC LIMIT 1`).get(created.project.id);
+    assert.ok(restoreAudit);
+    assert.deepEqual(JSON.parse(String(restoreAudit.metadata)), {
+      backupId: remoteBackup.backup.id,
+      safetyBackupId: safetyBackup.id,
+      databaseSha256: remoteBackup.backup.databaseSha256,
+      databaseBytes: remoteBackup.backup.databaseBytes,
+      placement: "provider",
+      generation: 3,
+      nodeId: "provider-placement-one",
+    });
+    const restoreQueueAudits = retained.prepare(`SELECT metadata
+      FROM clank_platform_audit
+      WHERE project_id = ? AND action = 'backup.restore.queue'
+      ORDER BY id`).all(
+      created.project.id,
+    ).map((row) => JSON.parse(String(row.metadata)));
+    assert.deepEqual(
+      restoreQueueAudits.map((metadata) => metadata.generation),
+      [2, 3],
+    );
+    assert.ok(restoreQueueAudits.every((metadata) =>
+      metadata.backupId === remoteBackup.backup.id
+      && metadata.safetyBackupId === safetyBackup.id));
     retained.close();
 
     const deleted = await payload(platform, jsonRequest(
@@ -2186,7 +2340,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     ));
     assert.equal(deleted.project.id, created.project.id);
     assert.equal(deletions.length, 1);
-    assert.equal(deletions[0].generation, 3);
+    assert.equal(deletions[0].generation, 5);
     assert.equal(deletions[0].confirmation, `delete ${created.project.id}`);
     const missing = await platform.handle(jsonRequest(
       `/api/projects/${created.project.id}`,
