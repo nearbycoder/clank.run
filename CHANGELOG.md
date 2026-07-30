@@ -6,6 +6,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 - Fixed the operator memory dashboard to render control-plane process attribution from the
   diagnostics API's `controlPlane` field instead of confusing it with control-database storage.
+- Hardened the release gate against Node's occasional truncated experimental coverage artifact:
+  it retries that exact all-tests-passed reporter failure once while continuing to fail
+  immediately for test failures, threshold misses, and every other nonzero exit.
 
 ## 0.12.0 - 2026-07-30
 
