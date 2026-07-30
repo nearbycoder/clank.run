@@ -168,7 +168,8 @@ follow
 [Deployment runner fleet](runner-fleet.md),
 [Remote runtime placement](runtime-placement.md),
 [Deployment provider adapters](provider-adapters.md),
-[Provider data lifecycle](provider-data-lifecycle.md), and
+[Provider data lifecycle](provider-data-lifecycle.md),
+[Provider runtime ingress](provider-runtime-ingress.md), and
 [Durable distributed deployment](distributed-deployment.md).
 
 ### Optional off-host release uploads

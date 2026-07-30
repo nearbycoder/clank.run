@@ -213,5 +213,5 @@ until the next integration binds this lifecycle to:
 - end-to-end lease-loss, retry-after-commit, deletion, and traffic-switch tests.
 
 Continue with [Remote runtime placement](runtime-placement.md), [Deployment provider
-adapters](provider-adapters.md), [Managed ingress](data-plane.md), and [Backup and disaster
-recovery](recovery.md).
+adapters](provider-adapters.md), [Provider runtime ingress](provider-runtime-ingress.md),
+[Managed ingress](data-plane.md), and [Backup and disaster recovery](recovery.md).

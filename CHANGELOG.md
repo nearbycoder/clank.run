@@ -6,6 +6,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- A provider-private `@clank.run/framework/provider-runtime` registry now publishes overlapping
+  application generations, validates the complete managed-ingress binding before dispatch, retains
+  only a route-token digest, proxies only to loopback origins, and revokes then drains exact
+  generations. URL/body/time/capacity bounds, reserved-header stripping, generic unavailable
+  failures, response streaming, pre-auth activation-race leases, close fencing, retry-safe
+  deactivation, and timed-out-drain retention are covered end to end.
 - Managed ingress can now bind an allowlisted remote provider origin to an exact
   `clank-runtime/1` generation and provider-local path. It overwrites reserved
   project/protocol/generation/ingress-token headers, binds health checks identically, keeps the

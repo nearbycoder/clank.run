@@ -156,8 +156,10 @@ altering another runtime; they do not make the destination host untrusted comput
 The capsule codec, lease-scoped coordinator call, standard deployment-agent access, desired-state
 protocol selector, provider verification, authenticated HTTP forwarding, public declarations,
 packaged-runner limits, and generation-bound managed-ingress route contract are implemented and
-tested. A remote ingress route fixes the allowlisted provider origin, provider-local path,
-`clank-runtime/1` protocol, desired generation, project, and private route token. Public requests
+tested. The package-supported provider runtime registry validates that contract before forwarding
+to a loopback application, retains only the route-token digest, permits safe generation overlap,
+and revokes then drains exact generations. A remote ingress route fixes the allowlisted provider
+origin, provider-local path, `clank-runtime/1` protocol, desired generation, project, and private route token. Public requests
 cannot override those headers, health uses the same binding, and an old generation's circuit state
 does not carry into the next generation.
 
@@ -167,9 +169,9 @@ without persisting secrets; initializes, preserves, replaces, snapshots, rolls b
 per-project SQLite data; applies immutable migrations; retains one rollback generation; and
 recovers interrupted apply and rollback journals.
 
-Remote activation remains closed until that lifecycle and ingress contract are bound end to end to
-an isolated runtime launcher, provider-side binding validation, atomic ingress publish/revoke,
-stateful node pinning, encrypted recovery replication, and lease-loss/traffic-switch
+Remote activation remains closed until the implemented data and ingress contracts are bound end
+to end to an isolated runtime launcher, atomic control-plane publish/revoke, stateful node pinning,
+encrypted recovery replication, restart reconciliation, and lease-loss/traffic-switch
 certification.
 
 Until those controls land, enabling a runner fleet does not move existing applications or their
@@ -178,5 +180,6 @@ volume, database, or object store is required.
 
 Continue with [Provider data lifecycle](provider-data-lifecycle.md), [Deployment provider
 adapters](provider-adapters.md), [Durable distributed deployment](distributed-deployment.md),
-[Managed ingress and external data](data-plane.md), [Recovery](recovery.md), and
+[Managed ingress and external data](data-plane.md), [Recovery](recovery.md),
+[Provider runtime ingress](provider-runtime-ingress.md), and
 [Platform security](platform-security.md).

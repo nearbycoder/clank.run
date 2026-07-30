@@ -83,6 +83,8 @@ also scoped to origin, protocol, provider path, and generation, so failures from
 cannot hold a newly activated generation open; late responses from the replaced generation also
 cannot change its replacement's circuit. This contract does not by itself publish a remote runtime;
 activation still requires a verified provider launcher and an atomic control-plane route switch.
+The package-supported [provider runtime ingress](provider-runtime-ingress.md) validates this exact
+contract on the other side of the private provider hop.
 
 ### Admission policy
 
