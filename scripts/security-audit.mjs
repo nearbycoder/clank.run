@@ -10,6 +10,21 @@ const fail = (message) => failures.push(message);
 const read = (relative) => readFile(path.join(root, relative), "utf8");
 
 const packageJson = JSON.parse(await read("package.json"));
+const escapedPackageVersion = packageJson.version.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+const [changelog, gettingStarted] = await Promise.all([
+  read("CHANGELOG.md"),
+  read("docs/getting-started.md"),
+]);
+if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(packageJson.version)) {
+  fail("The package version must be a valid release semantic version.");
+}
+if (!new RegExp(`^## ${escapedPackageVersion} - \\d{4}-\\d{2}-\\d{2}$`, "mu").test(changelog)) {
+  fail(`CHANGELOG.md must contain a dated ${packageJson.version} release heading.`);
+}
+if (!gettingStarted.includes(`"@clank.run/framework": "^${packageJson.version}"`)) {
+  fail("The Getting Started dependency example must match the package version.");
+}
+pass("release identity is synchronized across package metadata, changelog, and installation docs");
 for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
   if (packageJson[field] && Object.keys(packageJson[field]).length > 0) {
     fail(`package.json contains ${field}; Clank's runtime and release gate must remain dependency-free.`);

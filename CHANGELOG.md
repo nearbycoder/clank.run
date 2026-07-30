@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.10.0 - 2026-07-30
+
 ### Added
 
 - `clank templates --json` now exposes the versioned `clank-template-catalog/1` starter catalog,
