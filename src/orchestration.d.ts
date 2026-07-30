@@ -60,10 +60,16 @@ export interface ClaimedDeploymentOperation extends DeploymentOperation {
     leaseExpiresAt: number;
 }
 export type DeploymentOperationLease = Omit<ClaimedDeploymentOperation, "leaseToken">;
+/**
+ * Portable placements may move after node loss. Stateful placements reserve
+ * one node identity so node-local data is never failed over implicitly.
+ */
+export type DeploymentPlacementMode = "portable" | "stateful";
 export interface DesiredDeployment {
     projectId: string;
     desiredReleaseId: string | null;
     desiredState: "running" | "stopped";
+    placementMode: DeploymentPlacementMode;
     assignedNodeId: string | null;
     generation: number;
     observedReleaseId: string | null;
@@ -96,6 +102,11 @@ export interface DeploymentOrchestrator {
         releaseId: string | null;
         state: "running" | "stopped";
         region?: string;
+        /**
+         * Defaults to "portable" for a new placement and inherits the durable mode
+         * on later generations. A placement mode cannot be changed implicitly.
+         */
+        placementMode?: DeploymentPlacementMode;
         /** Selects the sensitive runtime capsule contract for the reconcile operation. */
         runtimeProtocol?: "clank-runtime/1";
     }): Promise<DesiredDeployment>;

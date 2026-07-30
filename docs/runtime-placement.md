@@ -110,6 +110,7 @@ await orchestrator.setDesired({
   releaseId,
   state: "running",
   region: "iad",
+  placementMode: "stateful",
   runtimeProtocol: "clank-runtime/1",
 });
 ```
@@ -178,9 +179,10 @@ deferred background activation, private ingress, durable operation/generation/fe
 response-lost retry, stopped desired state, and restart reconciliation end to end on one assigned
 provider node.
 
-Remote activation remains closed until the control plane opts projects into that service with
-atomic edge publish/revoke, stateful node pinning, encrypted recovery replication, and
-lease-loss/traffic-switch certification.
+The coordinator now provides durable stateful node pinning. It deliberately keeps an unavailable
+placement on the same node identity instead of silently moving node-local SQLite data. Remote
+activation remains closed until the control plane opts projects into that service with atomic edge
+publish/revoke, encrypted recovery replication, and lease-loss/traffic-switch certification.
 
 Until those controls land, enabling a runner fleet does not move existing applications or their
 data. The current single-host deployment path stays unchanged and no additional Railway service,

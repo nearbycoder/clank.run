@@ -6,6 +6,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- Deployment desired state now distinguishes portable from stateful placement. Stateful projects
+  reserve one node identity across releases, stopped state, expiry, and credential revocation;
+  unsafe implicit failover, mode changes, and pinned-region changes are rejected.
+
 - A complete zero-dependency `@clank.run/framework/provider-service` composition now binds
   independently verified runtime capsules, durable operation/generation/fence intent, provider
   data recovery and migrations, isolated Docker activation, stopped desired state, and

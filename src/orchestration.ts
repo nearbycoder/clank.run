@@ -70,10 +70,17 @@ export interface ClaimedDeploymentOperation extends DeploymentOperation {
 
 export type DeploymentOperationLease = Omit<ClaimedDeploymentOperation, "leaseToken">;
 
+/**
+ * Portable placements may move after node loss. Stateful placements reserve
+ * one node identity so node-local data is never failed over implicitly.
+ */
+export type DeploymentPlacementMode = "portable" | "stateful";
+
 export interface DesiredDeployment {
   projectId: string;
   desiredReleaseId: string | null;
   desiredState: "running" | "stopped";
+  placementMode: DeploymentPlacementMode;
   assignedNodeId: string | null;
   generation: number;
   observedReleaseId: string | null;
@@ -107,6 +114,11 @@ export interface DeploymentOrchestrator {
     releaseId: string | null;
     state: "running" | "stopped";
     region?: string;
+    /**
+     * Defaults to "portable" for a new placement and inherits the durable mode
+     * on later generations. A placement mode cannot be changed implicitly.
+     */
+    placementMode?: DeploymentPlacementMode;
     /** Selects the sensitive runtime capsule contract for the reconcile operation. */
     runtimeProtocol?: "clank-runtime/1";
   }): Promise<DesiredDeployment>;
@@ -186,8 +198,13 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
       FROM clank_deployment_placements p
       LEFT JOIN clank_deployment_nodes n ON n.id = p.assigned_node_id
       WHERE p.desired_state = 'running'
-        AND (p.assigned_node_id IS NULL
-          OR n.id IS NULL OR n.expires_at <= ? OR n.status = 'offline')`).all(now);
+        AND (
+          p.assigned_node_id IS NULL
+          OR (
+            p.placement_mode = 'portable'
+            AND (n.id IS NULL OR n.expires_at <= ? OR n.status = 'offline')
+          )
+        )`).all(now);
     for (const placement of placements) {
       const next = chooseNode(
         placement.region === null ? undefined : String(placement.region),
@@ -263,6 +280,13 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
       const labels = normalizedLabels(input.labels ?? {});
       const token = `clnka_${randomToken(32)}`;
       const now = Date.now();
+      const pinnedRegions = internal.prepare(`SELECT DISTINCT region
+        FROM clank_deployment_placements
+        WHERE assigned_node_id = ? AND placement_mode = 'stateful'`).all(id)
+        .map((placement) => placement.region === null ? null : String(placement.region));
+      if (pinnedRegions.some((pinnedRegion) => pinnedRegion !== null && pinnedRegion !== region)) {
+        throw new TypeError("A node with stateful placements cannot re-register in another region.");
+      }
       internal.transaction((changes) => {
         internal.prepare(`INSERT INTO clank_deployment_nodes
           (id, token_hash, region, endpoint, capacity, labels, status, heartbeat_at, expires_at, created_at, updated_at)
@@ -379,22 +403,50 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
       }
       reassignExpired();
       const existing = internal.prepare("SELECT * FROM clank_deployment_placements WHERE project_id = ?").get(projectId);
+      const storedPlacementMode = existing
+        ? String(existing.placement_mode) as DeploymentPlacementMode
+        : null;
+      const placementMode = input.placementMode ?? storedPlacementMode ?? "portable";
+      if (placementMode !== "portable" && placementMode !== "stateful") {
+        throw new TypeError("placementMode must be portable or stateful.");
+      }
+      if (storedPlacementMode && input.placementMode && input.placementMode !== storedPlacementMode) {
+        throw new TypeError("A deployment placementMode cannot change after it is created.");
+      }
+      const storedRegion = existing?.region === null || existing?.region === undefined
+        ? null
+        : String(existing.region);
+      const desiredRegion = input.region === undefined ? storedRegion : region;
+      if (
+        placementMode === "stateful"
+        && existing?.assigned_node_id !== null
+        && existing?.assigned_node_id !== undefined
+        && input.region !== undefined
+        && desiredRegion !== storedRegion
+      ) {
+        throw new TypeError("A pinned stateful deployment region cannot change.");
+      }
       const generation = existing ? Number(existing.generation) + 1 : 1;
       const assignedNodeId = state === "running"
-        ? chooseNode(region ?? undefined)
+        ? placementMode === "stateful"
+          && existing?.assigned_node_id !== null
+          && existing?.assigned_node_id !== undefined
+          ? String(existing.assigned_node_id)
+          : chooseNode(desiredRegion ?? undefined)
         : existing?.assigned_node_id === null || existing?.assigned_node_id === undefined
           ? null
           : String(existing.assigned_node_id);
       const now = Date.now();
       internal.transaction((changes) => {
         internal.prepare(`INSERT INTO clank_deployment_placements
-          (project_id, desired_release_id, desired_state, assigned_node_id, region, generation,
+          (project_id, desired_release_id, desired_state, placement_mode, assigned_node_id, region, generation,
            observed_release_id, observed_state, observed_generation, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, NULL, 'unknown', 0, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'unknown', 0, ?)
           ON CONFLICT(project_id) DO UPDATE SET desired_release_id = excluded.desired_release_id,
-            desired_state = excluded.desired_state, assigned_node_id = excluded.assigned_node_id,
+            desired_state = excluded.desired_state, placement_mode = excluded.placement_mode,
+            assigned_node_id = excluded.assigned_node_id,
             region = excluded.region, generation = excluded.generation, updated_at = excluded.updated_at`)
-          .run(projectId, releaseId, state, assignedNodeId, region, generation, now);
+          .run(projectId, releaseId, state, placementMode, assignedNodeId, desiredRegion, generation, now);
         changes.record("__orchestration", projectId);
       });
       await orchestrator.enqueue({
@@ -408,7 +460,7 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         },
         idempotencyKey: `reconcile:${projectId}:${generation}`,
         ...(assignedNodeId ? { nodeId: assignedNodeId } : {}),
-        ...(region ? { region } : {}),
+        ...(desiredRegion ? { region: desiredRegion } : {}),
       });
       return orchestrator.desired(projectId)!;
     },
@@ -424,7 +476,11 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
       await verifyNode(id, token);
       const result = internal.prepare(`UPDATE clank_deployment_placements
         SET observed_release_id = ?, observed_state = ?, observed_generation = ?,
-            assigned_node_id = CASE WHEN desired_state = 'stopped' AND ? = 'stopped' THEN NULL ELSE assigned_node_id END,
+            assigned_node_id = CASE
+              WHEN placement_mode = 'portable' AND desired_state = 'stopped' AND ? = 'stopped'
+                THEN NULL
+              ELSE assigned_node_id
+            END,
             updated_at = ?
         WHERE project_id = ? AND assigned_node_id = ? AND generation = ? AND observed_generation <= ?`)
         .run(
@@ -642,6 +698,7 @@ function createTables(internal: SQLiteInternal): void {
     project_id TEXT PRIMARY KEY,
     desired_release_id TEXT,
     desired_state TEXT NOT NULL CHECK (desired_state IN ('running', 'stopped')),
+    placement_mode TEXT NOT NULL DEFAULT 'portable' CHECK (placement_mode IN ('portable', 'stateful')),
     assigned_node_id TEXT REFERENCES clank_deployment_nodes(id) ON DELETE SET NULL,
     region TEXT,
     generation INTEGER NOT NULL CHECK (generation > 0),
@@ -650,6 +707,12 @@ function createTables(internal: SQLiteInternal): void {
     observed_generation INTEGER NOT NULL CHECK (observed_generation >= 0),
     updated_at INTEGER NOT NULL
   )`);
+  const placementColumns = internal.prepare("PRAGMA table_info(clank_deployment_placements)").all();
+  if (!placementColumns.some((column) => String(column.name) === "placement_mode")) {
+    internal.exec(`ALTER TABLE clank_deployment_placements
+      ADD COLUMN placement_mode TEXT NOT NULL DEFAULT 'portable'
+      CHECK (placement_mode IN ('portable', 'stateful'))`);
+  }
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_deployment_operations (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -712,6 +775,7 @@ function desiredFromRow(row: Record<string, unknown>): DesiredDeployment {
     projectId: String(row.project_id),
     desiredReleaseId: row.desired_release_id === null ? null : String(row.desired_release_id),
     desiredState: String(row.desired_state) as DesiredDeployment["desiredState"],
+    placementMode: String(row.placement_mode) as DeploymentPlacementMode,
     assignedNodeId: row.assigned_node_id === null ? null : String(row.assigned_node_id),
     generation: Number(row.generation),
     observedReleaseId: row.observed_release_id === null ? null : String(row.observed_release_id),

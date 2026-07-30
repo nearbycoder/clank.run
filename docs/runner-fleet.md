@@ -109,7 +109,9 @@ To upgrade a runner:
 5. Select **Reactivate** if the process did not reactivate itself.
 
 **Revoke** rotates the stored credential digest immediately, marks the node offline, and
-reassigns eligible desired placement. The old runner can no longer authenticate, renew, complete,
+reassigns eligible portable desired placement. A stateful placement stays pinned and unavailable
+until its node identity is re-enrolled or an explicit backup/restore workflow moves it. The old
+runner can no longer authenticate, renew, complete,
 or observe work. A leased operation stays fenced until its lease expires, then becomes retryable on
 the replacement node with a higher fence. To reuse a revoked node ID, create and consume a new
 one-time enrollment.

@@ -122,6 +122,138 @@ test("operator drain and revoke controls fence credentials and recover running p
   }
 });
 
+test("stateful placements pin one node identity across generations, stops, and node loss", async () => {
+  const test = await fixture();
+  try {
+    const nodeA = await test.orchestrator.registerNode({
+      id: "node-stateful-a",
+      region: "us-central",
+      capacity: 2,
+    });
+    const nodeB = await test.orchestrator.registerNode({
+      id: "node-stateful-b",
+      region: "us-central",
+      capacity: 2,
+    });
+    const first = await test.orchestrator.setDesired({
+      projectId: "project_stateful",
+      releaseId: "release-stateful-1",
+      state: "running",
+      region: "us-central",
+      placementMode: "stateful",
+      runtimeProtocol: "clank-runtime/1",
+    });
+    assert.equal(first.placementMode, "stateful");
+    assert.equal(first.assignedNodeId, "node-stateful-a");
+
+    const second = await test.orchestrator.setDesired({
+      projectId: "project_stateful",
+      releaseId: "release-stateful-2",
+      state: "running",
+      runtimeProtocol: "clank-runtime/1",
+    });
+    assert.equal(second.assignedNodeId, first.assignedNodeId);
+    assert.equal(second.placementMode, "stateful");
+
+    test.orchestrator.revokeNode("node-stateful-a");
+    assert.equal(test.orchestrator.desired("project_stateful").assignedNodeId, "node-stateful-a");
+    assert.equal((await test.orchestrator.claim("node-stateful-b", nodeB.token)).length, 0);
+
+    const recoveredNodeA = await test.orchestrator.registerNode({
+      id: "node-stateful-a",
+      region: "us-central",
+      capacity: 2,
+    });
+    const claims = await test.orchestrator.claim("node-stateful-a", recoveredNodeA.token);
+    assert.equal(claims.length, 2);
+    assert.equal(claims.every((operation) => operation.projectId === "project_stateful"), true);
+
+    const stopped = await test.orchestrator.setDesired({
+      projectId: "project_stateful",
+      releaseId: null,
+      state: "stopped",
+    });
+    assert.equal(stopped.assignedNodeId, "node-stateful-a");
+    assert.equal(await test.orchestrator.observe("node-stateful-a", recoveredNodeA.token, {
+      projectId: "project_stateful",
+      generation: stopped.generation,
+      releaseId: null,
+      state: "stopped",
+    }), true);
+    assert.equal(test.orchestrator.desired("project_stateful").assignedNodeId, "node-stateful-a");
+
+    const restarted = await test.orchestrator.setDesired({
+      projectId: "project_stateful",
+      releaseId: "release-stateful-3",
+      state: "running",
+      runtimeProtocol: "clank-runtime/1",
+    });
+    assert.equal(restarted.assignedNodeId, "node-stateful-a");
+    await assert.rejects(
+      test.orchestrator.setDesired({
+        projectId: "project_stateful",
+        releaseId: "release-stateful-4",
+        state: "running",
+        placementMode: "portable",
+      }),
+      /placementMode cannot change/u,
+    );
+    await assert.rejects(
+      test.orchestrator.setDesired({
+        projectId: "project_stateful",
+        releaseId: "release-stateful-4",
+        state: "running",
+        region: "us-east",
+      }),
+      /region cannot change/u,
+    );
+    assert.equal((await test.orchestrator.authenticateNode("node-stateful-a", recoveredNodeA.token)).id, "node-stateful-a");
+    await assert.rejects(
+      test.orchestrator.authenticateNode("node-stateful-a", nodeA.token),
+      /authentication failed/u,
+    );
+    await assert.rejects(
+      test.orchestrator.registerNode({
+        id: "node-stateful-a",
+        region: "us-east",
+        capacity: 2,
+      }),
+      /cannot re-register in another region/u,
+    );
+  } finally {
+    await test.close();
+  }
+});
+
+test("an initially unassigned stateful placement binds once when capacity appears", async () => {
+  const test = await fixture();
+  try {
+    const desired = await test.orchestrator.setDesired({
+      projectId: "project_stateful_waiting",
+      releaseId: "release-stateful-waiting",
+      state: "running",
+      region: "us-central",
+      placementMode: "stateful",
+      runtimeProtocol: "clank-runtime/1",
+    });
+    assert.equal(desired.assignedNodeId, null);
+
+    const node = await test.orchestrator.registerNode({
+      id: "node-stateful-first",
+      region: "us-central",
+      capacity: 1,
+    });
+    const [claim] = await test.orchestrator.claim(node.node.id, node.token);
+    assert.equal(claim.projectId, "project_stateful_waiting");
+    assert.equal(
+      test.orchestrator.desired("project_stateful_waiting").assignedNodeId,
+      "node-stateful-first",
+    );
+  } finally {
+    await test.close();
+  }
+});
+
 test("node placement, desired generations, operation retries, and stale-worker fencing are durable", async () => {
   const test = await fixture();
   try {
@@ -145,6 +277,7 @@ test("node placement, desired generations, operation retries, and stale-worker f
       runtimeProtocol: "clank-runtime/1",
     });
     assert.equal(desired.assignedNodeId, "node-b");
+    assert.equal(desired.placementMode, "portable");
     assert.equal(desired.generation, 1);
     assert.equal((await test.orchestrator.claim("node-a", nodeA.token)).length, 0);
 
@@ -246,5 +379,51 @@ test("desired deployment validation rejects inconsistent release and runtime sta
     assert.equal(test.orchestrator.desired("project_invalid_runtime"), null);
   } finally {
     await test.close();
+  }
+});
+
+test("legacy placement rows migrate to portable mode without losing desired state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-orchestration-migration-"));
+  const database = await openSQLite(defineDatabase({}), {
+    path: join(root, "control.sqlite"),
+    wal: false,
+  });
+  try {
+    const internal = database[SQLITE_INTERNAL];
+    internal.exec(`CREATE TABLE clank_deployment_placements (
+      project_id TEXT PRIMARY KEY,
+      desired_release_id TEXT,
+      desired_state TEXT NOT NULL CHECK (desired_state IN ('running', 'stopped')),
+      assigned_node_id TEXT,
+      region TEXT,
+      generation INTEGER NOT NULL CHECK (generation > 0),
+      observed_release_id TEXT,
+      observed_state TEXT NOT NULL CHECK (observed_state IN ('unknown', 'running', 'stopped', 'failed')),
+      observed_generation INTEGER NOT NULL CHECK (observed_generation >= 0),
+      updated_at INTEGER NOT NULL
+    )`);
+    internal.prepare(`INSERT INTO clank_deployment_placements
+      (project_id, desired_release_id, desired_state, assigned_node_id, region, generation,
+       observed_release_id, observed_state, observed_generation, updated_at)
+      VALUES ('legacy_project', 'legacy_release', 'running', NULL, 'us-central', 7,
+        NULL, 'unknown', 0, 1)`).run();
+
+    const orchestrator = openDeploymentOrchestrator(database);
+    assert.deepEqual(orchestrator.desired("legacy_project"), {
+      projectId: "legacy_project",
+      desiredReleaseId: "legacy_release",
+      desiredState: "running",
+      placementMode: "portable",
+      assignedNodeId: null,
+      generation: 7,
+      observedReleaseId: null,
+      observedState: "unknown",
+      observedGeneration: 0,
+      updatedAt: 1,
+    });
+    orchestrator.close();
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
