@@ -1320,15 +1320,17 @@ test("deployments supervise independent worker and scheduler processes beside th
 
     const databasePath = join(root, "platform", "projects", projectId, "data", "app.sqlite");
     await waitFor(() => {
+      let database;
       try {
-        const database = new DatabaseSync(databasePath, { readOnly: true });
+        database = new DatabaseSync(databasePath, { readOnly: true, timeout: 250 });
         const count = Number(database.prepare(
           "SELECT count(*) AS count FROM background_processes",
         ).get().count);
-        database.close();
         return count === 3;
       } catch {
         return false;
+      } finally {
+        database?.close();
       }
     });
     const database = new DatabaseSync(databasePath, { readOnly: true });
@@ -1385,15 +1387,24 @@ test("deployments supervise independent worker and scheduler processes beside th
     );
     assert.equal(replacement.response.status, 201, JSON.stringify(replacement.body));
     await waitFor(() => {
-      const current = new DatabaseSync(databasePath, { readOnly: true });
-      const oldActive = Number(current.prepare(
-        "SELECT count(*) AS count FROM background_processes WHERE release = 'jobs-release' AND stopped_at IS NULL",
-      ).get().count);
-      const newActive = Number(current.prepare(
-        "SELECT count(*) AS count FROM background_processes WHERE release = 'jobs-release-two' AND stopped_at IS NULL",
-      ).get().count);
-      current.close();
-      return oldActive === 0 && newActive === 2;
+      let current;
+      try {
+        current = new DatabaseSync(databasePath, { readOnly: true, timeout: 250 });
+        const oldActive = Number(current.prepare(
+          "SELECT count(*) AS count FROM background_processes WHERE release = 'jobs-release' AND stopped_at IS NULL",
+        ).get().count);
+        const newActive = Number(current.prepare(
+          "SELECT count(*) AS count FROM background_processes WHERE release = 'jobs-release-two' AND stopped_at IS NULL",
+        ).get().count);
+        return oldActive === 0 && newActive === 2;
+      } catch (error) {
+        if (error?.errcode === 5 && error?.errstr === "database is locked") {
+          return false;
+        }
+        throw error;
+      } finally {
+        current?.close();
+      }
     });
     const replacementLogs = await payload(platform, jsonRequest(`/api/projects/${projectId}/logs`, {
       token: owner.accessToken,
