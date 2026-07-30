@@ -106,7 +106,28 @@ Leave `CLANK_RUNNER_REGISTRATION_TOKEN` unset for the inexpensive single-service
 remote-node enrollment retains one additional compressed upload for each new release so an exact
 leased artifact can be transferred to another host; that copy is included in project release
 quotas and the storage-attribution panel. Set `CLANK_RUNNER_MAX_ARTIFACT_BYTES` deliberately before
-enabling enrollment, and budget the added volume usage until off-host object storage is configured.
+enabling enrollment.
+
+For independent deployment nodes, create a Railway Bucket only when needed, reference its
+S3-compatible variables into the control-plane service, and set:
+
+```sh
+CLANK_RUNNER_ARTIFACT_STORE=s3
+CLANK_RUNNER_ARTIFACT_NAMESPACE=railway-production-v1
+CLANK_OBJECT_ENDPOINT=<reference the bucket ENDPOINT>
+CLANK_OBJECT_REGION=<reference the bucket REGION>
+CLANK_OBJECT_BUCKET=<reference the bucket BUCKET>
+CLANK_OBJECT_ACCESS_KEY_ID=<reference the bucket ACCESS_KEY_ID>
+CLANK_OBJECT_SECRET_ACCESS_KEY=<reference the bucket SECRET_ACCESS_KEY>
+CLANK_OBJECT_PREFIX=clank-production
+```
+
+Map Railway's provided `ENDPOINT`, `REGION`, `BUCKET`, `ACCESS_KEY_ID`, and
+`SECRET_ACCESS_KEY` values into the corresponding `CLANK_OBJECT_*` service variables with Railway
+variable references. New runner uploads then leave the mounted volume; existing release runtime
+directories, databases, snapshots, backups, and legacy uploads remain local. Clank never creates
+a bucket automatically, and the current single-service production topology deliberately stays on
+local storage to avoid a new resource charge.
 
 ## Domains
 

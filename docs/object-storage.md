@@ -105,6 +105,41 @@ names and billing. Cloudflare publishes the supported subset for
 [R2's S3 API](https://developers.cloudflare.com/r2/api/s3/api/). MinIO and other self-hosted
 implementations can use the same contract.
 
+## Control-plane release uploads
+
+When authenticated remote deployment nodes are enabled, `clank-platform` retains every new
+original upload so the exact leased release can be downloaded by its assigned node. Local
+owner-only files remain the default. Select object storage explicitly:
+
+```sh
+export CLANK_RUNNER_REGISTRATION_TOKEN="$(your-secret-manager read runner-enrollment)"
+export CLANK_RUNNER_ARTIFACT_STORE=s3
+export CLANK_RUNNER_ARTIFACT_NAMESPACE=production-releases-v1
+export CLANK_OBJECT_ENDPOINT=https://objects.example.com
+export CLANK_OBJECT_REGION=auto
+export CLANK_OBJECT_BUCKET=clank-releases
+export CLANK_OBJECT_ACCESS_KEY_ID="$(your-secret-manager read object-access-key)"
+export CLANK_OBJECT_SECRET_ACCESS_KEY="$(your-secret-manager read object-secret-key)"
+export CLANK_OBJECT_PREFIX=installation-01
+```
+
+Standard `AWS_ENDPOINT_URL`, `AWS_DEFAULT_REGION`, `AWS_S3_BUCKET_NAME`,
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` variables are fallback names,
+including Railway Bucket references. Explicit `CLANK_OBJECT_*` values take precedence.
+
+Each release persists:
+
+- the operator-selected repository namespace;
+- an exact `runner-artifacts/<project>/<release>/<sha256>.clank.gz` key;
+- the original byte length and SHA-256; and
+- whether its runner copy is local or object-backed in the release API.
+
+The platform checks the metadata returned by `put`, rehashes each leased `get`, and removes the
+exact object during release cleanup and site deletion. A failed or ambiguous write is cleaned
+before its quota reservation is released. A namespace or key mismatch refuses reads and deletion;
+restore the original repository configuration rather than reusing an identity for a different
+bucket. Existing local releases never move implicitly.
+
 ## Railway without surprise cost
 
 Creating this adapter does not create a bucket. Provision one only when its failure-domain benefit
@@ -137,6 +172,7 @@ right default for development.
 - Exercise restore and provider-outage drills. Remote existence is not proof that an object can be
   decrypted, verified, and used.
 
-This phase provides and verifies the storage adapters. The control plane continues to use its local
-release and backup repositories until the corresponding platform options are configured in the
-next incremental storage phases.
+The control plane can now opt new remote-runner uploads into this object contract. Runtime
+directories, databases, migration snapshots, encrypted recovery backups, and legacy release
+uploads remain local. Moving encrypted recovery backups off-host is the next independent storage
+phase.

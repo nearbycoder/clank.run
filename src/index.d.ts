@@ -7,6 +7,7 @@ export * from "./ai.js";
 export * from "./blueprint.js";
 export * from "./webauthn.js";
 export * from "./services.js";
+export * from "./object-storage.js";
 export * from "./observability.js";
 export * from "./recovery.js";
 export * from "./orchestration.js";

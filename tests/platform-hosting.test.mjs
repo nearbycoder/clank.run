@@ -4,7 +4,10 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openPlatform } from "../dist/platform.js";
-import { resolvePlatformHosting } from "../scripts/platform-hosting.mjs";
+import {
+  resolvePlatformHosting,
+  resolveRunnerArtifactStorage,
+} from "../scripts/platform-hosting.mjs";
 
 test("development remains zero-setup while production defaults to isolated Docker hosting", () => {
   assert.deepEqual(
@@ -67,6 +70,61 @@ test("hosting configuration rejects unknown values rather than falling back to p
   );
 });
 
+test("runner artifact storage resolves explicit S3-compatible configuration without hidden defaults", () => {
+  assert.equal(resolveRunnerArtifactStorage({}), null);
+  const resolved = resolveRunnerArtifactStorage({
+    CLANK_RUNNER_ARTIFACT_STORE: "s3",
+    CLANK_RUNNER_ARTIFACT_NAMESPACE: "production-v1",
+    AWS_ENDPOINT_URL: "https://objects.example.test",
+    AWS_DEFAULT_REGION: "auto",
+    AWS_S3_BUCKET_NAME: "clank-artifacts",
+    AWS_ACCESS_KEY_ID: "ACCESSKEY",
+    AWS_SECRET_ACCESS_KEY: "secret-access-key",
+    AWS_SESSION_TOKEN: "temporary-session-token",
+    CLANK_OBJECT_PREFIX: "installation-01",
+    CLANK_OBJECT_PATH_STYLE: "1",
+    CLANK_RUNNER_MAX_ARTIFACT_BYTES: "4096",
+  });
+  assert.deepEqual(resolved, {
+    namespace: "production-v1",
+    options: {
+      endpoint: "https://objects.example.test",
+      region: "auto",
+      bucket: "clank-artifacts",
+      accessKeyId: "ACCESSKEY",
+      secretAccessKey: "secret-access-key",
+      sessionToken: "temporary-session-token",
+      prefix: "installation-01",
+      pathStyle: true,
+      maxObjectBytes: 4096,
+    },
+  });
+  assert.throws(
+    () => resolveRunnerArtifactStorage({ CLANK_RUNNER_ARTIFACT_STORE: "filesystem" }),
+    /must be local or s3/u,
+  );
+  assert.throws(
+    () => resolveRunnerArtifactStorage({
+      CLANK_RUNNER_ARTIFACT_STORE: "s3",
+      CLANK_RUNNER_ARTIFACT_NAMESPACE: "production-v1",
+    }),
+    /CLANK_OBJECT_ENDPOINT is required/u,
+  );
+  assert.throws(
+    () => resolveRunnerArtifactStorage({
+      CLANK_RUNNER_ARTIFACT_STORE: "s3",
+      CLANK_RUNNER_ARTIFACT_NAMESPACE: "production-v1",
+      CLANK_OBJECT_ENDPOINT: "https://objects.example.test",
+      CLANK_OBJECT_REGION: "auto",
+      CLANK_OBJECT_BUCKET: "clank-artifacts",
+      CLANK_OBJECT_ACCESS_KEY_ID: "ACCESSKEY",
+      CLANK_OBJECT_SECRET_ACCESS_KEY: "secret-access-key",
+      CLANK_OBJECT_PATH_STYLE: "yes",
+    }),
+    /CLANK_OBJECT_PATH_STYLE must be 0 or 1/u,
+  );
+});
+
 test("programmatic isolated hosting requires an isolated runner and reports its posture", async () => {
   await assert.rejects(
     openPlatform({
@@ -76,6 +134,26 @@ test("programmatic isolated hosting requires an isolated runner and reports its 
       runner: { kind: "process" },
     }),
     /hostingProfile "isolated" requires a Docker runner/u,
+  );
+  await assert.rejects(
+    openPlatform({
+      dataDirectory: join(tmpdir(), "clank-object-namespace-must-not-open"),
+      publicUrl: "http://127.0.0.1:4200",
+      deploymentAgents: {
+        registrationToken: "clank_runner_registration_validation_1234567890",
+        artifacts: {
+          namespace: "local",
+          store: {
+            kind: "test",
+            async put() { throw new Error("unused"); },
+            async get() { return null; },
+            async stat() { return null; },
+            async delete() { return false; },
+          },
+        },
+      },
+    }),
+    /portable non-local identifier/u,
   );
 
   const root = await mkdtemp(join(tmpdir(), "clank-hosting-profile-"));

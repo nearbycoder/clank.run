@@ -30,6 +30,16 @@ configured worker/scheduler processes for each active project.
 | `CLANK_RUNNER_REGISTRATION_TOKEN` | none | Enables authenticated remote-node enrollment and coordination |
 | `CLANK_RUNNER_MAX_REQUEST_BYTES` | `131072` | Remote-node protocol request limit |
 | `CLANK_RUNNER_MAX_ARTIFACT_BYTES` | `104857600` | Leased remote-node release-transfer limit |
+| `CLANK_RUNNER_ARTIFACT_STORE` | `local` | Original remote-runner upload repository: `local` or `s3` |
+| `CLANK_RUNNER_ARTIFACT_NAMESPACE` | none | Required stable repository identity when the store is `s3` |
+| `CLANK_OBJECT_ENDPOINT` | `AWS_ENDPOINT_URL` | S3-compatible HTTPS origin |
+| `CLANK_OBJECT_REGION` | `AWS_DEFAULT_REGION` | SigV4 region, commonly `auto` for compatible providers |
+| `CLANK_OBJECT_BUCKET` | `AWS_S3_BUCKET_NAME` | Private bucket name |
+| `CLANK_OBJECT_ACCESS_KEY_ID` | `AWS_ACCESS_KEY_ID` | Bucket-scoped access-key ID |
+| `CLANK_OBJECT_SECRET_ACCESS_KEY` | `AWS_SECRET_ACCESS_KEY` | Bucket-scoped secret access key |
+| `CLANK_OBJECT_SESSION_TOKEN` | `AWS_SESSION_TOKEN` | Optional signed temporary-credential token |
+| `CLANK_OBJECT_PREFIX` | none | Optional private installation prefix |
+| `CLANK_OBJECT_PATH_STYLE` | `0` | Use path-style compatible URLs when `1` |
 | `CLANK_APP_PORT_START` | `4300` | Port-range start |
 | `CLANK_APP_PORT_END` | `4999` | Port-range end |
 | `CLANK_APP_URL_TEMPLATE` | loopback with `{port}` | Public app URL pattern |
@@ -120,6 +130,37 @@ application data plane; local SQLite data is never placed in the release transfe
 built-in supervisor still owns application activation; use the protocol and agent loop as the
 secure control boundary for a runner integration and follow
 [Durable distributed deployment](distributed-deployment.md).
+
+### Optional off-host release uploads
+
+Remote enrollment uses the private data volume by default. To retain new original uploads through
+an S3-compatible store, configure the enrollment token and explicit repository together:
+
+```sh
+export CLANK_RUNNER_REGISTRATION_TOKEN="$(your-secret-manager read runner-enrollment)"
+export CLANK_RUNNER_ARTIFACT_STORE=s3
+export CLANK_RUNNER_ARTIFACT_NAMESPACE=production-releases-v1
+export CLANK_OBJECT_ENDPOINT=https://objects.example.com
+export CLANK_OBJECT_REGION=auto
+export CLANK_OBJECT_BUCKET=clank-releases
+export CLANK_OBJECT_ACCESS_KEY_ID="$(your-secret-manager read object-access-key)"
+export CLANK_OBJECT_SECRET_ACCESS_KEY="$(your-secret-manager read object-secret-key)"
+export CLANK_OBJECT_PREFIX=installation-01
+```
+
+The namespace is a persisted operator identity, not a bucket credential. Keep it stable while old
+releases exist. If the endpoint, bucket, credentials, or prefix must move, copy the objects while
+preserving keys and keep the same namespace; use a new namespace only for a genuinely different
+repository. Clank refuses old object reads and destructive cleanup when the configured namespace
+does not match, allowing the operator to restore the correct configuration without losing
+metadata.
+
+New uploads use object storage; runtime directories, databases, pre-migration snapshots, encrypted
+recovery backups, and legacy local uploads remain under `CLANK_PLATFORM_DATA`. Provider failures
+are privately reported and returned as stable deployment errors. Cleanup attempts the remote
+deletion only after local paths pass containment and symlink checks. The external delete and local
+filesystem removal cannot share one transaction, so monitor failed cleanup and retry with the same
+repository configuration. See [Object storage](object-storage.md).
 
 ## Production start
 
