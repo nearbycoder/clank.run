@@ -36,6 +36,14 @@ const [operation] = await orchestrator.claim(agent.node.id, agent.token);
 
 An agent must renew a leased operation before expiry. Completion and failure compare the node, token digest, lease expiry, and fence. If a worker resumes after another worker has reclaimed the operation, its stale completion is rejected.
 
+Operation fences come from one durable sequence per project, not one counter per operation. The
+first claim for a later release therefore has a higher fence than every claim for an earlier
+release, even when both are different queue records. Reclaims consume another value, unrelated
+projects have independent sequences, and reopening the control plane does not reset them. This is
+the ordering boundary provider storage uses to reject a late writer after newer work has started.
+Deleting a project removes its sequence only after its operations and provider placement have
+been revoked.
+
 Desired-state observations are generation checked. A late report for generation 4 cannot overwrite generation 5.
 
 `placementMode` makes the data-mobility contract explicit:

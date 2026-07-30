@@ -3828,6 +3828,9 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
         Date.now(),
         Date.now(),
       );
+    control.prepare(`INSERT INTO clank_deployment_project_fences
+      (project_id, fence, updated_at) VALUES (?, 7, ?)`)
+      .run(projectId, Date.now());
     assert.equal(control.prepare(
       "SELECT count(*) AS count FROM clank_deployment_placements WHERE project_id = ?",
     ).get(projectId).count, 1);
@@ -3919,6 +3922,7 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
       ["clank_platform_backup_schedules", "project_id"],
       ["clank_deployment_placements", "project_id"],
       ["clank_deployment_operations", "project_id"],
+      ["clank_deployment_project_fences", "project_id"],
     ]) {
       assert.equal(
         finalControl.prepare(`SELECT count(*) AS count FROM ${table} WHERE ${column} = ?`).get(projectId).count,

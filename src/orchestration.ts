@@ -613,16 +613,48 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         ORDER BY created_at LIMIT ?`).all(id, now, now, count);
       for (const candidate of candidates) {
         const leaseToken = `clnko_${randomToken(32)}`;
-        const fence = Number(candidate.fence) + 1;
+        const leaseTokenHash = await digest(leaseToken);
         const expiresAt = now + operationLeaseMs;
-        const updated = internal.prepare(`UPDATE clank_deployment_operations
-          SET state = 'leased', attempts = attempts + 1, fence = ?, lease_token_hash = ?,
-              lease_expires_at = ?, updated_at = ?
-          WHERE id = ? AND (
-            (state IN ('queued', 'retry') AND next_attempt_at <= ?)
-            OR (state = 'leased' AND lease_expires_at <= ?)
-          )`).run(fence, await digest(leaseToken), expiresAt, now, candidate.id, now, now);
-        if (Number(updated.changes) !== 1) continue;
+        const fence = internal.transaction(() => {
+          const current = internal.prepare(`SELECT project_id
+            FROM clank_deployment_operations
+            WHERE id = ? AND node_id = ? AND (
+              (state IN ('queued', 'retry') AND next_attempt_at <= ?)
+              OR (state = 'leased' AND lease_expires_at <= ?)
+            )`).get(candidate.id, id, now, now);
+          if (!current) return null;
+          const projectId = String(current.project_id);
+          internal.prepare(`INSERT INTO clank_deployment_project_fences
+            (project_id, fence, updated_at) VALUES (?, 1, ?)
+            ON CONFLICT(project_id) DO UPDATE
+              SET fence = fence + 1,
+                updated_at = MAX(clank_deployment_project_fences.updated_at, excluded.updated_at)`)
+            .run(projectId, now);
+          const allocated = Number(internal.prepare(`SELECT fence
+            FROM clank_deployment_project_fences WHERE project_id = ?`)
+            .get(projectId)!.fence);
+          const updated = internal.prepare(`UPDATE clank_deployment_operations
+            SET state = 'leased', attempts = attempts + 1, fence = ?, lease_token_hash = ?,
+                lease_expires_at = ?, updated_at = ?
+            WHERE id = ? AND node_id = ? AND (
+              (state IN ('queued', 'retry') AND next_attempt_at <= ?)
+              OR (state = 'leased' AND lease_expires_at <= ?)
+            )`).run(
+              allocated,
+              leaseTokenHash,
+              expiresAt,
+              now,
+              candidate.id,
+              id,
+              now,
+              now,
+            );
+          if (Number(updated.changes) !== 1) {
+            throw new Error("Deployment operation changed during fence allocation.");
+          }
+          return allocated;
+        });
+        if (fence === null) continue;
         claimed.push({
           ...operationFromRow(internal.prepare("SELECT * FROM clank_deployment_operations WHERE id = ?").get(candidate.id)!),
           state: "leased",
@@ -799,6 +831,19 @@ function createTables(internal: SQLiteInternal): void {
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_deployment_project_fences (
+    project_id TEXT PRIMARY KEY,
+    fence INTEGER NOT NULL CHECK (fence > 0),
+    updated_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
+  internal.exec(`INSERT INTO clank_deployment_project_fences (project_id, fence, updated_at)
+    SELECT project_id, MAX(fence), MAX(updated_at)
+    FROM clank_deployment_operations
+    WHERE fence > 0
+    GROUP BY project_id
+    ON CONFLICT(project_id) DO UPDATE SET
+      fence = MAX(clank_deployment_project_fences.fence, excluded.fence),
+      updated_at = MAX(clank_deployment_project_fences.updated_at, excluded.updated_at)`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_deployment_operations_ready ON clank_deployment_operations (node_id, state, next_attempt_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_deployment_operations_project ON clank_deployment_operations (project_id, created_at)");
 }
