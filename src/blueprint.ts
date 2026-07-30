@@ -371,11 +371,13 @@ Open http://127.0.0.1:3000. The first person can register, then each signed-in u
 npm run build
 npm run doctor
 npm run deploy:check
-clank login --server https://your-clank-platform.example
+clank login
 npm run deploy
 \`\`\`
 
-The first deployment creates and links the remote project automatically. See \`AGENTS.md\` for the file map and invariants an agent should preserve.
+\`clank login\` defaults to https://clank.run; pass \`--server\` only for an explicitly
+self-hosted control plane. The first deployment creates and links the remote project
+automatically. See \`AGENTS.md\` for the file map and invariants an agent should preserve.
 `;
 }
 

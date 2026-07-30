@@ -27,12 +27,17 @@ The templates are:
 
 `auth-todo` remains the default when `--template` is omitted. In a non-interactive terminal, bare `clank` prints the complete help instead of waiting for input. Agents and scripts should continue to use explicit commands and `--json` surfaces.
 
+`clank templates --json` returns the stable `clank-template-catalog/1` contract with the installed
+framework version, default template, capability identifiers, and recommendation state. The human
+form prints the same catalog and copyable create commands.
+
 ## Create
 
 ```sh
 clank create my-app
 clank create my-site --template=minimal
 clank create my-app --name="Customer workspace"
+clank create my-app --json
 cd my-app
 npm install
 npm run dev
@@ -45,6 +50,12 @@ human `README.md`, and an agent-oriented `AGENTS.md`. Its only runtime dependenc
 local build-only development dependencies; compiled CSS is included in the artifact. The exact
 Clank runtime is still embedded into deployment artifacts, so the platform never runs an install
 hook.
+
+The JSON form returns `clank-create-result/1`: normalized project identity, selected template
+metadata, exact framework dependency, every generated path with byte count and SHA-256, and the
+install/dev/doctor/login/deploy commands. It writes no human prose around the JSON. Project titles
+are limited to 100 visible characters and encoded for their TypeScript, TSX, and Markdown contexts,
+so names containing quotes, braces, ampersands, or markup cannot alter generated source.
 
 Until a Clank version is published, or while changing the framework and an app together, point the scaffold at the current checkout:
 

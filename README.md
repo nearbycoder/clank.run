@@ -38,6 +38,7 @@ first-class interfaces backed by the same typed contracts:
 npm install --global @clank.run/framework
 
 clank login
+clank templates
 clank create my-app
 cd my-app
 npm install
@@ -53,6 +54,8 @@ clank deploy
 
 `clank login` connects to [clank.run](https://clank.run) by default. Run `clank` without arguments
 for the interactive launcher, or give the same commands directly to a coding agent or CI job.
+Agents can inspect the exact starter capabilities with `clank templates --json` and receive a
+checksummed file manifest plus next-command map from `clank create my-app --json`.
 
 The generated app is already a working product—not an empty component. It includes:
 

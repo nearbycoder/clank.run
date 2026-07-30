@@ -177,7 +177,11 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.equal(packageJson.devDependencies["@tailwindcss/cli"], "^4.2.4");
   assert.match(packageJson.scripts.build, /--tailwind=src\/styles\.css/);
   assert.match(files.find((file) => file.path === "AGENTS.md").contents, /npm run deploy:check/);
-  assert.match(files.find((file) => file.path === "README.md").contents, /Focused Tasks/);
+  const readme = files.find((file) => file.path === "README.md").contents;
+  assert.match(readme, /Focused Tasks/);
+  assert.match(readme, /clank login\n/u);
+  assert.doesNotMatch(readme, /clank login --server/u);
+  assert.match(readme, /https:\/\/clank\.run/u);
 });
 
 test("plan, explain, and generate CLI commands create a buildable app without blueprint execution", async () => {
