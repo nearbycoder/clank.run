@@ -123,9 +123,11 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   encrypted frozen environment per generation, lease-scoped `clank-runtime/1`, exact observed
   activation, allowlisted managed-ingress publication, fenced rollback/delete, and resumable
   pending deploys. Generation-bound provider snapshots feed the same encrypted local or object
-  recovery repository used by local projects; create, schedule, list, and verify are supported,
-  while provider restore remains fail-closed. `placement.maxDatabaseBytes` bounds snapshot
-  transfer and runtime-capsule capacity. Provider placement requires managed ingress.
+  recovery repository used by local projects; create, schedule, list, verify, and fenced restore
+  are supported. Restore verifies the selected point, creates a safety recovery point, and
+  publishes a replacement generation only after provider data replacement, current migrations,
+  and health succeed. `placement.maxDatabaseBytes` bounds snapshot transfer, recovery reads, and
+  runtime-capsule capacity. Provider placement requires managed ingress.
 
 ## Object storage
 

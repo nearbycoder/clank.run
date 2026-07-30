@@ -6,6 +6,17 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- Provider-hosted recovery points can now be restored through the ordinary platform and CLI API.
+  The control plane verifies the target, creates an encrypted provider safety backup, freezes the
+  target ID/digest/size and safety ID into a durable replacement generation, and re-verifies the
+  recovery point while building the private runtime capsule. The provider then drains the prior
+  writer, takes its own exact safety snapshot, replaces SQLite, reapplies current migrations,
+  health-checks the candidate, and publishes only the new generation.
+- Provider restore timeouts resume the same durable intent without creating another safety copy.
+  Failed exact operations can allocate a new monotonically fenced attempt only after both target
+  and safety recovery points verify again. Pending retention protects both recovery points, queue
+  and completion are audited, and successful completion keeps the ordinary immediate data
+  rollback available.
 - The built-in control plane now creates, schedules, lists, and verifies encrypted backups for
   provider-hosted projects. It binds export to the exact active pinned node/release/generation and
   allowlisted origin, refuses redirects and encoded/unbounded/mismatched responses, rechecks

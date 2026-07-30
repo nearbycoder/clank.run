@@ -154,9 +154,11 @@ non-loopback cleartext origins.
 
 Provider backup creation and scheduling now use the exact active private origin and immediately
 encrypt verified snapshots in the configured recovery repository. Use the S3-compatible mode below
-so losing either Railway volume does not also remove the recovery copy. Provider restore through
-the control plane is not implemented yet; Railway volume snapshots or another independently tested
-provider-host restore path remain the operator's responsibility in this phase. See [Remote runtime
+so losing either Railway volume does not also remove the recovery copy. Provider restore now
+creates a replacement generation on the pinned provider after verifying the chosen recovery point
+and creating a second encrypted safety point. It intentionally drains the active writer while
+SQLite is replaced and current migrations and health checks run. Keep Railway volume snapshots or
+another independently tested operator path as defense in depth. See [Remote runtime
 placement](runtime-placement.md#current-support-boundary).
 
 The same private bucket can hold encrypted database recovery points under a separate logical root:

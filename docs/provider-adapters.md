@@ -230,11 +230,15 @@ The value `local` enables per-project selection while retaining the safe default
 
 Provider backup creation now uses the exact active node and generation-bound snapshot control
 credential, then immediately encrypts the verified bytes in the ordinary recovery repository.
-Scheduling, listing, and verification work for both local and provider placement. Provider restore,
-application-log forwarding, provider disk/memory telemetry, and automatic failover from node-local
+Scheduling, listing, verification, and restore work for both local and provider placement.
+Provider restore is a new `replace` generation on the pinned node: it uses an encrypted platform
+safety point plus the provider data store's post-drain safety snapshot, reapplies current
+migrations, health-checks, and publishes ingress last. `PROVIDER_RESTORE_PENDING` means that exact
+durable generation is still converging and the same request should be retried.
+
+Application-log forwarding, provider disk/memory telemetry, and automatic failover from node-local
 SQLite are not implemented. A stateful project stays pinned and unavailable when its node is
-unavailable, and restore fails closed with `PROVIDER_RESTORE_PENDING`. Operators must not treat
-release-object retention as a database backup. See [Remote runtime
+unavailable. Operators must not treat release-object retention as a database backup. See [Remote runtime
 placement](runtime-placement.md#current-support-boundary) for the precise boundary.
 
 See [Remote runtime placement](runtime-placement.md) for operator configuration, exact body, and
