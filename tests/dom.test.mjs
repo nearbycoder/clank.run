@@ -81,6 +81,7 @@ globalThis.document = {
 
 const { For, expression, h, hydrate, onMount, render } = await import("../dist/dom.js");
 const { signal } = await import("../dist/core.js");
+const { createApi } = await import("../dist/backend.js");
 
 function elementById(root, id) {
   return root.childNodes.find((node) => node instanceof FakeElement && node.getAttribute("data-id") === id);
@@ -107,6 +108,21 @@ test("agent labels give interactive controls the same accessible name", () => {
   label.value = "Create todo";
   assert.equal(button.getAttribute("data-clank-label"), "Create todo");
   assert.equal(button.getAttribute("aria-label"), "Create todo");
+});
+
+test("typed backend references remain exact when client action bindings change", () => {
+  const api = createApi();
+  const selected = signal(api.todos.add);
+  const root = new FakeElement("main");
+  render(root, h("section", {},
+    h("button", { agentAction: api.todos.add }, "Add"),
+    h("button", { agentAction: selected }, "Selected"),
+  ));
+  const [direct, reactive] = root.children[0].children;
+  assert.equal(direct.getAttribute("data-clank-action"), "todos.add");
+  assert.equal(reactive.getAttribute("data-clank-action"), "todos.add");
+  selected.value = api.todos.remove;
+  assert.equal(reactive.getAttribute("data-clank-action"), "todos.remove");
 });
 
 test("select value bindings attach after their options and remain reactive", () => {

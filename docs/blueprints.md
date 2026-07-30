@@ -294,8 +294,10 @@ The generated suite:
   in-memory database;
 - resolves references, then verifies every supplied field value;
 - proves private records are invisible to a separately registered account while public data
-  remains visible; and
-- server-renders every declared route with its allowed role.
+  remains visible;
+- server-renders every declared route with its allowed role; and
+- checks typed `agentAction` controls against the current backend manifest and contract revision,
+  including stable IDs, descriptions, internal-action exclusion, and required UI coverage.
 
 Fixtures are not migrations, seed scripts, passwords, or production snapshots. The deployment
 allowlist contains only `dist/` and `migrations/`, so `fixtures/` and `tests/` remain local and in
@@ -430,13 +432,13 @@ The important files are:
 | File | Responsibility |
 | --- | --- |
 | `src/backend.ts` | schemas, exact actions, role guards, MCP metadata, and relationship deletion |
-| `src/view.tsx` | accessible multi-entity UI, field forms, route navigation, stable agent controls |
+| `src/view.tsx` | accessible multi-entity UI, field forms, route navigation, typed stable backend action controls |
 | `src/app.tsx` | hydration, auth, live/request-response data, and typed mutations |
 | `src/server.tsx` | route SSR, role checks, CSP, health, services, static files, and API/MCP routing |
 | `src/service-requirements.ts` | normalized external service contract |
 | `src/services.ts` | local drivers and production service boundary |
 | `fixtures/*.json` | deterministic, synthetic, non-production app states |
-| `tests/app.contract.mjs` | application-owned manifest, backend, isolation, fixture, and SSR checks |
+| `tests/app.contract.mjs` | application-owned UI↔MCP parity, manifest, backend, isolation, fixture, and SSR checks |
 | `migrations/` | immutable SQL history plus the canonical blueprint metadata |
 | `AGENTS.md` | commands, file map, invariants, and definition of done for coding agents |
 

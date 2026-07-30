@@ -1,8 +1,15 @@
 /* @clankImportSource @clank.run/framework */
-import { For, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
-import type { Todo } from "./backend.ts";
+import {
+  For,
+  createApi,
+  signal,
+  type AuthUser,
+  type DefaultAuthProfile,
+} from "@clank.run/framework";
+import type { backend, Todo } from "./backend.ts";
 
 const projectTitle = __PROJECT_TITLE_JSON__;
+const api = createApi<typeof backend>();
 
 export interface TodoViewProps {
   user: AuthUser<DefaultAuthProfile>;
@@ -50,7 +57,12 @@ export function TodoView(props: TodoViewProps) {
           agentId="new-todo"
           agentLabel="New todo title"
         />
-        <button class="rounded-xl bg-slate-950 px-5 py-3 font-semibold text-white" type="submit" agentId="add-todo">
+        <button
+          class="rounded-xl bg-slate-950 px-5 py-3 font-semibold text-white"
+          type="submit"
+          agentId="add-todo"
+          agentAction={api.todos.add}
+        >
           Add
         </button>
       </form>
@@ -65,6 +77,7 @@ export function TodoView(props: TodoViewProps) {
                 onClick={() => props.setDone(todo._id, !todo.done, todo._version)}
                 agentId={`todo-${todo._id}-toggle`}
                 agentLabel={`${todo.done ? "Reopen" : "Complete"} ${todo.title}`}
+                agentAction={api.todos.setDone}
               >
                 {todo.done ? "✓" : ""}
               </button>
@@ -74,6 +87,7 @@ export function TodoView(props: TodoViewProps) {
                 onClick={() => props.remove(todo._id, todo._version)}
                 agentId={`todo-${todo._id}-remove`}
                 agentLabel={`Remove ${todo.title}`}
+                agentAction={api.todos.remove}
               >
                 Remove
               </button>

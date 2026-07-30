@@ -4,6 +4,8 @@ export * from "./core.js";
 export * from "./dom.js";
 export * from "./router.js";
 export * from "./ai.js";
+export * from "./agent-contract.js";
+export * from "./mcp.js";
 export * from "./blueprint.js";
 export * from "./webauthn.js";
 export * from "./services.js";

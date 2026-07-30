@@ -39,6 +39,8 @@ This is a Clank full-stack application. Keep the safe path short, the generated 
 - Give every backend function a precise `description`; mark additive writes with
   `agent: { destructive: false }`, destructive writes explicitly, and internal functions with
   `agent: false`.
+- Pass the typed `createApi<typeof backend>()` function reference to each server-backed control's
+  `agentAction`; the app contract must keep every rendered action current and MCP-visible.
 - Preserve the default `/__clank/mcp` endpoint and OAuth flow unless an integration requires a
   documented path change.
 - Never edit, rename, or remove an applied migration. Add the next numbered migration.

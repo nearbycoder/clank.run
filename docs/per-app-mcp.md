@@ -156,6 +156,30 @@ Treat `src/backend.ts` as the single source of truth:
 3. Make the UI call that same typed function reference.
 4. Build, test both paths, and deploy them together.
 
+Bind server-backed controls to the typed reference rather than copying its name into a string:
+
+```tsx
+import { createApi } from "@clank.run/framework";
+import type { backend } from "./backend.ts";
+
+const api = createApi<typeof backend>();
+
+<button
+  agentId="todo-add"
+  agentAction={api.todos.add}
+  onClick={() => client.mutate(api.todos.add, { title })}
+>
+  Add
+</button>
+```
+
+Clank serializes the reference as `data-clank-action="todos.add"` in both SSR and browser
+rendering. `assertAgentActionParity()` compares rendered controls with
+`GET /__clank/manifest`; `verifyAgentActionParity()` fetches that no-store manifest and also binds
+the deployment-sensitive revision header. Unknown, internal, undocumented, duplicate-ID, and
+missing required actions fail with a structured `clank-agent-action-parity/1` report. Generated
+apps run this assertion from `npm test`.
+
 Clank fingerprints every agent-visible name, schema, description, scope, and annotation. A
 contract change produces a new revision. Discovery responses require revalidation, tool lists
 have a zero freshness lifetime, and a deployment invalidates existing MCP sessions so compliant
@@ -169,7 +193,16 @@ reconnect; later deployments refresh automatically.
 ## Verify an app's MCP surface
 
 Before deployment, check that every server-backed UI operation has one matching backend function
-and that internal functions are intentionally hidden. After deployment:
+and that internal functions are intentionally hidden. `npm test` performs this check for generated
+apps. A custom app can run:
+
+```ts
+await verifyAgentActionParity(document, {
+  requiredActions: [api.todos.add, api.todos.remove],
+});
+```
+
+After deployment:
 
 - open `https://<project>.apps.clank.run/.well-known/clank` to confirm the advertised endpoint
   and contract revision;

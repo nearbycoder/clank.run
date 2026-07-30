@@ -40,6 +40,7 @@ const PROJECT_TEMPLATES = Object.freeze([
       "live-sync",
       "tailwind",
       "mcp-oauth",
+      "ui-mcp-parity",
       "deterministic-fixture",
       "app-contract-tests",
       "migrations",

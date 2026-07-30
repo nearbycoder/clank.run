@@ -28,6 +28,7 @@
     "./dom": { "types": "./dist/dom.d.ts", "import": "./dist/dom.js" },
     "./router": { "types": "./dist/router.d.ts", "import": "./dist/router.js" },
     "./ai": { "types": "./dist/ai.d.ts", "import": "./dist/ai.js" },
+    "./agent-contract": { "types": "./dist/agent-contract.d.ts", "import": "./dist/agent-contract.js" },
     "./mcp": { "types": "./dist/mcp.d.ts", "import": "./dist/mcp.js" },
     "./blueprint": { "types": "./dist/blueprint.d.ts", "import": "./dist/blueprint.js" },
     "./webauthn": { "types": "./dist/webauthn.d.ts", "import": "./dist/webauthn.js" },

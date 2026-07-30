@@ -1,4 +1,5 @@
 import { isSignal } from "./core.ts";
+import { agentActionPath, type AgentActionTarget } from "./agent-contract.ts";
 import {
   Fragment,
   KEYED,
@@ -158,6 +159,15 @@ async function renderElement(vnode: VNode, context: SSRContext): Promise<string>
       if (isInteractiveTag(lowerTag)) setSSRAttribute(attributes, "aria-label", value, lowerTag);
       continue;
     }
+    if (property === "agentAction") {
+      setSSRAttribute(
+        attributes,
+        "data-clank-action",
+        resolveAgentAction(raw),
+        lowerTag,
+      );
+      continue;
+    }
     setSSRAttribute(attributes, attributeName(property), resolveReactive(raw), lowerTag);
   }
   if (className) attributes.set("class", className.trim().replace(/\s+/g, " "));
@@ -187,6 +197,28 @@ function resolveReactive(input: unknown): any {
         : (value as () => unknown)();
   }
   return value;
+}
+
+function resolveAgentAction(input: unknown): string {
+  let value = input;
+  const seen = new Set<unknown>();
+  while (true) {
+    try {
+      return agentActionPath(value as AgentActionTarget);
+    } catch {
+      // Reactive wrappers are resolved below; other invalid values fail at the end.
+    }
+    if (!(isExpression(value) || isSignal(value) || typeof value === "function")) {
+      return agentActionPath(value as AgentActionTarget);
+    }
+    if (seen.has(value)) throw new Error("Circular reactive agent action during server rendering.");
+    seen.add(value);
+    value = isExpression(value)
+      ? value.read()
+      : isSignal(value)
+        ? value.value
+        : (value as () => unknown)();
+  }
 }
 
 function isKeyedBlock(value: unknown): value is KeyedBlock<any> {

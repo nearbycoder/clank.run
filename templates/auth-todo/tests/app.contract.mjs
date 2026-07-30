@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { openBackend, renderToString } from "@clank.run/framework";
+import {
+  assertAgentActionParity,
+  inspectAgentActions,
+  openBackend,
+  renderToString,
+} from "@clank.run/framework";
 import { backend } from "../dist/backend.js";
 import { TodoView } from "../dist/view.js";
 
@@ -53,6 +58,10 @@ test("Todo backend matches its agent contract and keeps fixture data private", a
     }));
     assert.match(html, /Verify the generated app/u);
     assert.match(html, /Live sync connected/u);
+    assertAgentActionParity(inspectAgentActions(html), manifest, {
+      expectedRevision: manifestResponse.headers.get("x-clank-contract-revision"),
+      requiredActions: ["todos.add", "todos.setDone", "todos.remove"],
+    });
   } finally {
     runtime.close();
   }

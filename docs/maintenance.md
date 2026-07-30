@@ -128,6 +128,28 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   public production health.
 - [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
+## 2026-07-30 UI and MCP parity phase
+
+- [x] Added typed backend function references to `agentAction` while retaining compatible literal
+  paths for lower-level local action surfaces.
+- [x] Added bounded SSR/DOM action inspection plus frozen `clank-agent-action-parity/1` reports
+  for unknown, internal, undocumented, unstable-ID, duplicate-ID, missing-required, disabled-MCP,
+  and contract-revision mismatches.
+- [x] Added a same-origin, no-store remote verifier with bounded streaming manifest reads and
+  explicit `X-Clank-Contract-Revision` binding.
+- [x] Updated blueprint-generated UI and the authenticated starter to use typed server action
+  references; their application-owned tests now render representative records for every allowed
+  role and compare required controls with the real backend manifest.
+- [x] Passed the final zero-dependency gate: 342 tests, 86.43% line / 75.22% branch / 87.23%
+  function coverage, 59-guide documentation audit, packaged clean-consumer deployment, auth, MCP,
+  migration, and rollback conformance, and repository-plus-history secret scanning.
+- [x] Generated a fresh five-route/two-role app, passed its eight application-owned tests, then
+  verified desktop and 375px browser surfaces, SSR hydration, live create/toggle mutations, stable
+  dynamic IDs, zero UI↔MCP issues, no application console errors, and no horizontal overflow.
+- [ ] Complete PR checks, CodeQL, merge, gated docs deployment, exact Railway activation, and
+  public production health.
+- [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
+
 ## 2026-07-30 version 0.10.0 release phase
 
 - [x] Selected a minor release because the accumulated public provider, preview, usage, and
