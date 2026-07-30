@@ -18,6 +18,8 @@ import type {
 } from "./provider.js";
 
 export declare const DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL: "clank-provider-service/1";
+export declare const DEPLOYMENT_PROVIDER_CONTROL_PREFIX: "/v1/clank/control";
+export declare const DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE: "application/vnd.clank.provider-snapshot";
 
 export interface DeploymentProviderServiceState {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
@@ -103,3 +105,6 @@ export declare function openDeploymentProviderService(
 export declare function openDockerDeploymentProviderService(
   options: DockerDeploymentProviderServiceOptions,
 ): Promise<DeploymentProviderService>;
+
+/** Returns the exact provider-private consistent snapshot path for one project. */
+export declare function deploymentProviderSnapshotPath(projectId: string): string;

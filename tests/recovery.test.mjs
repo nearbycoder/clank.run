@@ -184,6 +184,109 @@ test("a create-time protection keeps the selected restore target past a full ret
   }
 });
 
+test("consistent snapshot imports stay encrypted on disk and support bounded authenticated reads", async () => {
+  const test = await fixture();
+  const sourceBytes = new Uint8Array(await readFile(test.databasePath));
+  const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+  test.manager.close();
+  await rm(join(test.root, "backups"), { recursive: true, force: true });
+  const manager = await openBackupManager({
+    repositoryDirectory: join(test.root, "backups"),
+    encryptionKey: "a sufficiently long backup encryption key for the recovery tests",
+    maxBackups: 3,
+    maxDatabaseBytes: sourceBytes.byteLength,
+    verifyAfterCreate: true,
+  });
+  try {
+    const backup = await manager.createFromSnapshot({
+      bytes: sourceBytes,
+      sha256: sourceSha256,
+      source: "remote.sqlite",
+      reason: "provider snapshot",
+      databaseRevision: 1,
+      migrationCount: 0,
+    });
+    assert.equal(backup.databaseSha256, sourceSha256);
+    assert.equal(backup.source, "remote.sqlite");
+    assert.equal(backup.reason, "provider snapshot");
+    assert.equal(
+      Buffer.from(await readFile(
+        join(test.root, "backups", backup.id, "database.enc"),
+      )).includes(Buffer.from("preserve me")),
+      false,
+    );
+    assert.deepEqual(
+      await readdir(join(test.root, "backups", ".staging")),
+      [],
+      "snapshot import and authenticated read must not stage plaintext files",
+    );
+
+    const read = await manager.read(backup.id);
+    assert.deepEqual(read.bytes, sourceBytes);
+    assert.equal(read.verification.databaseSha256, sourceSha256);
+    assert.deepEqual(await readdir(join(test.root, "backups", ".staging")), []);
+
+    await assert.rejects(
+      manager.restore(backup.id, { confirmation: `restore ${backup.id}` }),
+      /restore target path is required/u,
+    );
+    const target = join(test.root, "restored.sqlite");
+    await manager.restore(backup.id, {
+      targetPath: target,
+      confirmation: `restore ${backup.id}`,
+    });
+    const restored = new DatabaseSync(target, { readOnly: true });
+    assert.equal(
+      JSON.parse(restored.prepare("SELECT _data FROM clank_tasks").get()._data).title,
+      "preserve me",
+    );
+    restored.close();
+  } finally {
+    manager.close();
+    await test.close();
+  }
+});
+
+test("snapshot imports reject invalid SQLite input and checksum drift without committing a backup", async () => {
+  const test = await fixture();
+  const sourceBytes = new Uint8Array(await readFile(test.databasePath));
+  test.manager.close();
+  await rm(join(test.root, "backups"), { recursive: true, force: true });
+  const manager = await openBackupManager({
+    repositoryDirectory: join(test.root, "backups"),
+    encryptionKey: "a sufficiently long backup encryption key for the recovery tests",
+    maxDatabaseBytes: sourceBytes.byteLength,
+  });
+  try {
+    await assert.rejects(
+      manager.create(),
+      /local database path is required/u,
+    );
+    await assert.rejects(
+      manager.createFromSnapshot({
+        bytes: sourceBytes,
+        sha256: "0".repeat(64),
+        source: "remote.sqlite",
+      }),
+      /checksum failed/u,
+    );
+    const invalid = new Uint8Array(sourceBytes);
+    invalid[0] ^= 0xff;
+    await assert.rejects(
+      manager.createFromSnapshot({
+        bytes: invalid,
+        source: "remote.sqlite",
+      }),
+      /not a SQLite database/u,
+    );
+    assert.deepEqual(await manager.list(), []);
+    assert.deepEqual(await readdir(join(test.root, "backups", ".staging")), []);
+  } finally {
+    manager.close();
+    await test.close();
+  }
+});
+
 test("object-backed backups are chunked, authenticated, restorable, and remotely deleted", async () => {
   const test = await fixture();
   const objects = memoryObjectStore();
@@ -252,6 +355,53 @@ test("object-backed backups are chunked, authenticated, restorable, and remotely
     assert.equal(await manager.delete(backup.id), true);
     assert.equal((await manager.list()).length, 0);
     assert.equal([...objects.values.keys()].some((key) => key.includes(`/${backup.id}/`)), false);
+  } finally {
+    manager.close();
+    await test.close();
+  }
+});
+
+test("object-backed repositories import and read provider snapshots without a live database path", async () => {
+  const test = await fixture();
+  const sourceBytes = new Uint8Array(await readFile(test.databasePath));
+  const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+  const objects = memoryObjectStore();
+  test.manager.close();
+  await rm(join(test.root, "backups"), { recursive: true, force: true });
+  const manager = await openBackupManager({
+    repositoryDirectory: join(test.root, "backups"),
+    encryptionKey: "a sufficiently long backup encryption key for the recovery tests",
+    maxBackups: 3,
+    maxDatabaseBytes: sourceBytes.byteLength,
+    verifyAfterCreate: true,
+    objects: {
+      store: objects.store,
+      namespace: "test-provider-recovery-v1",
+      repositoryId: "provider-database-01",
+      prefix: "provider-recovery",
+      chunkBytes: 64 * 1024,
+    },
+  });
+  try {
+    const backup = await manager.createFromSnapshot({
+      bytes: sourceBytes,
+      sha256: sourceSha256,
+      source: "provider.sqlite",
+      reason: "remote provider snapshot",
+    });
+    assert.equal((await manager.list())[0].id, backup.id);
+    assert.equal(
+      (await readdir(join(test.root, "backups"))).some((entry) => entry === backup.id),
+      false,
+    );
+    const read = await manager.read(backup.id);
+    assert.deepEqual(read.bytes, sourceBytes);
+    assert.equal(read.verification.databaseSha256, sourceSha256);
+    assert.equal(
+      [...objects.values.values()].some((value) =>
+        Buffer.from(value.bytes).includes(Buffer.from("preserve me"))),
+      false,
+    );
   } finally {
     manager.close();
     await test.close();

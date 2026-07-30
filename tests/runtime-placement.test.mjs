@@ -33,6 +33,7 @@ test("runtime capsules bind code, final environment, SQLite data, and ingress id
       ingress: {
         route: "/v1/clank/apps/project_runtime_01",
         token: "clanki_runtime-ingress-token-12345678901234567890",
+        controlToken: "clankc_runtime-control-token-12345678901234567890",
       },
       artifact: fixture.artifact,
     };
@@ -62,6 +63,10 @@ test("runtime capsules bind code, final environment, SQLite data, and ingress id
       "private-runtime-secret-value",
     );
     assert.equal(decoded.manifest.ingress.route, "/v1/clank/apps/project_runtime_01");
+    assert.equal(
+      decoded.manifest.ingress.controlToken,
+      "clankc_runtime-control-token-12345678901234567890",
+    );
     assert.equal(decoded.artifact.bundle.config.database.path, "app.sqlite");
     assert.deepEqual(decoded.databaseSnapshot, fixture.database);
 

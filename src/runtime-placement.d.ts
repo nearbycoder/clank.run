@@ -14,7 +14,10 @@ export interface DeploymentRuntimeDatabaseManifest {
 
 export interface DeploymentRuntimeIngressManifest {
   readonly route: string;
+  /** Secret sent only by Clank managed ingress when proxying this project. */
   readonly token: string;
+  /** Separate secret for provider control operations; never sent with public traffic. */
+  readonly controlToken?: string;
 }
 
 export interface DeploymentRuntimeManifest {
@@ -56,6 +59,7 @@ export interface CreateDeploymentRuntimeCapsuleInput {
   ingress: {
     route: string;
     token: string;
+    controlToken?: string;
   };
   artifact: Uint8Array;
 }

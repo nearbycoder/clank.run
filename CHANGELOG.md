@@ -6,6 +6,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- Runtime capsules can carry a distinct provider-control credential, and the complete provider
+  service now exposes a private, generation-bound consistent SQLite snapshot endpoint. The
+  credential is retained only as an in-memory digest, never shares public-ingress authority, and
+  is revoked on drain, stop, failure, deletion, close, or restart until exact reconciliation.
+- Encrypted recovery repositories can now import a bounded consistent SQLite byte snapshot without
+  a local live-database path or plaintext staging file. Authenticated bounded reads make the same
+  recovery point available to a fenced remote restore capsule, including through chunked
+  S3-compatible object storage.
 - The built-in control plane can now opt immutable projects and inherited previews into stateful
   provider placement. It freezes encrypted generation inputs, emits sensitive capsules only to a
   current lease, publishes only exact allowlisted observations, resumes pending deploys, supports

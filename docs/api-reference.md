@@ -93,13 +93,18 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `openBackupManager(options)`: consistent AES-256-GCM SQLite recovery points with authenticated
   manifests, retention, verification, explicit restore confirmation, and optional chunked
   `ObjectStore` persistence.
+- `BackupManager.createFromSnapshot(options)`: validate and directly encrypt a bounded consistent
+  SQLite byte snapshot without plaintext repository staging; `databasePath` may be omitted for an
+  import-only repository.
+- `BackupManager.read(id)`: authenticate and decrypt one recovery point into bounded memory for a
+  fenced remote restore path without writing plaintext staging data.
 - `BackupManager.purge({ confirmation: "delete all backups" })`: explicit repository-wide cleanup,
   including incomplete object promotions.
 - Local mode commits owner-only envelope/manifest directories atomically. Object mode promotes
   existing local copies, publishes an HMAC-authenticated per-database catalog, verifies every
   chunk and the reconstructed database, and retains the local copy after provider failure.
 - Types: `BackupManager`, `BackupManagerOptions`, `BackupManifest`, `BackupVerification`,
-  `BackupObjectRepositoryOptions`.
+  `BackupSnapshotInput`, `BackupReadResult`, `BackupObjectRepositoryOptions`.
 
 ## Deployment platform
 
@@ -222,7 +227,11 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   immediate predecessor, and resumes an interrupted post-commit attempt.
 - `delete(request)`: requires the same fenced lifecycle envelope plus exact project confirmation,
   then drains all writers and removes provider data and service state idempotently.
-- `handle(request)`: generation-bound private application ingress.
+- `handle(request)`: generation-bound private application ingress plus the separately authenticated
+  active-generation snapshot control boundary.
+- `deploymentProviderSnapshotPath(projectId)`: exact provider-private path for the consistent
+  SQLite snapshot endpoint. It requires the memory-only control token carried by the active
+  runtime capsule and returns `DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE`.
 - `inspect(projectId)`, `snapshot(projectId)`, and `close()`: serialized non-secret durable
   progress, consistent backup input, and revoke/drain/verified-stop shutdown.
 - `DeploymentProviderDataStore.apply(input, validate, discard?)`: optional cleanup hook runs before
