@@ -23,7 +23,7 @@ WORKDIR /app
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/brand ./brand
 COPY package.json LICENSE ./
-COPY scripts/clank-platform.mjs ./scripts/clank-platform.mjs
+COPY scripts/clank-platform.mjs scripts/platform-hosting.mjs ./scripts/
 
 EXPOSE 4200
 STOPSIGNAL SIGTERM

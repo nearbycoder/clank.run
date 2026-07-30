@@ -147,6 +147,7 @@ applications do not need a separate runtime compiler or bundler.
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, Tailwind Play CDN and compiled Tailwind CSS compatibility |
 | Deploy | Browser console, workspaces and RBAC, activity feeds, ingress metrics, enforced quotas, custom DNS/TLS onboarding, deterministic artifacts, encrypted secrets, immutable migrations, SQLite backups, storage-backed readiness, health-gated releases, logs, audit, rollback |
+| Hosting safety | Explicit trusted/isolated profiles, isolated production default, constrained Docker runner, bounded artifacts, resource ceilings, and fail-closed runner configuration |
 
 </details>
 

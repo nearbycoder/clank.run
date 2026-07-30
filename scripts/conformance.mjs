@@ -101,6 +101,7 @@ try {
       CLANK_APP_PORT_START: String(appPort),
       CLANK_APP_PORT_END: String(appPort),
       CLANK_SIGNUP: "bootstrap",
+      CLANK_HOSTING_PROFILE: "trusted",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

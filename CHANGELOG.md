@@ -4,6 +4,19 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+### Added
+
+- Production `clank-platform` starts in an explicit `isolated` hosting profile by default and
+  selects the constrained Docker runner unless the operator deliberately chooses the low-cost
+  `trusted` profile. Programmatic platform runtimes expose their resolved hosting profile and
+  runner kind for diagnostics.
+
+### Security
+
+- Unknown `CLANK_RUNNER` and `CLANK_HOSTING_PROFILE` values now fail at startup instead of silently
+  selecting process execution. The isolated profile rejects the process runner, and the packaged
+  control plane rejects public signup when applications share the platform Unix trust boundary.
+
 ## 0.9.4 - 2026-07-28
 
 ### Added

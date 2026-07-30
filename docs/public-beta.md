@@ -17,7 +17,9 @@ Any known cross-tenant access, authentication bypass, remote code execution acro
 
 ## Known beta limitations
 
-- Process mode trusts deployed application code as the platform Unix user. Public multi-tenancy requires Docker at minimum and preferably dedicated VMs or microVMs.
+- The explicit `trusted` profile runs deployed application code as the platform Unix user and
+  refuses public signup. Production defaults to the `isolated` Docker profile, but public
+  multi-tenancy still preferably uses dedicated VMs or microVMs.
 - Distributed leases, desired state, worker authentication, durable operations, and fencing are implemented, but the built-in process supervisor is not a turnkey multi-region HA control plane. Operate one active supervisor per project/data directory until leader election and remote runner integration are deployed.
 - The control-plane catalog uses SQLite. It supports durable coordination on one shared transactional store, not globally distributed consensus.
 - Built-in application data and live queries are SQLite-first. The external PostgreSQL driver/provisioner is available, but generated backend tables do not transparently switch engines.
@@ -44,7 +46,7 @@ These are targets to validate in the chosen topology, not guarantees from the pa
 ## Rollout
 
 1. Start with maintainers and synthetic applications.
-2. Add a small invited cohort with per-project quotas and Docker isolation.
+2. Add a small invited cohort with per-project quotas and the `isolated` Docker profile.
 3. Review incidents, failed deploys, restore drills, support load, and security findings weekly.
 4. Expand only when restore time, deployment success, auth failure rates, and isolation evidence remain inside the published operating targets.
 5. Preserve an immediate rollback path for framework, control-plane, schema, and edge changes.

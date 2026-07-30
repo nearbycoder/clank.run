@@ -44,6 +44,7 @@ CLANK_PLATFORM_DATA=/data
 CLANK_PLATFORM_MASTER_KEY=<base64url-encoded 32-byte secret>
 CLANK_PLATFORM_ADMIN_EMAILS=operator@example.com
 CLANK_SIGNUP=bootstrap
+CLANK_HOSTING_PROFILE=trusted
 CLANK_RUNNER=process
 CLANK_INGRESS=1
 CLANK_INGRESS_BASE_DOMAIN=apps.clank.run
@@ -64,6 +65,10 @@ losing it makes encrypted secrets and recovery points unreadable.
 
 `bootstrap` lets the first browser user create the only public account, then closes registration.
 Additional people join through email-bound invitations created by an owner or administrator.
+The explicit `trusted` hosting profile is required because Railway's hosted container does not
+provide a Docker daemon. It preserves the inexpensive single-service topology, but every invited
+deployer must be treated as having the control-plane Unix user's authority. Do not change
+`CLANK_SIGNUP` to `public` on this topology; the control plane refuses that unsafe combination.
 `CLANK_PLATFORM_ADMIN_EMAILS` is an exact, comma-separated operator allowlist. Matching accounts
 receive the separate `platform_admin` role; removing an address revokes that role on the next
 control-plane start. Global administration is available only to an interactive browser session,
@@ -189,4 +194,6 @@ local volume so the Railway service can run multiple stateless replicas.
 The Railway deployment uses Clank's `process` runner because hosted Railway containers do not expose
 a Docker daemon. This runner is intentionally for trusted deployers: application code runs with the
 same container and volume authority as the control plane. Use Clank's Docker runner or a remote
-sandbox worker before opening deployment access to mutually untrusted users.
+sandbox worker before opening deployment access to mutually untrusted users. The required
+`CLANK_HOSTING_PROFILE=trusted` setting is a visible acknowledgement of that boundary, not an
+isolation mechanism.

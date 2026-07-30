@@ -21,7 +21,8 @@ configured worker/scheduler processes for each active project.
 | `CLANK_PLATFORM_DATA` | `.clank-platform` | Persistent root |
 | `CLANK_PLATFORM_MASTER_KEY` | generated file | Base64/base64url 32-byte key |
 | `CLANK_SIGNUP` | `bootstrap` | `bootstrap`, `public`, or `disabled` |
-| `CLANK_RUNNER` | `process` | `process` or `docker` |
+| `CLANK_HOSTING_PROFILE` | `isolated` in production; `trusted` otherwise | Declared application trust boundary |
+| `CLANK_RUNNER` | selected by hosting profile | `process` or `docker` |
 | `CLANK_DOCKER_IMAGE` | Node image | Pin by digest in production |
 | `CLANK_APP_MEMORY` | `512m` | Container memory |
 | `CLANK_APP_CPUS` | `1` | Container CPUs |
@@ -62,12 +63,44 @@ Embedders calling `openPlatform()` directly should pass infrastructure listeners
 
 `bootstrap` permits one initial account and then closes ordinary registration. Its SQLite claim is shared by control-plane processes using the same data directory. `disabled` blocks ordinary registration immediately. In both modes, an owner/admin-issued invitation can still create only its bound email account through **Use invitation**; revoke outstanding invitations before disabling all intended onboarding.
 
+## Choose the hosting trust boundary
+
+Clank makes the application-code boundary explicit before it opens storage or starts listening:
+
+| Profile | Default runner | Intended use | Signup |
+| --- | --- | --- | --- |
+| `isolated` | Docker | Mutually untrusted deployers and public hosting | `bootstrap`, `disabled`, invitations, or `public` |
+| `trusted` | Process | One operator, a trusted team, or an invited cohort whose code the host accepts as its own | `bootstrap`, `disabled`, or invitations |
+
+`NODE_ENV=production` defaults to `isolated`; development defaults to `trusted` so a local checkout
+remains zero-setup. An explicit `CLANK_RUNNER=docker` also selects the isolated profile. Process
+execution in production therefore requires both:
+
+```sh
+CLANK_HOSTING_PROFILE=trusted
+CLANK_RUNNER=process
+```
+
+The trusted profile is a cost and compatibility option, not a sandbox. Every deployed web, worker,
+and scheduler process has the platform Unix user's authority over the host. Clank refuses
+`CLANK_SIGNUP=public` in this profile. Invitations remain available because the operator explicitly
+chooses each deployer and accepts that trust relationship.
+
+The isolated profile refuses the process runner. Docker remains the minimum supported boundary,
+not a claim that containers are equivalent to dedicated VMs. Public hosts should additionally pin
+the runtime image by digest, restrict egress, keep the daemon socket unavailable to applications,
+and use dedicated nodes or microVMs for hostile workloads.
+
+Unknown profile or runner values are fatal. This is intentional: a misspelled isolation setting
+must never fall back to process execution.
+
 ## Production start
 
 ```sh
 export CLANK_PLATFORM_URL=https://deploy.example.com
 export CLANK_PLATFORM_DATA=/var/lib/clank
 export CLANK_PLATFORM_MASTER_KEY="$(your-secret-manager read clank-master-key)"
+export CLANK_HOSTING_PROFILE=isolated
 export CLANK_RUNNER=docker
 export CLANK_DOCKER_IMAGE=node@sha256:<approved-digest>
 export CLANK_APP_URL_TEMPLATE='https://{slug}.apps.example.com'

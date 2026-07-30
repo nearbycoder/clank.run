@@ -69,6 +69,7 @@
     "scripts/clank.mjs",
     "scripts/cli-deploy.mjs",
     "scripts/clank-platform.mjs",
+    "scripts/platform-hosting.mjs",
     "scripts/conformance.mjs",
     "scripts/tsx.mjs",
     "templates",

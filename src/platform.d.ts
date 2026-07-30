@@ -10,6 +10,7 @@ export interface DockerRunnerOptions {
     pidsLimit?: number;
 }
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
+export type PlatformHostingProfile = "trusted" | "isolated";
 export interface PlatformLimits {
     /** Maximum organizations created by one account. Defaults to 5. */
     organizationsPerAccount?: number;
@@ -52,6 +53,11 @@ export interface ClankPlatformOptions {
     appPortEnd?: number;
     /** Listener or infrastructure ports that application runtimes must never use. */
     reservedAppPorts?: readonly number[];
+    /**
+     * Declares the application-code trust boundary. "isolated" requires the
+     * Docker runner. Defaults from the selected runner for programmatic callers.
+     */
+    hostingProfile?: PlatformHostingProfile;
     runner?: PlatformRunnerOptions;
     /** Defaults to "bootstrap": only the first platform account may self-register. */
     signup?: boolean | "bootstrap";
@@ -92,6 +98,8 @@ export interface PlatformRuntime {
     readonly handle: (request: Request) => Promise<Response>;
     readonly publicUrl: string;
     readonly dataDirectory: string;
+    readonly hostingProfile: PlatformHostingProfile;
+    readonly runnerKind: "process" | "docker";
     close(): Promise<void>;
 }
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
