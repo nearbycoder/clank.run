@@ -194,6 +194,45 @@ recovery repository. The low-level service provides this boundary; whether a par
 control-plane release consumes it is documented separately in [Remote runtime
 placement](runtime-placement.md#current-support-boundary).
 
+### Remote diagnostics boundary
+
+The same active control-token binding exposes the exact path returned by
+`deploymentProviderDiagnosticsPath(projectId)`:
+
+```http
+GET /v1/clank/control/<project-id>/diagnostics?logs=200
+Authorization: Bearer <generation-control-token>
+Accept: application/vnd.clank.provider-diagnostics+json
+```
+
+The complete Docker launcher retains at most 128 KiB and 1,000 entries of live attached
+stdout/stderr in provider-process memory. It stores no output in service state. One diagnostics
+request asks Docker for one non-streaming sample covering every tracked web, worker, and scheduler
+container in the project. The response contains role/instance identity, running state, current and
+limit memory, CPU percentage, PIDs, and cumulative network and block I/O. It deliberately omits
+container IDs, names, image metadata, environment values, filesystem paths, and Docker errors.
+
+The service allows only `GET`, an optional unique integer `logs` bound from 0 through 1,000, the
+current generation control token, and a matching durable running state. It caps the complete JSON
+response at 512 KiB and marks it `private, no-store`. Diagnostics serialize with lifecycle changes,
+so a stopped, replaced, restarted-without-reconcile, or deleting generation cannot be sampled as
+current. The request abort signal reaches the one-shot Docker stats command, so a disconnected or
+timed-out dashboard request cannot hold that serialized lifecycle lane until the provider command
+timeout.
+
+The built-in control plane independently enforces the private allowlisted provider origin,
+deadline, exact media type/length/release/generation, no redirects or content encoding, a 512 KiB
+body limit, exact fields, metric bounds, per-role uniqueness, and aggregate consistency. It then
+rechecks the active pinned node and generation after the transfer. Configured project secret
+values are redacted only at this receiving boundary before output reaches a project API or browser.
+Treat raw provider logs as sensitive inside the private transport, because applications can log
+data that is not registered as a project secret.
+
+Network and block counters reset with each runtime generation and are diagnostics, not billing or
+filesystem-capacity data. A Docker stats failure keeps bounded logs available with
+`statisticsAvailable: false`; a control-transport failure does not interrupt public application
+traffic.
+
 Use `rollback(request)` and `delete(request)` rather than reaching into the provider data store
 beneath a live service:
 

@@ -15,7 +15,9 @@ import test from "node:test";
 import { createDeploymentBundle } from "../dist/deploy.js";
 import { openDeploymentProviderDataStore } from "../dist/provider-data.js";
 import {
+  deploymentProviderDiagnosticsPath,
   deploymentProviderSnapshotPath,
+  DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE,
   DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
   DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
   openDeploymentProviderService,
@@ -119,6 +121,57 @@ test("provider service orders durable data, deferred jobs, ingress, stop, and re
     assert.equal(
       Number(remoteSnapshot.headers.get("content-length")),
       remoteBytes.byteLength,
+    );
+    const diagnosticsPath = deploymentProviderDiagnosticsPath(
+      "project_service_01",
+    );
+    assert.equal((await first.service.handle(new Request(
+      `https://provider.example${diagnosticsPath}`,
+    ))).status, 404);
+    assert.equal((await first.service.handle(new Request(
+      `https://provider.example${diagnosticsPath}?unknown=1`,
+      {
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+        },
+      },
+    ))).status, 404);
+    const remoteDiagnostics = await first.service.handle(new Request(
+      `https://provider.example${diagnosticsPath}?logs=20`,
+      {
+        headers: {
+          authorization:
+            "Bearer clankc_provider-service-control-token-12345678901234567890",
+        },
+      },
+    ));
+    assert.equal(remoteDiagnostics.status, 200);
+    assert.equal(
+      remoteDiagnostics.headers.get("content-type"),
+      DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE,
+    );
+    assert.equal(
+      remoteDiagnostics.headers.get("x-clank-release-id"),
+      "release_service_01",
+    );
+    assert.equal(
+      remoteDiagnostics.headers.get("x-clank-runtime-generation"),
+      "1",
+    );
+    const diagnostics = await remoteDiagnostics.json();
+    assert.equal(diagnostics.projectId, "project_service_01");
+    assert.equal(diagnostics.releaseId, "release_service_01");
+    assert.equal(diagnostics.generation, 1);
+    assert.equal(diagnostics.statisticsAvailable, true);
+    assert.equal(diagnostics.logs[0].message, "fake provider runtime output");
+    assert.deepEqual(
+      await first.service.diagnostics("project_service_01", 1),
+      diagnostics,
+    );
+    assert.deepEqual(
+      (await first.service.diagnostics("project_service_01", 0)).logs,
+      [],
     );
     assert.equal(await (await first.service.handle(new Request(
       "https://provider.example/v1/clank/apps/project_service_01",
@@ -753,6 +806,51 @@ function fakeRuntimes(events, options = {}) {
     },
     inspect() {
       return Object.freeze([...records.values()].map(runtimeState));
+    },
+    async diagnostics(projectId, logLimit = 200) {
+      const record = records.get(projectId);
+      if (!record) return null;
+      return Object.freeze({
+        protocol: "clank-provider-docker-diagnostics/1",
+        projectId: record.projectId,
+        releaseId: record.releaseId,
+        generation: record.generation,
+        sampledAt: 1_750_000_000_000,
+        statisticsAvailable: true,
+        containers: Object.freeze([Object.freeze({
+          role: "web",
+          instance: 0,
+          running: true,
+          memoryBytes: 64 * 1024 * 1024,
+          memoryLimitBytes: 512 * 1024 * 1024,
+          cpuPercent: 1.5,
+          networkReceiveBytes: 1_500,
+          networkTransmitBytes: 2_500,
+          blockReadBytes: 4_096,
+          blockWriteBytes: 8_192,
+          pids: 7,
+        })]),
+        totals: Object.freeze({
+          memoryBytes: 64 * 1024 * 1024,
+          memoryLimitBytes: 512 * 1024 * 1024,
+          cpuPercent: 1.5,
+          networkReceiveBytes: 1_500,
+          networkTransmitBytes: 2_500,
+          blockReadBytes: 4_096,
+          blockWriteBytes: 8_192,
+          pids: 7,
+        }),
+        logs: Object.freeze(logLimit === 0 ? [] : [Object.freeze({
+          sequence: 1,
+          createdAt: 1_750_000_000_000,
+          role: "web",
+          instance: 0,
+          stream: "stdout",
+          message: "fake provider runtime output",
+        })].slice(-logLimit)),
+        retainedLogBytes: 28,
+        logsTruncated: false,
+      });
     },
     async stop(projectId, generation) {
       const record = records.get(projectId);

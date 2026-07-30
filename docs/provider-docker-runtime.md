@@ -165,9 +165,11 @@ proxy, rootless runtime, locale, `PATH`, and `HOME` configuration. Unusual insta
 explicit trusted values through `dockerEnvironment`; never populate that option from a runtime
 capsule or project secret.
 
-The launcher never records application stdout or stderr in Clank state. Docker's bounded `local`
-log driver retains three 10 MiB files per container for private operator diagnostics. Applications
-must still avoid logging secrets, and operators must protect and expire Docker logs.
+The launcher never writes application stdout or stderr into durable Clank state. It keeps only a
+128 KiB/1,000-entry per-runtime tail in provider-process memory for the authenticated diagnostics
+boundary. Docker's bounded `local` log driver separately retains three 10 MiB files per container
+for private operator diagnostics. Applications must still avoid logging secrets, and operators
+must protect and expire Docker logs.
 
 ## Container boundary
 
@@ -181,6 +183,13 @@ Every runtime has:
 - bounded no-exec, no-suid, nodev `/tmp` and `/run` tmpfs mounts;
 - `--restart no`, bounded stop time, and bounded local logs; and
 - only the web port published on a provider-selected `127.0.0.1` port.
+
+`diagnostics(projectId, logLimit?)` combines the memory-only output tail with one shell-free
+`docker container stats --no-stream` invocation over the exact tracked container IDs. It returns
+only role/instance identity, running state, memory/limit, CPU, PIDs, network I/O, and block I/O.
+Malformed, partial, duplicate, oversized, or mismatched Docker statistics fail the resource sample
+closed without changing lifecycle state. The complete provider service carries this object through
+its separately authenticated private control route.
 
 Workers and schedulers receive the same release and database but publish no port.
 `CLANK_PROCESS_ROLE`, worker concurrency, worker queues, database aliases, managed-ingress

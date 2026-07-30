@@ -5,6 +5,7 @@ import type {
   DeploymentProviderDataStoreOptions,
 } from "./provider-data.js";
 import type {
+  DockerDeploymentRuntimeDiagnostics,
   DockerDeploymentRuntimeLauncher,
   DockerDeploymentRuntimeLauncherOptions,
 } from "./provider-docker.js";
@@ -20,6 +21,7 @@ import type {
 export declare const DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL: "clank-provider-service/1";
 export declare const DEPLOYMENT_PROVIDER_CONTROL_PREFIX: "/v1/clank/control";
 export declare const DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE: "application/vnd.clank.provider-snapshot";
+export declare const DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE: "application/vnd.clank.provider-diagnostics+json";
 
 export interface DeploymentProviderServiceState {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
@@ -77,12 +79,17 @@ export interface DockerDeploymentProviderServiceOptions {
 
 export interface DeploymentProviderService extends DeploymentProvider {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL;
-  /** Handles only the provider-private generation-bound runtime route. */
+  /** Handles provider-private runtime ingress plus authenticated control routes. */
   handle(request: Request): Promise<Response>;
   /** Reads durable, non-secret desired-state progress for one project. */
   inspect(projectId: string): Promise<DeploymentProviderServiceState | null>;
   /** Creates a consistent provider-data snapshot for external encrypted backup. */
   snapshot(projectId: string): Promise<DeploymentProviderDataSnapshot | null>;
+  /** Returns bounded live output and resource attribution for one runtime. */
+  diagnostics(
+    projectId: string,
+    logLimit?: number,
+  ): Promise<DockerDeploymentRuntimeDiagnostics | null>;
   /** Drains every writer and restores the immediate provider-data predecessor. */
   rollback(
     request: DeploymentProviderServiceLifecycleRequest,
@@ -108,3 +115,6 @@ export declare function openDockerDeploymentProviderService(
 
 /** Returns the exact provider-private consistent snapshot path for one project. */
 export declare function deploymentProviderSnapshotPath(projectId: string): string;
+
+/** Returns the exact provider-private diagnostics path for one project. */
+export declare function deploymentProviderDiagnosticsPath(projectId: string): string;

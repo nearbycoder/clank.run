@@ -43,7 +43,14 @@ import {
   DEPLOYMENT_RUNTIME_PROTOCOL,
 } from "./runtime-placement.ts";
 import {
+  DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL,
+  type DockerDeploymentRuntimeDiagnostics,
+  type DockerDeploymentRuntimeLog,
+} from "./provider-docker.ts";
+import {
+  deploymentProviderDiagnosticsPath,
   deploymentProviderSnapshotPath,
+  DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE,
   DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
 } from "./provider-service.ts";
 import {
@@ -2239,6 +2246,137 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       );
     }
     return origin;
+  };
+
+  const fetchProviderDiagnostics = async (
+    project: ProjectRow,
+    release: ReleaseRow,
+    logLimit: number,
+  ): Promise<DockerDeploymentRuntimeDiagnostics> => {
+    if (!providerPlacement) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_PLACEMENT_DISABLED",
+        "Provider placement is not enabled on this platform.",
+      );
+    }
+    const runtime = exactProviderRuntime(project, release);
+    const origin = exactProviderOrigin(project, runtime.nodeId);
+    const diagnosticsUrl = new URL(
+      deploymentProviderDiagnosticsPath(project.id),
+      `${origin}/`,
+    );
+    diagnosticsUrl.searchParams.set("logs", String(logLimit));
+    const maximum = 512 * 1024;
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      Math.min(5_000, providerPlacement.activationTimeoutMs),
+    );
+    let response: Response | undefined;
+    try {
+      response = await fetch(diagnosticsUrl.href, {
+        method: "GET",
+        redirect: "error",
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        signal: controller.signal,
+        headers: {
+          accept: DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE,
+          "accept-encoding": "identity",
+          authorization: `Bearer ${providerControlToken(
+            masterKey,
+            project.id,
+            runtime.generation,
+          )}`,
+        },
+      });
+      if (
+        response.status !== 200
+        || response.redirected
+        || response.url !== diagnosticsUrl.href
+      ) {
+        await response.body?.cancel();
+        throw new Error(
+          `Provider diagnostics returned status ${response.status}.`,
+        );
+      }
+      const contentLength = response.headers.get("content-length");
+      if (
+        response.headers.get("content-type")
+          !== DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE
+        || response.headers.has("content-encoding")
+        || !contentLength
+        || !/^[1-9][0-9]*$/u.test(contentLength)
+      ) {
+        await response.body?.cancel();
+        throw new Error("Provider diagnostics response metadata is invalid.");
+      }
+      const expectedBytes = Number(contentLength);
+      if (
+        !Number.isSafeInteger(expectedBytes)
+        || expectedBytes > maximum
+        || response.headers.get("x-clank-release-id") !== release.id
+        || response.headers.get("x-clank-runtime-generation")
+          !== String(runtime.generation)
+      ) {
+        await response.body?.cancel();
+        throw new Error("Provider diagnostics response identity is invalid.");
+      }
+      const bytes = await readBoundedResponseBytes(
+        response,
+        expectedBytes,
+        maximum,
+      );
+      const diagnostics = providerDiagnostics(
+        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+      );
+      if (
+        diagnostics.projectId !== project.id
+        || diagnostics.releaseId !== release.id
+        || diagnostics.generation !== runtime.generation
+      ) {
+        throw new Error("Provider diagnostics payload identity is invalid.");
+      }
+      const currentProject = projectById(storage.internal, project.id);
+      const currentRelease = releaseById(storage.internal, release.id);
+      if (!currentProject || !currentRelease) {
+        throw new Error("Provider diagnostics project state changed.");
+      }
+      const confirmed = exactProviderRuntime(currentProject, currentRelease);
+      const confirmedOrigin = exactProviderOrigin(
+        currentProject,
+        confirmed.nodeId,
+      );
+      if (
+        confirmed.generation !== runtime.generation
+        || confirmed.nodeId !== runtime.nodeId
+        || confirmedOrigin !== origin
+      ) {
+        throw new Error(
+          "Provider diagnostics generation changed during transfer.",
+        );
+      }
+      return diagnostics;
+    } catch (error) {
+      try {
+        options.onError?.(new Error(
+          "Provider diagnostics transport failed.",
+          { cause: error },
+        ));
+      } catch {
+        // Operator diagnostics cannot affect the fixed public failure.
+      }
+      throw new PlatformError(
+        503,
+        "PROVIDER_DIAGNOSTICS_UNAVAILABLE",
+        "The exact provider generation could not produce bounded diagnostics.",
+        1,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   const fetchProviderSnapshot = async (
@@ -5475,7 +5613,38 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         return api({ ok: true });
       }
       if (operation === "metrics" && request.method === "GET") {
-        return api({ ok: true, ...metricSeries(storage.internal, project.id, url.searchParams.get("range") ?? "24h") });
+        let runtime: Record<string, unknown> | null = null;
+        if (project.placement === "provider") {
+          const activeRelease = project.activeReleaseId
+            ? releaseById(storage.internal, project.activeReleaseId)
+            : null;
+          if (!activeRelease) {
+            runtime = { available: false, reason: "not_deployed" };
+          } else {
+            try {
+              runtime = {
+                available: true,
+                ...await fetchProviderDiagnostics(
+                  project,
+                  activeRelease,
+                  0,
+                ),
+              };
+            } catch (error) {
+              if (!(error instanceof PlatformError)) throw error;
+              runtime = { available: false, reason: "unavailable" };
+            }
+          }
+        }
+        return api({
+          ok: true,
+          ...metricSeries(
+            storage.internal,
+            project.id,
+            url.searchParams.get("range") ?? "24h",
+          ),
+          runtime,
+        });
       }
       if (operation === "logs" && request.method === "GET") {
         const limit = Math.min(1_000, Math.max(1, Number(url.searchParams.get("limit") ?? 200) || 200));
@@ -5483,13 +5652,72 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           FROM clank_platform_logs WHERE project_id = ? ORDER BY id DESC LIMIT ?`)
           .all(project.id, limit)
           .reverse();
-        return api({ ok: true, logs: rows.map((row) => ({
+        const logs: Array<{
+          id: number;
+          releaseId: string;
+          stream: string;
+          message: string;
+          createdAt: number;
+          source?: "provider";
+        }> = rows.map((row) => ({
           id: Number(row.id),
           releaseId: String(row.release_id),
           stream: String(row.stream),
           message: String(row.message),
           createdAt: Number(row.created_at),
-        })) });
+        }));
+        let runtime: Record<string, unknown> | null = null;
+        if (project.placement === "provider" && !project.activeReleaseId) {
+          runtime = { available: false, reason: "not_deployed" };
+        }
+        if (project.placement === "provider" && project.activeReleaseId) {
+          const activeRelease = releaseById(
+            storage.internal,
+            project.activeReleaseId,
+          );
+          if (activeRelease) {
+            try {
+              const diagnostics = await fetchProviderDiagnostics(
+                project,
+                activeRelease,
+                limit,
+              );
+              const secrets = decryptProjectSecrets(
+                storage.internal,
+                project.id,
+                masterKey,
+              );
+              for (const entry of diagnostics.logs) {
+                const role = entry.role === "worker"
+                  ? `worker[${entry.instance + 1}]`
+                  : entry.role;
+                logs.push({
+                  id: entry.sequence,
+                  releaseId: diagnostics.releaseId,
+                  stream: `${role}:${entry.stream}`,
+                  message: redact(entry.message, secrets),
+                  createdAt: entry.createdAt,
+                  source: "provider",
+                });
+              }
+              logs.sort((left, right) =>
+                left.createdAt - right.createdAt
+                || left.id - right.id);
+              if (logs.length > limit) logs.splice(0, logs.length - limit);
+              runtime = {
+                available: true,
+                generation: diagnostics.generation,
+                sampledAt: diagnostics.sampledAt,
+                retainedLogBytes: diagnostics.retainedLogBytes,
+                logsTruncated: diagnostics.logsTruncated,
+              };
+            } catch (error) {
+              if (!(error instanceof PlatformError)) throw error;
+              runtime = { available: false, reason: "unavailable" };
+            }
+          }
+        }
+        return api({ ok: true, logs, runtime });
       }
       if (operation === "secrets" && request.method === "GET") {
         const rows = storage.internal.prepare(
@@ -8957,6 +9185,290 @@ async function readBoundedResponseBytes(
   } finally {
     reader.releaseLock();
   }
+}
+
+function providerDiagnostics(
+  input: unknown,
+): DockerDeploymentRuntimeDiagnostics {
+  const value = diagnosticObject(input, "provider diagnostics");
+  diagnosticExactKeys(value, [
+    "protocol",
+    "projectId",
+    "releaseId",
+    "generation",
+    "sampledAt",
+    "statisticsAvailable",
+    "containers",
+    "totals",
+    "logs",
+    "retainedLogBytes",
+    "logsTruncated",
+  ], "provider diagnostics");
+  if (
+    value.protocol !== DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL
+    || typeof value.projectId !== "string"
+    || !/^[A-Za-z0-9_-]{1,128}$/u.test(value.projectId)
+    || typeof value.releaseId !== "string"
+    || !/^[A-Za-z0-9_-]{1,128}$/u.test(value.releaseId)
+  ) {
+    throw new Error("Provider diagnostics identity is invalid.");
+  }
+  const generation = diagnosticSafeInteger(
+    value.generation,
+    "provider diagnostics generation",
+    1,
+  );
+  const sampledAt = diagnosticSafeInteger(
+    value.sampledAt,
+    "provider diagnostics sample time",
+    1,
+  );
+  if (typeof value.statisticsAvailable !== "boolean") {
+    throw new Error("Provider diagnostics availability is invalid.");
+  }
+  if (!Array.isArray(value.containers) || value.containers.length > 34) {
+    throw new Error("Provider diagnostics containers are invalid.");
+  }
+  const identities = new Set<string>();
+  const containers = value.containers.map((entry, index) => {
+    const container = diagnosticObject(
+      entry,
+      `provider diagnostics container ${index}`,
+    );
+    diagnosticExactKeys(container, [
+      "role",
+      "instance",
+      "running",
+      "memoryBytes",
+      "memoryLimitBytes",
+      "cpuPercent",
+      "networkReceiveBytes",
+      "networkTransmitBytes",
+      "blockReadBytes",
+      "blockWriteBytes",
+      "pids",
+    ], `provider diagnostics container ${index}`);
+    if (
+      container.role !== "web"
+      && container.role !== "worker"
+      && container.role !== "scheduler"
+    ) {
+      throw new Error("Provider diagnostics container role is invalid.");
+    }
+    const instance = diagnosticSafeInteger(
+      container.instance,
+      "provider diagnostics container instance",
+      0,
+    );
+    const identity = `${container.role}:${instance}`;
+    if (identities.has(identity) || typeof container.running !== "boolean") {
+      throw new Error("Provider diagnostics container identity is invalid.");
+    }
+    identities.add(identity);
+    const metric = (
+      name: keyof typeof container,
+      cpu = false,
+    ): number | null => diagnosticMetric(
+      container[name],
+      `provider diagnostics ${String(name)}`,
+      cpu,
+    );
+    const output = {
+      role: container.role,
+      instance,
+      running: container.running,
+      memoryBytes: metric("memoryBytes"),
+      memoryLimitBytes: metric("memoryLimitBytes"),
+      cpuPercent: metric("cpuPercent", true),
+      networkReceiveBytes: metric("networkReceiveBytes"),
+      networkTransmitBytes: metric("networkTransmitBytes"),
+      blockReadBytes: metric("blockReadBytes"),
+      blockWriteBytes: metric("blockWriteBytes"),
+      pids: metric("pids"),
+    } satisfies DockerDeploymentRuntimeDiagnostics["containers"][number];
+    if (
+      !value.statisticsAvailable
+      && Object.entries(output).some(([name, metricValue]) =>
+        !["role", "instance", "running"].includes(name)
+        && metricValue !== null)
+    ) {
+      throw new Error("Unavailable provider statistics contain values.");
+    }
+    return Object.freeze(output);
+  });
+  const rawTotals = diagnosticObject(
+    value.totals,
+    "provider diagnostics totals",
+  );
+  const metricNames = [
+    "memoryBytes",
+    "memoryLimitBytes",
+    "cpuPercent",
+    "networkReceiveBytes",
+    "networkTransmitBytes",
+    "blockReadBytes",
+    "blockWriteBytes",
+    "pids",
+  ] as const;
+  diagnosticExactKeys(rawTotals, metricNames, "provider diagnostics totals");
+  const totals = Object.fromEntries(metricNames.map((name) => {
+    const metric = diagnosticMetric(
+      rawTotals[name],
+      `provider diagnostics total ${name}`,
+      name === "cpuPercent",
+    );
+    const expected = value.statisticsAvailable && containers.length > 0
+      ? containers.reduce<number | null>((sum, container) => {
+          const current = container[name];
+          return sum === null || current === null ? null : sum + current;
+        }, 0)
+      : null;
+    if (metric !== expected) {
+      throw new Error("Provider diagnostics totals are inconsistent.");
+    }
+    return [name, metric];
+  })) as unknown as DockerDeploymentRuntimeDiagnostics["totals"];
+  if (!Array.isArray(value.logs) || value.logs.length > 1_000) {
+    throw new Error("Provider diagnostics logs are invalid.");
+  }
+  let priorSequence = 0;
+  const logs = value.logs.map((entry, index) => {
+    const log = diagnosticObject(entry, `provider diagnostics log ${index}`);
+    diagnosticExactKeys(log, [
+      "sequence",
+      "createdAt",
+      "role",
+      "instance",
+      "stream",
+      "message",
+    ], `provider diagnostics log ${index}`);
+    const sequence = diagnosticSafeInteger(
+      log.sequence,
+      "provider diagnostics log sequence",
+      1,
+    );
+    if (sequence <= priorSequence) {
+      throw new Error("Provider diagnostics log ordering is invalid.");
+    }
+    priorSequence = sequence;
+    if (
+      (log.role !== "web"
+        && log.role !== "worker"
+        && log.role !== "scheduler")
+      || (log.stream !== "stdout"
+        && log.stream !== "stderr"
+        && log.stream !== "platform")
+      || typeof log.message !== "string"
+      || log.message.length < 1
+      || log.message.length > 16_384
+      || log.message.includes("\0")
+    ) {
+      throw new Error("Provider diagnostics log entry is invalid.");
+    }
+    return Object.freeze({
+      sequence,
+      createdAt: diagnosticSafeInteger(
+        log.createdAt,
+        "provider diagnostics log time",
+        1,
+      ),
+      role: log.role,
+      instance: diagnosticSafeInteger(
+        log.instance,
+        "provider diagnostics log instance",
+        0,
+      ),
+      stream: log.stream,
+      message: log.message,
+    }) satisfies DockerDeploymentRuntimeLog;
+  });
+  const retainedLogBytes = diagnosticSafeInteger(
+    value.retainedLogBytes,
+    "provider diagnostics retained log bytes",
+    0,
+  );
+  if (
+    retainedLogBytes > 128 * 1024
+    || logs.reduce(
+      (bytes, entry) =>
+        bytes + new TextEncoder().encode(entry.message).byteLength,
+      0,
+    ) > retainedLogBytes
+    || typeof value.logsTruncated !== "boolean"
+  ) {
+    throw new Error("Provider diagnostics retention is invalid.");
+  }
+  return Object.freeze({
+    protocol: DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL,
+    projectId: value.projectId,
+    releaseId: value.releaseId,
+    generation,
+    sampledAt,
+    statisticsAvailable: value.statisticsAvailable,
+    containers: Object.freeze(containers),
+    totals: Object.freeze({ ...totals }),
+    logs: Object.freeze(logs),
+    retainedLogBytes,
+    logsTruncated: value.logsTruncated,
+  });
+}
+
+function diagnosticObject(
+  input: unknown,
+  label: string,
+): Record<string, unknown> {
+  if (
+    !input
+    || typeof input !== "object"
+    || Array.isArray(input)
+    || Object.getPrototypeOf(input) !== Object.prototype
+  ) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return input as Record<string, unknown>;
+}
+
+function diagnosticExactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+  label: string,
+): void {
+  const expected = new Set(keys);
+  if (
+    Object.keys(value).length !== expected.size
+    || Object.keys(value).some((key) => !expected.has(key))
+  ) {
+    throw new Error(`${label} fields are invalid.`);
+  }
+}
+
+function diagnosticSafeInteger(
+  value: unknown,
+  label: string,
+  minimum: number,
+): number {
+  if (!Number.isSafeInteger(value) || Number(value) < minimum) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return Number(value);
+}
+
+function diagnosticMetric(
+  value: unknown,
+  label: string,
+  fractional: boolean,
+): number | null {
+  if (value === null) return null;
+  if (
+    typeof value !== "number"
+    || !Number.isFinite(value)
+    || value < 0
+    || value > Number.MAX_SAFE_INTEGER
+    || (!fractional && !Number.isSafeInteger(value))
+  ) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return value;
 }
 
 async function prepareDirectories(directory: string): Promise<{

@@ -2,6 +2,8 @@ import { parseDeploymentConfig, type DeploymentConfig } from "./deploy.ts";
 import type { PreparedDeploymentRuntimeData } from "./provider-data.ts";
 
 export const DEPLOYMENT_PROVIDER_DOCKER_PROTOCOL = "clank-provider-docker/1";
+export const DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL =
+  "clank-provider-docker-diagnostics/1";
 
 export interface DockerDeploymentRuntimeLauncherOptions {
   /** Same private provider root passed to openDeploymentProviderDataStore(). */
@@ -71,6 +73,52 @@ export interface DockerDeploymentRuntimeState
   readonly launchedAt: number;
 }
 
+export interface DockerDeploymentRuntimeLog {
+  readonly sequence: number;
+  readonly createdAt: number;
+  readonly role: "web" | "worker" | "scheduler";
+  readonly instance: number;
+  readonly stream: "stdout" | "stderr" | "platform";
+  readonly message: string;
+}
+
+export interface DockerDeploymentContainerDiagnostics {
+  readonly role: "web" | "worker" | "scheduler";
+  readonly instance: number;
+  readonly running: boolean;
+  readonly memoryBytes: number | null;
+  readonly memoryLimitBytes: number | null;
+  readonly cpuPercent: number | null;
+  readonly networkReceiveBytes: number | null;
+  readonly networkTransmitBytes: number | null;
+  readonly blockReadBytes: number | null;
+  readonly blockWriteBytes: number | null;
+  readonly pids: number | null;
+}
+
+export interface DockerDeploymentRuntimeDiagnostics {
+  readonly protocol: typeof DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL;
+  readonly projectId: string;
+  readonly releaseId: string;
+  readonly generation: number;
+  readonly sampledAt: number;
+  readonly statisticsAvailable: boolean;
+  readonly containers: readonly DockerDeploymentContainerDiagnostics[];
+  readonly totals: {
+    readonly memoryBytes: number | null;
+    readonly memoryLimitBytes: number | null;
+    readonly cpuPercent: number | null;
+    readonly networkReceiveBytes: number | null;
+    readonly networkTransmitBytes: number | null;
+    readonly blockReadBytes: number | null;
+    readonly blockWriteBytes: number | null;
+    readonly pids: number | null;
+  };
+  readonly logs: readonly DockerDeploymentRuntimeLog[];
+  readonly retainedLogBytes: number;
+  readonly logsTruncated: boolean;
+}
+
 export interface DockerDeploymentRuntimeLauncher {
   /**
    * Launches and health-checks an ingress-private candidate. The environment
@@ -93,6 +141,12 @@ export interface DockerDeploymentRuntimeLauncher {
   ): DockerDeploymentRuntimeState;
   /** Returns non-secret in-memory runtime metadata. */
   inspect(): readonly DockerDeploymentRuntimeState[];
+  /** Returns bounded live output and one non-streaming resource sample. */
+  diagnostics(
+    projectId: string,
+    logLimit?: number,
+    signal?: AbortSignal,
+  ): Promise<DockerDeploymentRuntimeDiagnostics | null>;
   /** Gracefully stops one exact generation, or the project's current generation. */
   stop(projectId: string, generation?: number): Promise<boolean>;
   /**
@@ -135,6 +189,10 @@ interface RuntimeRecord {
   deferredBackground: boolean;
   pendingBackground: PendingBackgroundPlan | null;
   controller: AbortController;
+  logs: DockerDeploymentRuntimeLog[];
+  logBytes: number;
+  nextLogSequence: number;
+  logsTruncated: boolean;
 }
 
 interface PendingBackgroundPlan {
@@ -147,6 +205,17 @@ interface PendingBackgroundPlan {
 interface DockerCommandResult {
   stdout: string;
   stderr: string;
+}
+
+interface ParsedDockerStatistics {
+  memoryBytes: number;
+  memoryLimitBytes: number;
+  cpuPercent: number;
+  networkReceiveBytes: number;
+  networkTransmitBytes: number;
+  blockReadBytes: number;
+  blockWriteBytes: number;
+  pids: number;
 }
 
 interface NodeFs {
@@ -178,6 +247,9 @@ const USER = /^(0|[1-9][0-9]{0,9}):(0|[1-9][0-9]{0,9})$/u;
 const MAX_DOCKER_OUTPUT_BYTES = 256 * 1024;
 const MAX_ENVIRONMENT_BYTES = 3 * 1024 * 1024;
 const MAX_ENCODED_ENVIRONMENT_BYTES = 4 * 1024 * 1024;
+const MAX_RUNTIME_LOG_BYTES = 128 * 1024;
+const MAX_RUNTIME_LOG_ENTRIES = 1_000;
+const MAX_RUNTIME_LOG_LINE = 16 * 1024;
 const TRUSTED_DOCKER_ENVIRONMENT = Object.freeze([
   "DOCKER_API_VERSION",
   "DOCKER_CERT_PATH",
@@ -446,11 +518,17 @@ export async function openDockerDeploymentRuntimeLauncher(
         expectedStop: false,
       };
       record.containers.push(process);
-      drain(child.stdout);
-      drain(child.stderr);
+      captureRuntimeOutput(record, process, "stdout", child.stdout);
+      captureRuntimeOutput(record, process, "stderr", child.stderr);
       child.once("error", (error) => {
         if (!process.expectedStop) {
           record.status = "failed";
+          appendRuntimeLog(
+            record,
+            process,
+            "platform",
+            "Docker attachment failed.",
+          );
           report(new Error(
             `${runtimeLabel(record)} ${roleLabel(process)} Docker attachment failed: ${safeError(error)}`,
           ));
@@ -459,6 +537,12 @@ export async function openDockerDeploymentRuntimeLauncher(
       child.once("exit", (code, signal) => {
         if (!process.expectedStop) {
           record.status = "failed";
+          appendRuntimeLog(
+            record,
+            process,
+            "platform",
+            `Process exited (${String(code ?? signal ?? "unknown")}).`,
+          );
           report(new Error(
             `${runtimeLabel(record)} ${roleLabel(process)} exited (${String(code ?? signal ?? "unknown")}).`,
           ));
@@ -600,6 +684,10 @@ export async function openDockerDeploymentRuntimeLauncher(
           deferredBackground: deferBackground,
           pendingBackground: null,
           controller: new AbortController(),
+          logs: [],
+          logBytes: 0,
+          nextLogSequence: 1,
+          logsTruncated: false,
         };
         records.set(prepared.projectId, record);
         candidates.set(candidate, record);
@@ -715,6 +803,102 @@ export async function openDockerDeploymentRuntimeLauncher(
             left.candidate.projectId.localeCompare(right.candidate.projectId))
           .map(publicState),
       );
+    },
+
+    async diagnostics(projectIdInput, logLimitInput = 200, signal?: AbortSignal) {
+      if (closed) throw new Error("Docker deployment runtime launcher is closed.");
+      if (signal !== undefined && !(signal instanceof AbortSignal)) {
+        throw new TypeError("signal must be an AbortSignal.");
+      }
+      const projectId = identifier(projectIdInput, "projectId");
+      const logLimit = integer(logLimitInput, "logLimit", 0, 1_000);
+      throwIfAborted(signal);
+      return exclusive(projectId, async () => {
+        if (closed) throw new Error("Docker deployment runtime launcher is closed.");
+        throwIfAborted(signal);
+        const record = records.get(projectId);
+        if (!record) return null;
+        const processes = [...record.containers];
+        let statisticsAvailable = true;
+        let statistics = new Map<string, ParsedDockerStatistics>();
+        try {
+          const result = await docker([
+            "container",
+            "stats",
+            "--no-stream",
+            "--format",
+            "{{json .}}",
+            ...processes.map((process) => process.id),
+          ], { signal });
+          statistics = parseDockerStatistics(result.stdout, processes);
+        } catch (error) {
+          throwIfAborted(signal);
+          statisticsAvailable = false;
+          report(new Error(
+            `${runtimeLabel(record)} resource diagnostics failed.`,
+            { cause: error },
+          ));
+        }
+        const containers = processes.map((process) => {
+          const sample = statistics.get(process.id);
+          return Object.freeze({
+            role: process.role,
+            instance: process.instance,
+            running: process.child.exitCode === null
+              || process.child.exitCode === undefined,
+            memoryBytes: sample?.memoryBytes ?? null,
+            memoryLimitBytes: sample?.memoryLimitBytes ?? null,
+            cpuPercent: sample?.cpuPercent ?? null,
+            networkReceiveBytes: sample?.networkReceiveBytes ?? null,
+            networkTransmitBytes: sample?.networkTransmitBytes ?? null,
+            blockReadBytes: sample?.blockReadBytes ?? null,
+            blockWriteBytes: sample?.blockWriteBytes ?? null,
+            pids: sample?.pids ?? null,
+          }) satisfies DockerDeploymentContainerDiagnostics;
+        });
+        const total = (
+          key: keyof ParsedDockerStatistics,
+        ): number | null => {
+          if (!statisticsAvailable || containers.length === 0) return null;
+          let value = 0;
+          for (const container of containers) {
+            const current = container[key];
+            if (typeof current !== "number" || !Number.isFinite(current)) {
+              return null;
+            }
+            value += current;
+          }
+          return Number.isSafeInteger(value) || key === "cpuPercent"
+            ? value
+            : null;
+        };
+        return Object.freeze({
+          protocol: DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL,
+          projectId: record.candidate.projectId,
+          releaseId: record.candidate.releaseId,
+          generation: record.candidate.generation,
+          sampledAt: Date.now(),
+          statisticsAvailable,
+          containers: Object.freeze(containers),
+          totals: Object.freeze({
+            memoryBytes: total("memoryBytes"),
+            memoryLimitBytes: total("memoryLimitBytes"),
+            cpuPercent: total("cpuPercent"),
+            networkReceiveBytes: total("networkReceiveBytes"),
+            networkTransmitBytes: total("networkTransmitBytes"),
+            blockReadBytes: total("blockReadBytes"),
+            blockWriteBytes: total("blockWriteBytes"),
+            pids: total("pids"),
+          }),
+          logs: Object.freeze(
+            record.logs.slice(Math.max(0, record.logs.length - logLimit))
+              .map((entry) => Object.freeze({ ...entry })),
+          ),
+          retainedLogBytes: record.logBytes,
+          logsTruncated: record.logsTruncated
+            || record.logs.length > logLimit,
+        }) satisfies DockerDeploymentRuntimeDiagnostics;
+      });
     },
 
     async stop(projectIdInput, generationInput) {
@@ -1208,17 +1392,195 @@ async function portAvailable(port: number): Promise<boolean> {
   });
 }
 
-function drain(stream: AsyncIterable<Uint8Array> | undefined): void {
+function captureRuntimeOutput(
+  record: RuntimeRecord,
+  process: ContainerProcess,
+  streamName: "stdout" | "stderr",
+  stream: AsyncIterable<Uint8Array> | undefined,
+): void {
   if (!stream) return;
   void (async () => {
+    const decoder = new TextDecoder();
+    let buffered = "";
     try {
-      for await (const _chunk of stream) {
-        // Docker's bounded local log driver retains operator-visible output.
+      for await (const chunk of stream) {
+        buffered += decoder.decode(chunk, { stream: true });
+        while (true) {
+          const newline = buffered.indexOf("\n");
+          if (newline === -1) break;
+          appendRuntimeLog(
+            record,
+            process,
+            streamName,
+            buffered.slice(0, newline).replace(/\r$/u, ""),
+          );
+          buffered = buffered.slice(newline + 1);
+        }
+        if (buffered.length > MAX_RUNTIME_LOG_LINE) {
+          appendRuntimeLog(
+            record,
+            process,
+            streamName,
+            buffered.slice(0, MAX_RUNTIME_LOG_LINE),
+          );
+          buffered = "";
+        }
+      }
+      buffered += decoder.decode();
+      if (buffered) {
+        appendRuntimeLog(record, process, streamName, buffered);
       }
     } catch {
       // The attached process exit path reports infrastructure failures.
     }
   })();
+}
+
+function appendRuntimeLog(
+  record: RuntimeRecord,
+  process: ContainerProcess,
+  stream: "stdout" | "stderr" | "platform",
+  value: string,
+): void {
+  const message = value
+    .replace(/\u0000/gu, "")
+    .slice(0, MAX_RUNTIME_LOG_LINE);
+  if (!message) return;
+  const bytes = new TextEncoder().encode(message).byteLength;
+  const entry = Object.freeze({
+    sequence: record.nextLogSequence++,
+    createdAt: Date.now(),
+    role: process.role,
+    instance: process.instance,
+    stream,
+    message,
+  }) satisfies DockerDeploymentRuntimeLog;
+  record.logs.push(entry);
+  record.logBytes += bytes;
+  while (
+    record.logs.length > MAX_RUNTIME_LOG_ENTRIES
+    || record.logBytes > MAX_RUNTIME_LOG_BYTES
+  ) {
+    const removed = record.logs.shift();
+    if (!removed) break;
+    record.logBytes = Math.max(
+      0,
+      record.logBytes - new TextEncoder().encode(removed.message).byteLength,
+    );
+    record.logsTruncated = true;
+  }
+}
+
+function parseDockerStatistics(
+  output: string,
+  processes: readonly ContainerProcess[],
+): Map<string, ParsedDockerStatistics> {
+  const samples = new Map<string, ParsedDockerStatistics>();
+  const lines = output.split(/\r?\n/u).filter(Boolean);
+  if (lines.length !== processes.length) {
+    throw new Error("Docker statistics did not cover the exact runtime.");
+  }
+  for (const line of lines) {
+    if (line.length > 4_096) {
+      throw new Error("Docker statistics row is too large.");
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      throw new Error("Docker statistics output is invalid.");
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("Docker statistics output is invalid.");
+    }
+    const row = value as Record<string, unknown>;
+    const rawId = shortDiagnosticString(row.ID, "Docker statistics ID");
+    if (!CONTAINER_ID.test(rawId)) {
+      throw new Error("Docker statistics identity is invalid.");
+    }
+    const process = processes.find((entry) => entry.id.startsWith(rawId));
+    if (!process || samples.has(process.id)) {
+      throw new Error("Docker statistics identity is invalid.");
+    }
+    const [memoryBytes, memoryLimitBytes] = diagnosticPair(
+      row.MemUsage,
+      "Docker memory statistics",
+    );
+    const [networkReceiveBytes, networkTransmitBytes] = diagnosticPair(
+      row.NetIO,
+      "Docker network statistics",
+    );
+    const [blockReadBytes, blockWriteBytes] = diagnosticPair(
+      row.BlockIO,
+      "Docker block statistics",
+    );
+    const cpuPercent = diagnosticPercent(row.CPUPerc, "Docker CPU statistics");
+    const pids = diagnosticInteger(row.PIDs, "Docker PID statistics");
+    samples.set(process.id, {
+      memoryBytes,
+      memoryLimitBytes,
+      cpuPercent,
+      networkReceiveBytes,
+      networkTransmitBytes,
+      blockReadBytes,
+      blockWriteBytes,
+      pids,
+    });
+  }
+  return samples;
+}
+
+function diagnosticPair(value: unknown, label: string): [number, number] {
+  const normalized = shortDiagnosticString(value, label);
+  const parts = normalized.split(/\s*\/\s*/u);
+  if (parts.length !== 2) throw new Error(`${label} is invalid.`);
+  return [
+    diagnosticBytes(parts[0]!, label),
+    diagnosticBytes(parts[1]!, label),
+  ];
+}
+
+function diagnosticBytes(value: string, label: string): number {
+  const match = /^([0-9]+(?:\.[0-9]+)?)\s*([kmgtpe]?i?b)$/iu.exec(value.trim());
+  if (!match) throw new Error(`${label} is invalid.`);
+  const unit = match[2]!.toLowerCase();
+  const exponent = ["b", "kb", "mb", "gb", "tb", "pb", "eb"].indexOf(
+    unit.replace("i", ""),
+  );
+  if (exponent < 0) throw new Error(`${label} is invalid.`);
+  const base = unit.includes("i") ? 1_024 : 1_000;
+  const result = Number(match[1]) * (base ** exponent);
+  if (!Number.isFinite(result) || result < 0 || result > Number.MAX_SAFE_INTEGER) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return Math.round(result);
+}
+
+function diagnosticPercent(value: unknown, label: string): number {
+  const normalized = shortDiagnosticString(value, label);
+  const match = /^([0-9]+(?:\.[0-9]+)?)%$/u.exec(normalized);
+  const result = match ? Number(match[1]) : Number.NaN;
+  if (!Number.isFinite(result) || result < 0 || result > 1_000_000) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return result;
+}
+
+function diagnosticInteger(value: unknown, label: string): number {
+  const normalized = shortDiagnosticString(value, label);
+  if (!/^[0-9]{1,12}$/u.test(normalized)) {
+    throw new Error(`${label} is invalid.`);
+  }
+  const result = Number(normalized);
+  if (!Number.isSafeInteger(result)) throw new Error(`${label} is invalid.`);
+  return result;
+}
+
+function shortDiagnosticString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > 256) {
+    throw new Error(`${label} is invalid.`);
+  }
+  return value;
 }
 
 async function waitForChildExit(child: NativeChild, timeoutMs: number): Promise<void> {

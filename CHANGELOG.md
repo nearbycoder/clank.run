@@ -6,6 +6,13 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- Provider-hosted runtimes now expose a generation-bound private diagnostics surface. The complete
+  provider keeps a 128 KiB/1,000-entry in-memory output tail, samples all current
+  web/worker/scheduler containers through one bounded Docker stats call, and reports memory,
+  memory limits, CPU, PIDs, network I/O, and block I/O without container IDs or environment
+  values. The control plane authenticates the exact node/release/generation, refuses redirects or
+  unbounded/malformed responses, rechecks placement after transfer, redacts project secrets, and
+  shows provider resources and logs in the existing project UI.
 - Provider-hosted recovery points can now be restored through the ordinary platform and CLI API.
   The control plane verifies the target, creates an encrypted provider safety backup, freezes the
   target ID/digest/size and safety ID into a durable replacement generation, and re-verifies the

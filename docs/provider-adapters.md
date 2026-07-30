@@ -236,9 +236,13 @@ safety point plus the provider data store's post-drain safety snapshot, reapplie
 migrations, health-checks, and publishes ingress last. `PROVIDER_RESTORE_PENDING` means that exact
 durable generation is still converging and the same request should be retried.
 
-Application-log forwarding, provider disk/memory telemetry, and automatic failover from node-local
-SQLite are not implemented. A stateful project stays pinned and unavailable when its node is
-unavailable. Operators must not treat release-object retention as a database backup. See [Remote runtime
+The complete Docker provider also supplies a bounded memory-only application-output tail and
+one-shot memory/limit, CPU, PID, network-I/O, and block-I/O attribution for the exact active
+generation. The control plane verifies the private response and redacts project secrets before
+showing it. Provider filesystem-capacity telemetry, remote durable-job inspection/mutation, and
+automatic failover from node-local SQLite are not implemented. A stateful project stays pinned and
+unavailable when its node is unavailable. Operators must not treat release-object retention as a
+database backup. See [Remote runtime
 placement](runtime-placement.md#current-support-boundary) for the precise boundary.
 
 See [Remote runtime placement](runtime-placement.md) for operator configuration, exact body, and

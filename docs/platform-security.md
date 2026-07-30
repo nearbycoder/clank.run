@@ -117,6 +117,14 @@ a zero-downtime database operation.
 
 Provider hosts remain trusted compute and require private TLS, non-root isolated runtime execution,
 a protected Docker socket, disk/network policy, monitoring, and secret rotation after compromise.
+
+Provider diagnostics use the separate generation-derived control credential, not the public
+ingress credential. The provider retains only a bounded memory tail, samples exact tracked
+containers without a shell, omits Docker/container/environment/path identity, and caps the private
+JSON response. The control plane pins the allowlisted origin, refuses redirects and encodings,
+checks length/media/release/generation, validates every field and aggregate, then rechecks
+placement after transfer. Configured project secrets are redacted before the project API response;
+unregistered sensitive application output remains an operator/application responsibility.
 See [Complete deployment provider service](provider-service.md), [Provider data
 lifecycle](provider-data-lifecycle.md), [Provider Docker
 runtime](provider-docker-runtime.md), [Provider runtime

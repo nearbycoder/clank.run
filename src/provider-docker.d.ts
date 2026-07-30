@@ -1,6 +1,7 @@
 import type { PreparedDeploymentRuntimeData } from "./provider-data.js";
 
 export declare const DEPLOYMENT_PROVIDER_DOCKER_PROTOCOL: "clank-provider-docker/1";
+export declare const DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL: "clank-provider-docker-diagnostics/1";
 
 export interface DockerDeploymentRuntimeLauncherOptions {
     /** Same private provider root passed to openDeploymentProviderDataStore(). */
@@ -69,6 +70,52 @@ export interface DockerDeploymentRuntimeState extends DockerDeploymentRuntimeCan
     readonly launchedAt: number;
 }
 
+export interface DockerDeploymentRuntimeLog {
+    readonly sequence: number;
+    readonly createdAt: number;
+    readonly role: "web" | "worker" | "scheduler";
+    readonly instance: number;
+    readonly stream: "stdout" | "stderr" | "platform";
+    readonly message: string;
+}
+
+export interface DockerDeploymentContainerDiagnostics {
+    readonly role: "web" | "worker" | "scheduler";
+    readonly instance: number;
+    readonly running: boolean;
+    readonly memoryBytes: number | null;
+    readonly memoryLimitBytes: number | null;
+    readonly cpuPercent: number | null;
+    readonly networkReceiveBytes: number | null;
+    readonly networkTransmitBytes: number | null;
+    readonly blockReadBytes: number | null;
+    readonly blockWriteBytes: number | null;
+    readonly pids: number | null;
+}
+
+export interface DockerDeploymentRuntimeDiagnostics {
+    readonly protocol: typeof DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL;
+    readonly projectId: string;
+    readonly releaseId: string;
+    readonly generation: number;
+    readonly sampledAt: number;
+    readonly statisticsAvailable: boolean;
+    readonly containers: readonly DockerDeploymentContainerDiagnostics[];
+    readonly totals: {
+        readonly memoryBytes: number | null;
+        readonly memoryLimitBytes: number | null;
+        readonly cpuPercent: number | null;
+        readonly networkReceiveBytes: number | null;
+        readonly networkTransmitBytes: number | null;
+        readonly blockReadBytes: number | null;
+        readonly blockWriteBytes: number | null;
+        readonly pids: number | null;
+    };
+    readonly logs: readonly DockerDeploymentRuntimeLog[];
+    readonly retainedLogBytes: number;
+    readonly logsTruncated: boolean;
+}
+
 export interface DockerDeploymentRuntimeLauncher {
     /**
      * Launches and health-checks an ingress-private candidate. The environment
@@ -84,6 +131,12 @@ export interface DockerDeploymentRuntimeLauncher {
     commit(candidate: DockerDeploymentRuntimeCandidate): DockerDeploymentRuntimeState;
     /** Returns non-secret in-memory runtime metadata. */
     inspect(): readonly DockerDeploymentRuntimeState[];
+    /** Returns bounded live output and one non-streaming resource sample. */
+    diagnostics(
+        projectId: string,
+        logLimit?: number,
+        signal?: AbortSignal,
+    ): Promise<DockerDeploymentRuntimeDiagnostics | null>;
     /** Gracefully stops one exact generation, or the project's current generation. */
     stop(projectId: string, generation?: number): Promise<boolean>;
     /**
