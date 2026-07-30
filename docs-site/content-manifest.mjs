@@ -63,6 +63,7 @@ export const groups = [
       ["deployment-platform", "docs/deployment-platform.md"],
       ["preview-environments", "docs/preview-environments.md"],
       ["usage-and-limits", "docs/usage-and-limits.md"],
+      ["hosted-plans-and-billing", "docs/hosted-plans-and-billing.md"],
       ["platform-dashboard", "docs/platform-dashboard.md"],
       ["organizations", "docs/organizations.md"],
       ["invitations", "docs/invitations.md"],

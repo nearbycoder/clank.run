@@ -132,6 +132,10 @@ const COMMANDS = Object.freeze({
     usage: "clank usage [directory] [--org <id>] [--month YYYY-MM] [--json]",
     summary: "Inspect transparent monthly workspace usage and enforced traffic limits.",
   },
+  billing: {
+    usage: "clank billing [--json]",
+    summary: "Show the account plan, billing state, and effective entitlements.",
+  },
   token: {
     usage: "clank token <create|list|revoke>",
     summary: "Manage scoped automation tokens.",
@@ -231,6 +235,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   activity: ["json"],
   audit: ["json"],
   usage: ["json"],
+  billing: ["json"],
   deploy: ["dry-run", "json"],
   preview: [
     "json",
@@ -268,6 +273,7 @@ export async function run(command, args) {
       case "activity":
       case "audit": return await activity(args);
       case "usage": return await usageCommand(args);
+      case "billing": return await billingCommand(args);
       case "token": return await tokenCommand(args);
       case "domain": return await domainCommand(args);
       case "deploy": return await deploy(args);
@@ -340,6 +346,7 @@ export async function runInteractive(options = {}) {
       { id: "login", title: "Log in", summary: `Authorize this CLI with ${DEFAULT_PLATFORM_SERVER}.` },
       { id: "deploy", title: "Deploy this app", summary: "Build, migrate, health-check, and activate this project." },
       { id: "help", title: "View every command", summary: "Print the complete CLI reference." },
+      { id: "billing", title: "View plan and limits", summary: "Inspect the current account plan and effective capacity." },
     ];
     output("What would you like to do?\n");
     actions.forEach((entry, index) => output(`  ${index + 1}) ${entry.title}\n     ${entry.summary}\n`));
@@ -468,6 +475,7 @@ Platform:
   clank project delete [project-id] --confirm="delete-site <slug>" --acknowledge-data-loss
   clank activity [--org=<id>] [--limit=100] [--before=<cursor>] [--json]
   clank usage [directory] [--org=<id>] [--month=YYYY-MM] [--json]
+  clank billing [--json]               Show the account plan and effective limits
   clank token create                    Create a scoped token for the linked project
   clank token list                      List active CLI and project tokens
   clank token revoke <token-id>         Revoke a token
@@ -1450,6 +1458,62 @@ async function usageCommand(args) {
     console.log(`History before ${new Date(payload.period.trackingStartedAt).toISOString()} may be incomplete.`);
   }
   console.log("Known transfer counts request bodies and responses that declare Content-Length; no prices or invoices are calculated.");
+}
+
+async function billingCommand(args) {
+  if (positionals(args).length > 0) {
+    throw new CliError("Usage: clank billing [--json]");
+  }
+  const profile = await requireProfile();
+  const payload = await platformRequest(profile.server, "/api/billing", {
+    token: profile.token,
+  });
+  if (flag(args, "json")) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  const plan = payload.plans.find((entry) => entry.id === payload.current.planId);
+  const storedPlan = payload.plans.find((entry) => entry.id === payload.current.storedPlanId);
+  const name = plan?.name ?? payload.current.planId;
+  const price = plan ? formatCliPrice(plan.monthlyPrice) : "price unavailable";
+  const state = payload.current.entitlementsActive
+    ? payload.current.status
+    : `${payload.current.status}; default entitlements active`;
+  console.log(`${name} · ${price}/month · ${state}`);
+  if (storedPlan && storedPlan.id !== plan?.id) {
+    console.log(`Stored plan: ${storedPlan.name}; its entitlements are not currently active.`);
+  }
+  if (payload.current.cancelAtPeriodEnd && payload.current.currentPeriodEnd) {
+    console.log(`Scheduled to end ${new Date(payload.current.currentPeriodEnd).toISOString()}.`);
+  } else if (payload.current.currentPeriodEnd) {
+    console.log(`Current period ends ${new Date(payload.current.currentPeriodEnd).toISOString()}.`);
+  }
+  if (payload.current.graceUntil) {
+    console.log(`Payment grace ends ${new Date(payload.current.graceUntil).toISOString()}.`);
+  }
+  console.log("Effective account entitlements:");
+  for (const definition of [
+    ["projectsPerAccount", "Projects"],
+    ["organizationsPerAccount", "Workspaces"],
+    ["backupsPerProject", "Backups per project"],
+    ["domainsPerProject", "Domains per project"],
+    ["releasesPerProject", "Releases per project"],
+    ["requestsPerMonthPerOrganization", "Requests per workspace/month"],
+    ["transferBytesPerMonthPerOrganization", "Known transfer per workspace/month"],
+    ["requestsPerMinutePerProject", "Requests per project/minute"],
+  ]) {
+    const [key, label] = definition;
+    const value = payload.entitlements[key];
+    if (value === undefined) continue;
+    console.log(`  ${label}: ${key === "transferBytesPerMonthPerOrganization"
+      ? formatCliBytes(value)
+      : formatCliNumber(value)}`);
+  }
+  const overrideCount = Object.keys(payload.operatorOverrides ?? {}).length;
+  if (overrideCount > 0) {
+    console.log(`${overrideCount} operator quota override${overrideCount === 1 ? "" : "s"} applied after plan entitlements.`);
+  }
+  console.log(`Manage billing in a browser: ${profile.server}/billing`);
 }
 
 async function tokenCommand(args) {
@@ -3237,6 +3301,18 @@ function formatCliBytes(value) {
     unit++;
   }
   return `${amount.toFixed(unit === 0 || amount >= 100 ? 0 : amount >= 10 ? 1 : 2)} ${units[unit]}`;
+}
+
+function formatCliPrice(value) {
+  const currency = String(value?.currency ?? "").toUpperCase();
+  const amount = Number(value?.amount);
+  const formatter = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    currencyDisplay: "narrowSymbol",
+  });
+  const digits = formatter.resolvedOptions().maximumFractionDigits;
+  return formatter.format(amount / (10 ** digits));
 }
 
 function formatCommand(command) {

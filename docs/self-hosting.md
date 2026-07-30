@@ -27,6 +27,11 @@ configured worker/scheduler processes for each active project.
 | `CLANK_EMAIL_FROM` | none | Required sender address when invitation email is enabled |
 | `CLANK_EMAIL_FROM_NAME` | `Clank` | Invitation sender display name |
 | `CLANK_EMAIL_REPLY_TO` | none | Optional invitation reply-to address |
+| `CLANK_BILLING_PLANS_JSON` | none | Optional bounded public plan catalog as inline JSON |
+| `CLANK_BILLING_PLANS_FILE` | none | Optional plan catalog regular-file path; mutually exclusive with inline JSON |
+| `CLANK_STRIPE_SECRET_KEY` | none | Enable Stripe checkout/portal with the webhook secret |
+| `CLANK_STRIPE_WEBHOOK_SECRET` | none | Verify exact raw Stripe webhook bodies |
+| `CLANK_STRIPE_API_VERSION` | account default | Optional operator-tested Stripe API-version pin |
 | `CLANK_HOSTING_PROFILE` | `isolated` in production; `trusted` otherwise | Declared application trust boundary |
 | `CLANK_RUNNER` | selected by hosting profile | `process` or `docker` |
 | `CLANK_DOCKER_IMAGE` | Node image | Pin by digest in production |
@@ -108,6 +113,13 @@ explicit manual-token mode. Removing a provider configuration cancels pending ou
 erases their ciphertext; reissue those invitations if they still need delivery. Read
 [Invitations and email delivery](invitations.md) for retry, concurrency, lease, and provider request
 settings.
+
+Hosted billing is also optional and runs in the existing control-plane process and database.
+A plan catalog by itself enables public plan/entitlement visibility plus audited operator grants;
+adding both Stripe secrets enables hosted checkout, the customer portal, and the signed webhook at
+`/api/billing/webhook`. Stripe's API key and webhook secret must be environment secrets and must
+never appear in the catalog. Read [Hosted plans and billing](hosted-plans-and-billing.md) for the
+exact schema, events, entitlement order, and production checklist.
 
 Monthly request and transfer controls require managed ingress. Keep supervised application ports
 on loopback or a private network; traffic routed directly to those ports is neither metered nor

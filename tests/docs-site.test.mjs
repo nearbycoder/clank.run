@@ -284,7 +284,7 @@ test("documentation manifest covers every canonical guide exactly once", async (
   const packageJson = JSON.parse(await readFile(new URL("package.json", projectRoot), "utf8"));
   assert.equal(manifest.frameworkVersion, packageJson.version);
   assert.equal(manifest.protocol, "clank-docs/1");
-  assert.equal(manifest.docs.length, 60);
+  assert.equal(manifest.docs.length, 61);
   assert.equal(new Set(manifest.docs.map((doc) => doc.slug)).size, manifest.docs.length);
   assert.ok(manifest.docs.every((doc) =>
     doc.title

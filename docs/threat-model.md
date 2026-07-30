@@ -7,7 +7,8 @@ This model covers the Clank framework, generated authenticated applications, CLI
 - account credentials, sessions, passkeys, recovery tokens, agent OAuth grants, and CLI tokens;
 - organization membership, project permissions, audit history, and deployment authority;
 - application source/artifacts, migrations, secrets, databases, files, email, jobs, and webhooks;
-- control-plane master keys, encrypted backups, release history, usage history, and signing/provenance data;
+- control-plane master keys, encrypted backups, release history, usage history, billing
+  entitlements, and signing/provenance data;
 - availability and integrity of active application processes and routes.
 
 ## Principals
@@ -32,7 +33,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 4. Artifact bytes to extraction, migration, candidate startup, and activation.
 5. Control plane to application process/container and project filesystem.
 6. Managed ingress to host routing and application upstream.
-7. Framework to external email, file, job, webhook, database, and provisioning providers.
+7. Framework to external email, file, job, webhook, database, billing, and provisioning providers.
 8. Live database to encrypted backup repository and restore target.
 9. Git source to CI, attestation, GitHub release, and npm publication.
 10. Trusted application source through the TSX compiler to generated executable modules.
@@ -56,6 +57,7 @@ This model covers the Clank framework, generated authenticated applications, CLI
 | Preview data leak or quota bypass | Branch deploy copies production data/secrets, nests children, or creates unbounded temporary runtimes | Empty isolated database/secret namespaces, separate project IDs/hostnames, nested-preview denial, ordinary account/workspace quota accounting, bounded TTL, startup/background cleanup | Populate only synthetic test data, remove previews when CI closes, and monitor project capacity |
 | Pull-request deployment identity abuse | Commit a broad token, replay a workflow JWT, rename/recycle a repository, substitute a workflow or target branch, target production or another pull request, or run untrusted code in the control plane | GitHub Actions OIDC with fixed issuer/JWKS and RS256, exact HTTPS audience, immutable repository ID plus name, workflow path/SHA, trusted cleanup ref, event/ref/time checks, hashed one-time JWT ID, 15-minute `pull-N` token, production/sibling denial, cleanup revocation, isolated-runtime gate, pinned actions, secretless workflows | Protect GitHub administrators and trusted-base workflow review, keep pull-request runtimes isolated, monitor exchange audit, and accept that fork policy may withhold OIDC |
 | Traffic quota bypass or privacy leak | Race monthly admission, route around ingress, stream undeclared bytes, or turn usage dimensions into request/user tracking | Immediate SQLite admission transaction, fixed workspace/project/month rows, metadata-minimal policy input, fail-closed decisions, bounded retention, explicit known-transfer semantics | Keep app ports private; enforce edge connection/body/response/DDoS limits; do not treat known transfer as total egress or a monetary record |
+| Billing entitlement forgery or replay | Forge checkout, substitute an account/plan/Price, replay or reorder a webhook, future-date state, use a project token to inspect billing, or turn cancellation into destructive deletion | Browser-only CSRF checkout/portal, durable attempt and session binding, exact provider/customer/subscription/plan identity, fixed-origin bounded Stripe adapter, raw-body HMAC and delivery-time validation, live/test separation, event digest replay/conflict ledger, monotonic subscription state, account-token scope checks, fail-closed snapshots, non-destructive admission | Protect provider keys/dashboard/webhook configuration, test tax/refund/dispute flows, monitor delivery failures, review operator grants, and meet business/legal billing obligations |
 | Queue inspection | Job payloads, results, exception text, owner/group identity, worker or lease credentials copied into the control plane | Allowlisted metadata-only reads, bounded responses, presence-only error flags, conditional RBAC mutations, payload-free audit/events | Keep detailed diagnostics in private app telemetry; review operator access |
 | Secret disclosure | API response/log leak, filesystem exposure, package publication | AES-GCM, no secret reads, recursive log redaction, private umask, npm package audit | KMS, rotation, OS/operator access, provider logging |
 | SSRF/proxy confusion | Attacker-chosen upstream, scheme-relative path, duplicate host, hop-header smuggling | Loopback/allowlist upstreams, target origin assigned before path, exact unique hosts, `Connection`-nominated header stripping, manual redirects | Network egress policy and trusted DNS/TLS edge |

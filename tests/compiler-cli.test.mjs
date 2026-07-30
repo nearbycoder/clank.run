@@ -945,6 +945,115 @@ test("usage CLI exposes the stable monthly workspace contract", async () => {
   }
 });
 
+test("billing CLI exposes account plans and effective entitlements without mutation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-billing-"));
+  const home = join(root, "home");
+  let observed;
+  const billing = {
+    ok: true,
+    protocol: "clank-billing/1",
+    provider: { name: "stripe" },
+    defaultPlanId: "free",
+    current: {
+      planId: "pro",
+      storedPlanId: "pro",
+      status: "active",
+      source: "provider",
+      entitlementsActive: true,
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: 1_790_000_000_000,
+      graceUntil: null,
+      portalAvailable: true,
+      updatedAt: 1_780_000_000_000,
+    },
+    plans: [{
+      id: "free",
+      name: "Free",
+      description: "Try Clank.",
+      monthlyPrice: { currency: "usd", amount: 0 },
+      quotas: { projectsPerAccount: 1 },
+      featured: false,
+      current: false,
+      checkoutAvailable: false,
+    }, {
+      id: "pro",
+      name: "Pro",
+      description: "Ship side projects.",
+      monthlyPrice: { currency: "usd", amount: 1_500 },
+      quotas: { projectsPerAccount: 10 },
+      featured: true,
+      current: true,
+      checkoutAvailable: false,
+    }],
+    entitlements: {
+      projectsPerAccount: 12,
+      organizationsPerAccount: 5,
+      backupsPerProject: 30,
+      domainsPerProject: 10,
+      releasesPerProject: 25,
+      requestsPerMonthPerOrganization: 5_000_000,
+      transferBytesPerMonthPerOrganization: 100_000_000_000,
+      requestsPerMinutePerProject: 3_000,
+    },
+    operatorOverrides: { projectsPerAccount: 12 },
+  };
+  const server = createHttpServer((request, response) => {
+    observed = {
+      method: request.method,
+      url: request.url,
+      authorization: request.headers.authorization,
+    };
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(billing));
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const platform = `http://127.0.0.1:${address.port}`;
+  try {
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: {
+        [platform]: {
+          token: "clnk_billing_test_token",
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    }));
+    const structured = await runCliResult(["billing", "--json"], repository, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(structured.code, 0, structured.stderr);
+    assert.deepEqual(JSON.parse(structured.stdout), billing);
+
+    const human = await runCliResult(["billing"], repository, {
+      ...process.env,
+      CLANK_HOME: home,
+    });
+    assert.equal(human.code, 0, human.stderr);
+    assert.match(human.stdout, /Pro · \$15\.00\/month · active/u);
+    assert.match(human.stdout, /Projects: 12/u);
+    assert.match(human.stdout, /Known transfer per workspace\/month: 100 GB/u);
+    assert.match(human.stdout, /1 operator quota override applied after plan entitlements/u);
+    assert.match(human.stdout, new RegExp(`Manage billing in a browser: ${platform}/billing`, "u"));
+    assert.deepEqual(observed, {
+      method: "GET",
+      url: "/api/billing",
+      authorization: "Bearer clnk_billing_test_token",
+    });
+  } finally {
+    await new Promise((resolve, reject) =>
+      server.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("organization CLI lists and administers roles and invitations", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-organization-access-"));
   const home = join(root, "home");

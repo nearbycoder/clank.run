@@ -16,7 +16,9 @@ Run the command without arguments in a terminal:
 clank
 ```
 
-Clank opens a dependency-free guided launcher for creating an app, checking the current project, logging in, deploying, or viewing every command. Creating an app presents the built-in templates and asks for the target directory.
+Clank opens a dependency-free guided launcher for creating an app, checking the current project,
+logging in, deploying, viewing account plans and limits, or viewing every command. Creating an app
+presents the built-in templates and asks for the target directory.
 
 The templates are:
 
@@ -264,6 +266,21 @@ Months are UTC and constrained to the platform's retention window. Human output 
 pre-upgrade history and the declared-response-byte boundary. `--json` returns the stable
 `clank-usage/1` API document without calculating prices or invoices. See
 [Usage accounting and traffic limits](usage-and-limits.md).
+
+## Account plan and entitlements
+
+```sh
+clank billing
+clank billing --json
+```
+
+When the selected platform has hosted plans enabled, this read-only command shows the account's
+effective plan, billing state, current period or payment-grace deadline, and capacity after
+operator overrides. It also prints the platform's `/billing` URL for interactive checkout or
+subscription management. `--json` emits the unmodified `clank-billing/1` document.
+
+The CLI cannot create checkout or portal sessions: those operations require a same-origin browser
+session and CSRF token. See [Hosted plans and billing](hosted-plans-and-billing.md).
 
 ## Deploy and inspect
 

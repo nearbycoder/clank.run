@@ -76,6 +76,21 @@ unchanged: invitation retries use the existing control SQLite database and proce
 Railway service, Redis instance, queue, or volume. See
 [Invitations and email delivery](invitations.md).
 
+To expose transparent hosted plans, add a bounded `CLANK_BILLING_PLANS_JSON` catalog. A
+catalog-only setup supports audited operator grants without adding a Railway service. To collect
+payments through Stripe, additionally set both:
+
+```sh
+CLANK_STRIPE_SECRET_KEY=<Railway secret>
+CLANK_STRIPE_WEBHOOK_SECRET=<Railway secret>
+```
+
+Configure Stripe to deliver checkout and subscription events to
+`https://clank.run/api/billing/webhook`. The integration uses the existing control process,
+SQLite volume, and public listener; it does not require another Railway service, Redis, or a
+database add-on. Keep live/test keys, Prices, and webhooks together, and rehearse the full flow in
+test mode first. See [Hosted plans and billing](hosted-plans-and-billing.md).
+
 Leave `CLANK_RUNNER_COORDINATOR` and `CLANK_RUNNER_REGISTRATION_TOKEN` unset on the current
 single-service topology. Enabling the remote-node coordinator does not improve isolation by itself
 and is unnecessary until a separate runner host is provisioned.

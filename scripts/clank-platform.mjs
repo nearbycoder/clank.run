@@ -13,6 +13,7 @@ import {
   resolveProviderPlacement,
   resolveRunnerArtifactStorage,
 } from "./platform-hosting.mjs";
+import { resolvePlatformBilling } from "./platform-billing.mjs";
 
 process.umask(0o077);
 
@@ -50,6 +51,7 @@ const domainRecheckInterval = process.env.CLANK_DOMAIN_RECHECK_INTERVAL_MS;
 const backupInterval = process.env.CLANK_BACKUP_INTERVAL_MS;
 const previewCleanupInterval = process.env.CLANK_PREVIEW_CLEANUP_INTERVAL_MS;
 const invitationDelivery = resolveInvitationDelivery(process.env);
+const billing = await resolvePlatformBilling(process.env);
 const runnerArtifactStorage = resolveRunnerArtifactStorage(process.env);
 const backupStorage = resolveBackupStorage(process.env);
 const providerPlacement = resolveProviderPlacement(process.env);
@@ -187,6 +189,7 @@ const platform = await openPlatform({
       : number(previewCleanupInterval, 5 * 60_000),
   },
   ...(invitationDelivery ? { invitations: invitationDelivery } : {}),
+  ...(billing ? { billing } : {}),
   ...(ingress ? { ingress } : {}),
   onError: (error) => console.error("[platform]", error),
 });
@@ -225,6 +228,15 @@ console.log(`Encrypted backup storage: ${backupStorage ? "object" : "local"}`);
 console.log(`Automatic backups: ${backupInterval === "0" ? "disabled" : "enabled"}`);
 console.log(`Preview cleanup: ${previewCleanupInterval === "0" ? "disabled" : "enabled"}`);
 console.log(`Invitation email delivery: ${invitationDelivery ? "enabled" : "manual token fallback"}`);
+console.log(
+  `Hosted billing: ${
+    billing
+      ? billing.provider
+        ? `${billing.provider.name} (${billing.plans.length} plans)`
+        : `catalog only (${billing.plans.length} plans)`
+      : "disabled"
+  }`,
+);
 
 let closing;
 const close = async () => {
