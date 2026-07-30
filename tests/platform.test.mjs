@@ -2836,6 +2836,7 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.match(operatorHtml, /\/api\/admin\/analytics/);
     assert.match(operatorHtml, /\/api\/admin\/diagnostics\/memory/);
     assert.match(operatorHtml, /\/api\/admin\/diagnostics\/storage/);
+    assert.match(operatorHtml, /const control=data\.controlPlane\|\|\{\}/);
     assert.match(operatorHtml, /\/api\/admin\/invitations/);
     assert.match(operatorHtml, /id="invite-personal-option" value="personal">Personal workspace only<\/option>/);
     assert.match(operatorHtml, /id="invite-scope"/);
