@@ -223,6 +223,8 @@ https://<project>.apps.clank.run/__clank/mcp
 
 The browser UI and an MCP client call the same functions from `src/backend.ts`, so validation,
 authentication, `.owned()` data isolation, transactions, and live updates behave identically.
+Server-backed controls use typed `agentAction={api.todos.add}` references, and `npm test` rejects
+rendered controls that no longer match the current backend/MCP manifest or contract revision.
 Connect from Codex with:
 
 ```sh
@@ -234,7 +236,7 @@ codex mcp login my-app
 The user signs into the application and approves access in the browser. They do not need the
 Clank CLI, deployment-account access, or a manual callback copy. See
 [The MCP server built into every app](per-app-mcp.md) for the query/mutation mapping, OAuth model,
-and contract-freshness checklist.
+typed UI action binding, parity verifier, and contract-freshness checklist.
 
 ## Use Tailwind
 

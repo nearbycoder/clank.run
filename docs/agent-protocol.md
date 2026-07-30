@@ -99,6 +99,23 @@ When changing UI behavior, update the backend function name, schema, `descriptio
 metadata in the same change. `GET /__clank/manifest` and authenticated `tools/list` enumerate the
 same agent-enabled function paths.
 
+Use the reference itself for semantic UI metadata:
+
+```tsx
+const api = createApi<typeof backend>();
+
+<button agentId="todo-add" agentAction={api.todos.add}>
+  Add
+</button>
+```
+
+`agentActionPath()` resolves that reference consistently in SSR and the browser.
+`assertAgentActionParity()` checks already-rendered HTML or DOM against a backend manifest, while
+`verifyAgentActionParity()` fetches the current no-store manifest and binds its
+`X-Clank-Contract-Revision` header. Generated application tests require every server-backed
+control to have a stable ID, an agent-visible backend function, a description, and current
+revision coverage.
+
 The optional `agent` contract supports:
 
 - `title`: human-readable tool name;

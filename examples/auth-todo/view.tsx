@@ -1,6 +1,15 @@
 /* @clankImportSource @clank.run/framework */
-import { For, signal, type AuthUser, type DefaultAuthProfile, type Id } from "@clank.run/framework";
-import type { Todo } from "./backend.ts";
+import {
+  For,
+  createApi,
+  signal,
+  type AuthUser,
+  type DefaultAuthProfile,
+  type Id,
+} from "@clank.run/framework";
+import type { backend, Todo } from "./backend.ts";
+
+const api = createApi<typeof backend>();
 
 export function TodoWorkspace(props: {
   user: AuthUser<DefaultAuthProfile>;
@@ -89,6 +98,7 @@ export function TodoWorkspace(props: {
                 disabled={props.pending}
                 agentId="profile-save"
                 agentLabel="Save profile"
+                agentAction={api.profile.update}
               >
                 Save
               </button>
@@ -152,6 +162,7 @@ export function TodoWorkspace(props: {
             disabled={props.pending}
             agentId="todo-add"
             agentLabel="Add todo"
+            agentAction={api.todos.add}
           >
             Add
           </button>
@@ -175,7 +186,9 @@ export function TodoWorkspace(props: {
                   class="grid size-7 shrink-0 place-items-center rounded-full border border-slate-300 text-sm"
                   classList={{ "border-emerald-500 bg-emerald-500 text-white": todo.done }}
                   onClick={() => props.setDone(todo._id, !todo.done, todo._version)}
+                  agentId={`todo-${todo._id}-toggle`}
                   agentLabel={`${todo.done ? "Reopen" : "Complete"} ${todo.title}`}
+                  agentAction={api.todos.setDone}
                 >
                   {todo.done ? "✓" : ""}
                 </button>
@@ -195,7 +208,9 @@ export function TodoWorkspace(props: {
                       class="rounded-full bg-slate-950 px-3 py-1 text-sm font-semibold text-white"
                       type="submit"
                       disabled={props.pending}
+                      agentId={`todo-${todo._id}-save`}
                       agentLabel={`Save ${todo.title}`}
+                      agentAction={api.todos.rename}
                     >
                       Save
                     </button>
@@ -224,7 +239,9 @@ export function TodoWorkspace(props: {
                 <button
                   class="rounded-full px-3 py-1 text-sm text-slate-400 transition hover:bg-red-50 hover:text-red-600"
                   onClick={() => props.remove(todo._id, todo._version)}
+                  agentId={`todo-${todo._id}-remove`}
                   agentLabel={`Remove ${todo.title}`}
+                  agentAction={api.todos.remove}
                 >
                   Remove
                 </button>
@@ -241,6 +258,7 @@ export function TodoWorkspace(props: {
             onClick={() => props.clearCompleted()}
             agentId="todo-clear-completed"
             agentLabel="Clear completed todos"
+            agentAction={api.todos.clearCompleted}
           >
             Clear completed
           </button>

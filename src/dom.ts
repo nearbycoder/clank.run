@@ -9,6 +9,7 @@ import {
   type Computed,
   type ReactiveSignal,
 } from "./core.ts";
+import { agentActionPath, type AgentActionTarget } from "./agent-contract.ts";
 import { assertSafeAttributeValue } from "./security.ts";
 
 export const VNODE = Symbol.for("clank.vnode");
@@ -923,6 +924,18 @@ function bindProperty(element: Element, name: string, input: unknown): Cleanup |
     if (typeof input !== "function") throw new TypeError(`${name} expects an event listener function.`);
     return bindEvent(element, name, input as EventListener);
   }
+  if (name === "agentAction") {
+    try {
+      setProperty(element, name, agentActionPath(input as AgentActionTarget));
+      return undefined;
+    } catch {
+      if (isExpression(input) || isSignal(input) || typeof input === "function") {
+        return effect(() => setProperty(element, name, resolveAgentAction(input)));
+      }
+      setProperty(element, name, input);
+      return undefined;
+    }
+  }
   if (isExpression(input)) {
     if (name === "classList") return bindDynamicClassList(element, input.read);
     if (name === "style") return bindDynamicStyle(element as HTMLElement, input.read);
@@ -950,6 +963,28 @@ function resolve(value: unknown): unknown {
         : (current as () => unknown)();
   }
   return current;
+}
+
+function resolveAgentAction(value: unknown): string {
+  let current = value;
+  const seen = new Set<unknown>();
+  while (true) {
+    try {
+      return agentActionPath(current as AgentActionTarget);
+    } catch {
+      // Reactive wrappers are resolved below; other invalid values fail at the end.
+    }
+    if (!(isExpression(current) || isSignal(current) || typeof current === "function")) {
+      return agentActionPath(current as AgentActionTarget);
+    }
+    if (seen.has(current)) throw new Error("Circular reactive agent action.");
+    seen.add(current);
+    current = isExpression(current)
+      ? current.read()
+      : isSignal(current)
+        ? current.value
+        : (current as () => unknown)();
+  }
 }
 
 function isEventProperty(name: string): boolean {
@@ -1074,6 +1109,14 @@ function setProperty(element: Element, property: string, value: unknown): void {
   if (property === "agentLabel") {
     setAttributeValue(element, "data-clank-label", value);
     if (isInteractiveElement(element)) setAttributeValue(element, "aria-label", value);
+    return;
+  }
+  if (property === "agentAction") {
+    setAttributeValue(
+      element,
+      "data-clank-action",
+      agentActionPath(value as AgentActionTarget),
+    );
     return;
   }
   if (property === "class") value = normalizeClass(value);

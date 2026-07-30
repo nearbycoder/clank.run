@@ -189,7 +189,10 @@ signup.manifest;
 
 The protocol is `clank-form/1`. It includes the form ID, JSON Schema, field names, required state, and a suggested native control type.
 
-The manifest does not contain live field values. Rendered controls remain discoverable through native IDs, associated labels, semantic roles, and optional `agentId`/`agentAction` metadata.
+The manifest does not contain live field values. Rendered controls remain discoverable through
+native IDs, associated labels, semantic roles, and optional `agentId`/`agentAction` metadata.
+For a server-backed submit control, prefer `agentAction={api.resource.mutation}` over a copied
+string and verify it with `assertAgentActionParity()` in the application contract test.
 
 Password and file-input values are deliberately omitted from semantic inspection.
 

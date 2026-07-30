@@ -498,6 +498,8 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   const view = files.find((file) => file.path === "src/view.tsx").contents;
   assert.match(view, /Complete/);
   assert.match(view, /<nav class="my-6 flex flex-wrap gap-2"/);
+  assert.match(view, /const api = createApi<typeof backend>\(\)/u);
+  assert.match(view, /agentAction=\{api\["tasks"\]\["create"\]\}/u);
   assert.doesNotMatch(view, /overflow-x-auto/);
   const serverSource = files.find((file) => file.path === "src/server.tsx").contents;
   assert.match(
@@ -521,7 +523,10 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   const fixture = JSON.parse(files.find((file) => file.path === "fixtures/default.json").contents);
   assert.equal(fixture.protocol, "clank-fixture/1");
   assert.equal(fixture.records.tasks.primary.values.title, "Task Title");
-  assert.match(files.find((file) => file.path === "tests/app.contract.mjs").contents, /ownership visibility/u);
+  const generatedTest = files.find((file) => file.path === "tests/app.contract.mjs").contents;
+  assert.match(generatedTest, /ownership visibility/u);
+  assert.match(generatedTest, /assertAgentActionParity/u);
+  assert.match(generatedTest, /rendered server actions match the current MCP-derived backend manifest/u);
   const readme = files.find((file) => file.path === "README.md").contents;
   assert.match(readme, /Focused Tasks/);
   assert.match(readme, /clank login\n/u);

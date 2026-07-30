@@ -5,6 +5,7 @@ import type {
   ReactiveSignal,
   Renderable,
 } from "./index.js";
+import type { AgentActionTarget } from "./agent-contract.js";
 
 type ReactiveValue<Value> =
   | Value
@@ -108,7 +109,7 @@ interface ClankSpecialProps<ElementType extends Element> {
   dangerouslySetInnerHTML?: ReactiveValue<{ __html: unknown }>;
   agentId?: ReactiveValue<string>;
   agentLabel?: ReactiveValue<string>;
-  agentAction?: ReactiveValue<string>;
+  agentAction?: ReactiveValue<AgentActionTarget>;
   agentDescription?: ReactiveValue<string>;
   agentHidden?: ReactiveValue<boolean>;
   intent?: ReactiveValue<string>;

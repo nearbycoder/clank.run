@@ -4,6 +4,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Server-backed controls can now pass typed backend function references directly to `agentAction`.
+  New bounded inspection and parity APIs compare SSR or DOM controls with the no-store backend
+  manifest and MCP contract revision, rejecting stale, internal, undocumented, unstable, or
+  missing required UI actions. Blueprint-generated apps and the authenticated starter enforce the
+  UI↔MCP contract from `npm test`.
 - AI blueprints now own bounded `clank-fixture/1` synthetic states and generated Node contract
   tests. Fixtures validate users, roles, values, references, creation order, and private ownership;
   generated suites exercise the real backend, exact agent manifest, isolated visibility, and every

@@ -441,22 +441,35 @@ function generatedTestSource(app: AppBlueprint): string {
       behavior: action.behavior,
       roles: action.roles,
     })));
+  const roles = Object.keys(app.auth.roles);
+  const uiActions = actions.filter((action) => {
+    if (!["create", "toggle", "delete"].includes(action.behavior)) return false;
+    return app.routes.some((route) => {
+      if (route.entity !== action.entity) return false;
+      const routeRoles = typeof route.access === "object" ? route.access.roles ?? [] : roles;
+      const actionRoles = action.roles.length ? action.roles : roles;
+      return routeRoles.some((role) => actionRoles.includes(role));
+    });
+  }).map((action) => action.path);
   const contract = {
     app: {
       name: app.name,
       defaultRole: Object.keys(app.auth.roles)[0],
+      roles,
     },
     actions,
     entities: Object.fromEntries(Object.entries(app.entities).map(([name, entity]) => [name, {
       ownership: entity.ownership,
       displayField: entity.displayField,
       completionField: entity.completionField ?? null,
+      sample: viewRecordSample(name, entity),
     }])),
     routes: app.routes.map((route) => ({
       path: route.path,
       label: humanize(route.view),
       roles: typeof route.access === "object" ? route.access.roles ?? [] : [],
     })),
+    uiActions,
     fixtures: Object.values(app.fixtures).map((fixture) => ({
       name: fixture.name,
       file: `../fixtures/${fileName(fixture.name)}.json`,
@@ -466,12 +479,45 @@ function generatedTestSource(app: AppBlueprint): string {
   return `import test from "${nodeProtocol}test";
 import assert from "${nodeProtocol}assert/strict";
 import { readFile } from "${nodeProtocol}fs/promises";
-import { openBackend, renderToString } from "@clank.run/framework";
+import {
+  assertAgentActionParity,
+  inspectAgentActions,
+  openBackend,
+  renderToString,
+} from "@clank.run/framework";
 import { backend } from "../dist/backend.js";
 import { AppView } from "../dist/view.js";
 
 const contract = ${sourceLiteral(contract, 2)};
 const password = "fixture-password-123";
+
+function viewProps(route, role) {
+  const props = {
+    route: route.path,
+    user: {
+      id: "fixture_user",
+      email: "fixture@example.invalid",
+      emailVerified: true,
+      role,
+      profile: { name: "Fixture User" },
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    version: 0,
+    connected: true,
+    pending: false,
+    error: "",
+    logout: () => {},
+  };
+  for (const [entityName, entity] of Object.entries(contract.entities)) {
+    props[\`\${entityName}Records\`] = [entity.sample];
+    props[\`\${entityName}Version\`] = 0;
+    props[\`\${entityName}Create\`] = async () => true;
+    if (entity.completionField) props[\`\${entityName}Toggle\`] = async () => true;
+    props[\`\${entityName}Remove\`] = async () => true;
+  }
+  return props;
+}
 
 test("agent manifest exposes the generated backend contract", async () => {
   const runtime = await openBackend(backend, { path: ":memory:", wal: false });
@@ -491,35 +537,39 @@ test("agent manifest exposes the generated backend contract", async () => {
 
 for (const route of contract.routes) {
   test(\`server-rendered route \${route.path}\`, async () => {
-    const props = {
-      route: route.path,
-      user: {
-        id: "fixture_user",
-        email: "fixture@example.invalid",
-        emailVerified: true,
-        role: route.roles[0] ?? contract.app.defaultRole,
-        profile: { name: "Fixture User" },
-        createdAt: 1,
-        updatedAt: 1,
-      },
-      version: 0,
-      connected: true,
-      pending: false,
-      error: "",
-      logout: () => {},
-    };
-    for (const [entityName, entity] of Object.entries(contract.entities)) {
-      props[\`\${entityName}Records\`] = [];
-      props[\`\${entityName}Version\`] = 0;
-      props[\`\${entityName}Create\`] = async () => true;
-      if (entity.completionField) props[\`\${entityName}Toggle\`] = async () => true;
-      props[\`\${entityName}Remove\`] = async () => true;
-    }
-    const html = await renderToString(AppView(props));
+    const role = route.roles[0] ?? contract.app.defaultRole;
+    const html = await renderToString(AppView(viewProps(route, role)));
     assert.match(html, new RegExp(escapeRegExp(contract.app.name)));
     assert.match(html, new RegExp(escapeRegExp(route.label)));
   });
 }
+
+test("rendered server actions match the current MCP-derived backend manifest", async () => {
+  const runtime = await openBackend(backend, { path: ":memory:", wal: false });
+  try {
+    const response = await runtime.handle(new Request("https://fixture.test/__clank/manifest"));
+    assert.equal(response.status, 200);
+    const manifest = await response.json();
+    const revision = response.headers.get("x-clank-contract-revision");
+    const renderedActions = new Set();
+    for (const route of contract.routes) {
+      for (const role of contract.app.roles) {
+        if (route.roles.length && !route.roles.includes(role)) continue;
+        const html = await renderToString(AppView(viewProps(route, role)));
+        const controls = inspectAgentActions(html);
+        assertAgentActionParity(controls, manifest, { expectedRevision: revision });
+        for (const control of controls) renderedActions.add(control.path);
+      }
+    }
+    assert.deepEqual(
+      [...new Set(contract.uiActions)].filter((action) => !renderedActions.has(action)),
+      [],
+      "every required server action must appear in at least one allowed route and role surface",
+    );
+  } finally {
+    runtime.close();
+  }
+});
 
 for (const fixtureContract of contract.fixtures) {
   test(\`fixture \${fixtureContract.name} seeds valid, isolated application data\`, async () => {
@@ -651,6 +701,30 @@ function escapeRegExp(value) {
 `;
 }
 
+function viewRecordSample(
+  entityName: string,
+  entity: AppEntityDefinition,
+): Record<string, AppFixtureValue | number | string> {
+  const values: Record<string, AppFixtureValue | number | string> = {
+    _id: `${entityName}_fixture_record`,
+    _creationTime: 1,
+    _version: 1,
+    _ownerId: "fixture_user",
+  };
+  for (const [fieldName, field] of Object.entries(entity.fields)) {
+    if (Object.hasOwn(field, "default")) {
+      values[fieldName] = field.default!;
+    } else if (field.nullable) {
+      values[fieldName] = null;
+    } else if (field.type === "reference") {
+      values[fieldName] = `${field.entity}_fixture_record`;
+    } else {
+      values[fieldName] = fixtureFieldSample(entityName, fieldName, field);
+    }
+  }
+  return values;
+}
+
 export async function createAppPlan(
   input: AppBlueprintInput | AppBlueprint,
   options: { frameworkVersion?: string; frameworkDependency?: string } = {},
@@ -765,8 +839,9 @@ npm test
 
 The generated suite builds the application, loads every deterministic fixture under
 \`fixtures/\` into an isolated in-memory database, verifies the exact agent manifest,
-checks ownership isolation, and server-renders every declared route. Fixture data is
-test-only and is never included in a deployment artifact.
+checks ownership isolation, server-renders every declared route, and proves each rendered
+server-action control resolves to a current, described MCP-visible backend function. Fixture
+data is test-only and is never included in a deployment artifact.
 `;
 }
 
@@ -806,6 +881,7 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 - Preserve ownership and authorization on every private ${Object.keys(app.entities).join(", ")} operation.
 - Treat all browser, agent, webhook, and model input as untrusted and validate it at the boundary.
 - Model every UI operation that reads or persists server state as a \`src/backend.ts\` query or mutation, then call that same typed function from \`src/app.tsx\`; never create a UI-only server action that MCP cannot discover.
+- Pass the typed \`createApi<typeof backend>()\` function reference to each server-backed control's \`agentAction\`; do not duplicate its path as a string.
 - When UI behavior changes, update the shared backend function name, schema, \`description\`, and \`agent\` metadata in the same change. The agent-enabled paths in \`GET /__clank/manifest\` and authenticated MCP \`tools/list\` must remain identical.
 - Give every backend function a precise \`description\`; mark additive writes with \`agent: { destructive: false }\`, destructive writes explicitly, and internal functions with \`agent: false\`.
 - Preserve the default MCP endpoint and OAuth flow unless the application has a documented integration reason to change them.
@@ -819,7 +895,7 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 
 ## Definition of done
 
-Run \`npm test\`, \`npm run doctor\`, and \`npm run deploy:check\`. For UI changes, verify registration/login and the main interaction in a browser. For data changes, update the deterministic fixtures and verify a fresh database plus an existing migrated database. For backend changes, compare agent-enabled \`GET /__clank/manifest\` paths with authenticated \`tools/list\`, verify the contract revision changed, reconnect an existing MCP session, and verify the narrowest OAuth scope that can perform the action.
+Run \`npm test\`, \`npm run doctor\`, and \`npm run deploy:check\`. The generated contract rejects stale UI↔MCP action references. For UI changes, verify registration/login and the main interaction in a browser. For data changes, update the deterministic fixtures and verify a fresh database plus an existing migrated database. For backend changes, compare agent-enabled \`GET /__clank/manifest\` paths with authenticated \`tools/list\`, verify the contract revision changed, reconnect an existing MCP session, and verify the narrowest OAuth scope that can perform the action.
 `;
 }
 
@@ -2143,10 +2219,12 @@ function viewSource(app: AppBlueprint): string {
     return `{props.route === ${sourceLiteral(route.path)} ? (${contents}) : null}`;
   }).join("\n          ");
   return `/* @clankImportSource @clank.run/framework */
-import { For, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
-import type { ${types} } from "./backend.ts";
+import { For, createApi, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
+import type { backend, ${types} } from "./backend.ts";
 
 ${createTypes}
+
+const api = createApi<typeof backend>();
 
 export interface AppViewProps {
   route: string;
@@ -2267,7 +2345,7 @@ ${reset}
         <form class="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:grid-cols-2" onSubmit={submit}>
 ${controls}
           <div class="flex items-end sm:col-span-2">
-            <button class="w-full rounded-xl bg-slate-950 px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="submit" disabled={props.pending} agentId=${sourceLiteral(`${name}-create`)} agentAction=${sourceLiteral(`${name}.${create.localName}`)}>
+            <button class="w-full rounded-xl bg-slate-950 px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="submit" disabled={props.pending} agentId=${sourceLiteral(`${name}-create`)} agentAction={api[${sourceLiteral(name)}][${sourceLiteral(create.localName)}]}>
               Add {${sourceLiteral(singular)}}
             </button>
           </div>
@@ -2283,7 +2361,7 @@ ${controls}
                   disabled={props.pending}
                   onClick={() => props.${name}Toggle(record._id, !record.${entity.completionField}, record._version)}
                   agentId={\`${name}-\${record._id}-toggle\`}
-                  agentAction=${sourceLiteral(`${name}.${toggle.localName}`)}
+                  agentAction={api[${sourceLiteral(name)}][${sourceLiteral(toggle.localName)}]}
                   agentLabel={\`\${record.${entity.completionField} ? "Reopen" : "Complete"} \${record.${entity.displayField}}\`}
                 >{record.${entity.completionField} ? "✓" : ""}</button> : null}` : ""}
                 <div class="min-w-0 flex-1">
@@ -2297,7 +2375,7 @@ ${controls}
                   disabled={props.pending}
                   onClick={() => props.${name}Remove(record._id, record._version)}
                   agentId={\`${name}-\${record._id}-remove\`}
-                  agentAction=${sourceLiteral(`${name}.${remove.localName}`)}
+                  agentAction={api[${sourceLiteral(name)}][${sourceLiteral(remove.localName)}]}
                   agentLabel={\`Remove \${record.${entity.displayField}}\`}
                 >Remove</button> : null}
               </div>

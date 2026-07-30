@@ -1162,6 +1162,7 @@ test("template discovery and create expose safe agent-readable contracts", async
     );
     assert.equal(catalog.templates[0].recommended, true);
     assert.equal(catalog.templates[0].features.includes("mcp-oauth"), true);
+    assert.equal(catalog.templates[0].features.includes("ui-mcp-parity"), true);
     assert.equal(catalog.templates[0].features.includes("deterministic-fixture"), true);
     assert.equal(catalog.templates[0].features.includes("app-contract-tests"), true);
     assert.equal(catalog.templates[1].features.includes("app-contract-tests"), true);

@@ -308,6 +308,18 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `openBackend()` exposes eligible functions at `/__clank/mcp` by default and installs OAuth
   discovery automatically when the backend uses Clank auth. `BackendRuntime.contractRevision`
   is the same revision published by MCP discovery and `GET /__clank/manifest`.
+- `agentActionPath(reference)`: resolve a literal or typed backend function reference to its exact
+  browser/MCP path.
+- `inspectAgentActions(htmlOrRoot)`: collect bounded `data-clank-action` controls from SSR HTML or
+  a rendered DOM.
+- `checkAgentActionParity(surface, manifest, options?)`: return a frozen
+  `clank-agent-action-parity/1` report without throwing.
+- `assertAgentActionParity(...)`: throw `AgentActionParityError` when a rendered action is stale,
+  internal, undocumented, missing a stable ID, or absent when required.
+- `verifyAgentActionParity(surface, options?)`: fetch the no-store backend manifest with a bounded
+  response, bind its contract-revision header, and assert the current rendered surface.
+- Types: `AgentActionTarget`, `AgentActionControl`, `AgentBackendManifest`,
+  `AgentActionParityOptions`, `AgentActionParityReport`, and `VerifyAgentActionParityOptions`.
 
 See [Agent protocol](agent-protocol.md) for connection, OAuth, scope, discovery, and security
 details.

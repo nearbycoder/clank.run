@@ -77,9 +77,11 @@ Agents already understand native controls when the HTML is accessible:
 Add Clank metadata where native semantics cannot express the application capability:
 
 ```tsx
+const api = createApi<typeof backend>();
+
 <button
   agentId="archive-project"
-  agentAction="projects.archive"
+  agentAction={api.projects.archive}
   agentLabel="Archive current project"
   intent="destructive-control"
 >
@@ -91,7 +93,9 @@ Rules:
 
 - IDs must be deterministic and unique in the mounted surface.
 - Labels describe the action, not its color or position.
-- `agentAction` should match a discoverable server action when one exists.
+- Pass the typed backend reference to `agentAction` when the control calls a server action.
+- Run `assertAgentActionParity()` in app contract tests so stale or internal action references
+  cannot ship.
 - Metadata never replaces authorization.
 - Password, file, and secret values must not be exposed through labels or state.
 
