@@ -536,6 +536,7 @@ test("packaged runner has useful non-secret help and rejects arguments before ne
   });
   assert.match(help.stdout, /Usage: clank-runner/u);
   assert.match(help.stdout, /CLANK_PROVIDER_URL/u);
+  assert.match(help.stdout, /--check/u);
   assert.match(help.stdout, /remove CLANK_RUNNER_REGISTRATION_TOKEN/u);
   assert.equal(help.stdout.includes(providerToken), false);
 
@@ -544,8 +545,32 @@ test("packaged runner has useful non-secret help and rejects arguments before ne
       env: {},
     }),
     (error) => error.code === 1
-      && /does not accept positional arguments/u.test(error.stderr),
+      && /accepts only --check/u.test(error.stderr),
   );
+
+  const enrollmentToken = "clnke_runner_check_token_12345678901234567890";
+  const checked = await execFileAsync(
+    process.execPath,
+    [script.pathname, "--check", "--json"],
+    {
+      env: {
+        CLANK_CONTROL_URL: "https://control.example.test",
+        CLANK_RUNNER_NODE_ID: "runner-check-01",
+        CLANK_RUNNER_REGION: "us-central",
+        CLANK_RUNNER_REGISTRATION_TOKEN: enrollmentToken,
+        CLANK_PROVIDER_URL: "https://provider.example.test",
+        CLANK_PROVIDER_TOKEN: providerToken,
+      },
+    },
+  );
+  const diagnostic = JSON.parse(checked.stdout);
+  assert.equal(diagnostic.ok, true);
+  assert.equal(diagnostic.nodeId, "runner-check-01");
+  assert.equal(diagnostic.control.status, "not_contacted");
+  assert.equal(diagnostic.provider.status, "configured_not_contacted");
+  assert.equal(diagnostic.credentials.status, "ready_for_one_time_enrollment");
+  assert.equal(checked.stdout.includes(enrollmentToken), false);
+  assert.equal(checked.stdout.includes(providerToken), false);
 });
 
 async function releaseFixture() {

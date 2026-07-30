@@ -9,6 +9,7 @@ import {
   createDeploymentCoordinatorClient,
   createDeploymentBundle,
   defineDatabase,
+  DeploymentCoordinatorError,
   deploymentDigest,
   openDeploymentOrchestrator,
   openPlatform,
@@ -1537,6 +1538,161 @@ test("legacy metric buckets gain bounded method counters without losing traffic"
     ]) {
       assert.ok(columns.includes(method), `missing upgraded metric column ${method}`);
     }
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("managed runner enrollment is one-time, bound, durable, browser-admin-only, and audited", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-runner-fleet-"));
+  const dataDirectory = join(root, "platform");
+  const options = {
+    dataDirectory,
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    platformAdminEmails: ["admin@example.com"],
+    deploymentAgents: { managedEnrollment: true },
+    backups: { intervalMs: false },
+  };
+  let platform = await openPlatform(options);
+  try {
+    const admin = await authorizeCli(platform, "admin@example.com");
+    const ordinary = await authorizeCli(platform, "ordinary@example.com");
+    const initial = await payload(platform, jsonRequest("/api/admin/runners", {
+      cookie: admin.cookie,
+    }));
+    assert.equal(initial.enabled, true);
+    assert.equal(initial.managedEnrollment, true);
+    assert.equal(initial.placementActive, false);
+    assert.deepEqual(initial.nodes, []);
+
+    const ordinaryDenied = await platform.handle(jsonRequest(
+      "/api/admin/runners/enrollments",
+      {
+        method: "POST",
+        cookie: ordinary.cookie,
+        csrf: ordinary.csrfToken,
+        body: { nodeId: "runner-one", region: "local" },
+      },
+    ));
+    assert.equal(ordinaryDenied.status, 403);
+    assert.equal((await ordinaryDenied.json()).error.code, "PLATFORM_ADMIN_REQUIRED");
+    const bearerDenied = await platform.handle(jsonRequest("/api/admin/runners", {
+      token: admin.accessToken,
+    }));
+    assert.equal(bearerDenied.status, 403);
+    assert.equal((await bearerDenied.json()).error.code, "BROWSER_ADMIN_REQUIRED");
+
+    const created = await payload(platform, jsonRequest(
+      "/api/admin/runners/enrollments",
+      {
+        method: "POST",
+        cookie: admin.cookie,
+        csrf: admin.csrfToken,
+        body: { nodeId: "runner-one", region: "local", expiresIn: 300 },
+      },
+    ), 201);
+    assert.match(created.enrollment.token, /^clnke_/u);
+    const rawDatabase = await readFile(join(dataDirectory, "control.sqlite"));
+    assert.equal(rawDatabase.includes(Buffer.from(created.enrollment.token)), false);
+
+    await platform.close();
+    platform = await openPlatform(options);
+    const fetcher = (url, init) => platform.handle(new Request(url, init));
+    const coordinator = createDeploymentCoordinatorClient({
+      baseUrl: "http://127.0.0.1:4200",
+      fetch: fetcher,
+    });
+    await assert.rejects(
+      coordinator.register(created.enrollment.token, {
+        id: "runner-one",
+        region: "wrong-region",
+      }),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 401
+        && error.code === "REGISTRATION_DENIED",
+    );
+    const attempts = await Promise.allSettled([
+      coordinator.register(created.enrollment.token, {
+        id: "runner-one",
+        region: "local",
+        capacity: 4,
+        labels: { runtime: "docker" },
+      }),
+      coordinator.register(created.enrollment.token, {
+        id: "runner-one",
+        region: "local",
+        capacity: 4,
+        labels: { runtime: "docker" },
+      }),
+    ]);
+    assert.equal(attempts.filter((entry) => entry.status === "fulfilled").length, 1);
+    assert.equal(attempts.filter((entry) => entry.status === "rejected").length, 1);
+    const session = attempts.find((entry) => entry.status === "fulfilled").value;
+    await assert.rejects(
+      coordinator.register(created.enrollment.token, {
+        id: "runner-one",
+        region: "local",
+      }),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 401,
+    );
+
+    const fleet = await payload(platform, jsonRequest("/api/admin/runners", {
+      cookie: admin.cookie,
+    }));
+    assert.equal(fleet.nodes.length, 1);
+    assert.equal(fleet.nodes[0].id, "runner-one");
+    assert.equal(fleet.nodes[0].capacity, 4);
+    assert.deepEqual(fleet.nodes[0].labels, { runtime: "docker" });
+    assert.equal(fleet.enrollments.length, 0);
+
+    const drained = await payload(platform, jsonRequest(
+      "/api/admin/runners/runner-one/drain",
+      {
+        method: "PUT",
+        cookie: admin.cookie,
+        csrf: admin.csrfToken,
+        body: { draining: true },
+      },
+    ));
+    assert.equal(drained.node.status, "draining");
+    const activated = await payload(platform, jsonRequest(
+      "/api/admin/runners/runner-one/drain",
+      {
+        method: "PUT",
+        cookie: admin.cookie,
+        csrf: admin.csrfToken,
+        body: { draining: false },
+      },
+    ));
+    assert.equal(activated.node.status, "active");
+    await payload(platform, jsonRequest("/api/admin/runners/runner-one", {
+      method: "DELETE",
+      cookie: admin.cookie,
+      csrf: admin.csrfToken,
+      body: { confirmation: "runner-one" },
+    }));
+    await assert.rejects(
+      coordinator.authenticate("runner-one", session.token),
+      (error) => error instanceof DeploymentCoordinatorError
+        && error.status === 401
+        && error.code === "NODE_AUTH_FAILED",
+    );
+
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"), { readOnly: true });
+    const auditRows = control.prepare(`SELECT action, metadata FROM clank_platform_audit
+      WHERE action LIKE 'runner.%' ORDER BY id`).all();
+    control.close();
+    assert.deepEqual(auditRows.map((row) => row.action), [
+      "runner.enrollment.create",
+      "runner.enrollment.consume",
+      "runner.node.drain",
+      "runner.node.activate",
+      "runner.node.revoke",
+    ]);
+    assert.equal(JSON.stringify(auditRows).includes(created.enrollment.token), false);
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });
@@ -4304,6 +4460,36 @@ test("legacy release rows upgrade to conservative storage accounting in place", 
       storage_bytes: 321,
       artifact_available: 1,
     });
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("bootstrap registration applies configured platform admin access before returning", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-bootstrap-admin-"));
+  const platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "http://127.0.0.1:4200",
+    appPortStart: 4528,
+    appPortEnd: 4529,
+    platformAdminEmails: ["bootstrap-admin@example.com"],
+  });
+  try {
+    const registered = await platform.handle(jsonRequest("/__clank/auth/register", {
+      method: "POST",
+      body: {
+        email: "bootstrap-admin@example.com",
+        password: "Clank8!x",
+        profile: { name: "bootstrap admin" },
+      },
+    }));
+    assert.equal(registered.status, 201);
+    const cookie = registered.headers.get("set-cookie").split(";", 1)[0];
+    const dashboard = await payload(platform, jsonRequest("/api/dashboard", { cookie }));
+    assert.equal(dashboard.account.platformRole, "platform_admin");
+    const runners = await payload(platform, jsonRequest("/api/admin/runners", { cookie }));
+    assert.equal(runners.enabled, false);
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });

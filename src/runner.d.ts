@@ -8,9 +8,28 @@ import type {
     NodeSession,
 } from "./orchestration.js";
 export declare const DEPLOYMENT_COORDINATOR_PREFIX = "/api/runner/v1";
+export interface DeploymentRegistrationAuthorization {
+    /**
+     * Finalizes a reserved one-time enrollment after the node credential has
+     * been created. A failure prevents the credential from reaching the node.
+     */
+    commit(): Promise<void>;
+    /** Releases a reservation when node validation or registration fails. */
+    rollback(): Promise<void>;
+}
+export interface DeploymentRegistrationRequest {
+    readonly token: string;
+    readonly node: Readonly<DeploymentNodeInput>;
+    readonly signal: AbortSignal;
+}
 export interface DeploymentCoordinatorHandlerOptions {
-    /** Separate high-entropy secret used only to enroll or rotate deployment nodes. */
-    registrationToken: string;
+    /** Optional static high-entropy secret used only to enroll or rotate deployment nodes. */
+    registrationToken?: string;
+    /**
+     * Optional transactional authorization for expiring or one-time enrollment
+     * credentials. Return null to deny the request.
+     */
+    authorizeRegistration?: (request: DeploymentRegistrationRequest) => Promise<DeploymentRegistrationAuthorization | null>;
     /** Maximum JSON request body. Defaults to 128 KiB. */
     maxRequestBytes?: number;
     /** Optional content-addressed release source, scoped to a current operation lease. */

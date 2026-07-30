@@ -25,10 +25,13 @@ replace daemon hardening, network policy, resource limits, image pinning, or hos
 
 ## Remote deployment nodes
 
-The deployment-node API is absent unless `CLANK_RUNNER_REGISTRATION_TOKEN` is configured. That
-token is a dedicated provisioning authority and must not reuse the master key, CLI credentials,
-project tokens, or application secrets. Registration returns a node credential once and stores only
-its digest. Every subsequent call binds a bearer credential to an exact bounded node ID.
+The deployment-node API is absent unless `CLANK_RUNNER_COORDINATOR=1` or the legacy shared
+`CLANK_RUNNER_REGISTRATION_TOKEN` is configured. Managed enrollment is created only by a
+same-origin, CSRF-protected browser administrator and is bound to one exact node and region,
+expiring, transactionally reserved, and single-use. It must not reuse the master key, CLI
+credentials, project tokens, or application secrets. Registration returns a node credential once
+and stores only its digest. Every subsequent call binds a bearer credential to an exact bounded
+node ID. See [Deployment runner fleet](runner-fleet.md).
 
 The versioned transport accepts only POST JSON, bounds request and response bytes, refuses
 non-loopback cleartext clients and redirects, emits no-store responses, and returns generic

@@ -12,10 +12,15 @@ import {
 
 process.umask(0o077);
 
-if (process.argv.slice(2).some((argument) => argument === "--help" || argument === "-h")) {
-  console.log(`Usage: clank-runner
+const arguments_ = process.argv.slice(2);
+if (arguments_.some((argument) => argument === "--help" || argument === "-h")) {
+  console.log(`Usage: clank-runner [--check [--json]]
 
 Runs a portable remote deployment node backed by an authenticated HTTP provider.
+
+Diagnostics:
+  --check                          Validate configuration and saved node access
+  --json                           Emit the check result as agent-readable JSON
 
 Required environment:
   CLANK_CONTROL_URL                Clank control-plane origin
@@ -47,9 +52,14 @@ The enrollment and provider tokens are never printed. After first enrollment,
 remove CLANK_RUNNER_REGISTRATION_TOKEN when your process manager permits it.`);
   process.exit(0);
 }
-if (process.argv.length > 2) {
-  throw new Error("clank-runner does not accept positional arguments. Use --help for configuration.");
+if (arguments_.some((argument) => !["--check", "--json"].includes(argument))) {
+  throw new Error("clank-runner accepts only --check, --json, or --help.");
 }
+if (arguments_.includes("--json") && !arguments_.includes("--check")) {
+  throw new Error("--json must be used with --check.");
+}
+const checkOnly = arguments_.includes("--check");
+const jsonOutput = arguments_.includes("--json");
 
 const controlUrl = required("CLANK_CONTROL_URL");
 const nodeId = identifier(required("CLANK_RUNNER_NODE_ID"), "CLANK_RUNNER_NODE_ID");
@@ -60,7 +70,7 @@ const credentialsPath = resolve(
   process.env.CLANK_RUNNER_CREDENTIALS
     ?? `.clank-runner/${nodeId}.credentials.json`,
 );
-await mkdir(dirname(credentialsPath), { recursive: true, mode: 0o700 });
+const credentials = fileDeploymentNodeCredentials(credentialsPath);
 
 const client = createDeploymentCoordinatorClient({
   baseUrl: controlUrl,
@@ -85,6 +95,58 @@ const provider = createHttpDeploymentProvider({
   retries: number(process.env.CLANK_PROVIDER_RETRIES, 2, 0, 10),
 });
 
+if (checkOnly) {
+  const storedCredential = await credentials.load(nodeId);
+  let control = storedCredential ? "authenticated" : "not_contacted";
+  let errorCode;
+  if (storedCredential) {
+    try {
+      await client.authenticate(nodeId, storedCredential);
+    } catch (error) {
+      control = "authentication_failed";
+      errorCode = typeof error === "object" && error && "code" in error
+        ? String(error.code)
+        : "CONTROL_CHECK_FAILED";
+    }
+  }
+  const enrollment = storedCredential
+    ? "saved_node_credential"
+    : process.env.CLANK_RUNNER_REGISTRATION_TOKEN
+      ? "ready_for_one_time_enrollment"
+      : "enrollment_required";
+  const ready = control !== "authentication_failed" && enrollment !== "enrollment_required";
+  const result = {
+    ok: ready,
+    nodeId,
+    region: identifier(process.env.CLANK_RUNNER_REGION ?? "local", "CLANK_RUNNER_REGION"),
+    capacity: number(process.env.CLANK_RUNNER_CAPACITY, 10, 1, 100_000),
+    control: {
+      origin: new URL(controlUrl).origin,
+      status: control,
+      ...(errorCode ? { errorCode } : {}),
+    },
+    provider: {
+      origin: new URL(providerUrl).origin,
+      kind: provider.kind,
+      status: "configured_not_contacted",
+    },
+    credentials: {
+      path: credentialsPath,
+      status: enrollment,
+    },
+  };
+  if (jsonOutput) console.log(JSON.stringify(result));
+  else {
+    console.log(`Clank runner check: ${ready ? "ready" : "not ready"}`);
+    console.log(`Node: ${nodeId} (${result.region})`);
+    console.log(`Control plane: ${result.control.origin} · ${result.control.status}`);
+    console.log(`Provider: ${result.provider.origin} · ${result.provider.status}`);
+    console.log(`Credentials: ${credentialsPath} · ${enrollment}`);
+  }
+  process.exit(ready ? 0 : 1);
+}
+
+await mkdir(dirname(credentialsPath), { recursive: true, mode: 0o700 });
 const agent = await openProviderDeploymentAgent({
   client,
   provider,
@@ -105,7 +167,7 @@ const agent = await openProviderDeploymentAgent({
         ),
       }
     : {}),
-  credentials: fileDeploymentNodeCredentials(credentialsPath),
+  credentials,
   concurrency,
   claimLimit: number(process.env.CLANK_RUNNER_CLAIM_LIMIT, concurrency, 1, 100),
   pollIntervalMs: number(process.env.CLANK_RUNNER_POLL_INTERVAL_MS, 1_000, 10, 60_000),

@@ -73,6 +73,14 @@ traffic histogram, capacity totals, account growth, and top-project table aggreg
 installation. The cursor-paginated account directory exposes only operational identity and usage
 metadata and supports bounded email/name search. CLI bearer tokens cannot open these APIs.
 
+When the optional runner coordinator is enabled, the same view includes the **Deployment runner
+fleet**. It reports node health, region, labels, capacity, assigned placement, heartbeat, queued
+work, and pending enrollments. An operator can create a recent-auth-gated one-time enrollment,
+drain/reactivate a node, revoke an unused enrollment, or revoke a node credential after exact
+confirmation. The panel explicitly reports that ordinary projects remain locally supervised until
+remote secret, data, ingress, backup, and rollback placement is implemented. See
+[Deployment runner fleet](runner-fleet.md).
+
 The **Limits…** action on every account opens the durable capacity editor. Operators can set
 account-wide workspace and project capacity, then select any workspace owned by that account to
 override its project, domain, release, release-storage, backup retention, monthly request,
@@ -276,6 +284,11 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `PUT /api/admin/quotas/workspace/:workspaceId` — the same update contract for workspace-compatible keys.
 - `POST /api/admin/impersonation` — recent-auth platform administrator starts a reason-bound read-only support session after exact email confirmation.
 - `DELETE /api/admin/impersonation` — revoke the current browser-session-bound support session.
+- `GET /api/admin/runners` — browser-platform-admin-only runner health, capacity, work, and active enrollment metadata; no credentials.
+- `POST /api/admin/runners/enrollments` — recent-auth and CSRF-protected one-time enrollment creation bound to exact `nodeId` and `region`.
+- `DELETE /api/admin/runners/enrollments/:enrollmentId` — revoke one unused enrollment.
+- `PUT /api/admin/runners/:nodeId/drain` — drain or reactivate a live node with `{ "draining": boolean }`.
+- `DELETE /api/admin/runners/:nodeId` — invalidate a node credential after exact node-ID confirmation.
 - `GET /api/audit?limit=100&before=<event-id>&organizationId=<id>` — role-filtered, cursor-paginated workspace activity including deleted projects.
 - `POST /api/organizations` — create an owned workspace under the account quota.
 - `GET /api/organizations/:id` — workspace capabilities, member roster, and administrator-only active invitation metadata.

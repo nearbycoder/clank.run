@@ -248,7 +248,13 @@ export interface ClankPlatformOptions {
    * Omit it to keep every runner endpoint closed.
    */
   deploymentAgents?: {
-    registrationToken: string;
+    /** Legacy shared enrollment secret. Prefer managedEnrollment for new installations. */
+    registrationToken?: string;
+    /**
+     * Enables administrator-created, node-and-region-bound enrollment tokens
+     * that expire and can be used exactly once. Defaults to false.
+     */
+    managedEnrollment?: boolean;
     maxRequestBytes?: number;
     /** Maximum content-addressed release transferred to a current node lease. */
     maxArtifactBytes?: number;
@@ -478,6 +484,11 @@ const IMPERSONATION_DURATION_MS = 15 * 60_000;
 const IMPERSONATION_RECENT_AUTH_MS = 30 * 60_000;
 const IMPERSONATION_COOKIE = "clank-impersonation";
 const SECURE_IMPERSONATION_COOKIE = "__Host-clank-impersonation";
+const RUNNER_ENROLLMENT_DEFAULT_MS = 15 * 60_000;
+const RUNNER_ENROLLMENT_MIN_MS = 5 * 60_000;
+const RUNNER_ENROLLMENT_MAX_MS = 24 * 60 * 60_000;
+const RUNNER_ENROLLMENT_CLAIM_MS = 60_000;
+const MAX_ACTIVE_RUNNER_ENROLLMENTS = 50;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
@@ -696,6 +707,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const runnerArtifactObjects = normalizeRunnerArtifactObjects(
     options.deploymentAgents?.artifacts,
   );
+  const managedRunnerEnrollment = options.deploymentAgents?.managedEnrollment === true;
+  if (
+    options.deploymentAgents
+    && !options.deploymentAgents.registrationToken
+    && !managedRunnerEnrollment
+  ) {
+    throw new TypeError(
+      "deploymentAgents requires registrationToken or managedEnrollment.",
+    );
+  }
   const paths = await prepareDirectories(options.dataDirectory);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
@@ -721,7 +742,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     : 0;
   const deploymentCoordinator = options.deploymentAgents
     ? createDeploymentCoordinatorHandler(orchestrator, {
-        registrationToken: options.deploymentAgents.registrationToken,
+        ...(options.deploymentAgents.registrationToken === undefined
+          ? {}
+          : { registrationToken: options.deploymentAgents.registrationToken }),
+        ...(managedRunnerEnrollment
+          ? {
+              authorizeRegistration: (request) => authorizeRunnerEnrollment(
+                storage.internal,
+                request.token,
+                request.node.id,
+                request.node.region,
+              ),
+            }
+          : {}),
         ...(options.deploymentAgents.maxRequestBytes === undefined
           ? {}
           : { maxRequestBytes: options.deploymentAgents.maxRequestBytes }),
@@ -2242,7 +2275,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           try {
             const response = await storage.auth.handle(request, authPrefix);
             return finalizePlatformRegistration(response.status === 201
-              ? retainBootstrapWinner(storage, response)
+              ? await retainBootstrapWinner(storage, response)
               : response);
           } finally {
             bootstrapRegistrationActive = false;
@@ -2571,6 +2604,222 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           changes.record("__platform", auth.user!.id);
         });
         return api({ ok: true, invitationId, revoked: true });
+      }
+      if (url.pathname === "/api/admin/runners" && request.method === "GET") {
+        await requirePlatformAdmin(storage, request);
+        const now = Date.now();
+        const placementCounts = new Map(
+          storage.internal.prepare(`SELECT assigned_node_id AS node_id, count(*) AS count
+            FROM clank_deployment_placements
+            WHERE assigned_node_id IS NOT NULL
+            GROUP BY assigned_node_id`).all()
+            .map((row) => [String(row.node_id), Number(row.count)]),
+        );
+        const operationCounts = new Map<string, Record<string, number>>();
+        for (const row of storage.internal.prepare(`SELECT node_id, state, count(*) AS count
+          FROM clank_deployment_operations
+          WHERE node_id IS NOT NULL AND state IN ('queued', 'leased', 'retry', 'failed')
+          GROUP BY node_id, state`).all()) {
+          const nodeId = String(row.node_id);
+          const counts = operationCounts.get(nodeId) ?? {};
+          counts[String(row.state)] = Number(row.count);
+          operationCounts.set(nodeId, counts);
+        }
+        const nodes = orchestrator.listNodes().map((node) => ({
+          ...node,
+          assignedProjects: placementCounts.get(node.id) ?? 0,
+          operations: {
+            queued: operationCounts.get(node.id)?.queued ?? 0,
+            leased: operationCounts.get(node.id)?.leased ?? 0,
+            retry: operationCounts.get(node.id)?.retry ?? 0,
+            failed: operationCounts.get(node.id)?.failed ?? 0,
+          },
+        }));
+        const enrollments = managedRunnerEnrollment
+          ? storage.internal.prepare(`SELECT e.id, e.node_id, e.region, e.expires_at, e.created_at,
+                u.email AS created_by_email
+              FROM clank_platform_runner_enrollments e
+              LEFT JOIN clank_auth_users u ON u.id = e.created_by
+              WHERE e.expires_at > ? AND e.used_at IS NULL AND e.revoked_at IS NULL
+              ORDER BY e.created_at DESC`).all(now).map((row) => ({
+                id: String(row.id),
+                nodeId: String(row.node_id),
+                region: String(row.region),
+                expiresAt: Number(row.expires_at),
+                createdAt: Number(row.created_at),
+                createdBy: row.created_by_email === null ? null : String(row.created_by_email),
+              }))
+          : [];
+        return api({
+          ok: true,
+          enabled: deploymentCoordinator !== null,
+          managedEnrollment: managedRunnerEnrollment,
+          placementActive: false,
+          nodes,
+          enrollments,
+          summary: {
+            active: nodes.filter((node) => node.status === "active").length,
+            draining: nodes.filter((node) => node.status === "draining").length,
+            offline: nodes.filter((node) => node.status === "offline").length,
+            capacity: nodes
+              .filter((node) => node.status !== "offline")
+              .reduce((total, node) => total + node.capacity, 0),
+            assignedProjects: nodes.reduce(
+              (total, node) => total + node.assignedProjects,
+              0,
+            ),
+          },
+        });
+      }
+      if (url.pathname === "/api/admin/runners/enrollments" && request.method === "POST") {
+        const auth = await requirePlatformAdmin(storage, request, true);
+        if (!managedRunnerEnrollment || !deploymentCoordinator) {
+          throw new PlatformError(
+            409,
+            "RUNNER_ENROLLMENT_DISABLED",
+            "Managed runner enrollment is not enabled on this installation.",
+          );
+        }
+        if (Date.now() - auth.session!.createdAt > IMPERSONATION_RECENT_AUTH_MS) {
+          throw new PlatformError(
+            403,
+            "RECENT_AUTH_REQUIRED",
+            "Sign in again before creating a runner enrollment.",
+          );
+        }
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["nodeId", "region", "expiresIn"]);
+        const nodeId = runnerIdentity(input.nodeId, "nodeId", 128);
+        const region = runnerIdentity(input.region, "region", 100);
+        const expiresIn = input.expiresIn === undefined
+          ? RUNNER_ENROLLMENT_DEFAULT_MS
+          : integerInRange(
+              input.expiresIn,
+              "expiresIn",
+              RUNNER_ENROLLMENT_MIN_MS / 1_000,
+              RUNNER_ENROLLMENT_MAX_MS / 1_000,
+            ) * 1_000;
+        const now = Date.now();
+        const id = await randomId(18);
+        const token = `clnke_${await randomToken(32)}`;
+        const expiresAt = now + expiresIn;
+        storage.internal.transaction((changes) => {
+          const pending = Number(storage.internal.prepare(`SELECT count(*) AS count
+            FROM clank_platform_runner_enrollments
+            WHERE expires_at > ? AND used_at IS NULL AND revoked_at IS NULL`).get(now)?.count ?? 0);
+          if (pending >= MAX_ACTIVE_RUNNER_ENROLLMENTS) {
+            throw new PlatformError(
+              409,
+              "RUNNER_ENROLLMENT_LIMIT_REACHED",
+              `This platform has reached its ${MAX_ACTIVE_RUNNER_ENROLLMENTS}-enrollment limit.`,
+            );
+          }
+          const existing = storage.internal.prepare(`SELECT 1 AS present
+            FROM clank_platform_runner_enrollments
+            WHERE node_id = ? AND expires_at > ? AND used_at IS NULL AND revoked_at IS NULL`)
+            .get(nodeId, now);
+          if (existing) {
+            throw new PlatformError(
+              409,
+              "RUNNER_ENROLLMENT_EXISTS",
+              "That node already has an active enrollment. Revoke it before creating another.",
+            );
+          }
+          storage.internal.prepare(`INSERT INTO clank_platform_runner_enrollments
+            (id, token_hash, node_id, region, created_by, expires_at, claim_id,
+             claim_expires_at, used_at, revoked_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)`)
+            .run(id, syncHash(token), nodeId, region, auth.user!.id, expiresAt, now);
+          audit(storage.internal, auth.user!.id, null, null, "runner.enrollment.create", {
+            enrollmentId: id,
+            nodeId,
+            region,
+            expiresAt,
+          });
+          changes.record("__platform", id);
+        });
+        return api({
+          ok: true,
+          enrollment: { id, token, nodeId, region, expiresAt, createdAt: now },
+        }, 201);
+      }
+      const adminRunnerEnrollmentMatch =
+        /^\/api\/admin\/runners\/enrollments\/([A-Za-z0-9_-]{8,128})$/.exec(url.pathname);
+      if (adminRunnerEnrollmentMatch && request.method === "DELETE") {
+        const auth = await requirePlatformAdmin(storage, request, true);
+        const enrollmentId = adminRunnerEnrollmentMatch[1]!;
+        const now = Date.now();
+        storage.internal.transaction((changes) => {
+          const result = storage.internal.prepare(`UPDATE clank_platform_runner_enrollments
+            SET revoked_at = ?, claim_id = NULL, claim_expires_at = NULL
+            WHERE id = ? AND expires_at > ? AND used_at IS NULL AND revoked_at IS NULL`)
+            .run(now, enrollmentId, now);
+          if (Number(result.changes) !== 1) {
+            throw new PlatformError(
+              404,
+              "RUNNER_ENROLLMENT_NOT_FOUND",
+              "Active runner enrollment not found.",
+            );
+          }
+          audit(storage.internal, auth.user!.id, null, null, "runner.enrollment.revoke", {
+            enrollmentId,
+          });
+          changes.record("__platform", enrollmentId);
+        });
+        return api({ ok: true, enrollmentId, revoked: true });
+      }
+      const adminRunnerDrainMatch =
+        /^\/api\/admin\/runners\/([A-Za-z0-9_-][A-Za-z0-9_.:-]{0,127})\/drain$/.exec(url.pathname);
+      if (adminRunnerDrainMatch && request.method === "PUT") {
+        const auth = await requirePlatformAdmin(storage, request, true);
+        const input = plainObject(await readJsonRequest(request, 4 * 1024));
+        exact(input, ["draining"]);
+        if (typeof input.draining !== "boolean") {
+          throw new PlatformError(422, "INVALID_INPUT", "draining must be a boolean.");
+        }
+        const nodeId = adminRunnerDrainMatch[1]!;
+        let node;
+        try {
+          node = orchestrator.setNodeDraining(nodeId, input.draining);
+        } catch (error) {
+          throw new PlatformError(
+            /not found/iu.test(safeError(error)) ? 404 : 409,
+            /not found/iu.test(safeError(error)) ? "RUNNER_NOT_FOUND" : "RUNNER_UNAVAILABLE",
+            safeError(error),
+          );
+        }
+        audit(
+          storage.internal,
+          auth.user!.id,
+          null,
+          null,
+          input.draining ? "runner.node.drain" : "runner.node.activate",
+          { nodeId },
+        );
+        return api({ ok: true, node });
+      }
+      const adminRunnerMatch =
+        /^\/api\/admin\/runners\/([A-Za-z0-9_-][A-Za-z0-9_.:-]{0,127})$/.exec(url.pathname);
+      if (adminRunnerMatch && request.method === "DELETE") {
+        const auth = await requirePlatformAdmin(storage, request, true);
+        const input = plainObject(await readJsonRequest(request, 4 * 1024));
+        exact(input, ["confirmation"]);
+        const nodeId = adminRunnerMatch[1]!;
+        if (input.confirmation !== nodeId) {
+          throw new PlatformError(
+            422,
+            "CONFIRMATION_MISMATCH",
+            "Type the runner node ID exactly.",
+          );
+        }
+        let node;
+        try {
+          node = orchestrator.revokeNode(nodeId);
+        } catch (error) {
+          throw new PlatformError(404, "RUNNER_NOT_FOUND", safeError(error));
+        }
+        audit(storage.internal, auth.user!.id, null, null, "runner.node.revoke", { nodeId });
+        return api({ ok: true, node, revoked: true });
       }
       if (url.pathname === "/api/admin/users" && request.method === "GET") {
         await requirePlatformAdmin(storage, request);
@@ -4272,6 +4521,21 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   )`);
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_personal_invitations_email
     ON clank_platform_personal_invitations (email, created_at)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_runner_enrollments (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    node_id TEXT NOT NULL,
+    region TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    claim_id TEXT,
+    claim_expires_at INTEGER,
+    used_at INTEGER,
+    revoked_at INTEGER,
+    created_at INTEGER NOT NULL
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_runner_enrollments_active
+    ON clank_platform_runner_enrollments (expires_at, used_at, revoked_at)`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_projects (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
@@ -4567,6 +4831,9 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   internal.prepare(
     "DELETE FROM clank_platform_personal_invitations WHERE expires_at <= ? OR revoked_at IS NOT NULL",
   ).run(Date.now());
+  internal.prepare(`DELETE FROM clank_platform_runner_enrollments
+    WHERE (expires_at <= ? OR used_at IS NOT NULL OR revoked_at IS NOT NULL)
+      AND created_at < ?`).run(Date.now(), Date.now() - 30 * 24 * 60 * 60_000);
   const legacyOwners = internal.prepare(`SELECT DISTINCT p.owner_id, u.email
     FROM clank_platform_projects p
     JOIN clank_auth_users u ON u.id = p.owner_id
@@ -6796,6 +7063,75 @@ function audit(
     (actor_user_id, actor_token_id, project_id, organization_id, action, metadata, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(userId, tokenId, projectId, organizationId, action, JSON.stringify(metadata), Date.now());
+}
+
+function runnerIdentity(value: unknown, name: string, maximum: number): string {
+  const identity = boundedString(value, name, 1, maximum);
+  if (!/^[A-Za-z0-9_-]+$/u.test(identity)) {
+    throw new PlatformError(422, "INVALID_INPUT", `${name} is invalid.`);
+  }
+  return identity;
+}
+
+async function authorizeRunnerEnrollment(
+  internal: SQLiteInternal,
+  token: string,
+  nodeId: string,
+  region: string,
+): Promise<{ commit(): Promise<void>; rollback(): Promise<void> } | null> {
+  if (!token.startsWith("clnke_") || token.length > 256) return null;
+  const tokenHash = syncHash(token);
+  const claimId = await randomId(18);
+  const now = Date.now();
+  let enrollment: Record<string, unknown> | undefined;
+  internal.transaction(() => {
+    const row = internal.prepare(`SELECT id, node_id, region, created_by
+      FROM clank_platform_runner_enrollments
+      WHERE token_hash = ? AND expires_at > ? AND used_at IS NULL AND revoked_at IS NULL
+        AND (claim_id IS NULL OR claim_expires_at <= ?)`).get(tokenHash, now, now);
+    if (!row || String(row.node_id) !== nodeId || String(row.region) !== region) return;
+    const reserved = internal.prepare(`UPDATE clank_platform_runner_enrollments
+      SET claim_id = ?, claim_expires_at = ?
+      WHERE id = ? AND expires_at > ? AND used_at IS NULL AND revoked_at IS NULL
+        AND (claim_id IS NULL OR claim_expires_at <= ?)`)
+      .run(claimId, now + RUNNER_ENROLLMENT_CLAIM_MS, row.id, now, now);
+    if (Number(reserved.changes) === 1) enrollment = row;
+  });
+  if (!enrollment) return null;
+  const enrollmentId = String(enrollment.id);
+  const createdBy = String(enrollment.created_by);
+  let finished = false;
+  return {
+    async commit() {
+      if (finished) throw new Error("Runner enrollment authorization was already finalized.");
+      const committedAt = Date.now();
+      internal.transaction((changes) => {
+        const result = internal.prepare(`UPDATE clank_platform_runner_enrollments
+          SET used_at = ?, claim_id = NULL, claim_expires_at = NULL
+          WHERE id = ? AND claim_id = ? AND claim_expires_at > ?
+            AND used_at IS NULL AND revoked_at IS NULL`)
+          .run(committedAt, enrollmentId, claimId, committedAt);
+        if (Number(result.changes) !== 1) {
+          throw new Error("Runner enrollment reservation expired before it could be committed.");
+        }
+        audit(internal, createdBy, null, null, "runner.enrollment.consume", {
+          enrollmentId,
+          nodeId,
+          region,
+          consumedAt: committedAt,
+        });
+        changes.record("__platform", enrollmentId);
+      });
+      finished = true;
+    },
+    async rollback() {
+      if (finished) return;
+      internal.prepare(`UPDATE clank_platform_runner_enrollments
+        SET claim_id = NULL, claim_expires_at = NULL
+        WHERE id = ? AND claim_id = ? AND used_at IS NULL`).run(enrollmentId, claimId);
+      finished = true;
+    },
+  };
 }
 
 function workspaceAuditEvents(

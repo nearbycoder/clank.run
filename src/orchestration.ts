@@ -94,6 +94,13 @@ export interface DeploymentOrchestrator {
     labels?: Record<string, string>;
   }): Promise<DeploymentNode>;
   drainNode(nodeId: string, token: string, draining?: boolean): Promise<DeploymentNode>;
+  /** Operator-only lifecycle control; callers must enforce their own authorization boundary. */
+  setNodeDraining(nodeId: string, draining: boolean): DeploymentNode;
+  /**
+   * Invalidates a node credential and marks the node offline. Callers must
+   * enforce their own operator authorization boundary.
+   */
+  revokeNode(nodeId: string): DeploymentNode;
   listNodes(): DeploymentNode[];
   setDesired(input: {
     projectId: string;
@@ -176,17 +183,30 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
     const placements = internal.prepare(`SELECT p.project_id, p.assigned_node_id, p.region
       FROM clank_deployment_placements p
       LEFT JOIN clank_deployment_nodes n ON n.id = p.assigned_node_id
-      WHERE p.assigned_node_id IS NOT NULL
-        AND (n.id IS NULL OR n.expires_at <= ? OR n.status = 'offline')`).all(now);
+      WHERE p.desired_state = 'running'
+        AND (p.assigned_node_id IS NULL
+          OR n.id IS NULL OR n.expires_at <= ? OR n.status = 'offline')`).all(now);
     for (const placement of placements) {
       const next = chooseNode(
         placement.region === null ? undefined : String(placement.region),
-        String(placement.assigned_node_id),
+        placement.assigned_node_id === null ? undefined : String(placement.assigned_node_id),
       );
       internal.prepare("UPDATE clank_deployment_placements SET assigned_node_id = ?, updated_at = ? WHERE project_id = ?")
         .run(next, now, placement.project_id);
       internal.prepare(`UPDATE clank_deployment_operations SET node_id = ?, updated_at = ?
         WHERE project_id = ? AND state IN ('queued', 'retry')`).run(next, now, placement.project_id);
+    }
+    const expiredOperations = internal.prepare(`SELECT o.id, p.assigned_node_id
+      FROM clank_deployment_operations o
+      JOIN clank_deployment_placements p ON p.project_id = o.project_id
+      WHERE o.state = 'leased' AND o.lease_expires_at <= ?
+        AND (o.node_id IS NOT p.assigned_node_id)`).all(now);
+    for (const operation of expiredOperations) {
+      internal.prepare(`UPDATE clank_deployment_operations
+        SET state = 'retry', node_id = ?, lease_token_hash = NULL, lease_expires_at = NULL,
+          next_attempt_at = ?, updated_at = ?
+        WHERE id = ? AND state = 'leased' AND lease_expires_at <= ?`)
+        .run(operation.assigned_node_id, now, now, operation.id, now);
     }
   };
 
@@ -289,6 +309,42 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         .run(draining ? "draining" : "active", Date.now(), id);
       return nodeFromRow(internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id)!);
     },
+    setNodeDraining(idInput, draining) {
+      ensureOpen();
+      const id = nodeId(idInput);
+      const row = internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id);
+      if (!row) throw new Error("Deployment node not found.");
+      if (Number(row.expires_at) <= Date.now() || String(row.status) === "offline") {
+        throw new Error("Deployment node lease is expired.");
+      }
+      internal.transaction((changes) => {
+        internal.prepare("UPDATE clank_deployment_nodes SET status = ?, updated_at = ? WHERE id = ?")
+          .run(draining ? "draining" : "active", Date.now(), id);
+        changes.record("__orchestration", id);
+      });
+      return nodeFromRow(
+        internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id)!,
+      );
+    },
+    revokeNode(idInput) {
+      ensureOpen();
+      const id = nodeId(idInput);
+      const row = internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id);
+      if (!row) throw new Error("Deployment node not found.");
+      const now = Date.now();
+      internal.transaction((changes) => {
+        internal.prepare(`UPDATE clank_deployment_nodes
+          SET token_hash = ?, status = 'offline', expires_at = 0, updated_at = ?
+          WHERE id = ?`)
+          .run(syncDigest(`revoked:${randomToken(32)}`), now, id);
+        changes.record("__orchestration", id);
+      });
+      reassignExpired();
+      return nodeFromRow(
+        internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id)!,
+        now,
+      );
+    },
     listNodes() {
       ensureOpen();
       const now = Date.now();
@@ -307,7 +363,6 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         : existing?.assigned_node_id === null || existing?.assigned_node_id === undefined
           ? null
           : String(existing.assigned_node_id);
-      if (input.state === "running" && !assignedNodeId) throw new Error("No deployment node has capacity for the desired placement.");
       const now = Date.now();
       internal.transaction((changes) => {
         internal.prepare(`INSERT INTO clank_deployment_placements

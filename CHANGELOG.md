@@ -6,6 +6,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Added
 
+- The remote deployment coordinator now supports administrator-created one-time enrollment tokens
+  bound to an exact node and region. The responsive control-plane fleet panel reports node health,
+  capacity, placement, work, and pending enrollment metadata and provides audited drain,
+  reactivate, enrollment-revoke, and credential-revoke controls.
+- `clank-runner --check [--json]` validates local configuration without consuming a fresh
+  enrollment and authenticates an existing saved node credential when present. The packaged
+  platform has an explicit `CLANK_RUNNER_COORDINATOR=1` switch while preserving the closed,
+  zero-cost single-host default and legacy shared enrollment compatibility.
 - Production `clank-platform` starts in an explicit `isolated` hosting profile by default and
   selects the constrained Docker runner unless the operator deliberately chooses the low-cost
   `trusted` profile. Programmatic platform runtimes expose their resolved hosting profile and
@@ -64,12 +72,22 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ### Fixed
 
+- The first-account bootstrap response now waits for winner retention before reconciling the
+  configured platform-administrator allowlist, so a new operator receives administrator access
+  immediately instead of only after the control plane restarts.
+- Revoked or expired runner placement is reconsidered transactionally, expired operation leases
+  become retryable on the current assigned node with a higher fence, and running desired state
+  without capacity remains durable until an eligible node appears.
 - Draining deployment nodes can no longer claim queued operations. Lost/expired leases and shutdown
   deadlines abandon work without stale settlement, while a missing completion response no longer
   converts a possibly committed success into an explicit failure and duplicate retry.
 
 ### Security
 
+- Managed runner enrollment stores only a high-entropy digest, caps active grants, requires a
+  recent same-origin browser administrator session plus CSRF, rejects bearer/admin impersonation,
+  expires automatically, reserves transactionally, commits once, rolls back failed registration,
+  and excludes enrollment and node credentials from API and audit records.
 - Unknown `CLANK_RUNNER` and `CLANK_HOSTING_PROFILE` values now fail at startup instead of silently
   selecting process execution. The isolated profile rejects the process runner, and the packaged
   control plane rejects public signup when applications share the platform Unix trust boundary.
