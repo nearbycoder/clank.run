@@ -258,7 +258,7 @@ export function generateAppFiles(
     },
     {
       path: "clank.app.ts",
-      contents: `export default ${JSON.stringify(app, null, 2)} satisfies import("@clank.run/framework/blueprint").AppBlueprintInput;\n`,
+      contents: `export default ${sourceLiteral(app, 2)} satisfies import("@clank.run/framework/blueprint").AppBlueprintInput;\n`,
     },
     {
       path: "clank.deploy.json",
@@ -327,7 +327,7 @@ function serviceRequirementsSource(app: AppBlueprint): string {
   }));
   return `import type { ServiceRegistry, ServiceRequirement } from "@clank.run/framework/services";
 
-export const serviceRequirements = ${JSON.stringify(requirements, null, 2)} as const satisfies readonly ServiceRequirement[];
+export const serviceRequirements = ${sourceLiteral(requirements, 2)} as const satisfies readonly ServiceRequirement[];
 
 export function assertServices(services: ServiceRegistry): void {
   services.assert(serviceRequirements);
@@ -337,13 +337,13 @@ export function assertServices(services: ServiceRegistry): void {
 
 function servicesSource(app: AppBlueprint): string {
   const drivers = Object.entries(app.services).map(([name, service]) => `    {
-      name: ${JSON.stringify(name)},
-      kind: ${JSON.stringify(service.kind)},
-      capabilities: ${JSON.stringify(service.capabilities ?? [])},
+      name: ${sourceLiteral(name)},
+      kind: ${sourceLiteral(service.kind)},
+      capabilities: ${sourceLiteral(service.capabilities ?? [])},
       service: Object.freeze({
         development: true,
-        name: ${JSON.stringify(name)},
-        kind: ${JSON.stringify(service.kind)},
+        name: ${sourceLiteral(name)},
+        kind: ${sourceLiteral(service.kind)},
       }),
       health: async () => ({ ok: true }),
     }`).join(",\n");
@@ -1005,14 +1005,14 @@ interface GeneratedEntityAction {
 
 function backendSource(app: AppBlueprint): string {
   const auth = app.auth.required
-    ? `export const auth = defineAuth({ defaultRole: ${JSON.stringify(Object.keys(app.auth.roles)[0] ?? "member")} });\n`
+    ? `export const auth = defineAuth({ defaultRole: ${sourceLiteral(Object.keys(app.auth.roles)[0] ?? "member")} });\n`
     : "";
   const tables = Object.entries(app.entities).map(([name, entity]) => {
     let chain = `defineTable({\n${Object.entries(entity.fields).map(([fieldName, field]) =>
       `      ${property(fieldName)}: ${schemaSource(field)},`).join("\n")}\n    })`;
     if (entity.ownership !== "public") chain += ".owned()";
     for (const [indexName, index] of Object.entries(entity.indexes ?? {})) {
-      chain += `.index(${JSON.stringify(indexName)}, ${JSON.stringify(index.fields)})`;
+      chain += `.index(${sourceLiteral(indexName)}, ${sourceLiteral(index.fields)})`;
     }
     return `  ${property(name)}: ${chain},`;
   }).join("\n");
@@ -1035,7 +1035,7 @@ ${tables}
 });
 
 ${Object.keys(app.entities).map((name) =>
-    `export type ${typeName(name)} = DocumentFor<typeof schema, ${JSON.stringify(name)}>;`).join("\n")}
+    `export type ${typeName(name)} = DocumentFor<typeof schema, ${sourceLiteral(name)}>;`).join("\n")}
 
 const documentVersion = s.number({ integer: true, min: 1 });
 ${deleteHelpersSource(app)}
@@ -1133,12 +1133,12 @@ function entityFunctions(app: AppBlueprint, name: string, entity: AppEntityDefin
     .map(([fieldName, field]) => `        if (
           input.${fieldName} !== undefined
           && input.${fieldName} !== null
-          && !db.table(${JSON.stringify(field.entity)}).get(input.${fieldName})
+          && !db.table(${sourceLiteral(field.entity)}).get(input.${fieldName})
         ) {
           throw new BackendActionError(
             404,
             "REFERENCE_NOT_FOUND",
-            ${JSON.stringify(`${humanize(fieldName)} does not reference a visible ${humanize(field.entity!).toLowerCase()} record.`)},
+            ${sourceLiteral(`${humanize(fieldName)} does not reference a visible ${humanize(field.entity!).toLowerCase()} record.`)},
           );
         }`).join("\n");
   const updateReferenceGuards = Object.entries(entity.fields)
@@ -1146,43 +1146,43 @@ function entityFunctions(app: AppBlueprint, name: string, entity: AppEntityDefin
     .map(([fieldName, field]) => `        if (
           changes.${fieldName} !== undefined
           && changes.${fieldName} !== null
-          && !db.table(${JSON.stringify(field.entity)}).get(changes.${fieldName})
+          && !db.table(${sourceLiteral(field.entity)}).get(changes.${fieldName})
         ) {
           throw new BackendActionError(
             404,
             "REFERENCE_NOT_FOUND",
-            ${JSON.stringify(`${humanize(fieldName)} does not reference a visible ${humanize(field.entity!).toLowerCase()} record.`)},
+            ${sourceLiteral(`${humanize(fieldName)} does not reference a visible ${humanize(field.entity!).toLowerCase()} record.`)},
           );
         }`).join("\n");
   const actions = generatedEntityActions(app, name, entity).map((action) => {
     const guard = action.roles.length
-      ? `        auth.requireRole(${action.roles.map((role) => JSON.stringify(role)).join(", ")});\n`
+      ? `        auth.requireRole(${action.roles.map((role) => sourceLiteral(role)).join(", ")});\n`
       : "";
     const agent = `{
-        title: ${JSON.stringify(humanize(action.localName))},
-        description: ${JSON.stringify(action.description)},
+        title: ${sourceLiteral(humanize(action.localName))},
+        description: ${sourceLiteral(action.description)},
         destructive: ${action.behavior === "delete" || action.confirmation === "always"},
         idempotent: ${action.behavior === "list" || action.behavior === "toggle"},
       }`;
     if (action.behavior === "list") {
       return `    ${property(action.localName)}: query({
-      description: ${JSON.stringify(action.description)},
+      description: ${sourceLiteral(action.description)},
       args: {},
       agent: ${agent},
       handler: ({ db, auth }) => {
-${guard}        return db.table(${JSON.stringify(name)}).query().orderBy("_creationTime", "asc").collect();
+${guard}        return db.table(${sourceLiteral(name)}).query().orderBy("_creationTime", "asc").collect();
       },
     })`;
     }
     if (action.behavior === "create") {
       return `    ${property(action.localName)}: mutation({
-      description: ${JSON.stringify(action.description)},
+      description: ${sourceLiteral(action.description)},
       args: {
 ${createFields}
       },
       agent: ${agent},
       handler: ({ db, auth }, input) => {
-${guard}${createReferenceGuards ? `${createReferenceGuards}\n` : ""}        return db.table(${JSON.stringify(name)}).insert({
+${guard}${createReferenceGuards ? `${createReferenceGuards}\n` : ""}        return db.table(${sourceLiteral(name)}).insert({
 ${insertFields}
         });
       },
@@ -1190,15 +1190,15 @@ ${insertFields}
     }
     if (action.behavior === "toggle") {
       return `    ${property(action.localName)}: mutation({
-      description: ${JSON.stringify(action.description)},
+      description: ${sourceLiteral(action.description)},
       args: {
-        id: s.id(${JSON.stringify(name)}),
+        id: s.id(${sourceLiteral(name)}),
         value: s.boolean(),
         version: documentVersion,
       },
       agent: ${agent},
       handler: ({ db, auth }, { id, value, version }) => {
-${guard}        return db.table(${JSON.stringify(name)}).patch(
+${guard}        return db.table(${sourceLiteral(name)}).patch(
           id,
           { ${property(entity.completionField!)}: value },
           { ifVersion: version },
@@ -1208,9 +1208,9 @@ ${guard}        return db.table(${JSON.stringify(name)}).patch(
     }
     if (action.behavior === "update") {
       return `    ${property(action.localName)}: mutation({
-      description: ${JSON.stringify(action.description)},
+      description: ${sourceLiteral(action.description)},
       args: {
-        id: s.id(${JSON.stringify(name)}),
+        id: s.id(${sourceLiteral(name)}),
         version: documentVersion,
         changes: s.object({
 ${updateFields}
@@ -1224,13 +1224,13 @@ ${cleanUpdateFields}
         if (Object.keys(update).length === 0) {
           throw new BackendActionError(400, "EMPTY_UPDATE", "At least one field must be changed.");
         }
-        return db.table(${JSON.stringify(name)}).patch(id, update, { ifVersion: version });
+        return db.table(${sourceLiteral(name)}).patch(id, update, { ifVersion: version });
       },
     })`;
     }
     return `    ${property(action.localName)}: mutation({
-      description: ${JSON.stringify(action.description)},
-      args: { id: s.id(${JSON.stringify(name)}), version: documentVersion },
+      description: ${sourceLiteral(action.description)},
+      args: { id: s.id(${sourceLiteral(name)}), version: documentVersion },
       agent: ${agent},
       handler: ({ db, auth }, { id, version }) => {
 ${guard}        return deleteEntity_${name}(db, id, version, {
@@ -1253,20 +1253,20 @@ function deleteHelpersSource(app: AppBlueprint): string {
     const operations = relationships.map((relationship) => {
       const reference = relationship.reference!;
       const child = reference.entity;
-      const query = `db.table(${JSON.stringify(child)}).query().where(${JSON.stringify(reference.field)}, id)`;
+      const query = `db.table(${sourceLiteral(child)}).query().where(${sourceLiteral(reference.field)}, id)`;
       if (relationship.onDelete === "restrict") {
         return `  if (${query}.limit(1).first()) {
     throw new BackendActionError(
       409,
       "RELATIONSHIP_RESTRICTED",
-      ${JSON.stringify(`Cannot delete ${humanize(name).toLowerCase()} while related ${humanize(child).toLowerCase()} exist.`)},
+      ${sourceLiteral(`Cannot delete ${humanize(name).toLowerCase()} while related ${humanize(child).toLowerCase()} exist.`)},
     );
   }`;
       }
       if (relationship.onDelete === "nullify") {
         return `  for (const related of ${query}.limit(MAX_RELATED_DELETE_OPERATIONS + 1).collect()) {
     consumeDeleteOperation(state);
-    db.table(${JSON.stringify(child)}).patch(
+    db.table(${sourceLiteral(child)}).patch(
       related._id,
       { ${property(reference.field)}: null },
       { ifVersion: related._version },
@@ -1283,12 +1283,12 @@ function deleteHelpersSource(app: AppBlueprint): string {
   version: number,
   state: DeleteState,
 ): boolean {
-  const key = ${JSON.stringify(`${name}:`)} + id;
+  const key = ${sourceLiteral(`${name}:`)} + id;
   if (state.seen.has(key)) return true;
   state.seen.add(key);
   consumeDeleteOperation(state);
 ${operations.join("\n")}
-  return db.table(${JSON.stringify(name)}).delete(id, { ifVersion: version });
+  return db.table(${sourceLiteral(name)}).delete(id, { ifVersion: version });
 }`;
   }).join("\n\n");
   return `
@@ -1333,26 +1333,26 @@ function viewSource(app: AppBlueprint): string {
     const link = `<a
               classList={{
                 "rounded-lg px-3 py-2 text-sm font-semibold transition": true,
-                "bg-slate-950 text-white": props.route === ${JSON.stringify(route.path)},
-                "text-slate-600 hover:bg-slate-100": props.route !== ${JSON.stringify(route.path)},
+                "bg-slate-950 text-white": props.route === ${sourceLiteral(route.path)},
+                "text-slate-600 hover:bg-slate-100": props.route !== ${sourceLiteral(route.path)},
               }}
-              href=${JSON.stringify(route.path)}
-              aria-current={props.route === ${JSON.stringify(route.path)} ? "page" : undefined}
-              agentId=${JSON.stringify(routeAgentId)}
-            >{${JSON.stringify(humanize(route.view))}}</a>`;
+              href=${sourceLiteral(route.path)}
+              aria-current={props.route === ${sourceLiteral(route.path)} ? "page" : undefined}
+              agentId=${sourceLiteral(routeAgentId)}
+            >{${sourceLiteral(humanize(route.view))}}</a>`;
     return typeof route.access === "object"
-      ? `{roleAllowed(props.user.role, ${JSON.stringify(route.access.roles ?? [])}) ? (${link}) : null}`
+      ? `{roleAllowed(props.user.role, ${sourceLiteral(route.access.roles ?? [])}) ? (${link}) : null}`
       : link;
   }).join("\n            ");
   const routeViews = app.routes.map((route) => {
     const contents = route.entity
       ? `<${typeName(route.entity)}Panel {...props} />`
       : `<section class="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-              <p class="text-xs font-bold uppercase tracking-[.18em] text-emerald-600">{${JSON.stringify(humanize(route.view))}}</p>
-              <h2 class="mt-2 text-2xl font-semibold">{${JSON.stringify(humanize(route.view))}}</h2>
-              <p class="mt-3 text-slate-600">{${JSON.stringify(route.description ?? "This route is ready for application-specific content.")}}</p>
+              <p class="text-xs font-bold uppercase tracking-[.18em] text-emerald-600">{${sourceLiteral(humanize(route.view))}}</p>
+              <h2 class="mt-2 text-2xl font-semibold">{${sourceLiteral(humanize(route.view))}}</h2>
+              <p class="mt-3 text-slate-600">{${sourceLiteral(route.description ?? "This route is ready for application-specific content.")}}</p>
             </section>`;
-    return `{props.route === ${JSON.stringify(route.path)} ? (${contents}) : null}`;
+    return `{props.route === ${sourceLiteral(route.path)} ? (${contents}) : null}`;
   }).join("\n          ");
   return `/* @clankImportSource @clank.run/framework */
 import { For, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
@@ -1389,8 +1389,8 @@ export function AppView(props: AppViewProps) {
       <header class="flex flex-col gap-6 border-b border-slate-200 pb-7 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p class="text-xs font-bold uppercase tracking-[.2em] text-emerald-600">Clank generated application</p>
-          <h1 class="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">{${JSON.stringify(app.name)}}</h1>
-          <p class="mt-3 max-w-2xl text-slate-500">{${JSON.stringify(app.description)}}</p>
+          <h1 class="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">{${sourceLiteral(app.name)}}</h1>
+          <p class="mt-3 max-w-2xl text-slate-500">{${sourceLiteral(app.description)}}</p>
           <p class="mt-2 text-sm text-slate-500" role="status">
             {props.connected ? "Live sync connected." : "Reconnecting…"}
             <span class="sr-only"> Database snapshot {props.version}.</span>
@@ -1418,7 +1418,7 @@ function createInputTypeSource(name: string, entity: AppEntityDefinition): strin
   const type = typeName(name);
   const fields = Object.entries(entity.fields).map(([fieldName, field]) => {
     const optional = field.required === false || Object.hasOwn(field, "default");
-    return `  ${property(fieldName)}${optional ? "?" : ""}: ${type}[${JSON.stringify(fieldName)}];`;
+    return `  ${property(fieldName)}${optional ? "?" : ""}: ${type}[${sourceLiteral(fieldName)}];`;
   }).join("\n");
   return `export interface ${type}CreateInput {
 ${fields}
@@ -1450,15 +1450,15 @@ function entityPanelSource(app: AppBlueprint, name: string, entity: AppEntityDef
                     : props.${field.entity}Records.find((candidate) => candidate._id === record.${fieldName})?.${app.entities[field.entity!].displayField} ?? String(record.${fieldName})`
         : `valueLabel(record.${fieldName})`;
       return `<div>
-                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-400">{${JSON.stringify(humanize(fieldName))}}</dt>
+                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-400">{${sourceLiteral(humanize(fieldName))}}</dt>
                 <dd class="mt-1 break-words text-sm text-slate-700">{${value}}</dd>
               </div>`;
     }).join("\n              ");
   return `function ${type}Panel(props: AppViewProps) {
 ${signals}
-  const canCreate = roleAllowed(props.user.role, ${JSON.stringify(create.roles)});
-  const canRemove = roleAllowed(props.user.role, ${JSON.stringify(remove.roles)});
-  ${toggle ? `const canToggle = roleAllowed(props.user.role, ${JSON.stringify(toggle.roles)});` : ""}
+  const canCreate = roleAllowed(props.user.role, ${sourceLiteral(create.roles)});
+  const canRemove = roleAllowed(props.user.role, ${sourceLiteral(remove.roles)});
+  ${toggle ? `const canToggle = roleAllowed(props.user.role, ${sourceLiteral(toggle.roles)});` : ""}
   const submit = async (event: Event) => {
     event.preventDefault();
     if (!canCreate || props.pending) return;
@@ -1471,22 +1471,22 @@ ${reset}
   return (
     <section>
       <div class="mb-5">
-        <p class="text-xs font-bold uppercase tracking-[.18em] text-emerald-600">{${JSON.stringify(title)}}</p>
-        <h2 class="mt-1 text-2xl font-semibold">{${JSON.stringify(title)}}</h2>
-        <p class="mt-2 text-slate-500">{${JSON.stringify(entity.description)}}</p>
+        <p class="text-xs font-bold uppercase tracking-[.18em] text-emerald-600">{${sourceLiteral(title)}}</p>
+        <h2 class="mt-1 text-2xl font-semibold">{${sourceLiteral(title)}}</h2>
+        <p class="mt-2 text-slate-500">{${sourceLiteral(entity.description)}}</p>
       </div>
       {canCreate ? (
         <form class="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:grid-cols-2" onSubmit={submit}>
 ${controls}
           <div class="flex items-end sm:col-span-2">
-            <button class="w-full rounded-xl bg-slate-950 px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="submit" disabled={props.pending} agentId=${JSON.stringify(`${name}-create`)} agentAction=${JSON.stringify(`${name}.${create.localName}`)}>
-              Add {${JSON.stringify(singular)}}
+            <button class="w-full rounded-xl bg-slate-950 px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto" type="submit" disabled={props.pending} agentId=${sourceLiteral(`${name}-create`)} agentAction=${sourceLiteral(`${name}.${create.localName}`)}>
+              Add {${sourceLiteral(singular)}}
             </button>
           </div>
         </form>
       ) : null}
       <div class="mt-6 grid gap-4">
-        <For each={props.${name}Records} by="_id" fallback={<p class="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500">{${JSON.stringify(`No ${title.toLowerCase()} yet.`)}}</p>}>
+        <For each={props.${name}Records} by="_id" fallback={<p class="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500">{${sourceLiteral(`No ${title.toLowerCase()} yet.`)}}</p>}>
           {(record) => (
             <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" agentId={\`${name}-\${record._id}\`} agentLabel={String(record.${entity.displayField})}>
               <div class="flex items-start gap-3">
@@ -1495,7 +1495,7 @@ ${controls}
                   disabled={props.pending}
                   onClick={() => props.${name}Toggle(record._id, !record.${entity.completionField}, record._version)}
                   agentId={\`${name}-\${record._id}-toggle\`}
-                  agentAction=${JSON.stringify(`${name}.${toggle.localName}`)}
+                  agentAction=${sourceLiteral(`${name}.${toggle.localName}`)}
                   agentLabel={\`\${record.${entity.completionField} ? "Reopen" : "Complete"} \${record.${entity.displayField}}\`}
                 >{record.${entity.completionField} ? "✓" : ""}</button> : null}` : ""}
                 <div class="min-w-0 flex-1">
@@ -1509,7 +1509,7 @@ ${controls}
                   disabled={props.pending}
                   onClick={() => props.${name}Remove(record._id, record._version)}
                   agentId={\`${name}-\${record._id}-remove\`}
-                  agentAction=${JSON.stringify(`${name}.${remove.localName}`)}
+                  agentAction=${sourceLiteral(`${name}.${remove.localName}`)}
                   agentLabel={\`Remove \${record.${entity.displayField}}\`}
                 >Remove</button> : null}
               </div>
@@ -1523,10 +1523,10 @@ ${controls}
 }
 
 function draftDefaultSource(field: AppFieldDefinition): string {
-  if (field.type === "boolean") return JSON.stringify(Object.hasOwn(field, "default") ? field.default : false);
+  if (field.type === "boolean") return sourceLiteral(Object.hasOwn(field, "default") ? field.default : false);
   if (field.type === "datetime") return '""';
-  if (Object.hasOwn(field, "default")) return JSON.stringify(field.default === null ? "" : String(field.default));
-  if (field.type === "enum") return JSON.stringify(field.values![0]);
+  if (Object.hasOwn(field, "default")) return sourceLiteral(field.default === null ? "" : String(field.default));
+  if (field.type === "enum") return sourceLiteral(field.values![0]);
   return '""';
 }
 
@@ -1537,7 +1537,7 @@ function draftValueSource(type: string, fieldName: string, field: AppFieldDefini
   if (field.type === "number") value = `Number(draft_${fieldName}.value)`;
   else if (field.type === "datetime") value = `new Date(draft_${fieldName}.value).toISOString()`;
   else if (field.type === "reference" || field.type === "enum") {
-    value = `draft_${fieldName}.value as ${type}[${JSON.stringify(fieldName)}]`;
+    value = `draft_${fieldName}.value as ${type}[${sourceLiteral(fieldName)}]`;
   } else value = `draft_${fieldName}.value.trim()`;
   if (field.nullable) return `${empty} ? null : ${value}`;
   if (field.required === false || Object.hasOwn(field, "default")) return `${empty} ? undefined : ${value}`;
@@ -1554,31 +1554,31 @@ function fieldControlSource(
   const label = humanize(fieldName);
   const required = field.required !== false && !Object.hasOwn(field, "default") && !field.nullable;
   const attributes = [
-    `id=${JSON.stringify(id)}`,
-    `name=${JSON.stringify(fieldName)}`,
+    `id=${sourceLiteral(id)}`,
+    `name=${sourceLiteral(fieldName)}`,
     ...(required ? ["required"] : []),
     ...(field.min === undefined ? [] : [field.type === "number" ? `min={${field.min}}` : `minlength={${field.min}}`]),
     ...(field.max === undefined ? [] : [field.type === "number" ? `max={${field.max}}` : `maxlength={${field.max}}`]),
     ...(field.type === "number" && field.integer ? ['step="1"'] : field.type === "number" ? ['step="any"'] : []),
-    `agentId=${JSON.stringify(`${entityName}-${fieldName}-input`)}`,
-    `agentLabel=${JSON.stringify(`${humanize(entityName.replace(/s$/u, ""))} ${label}`)}`,
+    `agentId=${sourceLiteral(`${entityName}-${fieldName}-input`)}`,
+    `agentLabel=${sourceLiteral(`${humanize(entityName.replace(/s$/u, ""))} ${label}`)}`,
   ].join(" ");
   const description = field.description
-    ? `<p class="mt-1 text-xs text-slate-500">{${JSON.stringify(field.description)}}</p>`
+    ? `<p class="mt-1 text-xs text-slate-500">{${sourceLiteral(field.description)}}</p>`
     : "";
   if (field.type === "boolean") {
     return `          <div class="sm:col-span-2">
-            <label class="flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3" for=${JSON.stringify(id)}>
+            <label class="flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-3" for=${sourceLiteral(id)}>
               <input type="checkbox" ${attributes} bind:checked={draft_${fieldName}} />
-              <span class="font-medium">{${JSON.stringify(label)}}</span>
+              <span class="font-medium">{${sourceLiteral(label)}}</span>
             </label>
             ${description}
           </div>`;
   }
   if (field.type === "enum") {
-    const options = field.values!.map((value) => `<option value=${JSON.stringify(value)}>{${JSON.stringify(value)}}</option>`).join("");
+    const options = field.values!.map((value) => `<option value=${sourceLiteral(value)}>{${sourceLiteral(value)}}</option>`).join("");
     return `          <div>
-            <label class="text-sm font-semibold" for=${JSON.stringify(id)}>{${JSON.stringify(label)}}</label>
+            <label class="text-sm font-semibold" for=${sourceLiteral(id)}>{${sourceLiteral(label)}}</label>
             <select class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3" ${attributes} bind:value={draft_${fieldName}}>${options}</select>
             ${description}
           </div>`;
@@ -1586,9 +1586,9 @@ function fieldControlSource(
   if (field.type === "reference") {
     const target = app.entities[field.entity!];
     return `          <div>
-            <label class="text-sm font-semibold" for=${JSON.stringify(id)}>{${JSON.stringify(label)}}</label>
+            <label class="text-sm font-semibold" for=${sourceLiteral(id)}>{${sourceLiteral(label)}}</label>
             <select class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3" ${attributes} bind:value={draft_${fieldName}}>
-              <option value="">{${JSON.stringify(`Choose ${humanize(field.entity!).toLowerCase()}…`)}}</option>
+              <option value="">{${sourceLiteral(`Choose ${humanize(field.entity!).toLowerCase()}…`)}}</option>
               <For each={props.${field.entity}Records} by="_id">
                 {(option) => <option value={option._id}>{option.${target.displayField}}</option>}
               </For>
@@ -1598,7 +1598,7 @@ function fieldControlSource(
   }
   if (field.type === "text") {
     return `          <div class="sm:col-span-2">
-            <label class="text-sm font-semibold" for=${JSON.stringify(id)}>{${JSON.stringify(label)}}</label>
+            <label class="text-sm font-semibold" for=${sourceLiteral(id)}>{${sourceLiteral(label)}}</label>
             <textarea class="mt-1 min-h-28 w-full resize-y rounded-xl border border-slate-300 bg-white px-4 py-3" ${attributes} bind:value={draft_${fieldName}} />
             ${description}
           </div>`;
@@ -1609,8 +1609,8 @@ function fieldControlSource(
       ? "datetime-local"
       : field.type;
   return `          <div>
-            <label class="text-sm font-semibold" for=${JSON.stringify(id)}>{${JSON.stringify(label)}}</label>
-            <input class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3" type=${JSON.stringify(inputType)} ${attributes} bind:value={draft_${fieldName}} />
+            <label class="text-sm font-semibold" for=${sourceLiteral(id)}>{${sourceLiteral(label)}}</label>
+            <input class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-4 py-3" type=${sourceLiteral(inputType)} ${attributes} bind:value={draft_${fieldName}} />
             ${description}
           </div>`;
 }
@@ -1624,16 +1624,16 @@ function browserSource(app: AppBlueprint): string {
     `      ${name}: { records: [], version: 0 },`).join("\n");
   const seeds = names.map((name) => {
     const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
-    return `client.seed(client.api[${JSON.stringify(name)}][${JSON.stringify(list.localName)}], {}, boot.entities.${name}.records, boot.entities.${name}.version);`;
+    return `client.seed(client.api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}], {}, boot.entities.${name}.records, boot.entities.${name}.version);`;
   }).join("\n");
   const live = names.map((name) => {
     const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
     return app.entities[name].realtime
-      ? `  const canRead_${name} = roleAllowed(user.role, ${JSON.stringify(list.roles)});
+      ? `  const canRead_${name} = roleAllowed(user.role, ${sourceLiteral(list.roles)});
   const live_${name} = canRead_${name}
-    ? client.live(client.api[${JSON.stringify(name)}][${JSON.stringify(list.localName)}])
+    ? client.live(client.api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}])
     : null;`
-      : `  const canRead_${name} = roleAllowed(user.role, ${JSON.stringify(list.roles)});
+      : `  const canRead_${name} = roleAllowed(user.role, ${sourceLiteral(list.roles)});
   const records_${name} = signal(boot.entities.${name}.records);`;
   }).join("\n");
   const dispose = names
@@ -1644,7 +1644,7 @@ function browserSource(app: AppBlueprint): string {
     .map((name) => {
       const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
       return `    canRead_${name}
-      ? client.query(client.api[${JSON.stringify(name)}][${JSON.stringify(list.localName)}]).then((value) => { records_${name}.value = value; })
+      ? client.query(client.api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}]).then((value) => { records_${name}.value = value; })
       : Promise.resolve(),`;
     }).join("\n");
   const version = names.map((name) => app.entities[name].realtime
@@ -1668,8 +1668,8 @@ function browserSource(app: AppBlueprint): string {
       : `boot.entities.${name}.version`;
     return `      ${name}Records={${records}}
       ${name}Version={${entityVersion}}
-      ${name}Create={(input) => mutate(() => client.mutate(client.api[${JSON.stringify(name)}][${JSON.stringify(create.localName)}], input))}
-      ${toggle ? `${name}Toggle={(id, value, version) => mutate(() => client.mutate(client.api[${JSON.stringify(name)}][${JSON.stringify(toggle.localName)}], { id, value, version }))}\n      ` : ""}${name}Remove={(id, version) => mutate(() => client.mutate(client.api[${JSON.stringify(name)}][${JSON.stringify(remove.localName)}], { id, version }))}`;
+      ${name}Create={(input) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(create.localName)}], input))}
+      ${toggle ? `${name}Toggle={(id, value, version) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(toggle.localName)}], { id, value, version }))}\n      ` : ""}${name}Remove={(id, version) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(remove.localName)}], { id, version }))}`;
   }).join("\n");
   return `/* @clankImportSource @clank.run/framework */
 import {
@@ -1696,7 +1696,7 @@ ${state}
 
 const boot = readState<PageState>() ?? {
   auth: { user: null, session: null },
-  route: ${JSON.stringify(app.routes[0].path)},
+  route: ${sourceLiteral(app.routes[0].path)},
   entities: {
 ${fallback}
   },
@@ -1763,10 +1763,10 @@ function serverSource(app: AppBlueprint): string {
   const initials = names.map((name) => {
     const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
     const allowed = list.roles.length
-      ? `${JSON.stringify(list.roles)}.includes(caller.auth.user.role)`
+      ? `${sourceLiteral(list.roles)}.includes(caller.auth.user.role)`
       : "true";
     return `  const initial_${name} = caller.auth.user && ${allowed}
-    ? caller.query(api[${JSON.stringify(name)}][${JSON.stringify(list.localName)}])
+    ? caller.query(api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}])
     : { value: [], version: runtime.version };`;
   }).join("\n");
   const stateEntities = names.map((name) =>
@@ -1780,9 +1780,9 @@ function serverSource(app: AppBlueprint): string {
   }).join("\n");
   const versions = names.map((name) => `initial_${name}.version`).join(", ");
   const access = app.routes.map((route) =>
-    `${JSON.stringify(route.path)}: ${typeof route.access === "object" ? JSON.stringify(route.access.roles ?? []) : "[]"}`).join(",\n  ");
+    `${sourceLiteral(route.path)}: ${typeof route.access === "object" ? sourceLiteral(route.access.roles ?? []) : "[]"}`).join(",\n  ");
   const routeRegistrations = app.routes.map((route) =>
-    `  .get(${JSON.stringify(route.path)}, ({ request }) => renderRoute(request, ${JSON.stringify(route.path)}))`).join("\n");
+    `  .get(${sourceLiteral(route.path)}, ({ request }) => renderRoute(request, ${sourceLiteral(route.path)}))`).join("\n");
   return `/* @clankImportSource @clank.run/framework */
 import {
   AuthGate,
@@ -1816,13 +1816,13 @@ const services = await openAppServices(environment);
 const runtime = await openBackend(backend, {
   path: databasePath,
   agent: {
-    name: ${JSON.stringify(app.slug)},
-    title: ${JSON.stringify(app.name)},
-    description: ${JSON.stringify(`${app.description} Its documented server actions are available to authenticated MCP clients.`)},
+    name: ${sourceLiteral(app.slug)},
+    title: ${sourceLiteral(app.name)},
+    description: ${sourceLiteral(`${app.description} Its documented server actions are available to authenticated MCP clients.`)},
   },
 });
 const observability = createObservability({
-  serviceName: ${JSON.stringify(app.slug)},
+  serviceName: ${sourceLiteral(app.slug)},
   environment: environment.NODE_ENV ?? "development",
 });
 observability.health.register("database", () => {
@@ -1874,7 +1874,7 @@ ${props}
         />
     </AuthGate>,
     {
-      title: ${JSON.stringify(app.name)},
+      title: ${sourceLiteral(app.name)},
       bodyClass: "m-0 bg-slate-50 antialiased",
       nonce,
       head: (
@@ -1915,7 +1915,7 @@ ${stateEntities}
 const app = createApp()
   .use(observability.middleware())
   .use(securityHeaders({ contentSecurityPolicy: false }))
-  .get(${JSON.stringify(app.deployment.healthPath)}, () => observability.health.response())
+  .get(${sourceLiteral(app.deployment.healthPath)}, () => observability.health.response())
 ${routeRegistrations}
   .get("/app.js", ({ request }) => appFiles.handle(request))
   .get("/view.js", ({ request }) => appFiles.handle(request))
@@ -1960,25 +1960,25 @@ function schemaSource(field: AppFieldDefinition, wrappers = true): string {
   };
   switch (field.type) {
     case "string":
-    case "text": source = `s.string(${JSON.stringify(options)})`; break;
-    case "number": source = `s.number(${JSON.stringify({ ...options, integer: field.integer ?? false })})`; break;
-    case "boolean": source = `s.boolean(${field.description ? JSON.stringify(field.description) : ""})`; break;
-    case "email": source = `s.email(${JSON.stringify(options)})`; break;
-    case "url": source = `s.url(${JSON.stringify(field.description ? { description: field.description } : {})})`; break;
-    case "date": source = `s.date(${field.description ? JSON.stringify(field.description) : ""})`; break;
-    case "datetime": source = `s.datetime(${field.description ? JSON.stringify(field.description) : ""})`; break;
-    case "enum": source = `s.enum(${JSON.stringify(field.values)} as const${field.description ? `, ${JSON.stringify(field.description)}` : ""})`; break;
-    case "reference": source = `s.id(${JSON.stringify(field.entity)}${field.description ? `, ${JSON.stringify(field.description)}` : ""})`; break;
+    case "text": source = `s.string(${sourceLiteral(options)})`; break;
+    case "number": source = `s.number(${sourceLiteral({ ...options, integer: field.integer ?? false })})`; break;
+    case "boolean": source = `s.boolean(${field.description ? sourceLiteral(field.description) : ""})`; break;
+    case "email": source = `s.email(${sourceLiteral(options)})`; break;
+    case "url": source = `s.url(${sourceLiteral(field.description ? { description: field.description } : {})})`; break;
+    case "date": source = `s.date(${field.description ? sourceLiteral(field.description) : ""})`; break;
+    case "datetime": source = `s.datetime(${field.description ? sourceLiteral(field.description) : ""})`; break;
+    case "enum": source = `s.enum(${sourceLiteral(field.values)} as const${field.description ? `, ${sourceLiteral(field.description)}` : ""})`; break;
+    case "reference": source = `s.id(${sourceLiteral(field.entity)}${field.description ? `, ${sourceLiteral(field.description)}` : ""})`; break;
   }
   if (!wrappers) return source;
   if (field.nullable) source = `s.nullable(${source})`;
-  if (Object.hasOwn(field, "default")) source = `s.default(${source}, ${JSON.stringify(field.default)})`;
+  if (Object.hasOwn(field, "default")) source = `s.default(${source}, ${sourceLiteral(field.default)})`;
   else if (field.required === false) source = `s.optional(${source})`;
   return source;
 }
 
 function createSchemaSource(field: AppFieldDefinition): string {
-  if (Object.hasOwn(field, "default")) return `s.default(${schemaSource({ ...field, default: undefined }, false)}, ${JSON.stringify(field.default)})`;
+  if (Object.hasOwn(field, "default")) return `s.default(${schemaSource({ ...field, default: undefined }, false)}, ${sourceLiteral(field.default)})`;
   return schemaSource(field);
 }
 
@@ -2256,8 +2256,21 @@ function unique(values: readonly string[], label: string): void {
   if (new Set(values).size !== values.length) throw new TypeError(`${label} must be unique.`);
 }
 
+const SOURCE_LITERAL_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
+  "<": "\\u003C",
+  ">": "\\u003E",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+});
+
+function sourceLiteral(value: unknown, space?: number): string {
+  const serialized = JSON.stringify(value, null, space);
+  if (serialized === undefined) throw new TypeError("Generated source values must be JSON serializable.");
+  return serialized.replace(/[<>\u2028\u2029]/gu, (character) => SOURCE_LITERAL_ESCAPES[character]!);
+}
+
 function property(value: string): string {
-  return NAME.test(value) ? value : JSON.stringify(value);
+  return NAME.test(value) ? value : sourceLiteral(value);
 }
 
 function typeName(value: string): string {

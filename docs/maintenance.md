@@ -73,10 +73,12 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   options mount, and separated development module revalidation from production immutable caching.
 - [x] Wrapped generated route navigation on narrow viewports and closed runtime streams concurrently
   with the HTTP server and service drivers so long-lived connections cannot stall shutdown.
+- [x] Applied explicit post-JSON JavaScript-source escaping to every generated literal and added
+  adversarial compilation/rendering coverage after CodeQL identified closing-script data flows.
 - [x] Rewrote the blueprint guide around executable semantics, validation, generated files,
   relationship/service boundaries, per-app MCP parity, and honest warnings; expanded each generated
   README and `AGENTS.md` with the concrete app contract and provisioning boundary.
-- [x] Passed the complete local gate: 334 tests, 86.45% line / 75.41% branch / 87.03% function
+- [x] Passed the complete local gate: 334 tests, 86.46% line / 75.40% branch / 87.04% function
   coverage, 59 Markdown files, 252 local links, 54 indexed guides, 35 synchronized declaration
   files, 33 package exports, packed consumer/deploy/migration/rollback conformance, release/current
   tree/history credential scans, and a 211-file npm dry run under the five-MiB ceiling.

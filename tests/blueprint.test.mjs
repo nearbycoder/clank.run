@@ -397,6 +397,14 @@ test("generated TSX context-encodes every human-authored blueprint string", asyn
   await writeFile(source, `export default ${JSON.stringify(hostile, null, 2)} satisfies import("@clank.run/framework/blueprint").AppBlueprintInput;\n`);
   try {
     await run(["generate", target, `--blueprint=${source}`, "--framework=local"]);
+    const generatedViewSource = await readFile(join(target, "src", "view.tsx"), "utf8");
+    const generatedBackendSource = await readFile(join(target, "src", "backend.ts"), "utf8");
+    const generatedServerSource = await readFile(join(target, "src", "server.tsx"), "utf8");
+    for (const generatedSource of [generatedViewSource, generatedBackendSource, generatedServerSource]) {
+      assert.doesNotMatch(generatedSource, /<script>globalThis\.__clankBlueprintInjected/u);
+      assert.match(generatedSource, /\\u003Cscript\\u003EglobalThis\.__clankBlueprintInjected/u);
+      assert.match(generatedSource, /\\u003C\/script\\u003E/u);
+    }
     await run(["build", "src", "dist"], target);
     await mkdir(join(target, "node_modules", "@clank.run"), { recursive: true });
     await symlink(repository, join(target, "node_modules", "@clank.run", "framework"), "dir");

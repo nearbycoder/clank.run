@@ -35,6 +35,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Generated route navigation now wraps on narrow viewports instead of clipping the active route.
   Shutdown closes live runtime streams alongside the HTTP server and service drivers so long-lived
   connections cannot stall process termination.
+- Blueprint code generation now applies JavaScript-source escaping after JSON serialization,
+  including HTML delimiters and Unicode line separators, so even hostile
+  human-authored text cannot form executable source or closing-script sequences.
 
 ## 0.10.0 - 2026-07-30
 
