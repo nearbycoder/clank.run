@@ -17,6 +17,72 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 
 `npm run check` covers the build, dependency contract, coverage floors, documentation/declaration audit, packed-release conformance, deterministic chaos tests, package/current-tree/history credential scans, and workflow-policy checks. Browser review remains intentionally explicit because visual and interaction regressions need a rendered application.
 
+## 2026-07-30 version 0.12.0 and hosted billing phase
+
+- [x] Added provider-neutral hosted plans, durable entitlement snapshots, exact effective limits,
+  browser checkout and portal flows, read-only CLI inspection, and audited operator grants while
+  keeping billing disabled by default.
+- [x] Added a zero-dependency Stripe adapter with fixed endpoints, bounded transport, exact Price
+  verification, durable checkout idempotency, raw-body signature verification, replay/conflict
+  handling, event-order fencing, and exact account/customer/subscription binding.
+- [x] Passed the complete release gate: 372 tests at 86.57% line / 75.31% branch / 87.70%
+  function coverage, 61 Markdown files, 269 local links, 56 indexed guides, 38 synchronized
+  declarations, 35 package exports, all nine packed-release scenarios, and package/current-tree/
+  reachable-history credential scans.
+- [x] Recorded [PR #114](https://github.com/nearbycoder/clank.run/pull/114), runtime-image
+  correction [PR #115](https://github.com/nearbycoder/clank.run/pull/115), and pre-deploy image
+  closure [PR #116](https://github.com/nearbycoder/clank.run/pull/116). Tag `v0.12.0` points to
+  exact commit `050c4c208ffbf10c1304883cdf4c70fbb197ac4c`; CI run `30589119315`, CodeQL
+  run `30589119313`, gated docs run `30589236607`, and release run `30589346711` passed.
+- [x] Verified npm stage `51faa521-413e-4800-a185-d1bfab93b853` is the exact GitHub release
+  asset: SHA-1 `c0219dc50aef1f3e7bf52add1ca2df0f4ef066e9`, SHA-256
+  `c057f20de9d3a0913ef6034f5670443cb7566ee2825b307e57329f3bd5a3d7cf`, 1,296,881
+  bytes, GitHub attestation verified, npm trusted-publishing provenance present, and a clean
+  consumer loaded the framework, billing adapter, and CLI successfully.
+- [ ] Approve the verified npm stage with a current proof-of-presence code, confirm registry
+  signatures/provenance, and run the final fresh-registry consumer.
+- [x] Activated Railway deployment `921db53c-8081-4c1b-8f52-fbea36f8fdb7` from the exact tag
+  only after its runtime import preflight and database readiness succeeded. The live control plane
+  and documentation endpoints returned HTTP 200; hosted billing remains explicitly disabled until
+  an operator supplies a catalog and provider configuration.
+- [x] Diagnosed the stateful Railway volume handoff honestly: image preflight now prevents a
+  missing runtime module from taking the volume, while true zero-downtime control-plane rollout
+  still requires external state and stateless replicas. No service, replica, volume, database,
+  bucket, or other paid resource was added.
+
+## 2026-07-30 production diagnostics correction
+
+- [x] Compared Railway series with Clank's live filesystem and process attribution. Memory remained
+  stable at 215 MB at the end of the 24-hour window with a 450 MB maximum; the live filesystem
+  reported 178 MB used and 176 MB accounted even though Railway's volume series reported a
+  substantially higher value.
+- [x] Identified retained release history, not application database growth, as the largest live
+  storage category: 169 MB retained copies, 5.02 MB project databases, and 1.70 MB control
+  database at diagnosis time.
+- [x] Corrected the operator memory UI to consume the API's `controlPlane` field instead of the
+  storage-only `controlDatabase` field and added a rendered-console regression assertion.
+- [x] Recorded [PR #117](https://github.com/nearbycoder/clank.run/pull/117): all required checks
+  passed before squash merge `f779279b69938aa43265dec589b59963a3011dbb`; post-merge CI run
+  `30590303889`, CodeQL run `30590303906`, and gated docs run `30590413639` passed.
+- [x] Activated Railway deployment `788d65a4-cc5d-4325-8c5b-65b9f6dc282c` from that exact merge
+  after image preflight and database readiness. Production then rendered 83.3 MB for the control
+  plane, 114.1 MB for hosted applications, and 12.9 MB unattributed, with no startup error or
+  warning and healthy public liveness/readiness.
+
+## 2026-07-30 version 0.11.0 release phase
+
+- [x] Recorded [PR #113](https://github.com/nearbycoder/clank.run/pull/113) and squash merge
+  `3a7cb8625887e9ae138ddba11627285ba608c052`. Post-merge CI run `30584113986`, CodeQL
+  run `30584113888`, and gated docs run `30584244808` passed on the exact source.
+- [x] Annotated tag `v0.11.0` points to that merge. Release run `30584338478` rebuilt, tested,
+  packed, attested, attached, and staged the package through npm trusted publishing.
+- [x] Verified and approved npm stage `fc9c5a60-8df6-4d80-a102-cd8ea71327f4`. The public
+  registry reports SHA-1 `cba145a00c144828b15528e6b1a7c02695987f48`, the expected integrity
+  digest and registry signature, and version `0.11.0`.
+- [x] Railway deployment `7ff0823b-3828-4792-8e55-bbdeeb83311d` successfully activated the
+  exact release merge before its later healthy successor. No service, replica, volume, database,
+  bucket, or other paid resource was added.
+
 ## 2026-07-30 integrated development loop phase
 
 - [x] Replaced generated one-shot development scripts with one `clank dev` command driven by the
@@ -236,7 +302,9 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 - [x] Passed the complete local gate: 327 tests, 85.92% line / 74.60% branch / 86.54%
   function coverage, 59 Markdown files, 249 local links, 35 declaration files, 33 package
   exports, packed-release conformance, and package/current-tree/reachable-history credential scans.
-- [ ] Record GitHub CI/CodeQL evidence, merge SHA, and post-merge documentation result.
+- [x] Recorded [PR #104](https://github.com/nearbycoder/clank.run/pull/104), squash merge
+  `6529d135cd902b587f29b020aa6a29ed28aae78f`, post-merge CI run `30554263154`,
+  CodeQL run `30554263594`, and gated docs run `30554416597`.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 remote jobs, capacity, and failover phase
@@ -293,8 +361,11 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   coverage, 60 Markdown files, 262 local links, 55 indexed guides, 37 synchronized declarations,
   34 package exports, a 220-file publish allowlist, all nine packed-release conformance scenarios,
   and package/current-tree/reachable-history credential scans.
-- [ ] Record PR checks, CodeQL, merge, release identity, gated docs deployment, exact Railway
-  activation, and public production health.
+- [x] Recorded [PR #113](https://github.com/nearbycoder/clank.run/pull/113), squash merge
+  `3a7cb8625887e9ae138ddba11627285ba608c052`, post-merge CI run `30584113986`,
+  CodeQL run `30584113888`, gated docs run `30584244808`, release run `30584338478`,
+  `v0.11.0`, npm stage `fc9c5a60-8df6-4d80-a102-cd8ea71327f4`, and exact Railway
+  deployment `7ff0823b-3828-4792-8e55-bbdeeb83311d`.
 - [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 provider diagnostics phase
@@ -311,7 +382,9 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 - [x] Passed the complete local gate: 326 tests, 85.92% line / 74.61% branch / 86.54%
   function coverage, 59 Markdown files, 249 local links, declaration/export synchronization,
   packed-release conformance, and package/current-tree/reachable-history credential scans.
-- [ ] Record GitHub CI/CodeQL evidence, merge SHA, and post-merge documentation result.
+- [x] Recorded [PR #103](https://github.com/nearbycoder/clank.run/pull/103), squash merge
+  `71b786df4ae8b0c70a442017a03edffc5ad616d9`, post-merge CI run `30552943062`,
+  CodeQL run `30552943870`, and gated docs run `30553115275`.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 provider restore control-plane phase
@@ -328,7 +401,9 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 - [x] Passed the complete local gate: 325 tests, 85.94% line / 74.83% branch / 86.45%
   function coverage, 59 Markdown files, 249 local links, declaration/export synchronization,
   packed-release conformance, and current-tree/history credential scans.
-- [ ] Record GitHub CI/CodeQL evidence, merge SHA, and post-merge documentation result.
+- [x] Recorded [PR #102](https://github.com/nearbycoder/clank.run/pull/102), squash merge
+  `84ec1ab3cfce5870e24dbe4b3ab5d603955e425b`, post-merge CI run `30549828075`,
+  CodeQL run `30549827905`, and gated docs run `30550030546`.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 provider backup control-plane phase
@@ -348,7 +423,9 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   coverage; 59 documentation files, 249 local links, 35 declaration files, and 33 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
-- [ ] Record GitHub CI/CodeQL evidence, merge SHA, and post-merge documentation result.
+- [x] Recorded [PR #101](https://github.com/nearbycoder/clank.run/pull/101), squash merge
+  `0c6429536b43ff5ada7a23a3d8950c0cdf71bef2`, post-merge CI run `30547423576`,
+  CodeQL run `30547423468`, and gated docs run `30547571037`.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 provider recovery foundation phase
@@ -367,7 +444,9 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   coverage; 59 documentation files, 249 local links, 35 declaration files, and 33 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
-- [ ] Record GitHub CI/CodeQL evidence, merge SHA, and post-merge documentation result.
+- [x] Recorded [PR #100](https://github.com/nearbycoder/clank.run/pull/100), squash merge
+  `2655f79d2604b4a5c8563d348a2a77bc53d38e63`, post-merge CI run `30545421101`,
+  CodeQL run `30545421197`, and gated docs run `30545551446`.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 
 ## 2026-07-25 review
@@ -496,7 +575,12 @@ The final certification result and exact test counts belong in the pull request 
   coverage; 59 documentation files, 246 local links, 35 declaration files, and 33 package
   exports; packed consumer conformance; and package, current-tree, and reachable-history security
   scans.
-- [ ] Record GitHub CI, CodeQL, merge, post-merge, and live documentation evidence.
+- [x] Recorded [PR #92](https://github.com/nearbycoder/clank.run/pull/92) and squash merge
+  `9896399800c2f6cdad625ac3bf37d5b0f9ef2262`. Its post-merge CodeQL passed, while CI
+  exposed a nondeterministic audit assertion; follow-up
+  [PR #93](https://github.com/nearbycoder/clank.run/pull/93) fixed that assertion. Exact follow-up
+  merge `cd8b0a0bf7da2dc288ddea1c96490bc017b55fdf`, CI run `30535853486`, CodeQL
+  run `30535853478`, and gated docs run `30535969026` passed.
 - [x] Added no Railway service, volume, database, bucket, or other paid resource.
 
 ## 2026-07-30 isolated provider Docker runtime phase
@@ -617,7 +701,9 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Re-certified all 264 tests at 86.05% line, 74.31% branch, and 85.29% function coverage;
   54 documentation files, 169 local links, 30 declaration files, and 28 package exports; packed
   consumer conformance; and package, current-tree, and reachable-history credential scans.
-- [ ] Record the CI evidence in the pull request after its required checks finish.
+- [x] Recorded [PR #85](https://github.com/nearbycoder/clank.run/pull/85), squash merge
+  `01acba7d0132eba14058d43d77bf604f0d0656e9`, post-merge CI run `30520674510`,
+  CodeQL run `30520674456`, and gated docs run `30520774456`.
 
 ## 2026-07-26 follow-up
 
