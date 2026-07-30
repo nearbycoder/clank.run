@@ -149,7 +149,7 @@ applications do not need a separate runtime compiler or bundler.
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, Tailwind Play CDN and compiled Tailwind CSS compatibility |
 | Deploy | Browser console, workspaces and RBAC, activity feeds, ingress metrics, enforced quotas, custom DNS/TLS onboarding, deterministic artifacts, optional off-host release and backup objects, encrypted secrets, immutable migrations, storage-backed readiness, health-gated releases, logs, audit, rollback |
 | Hosting safety | Explicit trusted/isolated profiles, isolated production default, constrained Docker runner, bounded artifacts, resource ceilings, and fail-closed runner configuration |
-| Distributed execution | Durable leases, authenticated nodes, placement, desired generations, fenced operations, verified leased release transfer, and a provider-neutral agent lifecycle with persistent credentials and graceful drain |
+| Distributed execution | Durable leases, authenticated nodes, placement, desired generations, fenced operations, verified leased release transfer, provider-neutral agents, a credential-free runtime adapter contract, and an authenticated HTTP provider bridge |
 
 </details>
 
@@ -194,7 +194,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 
 | Start | Build | Operate | Verify |
 | --- | --- | --- | --- |
-| [Getting started](docs/getting-started.md)<br>[Application recipes](docs/application-recipes.md)<br>[AI blueprints](docs/blueprints.md)<br>[CLI](docs/cli.md) | [Reactivity](docs/reactivity.md)<br>[Rendering](docs/rendering.md)<br>[Forms](docs/forms.md)<br>[Routing](docs/routing.md)<br>[Full stack](docs/full-stack.md)<br>[Durable jobs and cron](docs/jobs-and-cron.md)<br>[Tailwind](docs/tailwind.md) | [Deployment](docs/deployment-platform.md)<br>[Dashboard and domains](docs/platform-dashboard.md)<br>[Migrations](docs/migrations.md)<br>[Backups](docs/recovery.md)<br>[Self-hosting](docs/self-hosting.md)<br>[Railway](docs/railway.md) | [Agent protocol](docs/agent-protocol.md)<br>[Per-app MCP](docs/per-app-mcp.md)<br>[Authentication](docs/authentication.md)<br>[Threat model](docs/threat-model.md)<br>[ASVS verification](docs/security-asvs.md)<br>[Conformance](docs/conformance.md) |
+| [Getting started](docs/getting-started.md)<br>[Application recipes](docs/application-recipes.md)<br>[AI blueprints](docs/blueprints.md)<br>[CLI](docs/cli.md) | [Reactivity](docs/reactivity.md)<br>[Rendering](docs/rendering.md)<br>[Forms](docs/forms.md)<br>[Routing](docs/routing.md)<br>[Full stack](docs/full-stack.md)<br>[Durable jobs and cron](docs/jobs-and-cron.md)<br>[Tailwind](docs/tailwind.md) | [Deployment](docs/deployment-platform.md)<br>[Provider adapters](docs/provider-adapters.md)<br>[Dashboard and domains](docs/platform-dashboard.md)<br>[Migrations](docs/migrations.md)<br>[Backups](docs/recovery.md)<br>[Self-hosting](docs/self-hosting.md)<br>[Railway](docs/railway.md) | [Agent protocol](docs/agent-protocol.md)<br>[Per-app MCP](docs/per-app-mcp.md)<br>[Authentication](docs/authentication.md)<br>[Threat model](docs/threat-model.md)<br>[ASVS verification](docs/security-asvs.md)<br>[Conformance](docs/conformance.md) |
 
 <details>
 <summary><strong>Complete documentation index</strong></summary>
@@ -209,6 +209,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Typed durable queues, worker processes, and cron](docs/jobs-and-cron.md)
 - [Structured logs, traces, metrics, and health](docs/observability.md)
 - [Durable distributed deployment and agent fencing](docs/distributed-deployment.md)
+- [Portable deployment provider adapters and HTTP bridge](docs/provider-adapters.md)
 - [Managed ingress, custom domains, and external PostgreSQL](docs/data-plane.md)
 - [Chaos and failure testing](docs/chaos-testing.md)
 - [Public beta readiness](docs/public-beta.md)

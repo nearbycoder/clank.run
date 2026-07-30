@@ -59,6 +59,20 @@ The final certification result and exact test counts belong in the pull request 
 - [x] Preserved the zero-dependency, per-project SQLite queue and added no Railway service,
   database, or paid monitoring resource.
 
+## 2026-07-30 provider portability phase
+
+- [x] Added a credential-free `DeploymentProvider` desired-state contract with strict operation,
+  generation, release, artifact, abort, stale-observation, and bounded-result semantics.
+- [x] Added an independently verified, authenticated binary HTTP bridge with HTTPS/loopback
+  admission, redirect refusal, deadlines, exact retries, private provider errors, and bounded I/O.
+- [x] Added `clank-runner` as a zero-dependency packaged process with persistent node credentials,
+  placement labels, capacity/concurrency controls, and signal-driven drain.
+- [x] Kept the current Railway deployment on the existing single service and volume. No runner,
+  provider gateway, database, bucket, or other billable resource was provisioned.
+- [x] Re-certified all 253 tests at 85.88% line, 73.97% branch, and 85.17% function
+  coverage; 51 documentation files and 28 package exports; packed consumer conformance; and
+  package, current-tree, and reachable-history credential scans.
+
 ## 2026-07-26 follow-up
 
 - [x] Merged the complete 2026-07-25 security and release-certification pass into `main`.

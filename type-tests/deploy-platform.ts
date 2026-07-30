@@ -1,7 +1,11 @@
 import {
   openPlatform,
   openBackupManager,
+  createDeploymentProviderHandler,
+  createHttpDeploymentProvider,
+  openProviderDeploymentAgent,
   parseDeploymentConfig,
+  type DeploymentProvider,
   type DeploymentConfig,
   type ObjectStore,
   type PlatformRunnerOptions,
@@ -63,6 +67,31 @@ void openBackupManager({
     namespace: "production-recovery-v1",
     repositoryId: "orbit-tasks",
   },
+});
+
+const provider: DeploymentProvider = {
+  kind: "microvm",
+  async reconcile(request) {
+    request.operation.fence satisfies number;
+    request.desired.generation satisfies number;
+    request.artifact?.bundle.config.entry satisfies string | undefined;
+  },
+};
+
+createDeploymentProviderHandler(provider, {
+  token: "replace-with-a-high-entropy-provider-token-000000000000",
+});
+
+const remoteProvider = createHttpDeploymentProvider({
+  baseUrl: "https://runtime.example.com",
+  token: "replace-with-a-high-entropy-provider-token-000000000000",
+});
+
+void openProviderDeploymentAgent({
+  client: {} as Parameters<typeof openProviderDeploymentAgent>[0]["client"],
+  node: { id: "runner-01", region: "us-central" },
+  provider: remoteProvider,
+  registrationToken: "replace-with-a-high-entropy-enrollment-token-00000000",
 });
 
 // @ts-expect-error runner kind is intentionally closed.

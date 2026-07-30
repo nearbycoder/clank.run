@@ -130,10 +130,25 @@ for deliberate rotation or replacement.
 The coordinator transport is useful on one host, a private network, or multiple runner hosts.
 `openDeploymentAgent` supplies the authenticated heartbeat, claim, lease, fencing, and drain
 lifecycle, and leased nodes can retrieve verified release archives retained after enrollment is
-enabled. The operator still supplies the Docker/VM/microVM execution adapter, secret delivery, and
-application data plane; local SQLite data is never placed in the release transfer. The current
-built-in supervisor still owns application activation; use the protocol and agent loop as the
-secure control boundary for a runner integration and follow
+enabled. `openProviderDeploymentAgent` adds the strict `DeploymentProvider` reconciliation
+contract, while `clank-runner` connects it to the authenticated binary HTTP bridge:
+
+```sh
+export CLANK_CONTROL_URL=https://deploy.example.com
+export CLANK_RUNNER_NODE_ID=runner-01
+export CLANK_RUNNER_REGION=us-central
+export CLANK_RUNNER_REGISTRATION_TOKEN="$(your-secret-manager read runner-enrollment)"
+export CLANK_RUNNER_CREDENTIALS=/var/lib/clank-runner/credentials.json
+export CLANK_PROVIDER_URL=https://runtime.internal.example
+export CLANK_PROVIDER_TOKEN="$(your-secret-manager read runtime-provider)"
+clank-runner
+```
+
+The operator still supplies the provider-side Docker/VM/microVM mutation, project-scoped secret
+delivery, application data plane, and edge routing; local SQLite data is never placed in the
+release transfer. The current built-in supervisor still owns ordinary application activation.
+Use the protocol as the secure boundary for a deliberate runner integration and follow
+[Deployment provider adapters](provider-adapters.md) and
 [Durable distributed deployment](distributed-deployment.md).
 
 ### Optional off-host release uploads

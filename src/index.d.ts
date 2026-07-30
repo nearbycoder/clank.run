@@ -12,6 +12,7 @@ export * from "./observability.js";
 export * from "./recovery.js";
 export * from "./orchestration.js";
 export * from "./runner.js";
+export * from "./provider.js";
 export * from "./data-plane.js";
 export * from "./forms.js";
 export * from "./ui.js";

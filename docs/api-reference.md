@@ -155,6 +155,24 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   `DeploymentNodeCredentialStore`, `DeploymentExecutionContext`, `DeploymentAgentOptions`,
   `DeploymentAgentRuntime`.
 
+## Deployment providers
+
+- `openProviderDeploymentAgent(options)`: validates canonical desired-state operations, verifies
+  running artifacts, strips coordinator credentials before adapter execution, and reports only the
+  matching generation after provider convergence.
+- `reconcileDeploymentProvider(provider, operation, context)`: reusable validation/execution
+  boundary for custom agent loops.
+- `createHttpDeploymentProvider(options)`: HTTPS/loopback-only binary client with a separate bearer
+  token, redirect refusal, deadlines, exact idempotent retries, and bounded failure responses.
+- `createDeploymentProviderHandler(provider, options)`: authenticated
+  `POST /v1/clank/reconcile` bridge that independently bounds, hashes, and decodes every artifact.
+- `DEPLOYMENT_PROVIDER_RECONCILE_PATH`: fixed `/v1/clank/reconcile` provider protocol path.
+- `DeploymentProviderError`: stable HTTP `status` and `code` without a provider response body.
+- Types: `DeploymentProvider`, `DeploymentProviderRequest`, `DeploymentProviderOperation`,
+  `DeploymentProviderDesiredState`, `DeploymentProviderArtifact`,
+  `ProviderDeploymentAgentOptions`, `HttpDeploymentProviderOptions`,
+  `DeploymentProviderHandler`, and `DeploymentProviderHandlerOptions`.
+
 ## Managed data plane
 
 - `createManagedIngress(options)`: exact-host reverse proxy with fixed upstream origins, bounded streaming request bodies, hop-header stripping, safe retries, circuits, health, and request observation.
