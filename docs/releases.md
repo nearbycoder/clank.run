@@ -71,6 +71,10 @@ The `clank` npm name belongs to an unrelated project. Do not publish or document
 
 The GitHub release event runs the complete gate again, packs one tarball, creates a GitHub artifact attestation for it, attaches it to the release, and submits the same source to npm's staged-publishing queue through trusted publishing.
 
+The security gate also requires the package version, dated changelog heading, and the dependency
+example in Getting Started to match exactly. A version pull request therefore cannot pass while
+the published identity and installation documentation disagree.
+
 Every successful same-repository `main` CI run also starts the documentation deployment workflow.
 It checks out the exact commit that passed CI, rebuilds the complete documentation corpus, runs
 `doctor` and a deterministic dry-run, then deploys to the fixed `docs.clank.run` project. The

@@ -17,6 +17,22 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 
 `npm run check` covers the build, dependency contract, coverage floors, documentation/declaration audit, packed-release conformance, deterministic chaos tests, package/current-tree/history credential scans, and workflow-policy checks. Browser review remains intentionally explicit because visual and interaction regressions need a rendered application.
 
+## 2026-07-30 version 0.10.0 release phase
+
+- [x] Selected a minor release because the accumulated public provider, preview, usage, and
+  agent-readable CLI capabilities extend the package without intentionally breaking existing APIs.
+- [x] Synchronized `package.json`, the dated changelog release heading, and the Getting Started
+  dependency example at `0.10.0`.
+- [x] Added a permanent release-gate check preventing those three release identities from drifting.
+- [x] Passed the complete local gate: 327 tests, 85.92% line / 74.60% branch / 86.54%
+  function coverage, 59 Markdown files, 249 local links, 35 declaration files, 33 package
+  exports, packed-release conformance, and package/current-tree/reachable-history credential scans.
+- [x] Inspected the dry-run npm package: `@clank.run/framework@0.10.0`, 208 files, 1,148,732-byte
+  tarball, and 4,465,769 unpacked bytes under the enforced five-MiB ceiling.
+- [ ] Record GitHub CI/CodeQL, merge SHA, tag,
+  attestation, staged-publish approval, npm provenance, clean-consumer verification, and docs health.
+- [x] Added no Railway service, replica, volume, database, bucket, or other paid resource.
+
 ## 2026-07-30 agent-first create phase
 
 - [x] Added a versioned human/JSON template catalog with explicit starter capabilities.
