@@ -136,14 +136,24 @@ test("provider data stages isolated releases, migrates SQLite, snapshots, and ro
     assert.equal((await fixture.store.inspect("project_data_01")).generation, 2);
     assert.deepEqual(columns(firstPrepared.databasePath, "todo"), ["id", "title", "done"]);
     await writeFile(rollbackSnapshot, rollbackBytes, { mode: 0o600 });
+    await assert.rejects(
+      fixture.store.rollback({
+        projectId: "project_data_01",
+        generation: 2,
+        confirmation: "rollback project_data_01 2",
+        fence: 2,
+      }),
+      /rollback fence is stale/u,
+    );
 
     const rolledBack = await fixture.store.rollback({
       projectId: "project_data_01",
       generation: 2,
       confirmation: "rollback project_data_01 2",
+      fence: 7,
     });
     assert.equal(rolledBack.generation, 1);
-    assert.equal(rolledBack.fence, 3);
+    assert.equal(rolledBack.fence, 7);
     assert.equal(rolledBack.rollbackAvailable, false);
     assert.deepEqual(columns(firstPrepared.databasePath, "todo"), ["id", "title"]);
     await assert.rejects(

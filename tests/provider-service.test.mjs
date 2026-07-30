@@ -97,6 +97,196 @@ test("provider service orders durable data, deferred jobs, ingress, stop, and re
   }
 });
 
+test("provider service fences, drains, retries, rolls back, and deletes project data", async () => {
+  const fixture = await serviceFixture("destructive-lifecycle");
+  try {
+    const firstRuntime = await fixture.runtime({
+      generation: 1,
+      releaseId: "release_lifecycle_01",
+      mode: "initialize",
+      snapshot: await sqliteSnapshot(fixture.root, "first"),
+    });
+    const secondRuntime = await fixture.runtime({
+      generation: 2,
+      releaseId: "release_lifecycle_02",
+      mode: "preserve",
+      migrations: [
+        ["0001_init.sql", "CREATE TABLE todo (id TEXT PRIMARY KEY);\n"],
+        ["0002_done.sql", "ALTER TABLE todo ADD COLUMN done INTEGER DEFAULT 0;\n"],
+      ],
+    });
+    const opened = await fixture.open();
+    await opened.service.reconcile(providerInput(firstRuntime, 1));
+    await opened.service.reconcile(providerInput(secondRuntime, 2));
+
+    await assert.rejects(
+      opened.service.rollback(lifecycleInput("rollback", 2, 2)),
+      /conflicts with its durable fence/u,
+    );
+    await assert.rejects(
+      opened.service.rollback({
+        ...lifecycleInput("rollback", 2, 3),
+        confirmation: "rollback another_project 2",
+      }),
+      /confirmation must equal/u,
+    );
+    const credentialBearing = lifecycleInput("rollback", 2, 3);
+    await assert.rejects(
+      opened.service.rollback({
+        ...credentialBearing,
+        operation: {
+          ...credentialBearing.operation,
+          leaseToken: "must-not-cross-provider-boundary",
+        },
+      }),
+      /rollback operation is invalid/u,
+    );
+    const restored = await opened.service.rollback(lifecycleInput("rollback", 2, 3));
+    assert.equal(restored.generation, 1);
+    assert.equal(restored.fence, 3);
+    assert.equal(restored.rollbackAvailable, false);
+    assert.deepEqual(opened.events.slice(-2), [
+      "ingress-deactivate:2",
+      "runtime-stop:2",
+    ]);
+    const rolledBack = await opened.service.inspect("project_service_01");
+    assert.equal(rolledBack.phase, "rolled-back");
+    assert.equal(rolledBack.generation, 2);
+    assert.equal(rolledBack.operationId, "operation_rollback_2_3");
+    assert.equal((await opened.service.rollback(
+      lifecycleInput("rollback", 2, 3),
+    )).generation, 1);
+
+    const resumedRuntime = await fixture.runtime({
+      generation: 3,
+      releaseId: "release_lifecycle_01",
+      mode: "preserve",
+    });
+    await opened.service.reconcile(providerInput(resumedRuntime, 4));
+    assert.equal((await opened.service.inspect("project_service_01")).phase, "running");
+
+    opened.ingress.shouldDrain = false;
+    await assert.rejects(
+      opened.service.delete(lifecycleInput("delete", 3, 5)),
+      /did not drain/u,
+    );
+    assert.equal((await fixture.data.inspect("project_service_01")).generation, 3);
+    assert.equal(opened.runtimes.inspect()[0].generation, 3);
+    opened.ingress.shouldDrain = true;
+    assert.equal(
+      await opened.service.delete(lifecycleInput("delete", 3, 5)),
+      true,
+    );
+    assert.equal(await fixture.data.inspect("project_service_01"), null);
+    assert.equal(await opened.service.inspect("project_service_01"), null);
+    assert.equal(
+      await opened.service.delete(lifecycleInput("delete", 3, 5)),
+      false,
+    );
+    await opened.service.close();
+    await assert.rejects(
+      opened.service.snapshot("project_service_01"),
+      /service is closed/u,
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("provider service resumes rollback and deletion after their data commit points", async () => {
+  const fixture = await serviceFixture("lifecycle-crash-recovery");
+  try {
+    const firstRuntime = await fixture.runtime({
+      generation: 1,
+      releaseId: "release_crash_01",
+      mode: "initialize",
+      snapshot: await sqliteSnapshot(fixture.root, "first"),
+    });
+    const secondRuntime = await fixture.runtime({
+      generation: 2,
+      releaseId: "release_crash_02",
+      mode: "preserve",
+    });
+    const first = await fixture.open();
+    await first.service.reconcile(providerInput(firstRuntime, 1));
+    await first.service.reconcile(providerInput(secondRuntime, 2));
+    await first.service.close();
+
+    const statePath = join(
+      fixture.providerRoot,
+      "service",
+      "project_service_01.json",
+    );
+    const rollbackRequest = lifecycleInput("rollback", 2, 3);
+    await writeFile(statePath, JSON.stringify({
+      protocol: DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
+      projectId: "project_service_01",
+      operationId: rollbackRequest.operation.id,
+      fence: rollbackRequest.operation.fence,
+      generation: rollbackRequest.generation,
+      state: "stopped",
+      releaseId: null,
+      capsuleSha256: null,
+      phase: "rolling-back",
+      updatedAt: Date.now(),
+    }), { mode: 0o600 });
+    const interruptedRollback = await fixture.open();
+    await assert.rejects(
+      interruptedRollback.service.reconcile(providerInput(secondRuntime, 3)),
+      /lifecycle operation is incomplete/u,
+    );
+    await interruptedRollback.service.close();
+    await fixture.data.rollback({
+      projectId: "project_service_01",
+      generation: 2,
+      confirmation: "rollback project_service_01 2",
+      fence: 3,
+    });
+
+    const afterRollbackCrash = await fixture.open();
+    assert.equal(
+      (await afterRollbackCrash.service.rollback(rollbackRequest)).generation,
+      1,
+    );
+    assert.equal(
+      (await afterRollbackCrash.service.inspect("project_service_01")).phase,
+      "rolled-back",
+    );
+    const resumedRuntime = await fixture.runtime({
+      generation: 3,
+      releaseId: "release_crash_01",
+      mode: "preserve",
+    });
+    await afterRollbackCrash.service.reconcile(providerInput(resumedRuntime, 4));
+    await afterRollbackCrash.service.close();
+
+    const deleteRequest = lifecycleInput("delete", 3, 5);
+    await writeFile(statePath, JSON.stringify({
+      protocol: DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL,
+      projectId: "project_service_01",
+      operationId: deleteRequest.operation.id,
+      fence: deleteRequest.operation.fence,
+      generation: deleteRequest.generation,
+      state: "stopped",
+      releaseId: null,
+      capsuleSha256: null,
+      phase: "deleting",
+      updatedAt: Date.now(),
+    }), { mode: 0o600 });
+    await fixture.data.delete({
+      projectId: "project_service_01",
+      confirmation: "delete project_service_01",
+    });
+
+    const afterDeleteCrash = await fixture.open();
+    assert.equal(await afterDeleteCrash.service.delete(deleteRequest), true);
+    assert.equal(await afterDeleteCrash.service.inspect("project_service_01"), null);
+    await afterDeleteCrash.service.close();
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("provider service rejects unsafe roots and verifies capsules before durable intent", async () => {
   const linked = await serviceFixture("linked-state");
   try {
@@ -617,6 +807,23 @@ function stoppedInput(generation, fence) {
     },
     artifact: null,
     runtime: null,
+    signal: new AbortController().signal,
+  };
+}
+
+function lifecycleInput(action, generation, fence) {
+  return {
+    operation: {
+      id: `operation_${action}_${generation}_${fence}`,
+      projectId: "project_service_01",
+      fence,
+      attempt: 1,
+      maxAttempts: 3,
+    },
+    generation,
+    confirmation: action === "rollback"
+      ? `rollback project_service_01 ${generation}`
+      : "delete project_service_01",
     signal: new AbortController().signal,
   };
 }

@@ -18,6 +18,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   data recovery and migrations, isolated Docker activation, stopped desired state, and
   generation-bound private ingress. Exact response-lost and restart retries recover without
   process adoption; failed post-commit activation removes the candidate and remains retryable.
+- The complete provider service now owns fenced rollback and confirmed project deletion instead
+  of requiring callers to reach beneath a live runtime boundary. Both operations revoke traffic,
+  drain requests, stop every writer, persist restart-safe destructive intent, and resume safely
+  when a process exits after the data commit point.
 - Docker runtime launch can defer workers and the scheduler until `activate()` runs after provider
   data commits. Provider data validation has a cleanup hook that must quiesce an exposed candidate
   before uncommitted SQLite rollback and leaves recovery journaled when cleanup is uncertain.

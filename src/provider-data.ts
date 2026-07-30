@@ -104,6 +104,8 @@ export interface DeploymentProviderDataStore {
     projectId: string;
     generation: number;
     confirmation: string;
+    /** Optional project-wide lifecycle fence carried into restored state. */
+    fence?: number;
   }): Promise<DeploymentProviderDataState | null>;
   delete(input: {
     projectId: string;
@@ -766,6 +768,9 @@ export async function openDeploymentProviderDataStore(
     async rollback(input) {
       const projectId = identifier(input.projectId, "projectId");
       const generation = positiveInteger(input.generation, "generation");
+      const requestedFence = input.fence === undefined
+        ? null
+        : positiveInteger(input.fence, "fence");
       if (input.confirmation !== `rollback ${projectId} ${generation}`) {
         throw new TypeError(`confirmation must equal "rollback ${projectId} ${generation}".`);
       }
@@ -778,7 +783,11 @@ export async function openDeploymentProviderDataStore(
           throw new Error("Provider rollback generation is stale.");
         }
         if (!current.rollback) throw new Error("Provider rollback data is unavailable.");
-        await writeFence(fs, path, locations, current.active.fence);
+        if (requestedFence !== null && requestedFence < current.active.fence) {
+          throw new Error("Provider rollback fence is stale.");
+        }
+        const fence = requestedFence ?? current.active.fence;
+        await writeFence(fs, path, locations, fence);
         const database = resolveRelative(
           path,
           locations.project,
@@ -836,7 +845,7 @@ export async function openDeploymentProviderDataStore(
               protocol: DEPLOYMENT_PROVIDER_DATA_PROTOCOL,
               active: {
                 ...current.previous,
-                fence: current.active.fence,
+                fence,
               },
               previous: null,
               rollback: null,
@@ -864,7 +873,7 @@ export async function openDeploymentProviderDataStore(
           return current.previous
             ? publicState({
               ...current.previous,
-              fence: current.active.fence,
+              fence,
             }, false)
             : null;
         }

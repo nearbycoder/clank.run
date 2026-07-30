@@ -205,6 +205,7 @@ await data.rollback({
   projectId: "orbit_tasks",
   generation: 42,
   confirmation: "rollback orbit_tasks 42",
+  fence: 87, // optional project-wide lifecycle fence
 });
 
 await data.delete({
@@ -215,7 +216,9 @@ await data.delete({
 
 Rollback restores only the immediately preceding database/release and consumes that rollback
 point. It requires the exact current generation and confirmation string, carries the latest fence
-forward, and is itself journaled. Deletion recursively removes only the provider-owned project
+forward, and is itself journaled. A provider service supplies the optional project-wide operation
+fence so restored state rejects every earlier writer; direct offline operator use may omit it.
+Deletion recursively removes only the provider-owned project
 root and requires an exact confirmation. Stop and revoke ingress before either operation; restore
 and deletion do not coordinate public traffic themselves.
 

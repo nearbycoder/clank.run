@@ -207,13 +207,19 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `reconcile(request)`: independently verifies the capsule, persists exact operation/fence intent,
   drains before stopping a writer, recovers/stages/migrates data, defers jobs until commit,
   activates ingress last, and supports exact retry after response loss or restart.
+- `rollback(request)`: requires the exact current data generation, project-wide operation fence,
+  confirmation, and abort signal; it drains all writers, durably records intent, restores the
+  immediate predecessor, and resumes an interrupted post-commit attempt.
+- `delete(request)`: requires the same fenced lifecycle envelope plus exact project confirmation,
+  then drains all writers and removes provider data and service state idempotently.
 - `handle(request)`: generation-bound private application ingress.
-- `inspect(projectId)`, `snapshot(projectId)`, and `close()`: non-secret durable progress,
-  consistent backup input, and revoke/drain/verified-stop shutdown.
+- `inspect(projectId)`, `snapshot(projectId)`, and `close()`: serialized non-secret durable
+  progress, consistent backup input, and revoke/drain/verified-stop shutdown.
 - `DeploymentProviderDataStore.apply(input, validate, discard?)`: optional cleanup hook runs before
   uncommitted SQLite rollback; failed cleanup leaves the journal intact.
-- Types: `DeploymentProviderService`, `DeploymentProviderServiceOptions`,
-  `DockerDeploymentProviderServiceOptions`, and `DeploymentProviderServiceState`.
+- Types: `DeploymentProviderService`, `DeploymentProviderServiceLifecycleRequest`,
+  `DeploymentProviderServiceOptions`, `DockerDeploymentProviderServiceOptions`, and
+  `DeploymentProviderServiceState`.
 
 ## Managed data plane
 

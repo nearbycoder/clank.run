@@ -1,4 +1,5 @@
 import type {
+  DeploymentProviderDataState,
   DeploymentProviderDataSnapshot,
   DeploymentProviderDataStore,
   DeploymentProviderDataStoreOptions,
@@ -11,7 +12,10 @@ import type {
   DeploymentRuntimeIngress,
   DeploymentRuntimeIngressOptions,
 } from "./provider-runtime.js";
-import type { DeploymentProvider } from "./provider.js";
+import type {
+  DeploymentProvider,
+  DeploymentProviderOperation,
+} from "./provider.js";
 
 export declare const DEPLOYMENT_PROVIDER_SERVICE_PROTOCOL: "clank-provider-service/1";
 
@@ -24,8 +28,23 @@ export interface DeploymentProviderServiceState {
   readonly state: "running" | "stopped";
   readonly releaseId: string | null;
   readonly capsuleSha256: string | null;
-  readonly phase: "reconciling" | "running" | "stopped";
+  readonly phase:
+    | "reconciling"
+    | "running"
+    | "stopped"
+    | "rolling-back"
+    | "rolled-back"
+    | "deleting";
   readonly updatedAt: number;
+}
+
+export interface DeploymentProviderServiceLifecycleRequest {
+  readonly operation: DeploymentProviderOperation;
+  /** Exact current provider-data generation being changed. */
+  readonly generation: number;
+  /** Exact human/operator confirmation required by the data boundary. */
+  readonly confirmation: string;
+  readonly signal: AbortSignal;
 }
 
 export interface DeploymentProviderServiceOptions {
@@ -68,6 +87,12 @@ export interface DeploymentProviderService extends DeploymentProvider {
   inspect(projectId: string): Promise<DeploymentProviderServiceState | null>;
   /** Creates a consistent provider-data snapshot for external encrypted backup. */
   snapshot(projectId: string): Promise<DeploymentProviderDataSnapshot | null>;
+  /** Drains every writer and restores the immediate provider-data predecessor. */
+  rollback(
+    request: DeploymentProviderServiceLifecycleRequest,
+  ): Promise<DeploymentProviderDataState | null>;
+  /** Drains every writer and permanently removes provider-owned project state. */
+  delete(request: DeploymentProviderServiceLifecycleRequest): Promise<boolean>;
   /** Revokes traffic, drains requests, stops runtimes, and closes the service. */
   close(): Promise<void>;
 }

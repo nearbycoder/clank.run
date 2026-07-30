@@ -92,6 +92,8 @@ export interface DeploymentProviderDataStore {
     projectId: string;
     generation: number;
     confirmation: string;
+    /** Optional project-wide lifecycle fence carried into restored state. */
+    fence?: number;
   }): Promise<DeploymentProviderDataState | null>;
   delete(input: {
     projectId: string;
