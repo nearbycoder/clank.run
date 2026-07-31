@@ -1558,9 +1558,9 @@ export function createMeter(options: MeterOptions): MeterController {
   });
   const percentage = computed(() => (state.value.value - range.min) / (range.max - range.min) * 100, { name: `${id}.percentage` });
   const formatter = new Intl.NumberFormat(options.locale, options.format ?? { style: "percent" });
-  const formattedValue = () => options.format
-    ? formatter.format(state.value.value)
-    : formatter.format(percentage.value / 100);
+  const formattedValue = () => formatter.format((options.format?.style ?? "percent") === "percent"
+    ? percentage.value / 100
+    : state.value.value);
   const valueText = () => options.ariaValueText
     ?? options.getAriaValueText?.(formattedValue(), state.value.value)
     ?? (typeof options.valueText === "function"
@@ -1671,7 +1671,7 @@ export function createProgress(options: ProgressOptions): ProgressController {
     const current = state.value.value;
     const percent = percentage.value;
     if (current === null || percent === null) return null;
-    return options.format ? formatter.format(current) : formatter.format(percent / 100);
+    return formatter.format((options.format?.style ?? "percent") === "percent" ? percent / 100 : current);
   };
   const valueText = () => {
     const current = state.value.value;

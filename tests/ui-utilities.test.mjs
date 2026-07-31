@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { effect } from "../dist/core.js";
 import {
   createScrollArea,
   createToastManager,
@@ -108,10 +109,13 @@ test("scrollbar wheel, keyboard, track, and thumb input consume movement only wh
   area.measure();
 
   const horizontal = area.scrollbar("horizontal");
+  let accessibleOffset = -1;
+  const stopAccessibleOffset = effect(() => { accessibleOffset = horizontal["aria-valuenow"](); });
   const wheel = wheelEvent({ deltaX: 30 });
   horizontal.onWheel(wheel);
   assert.equal(wheel.prevented, true);
   assert.equal(area.scrollX.value, 30);
+  assert.equal(accessibleOffset, 30, "scrollbar ARIA state tracks controller-driven movement");
   const canceledWheel = wheelEvent({ deltaX: 30, defaultPrevented: true });
   horizontal.onWheel(canceledWheel);
   assert.equal(area.scrollX.value, 30, "pre-canceled input never mutates scroll state");
@@ -132,6 +136,7 @@ test("scrollbar wheel, keyboard, track, and thumb input consume movement only wh
   const end = keyEvent("End");
   horizontal.onKeyDown(end);
   assert.equal(area.scrollX.value, 300);
+  assert.equal(accessibleOffset, 300);
 
   area.scrollTo({ left: 0 });
   const trackPress = pointerEvent({ currentTarget: track, target: track, clientX: 90 });
@@ -145,6 +150,7 @@ test("scrollbar wheel, keyboard, track, and thumb input consume movement only wh
   assert.equal(area.scrollX.value, 150);
   document.dispatch("pointerup", pointerEvent({ pointerId: 7, clientX: 37.5 }));
   assert.equal(thumbProps["data-dragging"](), undefined);
+  stopAccessibleOffset();
   area.dispose();
 });
 

@@ -1,6 +1,5 @@
 /* @clankImportSource ../vendor/dom.js */
-import { onCleanup, signal } from "../vendor/core.js";
-import { For, Portal, Show } from "../vendor/dom.js";
+import { For, Portal, Show, onCleanup, signal } from "../vendor/dom.js";
 import {
   createAccordion,
   createAlertDialog,
@@ -86,13 +85,14 @@ function PopupLayer(props: { popup: any; kind?: string; children: unknown }) {
 
 function MenuLayer(props: { menu: any; children?: unknown }) {
   const menu = props.menu;
+  const hasChildren = Array.isArray(props.children) ? props.children.length > 0 : props.children !== null && props.children !== undefined;
   return (
     <Show when={() => menu.isMounted()}>
       <Portal>
         <div {...menu.portal()} class="portal-root">
           <div {...menu.positioner()} class="floating-positioner">
             <div {...menu.popup()} class="demo-menu">
-              {props.children ?? (
+              {hasChildren ? props.children : (
                 <>
                   <button {...menu.item("new")} class="demo-menu-item"><span>New document</span><kbd>⌘N</kbd></button>
                   <button {...menu.item("duplicate")} class="demo-menu-item"><span>Duplicate</span><kbd>⌘D</kbd></button>
@@ -303,7 +303,7 @@ export function DrawerStory() {
 export function FieldStory() {
   const field = createField({ id: "story-field", name: "workspace", defaultValue: "", required: true, validationMode: "onChange", validate: (value) => value.trim().length < 3 ? "Use at least three characters." : null });
   cleanup(field);
-  return <div {...field.root()} class="demo-field-stack wide-control"><label {...field.label()} class="demo-label">Workspace name</label><input {...field.control()} class="demo-input" placeholder="Acme Studio" /><p {...field.description()} class="field-description">Shown to every member of your organization.</p><p {...field.error()} class="field-error" /><span {...field.validity()} class="demo-status" /></div>;
+  return <div {...field.root()} class="demo-field-stack wide-control"><label {...field.label()} class="demo-label">Workspace name</label><input {...field.control()} class="demo-input" placeholder="Acme Studio" /><p {...field.description()} class="field-description">Shown to every member of your organization.</p><p {...field.error()} class="field-error">{() => field.errors.value[0] ?? ""}</p><span {...field.validity()} class="demo-status">{() => field.valid.value === true ? "Ready to use." : field.valid.value === false ? "Needs attention." : ""}</span></div>;
 }
 
 export function FieldsetStory() {
@@ -318,7 +318,7 @@ export function FormStory() {
   const unregisterEmail = form.register("email", email);
   const unregisterRole = form.register("role", role);
   if (typeof document !== "undefined") onCleanup(() => { unregisterEmail(); unregisterRole(); form.dispose(); email.dispose(); role.dispose(); });
-  return <form {...form.root()} class="demo-form"><div {...email.root()} class="demo-field-stack"><label {...email.label()} class="demo-label">Email</label><input {...email.control({ type: "email" })} class="demo-input" placeholder="ada@example.com" /><p {...email.error()} class="field-error" /></div><div {...role.root()} class="demo-field-stack"><label {...role.label()} class="demo-label">Role</label><select {...role.control()} class="demo-input"><option value="member">Member</option><option value="admin">Administrator</option></select></div><button class="demo-button" type="submit">Create member</button></form>;
+  return <form {...form.root()} class="demo-form"><div {...email.root()} class="demo-field-stack"><label {...email.label()} class="demo-label">Email</label><input {...email.control({ type: "email" })} class="demo-input" placeholder="ada@example.com" /><p {...email.error()} class="field-error">{() => email.errors.value[0] ?? ""}</p></div><div {...role.root()} class="demo-field-stack"><label {...role.label()} class="demo-label">Role</label><select {...role.control()} class="demo-input"><option value="member">Member</option><option value="admin">Administrator</option></select></div><button class="demo-button" type="submit">Create member</button></form>;
 }
 
 export function InputStory() {
@@ -434,7 +434,7 @@ export function SeparatorStory() {
 
 export function SliderStory() {
   const slider = createSlider({ id: "story-slider", name: "range", defaultValue: [24, 76], min: 0, max: 100, minGap: 8 });
-  return <div {...slider.root()} class="slider-card"><div class="range-heading"><label {...slider.label()}>Traffic range</label><strong {...slider.valueText()} /></div><div {...slider.control()} class="demo-slider"><div {...slider.track()} class="slider-track"><div {...slider.indicator()} class="slider-indicator" /></div><For each={[0, 1]}>{(index) => <><div {...slider.thumb(index, { getAriaLabel: (value) => value ? "Maximum" : "Minimum" })} class="slider-thumb" /><HiddenInput {...slider.input(index)} /></>}</For></div><div class="slider-scale"><span>0</span><span>50</span><span>100</span></div></div>;
+  return <div {...slider.root()} class="slider-card"><div class="range-heading"><label {...slider.label()}>Traffic range</label><strong {...slider.valueText()}>{() => slider.values.value.join(" – ")}</strong></div><div {...slider.control()} class="demo-slider"><div {...slider.track()} class="slider-track"><div {...slider.indicator()} class="slider-indicator" /></div><For each={[0, 1]}>{(index) => <><div {...slider.thumb(index, { getAriaLabel: (value) => value ? "Maximum" : "Minimum" })} class="slider-thumb" /><HiddenInput {...slider.input(index)} /></>}</For></div><div class="slider-scale"><span>0</span><span>50</span><span>100</span></div></div>;
 }
 
 export function SwitchStory() {
@@ -478,7 +478,7 @@ export function ToolbarStory() {
       { value: "search", textValue: "Search", kind: "input", type: "search", placeholder: "Find…" },
     ],
   });
-  return <div {...toolbar.root()} class="demo-toolbar"><button {...toolbar.button("bold")} class="toolbar-button"><strong>B</strong></button><button {...toolbar.button("italic")} class="toolbar-button"><em>I</em></button><button {...toolbar.button("link")} class="toolbar-button">↗</button><span {...toolbar.separator("separator")} class="demo-separator vertical" /><input {...toolbar.input("search")} class="toolbar-input" /></div>;
+  return <div {...toolbar.root()} class="demo-toolbar"><button {...toolbar.button("bold")} class="toolbar-button" aria-label="Bold"><strong aria-hidden="true">B</strong></button><button {...toolbar.button("italic")} class="toolbar-button" aria-label="Italic"><em aria-hidden="true">I</em></button><button {...toolbar.button("link")} class="toolbar-button" aria-label="Insert link"><span aria-hidden="true">↗</span></button><span {...toolbar.separator("separator")} class="demo-separator vertical" /><input {...toolbar.input("search")} class="toolbar-input" aria-label="Find" /></div>;
 }
 
 export function TooltipStory() {

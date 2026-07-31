@@ -56,11 +56,12 @@ test("Design Studio serves every real component and theme contract securely", as
   const appModule = home.match(/import\("(\/assets\/app\.[a-f0-9]{16}\.js)"\)/u)?.[1];
   assert.ok(stylesheet);
   assert.ok(appModule);
-  const [styleResponse, appResponse, studioModule, storiesModule] = await Promise.all([
+  const [styleResponse, appResponse, studioModule, storiesModule, vendorModule] = await Promise.all([
     fetch(`${origin}${stylesheet}`),
     fetch(`${origin}${appModule}`),
     fetch(`${origin}/assets/studio.js`),
     fetch(`${origin}/assets/stories.js`),
+    fetch(`${origin}/vendor/dom.js?v=${manifest.vendorVersion}`),
   ]);
   assert.equal(styleResponse.status, 200);
   assert.match(styleResponse.headers.get("cache-control") ?? "", /immutable/u);
@@ -71,6 +72,14 @@ test("Design Studio serves every real component and theme contract securely", as
   assert.equal(storiesModule.status, 200);
   assert.match(studioModule.headers.get("cache-control") ?? "", /must-revalidate/u);
   assert.match(storiesModule.headers.get("cache-control") ?? "", /must-revalidate/u);
+  const studioSource = await studioModule.text();
+  const storiesSource = await storiesModule.text();
+  for (const source of [studioSource, storiesSource]) {
+    assert.match(source, /\.\.\/vendor\/[^"']+\.js\?v=[a-f0-9]{16}/u);
+    assert.ok(source.includes(`?v=${manifest.vendorVersion}`));
+  }
+  assert.equal(vendorModule.status, 200);
+  assert.match(await vendorModule.text(), new RegExp(`from "\\./core\\.js\\?v=${manifest.vendorVersion}"`, "u"));
   assert.equal((await fetch(`${origin}/assets/app.outdated.js`)).status, 404);
 
   const catalogResponse = await fetch(`${origin}/api/catalog.json`);
@@ -151,6 +160,7 @@ test("Design Studio source remains a zero-dependency first-party Clank project",
     assert.equal(packageJson[field], undefined);
   }
   assert.equal(manifest.protocol, "clank-design/1");
+  assert.match(manifest.vendorVersion, /^[a-f0-9]{16}$/u);
   assert.equal(manifest.componentCount, 37);
   assert.equal(manifest.themeCount, 10);
 });

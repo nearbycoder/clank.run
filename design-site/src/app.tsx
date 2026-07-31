@@ -10,5 +10,12 @@ const boot = readState<DesignStudioProps>() ?? {
 };
 
 const root = document.getElementById("design-root");
-if (root) hydrate(root, <DesignStudio {...boot} />);
-document.documentElement.dataset.designEnhanced = "true";
+document.documentElement.dataset.designEnhanced = "loading";
+try {
+  if (root) hydrate(root, <DesignStudio {...boot} />);
+  document.documentElement.dataset.designEnhanced = "true";
+} catch (error) {
+  document.documentElement.dataset.designEnhanced = "failed";
+  document.documentElement.dataset.designEnhancementError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  throw error;
+}

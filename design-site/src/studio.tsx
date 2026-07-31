@@ -1,6 +1,5 @@
 /* @clankImportSource ../vendor/dom.js */
-import { computed, effect, signal } from "../vendor/core.js";
-import { For, Show } from "../vendor/dom.js";
+import { For, Show, computed, effect, signal } from "../vendor/dom.js";
 import {
   CLANK_THEME_PRESETS,
   UI_COMPONENT_CATALOG,

@@ -701,6 +701,8 @@ test("meter and progress clamp ranges, expose percentages, and remain style-free
   assert.equal(meterRoot["aria-labelledby"](), undefined);
   assert.equal(meter.value().children(), "50%");
   assert.equal(meter.indicator().style["--clank-meter-percentage"](), "50%");
+  const explicitPercentMeter = createMeter({ id: "storage-explicit-percent", min: 0, max: 100, defaultValue: 68, format: { style: "percent", maximumFractionDigits: 0 } });
+  assert.equal(explicitPercentMeter.root()["aria-valuetext"](), "68%", "explicit percent format options normalize the configured range");
   meter.setValue(1_000);
   assert.equal(meter.current.value, 120);
   assert.equal(meter.root()["data-state"](), "complete");
@@ -721,6 +723,8 @@ test("meter and progress clamp ranges, expose percentages, and remain style-free
   assert.equal(progressLabel.id, "upload-label");
   assert.equal(progressRoot["aria-labelledby"](), "upload-label");
   assert.equal(progress.value().children(), "25%");
+  const explicitPercentProgress = createProgress({ id: "upload-explicit-percent", min: 0, max: 100, defaultValue: 72, format: { style: "percent", maximumFractionDigits: 0 } });
+  assert.equal(explicitPercentProgress.root()["aria-valuetext"](), "72%", "explicit progress percent options normalize the configured range");
 });
 
 test("separators distinguish semantic and decorative usage", () => {

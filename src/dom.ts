@@ -1,5 +1,6 @@
 import {
   batch,
+  computed,
   createRoot,
   effect,
   isSignal,
@@ -11,6 +12,10 @@ import {
 } from "./core.ts";
 import { agentActionPath, type AgentActionTarget } from "./agent-contract.ts";
 import { assertSafeAttributeValue } from "./security.ts";
+
+// Re-export the lifecycle primitives used by JSX components so applications can
+// bind rendering and cleanup to the exact same runtime instance as the DOM owner.
+export { computed, effect, onCleanup, signal };
 
 export const VNODE = Symbol.for("clank.vnode");
 export const Fragment = Symbol.for("clank.fragment");
