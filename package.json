@@ -81,6 +81,7 @@
     "scripts/clank.mjs",
     "scripts/clank-dev.mjs",
     "scripts/cli-deploy.mjs",
+    "scripts/cli-compose.mjs",
     "scripts/clank-platform.mjs",
     "scripts/clank-runner.mjs",
     "scripts/clank-provider.mjs",

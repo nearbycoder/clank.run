@@ -56,6 +56,9 @@ clank deploy
 for the interactive launcher, or give the same commands directly to a coding agent or CI job.
 Agents can inspect the exact starter capabilities with `clank templates --json` and receive a
 checksummed file manifest plus next-command map from `clank create my-app --json`.
+For a product built from a conversation, `clank compose` accepts an agent-prepared blueprint or a
+deliberately configured agent executable, freezes a checksummed file review, and writes nothing
+until a person or orchestrator approves that exact digest. [Read the composition contract →](docs/conversational-build.md)
 `npm run dev` is a complete local supervisor: it rebuilds TypeScript and Tailwind, starts only
 healthy replacements, keeps the last good process after errors, and reloads connected browsers.
 Agents can use `clank dev --json` for stable newline-delimited lifecycle events.
@@ -156,7 +159,7 @@ applications do not need a separate runtime compiler or bundler.
 | Reactivity | Signals, lazy computed values, effects with cleanup, batching, rollback transactions, untracked reads, owned roots, deep proxy stores, snapshots, async resources, stream reduction |
 | UI | Typed compiler-powered TSX, automatic reactive expressions and props, keyed lists, stable text nodes, lifecycle/context, forms, dialogs, tabs, disclosures, pagination, directives, `Show`, `For`, `Switch`, lazy components |
 | Forms | Schema validation, typed fields, accessible control/error props, touched/dirty state, cross-field rules, cancellation, server errors, invalid-focus behavior, reset, agent-readable manifests |
-| AI | Web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface with secret-value redaction |
+| AI | Approval-bound conversational application composition, web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface with secret-value redaction |
 | UI↔MCP parity | Typed `agentAction` function references, bounded SSR/DOM inspection, manifest and revision verification, stable-control enforcement, structured mismatch reports |
 | Generated verification | Blueprint-derived synthetic fixture users and related records, real backend seeding, ownership isolation, exact agent/UI manifest parity, and per-route SSR smoke tests with Node's built-in test runner |
 | Routing | Parameters, optional segments, wildcards, repeated query values, async loaders, aborts, guards, redirects, titles, links, history navigation |
@@ -229,6 +232,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Headless UI behavior](docs/ui.md)
 - [Performance model](docs/performance.md)
 - [AI-first contracts](docs/ai-first.md)
+- [Conversational application building](docs/conversational-build.md)
 - [Organizations, RBAC, invitations, and scoped tokens](docs/organizations.md)
 - [Service drivers for files, email, jobs, and webhooks](docs/services.md)
 - [Atomic local and S3-compatible object storage](docs/object-storage.md)
