@@ -65,6 +65,9 @@ test("Design Studio serves every real component and theme contract securely", as
   ]);
   assert.equal(styleResponse.status, 200);
   assert.match(styleResponse.headers.get("cache-control") ?? "", /immutable/u);
+  const styleSource = await styleResponse.text();
+  assert.match(styleSource, /\.scrollbar\.vertical\s*\{[^}]*width:\s*16px/u);
+  assert.match(styleSource, /\.scroll-thumb::after\s*\{[^}]*pointer-events:\s*none/u);
   assert.equal(appResponse.status, 200);
   assert.match(appResponse.headers.get("cache-control") ?? "", /immutable/u);
   assert.match(await appResponse.text(), /\.\/studio\.js/u);
