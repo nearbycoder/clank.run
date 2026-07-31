@@ -320,7 +320,7 @@ function InviteDialog() {
       <section {...inviteDialog.dialog()} class="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-3xl bg-white p-7 shadow-2xl">
         <div class="flex items-start justify-between gap-5">
           <div><h2 {...inviteDialog.title()} class="text-2xl font-semibold">Invite a teammate</h2><p {...inviteDialog.description()} class="mt-2 text-sm text-black/50">They’ll receive a secure link to join Relay Product Studio.</p></div>
-          <button class="grid size-10 place-items-center rounded-full bg-cloud text-xl" onClick={inviteDialog.hide} agentLabel="Close invite dialog">×</button>
+          <button {...inviteDialog.close({ agentLabel: "Close invite dialog" })} class="grid size-10 place-items-center rounded-full bg-cloud text-xl">×</button>
         </div>
         <form {...invite.props()} class="mt-7 space-y-5">
           <div><label class="text-sm font-semibold" for={email.id}>Work email</label><input {...email.input({ type: "email" })} autocomplete="email" class="mt-2 w-full rounded-xl border border-black/10 px-4 py-3 focus:border-electric" /><FieldError field={email} /></div>

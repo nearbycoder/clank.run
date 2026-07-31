@@ -16,9 +16,11 @@ export const VNODE = Symbol.for("clank.vnode");
 export const Fragment = Symbol.for("clank.fragment");
 export const EXPRESSION = Symbol.for("clank.expression");
 export const KEYED = Symbol.for("clank.keyed");
+export const PORTAL = Symbol.for("clank.portal");
+export const RENDER_ID_CONTEXT = Symbol.for("clank.render-id-context");
 
 export type Primitive = string | number | bigint | boolean | null | undefined;
-export type Renderable = Primitive | Node | VNode | Renderable[] | ReactiveSignal<any> | Computed<any> | ReactiveExpression | KeyedBlock<any> | ((...args: any[]) => Renderable) | Promise<Renderable>;
+export type Renderable = Primitive | Node | VNode | readonly Renderable[] | ReactiveSignal<any> | Computed<any> | ReactiveExpression | KeyedBlock<any> | PortalBlock | ((...args: any[]) => Renderable) | Promise<Renderable>;
 export type Component<P extends Record<string, unknown> = Record<string, unknown>> = (props: P & { children: Renderable[] }) => Renderable;
 export type ElementType = string | Component<any> | typeof Fragment;
 
@@ -36,10 +38,25 @@ export interface ReactiveExpression<T = unknown> {
 
 export interface KeyedBlock<T> {
   readonly [KEYED]: true;
-  readonly each: T[] | ReactiveSignal<T[]> | Computed<T[]> | ReactiveExpression<T[]> | (() => T[]);
+  readonly each: readonly T[] | ReactiveSignal<readonly T[]> | Computed<readonly T[]> | ReactiveExpression<readonly T[]> | (() => readonly T[]);
   readonly by?: keyof T | ((item: T, index: number) => PropertyKey);
   readonly fallback?: Renderable;
   readonly renderItem: (item: T, index: () => number) => Renderable;
+}
+
+export type PortalTarget = Element | DocumentFragment | string | (() => Element | DocumentFragment | null | undefined);
+
+export interface PortalBlock {
+  readonly [PORTAL]: true;
+  readonly children: Renderable[];
+  readonly target?: PortalTarget;
+  readonly disabled?: boolean;
+}
+
+export interface PortalProps {
+  target?: PortalTarget;
+  disabled?: boolean;
+  children: Renderable | Renderable[];
 }
 
 interface Mounted {
@@ -57,6 +74,8 @@ interface ComponentFrame {
   mounts: Array<() => void | Cleanup>;
 }
 
+interface RenderIdState { next: number; }
+
 export interface ComponentEvaluation {
   output: Renderable;
   contexts: Map<symbol, unknown>;
@@ -69,6 +88,11 @@ export interface ClankContext<T> {
 }
 
 let currentFrame: ComponentFrame | null = null;
+
+/** @internal Creates the shared root contexts used by the DOM and SSR renderers. */
+export function createRenderContexts(): Map<symbol, unknown> {
+  return new Map([[RENDER_ID_CONTEXT, { next: 0 } satisfies RenderIdState]]);
+}
 
 export function h(
   type: ElementType,
@@ -116,7 +140,7 @@ export function render(root: Element | DocumentFragment, view: Renderable): Clea
   while (root.firstChild) root.removeChild(root.firstChild);
   createRoot((dispose) => {
     disposeRoot = dispose;
-    const mounted = mountValue(root, view, null, { contexts: new Map() });
+    const mounted = mountValue(root, view, null, { contexts: createRenderContexts() });
     onCleanup(() => mounted.dispose());
   });
   return () => {
@@ -132,7 +156,7 @@ export function hydrate(root: Element, view: Renderable): Cleanup {
     createRoot((dispose) => {
       disposeRoot = dispose;
       const cursor: HydrationCursor = { node: root.firstChild };
-      const mounted = hydrateValue(root, view, cursor, { contexts: new Map() });
+      const mounted = hydrateValue(root, view, cursor, { contexts: createRenderContexts() });
       onCleanup(() => mounted.dispose());
       if (cursor.node !== null) throw new HydrationMismatch("Unexpected trailing server-rendered nodes.");
     });
@@ -158,15 +182,47 @@ class HydrationMismatch extends Error {
   readonly name = "HydrationMismatch";
 }
 
+function ownerDocumentFor(node: Node): Document {
+  const candidate = node.nodeType === 9 ? node as Document : node.ownerDocument ?? globalThis.document;
+  if (!candidate) throw new Error("Clank rendering requires an owner document.");
+  return candidate;
+}
+
+function realmClass(parent: Node, name: "Node" | "Text" | "Comment" | "Element"): typeof Node | undefined {
+  const document = parent.nodeType === 9 ? parent as Document : parent.ownerDocument ?? globalThis.document;
+  return (document?.defaultView?.[name] ?? globalThis[name]) as typeof Node | undefined;
+}
+
+function isNodeValue(parent: Node, value: unknown): value is Node {
+  const NodeClass = realmClass(parent, "Node");
+  return Boolean(NodeClass && value instanceof NodeClass);
+}
+
+function isTextNode(parent: Node, value: Node | null): value is Text {
+  const TextClass = realmClass(parent, "Text");
+  return Boolean(value && ((TextClass && value instanceof TextClass) || value.nodeType === 3));
+}
+
+function isCommentNode(parent: Node, value: Node | null): value is Comment {
+  const CommentClass = realmClass(parent, "Comment");
+  return Boolean(value && ((CommentClass && value instanceof CommentClass) || value.nodeType === 8));
+}
+
+function isElementNode(parent: Node, value: Node | null): value is Element {
+  const ElementClass = realmClass(parent, "Element");
+  return Boolean(value && ((ElementClass && value instanceof ElementClass) || value.nodeType === 1));
+}
+
 function hydrateValue(parent: Node, input: Renderable, cursor: HydrationCursor, context: MountContext): Mounted {
   if (isExpression(input)) return hydrateDynamic(parent, input.read as () => Renderable, cursor, context);
   if (isSignal(input)) return hydrateDynamic(parent, () => input.value as Renderable, cursor, context);
   if (isKeyedBlock(input)) return hydrateKeyed(parent, input, cursor, context);
+  if (isPortalBlock(input)) return hydratePortal(parent, input, cursor, context);
   if (typeof input === "function") return hydrateDynamic(parent, input as () => Renderable, cursor, context);
   if (input instanceof Promise) throw new HydrationMismatch("Promises cannot be synchronously hydrated.");
   if (Array.isArray(input)) return hydrateFragment(parent, input, cursor, context);
   if (isVNode(input)) return hydrateVNode(parent, input, cursor, context);
-  if (typeof Node !== "undefined" && input instanceof Node) {
+  if (isNodeValue(parent, input)) {
     if (cursor.node !== input) throw new HydrationMismatch("Client Node does not match the server Node.");
     cursor.node = input.nextSibling;
     return simpleMount([input]);
@@ -178,12 +234,12 @@ function hydrateValue(parent: Node, input: Renderable, cursor: HydrationCursor, 
   const node = cursor.node;
   const value = String(input);
   if (value === "") return simpleMount([]);
-  if (!(node instanceof Text)) {
-    const found = node instanceof Comment ? `<!--${node.data}-->` : node instanceof Element ? `<${node.localName}>` : String(node);
+  if (!isTextNode(parent, node)) {
+    const found = isCommentNode(parent, node) ? `<!--${(node as Comment).data}-->` : isElementNode(parent, node) ? `<${(node as Element).localName}>` : String(node);
     throw new HydrationMismatch(`Expected server-rendered text ${JSON.stringify(value)}; found ${found}.`);
   }
   if (node.data !== value && node.data.startsWith(value)) {
-    const remainder = document.createTextNode(node.data.slice(value.length));
+    const remainder = ownerDocumentFor(parent).createTextNode(node.data.slice(value.length));
     node.data = value;
     parent.insertBefore(remainder, node.nextSibling);
     cursor.node = remainder;
@@ -215,8 +271,8 @@ function hydrateDynamic(parent: Node, read: () => Renderable, cursor: HydrationC
   let current: Mounted | undefined;
   let end: Comment;
   try {
-    if (isTextValue(initial) && String(initial) === "" && cursor.node instanceof Comment && cursor.node.data === "clank:end") {
-      const text = document.createTextNode("");
+    if (isTextValue(initial) && String(initial) === "" && isCommentNode(parent, cursor.node) && (cursor.node as Comment).data === "clank:end") {
+      const text = ownerDocumentFor(parent).createTextNode("");
       parent.insertBefore(text, cursor.node);
       current = simpleMount([text]);
     } else {
@@ -239,7 +295,7 @@ function hydrateDynamic(parent: Node, read: () => Renderable, cursor: HydrationC
         return;
       }
       if (Object.is(next, currentValue)) return;
-      if (isTextValue(next) && current!.nodes.length === 1 && current!.nodes[0] instanceof Text) {
+      if (isTextValue(next) && current!.nodes.length === 1 && isTextNode(parent, current!.nodes[0])) {
         const text = String(next);
         if (current!.nodes[0].data !== text) current!.nodes[0].data = text;
         currentValue = next;
@@ -310,7 +366,7 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
   const tag = vnode.type as string;
   const namespace = context.namespace === "svg" || tag === "svg" ? "svg" : undefined;
   const expectedTag = namespace === "svg" ? tag : tag.toLowerCase();
-  if (!(node instanceof Element) || node.localName !== expectedTag) {
+  if (!isElementNode(parent, node) || (node as Element).localName !== expectedTag) {
     throw new HydrationMismatch(`Expected server-rendered <${tag}>.`);
   }
   cursor.node = node.nextSibling;
@@ -320,8 +376,11 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
   let children: Mounted | undefined;
   const ref = vnode.props.ref;
   try {
+    const classCleanup = bindClassProperties(node, vnode.props);
+    if (classCleanup) cleanups.push(classCleanup);
     for (const [name, value] of Object.entries(vnode.props)) {
       if (name === "children" || name === "key") continue;
+      if (name === "class" || name === "className" || name === "classList") continue;
       if (bindingNeedsChildren(node, name)) {
         deferred.push([name, value]);
         continue;
@@ -358,34 +417,38 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
     if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === node) {
       (ref as ReactiveSignal<Element | null>).value = null;
     }
+    if (typeof ref === "function") (ref as (element: Element | null) => void)(null);
   });
 }
 
 function expectComment(cursor: HydrationCursor, data: string): Comment {
   const node = cursor.node;
-  if (!(node instanceof Comment) || node.data !== data) throw new HydrationMismatch(`Expected <!--${data}--> hydration marker.`);
+  const document = node?.ownerDocument ?? globalThis.document;
+  const CommentClass = document?.defaultView?.Comment ?? globalThis.Comment;
+  if (!node || !((CommentClass && node instanceof CommentClass) || node.nodeType === 8) || (node as Comment).data !== data) throw new HydrationMismatch(`Expected <!--${data}--> hydration marker.`);
   cursor.node = node.nextSibling;
-  return node;
+  return node as Comment;
 }
 
 function mountValue(parent: Node, input: Renderable, before: Node | null, context: MountContext): Mounted {
   if (isExpression(input)) return mountDynamic(parent, input.read as () => Renderable, before, context);
   if (isSignal(input)) return mountDynamic(parent, () => input.value as Renderable, before, context);
   if (isKeyedBlock(input)) return mountKeyed(parent, input, before, context);
+  if (isPortalBlock(input)) return mountPortal(parent, input, before, context);
   if (typeof input === "function") return mountDynamic(parent, input as () => Renderable, before, context);
   if (input instanceof Promise) return mountPromise(parent, input, before, context);
   if (Array.isArray(input)) return mountFragment(parent, input, before, context);
   if (isVNode(input)) return mountVNode(parent, input, before, context);
-  if (typeof Node !== "undefined" && input instanceof Node) {
+  if (isNodeValue(parent, input)) {
     parent.insertBefore(input, before);
     return simpleMount([input]);
   }
   if (input === null || input === undefined || input === false || input === true) {
-    const marker = document.createComment("clank");
+    const marker = ownerDocumentFor(parent).createComment("clank");
     parent.insertBefore(marker, before);
     return simpleMount([marker]);
   }
-  const text = document.createTextNode(String(input));
+  const text = ownerDocumentFor(parent).createTextNode(String(input));
   parent.insertBefore(text, before);
   return simpleMount([text]);
 }
@@ -429,8 +492,9 @@ function mountFragment(parent: Node, values: Renderable[], before: Node | null, 
 }
 
 function mountDynamic(parent: Node, read: () => Renderable, before: Node | null, context: MountContext): Mounted {
-  const start = document.createComment("clank:start");
-  const end = document.createComment("clank:end");
+  const ownerDocument = ownerDocumentFor(parent);
+  const start = ownerDocument.createComment("clank:start");
+  const end = ownerDocument.createComment("clank:end");
   parent.insertBefore(start, before);
   parent.insertBefore(end, before);
   let current: Mounted | undefined;
@@ -438,7 +502,7 @@ function mountDynamic(parent: Node, read: () => Renderable, before: Node | null,
   const stop = effect(() => {
     const next = unwrapReactive(read());
     if (Object.is(next, currentValue) && current) return;
-    if (isTextValue(next) && current?.nodes.length === 1 && current.nodes[0] instanceof Text) {
+    if (isTextValue(next) && current?.nodes.length === 1 && isTextNode(parent, current.nodes[0])) {
       const text = String(next);
       if (current.nodes[0].data !== text) current.nodes[0].data = text;
       currentValue = next;
@@ -484,6 +548,84 @@ function isKeyedBlock(value: unknown): value is KeyedBlock<any> {
   return Boolean(value && typeof value === "object" && (value as Record<PropertyKey, unknown>)[KEYED]);
 }
 
+function isPortalBlock(value: unknown): value is PortalBlock {
+  return Boolean(value && typeof value === "object" && (value as Record<PropertyKey, unknown>)[PORTAL]);
+}
+
+function portalTarget(parent: Node, target?: PortalTarget): Element | DocumentFragment {
+  const ownerDocument = parent.nodeType === 9
+    ? parent as Document
+    : parent.ownerDocument ?? globalThis.document;
+  if (!ownerDocument) throw new Error("Portal requires an owner document.");
+  const resolved = typeof target === "function"
+    ? target()
+    : typeof target === "string"
+      ? ownerDocument.querySelector(target)
+      : target;
+  const destination = resolved ?? ownerDocument.body;
+  if (!destination) throw new Error("Portal target was not found and the document has no body.");
+  if (destination.ownerDocument && destination.ownerDocument !== ownerDocument) {
+    throw new Error("Portal target must belong to the same document as its render root.");
+  }
+  return destination;
+}
+
+function mountPortal(
+  parent: Node,
+  portal: PortalBlock,
+  before: Node | null,
+  context: MountContext,
+): Mounted {
+  const ownerDocument = parent.nodeType === 9 ? parent as Document : parent.ownerDocument ?? globalThis.document;
+  if (!ownerDocument) throw new Error("Portal requires an owner document.");
+  const marker = ownerDocument.createComment("clank:portal");
+  parent.insertBefore(marker, before);
+  const destination = portal.disabled ? parent : portalTarget(parent, portal.target);
+  const childBefore = portal.disabled ? marker : null;
+  let children: Mounted;
+  try {
+    children = mountFragment(destination, portal.children, childBefore, context);
+  } catch (error) {
+    marker.parentNode?.removeChild(marker);
+    throw error;
+  }
+  return {
+    nodes: [marker],
+    dispose(remove = true) {
+      children.dispose(portal.disabled ? remove : true);
+      if (remove) marker.parentNode?.removeChild(marker);
+    },
+  };
+}
+
+function hydratePortal(
+  parent: Node,
+  portal: PortalBlock,
+  cursor: HydrationCursor,
+  context: MountContext,
+): Mounted {
+  const start = expectComment(cursor, "clank:portal");
+  const children = hydrateFragment(parent, portal.children, cursor, context);
+  const end = expectComment(cursor, "clank:/portal");
+  if (!portal.disabled) {
+    const destination = portalTarget(parent, portal.target);
+    for (const node of children.nodes) destination.appendChild(node);
+  }
+  let active = true;
+  return {
+    nodes: [start, end],
+    dispose(remove = true) {
+      if (!active) return;
+      active = false;
+      children.dispose(portal.disabled ? remove : true);
+      if (remove) {
+        start.parentNode?.removeChild(start);
+        end.parentNode?.removeChild(end);
+      }
+    },
+  };
+}
+
 interface KeyedEntry<T> {
   key: unknown;
   updateItem(item: T): void;
@@ -492,8 +634,9 @@ interface KeyedEntry<T> {
 }
 
 function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, context: MountContext): Mounted {
-  const start = document.createComment("clank:for");
-  const end = document.createComment("clank:/for");
+  const ownerDocument = ownerDocumentFor(parent);
+  const start = ownerDocument.createComment("clank:for");
+  const end = ownerDocument.createComment("clank:/for");
   parent.insertBefore(start, before);
   parent.insertBefore(end, before);
   let entries = new Map<unknown, KeyedEntry<T>>();
@@ -766,7 +909,8 @@ function createReactiveItem<T>(initial: T): ReactiveItem<T> {
 }
 
 function mountPromise(parent: Node, promise: Promise<Renderable>, before: Node | null, context: MountContext): Mounted {
-  const marker = document.createComment("clank:pending");
+  const ownerDocument = ownerDocumentFor(parent);
+  const marker = ownerDocument.createComment("clank:pending");
   parent.insertBefore(marker, before);
   let current: Mounted | undefined;
   let active = true;
@@ -778,7 +922,7 @@ function mountPromise(parent: Node, promise: Promise<Renderable>, before: Node |
     },
     (error) => {
       if (!active) return;
-      const message = document.createTextNode(error instanceof Error ? error.message : String(error));
+      const message = ownerDocument.createTextNode(error instanceof Error ? error.message : String(error));
       parent.insertBefore(message, marker);
       marker.parentNode?.removeChild(marker);
       current = simpleMount([message]);
@@ -866,13 +1010,18 @@ function mountElement(parent: Node, vnode: VNode, before: Node | null, context: 
   const tag = vnode.type as string;
   const namespace = context.namespace === "svg" || tag === "svg" ? "svg" : undefined;
   const childNamespace = namespace === "svg" && tag === "foreignObject" ? undefined : namespace;
+  const ownerDocument = parent.nodeType === 9 ? parent as Document : parent.ownerDocument ?? globalThis.document;
+  if (!ownerDocument) throw new Error(`Cannot mount <${tag}> without an owner document.`);
   const element = namespace
-    ? document.createElementNS("http://www.w3.org/2000/svg", tag)
-    : document.createElement(tag);
+    ? ownerDocument.createElementNS("http://www.w3.org/2000/svg", tag)
+    : ownerDocument.createElement(tag);
   const cleanups: Cleanup[] = [];
   const deferred: Array<[string, unknown]> = [];
+  const classCleanup = bindClassProperties(element, vnode.props);
+  if (classCleanup) cleanups.push(classCleanup);
   for (const [name, value] of Object.entries(vnode.props)) {
     if (name === "children" || name === "key") continue;
+    if (name === "class" || name === "className" || name === "classList") continue;
     if (bindingNeedsChildren(element, name)) {
       deferred.push([name, value]);
       continue;
@@ -898,6 +1047,7 @@ function mountElement(parent: Node, vnode: VNode, before: Node | null, context: 
     if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === element) {
       (ref as ReactiveSignal<Element | null>).value = null;
     }
+    if (typeof ref === "function") (ref as (node: Element | null) => void)(null);
   });
 }
 
@@ -907,6 +1057,43 @@ function bindingNeedsChildren(element: Element, name: string): boolean {
       || name === "selectedIndex"
       || name === "bind:value"
       || name === "bind:selectedIndex");
+}
+
+function bindClassProperties(element: Element, props: Record<string, unknown>): Cleanup | undefined {
+  let baseInput: unknown;
+  let listInput: unknown;
+  let hasBase = false;
+  let hasList = false;
+  // Treat class and className as aliases; if both are supplied, the last one
+  // in declaration order wins. classList is always composed after that base.
+  for (const [name, value] of Object.entries(props)) {
+    if (name === "class" || name === "className") {
+      baseInput = value;
+      hasBase = true;
+    } else if (name === "classList") {
+      listInput = value;
+      hasList = true;
+    }
+  }
+  if (!hasBase && !hasList) return undefined;
+  return effect(() => {
+    const tokens = new Set<string>();
+    if (hasBase) {
+      for (const token of normalizeClass(resolve(baseInput)).split(/\s+/).filter(Boolean)) tokens.add(token);
+    }
+    if (hasList) {
+      const list = resolve(listInput);
+      if (list && typeof list === "object") {
+        for (const [names, enabled] of Object.entries(list as Record<string, unknown>)) {
+          if (!Boolean(resolve(enabled))) continue;
+          for (const token of names.split(/\s+/).filter(Boolean)) tokens.add(token);
+        }
+      }
+    }
+    const value = [...tokens].join(" ");
+    if (value) element.setAttribute("class", value);
+    else element.removeAttribute("class");
+  });
 }
 
 function bindProperty(element: Element, name: string, input: unknown): Cleanup | undefined {
@@ -921,6 +1108,10 @@ function bindProperty(element: Element, name: string, input: unknown): Cleanup |
   }
   if (name.startsWith("bind:")) return bindTwoWay(element, name.slice(5), input);
   if (isEventProperty(name)) {
+    // Optional composed part handlers are commonly represented as undefined.
+    // Treat nullish values as an absent listener while continuing to reject
+    // strings and other executable-attribute lookalikes.
+    if (input == null) return undefined;
     if (typeof input !== "function") throw new TypeError(`${name} expects an event listener function.`);
     return bindEvent(element, name, input as EventListener);
   }
@@ -936,12 +1127,12 @@ function bindProperty(element: Element, name: string, input: unknown): Cleanup |
       return undefined;
     }
   }
+  if (name === "style" && (isExpression(input) || isSignal(input) || typeof input === "function")) {
+    return bindDynamicStyle(element as HTMLElement, () => resolve(input));
+  }
   if (isExpression(input)) {
-    if (name === "classList") return bindDynamicClassList(element, input.read);
-    if (name === "style") return bindDynamicStyle(element as HTMLElement, input.read);
     return effect(() => setProperty(element, name, resolve(input)));
   }
-  if (name === "classList" && input && typeof input === "object") return bindClassList(element, input as Record<string, unknown>);
   if (name === "style" && input && typeof input === "object" && !isSignal(input)) return bindStyle(element as HTMLElement, input as Record<string, unknown>);
   if (isSignal(input) || typeof input === "function") {
     return effect(() => setProperty(element, name, resolve(input)));
@@ -1030,37 +1221,17 @@ function bindTwoWay(element: Element, property: string, input: unknown): Cleanup
   };
 }
 
-function bindClassList(element: Element, classes: Record<string, unknown>): Cleanup {
-  const stops = Object.entries(classes).map(([name, value]) => effect(() => {
-    const enabled = Boolean(resolve(value));
-    for (const token of name.split(/\s+/).filter(Boolean)) element.classList.toggle(token, enabled);
-  }));
-  return () => stops.reverse().forEach((stop) => stop());
-}
-
-function bindDynamicClassList(element: Element, read: () => unknown): Cleanup {
-  let previous = new Set<string>();
-  return effect(() => {
-    const value = read();
-    const next = new Set<string>();
-    if (value && typeof value === "object") {
-      for (const [names, enabled] of Object.entries(value as Record<string, unknown>)) {
-        if (Boolean(resolve(enabled))) for (const token of names.split(/\s+/).filter(Boolean)) next.add(token);
-      }
-    }
-    for (const token of previous) if (!next.has(token)) element.classList.remove(token);
-    for (const token of next) if (!previous.has(token)) element.classList.add(token);
-    previous = next;
-  });
-}
-
 function bindStyle(element: HTMLElement, styles: Record<string, unknown>): Cleanup {
+  // A style prop owns the complete inline declaration. Clear parser- or
+  // server-provided leftovers synchronously before attaching its fine-grained
+  // property effects so hydration reconciles stale declarations as well.
+  element.style.cssText = "";
   const stops = Object.entries(styles).map(([name, value]) => effect(() => {
     const next = resolve(value);
     if (name.startsWith("--") || name.includes("-")) {
-      element.style.setProperty(name, next === null || next === undefined ? "" : String(next));
+      element.style.setProperty(name, next === null || next === undefined || next === false ? "" : String(next));
     } else {
-      (element.style as unknown as Record<string, unknown>)[name] = next ?? "";
+      (element.style as unknown as Record<string, unknown>)[name] = next === false ? "" : next ?? "";
     }
   }));
   return () => stops.reverse().forEach((stop) => stop());
@@ -1068,8 +1239,24 @@ function bindStyle(element: HTMLElement, styles: Record<string, unknown>): Clean
 
 function bindDynamicStyle(element: HTMLElement, read: () => unknown): Cleanup {
   let previous = new Map<string, unknown>();
+  let previousText: string | undefined;
+  let mode: "uninitialized" | "object" | "text" = "uninitialized";
   return effect(() => {
     const value = read();
+    if (value !== null && value !== undefined && value !== false && typeof value !== "object") {
+      const text = String(value);
+      if (mode !== "text" || previousText !== text) element.style.cssText = text;
+      previous.clear();
+      previousText = text;
+      mode = "text";
+      return;
+    }
+    if (mode !== "object") {
+      element.style.cssText = "";
+      previousText = undefined;
+      previous.clear();
+      mode = "object";
+    }
     const styles = value && typeof value === "object" ? value as Record<string, unknown> : {};
     const next = new Map(Object.entries(styles).map(([name, entry]) => [name, resolve(entry)]));
     for (const name of previous.keys()) if (!next.has(name)) setStyleValue(element, name, undefined);
@@ -1082,9 +1269,9 @@ function bindDynamicStyle(element: HTMLElement, read: () => unknown): Cleanup {
 
 function setStyleValue(element: HTMLElement, name: string, value: unknown): void {
   if (name.startsWith("--") || name.includes("-")) {
-    element.style.setProperty(name, value === null || value === undefined ? "" : String(value));
+    element.style.setProperty(name, value === null || value === undefined || value === false ? "" : String(value));
   } else {
-    (element.style as unknown as Record<string, unknown>)[name] = value ?? "";
+    (element.style as unknown as Record<string, unknown>)[name] = value === false ? "" : value ?? "";
   }
 }
 
@@ -1119,7 +1306,7 @@ function setProperty(element: Element, property: string, value: unknown): void {
     );
     return;
   }
-  if (property === "class") value = normalizeClass(value);
+  if (property === "class" || property === "className") value = normalizeClass(value);
   const name = attributeAliases[property] ?? property;
   if (/^on/i.test(name)) throw new TypeError(`Inline event property ${name} is not allowed; pass a listener function.`);
   assertSafeAttributeValue(element.localName, name, value);
@@ -1198,6 +1385,19 @@ export function useContext<T>(context: ClankContext<T>): T {
     : context.defaultValue;
 }
 
+/**
+ * Returns a deterministic ID scoped to the current render root. Server rendering and hydration
+ * produce the same sequence as long as the component tree is structurally identical.
+ */
+export function useId(prefix = "ui"): string {
+  if (!currentFrame) throw new Error("useId() must run while a component is being created.");
+  const state = currentFrame.contexts.get(RENDER_ID_CONTEXT) as RenderIdState | undefined;
+  if (!state) throw new Error("The current renderer does not provide deterministic IDs.");
+  const token = prefix.trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!token || !/[A-Za-z]/.test(token)) throw new TypeError("useId prefix must contain a letter.");
+  return `clank-${token}-${++state.next}`;
+}
+
 export function Show(props: {
   when: unknown;
   fallback?: Renderable;
@@ -1209,7 +1409,7 @@ export function Show(props: {
 }
 
 export function For<T>(props: {
-  each: T[] | ReactiveSignal<T[]> | Computed<T[]> | (() => T[]);
+  each: readonly T[] | ReactiveSignal<readonly T[]> | Computed<readonly T[]> | (() => readonly T[]);
   by?: keyof T | ((item: T, index: number) => PropertyKey);
   fallback?: Renderable;
   children: ((item: T, index: () => number) => Renderable) | Array<(item: T, index: () => number) => Renderable>;
@@ -1218,10 +1418,25 @@ export function For<T>(props: {
   if (typeof renderItem !== "function") throw new TypeError("For expects a render function as its child.");
   return {
     [KEYED]: true,
-    each: expression(() => props.each as T[]),
+    each: expression(() => props.each as readonly T[]),
     by: props.by,
     fallback: expression(() => props.fallback ?? null),
     renderItem,
+  };
+}
+
+/**
+ * Renders children into another node while preserving their Clank ownership and context.
+ * During SSR the children remain at the declaration site between hydration markers and are
+ * moved into the target when hydration attaches.
+ */
+export function Portal(props: PortalProps): PortalBlock {
+  const children = Array.isArray(props.children) ? props.children : [props.children];
+  return {
+    [PORTAL]: true,
+    children,
+    ...(props.target === undefined ? {} : { target: props.target }),
+    ...(props.disabled === undefined ? {} : { disabled: props.disabled }),
   };
 }
 

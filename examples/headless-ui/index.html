@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Dependency-free Clank headless UI interaction lab" />
+    <title>Clank Headless UI Lab</title>
+    <script type="importmap">
+      {"imports":{"@clank.run/framework/dom":"/dist/dom.js","@clank.run/framework/ui":"/dist/ui.js"}}
+    </script>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        background: #090b10;
+        color: #f5f7fb;
+      }
+      * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
+      body { margin: 0; min-width: 20rem; background: radial-gradient(circle at 15% 0%, #182239 0, transparent 34rem), #090b10; }
+      button, input { font: inherit; }
+      button { color: inherit; }
+      button:focus-visible, input:focus-visible, [role="option"]:focus-visible, [role="tab"]:focus-visible, [role="slider"]:focus-visible {
+        outline: 3px solid #7cf7cc; outline-offset: 3px;
+      }
+      .shell { width: min(72rem, 100%); margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+      .eyebrow { color: #7cf7cc; font-size: .76rem; font-weight: 800; letter-spacing: .18em; text-transform: uppercase; }
+      h1 { max-width: 16ch; margin: .75rem 0 1rem; font-size: clamp(2.6rem, 8vw, 5.5rem); line-height: .92; letter-spacing: -.065em; }
+      .lede { max-width: 42rem; margin: 0; color: #aeb8cc; font-size: 1.05rem; line-height: 1.7; }
+      .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 1rem; margin-top: 2.5rem; }
+      .card { grid-column: span 6; min-width: 0; border: 1px solid #252c3b; border-radius: 1.35rem; background: rgba(17, 21, 29, .88); padding: 1.25rem; box-shadow: 0 1.5rem 4rem rgba(0,0,0,.2); }
+      .wide { grid-column: span 12; }
+      .card h2 { margin: 0; font-size: 1rem; }
+      .card p { color: #99a5ba; }
+      .stack { display: grid; gap: .85rem; margin-top: 1.15rem; }
+      .row { display: flex; flex-wrap: wrap; align-items: center; gap: .7rem; }
+      .button, .select-trigger, .number-button, .tab {
+        min-height: 2.75rem; border: 1px solid #30394c; border-radius: .8rem; background: #171c27; padding: .68rem .9rem; cursor: pointer;
+      }
+      .button:hover, .select-trigger:hover, .number-button:hover, .tab:hover { background: #202838; }
+      .button.primary { border-color: #7cf7cc; background: #7cf7cc; color: #07110d; font-weight: 800; }
+      .field-label { color: #cbd3e1; font-size: .82rem; font-weight: 700; }
+      .input, .number-input {
+        width: 100%; min-height: 2.8rem; border: 1px solid #30394c; border-radius: .8rem; background: #0d1119; color: #f5f7fb; padding: .72rem .85rem;
+      }
+      .select-trigger { display: flex; width: 100%; justify-content: space-between; text-align: left; }
+      .select-trigger[data-popup-open] { border-color: #7cf7cc; }
+      .popup-positioner { z-index: 40; width: min(22rem, calc(100vw - 2rem)); }
+      .popup { max-height: 18rem; overflow: auto; border: 1px solid #30394c; border-radius: 1rem; background: #111620; padding: .4rem; box-shadow: 0 1rem 3rem rgba(0,0,0,.55); }
+      .option { border-radius: .7rem; padding: .7rem .8rem; cursor: pointer; }
+      .option[data-highlighted], .option:hover { background: #243047; }
+      .option[data-selected]::after { content: "✓"; float: right; color: #7cf7cc; }
+      .number-group { display: grid; grid-template-columns: auto 1fr auto; gap: .45rem; }
+      .number-button { min-width: 2.8rem; padding: .55rem; }
+      .check { display: inline-flex; align-items: center; gap: .65rem; border: 0; background: transparent; padding: .25rem; cursor: pointer; }
+      .check-box { display: grid; width: 1.35rem; height: 1.35rem; place-items: center; border: 1px solid #4a566d; border-radius: .35rem; }
+      .check[data-checked] .check-box { border-color: #7cf7cc; background: #7cf7cc; color: #07110d; }
+      .native-projection { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+      .slider { position: relative; height: 2rem; touch-action: none; }
+      .slider-track { position: absolute; inset: .85rem 0 auto; height: .35rem; border-radius: 1rem; background: #2a3345; }
+      .slider-fill { position: absolute; inset: 0 auto 0 0; width: var(--clank-slider-percentage); border-radius: inherit; background: #7cf7cc; }
+      .slider-thumb { position: absolute; top: .15rem; left: var(--clank-slider-percentage); width: 1.75rem; height: 1.75rem; translate: -50% 0; border: 3px solid #090b10; border-radius: 50%; background: #7cf7cc; box-shadow: 0 0 0 1px #7cf7cc; }
+      .tabs { display: flex; gap: .4rem; border-bottom: 1px solid #252c3b; padding-bottom: .7rem; }
+      .tab { border-color: transparent; background: transparent; color: #99a5ba; }
+      .tab[data-selected] { background: #202838; color: #fff; }
+      .panel { padding-top: 1rem; }
+      .dialog-backdrop { position: fixed; z-index: 80; inset: 0; background: rgba(0,0,0,.72); backdrop-filter: blur(4px); }
+      .dialog { position: fixed; z-index: 81; inset: 50% auto auto 50%; width: min(30rem, calc(100vw - 2rem)); translate: -50% -50%; border: 1px solid #344057; border-radius: 1.3rem; background: #121722; padding: 1.4rem; box-shadow: 0 2rem 6rem #000; }
+      .dialog h2 { margin: 0; font-size: 1.45rem; }
+      .dialog-actions { display: flex; justify-content: flex-end; gap: .6rem; margin-top: 1.25rem; }
+      .tooltip { z-index: 60; max-width: 15rem; border-radius: .55rem; background: #edfdf7; color: #10251d; padding: .5rem .65rem; font-size: .78rem; box-shadow: 0 .7rem 2rem #0008; }
+      .toast-viewport { position: fixed; z-index: 100; right: 1rem; bottom: 1rem; display: grid; width: min(24rem, calc(100vw - 2rem)); gap: .65rem; }
+      .toast { border: 1px solid #344057; border-radius: 1rem; background: #171d29; padding: .9rem; box-shadow: 0 1rem 3rem #0008; }
+      .toast-content { display: grid; grid-template-columns: 1fr auto; gap: .7rem; }
+      .toast-title { display: block; }
+      .toast-description { margin: .25rem 0 0; color: #aeb8cc; font-size: .85rem; }
+      .toast-close { align-self: start; border: 0; background: transparent; color: #aeb8cc; cursor: pointer; }
+      .status { margin-top: .75rem; color: #7cf7cc; font-size: .82rem; }
+      @media (max-width: 44rem) {
+        .shell { padding-top: 2rem; }
+        .card { grid-column: span 12; }
+        .grid { margin-top: 2rem; }
+      }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <noscript>This interaction lab requires JavaScript.</noscript>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

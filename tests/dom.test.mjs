@@ -51,13 +51,40 @@ class FakeElement extends FakeNode {
     this.tagName = namespaceURI === "http://www.w3.org/2000/svg" ? tagName : tagName.toUpperCase();
     this.attributes = new Map();
     this.listeners = new Map();
-    this.style = { setProperty() {} };
-    this.classList = { add() {}, remove() {}, toggle() {} };
+    this.style = createFakeStyle();
+    const classTokens = new Set();
+    this.classTokens = classTokens;
+    const synchronizeClass = () => {
+      if (classTokens.size > 0) this.attributes.set("class", [...classTokens].join(" "));
+      else this.attributes.delete("class");
+    };
+    this.classList = {
+      add(...tokens) { for (const token of tokens) classTokens.add(token); synchronizeClass(); },
+      remove(...tokens) { for (const token of tokens) classTokens.delete(token); synchronizeClass(); },
+      toggle(token, force) {
+        const enabled = force === undefined ? !classTokens.has(token) : Boolean(force);
+        if (enabled) classTokens.add(token);
+        else classTokens.delete(token);
+        synchronizeClass();
+        return enabled;
+      },
+      contains(token) { return classTokens.has(token); },
+    };
   }
-  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  setAttribute(name, value) {
+    const next = String(value);
+    this.attributes.set(name, next);
+    if (name === "class" && this.classTokens) {
+      this.classTokens.clear();
+      for (const token of next.split(/\s+/).filter(Boolean)) this.classTokens.add(token);
+    }
+  }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   hasAttribute(name) { return this.attributes.has(name); }
-  removeAttribute(name) { this.attributes.delete(name); }
+  removeAttribute(name) {
+    this.attributes.delete(name);
+    if (name === "class") this.classTokens?.clear();
+  }
   addEventListener(name, listener) { this.listeners.set(name, listener); }
   removeEventListener(name) { this.listeners.delete(name); }
   get children() { return this.childNodes.filter((node) => node instanceof FakeElement); }
@@ -66,6 +93,42 @@ class FakeElement extends FakeNode {
     this.currentValue = value;
   }
   get value() { return this.currentValue ?? ""; }
+}
+
+function createFakeStyle() {
+  const target = {
+    values: new Map(),
+    text: "",
+    setProperty(name, value) {
+      if (value === "") {
+        this.values.delete(name);
+        delete this[name];
+      } else {
+        this.values.set(name, value);
+        this[name] = value;
+      }
+    },
+  };
+  return new Proxy(target, {
+    get(style, property) {
+      if (property === "cssText") return style.text;
+      return style[property];
+    },
+    set(style, property, value) {
+      if (property === "cssText") {
+        for (const name of style.values.keys()) delete style[name];
+        style.values.clear();
+        style.text = String(value);
+        return true;
+      }
+      if (typeof property === "string" && !["values", "text", "setProperty"].includes(property)) {
+        if (value === "") style.values.delete(property);
+        else style.values.set(property, value);
+      }
+      style[property] = value;
+      return true;
+    },
+  });
 }
 
 globalThis.Node = FakeNode;
@@ -79,9 +142,11 @@ globalThis.document = {
   createComment: (value) => new FakeComment(value),
 };
 
-const { For, expression, h, hydrate, onMount, render } = await import("../dist/dom.js");
+const { For, Portal, expression, h, hydrate, onMount, render, useId } = await import("../dist/dom.js");
 const { signal } = await import("../dist/core.js");
 const { createApi } = await import("../dist/backend.js");
+const { createCheckbox } = await import("../dist/ui-controls.js");
+const { mergeProps } = await import("../dist/ui-foundation.js");
 
 function elementById(root, id) {
   return root.childNodes.find((node) => node instanceof FakeElement && node.getAttribute("data-id") === id);
@@ -149,11 +214,120 @@ test("boolean ARIA states remain explicit as they change", () => {
   assert.equal(button.getAttribute("aria-expanded"), "true");
 });
 
+test("reactive merged styles bind properties instead of replacing element.style", () => {
+  const x = signal(12);
+  const root = new FakeElement("main");
+  const props = mergeProps({
+    style: {
+      position: "fixed",
+      left: () => `${x.value}px`,
+      "--anchor-width": () => `${x.value * 2}px`,
+    },
+  });
+  const dispose = render(root, h("div", props));
+  const element = root.children[0];
+
+  assert.equal(element.style.position, "fixed");
+  assert.equal(element.style.left, "12px");
+  x.value = 18;
+  assert.equal(element.style.left, "18px");
+
+  dispose();
+  x.value = 24;
+  assert.equal(element.style.left, "18px", "disposing releases every nested style effect");
+});
+
+test("reactive mixed style sources update cssText", () => {
+  const x = signal(5);
+  const root = new FakeElement("main");
+  const props = mergeProps(
+    { style: "color:red" },
+    { style: { left: () => `${x.value}px` } },
+  );
+  render(root, h("div", props));
+  const element = root.children[0];
+
+  assert.equal(element.style.cssText, "color:red;left:5px");
+  x.value = 9;
+  assert.equal(element.style.cssText, "color:red;left:9px");
+});
+
+test("reactive style bindings reconcile object, text, and empty modes", () => {
+  const style = signal({ position: "fixed", top: "4px", display: false, "--inactive": false });
+  const root = new FakeElement("main");
+  const dispose = render(root, h("div", { style }));
+  const element = root.children[0];
+
+  assert.equal(element.style.position, "fixed");
+  assert.equal(element.style.top, "4px");
+  assert.equal(element.style.display, "");
+  assert.equal(element.style.values.has("--inactive"), false);
+  style.value = "color:blue";
+  assert.equal(element.style.cssText, "color:blue");
+  assert.equal(element.style.position, undefined);
+  style.value = { insetInline: "8px" };
+  assert.equal(element.style.cssText, "");
+  assert.equal(element.style.insetInline, "8px");
+  style.value = null;
+  assert.equal(element.style.insetInline, "");
+
+  dispose();
+  style.value = { opacity: 0.5 };
+  assert.equal(element.style.opacity, undefined);
+});
+
+test("reactive classList removes false hydration tokens without touching static classes", () => {
+  const active = signal(false);
+  const root = new FakeElement("main");
+  const element = new FakeElement("div");
+  element.setAttribute("class", "stale application-owned");
+  element.classList.add("stale", "application-owned");
+  root.insertBefore(element, null);
+
+  hydrate(root, h("div", {
+    className: ["application-owned", { ready: true }],
+    classList: () => ({ stale: active.value, current: !active.value }),
+  }));
+  assert.equal(element.getAttribute("class"), "application-owned ready current");
+  assert.equal(element.classList.contains("stale"), false);
+  assert.equal(element.classList.contains("current"), true);
+  assert.equal(element.classList.contains("application-owned"), true);
+
+  active.value = true;
+  assert.equal(element.getAttribute("class"), "application-owned ready stale");
+  assert.equal(element.classList.contains("stale"), true);
+  assert.equal(element.classList.contains("current"), false);
+});
+
+test("merged class and classList bindings stay composed across reactive updates", () => {
+  const tone = signal("tone-a");
+  const agent = signal(true);
+  const props = mergeProps(
+    { class: "base", classList: { internal: true, shared: true } },
+    { className: () => tone.value, classList: () => ({ shared: false, agent: agent.value }) },
+  );
+  const root = new FakeElement("main");
+  render(root, h("div", props));
+  const element = root.children[0];
+
+  assert.equal(element.getAttribute("class"), "base tone-a internal agent");
+  tone.value = "tone-b";
+  assert.equal(element.getAttribute("class"), "base tone-b internal agent");
+  agent.value = false;
+  assert.equal(element.getAttribute("class"), "base tone-b internal");
+});
+
 test("DOM bindings reject inline handlers and executable URL/raw iframe attributes", () => {
   const root = new FakeElement("main");
   assert.throws(() => render(root, h("button", { onclick: "alert(1)" }, "Unsafe")), /listener function/);
   assert.throws(() => render(root, h("a", { href: "javascript:alert(1)" }, "Unsafe")), /Unsafe URL scheme/);
   assert.throws(() => render(root, h("iframe", { srcdoc: "<script>alert(1)</script>" })), /srcdoc/);
+});
+
+test("optional nullish event props mount as absent listeners", () => {
+  const root = new FakeElement("main");
+  assert.doesNotThrow(() => render(root, h("input", { onInvalid: undefined, onChange: null })));
+  assert.equal(root.children[0].listeners.size, 0);
 });
 
 test("hydrate attaches to matching dynamic and keyed DOM without replacing nodes", () => {
@@ -174,6 +348,33 @@ test("hydrate attaches to matching dynamic and keyed DOM without replacing nodes
   assert.equal(section.children[0].childNodes.find((node) => node instanceof FakeText), headingText);
   assert.equal(section.children[1], row);
   assert.equal(row.childNodes.find((node) => node instanceof FakeText), rowText);
+});
+
+test("headless controls hydrate in place and retain reactive interaction", () => {
+  const checkbox = createCheckbox({ id: "hydrated-sync", defaultChecked: false });
+  const view = h("section", {},
+    h("button", checkbox.root(),
+      h("span", checkbox.indicator({ keepMounted: true }), "✓"),
+      "Keep synchronized",
+    ),
+  );
+  const root = new FakeElement("main");
+  render(root, view);
+  const section = root.children[0];
+  const button = section.children[0];
+  const indicator = button.children[0];
+
+  hydrate(root, view);
+  assert.equal(root.children[0], section);
+  assert.equal(section.children[0], button);
+  assert.equal(button.children[0], indicator);
+  assert.equal(button.getAttribute("aria-checked"), "false");
+  assert.notEqual(indicator.hidden, true);
+  assert.equal(indicator.getAttribute("data-state"), "unchecked");
+
+  button.listeners.get("click")({ defaultPrevented: false });
+  assert.equal(button.getAttribute("aria-checked"), "true");
+  assert.equal(indicator.getAttribute("data-state"), "checked");
 });
 
 test("hydrate splits adjacent static text merged by an HTML parser", () => {
@@ -335,4 +536,47 @@ test("keyed For preserves row and text identity across edits and reorders", () =
   assert.equal(beta.textContent, "Beta updated");
   assert.deepEqual(root.children.map((node) => node.getAttribute("data-id")), ["b", "a", "c"]);
   assert.equal(root.insertions, 2, "one new row and one moved row are the only insertions");
+});
+
+test("Portal mounts into an explicit target and cleans up without disturbing siblings", () => {
+  const root = new FakeElement("main");
+  const target = new FakeElement("aside");
+  const sibling = new FakeElement("p");
+  target.insertBefore(sibling, null);
+  const dispose = render(root, h("section", {},
+    h(Portal, { target }, h("button", { "data-id": "portalled" }, "Open")),
+  ));
+
+  assert.equal(root.children[0].children.length, 0);
+  assert.equal(target.children.length, 2);
+  assert.equal(target.children[0], sibling);
+  assert.equal(target.children[1].getAttribute("data-id"), "portalled");
+  dispose();
+  assert.deepEqual(target.children, [sibling]);
+});
+
+test("callback refs receive null exactly once when their element is disposed", () => {
+  const root = new FakeElement("main");
+  const values = [];
+  const dispose = render(root, h("button", { ref: (value) => values.push(value) }, "Save"));
+  assert.equal(values.length, 1);
+  assert.equal(values[0], root.children[0]);
+  dispose();
+  assert.deepEqual(values, [values[0], null]);
+});
+
+test("client render and hydration reuse deterministic component IDs", () => {
+  function Field() {
+    const id = useId("field");
+    return h("label", { for: id }, h("input", { id }));
+  }
+  const root = new FakeElement("main");
+  const view = h("form", {}, h(Field), h(Field));
+  render(root, view);
+  const form = root.children[0];
+  assert.equal(form.children[0].getAttribute("for"), "clank-field-1");
+  assert.equal(form.children[1].getAttribute("for"), "clank-field-2");
+  hydrate(root, view);
+  assert.equal(root.children[0], form);
+  assert.equal(root.getAttribute("data-clank-hydration"), "attached");
 });

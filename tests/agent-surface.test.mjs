@@ -144,3 +144,44 @@ test("agent operations support native IDs, protected controls, and multi-select 
   assert.deepEqual(select.options.map((option) => option.selected), [true, true, false]);
   assert.deepEqual(email.events, ["input", "change"]);
 });
+
+test("agent inspection exposes headless widget and range state", () => {
+  const listbox = new SurfaceElement("div", {
+    id: "assignees",
+    role: "listbox",
+    "aria-orientation": "vertical",
+    "aria-activedescendant": "assignee-2",
+    "aria-multiselectable": "true",
+    "data-clank-part": "list",
+    "data-state": "open",
+  });
+  const option = new SurfaceElement("div", {
+    id: "assignee-2",
+    role: "option",
+    "aria-selected": "true",
+  }, "Grace");
+  listbox.append(option);
+  const slider = new SurfaceElement("div", {
+    id: "volume",
+    role: "slider",
+    "aria-valuemin": "0",
+    "aria-valuemax": "100",
+    "aria-valuenow": "42",
+    "aria-valuetext": "42 percent",
+  });
+  const toggle = new SurfaceElement("button", { id: "bold", "aria-pressed": "mixed" }, "Bold");
+  const root = new SurfaceRoot([listbox, slider, toggle]);
+
+  const nodes = inspectAgentSurface(root);
+  const list = nodes.find((node) => node.id === "assignees");
+  assert.equal(list.orientation, "vertical");
+  assert.equal(list.activeDescendant, "assignee-2");
+  assert.equal(list.multiple, true);
+  assert.equal(list.part, "list");
+  assert.equal(list.state, "open");
+  assert.equal(list.children[0].selected, true);
+  assert.deepEqual(nodes.find((node) => node.id === "volume"), {
+    id: "volume", tag: "div", role: "slider", valueMin: 0, valueMax: 100, valueNow: 42, valueText: "42 percent",
+  });
+  assert.equal(nodes.find((node) => node.id === "bold").pressed, "mixed");
+});

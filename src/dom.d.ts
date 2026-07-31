@@ -3,8 +3,10 @@ export declare const VNODE: unique symbol;
 export declare const Fragment: unique symbol;
 export declare const EXPRESSION: unique symbol;
 export declare const KEYED: unique symbol;
+export declare const PORTAL: unique symbol;
+export declare const RENDER_ID_CONTEXT: unique symbol;
 export type Primitive = string | number | bigint | boolean | null | undefined;
-export type Renderable = Primitive | Node | VNode | Renderable[] | ReactiveSignal<any> | Computed<any> | ReactiveExpression | KeyedBlock<any> | ((...args: any[]) => Renderable) | Promise<Renderable>;
+export type Renderable = Primitive | Node | VNode | readonly Renderable[] | ReactiveSignal<any> | Computed<any> | ReactiveExpression | KeyedBlock<any> | PortalBlock | ((...args: any[]) => Renderable) | Promise<Renderable>;
 export type Component<P extends Record<string, unknown> = Record<string, unknown>> = (props: P & {
     children: Renderable[];
 }) => Renderable;
@@ -21,10 +23,22 @@ export interface ReactiveExpression<T = unknown> {
 }
 export interface KeyedBlock<T> {
     readonly [KEYED]: true;
-    readonly each: T[] | ReactiveSignal<T[]> | Computed<T[]> | ReactiveExpression<T[]> | (() => T[]);
+    readonly each: readonly T[] | ReactiveSignal<readonly T[]> | Computed<readonly T[]> | ReactiveExpression<readonly T[]> | (() => readonly T[]);
     readonly by?: keyof T | ((item: T, index: number) => PropertyKey);
     readonly fallback?: Renderable;
     readonly renderItem: (item: T, index: () => number) => Renderable;
+}
+export type PortalTarget = Element | DocumentFragment | string | (() => Element | DocumentFragment | null | undefined);
+export interface PortalBlock {
+    readonly [PORTAL]: true;
+    readonly children: Renderable[];
+    readonly target?: PortalTarget;
+    readonly disabled?: boolean;
+}
+export interface PortalProps {
+    target?: PortalTarget;
+    disabled?: boolean;
+    children: Renderable | Renderable[];
 }
 export interface ComponentEvaluation {
     output: Renderable;
@@ -47,23 +61,33 @@ export declare function isVNode(value: unknown): value is VNode;
 export declare function render(root: Element | DocumentFragment, view: Renderable): Cleanup;
 /** Attaches reactive bindings and events to Clank SSR markers without recreating matching DOM. */
 export declare function hydrate(root: Element, view: Renderable): Cleanup;
+/** @internal Creates the shared root contexts used by the DOM and SSR renderers. */
+export declare function createRenderContexts(): Map<symbol, unknown>;
 /** @internal Evaluates one component with context/lifecycle ownership for DOM and SSR renderers. */
 export declare function evaluateComponent(vnode: VNode, parentContexts: Map<symbol, unknown>): ComponentEvaluation;
 export declare function onMount(callback: () => void | Cleanup): void;
 export declare function createContext<T>(defaultValue: T): ClankContext<T>;
 export declare function provideContext<T>(context: ClankContext<T>, value: T): void;
 export declare function useContext<T>(context: ClankContext<T>): T;
+/** Returns an SSR/hydration-stable ID scoped to the current render root. */
+export declare function useId(prefix?: string): string;
 export declare function Show(props: {
     when: unknown;
     fallback?: Renderable;
     children: Renderable | Renderable[];
 }): Renderable;
 export declare function For<T>(props: {
-    each: T[] | ReactiveSignal<T[]> | Computed<T[]> | (() => T[]);
+    each: readonly T[] | ReactiveSignal<readonly T[]> | Computed<readonly T[]> | (() => readonly T[]);
     by?: keyof T | ((item: T, index: number) => PropertyKey);
     fallback?: Renderable;
     children: ((item: T, index: () => number) => Renderable) | Array<(item: T, index: () => number) => Renderable>;
 }): KeyedBlock<T>;
+/**
+ * Renders children into another node while preserving their Clank ownership and context.
+ * During SSR the children remain at the declaration site between hydration markers and are
+ * moved into the target when hydration attaches.
+ */
+export declare function Portal(props: PortalProps): PortalBlock;
 export declare function Match(props: {
     when: unknown;
     children: Renderable | Renderable[];

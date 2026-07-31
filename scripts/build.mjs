@@ -33,6 +33,10 @@ async function compileFile(sourcePath, outputPath, options = {}) {
   const javascript = compile(source, {
     filename: sourcePath,
     jsxImportSource: options.jsxImportSource,
+    // Inline source maps duplicate most source text and made the published
+    // zero-dependency package exceed its bounded release envelope. They remain
+    // available explicitly for local debugging without bloating every install.
+    sourceMap: options.sourceMap ?? process.env.CLANK_SOURCE_MAPS === "1",
   });
   await writeFileAtomically(outputPath, javascript);
 }

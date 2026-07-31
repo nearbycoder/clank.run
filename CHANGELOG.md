@@ -4,6 +4,15 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added a complete dependency-free headless UI library aligned to the 37-family Base UI 1.6
+  catalog. Clank-native controllers expose canonical part anatomy, controlled and uncontrolled
+  state with cancelable reasons, keyboard/focus and RTL behavior, native form projection and
+  validation, document-scoped overlays, same-document portals, collision-aware floating parts,
+  transition-aware presence, drawer snap points and swipe physics, SSR-stable IDs and hydration,
+  Tailwind-ready data/CSS hooks, and frozen redaction-aware `clank-ui/1` agent manifests. The
+  package root, `/ui`, group modules, and every `/ui/<family>` subpath expose the library without
+  adding React, Base UI, Floating UI, CSS-in-JS, or any other runtime dependency.
+
 - Added a dependency-free signed blueprint registry protocol and `clank registry` CLI. Scoped
   Ed25519 publisher keys bind normalized data-only blueprints to exact semantic versions; separate
   registry keys bind monotonic catalogs to exact HTTPS origins, release digests, publisher keys,

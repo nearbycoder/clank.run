@@ -3,10 +3,13 @@ import { agentActionPath, type AgentActionTarget } from "./agent-contract.ts";
 import {
   Fragment,
   KEYED,
+  PORTAL,
+  createRenderContexts,
   evaluateComponent,
   isExpression,
   isVNode,
   type KeyedBlock,
+  type PortalBlock,
   type Renderable,
   type VNode,
 } from "./dom.ts";
@@ -23,7 +26,7 @@ interface SSRContext {
 
 /** Renders Clank TSX/VNodes to escaped HTML without requiring a DOM. */
 export async function renderToString(view: Renderable, options: RenderStringOptions = {}): Promise<string> {
-  return renderValue(view, { contexts: new Map(), markers: options.markers !== false });
+  return renderValue(view, { contexts: createRenderContexts(), markers: options.markers !== false });
 }
 
 export interface RenderDocumentOptions extends RenderStringOptions {
@@ -82,6 +85,7 @@ async function renderValue(input: Renderable, context: SSRContext): Promise<stri
   if (isExpression(input)) return renderDynamic(input.read as () => Renderable, context);
   if (isSignal(input)) return renderDynamic(() => input.value as Renderable, context);
   if (isKeyedBlock(input)) return renderKeyed(input, context);
+  if (isPortalBlock(input)) return renderPortal(input, context);
   if (typeof input === "function") return renderDynamic(input as () => Renderable, context);
   if (input instanceof Promise) {
     const resolved: unknown = await (input as Promise<unknown>);
@@ -111,6 +115,11 @@ async function renderKeyed(block: KeyedBlock<any>, context: SSRContext): Promise
   return context.markers ? `<!--clank:for-->${content}<!--clank:/for-->` : content;
 }
 
+async function renderPortal(portal: PortalBlock, context: SSRContext): Promise<string> {
+  const content = await renderValue(portal.children, context);
+  return context.markers ? `<!--clank:portal-->${content}<!--clank:/portal-->` : content;
+}
+
 async function renderVNode(vnode: VNode, context: SSRContext): Promise<string> {
   if (vnode.type === Fragment) return renderValue(vnode.props.children as Renderable[], context);
   if (typeof vnode.type === "function") {
@@ -126,20 +135,21 @@ async function renderElement(vnode: VNode, context: SSRContext): Promise<string>
   const lowerTag = tag.toLowerCase();
   const props = vnode.props;
   const attributes = new Map<string, string | true>();
-  let className = "";
+  let baseClassName = "";
+  let classListName = "";
 
   for (const [property, raw] of Object.entries(props)) {
     if (property === "children" || property === "key" || property === "ref" || property === "use" || property === "dangerouslySetInnerHTML") continue;
     if (/^on(?::|[a-z])/i.test(property)) continue;
     if (property === "class" || property === "className") {
-      className = normalizeClass(resolveReactive(raw));
+      baseClassName = normalizeClass(resolveReactive(raw));
       continue;
     }
     if (property === "classList") {
       const list = resolveReactive(raw);
       if (list && typeof list === "object") {
         for (const [names, enabled] of Object.entries(list as Record<string, unknown>)) {
-          if (Boolean(resolveReactive(enabled))) className = [className, names].filter(Boolean).join(" ");
+          if (Boolean(resolveReactive(enabled))) classListName = [classListName, names].filter(Boolean).join(" ");
         }
       }
       continue;
@@ -170,7 +180,10 @@ async function renderElement(vnode: VNode, context: SSRContext): Promise<string>
     }
     setSSRAttribute(attributes, attributeName(property), resolveReactive(raw), lowerTag);
   }
-  if (className) attributes.set("class", className.trim().replace(/\s+/g, " "));
+  const className = [...new Set(
+    [baseClassName, classListName].filter(Boolean).join(" ").split(/\s+/).filter(Boolean),
+  )].join(" ");
+  if (className) attributes.set("class", className);
 
   const serialized = [...attributes].map(([name, value]) => value === true
     ? ` ${name}`
@@ -223,6 +236,10 @@ function resolveAgentAction(input: unknown): string {
 
 function isKeyedBlock(value: unknown): value is KeyedBlock<any> {
   return Boolean(value && typeof value === "object" && (value as Record<PropertyKey, unknown>)[KEYED]);
+}
+
+function isPortalBlock(value: unknown): value is PortalBlock {
+  return Boolean(value && typeof value === "object" && (value as Record<PropertyKey, unknown>)[PORTAL]);
 }
 
 function normalizeClass(value: unknown): string {

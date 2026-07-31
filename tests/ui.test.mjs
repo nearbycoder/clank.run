@@ -20,31 +20,47 @@ test("disclosures expose reactive accessible trigger and panel state", () => {
   assert.equal(panel.hidden(), false);
   disclosure.hide();
   assert.equal(disclosure.open.value, false);
+
+  const customTrigger = disclosure.trigger({ id: "custom-trigger" });
+  assert.equal(customTrigger["aria-controls"], "filters-panel");
+  const customPanel = disclosure.panel({ id: "custom-panel", labelledBy: "custom-trigger" });
+  const linkedTrigger = disclosure.trigger({ id: "custom-trigger", controls: "custom-panel" });
+  assert.equal(linkedTrigger["aria-controls"], customPanel.id);
+  assert.equal(customPanel["aria-labelledby"], linkedTrigger.id);
 });
 
 test("dialogs trap initial focus, close on Escape, restore focus, and unlock scrolling", async () => {
   const listeners = new Map();
+  class FakeHTMLElement {
+    constructor(document) {
+      this.ownerDocument = document;
+      this.isConnected = true;
+      this.hidden = false;
+      this.attributes = new Map();
+    }
+    addEventListener() {}
+    removeEventListener() {}
+    querySelectorAll() { return []; }
+    contains(value) { return value === this; }
+    closest() { return null; }
+    matches() { return false; }
+    getAttribute(name) { return this.attributes.get(name) ?? null; }
+    hasAttribute(name) { return this.attributes.has(name); }
+    getClientRects() { return [{}]; }
+    focus() { this.ownerDocument.activeElement = this; }
+  }
   const document = {
     activeElement: null,
-    body: { style: { overflow: "auto" } },
+    body: { style: { overflow: "auto", paddingRight: "" }, children: [] },
+    documentElement: { clientWidth: 800 },
+    defaultView: { HTMLElement: FakeHTMLElement, Node: FakeHTMLElement, innerWidth: 800 },
     addEventListener(name, listener) { listeners.set(name, listener); },
     removeEventListener(name) { listeners.delete(name); },
   };
-  const trigger = {
-    isConnected: true,
-    hasAttribute: () => false,
-    focus() { document.activeElement = this; },
-  };
-  const first = {
-    focus() { document.activeElement = this; },
-    hasAttribute: () => false,
-    getAttribute: () => null,
-  };
-  const element = {
-    ownerDocument: document,
-    querySelectorAll: () => [first],
-    focus() { document.activeElement = this; },
-  };
+  const trigger = new FakeHTMLElement(document);
+  const first = new FakeHTMLElement(document);
+  const element = new FakeHTMLElement(document);
+  element.querySelectorAll = () => [first];
   const dialog = createDialog({ id: "checkout" });
   const props = dialog.dialog();
   const cleanup = props.use(element);
@@ -100,6 +116,23 @@ test("tabs provide selection, panel visibility, and keyboard navigation", () => 
   assert.equal(focused, "billing");
   assert.equal(tabs.selected.value, "billing");
   assert.equal(billingPanel.hidden(), false);
+});
+
+test("legacy tab values always produce unique, connected DOM ids", () => {
+  const tabs = createTabs({
+    id: "legacy-collisions",
+    tabs: [{ value: "a b" }, { value: "a-b" }],
+  });
+  const firstTab = tabs.tab("a b");
+  const secondTab = tabs.tab("a-b");
+  const firstPanel = tabs.panel("a b");
+  const secondPanel = tabs.panel("a-b");
+  assert.notEqual(firstTab.id, secondTab.id);
+  assert.notEqual(firstPanel.id, secondPanel.id);
+  assert.equal(firstTab["aria-controls"], firstPanel.id);
+  assert.equal(secondTab["aria-controls"], secondPanel.id);
+  assert.equal(firstPanel["aria-labelledby"], firstTab.id);
+  assert.equal(secondPanel["aria-labelledby"], secondTab.id);
 });
 
 test("pagination clamps changing totals and emits compact page ranges", () => {

@@ -629,7 +629,19 @@ export interface AgentNode {
   required?: boolean;
   invalid?: boolean;
   expanded?: boolean;
-  checked?: boolean;
+  checked?: boolean | "mixed";
+  selected?: boolean;
+  pressed?: boolean | "mixed";
+  current?: boolean | string;
+  orientation?: "horizontal" | "vertical";
+  activeDescendant?: string;
+  hasPopup?: string;
+  valueMin?: number;
+  valueMax?: number;
+  valueNow?: number;
+  valueText?: string;
+  part?: string;
+  state?: string;
   multiple?: boolean;
   value?: string | string[];
   placeholder?: string;
@@ -663,10 +675,23 @@ export function inspectAgentSurface(root: ParentNode): AgentNode[] {
     const expanded = element.getAttribute("aria-expanded");
     const name = element.getAttribute("name") ?? undefined;
     const placeholder = element.getAttribute("placeholder") ?? undefined;
-    const multiple = tag === "select" && Boolean(control.multiple);
+    const multiple = (tag === "select" && Boolean(control.multiple)) || element.getAttribute("aria-multiselectable") === "true";
+    const ariaChecked = booleanOrMixed(element.getAttribute("aria-checked"));
     const checked = inputType === "checkbox" || inputType === "radio"
       ? Boolean(control.checked)
-      : undefined;
+      : ariaChecked;
+    const selected = booleanAttribute(element.getAttribute("aria-selected"));
+    const pressed = booleanOrMixed(element.getAttribute("aria-pressed"));
+    const current = currentAttribute(element.getAttribute("aria-current"));
+    const orientation = orientationAttribute(element.getAttribute("aria-orientation"));
+    const activeDescendant = element.getAttribute("aria-activedescendant") ?? undefined;
+    const hasPopup = element.getAttribute("aria-haspopup") ?? undefined;
+    const valueMin = numberAttribute(element.getAttribute("aria-valuemin"));
+    const valueMax = numberAttribute(element.getAttribute("aria-valuemax"));
+    const valueNow = numberAttribute(element.getAttribute("aria-valuenow"));
+    const valueText = element.getAttribute("aria-valuetext") ?? undefined;
+    const part = element.getAttribute("data-clank-part") ?? undefined;
+    const state = element.getAttribute("data-state") ?? undefined;
     const value = agentControlValue(element, tag, inputType, multiple);
     return {
       ...(id ? { id } : {}),
@@ -684,6 +709,18 @@ export function inspectAgentSurface(root: ParentNode): AgentNode[] {
       ...(invalid === "true" ? { invalid: true } : {}),
       ...(expanded === "true" ? { expanded: true } : expanded === "false" ? { expanded: false } : {}),
       ...(checked === undefined ? {} : { checked }),
+      ...(selected === undefined ? {} : { selected }),
+      ...(pressed === undefined ? {} : { pressed }),
+      ...(current === undefined ? {} : { current }),
+      ...(orientation ? { orientation } : {}),
+      ...(activeDescendant ? { activeDescendant } : {}),
+      ...(hasPopup ? { hasPopup } : {}),
+      ...(valueMin === undefined ? {} : { valueMin }),
+      ...(valueMax === undefined ? {} : { valueMax }),
+      ...(valueNow === undefined ? {} : { valueNow }),
+      ...(valueText ? { valueText } : {}),
+      ...(part ? { part } : {}),
+      ...(state ? { state } : {}),
       ...(multiple ? { multiple: true } : {}),
       ...(value === undefined ? {} : { value }),
       ...(placeholder ? { placeholder } : {}),
@@ -694,6 +731,29 @@ export function inspectAgentSurface(root: ParentNode): AgentNode[] {
     };
   };
   return [...root.children].map(visit).filter((entry): entry is AgentNode => entry !== null);
+}
+
+function booleanAttribute(value: string | null): boolean | undefined {
+  return value === "true" ? true : value === "false" ? false : undefined;
+}
+
+function booleanOrMixed(value: string | null): boolean | "mixed" | undefined {
+  return value === "mixed" ? "mixed" : booleanAttribute(value);
+}
+
+function currentAttribute(value: string | null): boolean | string | undefined {
+  if (value === null || value === "false") return value === "false" ? false : undefined;
+  return value === "true" ? true : value;
+}
+
+function orientationAttribute(value: string | null): "horizontal" | "vertical" | undefined {
+  return value === "horizontal" || value === "vertical" ? value : undefined;
+}
+
+function numberAttribute(value: string | null): number | undefined {
+  if (value === null || value.trim() === "") return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
 }
 
 export interface AgentSurface {
