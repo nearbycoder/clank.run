@@ -426,6 +426,16 @@ test("context menu right-click uses pointer coordinates and touch movement cance
   assert.deepEqual(context.triggerElement.value.getBoundingClientRect().toJSON(), { x: 42, y: 73, width: 0, height: 0 });
   context.hide();
 
+  const keyboardTarget = { ownerDocument: null, getBoundingClientRect: () => ({ left: 12, bottom: 34 }) };
+  target.ref(keyboardTarget);
+  const keyboardOpen = keyEvent("F10", { shiftKey: true, currentTarget: keyboardTarget });
+  target.onKeyDown(keyboardOpen);
+  assert.equal(keyboardOpen.defaultPrevented, true);
+  assert.equal(context.open.value, true);
+  assert.deepEqual(context.triggerElement.value.getBoundingClientRect().toJSON(), { x: 12, y: 34, width: 0, height: 0 });
+  assert.equal(context.manifest().keyboard["Shift+F10"], "Open the context menu from its keyboard target");
+  context.hide();
+
   target.onPointerDown(pointerEvent({ pointerType: "touch", isPrimary: true, pointerId: 2, clientX: 1, clientY: 1 }));
   target.onPointerMove(pointerEvent({ pointerType: "touch", pointerId: 2, clientX: 20, clientY: 1 }));
   await delay(15);
@@ -471,7 +481,10 @@ test("menubar coordinates one menu, horizontal RTL roving, links, and nested pop
       { kind: "link", value: "help", textValue: "Help", href: "/help" },
     ],
   });
-  for (const value of ["file", "edit", "help"]) attach(menubar.item(value), focusable(value, focused));
+  attach(menubar.trigger("file"), focusable("file", focused));
+  attach(menubar.trigger("edit"), focusable("edit", focused));
+  attach(menubar.link("help"), focusable("help", focused));
+  assert.equal(menubar.item("file").ref, undefined, "item wrappers must not register a second popup trigger");
   assert.equal(menubar.root().role, "menubar");
   assert.equal(menubar.link("help").href, "/help");
   menubar.openMenu("file", "programmatic", undefined, false);

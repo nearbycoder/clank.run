@@ -1294,6 +1294,19 @@ export function createContextMenu<Value extends string>(options: ContextMenuOpti
           menu.show("trigger-press", event, "first");
           event.preventDefault();
         },
+        onKeyDown(event: KeyboardEvent) {
+          if (event.defaultPrevented || (event.key !== "ContextMenu" && !(event.key === "F10" && event.shiftKey))) return;
+          clear();
+          const target = event.currentTarget as HTMLElement | null;
+          const rect = target?.getBoundingClientRect?.();
+          setVirtualAnchor({
+            clientX: rect?.left ?? 0,
+            clientY: rect?.bottom ?? 0,
+            currentTarget: target,
+          });
+          menu.show("trigger-press", event, "first");
+          event.preventDefault();
+        },
         onPointerDown(event: PointerEvent) {
           if (event.pointerType !== "touch" || !event.isPrimary) return;
           clear();
@@ -1570,10 +1583,14 @@ export function createMenubar<Value extends string>(options: MenubarOptions<Valu
     }),
     item(value, partOptions = {}) {
       const item = definition(value);
-      return mergeProps(itemProps(value, undefined, partOptions), {
+      return {
+        id: itemId(id, items, value),
+        "data-open": () => state.value.value === value ? "" : undefined,
+        "data-disabled": () => itemDisabled(value) ? "" : undefined,
         "data-item-kind": item.kind ?? "menu",
         "data-clank-part": "item",
-      });
+        ...agentProps(partOptions),
+      };
     },
     trigger: (value, partOptions = {}) => itemProps(value, "menu", partOptions),
     link: (value, partOptions = {}) => itemProps(value, "link", partOptions),
@@ -1589,7 +1606,7 @@ export function createMenubar<Value extends string>(options: MenubarOptions<Valu
       state: { value: state.value.peek(), focusedValue: focusedValue.peek(), direction },
       parts: [
         { name: "root", role: "menubar", defaultElement: "div", required: true },
-        { name: "item", role: "menuitem", defaultElement: "div" },
+        { name: "item", defaultElement: "div" },
         { name: "trigger", role: "menuitem", defaultElement: "button" },
         { name: "link", role: "menuitem", defaultElement: "a" },
         { name: "menu", role: "menu", defaultElement: "div" },
@@ -2769,6 +2786,10 @@ function menuManifest<Value extends string>(
       { name: "openSubmenu", description: "Open a nested menu with direction-aware focus.", sideEffects: "write" },
     ],
     keyboard: {
+      ...(component === "ContextMenu" ? {
+        "Shift+F10": "Open the context menu from its keyboard target",
+        ContextMenu: "Open the context menu from its keyboard target",
+      } : {}),
       ArrowDown: "Focus the next enabled item",
       ArrowUp: "Focus the previous enabled item",
       Home: "Focus the first enabled item",

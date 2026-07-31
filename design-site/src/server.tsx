@@ -22,6 +22,7 @@ interface Manifest {
   protocol: "clank-design/1";
   frameworkVersion: string;
   assetVersion: string;
+  vendorVersion: string;
   componentCount: number;
   themeCount: number;
 }

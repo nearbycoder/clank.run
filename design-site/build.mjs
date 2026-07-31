@@ -44,24 +44,45 @@ await Promise.all([
   mkdir(vendorRoot, { recursive: true }),
 ]);
 
-for (const path of await filesUnder(sourceRoot)) {
-  const target = join(outputRoot, relative(sourceRoot, path));
-  if (/\.tsx?$/u.test(path)) {
-    await writeAtomically(target.replace(/\.tsx?$/u, ".js"), compile(await readFile(path, "utf8"), {
-      filename: path,
-      jsxImportSource: "../vendor/dom.js",
-    }));
-  } else {
-    await writeAtomically(target, await readFile(path));
-  }
-}
-
 await Promise.all([
   cp(join(projectRoot, "dist"), vendorRoot, { recursive: true }),
   cp(join(projectRoot, "package.json"), join(vendorRoot, "package.json")),
   cp(join(projectRoot, "LICENSE"), join(vendorRoot, "LICENSE")),
   cp(join(projectRoot, "brand"), join(outputRoot, "brand"), { recursive: true }),
 ]);
+
+const vendorHash = createHash("sha256");
+for (const path of (await filesUnder(vendorRoot)).sort()) {
+  vendorHash.update(relative(vendorRoot, path));
+  vendorHash.update(await readFile(path));
+}
+const vendorVersion = vendorHash.digest("hex").slice(0, 16);
+
+function versionRelativeImports(javascript) {
+  return javascript.replace(/(["'])((?:\.\.\/|\.\/)[^"'?]+\.js)\1/gu, (_match, quote, path) => `${quote}${path}?v=${vendorVersion}${quote}`);
+}
+
+for (const path of await filesUnder(vendorRoot)) {
+  if (!path.endsWith(".js")) continue;
+  await writeAtomically(path, versionRelativeImports(await readFile(path, "utf8")));
+}
+
+function versionVendorImports(javascript) {
+  return javascript.replace(/(["'])\.\.\/vendor\/([^"'?]+\.js)\1/gu, (_match, quote, path) => `${quote}../vendor/${path}?v=${vendorVersion}${quote}`);
+}
+
+for (const path of await filesUnder(sourceRoot)) {
+  const target = join(outputRoot, relative(sourceRoot, path));
+  if (/\.tsx?$/u.test(path)) {
+    const javascript = compile(await readFile(path, "utf8"), {
+      filename: path,
+      jsxImportSource: "../vendor/dom.js",
+    });
+    await writeAtomically(target.replace(/\.tsx?$/u, ".js"), versionVendorImports(javascript));
+  } else {
+    await writeAtomically(target, await readFile(path));
+  }
+}
 
 const { CLANK_THEME_PRESETS, createClankThemeStylesheet } = await import("../dist/ui-theme.js");
 const sourceStyles = await readFile(join(sourceRoot, "styles.css"), "utf8");
@@ -79,6 +100,7 @@ await writeAtomically(join(outputRoot, "manifest.json"), `${JSON.stringify({
   protocol: "clank-design/1",
   frameworkVersion: packageJson.version,
   assetVersion,
+  vendorVersion,
   componentCount: 37,
   themeCount: CLANK_THEME_PRESETS.length,
 }, null, 2)}\n`);

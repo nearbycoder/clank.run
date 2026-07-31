@@ -140,10 +140,10 @@ export function createScrollArea(options: ScrollAreaOptions): ScrollAreaControll
   const visible = (orientation: Orientation) => {
     if (mode === "hidden") return false;
     if (mode === "always") return true;
-    return orientation === "horizontal" ? overflowX.peek() : overflowY.peek();
+    return orientation === "horizontal" ? overflowX.value : overflowY.value;
   };
-  const maximum = (orientation: Orientation) => orientation === "horizontal" ? maxScrollX.peek() : maxScrollY.peek();
-  const offset = (orientation: Orientation) => orientation === "horizontal" ? scrollX.peek() : scrollY.peek();
+  const maximum = (orientation: Orientation) => orientation === "horizontal" ? maxScrollX.value : maxScrollY.value;
+  const offset = (orientation: Orientation) => orientation === "horizontal" ? scrollX.value : scrollY.value;
   const viewportSize = (orientation: Orientation) => orientation === "horizontal"
     ? measurements.viewportWidth
     : measurements.viewportHeight;
