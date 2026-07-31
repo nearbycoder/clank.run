@@ -1219,6 +1219,7 @@ test("deployment agent keeps private execution errors out of coordinator state",
 test("deployment agent never retries an uncertain successful completion", async () => {
   const test = await fixture({ operationLeaseMs: 500 });
   let failures = 0;
+  let executions = 0;
   let releaseExecution;
   let agent;
   const client = {
@@ -1244,6 +1245,7 @@ test("deployment agent never retries an uncertain successful completion", async 
       pollIntervalMs: 10,
       heartbeatIntervalMs: 100,
       async execute() {
+        executions += 1;
         await new Promise((resolve) => {
           releaseExecution = resolve;
         });
@@ -1259,6 +1261,9 @@ test("deployment agent never retries an uncertain successful completion", async 
     await waitFor(() => releaseExecution, "the uncertain operation did not start");
     releaseExecution();
     await waitFor(() => agent.activeOperations === 0, "the uncertain operation did not settle locally");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(executions, 1);
+    assert.equal(agent.activeOperations, 0);
     assert.equal(failures, 0);
     assert.equal(test.orchestrator.operation(queued.operation.id).state, "leased");
   } finally {
