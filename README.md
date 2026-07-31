@@ -168,7 +168,7 @@ applications do not need a separate runtime compiler or bundler.
 | Full stack | Inferred schemas, documents, arguments, and results; branded IDs; query and mutation functions; zero-codegen typed API references |
 | Auth | Email/password sessions, scrypt hashing, secure cookies, CSRF, roles, revocation, default auth UI, SSR boot state |
 | Data | Node's built-in SQLite, JSON documents, declared expression indexes, owned tables, atomic mutations, immutable document history, compensating restores, persisted live revisions, dependency-tracked query cache |
-| Live sync | Auth-partitioned Fetch RPC and cache, EventSource streams, session revocation, automatic invalidation, SSR seeding, multi-tab synchronization |
+| Live sync | Auth-partitioned Fetch RPC and cache, EventSource streams, session revocation, automatic invalidation, SSR seeding, multi-tab synchronization, and bounded presence/cursor/signal rooms |
 | SSR | Async string rendering, full-document templates, safe state serialization, CSP nonces, context and keyed lists, marker-based DOM-preserving hydration |
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |
 | Object storage | Atomic owner-only local objects plus zero-dependency S3-compatible storage with SigV4, bounded retries, deadlines, verified SHA-256, and chunked encrypted recovery |
@@ -236,6 +236,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [AI-first contracts](https://docs.clank.run/docs/ai-first)
 - [Conversational application building](https://docs.clank.run/docs/conversational-build)
 - [Semantic real-browser journeys](https://docs.clank.run/docs/browser-journeys)
+- [Realtime presence, cursors, and signals](https://docs.clank.run/docs/collaboration)
 - [Agent access inbox and scoped grants](https://docs.clank.run/docs/agent-access)
 - [Blueprint-generated admin studio](https://docs.clank.run/docs/admin-studio)
 - [Organizations, RBAC, invitations, and scoped tokens](https://docs.clank.run/docs/organizations)

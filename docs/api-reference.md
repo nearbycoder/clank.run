@@ -83,6 +83,21 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   `JourneyInputValue`, `JourneySecretReference`, `JourneyDriver`, `JourneyReport`,
   `JourneyStepReport`, `RunJourneyOptions`.
 
+## Realtime collaboration
+
+- `createCollaborationHub(options)` → `CollaborationHub`: authenticated, CSRF-protected,
+  same-origin presence and ephemeral signal rooms over bounded Fetch + SSE.
+- `createAuthCollaborationHub(auth, options?)`: reuse Clank sessions and CSRF checks with an
+  application-supplied exact-room authorization callback.
+- `createCollaborationClient(options)` → `CollaborationClient`: reconnecting reactive browser
+  state with immutable participants, event/error signals, presence replacement, and signals.
+- `CollaborationHub.diagnostics()`: aggregate room/participant/stream counts without identities,
+  room names, connection IDs, or payloads.
+- Types: `CollaborationValue`, `CollaborationPrincipal`, `CollaborationParticipant`,
+  `CollaborationEvent`, `CollaborationOperation`, `CollaborationLimits`, `CollaborationHub`,
+  `CollaborationClient`, `CollaborationClientState`, `CreateCollaborationHubOptions`,
+  `CreateAuthCollaborationHubOptions`, `CreateCollaborationClientOptions`.
+
 ## Deployment artifacts
 
 - `readDeploymentConfig(root, filename?)`: read and normalize `clank.deploy.json`.
