@@ -27,11 +27,32 @@ export interface ProjectOAuthOptions<Profile extends object = DefaultAuthProfile
   refreshTokenLifetimeMs?: number;
   authorizationCodeLifetimeMs?: number;
   maxClients?: number;
+  maxUserGrants?: number;
+}
+
+export interface AgentOAuthGrant {
+  readonly id: string;
+  readonly clientId: string;
+  readonly clientName: string;
+  readonly scopes: readonly McpScope[];
+  readonly createdAt: number;
+  readonly lastUsedAt: number | null;
+  readonly expiresAt: number;
+}
+
+export interface AgentOAuthGrantList {
+  readonly protocol: "clank-agent-grants/1";
+  readonly grants: readonly AgentOAuthGrant[];
+  readonly hasMore: boolean;
+  readonly managementPath: string;
+  readonly grantsPath: string;
 }
 
 export interface ProjectOAuth<Profile extends object = DefaultAuthProfile> {
   readonly mcpPath: string;
   readonly oauthPrefix: string;
+  readonly grantManagementPath: string;
+  readonly grantsPath: string;
   handles(request: Request): boolean;
   handle(request: Request): Promise<Response>;
   authenticate(request: Request): Promise<McpAuthentication<AuthRequest<Profile>> | null>;
@@ -55,7 +76,10 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
   const refreshTokenLifetimeMs = positiveDuration(options.refreshTokenLifetimeMs ?? 30 * 24 * 60 * 60 * 1_000, "refreshTokenLifetimeMs");
   const authorizationCodeLifetimeMs = positiveDuration(options.authorizationCodeLifetimeMs ?? 5 * 60 * 1_000, "authorizationCodeLifetimeMs");
   const maxClients = positiveInteger(options.maxClients ?? 1_000, "maxClients");
+  const maxUserGrants = boundedInteger(options.maxUserGrants ?? 100, 1, 1_000, "maxUserGrants");
   const applicationName = boundedPlainText(options.applicationName ?? "Clank application", "applicationName", 120);
+  const grantManagementPath = `${oauthPrefix}/access`;
+  const grantsPath = `${oauthPrefix}/grants`;
   createOAuthTables(internal);
   pruneOAuthState(internal);
 
@@ -72,6 +96,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
       scopes_supported: [...AGENT_SCOPES],
       resource_name: `${applicationName} agent actions`,
       resource_documentation: `${url.origin}/.well-known/clank`,
+      clank_agent_access_url: `${url.origin}${grantManagementPath}`,
     };
   };
 
@@ -89,12 +114,16 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
       code_challenge_methods_supported: ["S256"],
       scopes_supported: [...AGENT_SCOPES],
       service_documentation: `${origin}/.well-known/clank`,
+      clank_agent_grants_endpoint: `${origin}${grantsPath}`,
+      clank_agent_access_url: `${origin}${grantManagementPath}`,
     };
   };
 
   const oauth: ProjectOAuth<Profile> = {
     mcpPath,
     oauthPrefix,
+    grantManagementPath,
+    grantsPath,
     handles(request) {
       const path = new URL(request.url).pathname;
       return path === "/.well-known/oauth-protected-resource"
@@ -103,7 +132,10 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
         || path === "/.well-known/openid-configuration"
         || path === `${oauthPrefix}/register`
         || path === `${oauthPrefix}/authorize`
-        || path === `${oauthPrefix}/token`;
+        || path === `${oauthPrefix}/token`
+        || path === grantManagementPath
+        || path === grantsPath
+        || path.startsWith(`${grantsPath}/`);
     },
     async handle(request) {
       const url = new URL(request.url);
@@ -128,6 +160,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
           resource: resourceFor(request),
           codeLifetimeMs: authorizationCodeLifetimeMs,
           authorizePath: `${oauthPrefix}/authorize`,
+          grantManagementPath,
         });
       }
       if (url.pathname === `${oauthPrefix}/token`) {
@@ -135,6 +168,20 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
           resource: resourceFor(request),
           accessTokenLifetimeMs,
           refreshTokenLifetimeMs,
+          maxUserGrants,
+        });
+      }
+      if (url.pathname === grantManagementPath) {
+        return manageAgentAccess(request, internal, options.auth, {
+          applicationName,
+          grantManagementPath,
+          grantsPath,
+        });
+      }
+      if (url.pathname === grantsPath || url.pathname.startsWith(`${grantsPath}/`)) {
+        return agentGrantApi(request, internal, options.auth, {
+          grantManagementPath,
+          grantsPath,
         });
       }
       return oauthProblem(404, "invalid_request", "OAuth endpoint not found.");
@@ -280,6 +327,7 @@ async function authorize<Profile extends object>(
     resource: string;
     codeLifetimeMs: number;
     authorizePath: string;
+    grantManagementPath: string;
   },
 ): Promise<Response> {
   if (request.method !== "GET" && request.method !== "POST") return methodNotAllowed("GET, POST");
@@ -310,7 +358,13 @@ async function authorize<Profile extends object>(
         options.codeLifetimeMs,
       );
       return authorizationHtml(
-        consentPage(parameters, auth, options.applicationName, consentToken),
+        consentPage(
+          parameters,
+          auth,
+          options.applicationName,
+          consentToken,
+          options.grantManagementPath,
+        ),
         200,
         new URL(parameters.redirectUri).origin,
       );
@@ -362,6 +416,7 @@ async function exchangeToken(
     resource: string;
     accessTokenLifetimeMs: number;
     refreshTokenLifetimeMs: number;
+    maxUserGrants: number;
   },
 ): Promise<Response> {
   if (request.method !== "POST") return methodNotAllowed("POST");
@@ -396,6 +451,13 @@ async function exchangeToken(
       ) throw new OAuthRequestError("invalid_grant", "The authorization code is invalid or expired.");
       const pair = await prepareTokenPair(String(row.user_id), clientId, String(row.scope), resource, options);
       internal.transaction(() => {
+        if (activeGrantCount(internal, String(row.user_id), Date.now()) >= options.maxUserGrants) {
+          throw new OAuthRequestError(
+            "temporarily_unavailable",
+            "This account has reached its active agent grant limit. Revoke an existing grant and try again.",
+            503,
+          );
+        }
         const consumed = internal.prepare(`UPDATE clank_oauth_codes SET consumed_at = ?
           WHERE code_hash = ? AND consumed_at IS NULL AND expires_at > ?`)
           .run(Date.now(), codeHash, Date.now());
@@ -536,6 +598,300 @@ function tokenResponse(pair: PreparedTokenPair): Response {
   });
 }
 
+const MAX_VISIBLE_AGENT_GRANTS = 100;
+const AGENT_GRANT_ID = /^clank_grant_([A-Za-z0-9_-]{24})$/u;
+
+async function agentGrantApi<Profile extends object>(
+  request: Request,
+  internal: SQLiteInternal,
+  authRuntime: AuthRuntime<Profile>,
+  options: { grantManagementPath: string; grantsPath: string },
+): Promise<Response> {
+  try {
+    const auth = await authRuntime.resolve(request);
+    if (!auth.user) return agentGrantProblem(401, "UNAUTHENTICATED", "Sign in to manage agent access.");
+    const path = new URL(request.url).pathname;
+    if (path === options.grantsPath) {
+      if (request.method !== "GET") return agentGrantMethodNotAllowed("GET");
+      return privateJson(listAgentGrants(
+        internal,
+        auth.user.id,
+        options.grantManagementPath,
+        options.grantsPath,
+      ));
+    }
+    const familyId = agentGrantFamily(path.slice(options.grantsPath.length + 1));
+    if (!familyId) return agentGrantProblem(404, "GRANT_NOT_FOUND", "Agent grant not found.");
+    if (request.method !== "PATCH" && request.method !== "DELETE") {
+      return agentGrantMethodNotAllowed("PATCH, DELETE");
+    }
+    await authRuntime.verifyCsrf(request, auth);
+    const action = request.method === "DELETE" ? "revoke" : await grantPatchAction(request);
+    if (!mutateAgentGrant(internal, auth.user.id, familyId, action)) {
+      return agentGrantProblem(404, "GRANT_NOT_FOUND", "Agent grant not found.");
+    }
+    return privateJson({
+      ...listAgentGrants(internal, auth.user.id, options.grantManagementPath, options.grantsPath),
+      updated: {
+        grantId: grantId(familyId),
+        action: action === "read" ? "reduced_to_read_only" : "revoked",
+      },
+    });
+  } catch (error) {
+    if (error instanceof AuthError) return agentGrantProblem(error.status, error.code, error.message);
+    if (error instanceof OAuthRequestError) {
+      return agentGrantProblem(error.status, "INVALID_GRANT_REQUEST", error.message);
+    }
+    return agentGrantProblem(400, "INVALID_GRANT_REQUEST", "The agent grant request could not be completed.");
+  }
+}
+
+async function manageAgentAccess<Profile extends object>(
+  request: Request,
+  internal: SQLiteInternal,
+  authRuntime: AuthRuntime<Profile>,
+  options: {
+    applicationName: string;
+    grantManagementPath: string;
+    grantsPath: string;
+  },
+): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "POST") {
+    return methodNotAllowed("GET, POST");
+  }
+  try {
+    const auth = await authRuntime.resolve(request);
+    if (!auth.user) {
+      return authorizationHtml(pageShell(
+        "Agent access",
+        `<p>Sign in to <strong>${escapeHtml(options.applicationName)}</strong> before reviewing agent access.</p>
+        <div class="actions"><a class="button primary" href="/">Open application sign in</a></div>`,
+      ), 401);
+    }
+    if (request.method === "POST") {
+      const input = await readBoundedForm(request, 8 * 1024);
+      if (
+        !auth.session
+        || !auth.csrfToken
+        || !constantTimeEqual(String(input.csrf_token ?? ""), auth.csrfToken)
+      ) {
+        throw new OAuthRequestError("invalid_request", "The agent access request could not be verified.", 403);
+      }
+      const familyId = agentGrantFamily(requiredString(input.grant_id, "grant_id", 256));
+      const decision = requiredString(input.decision, "decision", 32);
+      const action = decision === "revoke" ? "revoke" : decision === "read" ? "read" : null;
+      if (!familyId || !action) throw new OAuthRequestError("invalid_request", "The agent access action is invalid.");
+      if (!mutateAgentGrant(internal, auth.user.id, familyId, action)) {
+        throw new OAuthRequestError("invalid_request", "The agent grant is no longer active.", 404);
+      }
+      return new Response(null, {
+        status: 303,
+        headers: oauthHeaders({
+          location: `${options.grantManagementPath}?updated=${action === "read" ? "read" : "revoked"}`,
+        }),
+      });
+    }
+    const listed = listAgentGrants(
+      internal,
+      auth.user.id,
+      options.grantManagementPath,
+      options.grantsPath,
+    );
+    const notice = new URL(request.url).searchParams.get("updated");
+    return authorizationHtml(agentAccessPage(
+      listed,
+      auth,
+      options.applicationName,
+      notice === "read" ? "Grant reduced to read-only access."
+        : notice === "revoked" ? "Agent access revoked."
+          : undefined,
+    ));
+  } catch (error) {
+    const message = error instanceof OAuthRequestError
+      ? error.message
+      : error instanceof AuthError
+        ? error.message
+        : "The agent access request could not be completed.";
+    const status = error instanceof OAuthRequestError || error instanceof AuthError ? error.status : 400;
+    return authorizationHtml(pageShell(
+      "Agent access failed",
+      `<p class="error" role="alert">${escapeHtml(message)}</p>
+      <div class="actions"><a class="button" href="${escapeAttribute(options.grantManagementPath)}">Return to agent access</a></div>`,
+    ), status);
+  }
+}
+
+function listAgentGrants(
+  internal: SQLiteInternal,
+  userId: string,
+  managementPath: string,
+  grantsPath: string,
+): AgentOAuthGrantList {
+  const now = Date.now();
+  const rows = internal.prepare(`SELECT
+      t.family_id,
+      t.client_id,
+      c.client_name,
+      MIN(t.created_at) AS created_at,
+      MAX(CASE WHEN t.consumed_at IS NULL AND t.expires_at > ? THEN t.expires_at ELSE 0 END) AS expires_at,
+      MAX(t.last_used_at) AS last_used_at,
+      MAX(CASE
+        WHEN t.consumed_at IS NULL AND t.expires_at > ?
+          AND (' ' || t.scope || ' ') LIKE '% agent:write %'
+        THEN 1 ELSE 0 END) AS can_write
+    FROM clank_oauth_tokens t
+    JOIN clank_oauth_clients c ON c.client_id = t.client_id
+    WHERE t.user_id = ?
+      AND EXISTS (
+        SELECT 1 FROM clank_oauth_tokens active
+        WHERE active.family_id = t.family_id
+          AND active.user_id = t.user_id
+          AND active.consumed_at IS NULL
+          AND active.expires_at > ?
+      )
+    GROUP BY t.family_id, t.client_id, c.client_name
+    ORDER BY COALESCE(MAX(t.last_used_at), MIN(t.created_at)) DESC, t.family_id ASC
+    LIMIT ?`).all(now, now, userId, now, MAX_VISIBLE_AGENT_GRANTS + 1);
+  return {
+    protocol: "clank-agent-grants/1",
+    grants: rows.slice(0, MAX_VISIBLE_AGENT_GRANTS).map((row) => ({
+      id: grantId(String(row.family_id)),
+      clientId: String(row.client_id),
+      clientName: String(row.client_name),
+      scopes: Number(row.can_write) === 1
+        ? ["agent:read", "agent:write"] as const
+        : ["agent:read"] as const,
+      createdAt: Number(row.created_at),
+      lastUsedAt: row.last_used_at === null || row.last_used_at === undefined
+        ? null
+        : Number(row.last_used_at),
+      expiresAt: Number(row.expires_at),
+    })),
+    hasMore: rows.length > MAX_VISIBLE_AGENT_GRANTS,
+    managementPath,
+    grantsPath,
+  };
+}
+
+function activeGrantCount(internal: SQLiteInternal, userId: string, now: number): number {
+  return Number(internal.prepare(`SELECT COUNT(DISTINCT family_id) AS count
+    FROM clank_oauth_tokens
+    WHERE user_id = ? AND consumed_at IS NULL AND expires_at > ?`).get(userId, now)?.count ?? 0);
+}
+
+function mutateAgentGrant(
+  internal: SQLiteInternal,
+  userId: string,
+  familyId: string,
+  action: "read" | "revoke",
+): boolean {
+  const now = Date.now();
+  const active = internal.prepare(`SELECT 1 AS active FROM clank_oauth_tokens
+    WHERE family_id = ? AND user_id = ? AND consumed_at IS NULL AND expires_at > ?
+    LIMIT 1`).get(familyId, userId, now);
+  if (!active) return false;
+  if (action === "read") {
+    internal.prepare(`UPDATE clank_oauth_tokens SET scope = 'agent:read'
+      WHERE family_id = ? AND user_id = ? AND consumed_at IS NULL`).run(familyId, userId);
+  } else {
+    internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
+      WHERE family_id = ? AND user_id = ? AND consumed_at IS NULL`).run(now, familyId, userId);
+  }
+  return true;
+}
+
+async function grantPatchAction(request: Request): Promise<"read"> {
+  const input = await readBoundedJson(request, 8 * 1024);
+  if (
+    !isRecord(input)
+    || Object.keys(input).length !== 1
+    || !Array.isArray(input.scopes)
+    || input.scopes.length !== 1
+    || input.scopes[0] !== "agent:read"
+  ) {
+    throw new OAuthRequestError(
+      "invalid_request",
+      "A grant can only be reduced with scopes set to [\"agent:read\"].",
+      422,
+    );
+  }
+  return "read";
+}
+
+function agentGrantFamily(value: string): string | null {
+  return AGENT_GRANT_ID.exec(value)?.[1] ?? null;
+}
+
+function grantId(familyId: string): string {
+  return `clank_grant_${familyId}`;
+}
+
+function agentAccessPage<Profile extends object>(
+  listed: AgentOAuthGrantList,
+  auth: AuthRequest<Profile>,
+  applicationName: string,
+  notice?: string,
+): string {
+  const grants = listed.grants.length === 0
+    ? `<div class="empty"><strong>No active agent access</strong><p>Connecting an MCP client will create a scoped, expiring grant here.</p></div>`
+    : `<div class="grant-list">${listed.grants.map((grant) => {
+        const writable = grant.scopes.includes("agent:write");
+        return `<article class="grant">
+          <div><h2>${escapeHtml(grant.clientName)} <span class="badge">Unverified client</span></h2>
+          <p class="meta mono">${escapeHtml(grant.clientId)}</p></div>
+          <dl><div><dt>Access</dt><dd>${writable ? "Read and write" : "Read-only"}</dd></div>
+          <div><dt>Last used</dt><dd>${grant.lastUsedAt ? timeElement(grant.lastUsedAt) : "Not used yet"}</dd></div>
+          <div><dt>Expires</dt><dd>${timeElement(grant.expiresAt)}</dd></div></dl>
+          <form method="post">
+            <input type="hidden" name="grant_id" value="${escapeAttribute(grant.id)}">
+            <input type="hidden" name="csrf_token" value="${escapeAttribute(auth.csrfToken ?? "")}">
+            <div class="actions">
+              ${writable ? `<button class="button" name="decision" value="read" type="submit">Make read-only</button>` : ""}
+              <button class="button danger" name="decision" value="revoke" type="submit">Revoke</button>
+            </div>
+          </form>
+        </article>`;
+      }).join("")}</div>`;
+  return pageShell(
+    `Agent access · ${escapeHtml(applicationName)}`,
+    `<p>Review MCP clients acting as <strong>${escapeHtml(auth.user!.email)}</strong>. Changes take effect on the next agent request.</p>
+    ${notice ? `<p class="notice" role="status">${escapeHtml(notice)}</p>` : ""}
+    ${grants}
+    ${listed.hasMore ? `<p class="meta">Only the ${MAX_VISIBLE_AGENT_GRANTS} most recent grants are shown.</p>` : ""}
+    <div class="actions"><a class="button" href="/">Return to application</a>
+    <a class="button" href="${escapeAttribute(listed.grantsPath)}">View JSON contract</a></div>`,
+  );
+}
+
+function timeElement(value: number): string {
+  const iso = new Date(value).toISOString();
+  return `<time datetime="${iso}">${iso.replace("T", " ").replace(".000Z", " UTC")}</time>`;
+}
+
+function privateJson(value: unknown): Response {
+  return Response.json(value, { headers: oauthHeaders() });
+}
+
+function agentGrantMethodNotAllowed(allow: string): Response {
+  return agentGrantProblem(405, "METHOD_NOT_ALLOWED", "Method not allowed.", { allow });
+}
+
+function agentGrantProblem(
+  status: number,
+  code: string,
+  message: string,
+  extraHeaders?: HeadersInit,
+): Response {
+  return Response.json({
+    protocol: "clank-agent-grants/1",
+    ok: false,
+    error: { code, message },
+  }, {
+    status,
+    headers: oauthHeaders(extraHeaders),
+  });
+}
+
 interface AuthorizationParameters {
   clientId: string;
   clientName: string;
@@ -660,6 +1016,7 @@ function consentPage<Profile extends object>(
   auth: AuthRequest<Profile>,
   applicationName: string,
   consentToken: string,
+  grantManagementPath: string,
 ): string {
   return pageShell(
     `Connect ${escapeHtml(parameters.clientName)}`,
@@ -679,7 +1036,8 @@ function consentPage<Profile extends object>(
         <button class="button primary" name="decision" value="approve" type="submit">Approve access</button>
         <button class="button" name="decision" value="deny" type="submit">Deny</button>
       </div>
-    </form>`,
+    </form>
+    <p class="meta"><a href="${escapeAttribute(grantManagementPath)}">Review existing agent access</a></p>`,
   );
 }
 
@@ -734,7 +1092,10 @@ function pageShell(title: string, body: string): string {
   .field{display:grid;gap:.4rem;margin-top:1rem;font-weight:650}.field input{box-sizing:border-box;width:100%;border:1px solid #50617d;border-radius:.65rem;background:#080d18;color:#fff;padding:.75rem;font:inherit}
   .error{border:1px solid #ef6d7a;border-radius:.65rem;background:#35151c;color:#ffd9dd;padding:.75rem}
   .button{appearance:none;border:1px solid #50617d;border-radius:.65rem;background:#182238;color:#fff;padding:.7rem 1rem;text-decoration:none;font:inherit;cursor:pointer}
-  .primary{background:#6ee7c7;color:#07110f;border-color:#6ee7c7;font-weight:700}li+li{margin-top:.5rem}
+  .primary{background:#6ee7c7;color:#07110f;border-color:#6ee7c7;font-weight:700}.danger{border-color:#a94d5a;color:#ffd9dd}li+li{margin-top:.5rem}
+  .notice,.empty{border:1px solid #315f57;border-radius:.75rem;background:#102821;padding:.85rem}.empty{border-color:#273249;background:#0b111d}.empty p{margin-bottom:0}
+  .grant-list{display:grid;gap:1rem;margin-top:1.5rem}.grant{border:1px solid #273249;border-radius:.85rem;padding:1rem;background:#0b111d}.grant h2{font-size:1.05rem;margin:0}.grant p{margin:.2rem 0 0;overflow-wrap:anywhere}.grant dl{display:grid;gap:.5rem;margin:1rem 0}.grant dl div{display:flex;justify-content:space-between;gap:1rem}.grant dt{color:#a8b4ca}.grant dd{margin:0;text-align:right}.grant form .actions{margin-top:.75rem}.mono{font-family:ui-monospace,SFMono-Regular,monospace;font-size:.8rem}a{color:#9aead5}
+  .badge{display:inline-block;margin-left:.35rem;border:1px solid #50617d;border-radius:999px;padding:.08rem .42rem;color:#a8b4ca;font-size:.7rem;font-weight:500;vertical-align:.1rem}@media(max-width:30rem){main{padding:1.25rem}.grant dl div{display:grid;gap:.1rem}.grant dd{text-align:left}}
   </style></head><body><main><h1>${title}</h1>${body}</main></body></html>`;
 }
 
@@ -1028,6 +1389,13 @@ function positiveDuration(value: number, name: string): number {
 
 function positiveInteger(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${name} must be a positive integer.`);
+  return value;
+}
+
+function boundedInteger(value: number, minimum: number, maximum: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new TypeError(`${name} must be an integer from ${minimum} through ${maximum}.`);
+  }
   return value;
 }
 

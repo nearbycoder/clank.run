@@ -223,6 +223,13 @@ it does not introduce a Clank-specific relay or installation requirement.
 OAuth access tokens work only at the exact MCP resource that issued them. They do not authenticate
 ordinary `__clank/query`, `__clank/mutation`, browser-auth, or another domain's endpoints.
 
+Every authenticated app also publishes a server-rendered access inbox at
+`/__clank/oauth/access`. The signed-in application user can inspect active client grants, reduce
+read/write access to read-only, or revoke a complete refresh family. Enforcement happens on the
+next MCP request, including requests in an existing MCP session. The no-store
+`/__clank/oauth/grants` JSON contract supports the same management flow for same-origin
+application UI. See [Agent access inbox and scoped grants](agent-access.md).
+
 ## Scopes
 
 Clank uses two deliberately small scopes:
@@ -237,6 +244,9 @@ insufficient_scope`.
 Applications keep their normal authorization rules. Required authentication, verified-email
 requirements, roles, owned-table isolation, validation, optimistic concurrency, and transaction
 boundaries apply identically to browser and MCP calls.
+
+Scope management is monotonic: the inbox can remove `agent:write` or revoke a family, but cannot
+add authority. Restoring write access requires a fresh authorization flow and explicit consent.
 
 ## Transport behavior
 

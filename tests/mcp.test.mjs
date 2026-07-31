@@ -236,7 +236,7 @@ async function requestConsent(runtime, session, requestParameters) {
   };
 }
 
-async function authorize(runtime, session, client, scopes = "agent:read agent:write") {
+async function approveAuthorization(runtime, session, client, scopes = "agent:read agent:write") {
   const verifier = "clank-agent-pkce-verifier-012345678901234567890123456789";
   const challenge = await pkce(verifier);
   const requestParameters = {
@@ -273,16 +273,21 @@ async function authorize(runtime, session, client, scopes = "agent:read agent:wr
   const code = callback.searchParams.get("code");
   assert.ok(code);
 
+  return { code, verifier };
+}
+
+async function authorize(runtime, session, client, scopes = "agent:read agent:write") {
+  const approved = await approveAuthorization(runtime, session, client, scopes);
   const token = await runtime.handle(formRequest("/__clank/oauth/token", {
     grant_type: "authorization_code",
     client_id: client.client_id,
-    code,
+    code: approved.code,
     redirect_uri: client.redirect_uris[0],
-    code_verifier: verifier,
+    code_verifier: approved.verifier,
     resource,
   }));
   assert.equal(token.status, 200);
-  return { ...(await token.json()), code, verifier };
+  return { ...(await token.json()), ...approved };
 }
 
 test("OAuth sign-in form returns to consent without a separate application tab", async () => {
@@ -670,6 +675,7 @@ test("backend functions become deterministic MCP tools with public discovery", a
   const manifest = await discovery.json();
   assert.equal(manifest.mcp.endpoint, resource);
   assert.equal(manifest.mcp.authentication, "oauth2");
+  assert.equal(manifest.mcp.accessManagement, `${origin}/__clank/oauth/access`);
   assert.equal(manifest.contractRevision, runtime.contractRevision);
   assert.equal(discovery.headers.get("x-clank-contract-revision"), runtime.contractRevision);
   assert.equal(JSON.stringify(manifest).includes("todos.add"), false);
@@ -685,7 +691,9 @@ test("backend functions become deterministic MCP tools with public discovery", a
   const protectedMetadata = await runtime.handle(new Request(
     `${origin}/.well-known/oauth-protected-resource/__clank/mcp`,
   ));
-  assert.deepEqual((await protectedMetadata.json()).authorization_servers, [origin]);
+  const protectedPayload = await protectedMetadata.json();
+  assert.deepEqual(protectedPayload.authorization_servers, [origin]);
+  assert.equal(protectedPayload.clank_agent_access_url, `${origin}/__clank/oauth/access`);
   const authorizationMetadata = await runtime.handle(new Request(
     `${origin}/.well-known/oauth-authorization-server`,
   ));
@@ -880,6 +888,255 @@ test("read-only OAuth grants hide and reject mutation tools", async () => {
   runtime.close();
 });
 
+test("agent access inbox isolates, reduces, and revokes active OAuth grants immediately", async () => {
+  const runtime = await openBackend(authenticatedBackend(), {
+    path: ":memory:",
+    agent: { title: "Private Todo" },
+  });
+  const owner = await registerUser(runtime);
+  const client = await registerClient(runtime);
+  const tokens = await authorize(runtime, owner, client);
+
+  const metadata = await runtime.handle(new Request(`${origin}/.well-known/oauth-authorization-server`));
+  const metadataPayload = await metadata.json();
+  assert.equal(metadataPayload.clank_agent_access_url, `${origin}/__clank/oauth/access`);
+  assert.equal(metadataPayload.clank_agent_grants_endpoint, `${origin}/__clank/oauth/grants`);
+
+  const anonymous = await runtime.handle(new Request(`${origin}/__clank/oauth/grants`));
+  assert.equal(anonymous.status, 401);
+  assert.equal((await anonymous.json()).error.code, "UNAUTHENTICATED");
+
+  const listed = await runtime.handle(new Request(`${origin}/__clank/oauth/grants`, {
+    headers: { cookie: owner.cookie },
+  }));
+  assert.equal(listed.status, 200);
+  assert.equal(listed.headers.get("cache-control"), "no-store");
+  const grantList = await listed.json();
+  assert.equal(grantList.protocol, "clank-agent-grants/1");
+  assert.equal(grantList.hasMore, false);
+  assert.equal(grantList.managementPath, "/__clank/oauth/access");
+  assert.equal(grantList.grantsPath, "/__clank/oauth/grants");
+  assert.equal(grantList.grants.length, 1);
+  const grant = grantList.grants[0];
+  assert.match(grant.id, /^clank_grant_[A-Za-z0-9_-]{24}$/u);
+  assert.equal(grant.clientId, client.client_id);
+  assert.equal(grant.clientName, "Test MCP client");
+  assert.deepEqual(grant.scopes, ["agent:read", "agent:write"]);
+  assert.equal(grant.lastUsedAt, null);
+  assert.ok(grant.expiresAt > grant.createdAt);
+
+  const inbox = await runtime.handle(new Request(`${origin}/__clank/oauth/access`, {
+    headers: { cookie: owner.cookie },
+  }));
+  assert.equal(inbox.status, 200);
+  assert.match(inbox.headers.get("content-security-policy"), /default-src 'none'/u);
+  const inboxHtml = await inbox.text();
+  assert.match(inboxHtml, /Agent access · Private Todo/u);
+  assert.match(inboxHtml, /Test MCP client/u);
+  assert.match(inboxHtml, /Read and write/u);
+  assert.match(inboxHtml, /Make read-only/u);
+  assert.match(inboxHtml, /Revoke/u);
+  assert.doesNotMatch(inboxHtml, new RegExp(tokens.access_token, "u"));
+  assert.doesNotMatch(inboxHtml, new RegExp(tokens.refresh_token, "u"));
+
+  const noCsrf = await runtime.handle(new Request(`${origin}/__clank/oauth/grants/${grant.id}`, {
+    method: "PATCH",
+    headers: {
+      cookie: owner.cookie,
+      origin,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ scopes: ["agent:read"] }),
+  }));
+  assert.equal(noCsrf.status, 403);
+  assert.equal((await noCsrf.json()).error.code, "INVALID_CSRF");
+
+  const expansion = await runtime.handle(new Request(`${origin}/__clank/oauth/grants/${grant.id}`, {
+    method: "PATCH",
+    headers: {
+      cookie: owner.cookie,
+      origin,
+      "content-type": "application/json",
+      "x-clank-csrf": owner.csrf,
+    },
+    body: JSON.stringify({ scopes: ["agent:read", "agent:write"] }),
+  }));
+  assert.equal(expansion.status, 422);
+  assert.equal((await expansion.json()).error.code, "INVALID_GRANT_REQUEST");
+
+  const reduced = await runtime.handle(new Request(`${origin}/__clank/oauth/grants/${grant.id}`, {
+    method: "PATCH",
+    headers: {
+      cookie: owner.cookie,
+      origin,
+      "content-type": "application/json",
+      "x-clank-csrf": owner.csrf,
+    },
+    body: JSON.stringify({ scopes: ["agent:read"] }),
+  }));
+  assert.equal(reduced.status, 200);
+  const reducedPayload = await reduced.json();
+  assert.equal(reducedPayload.updated.action, "reduced_to_read_only");
+  assert.deepEqual(reducedPayload.grants[0].scopes, ["agent:read"]);
+
+  const initialized = await runtime.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "grant-test", version: "1.0.0" },
+    },
+  }, tokens.access_token));
+  assert.equal(initialized.status, 200);
+  const mcpSession = initialized.headers.get("mcp-session-id");
+  const tools = await runtime.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: {},
+  }, tokens.access_token, { "mcp-session-id": mcpSession }));
+  assert.deepEqual((await tools.json()).result.tools.map((tool) => tool.name), ["todos.list"]);
+  const write = await runtime.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: { name: "todos.add", arguments: { title: "Must remain blocked" } },
+  }, tokens.access_token, { "mcp-session-id": mcpSession }));
+  assert.equal(write.status, 403);
+  assert.equal((await write.json()).error, "insufficient_scope");
+
+  const refreshed = await runtime.handle(formRequest("/__clank/oauth/token", {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    refresh_token: tokens.refresh_token,
+    resource,
+  }));
+  assert.equal(refreshed.status, 200);
+  const refreshedTokens = await refreshed.json();
+  assert.equal(refreshedTokens.scope, "agent:read");
+
+  const otherRegistration = await runtime.handle(jsonRequest("/__clank/auth/register", {
+    email: "other-agent-user@example.com",
+    password: "correct horse battery staple",
+    profile: { name: "Other Agent User" },
+  }));
+  assert.equal(otherRegistration.status, 201);
+  const otherPayload = await otherRegistration.json();
+  const other = {
+    cookie: otherRegistration.headers.get("set-cookie").split(";", 1)[0],
+    csrf: otherPayload.csrfToken,
+  };
+  const crossUser = await runtime.handle(new Request(`${origin}/__clank/oauth/grants/${grant.id}`, {
+    method: "DELETE",
+    headers: {
+      cookie: other.cookie,
+      origin,
+      "x-clank-csrf": other.csrf,
+    },
+  }));
+  assert.equal(crossUser.status, 404);
+  assert.equal((await crossUser.json()).error.code, "GRANT_NOT_FOUND");
+
+  const formGrantTokens = await authorize(runtime, owner, client, "agent:read");
+  const withFormGrant = await runtime.handle(new Request(`${origin}/__clank/oauth/grants`, {
+    headers: { cookie: owner.cookie },
+  }));
+  const formGrant = (await withFormGrant.json()).grants.find((entry) => entry.id !== grant.id);
+  assert.ok(formGrant);
+  const formRevoked = await runtime.handle(formRequest("/__clank/oauth/access", {
+    grant_id: formGrant.id,
+    csrf_token: owner.csrf,
+    decision: "revoke",
+  }, {
+    cookie: owner.cookie,
+    origin,
+  }));
+  assert.equal(formRevoked.status, 303);
+  assert.equal(
+    formRevoked.headers.get("location"),
+    "/__clank/oauth/access?updated=revoked",
+  );
+  const formGrantDenied = await runtime.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 4,
+    method: "tools/list",
+    params: {},
+  }, formGrantTokens.access_token));
+  assert.equal(formGrantDenied.status, 401);
+
+  const revoked = await runtime.handle(new Request(`${origin}/__clank/oauth/grants/${grant.id}`, {
+    method: "DELETE",
+    headers: {
+      cookie: owner.cookie,
+      origin,
+      "x-clank-csrf": owner.csrf,
+    },
+  }));
+  assert.equal(revoked.status, 200);
+  const revokedPayload = await revoked.json();
+  assert.equal(revokedPayload.updated.action, "revoked");
+  assert.deepEqual(revokedPayload.grants, []);
+
+  const denied = await runtime.handle(mcpRequest({
+    jsonrpc: "2.0",
+    id: 5,
+    method: "tools/list",
+    params: {},
+  }, refreshedTokens.access_token, { "mcp-session-id": mcpSession }));
+  assert.equal(denied.status, 401);
+  const deniedRefresh = await runtime.handle(formRequest("/__clank/oauth/token", {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    refresh_token: refreshedTokens.refresh_token,
+    resource,
+  }));
+  assert.equal(deniedRefresh.status, 400);
+  assert.equal((await deniedRefresh.json()).error, "invalid_grant");
+  runtime.close();
+});
+
+test("agent grant capacity is bounded per user and a rejected code remains retryable", async () => {
+  const runtime = await openBackend(authenticatedBackend(), {
+    path: ":memory:",
+    agent: { maxUserGrants: 1 },
+  });
+  const session = await registerUser(runtime);
+  const client = await registerClient(runtime);
+  const first = await authorize(runtime, session, client);
+  const second = await approveAuthorization(runtime, session, client);
+  const exchange = () => runtime.handle(formRequest("/__clank/oauth/token", {
+    grant_type: "authorization_code",
+    client_id: client.client_id,
+    code: second.code,
+    redirect_uri: client.redirect_uris[0],
+    code_verifier: second.verifier,
+    resource,
+  }));
+  const atCapacity = await exchange();
+  assert.equal(atCapacity.status, 503);
+  assert.equal((await atCapacity.json()).error, "temporarily_unavailable");
+
+  const listed = await runtime.handle(new Request(`${origin}/__clank/oauth/grants`, {
+    headers: { cookie: session.cookie },
+  }));
+  const grant = (await listed.json()).grants[0];
+  const revoked = await runtime.handle(new Request(`${origin}/__clank/oauth/grants/${grant.id}`, {
+    method: "DELETE",
+    headers: {
+      cookie: session.cookie,
+      origin,
+      "x-clank-csrf": session.csrf,
+    },
+  }));
+  assert.equal(revoked.status, 200);
+  const retried = await exchange();
+  assert.equal(retried.status, 200);
+  assert.notEqual((await retried.json()).access_token, first.access_token);
+  runtime.close();
+});
+
 test("OAuth client registration rejects redirects that could exfiltrate authorization codes", async () => {
   const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
   const insecure = await runtime.handle(jsonRequest("/__clank/oauth/register", {
@@ -935,6 +1192,13 @@ test("agent endpoint configuration fails closed before opening project resources
       agent: { mcpPath: "/agent", oauthPrefix: "/agent" },
     }),
     /must be different paths/,
+  );
+  await assert.rejects(
+    openBackend(authenticatedBackend(), {
+      path: ":memory:",
+      agent: { maxUserGrants: 1_001 },
+    }),
+    /must not exceed 1000/,
   );
 });
 

@@ -326,6 +326,10 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `openBackend()` exposes eligible functions at `/__clank/mcp` by default and installs OAuth
   discovery automatically when the backend uses Clank auth. `BackendRuntime.contractRevision`
   is the same revision published by MCP discovery and `GET /__clank/manifest`.
+- Authenticated backends expose a server-rendered agent access inbox at
+  `/__clank/oauth/access` and the no-store `clank-agent-grants/1` contract at
+  `/__clank/oauth/grants`. `agent.maxUserGrants` sets the per-user active-family ceiling from 1
+  through 1,000; the default is 100.
 - `agentActionPath(reference)`: resolve a literal or typed backend function reference to its exact
   browser/MCP path.
 - `inspectAgentActions(htmlOrRoot)`: collect bounded `data-clank-action` controls from SSR HTML or
@@ -340,7 +344,7 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   `AgentActionParityOptions`, `AgentActionParityReport`, and `VerifyAgentActionParityOptions`.
 
 See [Agent protocol](agent-protocol.md) for connection, OAuth, scope, discovery, and security
-details.
+details, and [Agent access](agent-access.md) for grant inspection, reduction, and revocation.
 
 ## Router
 

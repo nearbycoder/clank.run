@@ -147,6 +147,17 @@ can list and call queries. A write grant can also call mutations. Normal applica
 apply, including required login, verified email, roles, record ownership, argument validation,
 and document-version conflicts.
 
+Each signed-in user can review their active clients at:
+
+```text
+https://my-app.apps.clank.run/__clank/oauth/access
+```
+
+Making a grant read-only or revoking it changes the authority checked on the next request; a
+client does not retain its old write scope merely because it already initialized an MCP session.
+The inbox and its JSON API are stored in this app's isolated database. See [Agent access inbox and
+scoped grants](agent-access.md).
+
 ## Keep the UI and MCP contract synchronized
 
 Treat `src/backend.ts` as the single source of truth:

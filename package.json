@@ -72,6 +72,7 @@
     "brand",
     "dist",
     "docs",
+    "!docs/maintenance.md",
     "examples",
     "!examples/**/*.sqlite",
     "!examples/**/*.sqlite-shm",

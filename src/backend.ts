@@ -1322,6 +1322,8 @@ export interface OpenBackendOptions extends SQLiteOptions {
     instructions?: string;
     mcpPath?: string;
     oauthPrefix?: string;
+    /** Maximum simultaneously active OAuth grants for one application user. Defaults to 100. */
+    maxUserGrants?: number;
   };
 }
 
@@ -1356,6 +1358,12 @@ export async function openBackend<
   const agentTitle = agentOptions?.title ?? "Clank application";
   const agentDescription = agentOptions?.description
     ?? "Typed application actions generated from the Clank backend contract.";
+  const maxUserGrants = agentOptions
+    ? positiveIntegerOption(agentOptions.maxUserGrants ?? 100, "agent.maxUserGrants")
+    : 100;
+  if (maxUserGrants > 1_000) {
+    throw new TypeError("agent.maxUserGrants must not exceed 1000.");
+  }
   if (agentOptions) validateBackendAgentMetadata(agentName, agentTitle, agentDescription, agentOptions);
   const registry = flattenFunctions(definition.functions);
   if (agentOptions) {
@@ -1577,6 +1585,7 @@ export async function openBackend<
         mcpPath,
         oauthPrefix,
         applicationName: agentTitle,
+        maxUserGrants,
       })
     : undefined;
   const mcpTools: McpTool<AuthRequest<any> | null>[] = agentOptions
@@ -1678,6 +1687,7 @@ export async function openBackend<
         serverVersion: mcpManifest!.server.version,
         endpoint: `${origin}${mcpPath}`,
         authentication: oauth ? "oauth2" : "none",
+        ...(oauth ? { accessManagement: `${origin}${oauth.grantManagementPath}` } : {}),
       },
       documentation: {
         actions: "Connect with MCP and call tools/list or read clank://actions.",
