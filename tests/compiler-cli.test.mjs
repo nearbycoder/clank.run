@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { access, chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
@@ -162,7 +163,7 @@ test("bare Clank is helpful without a TTY and the interactive launcher routes gu
     } = await import("../scripts/cli-deploy.mjs");
     assert.equal(DEFAULT_PLATFORM_SERVER, "https://clank.run");
 
-    const answers = ["1", "2", "guided-app"];
+    const answers = ["2", "2", "guided-app"];
     const prompts = [];
     const invocations = [];
     let output = "";
@@ -190,11 +191,229 @@ test("bare Clank is helpful without a TTY and the interactive launcher routes gu
 
     const loginInvocations = [];
     await runInteractive({
-      ask: async () => "3",
+      ask: async () => "4",
       write: () => {},
       execute: async (command, args) => { loginInvocations.push({ command, args }); },
     });
     assert.deepEqual(loginInvocations, [{ command: "login", args: [] }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("compose freezes an exact review before transactionally applying generated files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-compose-"));
+  const target = join(root, "app");
+  const proposal = fileURLToPath(new URL("examples/blueprint-todo/clank.app.ts", repository));
+  try {
+    const reviewed = await runCliOutput([
+      "compose",
+      target,
+      "--request=Build a collaborative task planner",
+      `--proposal=${proposal}`,
+      "--framework=local",
+      "--json",
+    ]);
+    const review = JSON.parse(reviewed.stdout);
+    assert.equal(review.protocol, "clank-compose-result/1");
+    assert.equal(review.status, "review");
+    assert.equal(review.directory, target);
+    assert.match(review.reviewId, /^[a-f0-9-]{36}$/u);
+    assert.match(review.planDigest, /^[a-f0-9]{64}$/u);
+    assert.ok(review.changes.length > 10);
+    assert.ok(review.changes.every((change) => change.status === "create"));
+    assert.match(review.apply, new RegExp(`--review=${review.reviewId}`, "u"));
+    await assert.rejects(access(join(target, "package.json")));
+
+    const reviewPath = join(target, ".clank", "compose-reviews", `${review.reviewId}.json`);
+    assert.equal((await lstat(reviewPath)).mode & 0o777, 0o600);
+
+    const rejected = await runCliResult([
+      "compose",
+      target,
+      `--review=${review.reviewId}`,
+      `--approve=${"0".repeat(64)}`,
+      "--json",
+    ]);
+    assert.equal(rejected.code, 1);
+    assert.equal(JSON.parse(rejected.stderr).error.code, "COMPOSE_APPROVAL_MISMATCH");
+    await assert.rejects(access(join(target, "package.json")));
+
+    const applied = JSON.parse((await runCliOutput([
+      "compose",
+      target,
+      `--review=${review.reviewId}`,
+      `--approve=${review.planDigest}`,
+      "--json",
+    ])).stdout);
+    assert.equal(applied.protocol, "clank-compose-result/1");
+    assert.equal(applied.status, "applied");
+    assert.equal(applied.planDigest, review.planDigest);
+    assert.equal(applied.directory, target);
+    assert.equal(JSON.parse(await readFile(join(target, "package.json"), "utf8")).name, "orbit-tasks");
+    const sessionPath = join(target, ".clank", "compose-sessions", `${review.reviewId}.json`);
+    assert.equal((await lstat(sessionPath)).mode & 0o777, 0o600);
+    assert.equal(JSON.parse(await readFile(sessionPath, "utf8")).planDigest, review.planDigest);
+    await linkFramework(target);
+    await runNodeTests(target);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("compose rejects stale baselines and unsafe private or generated paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-compose-safety-"));
+  const proposal = fileURLToPath(new URL("examples/blueprint-todo/clank.app.ts", repository));
+  const review = async (target) => JSON.parse((await runCliOutput([
+    "compose",
+    target,
+    "--request=Build a safe task planner",
+    `--proposal=${proposal}`,
+    "--framework=local",
+    "--json",
+  ])).stdout);
+  try {
+    const staleTarget = join(root, "stale");
+    const staleReview = await review(staleTarget);
+    await writeFile(join(staleTarget, "README.md"), "changed after review\n");
+    const stale = await runCliResult([
+      "compose",
+      staleTarget,
+      `--review=${staleReview.reviewId}`,
+      `--approve=${staleReview.planDigest}`,
+      "--json",
+    ]);
+    assert.equal(stale.code, 1);
+    assert.equal(JSON.parse(stale.stderr).error.code, "COMPOSE_REVIEW_STALE");
+    assert.equal(await readFile(join(staleTarget, "README.md"), "utf8"), "changed after review\n");
+    const staleReviewPath = join(
+      staleTarget,
+      ".clank",
+      "compose-reviews",
+      `${staleReview.reviewId}.json`,
+    );
+    const tampered = JSON.parse(await readFile(staleReviewPath, "utf8"));
+    const readmeChange = tampered.changes.find((change) => change.path === "README.md");
+    readmeChange.status = "update";
+    readmeChange.beforeSha256 = createHash("sha256").update("changed after review\n").digest("hex");
+    await writeFile(staleReviewPath, `${JSON.stringify(tampered, null, 2)}\n`);
+    const widened = await runCliResult([
+      "compose",
+      staleTarget,
+      `--review=${staleReview.reviewId}`,
+      `--approve=${staleReview.planDigest}`,
+      "--json",
+    ]);
+    assert.equal(widened.code, 1);
+    assert.equal(JSON.parse(widened.stderr).error.code, "COMPOSE_REVIEW_STALE");
+    await assert.rejects(access(join(staleTarget, "package.json")));
+
+    const privateTarget = join(root, "private-link");
+    const privateOutside = join(root, "private-outside");
+    await mkdir(privateTarget);
+    await mkdir(privateOutside);
+    await symlink(privateOutside, join(privateTarget, ".clank"), "dir");
+    const privateResult = await runCliResult([
+      "compose",
+      privateTarget,
+      "--request=Do not follow metadata links",
+      `--proposal=${proposal}`,
+      "--framework=local",
+      "--json",
+    ]);
+    assert.equal(privateResult.code, 1);
+    assert.equal(JSON.parse(privateResult.stderr).error.code, "COMPOSE_UNSAFE_TARGET");
+    assert.deepEqual(await readdir(privateOutside), []);
+
+    const generatedTarget = join(root, "generated-link");
+    const generatedOutside = join(root, "generated-outside");
+    await mkdir(generatedTarget);
+    await mkdir(generatedOutside);
+    const generatedReview = await review(generatedTarget);
+    await symlink(generatedOutside, join(generatedTarget, "src"), "dir");
+    const generatedResult = await runCliResult([
+      "compose",
+      generatedTarget,
+      `--review=${generatedReview.reviewId}`,
+      `--approve=${generatedReview.planDigest}`,
+      "--json",
+    ]);
+    assert.equal(generatedResult.code, 1);
+    assert.equal(JSON.parse(generatedResult.stderr).error.code, "COMPOSE_UNSAFE_TARGET");
+    assert.deepEqual(await readdir(generatedOutside), []);
+    await assert.rejects(access(join(generatedTarget, "package.json")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("compose gives configured agents a bounded protocol without ambient secrets or public environment values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-compose-agent-"));
+  const target = join(root, "app");
+  const sourceProposal = fileURLToPath(new URL("examples/blueprint-todo/clank.app.ts", repository));
+  const proposal = join(root, "clank.app.ts");
+  const agent = join(root, "agent.mjs");
+  const canary = "compose-environment-canary";
+  try {
+    await writeFile(proposal, (await readFile(sourceProposal, "utf8")).replace(
+      "customDomains: true,",
+      'customDomains: true,\n    env: { PUBLIC_LABEL: "retained-without-agent-disclosure" },',
+    ));
+    const initialReview = JSON.parse((await runCliOutput([
+      "compose",
+      target,
+      "--request=Create the first revision",
+      `--proposal=${proposal}`,
+      "--framework=local",
+      "--json",
+    ])).stdout);
+    await runCliOutput([
+      "compose",
+      target,
+      `--review=${initialReview.reviewId}`,
+      `--approve=${initialReview.planDigest}`,
+      "--json",
+    ]);
+
+    await writeFile(agent, `#!/usr/bin/env node
+let source = "";
+for await (const chunk of process.stdin) source += chunk;
+const request = JSON.parse(source);
+const safe = request.protocol === "clank-compose-request/1"
+  && request.currentBlueprint?.deployment
+  && !("env" in request.currentBlueprint.deployment)
+  && process.env.CLANK_COMPOSE_TEST_SECRET === undefined
+  && process.env.HOME === undefined;
+process.stdout.write(JSON.stringify({
+  protocol: "clank-compose-proposal/1",
+  type: "proposal",
+  message: safe ? "Agent input was sanitized." : "Agent input leaked ambient state.",
+  blueprint: request.currentBlueprint,
+}));
+`);
+    await chmod(agent, 0o700);
+    const result = await runCliOutput([
+      "compose",
+      target,
+      "--request=Keep the app and review it through the agent protocol",
+      `--agent=${agent}`,
+      "--framework=local",
+      "--json",
+    ], repository, {
+      ...process.env,
+      CLANK_COMPOSE_TEST_SECRET: canary,
+    });
+    assert.doesNotMatch(result.stdout, new RegExp(canary, "u"));
+    assert.doesNotMatch(result.stderr, new RegExp(canary, "u"));
+    const review = JSON.parse(result.stdout);
+    assert.equal(review.message, "Agent input was sanitized.");
+    const stored = JSON.parse(await readFile(
+      join(target, ".clank", "compose-reviews", `${review.reviewId}.json`),
+      "utf8",
+    ));
+    assert.deepEqual(stored.blueprint.deployment.env, {
+      PUBLIC_LABEL: "retained-without-agent-disclosure",
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

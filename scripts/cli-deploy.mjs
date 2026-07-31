@@ -17,6 +17,7 @@ import {
 } from "../dist/blueprint.js";
 import { applyMigrations, loadMigrations, planMigrations } from "../dist/migrations.js";
 import { readResponseBytes, ResponseBodyLimitError } from "../dist/security.js";
+import { composeApp, ComposeError } from "./cli-compose.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
@@ -71,6 +72,10 @@ const COMMANDS = Object.freeze({
   create: {
     usage: "clank create <directory> [--template <auth-todo|minimal>] [--name <name>] [--framework <version|local|spec>] [--json]",
     summary: "Create a deploy-ready full-stack app from a built-in template.",
+  },
+  compose: {
+    usage: "clank compose [directory] --request <text> (--proposal <clank.app.ts> | --agent <executable>) [--approve <plan-digest>] [--json]",
+    summary: "Review and apply an agent-proposed application through an exact approval-bound plan.",
   },
   dev: {
     usage: "clank dev [directory] [--host <host>] [--port <port>] [--no-reload] [--json]",
@@ -195,6 +200,7 @@ const COMMAND_ALIASES = Object.freeze({
 });
 const VALUE_OPTIONS = Object.freeze({
   create: ["name", "framework", "template"],
+  compose: ["request", "proposal", "agent", "review", "approve", "framework", "max-turns", "agent-timeout"],
   plan: ["blueprint", "output", "framework"],
   explain: ["blueprint"],
   generate: ["blueprint", "framework"],
@@ -229,6 +235,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   help: ["json"],
   templates: ["json"],
   create: ["json"],
+  compose: ["json"],
   generate: ["force"],
   logout: ["local"],
   project: ["acknowledge-data-loss"],
@@ -259,6 +266,7 @@ export async function run(command, args) {
       case "version": return version();
       case "templates": return templates(args);
       case "create": return await createProject(args);
+      case "compose": return await composeCommand(args);
       case "plan": return await blueprintPlan(args);
       case "generate": return await generateProject(args);
       case "explain": return await explainBlueprint(args);
@@ -300,7 +308,9 @@ export async function run(command, args) {
       console.error(JSON.stringify({
         ok: false,
         error: {
-          code: error instanceof ApiError ? error.code : error instanceof CliError ? error.code : "CLANK_ERROR",
+          code: error instanceof ApiError || error instanceof CliError || error instanceof ComposeError
+            ? error.code
+            : "CLANK_ERROR",
           message,
         },
       }));
@@ -341,7 +351,8 @@ export async function runInteractive(options = {}) {
     output(`\nClank ${packageJson.version}\n`);
     output("Build and deploy a TypeScript app with one package.\n\n");
     const actions = [
-      { id: "create", title: "Create a new app", summary: "Choose a starter and scaffold a deploy-ready project." },
+      { id: "compose", title: "Build with an agent", summary: "Review an agent-proposed blueprint before any application files change." },
+      { id: "create", title: "Create from a starter", summary: "Choose a starter and scaffold a deploy-ready project." },
       { id: "doctor", title: "Check this app", summary: "Validate the current project before deploying." },
       { id: "login", title: "Log in", summary: `Authorize this CLI with ${DEFAULT_PLATFORM_SERVER}.` },
       { id: "deploy", title: "Deploy this app", summary: "Build, migrate, health-check, and activate this project." },
@@ -351,6 +362,38 @@ export async function runInteractive(options = {}) {
     output("What would you like to do?\n");
     actions.forEach((entry, index) => output(`  ${index + 1}) ${entry.title}\n     ${entry.summary}\n`));
     const action = await choose("\nSelect [1]: ", actions);
+
+    if (action.id === "compose") {
+      const request = (await ask("Describe the application you want: ")).trim();
+      if (!request) {
+        output("An application description is required.\n");
+        return;
+      }
+      let target;
+      while (!target) {
+        const candidate = (await ask("Project directory [my-clank-app]: ")).trim() || "my-clank-app";
+        if (!candidate.startsWith("-") && !candidate.includes("\0")) target = candidate;
+        else output("Enter a normal filesystem path that does not start with a dash.\n");
+      }
+      const sources = [
+        { id: "proposal", title: "Blueprint prepared by this agent" },
+        { id: "agent", title: "Configured agent executable" },
+      ];
+      output("\nHow will the proposal be supplied?\n");
+      sources.forEach((entry, index) => output(`  ${index + 1}) ${entry.title}\n`));
+      const source = await choose("\nSource [1]: ", sources);
+      const sourcePath = (await ask(source.id === "proposal"
+        ? "Blueprint path [clank.app.ts]: "
+        : "Agent executable path: ")).trim() || (source.id === "proposal" ? "clank.app.ts" : "");
+      if (!sourcePath) {
+        output("An agent executable path is required.\n");
+        return;
+      }
+      terminal?.close();
+      terminal = undefined;
+      output("\n");
+      return await execute("compose", [target, `--request=${request}`, `--${source.id}=${sourcePath}`]);
+    }
 
     if (action.id === "create") {
       output("\nChoose a template:\n");
@@ -430,6 +473,7 @@ Run clank help for the complete command list.`);
 
 Start:
   clank templates                      List built-in app starters
+  clank compose <directory>            Review and apply an agent-proposed app
   clank create <directory>             Create a deploy-ready full-stack app
   clank dev [directory]                Build, run, and live-reload an app
   clank doctor [directory]             Check build and deployment readiness
@@ -439,6 +483,8 @@ Start:
                                         Add secretless GitHub pull-request previews
 
 Build and agents:
+  clank compose <directory> --request <text> --proposal <file>
+                                        Freeze, review, and approve an agent proposal
   clank dev [directory]                Build, supervise, and live-reload locally
   clank plan [clank.app.ts]            Print a deterministic generated-file plan
   clank explain [clank.app.ts]         Explain an app blueprint in plain language
@@ -536,6 +582,52 @@ function templates(args) {
     );
   }
   console.log("\nUse clank templates --json for the stable agent-readable catalog.");
+}
+
+async function composeCommand(args) {
+  const values = positionals(args);
+  if (values.length > 1) {
+    throw new CliError(
+      "clank compose accepts at most one project directory.",
+      "TOO_MANY_ARGUMENTS",
+    );
+  }
+  const proposalPath = option(args, "proposal");
+  const agentPath = option(args, "agent");
+  if (proposalPath && agentPath) {
+    throw new CliError(
+      "Choose either --proposal or --agent, not both.",
+      "COMPOSE_OPTION_CONFLICT",
+    );
+  }
+  const json = flag(args, "json");
+  const interactive = !json && process.stdin.isTTY === true && process.stdout.isTTY === true;
+  let terminal;
+  let askQuestion;
+  if (interactive) {
+    const { createInterface } = await import("node:readline/promises");
+    terminal = createInterface({ input: process.stdin, output: process.stdout });
+    askQuestion = (prompt) => terminal.question(prompt);
+  }
+  try {
+    return await composeApp({
+      target: values[0] ?? ".",
+      request: option(args, "request"),
+      proposalPath,
+      agentPath,
+      reviewId: option(args, "review"),
+      approvalDigest: option(args, "approve"),
+      generation: generationOptions(args),
+      frameworkVersion: packageJson.version,
+      maxTurns: positiveIntegerOption(args, "max-turns", 4, 10),
+      agentTimeoutSeconds: positiveIntegerOption(args, "agent-timeout", 120, 600),
+      json,
+      interactive,
+      ask: askQuestion,
+    });
+  } finally {
+    terminal?.close();
+  }
 }
 
 async function blueprintPlan(args) {

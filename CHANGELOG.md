@@ -4,6 +4,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added `clank compose`, a provider-neutral conversational build loop with data-only blueprint
+  proposals, bounded external-agent stdin/stdout protocols, sanitized process context, private
+  resumable reviews, exact SHA-256 plan approvals, stale-baseline rejection, transactional writes,
+  rollback on unsafe paths, agent-readable JSON results, and an interactive launcher path.
+
 ## 0.13.0 - 2026-07-30
 
 - Fixed the operator memory dashboard to render control-plane process attribution from the

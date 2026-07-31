@@ -51,6 +51,7 @@ export const groups = [
     entries: [
       ["per-app-mcp", "docs/per-app-mcp.md"],
       ["agent-protocol", "docs/agent-protocol.md"],
+      ["conversational-build", "docs/conversational-build.md"],
       ["blueprints", "docs/blueprints.md"]
     ]
   },

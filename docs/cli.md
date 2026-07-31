@@ -16,9 +16,10 @@ Run the command without arguments in a terminal:
 clank
 ```
 
-Clank opens a dependency-free guided launcher for creating an app, checking the current project,
-logging in, deploying, viewing account plans and limits, or viewing every command. Creating an app
-presents the built-in templates and asks for the target directory.
+Clank opens a dependency-free guided launcher for building with an agent, creating from a starter,
+checking the current project, logging in, deploying, viewing account plans and limits, or viewing
+every command. Agent building collects the product request and a blueprint or configured agent
+executable; starter creation presents the built-in templates and asks for the target directory.
 
 The templates are:
 
@@ -32,6 +33,26 @@ The templates are:
 `clank templates --json` returns the stable `clank-template-catalog/1` contract with the installed
 framework version, default template, capability identifiers, and recommendation state. The human
 form prints the same catalog and copyable create commands.
+
+## Compose with an agent
+
+```sh
+clank compose my-app \
+  --request="Build a private customer project tracker" \
+  --proposal=./proposals/customer-tracker.clank.app.ts \
+  --json
+```
+
+`compose` validates an agent-proposed data-only blueprint and freezes its exact generated-file
+plan before it changes application files. The JSON result contains a review ID, SHA-256 plan
+digest, file-by-file changes, and a copyable apply command. Apply requires the exact digest and
+fails if any reviewed destination changed in the meantime.
+
+For a persistent provider adapter, pass `--agent=./path/to/executable`. Clank communicates through
+the bounded `clank-compose-request/1` and `clank-compose-proposal/1` stdin/stdout protocol without
+a shell or ambient application secrets. Interactive runs can send revision feedback before
+approval. See [Conversational application building](conversational-build.md) for the complete
+protocol, security boundary, review storage, and existing-app workflow.
 
 ## Create
 
