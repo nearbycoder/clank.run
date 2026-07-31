@@ -98,7 +98,7 @@ test("provider Docker launcher keeps application secrets outside the Docker clie
     });
     assert.equal(
       diagnostics.protocol,
-      "clank-provider-docker-diagnostics/1",
+      "clank-provider-docker-diagnostics/2",
     );
     assert.equal(diagnostics.projectId, prepared.projectId);
     assert.equal(diagnostics.releaseId, prepared.releaseId);
@@ -114,6 +114,21 @@ test("provider Docker launcher keeps application secrets outside the Docker clie
       blockWriteBytes: 8 * 1024,
       pids: 7,
     });
+    assert.equal(diagnostics.filesystem.available, true);
+    assert.equal(diagnostics.filesystem.capacityBytes > 0, true);
+    assert.equal(diagnostics.filesystem.usedBytes >= 0, true);
+    assert.equal(diagnostics.filesystem.availableBytes >= 0, true);
+    assert.equal(
+      diagnostics.filesystem.usedBytes
+        + diagnostics.filesystem.availableBytes
+        <= diagnostics.filesystem.capacityBytes,
+      true,
+    );
+    assert.equal(
+      diagnostics.filesystem.utilization,
+      diagnostics.filesystem.usedBytes
+        / diagnostics.filesystem.capacityBytes,
+    );
     assert.deepEqual(diagnostics.containers.map((container) => ({
       role: container.role,
       instance: container.instance,
@@ -272,6 +287,11 @@ test("provider diagnostics bound output and fail a malformed resource sample clo
       blockWriteBytes: null,
       pids: null,
     });
+    assert.equal(
+      diagnostics.filesystem.available,
+      true,
+      "filesystem capacity remains independently available when Docker stats fail",
+    );
     assert.equal(
       diagnostics.containers.every((container) =>
         container.memoryBytes === null

@@ -1787,7 +1787,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
           "http://provider.invalid",
         ).searchParams.get("logs");
         const diagnostics = {
-          protocol: "clank-provider-docker-diagnostics/1",
+          protocol: "clank-provider-docker-diagnostics/2",
           projectId: request.url.split("/")[4],
           releaseId: activeProviderReleaseId,
           generation: activeProviderGeneration,
@@ -1816,6 +1816,13 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
             blockWriteBytes: 8_192,
             pids: 7,
           },
+          filesystem: {
+            available: true,
+            capacityBytes: 100 * 1024 * 1024 * 1024,
+            usedBytes: 25 * 1024 * 1024 * 1024,
+            availableBytes: 70 * 1024 * 1024 * 1024,
+            utilization: 0.25,
+          },
           logs: requested === "0" ? [] : [{
             sequence: 1,
             createdAt: 1_750_000_000_000,
@@ -1829,6 +1836,22 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
         };
         if (providerDiagnosticsFault === "totals") {
           diagnostics.totals.memoryBytes = 1;
+        }
+        if (providerDiagnosticsFault === "filesystem") {
+          diagnostics.filesystem.availableBytes = diagnostics.filesystem.capacityBytes;
+        }
+        if (providerDiagnosticsFault === "filesystem-unavailable") {
+          diagnostics.filesystem = {
+            available: false,
+            capacityBytes: null,
+            usedBytes: null,
+            availableBytes: null,
+            utilization: null,
+          };
+        }
+        if (providerDiagnosticsFault === "legacy") {
+          diagnostics.protocol = "clank-provider-docker-diagnostics/1";
+          delete diagnostics.filesystem;
         }
         const body = JSON.stringify(diagnostics);
         response.writeHead(200, {
@@ -2173,7 +2196,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     }]);
     const providerMetrics = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/metrics?range=15m`,
-      { token: owner.accessToken },
+      { cookie: owner.cookie },
     ));
     assert.equal(providerMetrics.runtime.available, true);
     assert.equal(providerMetrics.runtime.generation, 1);
@@ -2187,6 +2210,24 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       blockReadBytes: 4_096,
       blockWriteBytes: 8_192,
       pids: 7,
+    });
+    assert.deepEqual(providerMetrics.runtime.filesystem, {
+      available: true,
+      capacityBytes: 100 * 1024 * 1024 * 1024,
+      usedBytes: 25 * 1024 * 1024 * 1024,
+      availableBytes: 70 * 1024 * 1024 * 1024,
+      utilization: 0.25,
+    });
+    const tokenProviderMetrics = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/metrics?range=15m`,
+      { token: owner.accessToken },
+    ));
+    assert.deepEqual(tokenProviderMetrics.runtime.filesystem, {
+      available: false,
+      capacityBytes: null,
+      usedBytes: null,
+      availableBytes: null,
+      utilization: null,
     });
     const providerLogs = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/logs?limit=100`,
@@ -2213,16 +2254,51 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
         acceptEncoding: "identity",
         authorized: true,
       }, {
+        url: `/v1/clank/control/${created.project.id}/diagnostics?logs=0`,
+        accept: "application/vnd.clank.provider-diagnostics+json",
+        acceptEncoding: "identity",
+        authorized: true,
+      }, {
         url: `/v1/clank/control/${created.project.id}/diagnostics?logs=100`,
         accept: "application/vnd.clank.provider-diagnostics+json",
         acceptEncoding: "identity",
         authorized: true,
       }],
     );
+    providerDiagnosticsFault = "legacy";
+    const legacyProviderMetrics = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/metrics?range=15m`,
+      { cookie: owner.cookie },
+    ));
+    assert.deepEqual(legacyProviderMetrics.runtime.filesystem, {
+      available: false,
+      capacityBytes: null,
+      usedBytes: null,
+      availableBytes: null,
+      utilization: null,
+    });
+    providerDiagnosticsFault = "filesystem-unavailable";
+    const unavailableFilesystemMetrics = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/metrics?range=15m`,
+      { cookie: owner.cookie },
+    ));
+    assert.deepEqual(
+      unavailableFilesystemMetrics.runtime.filesystem,
+      legacyProviderMetrics.runtime.filesystem,
+    );
+    providerDiagnosticsFault = "filesystem";
+    const invalidFilesystemMetrics = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}/metrics?range=15m`,
+      { cookie: owner.cookie },
+    ));
+    assert.deepEqual(invalidFilesystemMetrics.runtime, {
+      available: false,
+      reason: "unavailable",
+    });
     providerDiagnosticsFault = "totals";
     const unavailableProviderMetrics = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/metrics?range=15m`,
-      { token: owner.accessToken },
+      { cookie: owner.cookie },
     ));
     assert.deepEqual(unavailableProviderMetrics.runtime, {
       available: false,
@@ -2365,7 +2441,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     assert.equal(
       providerControlRequests.filter((request) =>
         request.url.includes("/diagnostics?")).length,
-      3,
+      7,
     );
     const remoteJobs = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/jobs`,
@@ -2847,6 +2923,8 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.match(operatorHtml, /id="invite-scope"/);
     assert.match(operatorHtml, /id="admin-memory-projects"/);
     assert.match(operatorHtml, /id="admin-storage-projects"/);
+    assert.match(operatorHtml, /id="runtime-filesystem-value"/);
+    assert.match(operatorHtml, /aria-label="Provider filesystem utilization"/);
     assert.match(operatorHtml, /"trustBoundary":\{"hostingProfile":"trusted","runnerKind":"process","signupMode":"public"\}/);
     assert.match(operatorHtml, /class="admin-warning critical" id="admin-runner-boundary"/);
     assert.match(operatorHtml, /Stop public onboarding until isolated hosting is configured/);

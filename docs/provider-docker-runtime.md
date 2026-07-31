@@ -186,10 +186,13 @@ Every runtime has:
 
 `diagnostics(projectId, logLimit?)` combines the memory-only output tail with one shell-free
 `docker container stats --no-stream` invocation over the exact tracked container IDs. It returns
-only role/instance identity, running state, memory/limit, CPU, PIDs, network I/O, and block I/O.
-Malformed, partial, duplicate, oversized, or mismatched Docker statistics fail the resource sample
-closed without changing lifecycle state. The complete provider service carries this object through
-its separately authenticated private control route.
+only role/instance identity, running state, memory/limit, CPU, PIDs, network I/O, block I/O, and a
+path-free capacity sample for the filesystem containing the project's data directory. Filesystem
+capacity covers the shared provider volume and is not per-project attribution. Malformed, partial,
+duplicate, oversized, or mismatched Docker statistics fail the container resource sample closed
+without changing lifecycle state. An unavailable filesystem sample is reported independently
+without hiding bounded logs or valid Docker statistics. The complete provider service carries this
+object through its separately authenticated private control route.
 
 Workers and schedulers receive the same release and database but publish no port.
 `CLANK_PROCESS_ROLE`, worker concurrency, worker queues, database aliases, managed-ingress

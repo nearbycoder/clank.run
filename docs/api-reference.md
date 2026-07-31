@@ -133,8 +133,9 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   are supported. Restore verifies the selected point, creates a safety recovery point, and
   publishes a replacement generation only after provider data replacement, current migrations,
   and health succeed. The same exact active generation supplies bounded logs and Docker
-  memory/CPU/PID/network/block-I/O diagnostics to the project UI; secret values are redacted at
-  the control plane. `placement.maxDatabaseBytes` bounds snapshot transfer, recovery reads, and
+  memory/CPU/PID/network/block-I/O diagnostics plus shared provider-filesystem capacity to a
+  platform-administrator browser session; token, project-member, and support-impersonation
+  responses redact shared capacity to an unavailable record. Secret values are redacted at the control plane. `placement.maxDatabaseBytes` bounds snapshot transfer, recovery reads, and
   runtime-capsule capacity. Provider placement requires managed ingress.
 
 ## Object storage
@@ -222,12 +223,14 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   data commits, verifies them, releases the memory-only activation plan, and marks it active.
 - `commit(candidate)`: marks the exact healthy candidate active after provider data commits.
 - `diagnostics(projectId, logLimit?, signal?)`: returns a bounded memory-only output tail and one
-  non-streaming per-role Docker resource sample, or `null` when no runtime is tracked. An optional
-  abort signal cancels the one-shot Docker command.
+  non-streaming per-role Docker resource sample plus a path-free shared-filesystem capacity sample,
+  or `null` when no runtime is tracked. An optional abort signal cancels the one-shot Docker
+  command.
 - `inspect()`, `stop(projectId, generation?)`, `forget(projectId, generation)`, and `close()`:
   non-secret state, verified container removal, deletion cleanup, and fail-closed shutdown.
 - Types: `DockerDeploymentRuntimeLauncherOptions`, `DockerDeploymentRuntimeCandidate`,
-  `DockerDeploymentRuntimeState`, `DockerDeploymentRuntimeLauncher`.
+  `DockerDeploymentRuntimeState`, `DockerDeploymentRuntimeDiagnostics`,
+  `DockerDeploymentFilesystemDiagnostics`, `DockerDeploymentRuntimeLauncher`.
 
 ## Complete deployment provider service
 

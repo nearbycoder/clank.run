@@ -12,6 +12,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Added a server-rendered, live-refreshed operator status for the local application trust boundary,
   runner kind, and signup mode, including a critical warning for public signup on trusted local
   execution.
+- Added generation-bound provider filesystem-capacity telemetry with a path-free versioned
+  protocol, version 1 rolling-upgrade compatibility, strict aggregate validation, and responsive
+  platform-administrator dashboard reporting with tenant/token redaction.
 
 ## 0.12.0 - 2026-07-30
 

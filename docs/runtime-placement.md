@@ -288,12 +288,15 @@ duplicating the safety point. Restore intentionally pauses writes and still depe
 node.
 
 The exact active generation now provides a bounded live-output tail plus one-shot Docker
-memory/limit, CPU, PID, network-I/O, and block-I/O attribution. The control plane authenticates
+memory/limit, CPU, PID, network-I/O, block-I/O attribution, and a point-in-time filesystem-capacity
+sample for the shared provider data volume. The control plane authenticates
 the generation-only diagnostics route, enforces response metadata and byte limits, validates all
 aggregates, rechecks placement after transfer, redacts configured project secrets, and displays
 the result beside managed-ingress traffic metrics. Provider network and block counters are
 cumulative only for the current runtime generation; they are operational signals, not billing
-records or filesystem-capacity measurements.
+records. Filesystem capacity is not per-project storage attribution.
+Exact shared capacity is returned only to a platform administrator's interactive browser session;
+tokens, project members, and support impersonation receive a fixed unavailable record.
 
 Job inspection, cancellation, and retry now use a separate generation-bound provider control
 contract. The provider opens only the exact active application database, returns the same bounded
@@ -310,7 +313,8 @@ with less capacity than its existing reservations. Portable placements wait for 
 enough matching slots and may move after node loss. Provider projects remain `stateful`: their
 node-local SQLite data stays pinned and fails closed until that node identity returns or an
 operator restores an encrypted backup through an explicit recovery workflow. Provider filesystem
-and block-device capacity remain operator responsibilities.
+capacity is visible to platform administrators in the project dashboard, while per-project disk quotas and block-device
+provisioning remain operator responsibilities.
 
 An inexpensive single-host installation needs none of this configuration and incurs no additional
 runner, bucket, or volume cost. Existing local projects and their databases are never relocated.
