@@ -332,6 +332,7 @@ A changed artifact digest creates a separate attempt.
 ```sh
 clank preview deploy feature-auth
 clank preview deploy pull-482 --ttl=48 --json
+clank preview deploy feature-search --data=sanitized
 clank preview list
 clank preview remove feature-auth \
   --confirm="delete-preview feature-auth" \
@@ -342,9 +343,14 @@ clank preview github status
 
 Preview deploys use the production link without replacing it. Each normalized name has a separate,
 expiring URL, SQLite database, releases, secrets, jobs, logs, and MCP endpoint. Repeating a name
-refreshes its TTL and deploys a new release. Production data and secrets are never copied, and the
-preview consumes an ordinary account/workspace project slot. See
+refreshes its TTL and deploys a new release. Raw production data and secrets are never copied, and
+the preview consumes an ordinary account/workspace project slot. See
 [Preview environments](preview-environments.md).
+
+Data starts empty. `--data=sanitized` opts into the bounded policy frozen in the active production
+release, branches after the preview deploy, reapplies target migrations, and reports only aggregate
+sanitization counts. Pull-request code cannot replace that policy, raw copies are unavailable, and
+production secrets are never inherited.
 
 `preview github configure` binds the linked project to the repository's immutable GitHub ID and
 writes deploy plus cleanup workflows. Public repository IDs are resolved automatically; private

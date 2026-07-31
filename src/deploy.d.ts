@@ -6,6 +6,27 @@ export interface DeployDatabaseConfig {
     path: string;
     migrations: string;
     allowUnsafeMigrations: boolean;
+    /** Trusted production policy for opt-in sanitized preview data branches. */
+    previewData?: DeployPreviewDataConfig;
+}
+export type DeployPreviewDataTransform = "keep" | "hash" | "redact" | "email";
+export interface DeployPreviewJsonTransform {
+    json: {
+        /** Applied to every JSON leaf not named in paths. Defaults to hash. */
+        default?: DeployPreviewDataTransform;
+        /** JSON Pointer to transform overrides. */
+        paths?: Record<string, DeployPreviewDataTransform>;
+    };
+}
+export interface DeployPreviewDataTableConfig {
+    /** Deterministically retain at most this many rows. Defaults to 1,000. */
+    rows?: number;
+    /** Column overrides. Text/blob columns default to hash; numeric values remain structural. */
+    columns?: Record<string, DeployPreviewDataTransform | DeployPreviewJsonTransform>;
+}
+export interface DeployPreviewDataConfig {
+    /** Only named tables retain rows; every other non-framework table is emptied. */
+    tables: Record<string, DeployPreviewDataTableConfig>;
 }
 export interface DeployBuildConfig {
     command: readonly string[];

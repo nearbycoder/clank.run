@@ -4,6 +4,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added opt-in sanitized preview database branches for local and provider placement. Policies are
+  frozen in the active production release, table/row bounded, deterministic and per-preview keyed;
+  auth/OAuth/jobs and unlisted data are purged, staging files are vacuumed and overwritten, target
+  migrations and health gates run normally, failures preserve the prior preview, raw production
+  copies and secrets remain unavailable, and CLI/UI/audit surfaces expose only aggregate reports.
+  The internal code-audit and public-beta readiness ledgers stay in the repository and docs site
+  but are omitted from the npm tarball to preserve the existing 5 MiB package ceiling without
+  removing user documentation.
 - AI blueprints now generate an optional, server-rendered admin studio with inferred or explicit
   privileged roles, an entity allowlist, read-only mode, schema and visibility summaries,
   responsive live data controls, and generated SSR/UI-to-MCP parity tests. Route access, backend

@@ -873,6 +873,12 @@ export async function openDeploymentAgent(
     promise: Promise<void>;
     abandon(error: Error): void;
   }>();
+  // A completion response can be lost after the coordinator committed it. Keep
+  // an in-process tombstone so a recovery claim cannot execute the same
+  // provider operation twice while its outcome is uncertain. The set lives for
+  // the runner lifetime; operators can reconcile an uncertain operation by its
+  // idempotency key before restarting the node.
+  const uncertainCompletions = new Set<string>();
   const stopForInvalidCredential = (error: DeploymentCoordinatorError) => {
     report(error);
     draining = true;
@@ -1004,7 +1010,9 @@ export async function openDeploymentAgent(
           }
         } catch (settlementError) {
           // A timed-out completion may have committed. Never turn an uncertain
-          // success into a second execution by explicitly failing the lease.
+          // success into a second execution by explicitly failing the lease or
+          // accepting a recovery claim for it in this runner process.
+          uncertainCompletions.add(claimed.id);
           report(settlementError);
         }
       }
@@ -1047,14 +1055,18 @@ export async function openDeploymentAgent(
             token!,
             Math.min(available, claimLimit),
           );
+          let accepted = 0;
           for (const operation of operations) {
             // A claim request may have crossed a shutdown request. Work already
             // leased to this node is still accepted during the grace period.
             if (lifecycle.signal.aborted || active.size >= concurrency) break;
-            if (!active.has(operation.id)) execute(operation);
+            if (!active.has(operation.id) && !uncertainCompletions.has(operation.id)) {
+              execute(operation);
+              accepted += 1;
+            }
           }
           if (closing) return;
-          if (operations.length > 0) continue;
+          if (accepted > 0) continue;
         } catch (error) {
           if (error instanceof DeploymentCoordinatorError && error.code === "NODE_AUTH_FAILED") {
             stopForInvalidCredential(error);

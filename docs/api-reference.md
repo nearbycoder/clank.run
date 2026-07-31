@@ -79,7 +79,9 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `decodeDeploymentBundle(bytes, limits?)`: bounded protocol, path, size, base64, and SHA-256 verification.
 - `extractDeploymentBundle(bundle, directory)`: exclusive extraction into a release root.
 - `deploymentDigest(bytes)`: SHA-256 artifact digest.
-- Types: `DeploymentConfig`, `DeploymentBundle`, `DeploymentFile`, `BundleLimits`.
+- Types: `DeploymentConfig`, `DeployDatabaseConfig`, `DeployPreviewDataConfig`,
+  `DeployPreviewDataTableConfig`, `DeployPreviewDataTransform`, `DeployPreviewJsonTransform`,
+  `DeploymentBundle`, `DeploymentFile`, `BundleLimits`.
 
 ## Migrations
 

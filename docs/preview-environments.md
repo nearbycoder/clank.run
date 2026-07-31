@@ -5,8 +5,9 @@ isolated project with its own URL, SQLite database, migration history, releases,
 logs, metrics, backups, and project-scoped tokens.
 
 The important default is absence: creating a preview does **not** copy production data or secrets.
-An application must populate test data explicitly. This prevents a routine branch deploy from
-turning into an unreviewed production-data export.
+An application may populate synthetic data explicitly or opt into a production-reviewed
+sanitization policy. Raw production copies are not an available mode. This prevents a routine
+branch deploy from turning into an unreviewed production-data export.
 
 ## Deploy a preview
 
@@ -15,6 +16,7 @@ Link the directory to its production project once, then name the preview:
 ```sh
 clank preview deploy feature-auth
 clank preview deploy pull-482 --ttl=48
+clank preview deploy feature-search --data=sanitized
 clank preview list
 ```
 
@@ -30,7 +32,87 @@ clank preview deploy pull-482 --ttl=24 --json
 ```
 
 The `clank-preview-result/1` document includes the preview ID, normalized name, parent project,
-expiration, release digest, URL, identity method, and build/upload timing.
+expiration, release digest, URL, data mode and sanitization counts, identity method, and
+build/upload timing.
+
+## Sanitized data branches
+
+`--data=sanitized` branches a consistent production SQLite snapshot only after deploying the
+preview release. The platform takes the policy from the **active production release**, never from
+the pull request or preview artifact. A GitHub OIDC identity can therefore request the approved
+branch but cannot broaden the table or column contract.
+
+Declare the policy in production's `clank.deploy.json`, review it, and deploy it before using the
+option:
+
+```json
+{
+  "version": 1,
+  "database": {
+    "path": "app.sqlite",
+    "migrations": "migrations",
+    "allowUnsafeMigrations": false,
+    "previewData": {
+      "tables": {
+        "customers": {
+          "rows": 500,
+          "columns": {
+            "id": "keep",
+            "email": "email",
+            "display_name": "hash",
+            "settings": {
+              "json": {
+                "default": "hash",
+                "paths": {
+                  "/theme": "keep",
+                  "/notifications/enabled": "keep"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Only named tables retain rows; all other application tables are emptied. Framework auth, OAuth,
+session, recovery-token, passkey, challenge, live-change, and job tables are always purged and
+cannot be retained by policy. Migration and database-revision metadata remain so the preview
+release can apply its pending migrations correctly.
+
+Each table keeps at most 1,000 rows by default and at most 10,000 when configured. One branch is
+capped at 50,000 rows. Selection is deterministic by primary key or row ID. Supported transforms
+are:
+
+| Transform | Result |
+| --- | --- |
+| `hash` | Per-preview HMAC pseudonym with no cross-preview correlation; the default for text and blobs |
+| `email` | Stable `preview+…@example.invalid` address |
+| `redact` | Fixed redaction marker, zero, or empty bytes |
+| `keep` | Exact value, counted explicitly in the branch report |
+
+Numeric/date-like SQLite columns remain structural by default. JSON columns use `json.default`
+for every scalar leaf and accept JSON Pointer overrides in `json.paths`. Treat every `keep` as a
+security review item. In particular, enums, foreign keys, dates, URLs, constrained strings, and
+JSON schema requirements may need explicit structural handling to keep the target application
+valid.
+
+The sanitizer works on a private consistent staging snapshot, never the live production file. It
+uses per-preview key derivation, disables credential inheritance, empties unlisted data, verifies
+foreign keys and SQLite integrity, enables secure deletion, vacuums removed pages, and overwrites
+staging files before unlinking them. The production database is never modified.
+
+After sanitization, Clank applies the preview release's migrations and starts it through the normal
+health gate. Local and provider-placed previews use the same contract. Provider snapshots and
+restores are generation-bound and checksum verified. A local activation failure restores the
+preview's pre-branch safety snapshot; production is unaffected.
+
+The branch report contains only counts—tables copied/emptied, rows retained/removed, and values
+transformed/explicitly kept. It contains no table names, column names, source values, hashes, or
+credentials. The latest report and source/target release IDs appear in `clank preview list`, the
+control plane, and the audit trail.
 
 ## GitHub pull-request previews
 
@@ -131,6 +213,7 @@ The authenticated API is:
 | --- | --- | --- |
 | `GET` | `/api/projects/:parentId/previews` | List unexpired previews and the effective TTL/isolation policy |
 | `POST` | `/api/projects/:parentId/previews` | Create or refresh `{ "name": string, "ttlHours"?: integer }` |
+| `POST` | `/api/projects/:parentId/previews/:previewId/data` | Replace preview data from the trusted sanitized policy after exact confirmation |
 | `DELETE` | `/api/projects/:parentId/previews/:previewId` | Permanently remove a preview after exact confirmation |
 | `GET` | `/api/projects/:parentId/github-previews` | Read the repository/workflow binding and isolation policy |
 | `PUT` | `/api/projects/:parentId/github-previews` | Owner/admin: bind an exact repository ID and two workflow paths |
@@ -148,6 +231,8 @@ authorization rules.
 
 - Preview and production database paths live under different project IDs.
 - Production secrets are not inherited. Set preview secrets explicitly if the app needs them.
+- Empty is the default; raw production data copying is not exposed. Sanitized branches require a
+  policy frozen into the active production release.
 - Migrations run against only the preview database.
 - Realtime connections, MCP/OAuth endpoints, durable jobs, and logs belong to the preview URL.
 - Preview projects are hidden from the top-level production project list and appear under their

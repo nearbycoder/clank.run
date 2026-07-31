@@ -144,6 +144,70 @@ test("deployment config strictly validates provider-neutral worker and scheduler
   }), /valid queue name/);
 });
 
+test("deployment config bounds trusted sanitized preview data policies", () => {
+  const withPreviewData = parseDeploymentConfig({
+    ...config,
+    database: {
+      ...config.database,
+      previewData: {
+        tables: {
+          tasks: {
+            rows: 250,
+            columns: {
+              id: "keep",
+              email: "email",
+              data: {
+                json: {
+                  default: "hash",
+                  paths: { "/done": "keep", "/profile/name": "redact" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(withPreviewData.database.previewData)), {
+    tables: {
+      tasks: {
+        rows: 250,
+        columns: {
+          id: "keep",
+          email: "email",
+          data: {
+            json: {
+              default: "hash",
+              paths: { "/done": "keep", "/profile/name": "redact" },
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.throws(() => parseDeploymentConfig({
+    ...config,
+    database: {
+      ...config.database,
+      previewData: { tables: {} },
+    },
+  }), /between 1 and 64 tables/u);
+  assert.throws(() => parseDeploymentConfig({
+    ...config,
+    database: {
+      ...config.database,
+      previewData: { tables: { tasks: { columns: { email: "plaintext" } } } },
+    },
+  }), /transform tasks\.email is invalid/u);
+  assert.throws(() => parseDeploymentConfig({
+    ...config,
+    database: {
+      ...config.database,
+      previewData: { tables: { "unsafe-table": {} } },
+    },
+  }), /table unsafe-table is invalid/u);
+});
+
 test("migration planning upgrades the legacy Proact ledger without replaying history", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-legacy-ledger-"));
   const directory = join(root, "migrations");

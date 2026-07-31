@@ -154,8 +154,8 @@ const COMMANDS = Object.freeze({
     summary: "Build, package, migrate, and atomically deploy in one command.",
   },
   preview: {
-    usage: "clank preview <deploy|list|remove|github> [name] [directory] [--ttl <hours>] [--json]",
-    summary: "Deploy isolated previews manually or from secretless GitHub pull-request workflows.",
+    usage: "clank preview <deploy|list|remove|github> [name] [directory] [--ttl <hours>] [--data <empty|sanitized>] [--json]",
+    summary: "Deploy isolated previews with empty or policy-sanitized data, manually or through GitHub OIDC.",
   },
   status: {
     usage: "clank status",
@@ -216,6 +216,7 @@ const VALUE_OPTIONS = Object.freeze({
   deploy: ["name", "slug", "org", "placement", "output"],
   preview: [
     "ttl",
+    "data",
     "confirm",
     "project",
     "server",
@@ -1874,7 +1875,7 @@ async function previewCommand(args) {
     }
     for (const preview of payload.previews) {
       console.log(
-        `${preview.previewName}  ${preview.runtimeStatus}  ${preview.url}  expires ${new Date(preview.previewExpiresAt).toISOString()}`,
+        `${preview.previewName}  ${preview.runtimeStatus}  ${preview.dataBranch?.mode ?? "empty"} data  ${preview.url}  expires ${new Date(preview.previewExpiresAt).toISOString()}`,
       );
     }
     return;
@@ -1885,7 +1886,7 @@ async function previewCommand(args) {
     const root = resolve(github ? values[0] ?? "." : values[1] ?? ".");
     if (!github && !requestedName) {
       throw new CliError(
-        "Usage: clank preview deploy <name> [directory] [--ttl <hours>] [--json]",
+        "Usage: clank preview deploy <name> [directory] [--ttl <hours>] [--data=empty|sanitized] [--json]",
       );
     }
     const json = flag(args, "json");
@@ -1910,6 +1911,10 @@ async function previewCommand(args) {
     const { profile, link } = context;
     const name = github ? context.previewName : requestedName;
     const ttl = option(args, "ttl");
+    const dataMode = option(args, "data") ?? "empty";
+    if (!["empty", "sanitized"].includes(dataMode)) {
+      throw new CliError("--data must be empty or sanitized.");
+    }
     const created = await platformRequest(
       profile.server,
       `/api/projects/${encodeURIComponent(link.projectId)}/previews`,
@@ -1954,6 +1959,23 @@ async function previewCommand(args) {
       throw error;
     }
     await rm(deploymentAttemptPath(root), { force: true });
+    let data = { mode: "empty" };
+    if (dataMode === "sanitized") {
+      if (!json) console.log("Branching production data through the trusted sanitization policy…");
+      const branched = await platformRequest(
+        profile.server,
+        `/api/projects/${encodeURIComponent(link.projectId)}/previews/${encodeURIComponent(preview.id)}/data`,
+        {
+          method: "POST",
+          token: profile.token,
+          body: {
+            mode: "sanitized",
+            confirmation: `branch-sanitized-data ${preview.previewName}`,
+          },
+        },
+      );
+      data = branched.data;
+    }
     const result = {
       protocol: "clank-preview-result/1",
       ok: true,
@@ -1970,6 +1992,7 @@ async function previewCommand(args) {
         url: payload.release.url ?? payload.release.directUrl,
       },
       artifact: { digest, bytes: artifact.byteLength },
+      data,
       identity: github ? "github_actions_oidc" : "cli_profile",
       timing: {
         buildMs: roundedMilliseconds(buildMs),

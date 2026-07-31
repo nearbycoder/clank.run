@@ -14,6 +14,9 @@ import {
   deploymentDigest,
   extractDeploymentBundle,
   type DeploymentBundle,
+  type DeployPreviewDataConfig,
+  type DeployPreviewDataTransform,
+  type DeployPreviewJsonTransform,
 } from "./deploy.ts";
 import {
   applyMigrations,
@@ -3210,6 +3213,202 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
   };
 
+  const branchSanitizedPreviewData = async (
+    principal: TokenPrincipal,
+    parent: ProjectRow,
+    preview: ProjectRow,
+  ): Promise<Record<string, unknown>> => {
+    const parentRelease = parent.activeReleaseId
+      ? releaseById(storage.internal, parent.activeReleaseId)
+      : null;
+    const previewRelease = preview.activeReleaseId
+      ? releaseById(storage.internal, preview.activeReleaseId)
+      : null;
+    const policy = parentRelease?.config.database.previewData;
+    if (!parentRelease || !parent.databasePath) {
+      throw new PlatformError(
+        409,
+        "PREVIEW_DATA_SOURCE_UNAVAILABLE",
+        "Deploy the production project before branching sanitized data.",
+      );
+    }
+    if (!policy) {
+      throw new PlatformError(
+        409,
+        "PREVIEW_DATA_POLICY_REQUIRED",
+        "The active production release does not declare database.previewData.",
+      );
+    }
+    if (!previewRelease || !preview.databasePath) {
+      throw new PlatformError(
+        409,
+        "PREVIEW_DATA_TARGET_UNAVAILABLE",
+        "Deploy the preview before branching sanitized data.",
+      );
+    }
+    const temporaryId = `preview-branch-${await randomId(8)}`;
+    const temporary = await releaseBackupPath(paths.projects, preview.id, temporaryId);
+    const fsName = "node:fs/promises";
+    const pathName = "node:path";
+    const [fs, path] = await Promise.all([
+      import(fsName) as unknown as Promise<{
+        readFile(path: string): Promise<Uint8Array>;
+        writeFile(path: string, bytes: Uint8Array, options: { flag: "wx"; mode: number }): Promise<void>;
+      }>,
+      import(pathName) as unknown as Promise<{ basename(path: string): string }>,
+    ]);
+    let safetyPath: string | null = null;
+    try {
+      if (parent.placement === "provider") {
+        const snapshot = await fetchProviderSnapshot(parent, parentRelease);
+        await fs.writeFile(temporary, snapshot.bytes, { flag: "wx", mode: 0o600 });
+      } else {
+        const parentDataRoot = await projectDataDirectory(paths.projects, parent.id);
+        const parentDatabase = await safeProjectDataPath(parentDataRoot, parent.databasePath);
+        await backupSQLite(parentDatabase, temporary);
+      }
+      const report = await sanitizePreviewDatabase(
+        temporary,
+        policy,
+        previewDataBranchSeed(masterKey, parent.id, preview.id),
+      );
+      if (preview.placement === "provider") {
+        const bytes = await fs.readFile(temporary);
+        const effective = projectQuotas(storage.internal, preview, quotaDefaults);
+        const manager = await projectBackupManager(paths.projects, preview, masterKey, {
+          ...backupPolicy,
+          maxBackups: effective.backupsPerProject,
+        }, backupObjects);
+        let branchBackup: BackupManifest;
+        try {
+          branchBackup = await manager.createFromSnapshot({
+            bytes,
+            sha256: await deploymentRuntimeDigest(bytes),
+            source: path.basename(preview.databasePath),
+            reason: `sanitized preview branch from ${parent.slug}`,
+          });
+        } finally {
+          manager.close();
+        }
+        backupScheduler.recordBackup(preview.id, branchBackup);
+        const restored = await queueProviderRestore(
+          principal,
+          preview,
+          previewRelease,
+          branchBackup.id,
+        );
+        recordPreviewDataBranch(
+          storage.internal,
+          principal,
+          parent,
+          preview,
+          parentRelease,
+          previewRelease,
+          report,
+        );
+        audit(storage.internal, principal.userId, principal.tokenId, preview.id, "preview.data.branch", {
+          parentProjectId: parent.id,
+          previewName: preview.previewName,
+          sourceReleaseId: parentRelease.id,
+          targetReleaseId: previewRelease.id,
+          placement: "provider",
+          report,
+          backupId: branchBackup.id,
+          generation: restored.generation,
+        });
+        return {
+          mode: "sanitized",
+          sourceReleaseId: parentRelease.id,
+          targetReleaseId: previewRelease.id,
+          report,
+          generation: restored.generation,
+        };
+      }
+
+      const migrationDirectory = await safeReleasePath(
+        previewRelease.directory,
+        previewRelease.config.database.migrations,
+      );
+      await applyMigrations({
+        path: temporary,
+        directory: migrationDirectory,
+        allowUnsafe: previewRelease.config.database.allowUnsafeMigrations,
+      });
+      const previewDataRoot = await projectDataDirectory(paths.projects, preview.id);
+      const previewDatabase = await safeProjectDataPath(previewDataRoot, preview.databasePath);
+      safetyPath = await releaseBackupPath(
+        paths.projects,
+        preview.id,
+        `preview-branch-safety-${await randomId(8)}`,
+      );
+      await backupSQLite(previewDatabase, safetyPath);
+      cancelRestart(preview.id);
+      await stopProject(preview.id);
+      try {
+        await restoreSQLiteBackup(temporary, previewDatabase);
+        await startRelease(
+          preview,
+          previewRelease,
+          decryptProjectSecrets(storage.internal, preview.id, masterKey),
+        );
+      } catch (error) {
+        try {
+          await restoreSQLiteBackup(safetyPath, previewDatabase);
+          await startRelease(
+            preview,
+            previewRelease,
+            decryptProjectSecrets(storage.internal, preview.id, masterKey),
+          );
+        } catch (recoveryError) {
+          try { options.onError?.(recoveryError); } catch { /* Recovery diagnostics are non-authoritative. */ }
+        }
+        throw new PlatformError(
+          422,
+          "PREVIEW_DATA_BRANCH_FAILED",
+          "The sanitized data branch did not pass target migrations and health checks; the prior preview data was restored.",
+        );
+      }
+      recordPreviewDataBranch(
+        storage.internal,
+        principal,
+        parent,
+        preview,
+        parentRelease,
+        previewRelease,
+        report,
+      );
+      audit(storage.internal, principal.userId, principal.tokenId, preview.id, "preview.data.branch", {
+        parentProjectId: parent.id,
+        previewName: preview.previewName,
+        sourceReleaseId: parentRelease.id,
+        targetReleaseId: previewRelease.id,
+        placement: "local",
+        report,
+      });
+      return {
+        mode: "sanitized",
+        sourceReleaseId: parentRelease.id,
+        targetReleaseId: previewRelease.id,
+        report,
+      };
+    } catch (error) {
+      if (error instanceof PlatformError) throw error;
+      try {
+        options.onError?.(new Error("Preview data sanitization failed.", { cause: error }));
+      } catch {
+        // Private operator diagnostics cannot change the bounded public failure.
+      }
+      throw new PlatformError(
+        422,
+        "PREVIEW_DATA_SANITIZATION_FAILED",
+        "Production data could not satisfy the trusted preview sanitization policy; the preview was not changed.",
+      );
+    } finally {
+      await removeSensitiveSQLiteFiles(temporary);
+      if (safetyPath) await removeSensitiveSQLiteFiles(safetyPath);
+    }
+  };
+
   const runProviderLifecycle = async (
     project: ProjectRow,
     release: ReleaseRow,
@@ -6172,6 +6371,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             principal.previewName === null || preview.previewName === principal.previewName)
           .map((preview) => {
           const release = preview.activeReleaseId ? releaseById(storage.internal, preview.activeReleaseId) : null;
+          const branch = storage.internal.prepare(`SELECT source_release_id, target_release_id,
+              mode, report, created_at
+            FROM clank_platform_preview_data_branches WHERE preview_project_id = ?`)
+            .get(preview.id);
           return {
             ...projectPayload(preview),
             url: appUrlTemplate.replaceAll("{slug}", preview.slug)
@@ -6180,8 +6383,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               ? "online"
               : release ? "degraded" : "not_deployed",
             activeRelease: release ? publicRelease(release) : null,
+            dataBranch: branch ? {
+              mode: String(branch.mode),
+              sourceReleaseId: String(branch.source_release_id),
+              targetReleaseId: String(branch.target_release_id),
+              report: JSON.parse(String(branch.report)),
+              createdAt: Number(branch.created_at),
+            } : null,
           };
         });
+        const activeParentRelease = project.activeReleaseId
+          ? releaseById(storage.internal, project.activeReleaseId)
+          : null;
         return api({
           ok: true,
           previews,
@@ -6190,6 +6403,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             maxTtlMs: previewMaxTtlMs,
             isolatedData: true,
             copiesProductionData: false,
+            sanitizedDataBranches: Boolean(activeParentRelease?.config.database.previewData),
+            rawProductionCopies: false,
             countsTowardProjectQuota: true,
           },
           github: {
@@ -6351,6 +6566,44 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               : result.preview.activeReleaseId ? "degraded" : "not_deployed",
           },
         }, result.created ? 201 : 200);
+      }
+      const previewDataMatch = /^previews\/([A-Za-z0-9_-]{8,128})\/data$/.exec(operation);
+      if (previewDataMatch && request.method === "POST") {
+        if (project.parentProjectId) {
+          throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Use the production project's preview endpoint.");
+        }
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["mode", "confirmation"]);
+        if (input.mode !== "sanitized") {
+          throw new PlatformError(422, "INVALID_PREVIEW_DATA_MODE", "Preview data mode must be sanitized.");
+        }
+        const previewId = previewDataMatch[1]!;
+        const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
+        const result = await withProjectLock(project.id, () =>
+          withProjectLock(previewId, async () => {
+            const parent = projectById(storage.internal, project.id);
+            const preview = projectById(storage.internal, previewId);
+            if (
+              !parent
+              || parent.parentProjectId
+              || !preview
+              || preview.parentProjectId !== parent.id
+              || !preview.previewName
+              || (preview.previewExpiresAt ?? 0) <= Date.now()
+              || (
+                principal.previewName !== null
+                && preview.previewName !== principal.previewName
+              )
+            ) {
+              throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
+            }
+            const expected = `branch-sanitized-data ${preview.previewName}`;
+            if (confirmation !== expected) {
+              throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
+            }
+            return branchSanitizedPreviewData(principal, parent, preview);
+          }));
+        return api({ ok: true, data: result });
       }
       const previewDeleteMatch = /^previews\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
       if (previewDeleteMatch && request.method === "DELETE") {
@@ -7712,6 +7965,18 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_github_preview_repository
     ON clank_platform_github_preview_bindings (repository_id, project_id)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_preview_data_branches (
+    preview_project_id TEXT PRIMARY KEY REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    parent_project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    source_release_id TEXT NOT NULL REFERENCES clank_platform_releases(id) ON DELETE CASCADE,
+    target_release_id TEXT NOT NULL REFERENCES clank_platform_releases(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK (mode = 'sanitized'),
+    report TEXT NOT NULL CHECK (json_valid(report) AND json_type(report) = 'object'),
+    created_by TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_preview_data_parent
+    ON clank_platform_preview_data_branches (parent_project_id, created_at)`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_github_oidc_replay (
     jti_hash TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL
@@ -13163,6 +13428,377 @@ function previewProjectSlug(parentSlug: string, previewName: string, projectId: 
   const available = 48 - suffix.length;
   const parent = trimBoundaryHyphens(parentSlug.slice(0, Math.max(1, available)));
   return `${parent}${suffix}`;
+}
+
+interface PreviewDataSanitizationReport {
+  tablesCopied: number;
+  tablesEmptied: number;
+  rowsRetained: number;
+  rowsRemoved: number;
+  valuesTransformed: number;
+  valuesExplicitlyKept: number;
+}
+
+const PREVIEW_DATA_PRESERVED_TABLES = new Set(["clank_meta", "clank_migrations"]);
+const PREVIEW_DATA_PURGED_TABLES = new Set([
+  "clank_changes",
+  "clank_job_events",
+  "clank_job_schedules",
+  "clank_jobs",
+  "clank_service_jobs",
+]);
+const PREVIEW_DATA_PURGED_PREFIXES = ["clank_auth_", "clank_oauth_"];
+
+async function sanitizePreviewDatabase(
+  databasePath: string,
+  policy: DeployPreviewDataConfig,
+  seed: Uint8Array,
+): Promise<PreviewDataSanitizationReport> {
+  const sqliteName = "node:sqlite";
+  const cryptoName = "node:crypto";
+  const [{ DatabaseSync }, cryptoModule] = await Promise.all([
+    import(sqliteName) as unknown as Promise<{ DatabaseSync: new(path: string) => any }>,
+    import(cryptoName) as unknown as Promise<{
+      createHmac(algorithm: string, key: Uint8Array): {
+        update(value: string | Uint8Array): { digest(encoding: "hex"): string };
+      };
+    }>,
+  ]);
+  const database = new DatabaseSync(databasePath);
+  const report: PreviewDataSanitizationReport = {
+    tablesCopied: 0,
+    tablesEmptied: 0,
+    rowsRetained: 0,
+    rowsRemoved: 0,
+    valuesTransformed: 0,
+    valuesExplicitlyKept: 0,
+  };
+  const digest = (value: unknown): string => {
+    const encoded = value instanceof Uint8Array
+      ? value
+      : `${value === null ? "null" : typeof value}:${String(value)}`;
+    return cryptoModule.createHmac("sha256", seed).update(encoded).digest("hex");
+  };
+  try {
+    database.exec("PRAGMA trusted_schema = OFF");
+    database.exec("PRAGMA foreign_keys = OFF");
+    database.exec("PRAGMA secure_delete = ON");
+    const tables = database.prepare(`SELECT name, sql FROM sqlite_schema
+      WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as Array<{
+        name: string;
+        sql: string | null;
+      }>;
+    const tableNames = new Set(tables.map((table) => String(table.name)));
+    for (const requested of Object.keys(policy.tables)) {
+      if (!tableNames.has(requested)) {
+        throw new Error(`Preview data policy references missing table ${requested}.`);
+      }
+      if (previewDataTableIsProtected(requested)) {
+        throw new Error(`Preview data policy cannot retain protected table ${requested}.`);
+      }
+    }
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      let totalRows = 0;
+      for (const table of tables) {
+        const name = String(table.name);
+        if (PREVIEW_DATA_PRESERVED_TABLES.has(name)) continue;
+        const tablePolicy = policy.tables[name];
+        if (!tablePolicy || previewDataTableIsProtected(name)) {
+          const removed = Number(database.prepare(
+            `SELECT count(*) AS count FROM ${previewSqlIdentifier(name)}`,
+          ).get().count);
+          database.prepare(`DELETE FROM ${previewSqlIdentifier(name)}`).run();
+          report.tablesEmptied++;
+          report.rowsRemoved += removed;
+          continue;
+        }
+        report.tablesCopied++;
+        const columns = database.prepare(
+          `PRAGMA table_info(${previewSqlIdentifier(name)})`,
+        ).all() as Array<{
+          name: string;
+          type: string;
+          pk: number;
+        }>;
+        const columnNames = new Set(columns.map((column) => String(column.name)));
+        for (const configured of Object.keys(tablePolicy.columns ?? {})) {
+          if (!columnNames.has(configured)) {
+            throw new Error(`Preview data policy references missing column ${name}.${configured}.`);
+          }
+        }
+        const primary = columns
+          .filter((column) => Number(column.pk) > 0)
+          .sort((left, right) => Number(left.pk) - Number(right.pk));
+        const withoutRowId = /\bWITHOUT\s+ROWID\b/iu.test(String(table.sql ?? ""));
+        const identity = primary.length > 0
+          ? primary.map((column) => String(column.name))
+          : withoutRowId
+            ? []
+            : ["rowid"];
+        if (identity.length === 0) {
+          throw new Error(`Preview data table ${name} has no deterministic row identity.`);
+        }
+        const rowLimit = tablePolicy.rows ?? 1_000;
+        const ordering = identity.map(previewSqlIdentifier).join(", ");
+        const identityTuple = identity.length === 1
+          ? previewSqlIdentifier(identity[0]!)
+          : `(${identity.map(previewSqlIdentifier).join(", ")})`;
+        const before = Number(database.prepare(
+          `SELECT count(*) AS count FROM ${previewSqlIdentifier(name)}`,
+        ).get().count);
+        database.prepare(`DELETE FROM ${previewSqlIdentifier(name)} WHERE ${identityTuple} NOT IN (
+          SELECT ${identity.map(previewSqlIdentifier).join(", ")}
+          FROM ${previewSqlIdentifier(name)} ORDER BY ${ordering} LIMIT ?
+        )`).run(rowLimit);
+        const after = Math.min(before, rowLimit);
+        report.rowsRemoved += before - after;
+        report.rowsRetained += after;
+        totalRows += after;
+        if (totalRows > 50_000) {
+          throw new Error("Sanitized preview data cannot retain more than 50,000 rows.");
+        }
+        const selectIdentity = identity[0] === "rowid"
+          ? `rowid AS ${previewSqlIdentifier("__clank_preview_rowid")}`
+          : identity.map(previewSqlIdentifier).join(", ");
+        const selectedColumns = columns.map((column) => previewSqlIdentifier(String(column.name))).join(", ");
+        const rows = database.prepare(`SELECT ${selectIdentity}, ${selectedColumns}
+          FROM ${previewSqlIdentifier(name)} ORDER BY ${ordering}`).all() as Array<Record<string, unknown>>;
+        for (const row of rows) {
+          const assignments: string[] = [];
+          const values: unknown[] = [];
+          for (const column of columns) {
+            const columnName = String(column.name);
+            const configured = tablePolicy.columns?.[columnName];
+            const current = row[columnName];
+            const transformed = configured && typeof configured === "object"
+              ? sanitizePreviewJson(current, configured, digest, report)
+              : sanitizePreviewValue(
+                  current,
+                  configured ?? previewDefaultTransform(String(column.type)),
+                  digest,
+                  report,
+                  configured !== undefined,
+                );
+            if (!previewValuesEqual(current, transformed)) {
+              assignments.push(`${previewSqlIdentifier(columnName)} = ?`);
+              values.push(transformed);
+            }
+          }
+          if (assignments.length === 0) continue;
+          const predicates = identity.map((column) => `${previewSqlIdentifier(column)} IS ?`).join(" AND ");
+          const identityValues = identity.map((column) =>
+            row[column === "rowid" ? "__clank_preview_rowid" : column]);
+          database.prepare(`UPDATE ${previewSqlIdentifier(name)} SET ${assignments.join(", ")}
+            WHERE ${predicates}`).run(...values, ...identityValues);
+        }
+      }
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+    database.exec("PRAGMA foreign_keys = ON");
+    const foreignKeyFailure = database.prepare("PRAGMA foreign_key_check").get();
+    if (foreignKeyFailure) {
+      throw new Error("Sanitized preview data violates a foreign-key relationship; retain or empty the related tables together.");
+    }
+    const integrity = database.prepare("PRAGMA quick_check").get() as Record<string, unknown> | undefined;
+    if (!integrity || String(Object.values(integrity)[0]) !== "ok") {
+      throw new Error("Sanitized preview database failed SQLite integrity verification.");
+    }
+    database.exec("VACUUM");
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    return Object.freeze(report);
+  } finally {
+    database.close();
+  }
+}
+
+function previewDataTableIsProtected(name: string): boolean {
+  return PREVIEW_DATA_PRESERVED_TABLES.has(name)
+    || PREVIEW_DATA_PURGED_TABLES.has(name)
+    || PREVIEW_DATA_PURGED_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+function previewSqlIdentifier(value: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(value) && value !== "rowid") {
+    throw new Error("Preview data contains an unsafe SQLite identifier.");
+  }
+  return `"${value}"`;
+}
+
+function previewDefaultTransform(declaredType: string): DeployPreviewDataTransform {
+  return /(?:INT|REAL|FLOA|DOUB|NUM|DEC|BOOL|DATE|TIME)/iu.test(declaredType)
+    ? "keep"
+    : "hash";
+}
+
+function sanitizePreviewValue(
+  value: unknown,
+  transform: DeployPreviewDataTransform,
+  digest: (value: unknown) => string,
+  report: PreviewDataSanitizationReport,
+  countExplicitKeep = true,
+): unknown {
+  if (value === null) return null;
+  if (transform === "keep") {
+    if (countExplicitKeep) report.valuesExplicitlyKept++;
+    return value;
+  }
+  report.valuesTransformed++;
+  if (transform === "email") return `preview+${digest(value).slice(0, 16)}@example.invalid`;
+  if (transform === "redact") {
+    if (typeof value === "number" || typeof value === "bigint") return 0;
+    if (value instanceof Uint8Array) return new Uint8Array();
+    return "[redacted]";
+  }
+  if (typeof value === "number") return Number.parseInt(digest(value).slice(0, 12), 16);
+  if (typeof value === "bigint") return BigInt(`0x${digest(value).slice(0, 15)}`);
+  if (value instanceof Uint8Array) {
+    return Uint8Array.from(digest(value).match(/.{2}/gu)!.slice(0, Math.min(value.byteLength, 32)), (pair) =>
+      Number.parseInt(pair, 16));
+  }
+  return `pv_${digest(value).slice(0, 16)}`;
+}
+
+function sanitizePreviewJson(
+  value: unknown,
+  configured: DeployPreviewJsonTransform,
+  digest: (value: unknown) => string,
+  report: PreviewDataSanitizationReport,
+): string {
+  if (typeof value !== "string") throw new Error("Configured preview JSON columns must contain text.");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("Configured preview JSON columns must contain valid JSON.");
+  }
+  const walk = (current: unknown, pointer: string): unknown => {
+    if (Array.isArray(current)) {
+      return current.map((entry, index) => walk(entry, `${pointer}/${index}`));
+    }
+    if (current && typeof current === "object") {
+      return Object.fromEntries(Object.entries(current as Record<string, unknown>).map(([key, entry]) => [
+        key,
+        walk(entry, `${pointer}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`),
+      ]));
+    }
+    const pathTransform = configured.json.paths?.[pointer];
+    const transform = pathTransform ?? configured.json.default ?? "hash";
+    return sanitizePreviewValue(
+      current,
+      transform,
+      digest,
+      report,
+      pathTransform !== undefined || configured.json.default !== undefined,
+    );
+  };
+  return JSON.stringify(walk(parsed, ""));
+}
+
+function previewValuesEqual(left: unknown, right: unknown): boolean {
+  if (left instanceof Uint8Array && right instanceof Uint8Array) {
+    return left.byteLength === right.byteLength
+      && left.every((value, index) => value === right[index]);
+  }
+  return Object.is(left, right);
+}
+
+function previewDataBranchSeed(
+  masterKey: Uint8Array,
+  parentProjectId: string,
+  previewProjectId: string,
+): Uint8Array {
+  const module = (globalThis as any).process.getBuiltinModule?.("node:crypto");
+  if (!module) throw new Error("Node crypto module is unavailable.");
+  return new Uint8Array(module.createHmac("sha256", masterKey)
+    .update(`clank-preview-data/1\0${parentProjectId}\0${previewProjectId}`)
+    .digest());
+}
+
+function recordPreviewDataBranch(
+  internal: SQLiteInternal,
+  principal: TokenPrincipal,
+  parent: ProjectRow,
+  preview: ProjectRow,
+  sourceRelease: ReleaseRow,
+  targetRelease: ReleaseRow,
+  report: PreviewDataSanitizationReport,
+): void {
+  const now = Date.now();
+  internal.transaction((changes) => {
+    internal.prepare(`INSERT INTO clank_platform_preview_data_branches
+      (preview_project_id, parent_project_id, source_release_id, target_release_id,
+        mode, report, created_by, created_at)
+      VALUES (?, ?, ?, ?, 'sanitized', ?, ?, ?)
+      ON CONFLICT(preview_project_id) DO UPDATE SET
+        parent_project_id = excluded.parent_project_id,
+        source_release_id = excluded.source_release_id,
+        target_release_id = excluded.target_release_id,
+        mode = excluded.mode,
+        report = excluded.report,
+        created_by = excluded.created_by,
+        created_at = excluded.created_at`)
+      .run(
+        preview.id,
+        parent.id,
+        sourceRelease.id,
+        targetRelease.id,
+        JSON.stringify(report),
+        principal.userId,
+        now,
+      );
+    changes.record("__platform", parent.organizationId ?? parent.id);
+  });
+}
+
+async function removeSensitiveSQLiteFiles(databasePath: string): Promise<void> {
+  for (const target of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    await overwriteAndRemovePrivateFile(target);
+  }
+}
+
+async function overwriteAndRemovePrivateFile(target: string): Promise<void> {
+  const fsName = "node:fs/promises";
+  const fs = await import(fsName) as unknown as {
+    lstat(path: string): Promise<{ isFile(): boolean; isSymbolicLink(): boolean; size: number }>;
+    open(path: string, flags: "r+"): Promise<{
+      write(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{ bytesWritten: number }>;
+      sync(): Promise<void>;
+      truncate(length: number): Promise<void>;
+      close(): Promise<void>;
+    }>;
+    rm(path: string, options: { force: true }): Promise<void>;
+  };
+  let size: number;
+  try {
+    const stats = await fs.lstat(target);
+    if (!stats.isFile() || stats.isSymbolicLink() || !Number.isSafeInteger(stats.size) || stats.size < 0) {
+      throw new Error("Preview branch staging data is not a safe regular file.");
+    }
+    size = stats.size;
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") return;
+    throw error;
+  }
+  const handle = await fs.open(target, "r+");
+  try {
+    const zeros = new Uint8Array(64 * 1024);
+    for (let position = 0; position < size;) {
+      const length = Math.min(zeros.byteLength, size - position);
+      const result = await handle.write(zeros, 0, length, position);
+      if (result.bytesWritten !== length) throw new Error("Preview branch staging cleanup was incomplete.");
+      position += length;
+    }
+    await handle.sync();
+    await handle.truncate(0);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await fs.rm(target, { force: true });
 }
 
 function trimTrailingSlashes(value: string): string {
