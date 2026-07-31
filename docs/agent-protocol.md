@@ -334,3 +334,8 @@ make model-generated arguments safe.
 Realtime collaboration presence is not an MCP tool or durable application record. Agents continue
 to use the typed backend queries and mutations as the source of truth; cursors, typing indicators,
 and ephemeral signals remain short-lived UI context for currently authorized room participants.
+
+Typed product analytics can publish its immutable `clank-analytics/1` manifest through a normal
+agent-readable query and expose only role-appropriate aggregate query or funnel actions. Raw events
+and subjects are never an MCP surface, and an MCP grant does not imply analytics access. See
+[Privacy-first product analytics](./product-analytics.md).

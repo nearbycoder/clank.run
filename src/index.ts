@@ -5,6 +5,7 @@ export * from "./ai.ts";
 export * from "./agent-contract.ts";
 export * from "./journey.ts";
 export * from "./collaboration.ts";
+export * from "./analytics.ts";
 export * from "./mcp.ts";
 export * from "./blueprint.ts";
 export * from "./webauthn.ts";

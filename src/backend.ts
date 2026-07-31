@@ -144,6 +144,8 @@ const RESERVED_TABLE_NAMES = new Set([
   "workflow_runs",
   "workflow_steps",
   "workflow_events",
+  "analytics_events",
+  "analytics_state",
 ]);
 
 export type TableName<Schema extends DatabaseSchema<any>> = keyof Schema["tables"] & string;

@@ -4,6 +4,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added typed, privacy-first product analytics in each application's isolated SQLite database.
+  Finite event contracts accept only aggregate-safe properties, publish an immutable agent-readable
+  manifest, and support bounded time-series, dimension, measure, and ordered-funnel queries. Every
+  write requires consent, honors do-not-track, HMAC-pseudonymizes identity and retry keys, enforces
+  deterministic sampling, retention, scan limits, idempotency, and an atomic storage ceiling; raw
+  events and small cohorts are never exposed. A typed memory-only browser queue discards pending
+  data when consent is withdrawn.
+
 - Added dependency-free realtime collaboration primitives for presence, cursors, selections,
   typing state, and ephemeral signals. The Fetch + SSE hub re-authorizes exact room access on every
   request, requires the application's CSRF check for writes, enforces same-origin and bounded

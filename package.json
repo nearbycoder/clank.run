@@ -55,6 +55,7 @@
     "./jobs": { "types": "./dist/jobs.d.ts", "import": "./dist/jobs.js" },
     "./journey": { "types": "./dist/journey.d.ts", "import": "./dist/journey.js" },
     "./collaboration": { "types": "./dist/collaboration.d.ts", "import": "./dist/collaboration.js" },
+    "./analytics": { "types": "./dist/analytics.d.ts", "import": "./dist/analytics.js" },
     "./billing": { "types": "./dist/billing.d.ts", "import": "./dist/billing.js" },
     "./platform": { "types": "./dist/platform.d.ts", "import": "./dist/platform.js" },
     "./ssr": { "types": "./dist/ssr.d.ts", "import": "./dist/ssr.js" },

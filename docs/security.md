@@ -246,6 +246,9 @@ Before release, verify:
 - collaboration endpoints re-authorize the exact room on every stream, heartbeat, presence, and
   signal request; writes reuse the application's CSRF check, and presence contains no secret or
   hidden database values;
+- analytics writes require explicit consent, honor do-not-track, admit only aggregate-safe typed
+  properties, pseudonymize identity with an independent HMAC secret, enforce retention and storage
+  ceilings, and never expose raw events or small cohorts;
 
 Clank's test suite contains executable checks for these invariants. Security is iterative: repeat this review when adding a new transport, credential type, storage backend, raw-HTML path, or deployment topology.
 
