@@ -116,6 +116,11 @@ const api = createApi<typeof backend>();
 control to have a stable ID, an agent-visible backend function, a description, and current
 revision coverage.
 
+The same stable IDs power [semantic browser journeys](browser-journeys.md). Journeys verify the
+human-visible behavior in real Chrome while MCP verifies the server action contract. Using both
+surfaces catches a control that is documented but unusable, or a visible flow whose server action
+was never exposed to agents, without maintaining CSS-selector tests.
+
 The optional `agent` contract supports:
 
 - `title`: human-readable tool name;

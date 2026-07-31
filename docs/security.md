@@ -238,6 +238,11 @@ Before release, verify:
 - CSP is present on HTML;
 - cookies are `HttpOnly`, `Secure`, `SameSite`, and host-only in production;
 - the complete app works in two independent browser contexts.
+- semantic browser journeys cannot leave the configured app origin, attach to network CDP, or
+  enter a literal password; login secrets resolve from the runner environment and never appear in
+  reports or inspected surfaces;
+- untrusted agent-proposed journeys use JSON, because local `.js` and `.mjs` journey modules are
+  executable project code rather than a sandbox;
 
 Clank's test suite contains executable checks for these invariants. Security is iterative: repeat this review when adding a new transport, credential type, storage backend, raw-HTML path, or deployment topology.
 

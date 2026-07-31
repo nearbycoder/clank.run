@@ -71,6 +71,18 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `compile(source, options?)`: programmatic TypeScript/TSX compilation.
 - `transformTSX(source, options?)`: programmatic TSX-only lowering.
 
+## Semantic browser journeys
+
+- `defineJourney(input)` → immutable `JourneyDefinition`: validate and snapshot a bounded,
+  data-only semantic acceptance flow.
+- `runJourney(journey, driver, options)` → `JourneyReport`: execute with same-origin navigation,
+  overall/step timeouts, optional secret resolution, redacted failure surfaces, and step events.
+- `createDomJourneyDriver(window, agentSurface)` → `JourneyDriver`: adapt a mounted browser app.
+- `clank journey [file]`: run JSON or trusted local module suites in isolated real Chrome.
+- Types: `JourneyInput`, `JourneyDefinition`, `JourneyStep`, `JourneyExpectation`,
+  `JourneyInputValue`, `JourneySecretReference`, `JourneyDriver`, `JourneyReport`,
+  `JourneyStepReport`, `RunJourneyOptions`.
+
 ## Deployment artifacts
 
 - `readDeploymentConfig(root, filename?)`: read and normalize `clank.deploy.json`.

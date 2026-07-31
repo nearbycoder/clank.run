@@ -105,6 +105,10 @@ const COMMANDS = Object.freeze({
     usage: "clank jobs <worker|scheduler|status|list|cancel|retry> [directory|job-id] [--state <state>] [--queue <name>] [--limit <count>] [--json]",
     summary: "Run job processes or inspect and operate a linked project's private queue.",
   },
+  journey: {
+    usage: "clank journey [journey.json|journey.mjs] [--url <app-url>] [--browser <executable> | --cdp <loopback-url>] [--headed] [--output <report.json>] [--json]",
+    summary: "Replay agent-authored semantic acceptance journeys in an isolated real browser.",
+  },
   doctor: {
     usage: "clank doctor [directory] [--json]",
     summary: "Check whether an app is ready to build and deploy.",
@@ -226,6 +230,7 @@ const VALUE_OPTIONS = Object.freeze({
     "cleanup-ref",
   ],
   jobs: ["concurrency", "queues", "state", "queue", "limit"],
+  journey: ["url", "browser", "cdp", "output", "timeout"],
   releases: ["confirm"],
   logs: ["limit"],
   rollback: ["confirm"],
@@ -256,6 +261,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   rollback: ["restore-data"],
   doctor: ["json"],
   jobs: ["json"],
+  journey: ["json", "headed"],
 });
 
 export async function run(command, args) {
@@ -273,6 +279,7 @@ export async function run(command, args) {
       case "explain": return await explainBlueprint(args);
       case "doctor": return await doctor(args);
       case "jobs": return await jobsCommand(args);
+      case "journey": return await journeyCommand(args);
       case "login": return await login(args);
       case "logout": return await logout(args);
       case "whoami": return await whoami(args);
@@ -499,6 +506,7 @@ Build and agents:
                                         List safe operational job metadata
   clank jobs cancel <job-id>           Request cancellation
   clank jobs retry <job-id>            Retry a dead or cancelled job
+  clank journey [journey.json]          Replay semantic acceptance flows in real Chrome
 
 Platform:
   clank login                          Authorize with https://clank.run
@@ -979,6 +987,11 @@ async function doctor(args) {
     console.log(`${summary.pass} passed, ${summary.warn} warnings, ${summary.fail} failed.`);
   }
   if (!report.ok) process.exitCode = 1;
+}
+
+async function journeyCommand(args) {
+  const { runJourneyCommand } = await import("./cli-journey.mjs");
+  return await runJourneyCommand(args);
 }
 
 async function jobsCommand(args) {

@@ -3,6 +3,7 @@ export * from "./dom.ts";
 export * from "./router.ts";
 export * from "./ai.ts";
 export * from "./agent-contract.ts";
+export * from "./journey.ts";
 export * from "./mcp.ts";
 export * from "./blueprint.ts";
 export * from "./webauthn.ts";
