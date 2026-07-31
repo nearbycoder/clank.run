@@ -33,10 +33,27 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   current-tree/reachable-history credential scans.
 - [x] Inspected the dry-run package: 224 bounded files, 1,312,516-byte tarball, 5,170,153-byte
   unpacked size, SHA-1 `ce6a7cd766a85e8a2f4e3281f5b9d112fc88d60a`, and no dependencies.
-- [ ] Merge the version pull request after CI and CodeQL, create protected annotated tag
-  `v0.13.0`, publish the matching GitHub release, and verify its attested npm stage.
-- [ ] Approve only that verified stage with a fresh proof-of-presence code, confirm registry
-  signatures and provenance, and exercise a fresh-registry consumer.
+- [x] Recorded version [PR #123](https://github.com/nearbycoder/clank.run/pull/123): PR CI run
+  `30596328386` and CodeQL run `30596328368` passed before squash merge
+  `0843716df2fbf9b5bbbb84437e9fb5792da29362`; post-merge CI run `30596429478`, CodeQL run
+  `30596429467`, and gated docs run `30596565796` passed.
+- [x] Created protected annotated tag `v0.13.0` at that exact merge and published the matching
+  [GitHub release](https://github.com/nearbycoder/clank.run/releases/tag/v0.13.0). Release run
+  `30596604024` rebuilt and tested the tag with pinned npm 11.18.0, attached a GitHub-attested
+  tarball, and created trusted-automation npm stage
+  `3a5720e5-6a11-432b-b28c-381e22b497c2`.
+- [x] Verified the npm stage, GitHub release asset, and public-registry tarball are byte-for-byte
+  identical: 1,313,493 bytes, SHA-1 `0fd6fa3338ac315515714a512381c19922f803ce`, SHA-256
+  `941be9bd2678f9fb27eced2d105903ad59d72413a3ff4764a2e8fc011041760a`, 224 files, and
+  SLSA provenance bound to release workflow, tag, and merge SHA.
+- [x] Confirmed npm registry signatures and provenance, `latest` at `0.13.0`, and no pending
+  stages. A fresh registry consumer loaded the CLI, scaffolded the authenticated Todo starter,
+  compiled Tailwind and TypeScript, passed its private-data/UI-to-MCP contract test, and passed
+  `clank doctor`.
+- [x] Activated Railway deployment `bb49f67c-3308-4150-b422-8112a1bbd5bb` from the exact
+  release merge. Image preflight, database readiness, all three control-plane health endpoints,
+  and docs version health passed; no service, replica, volume, database, bucket, or other paid
+  resource was added.
 
 ## 2026-07-30 version 0.12.0 and hosted billing phase
 
@@ -60,8 +77,9 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   `c057f20de9d3a0913ef6034f5670443cb7566ee2825b307e57329f3bd5a3d7cf`, 1,296,881
   bytes, GitHub attestation verified, npm trusted-publishing provenance present, and a clean
   consumer loaded the framework, billing adapter, and CLI successfully.
-- [ ] Approve the verified npm stage with a current proof-of-presence code, confirm registry
-  signatures/provenance, and run the final fresh-registry consumer.
+- [x] Approved the verified npm stage before `0.13.0`; the public `0.12.0` registry entry keeps
+  SHA-1 `c0219dc50aef1f3e7bf52add1ca2df0f4ef066e9`, reports registry signatures and SLSA
+  provenance, and passed a fresh-registry CLI and representative-export consumer.
 - [x] Activated Railway deployment `921db53c-8081-4c1b-8f52-fbea36f8fdb7` from the exact tag
   only after its runtime import preflight and database readiness succeeded. The live control plane
   and documentation endpoints returned HTTP 200; hosted billing remains explicitly disabled until
