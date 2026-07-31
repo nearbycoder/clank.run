@@ -30,6 +30,7 @@ import {
 } from "./recovery.ts";
 import {
   DeploymentCapacityError,
+  DeploymentRelocationError,
   openDeploymentOrchestrator,
   type DeploymentOrchestrator,
 } from "./orchestration.ts";
@@ -503,6 +504,8 @@ interface ProviderGenerationRow {
   restoreDatabaseSha256: string | null;
   restoreDatabaseBytes: number | null;
   safetyBackupId: string | null;
+  recoveryKind: "restore" | "failover" | null;
+  recoverySourceNodeId: string | null;
   createdAt: number;
 }
 
@@ -1030,11 +1033,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                       !generation.restoreBackupId
                       || !generation.restoreDatabaseSha256
                       || generation.restoreDatabaseBytes === null
-                      || !generation.safetyBackupId
                       || generation.restoreDatabaseBytes
                         > providerPlacement.maxDatabaseBytes
                     ) {
-                      throw new Error("Stored provider restore generation is invalid.");
+                      throw new Error("Stored provider recovery generation is invalid.");
                     }
                     const effective = projectQuotas(
                       storage.internal,
@@ -1695,6 +1697,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     );
   };
 
+  const providerSourceRevoked = (nodeId: string): boolean => {
+    const source = storage.internal.prepare(`SELECT status, expires_at
+      FROM clank_deployment_nodes WHERE id = ?`).get(nodeId);
+    return Boolean(
+      source
+      && source.status === "offline"
+      && Number(source.expires_at) === 0,
+    );
+  };
+
   const finishProviderRelease = (
     principal: TokenPrincipal,
     project: ProjectRow,
@@ -1722,6 +1734,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         409,
         "PROVIDER_OBSERVATION_STALE",
         "The provider observation no longer matches this release.",
+      );
+    }
+    if (
+      generationState.recoveryKind === "failover"
+      && (
+        !generationState.recoverySourceNodeId
+        || !providerSourceRevoked(generationState.recoverySourceNodeId)
+      )
+    ) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_FAILOVER_SOURCE_REENROLLED",
+        "The recovery source returned before activation. Revoke it again before publishing the target.",
       );
     }
     const node = orchestrator.listNodes().find((entry) =>
@@ -1763,10 +1788,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         );
       changes.record("__platform", project.id);
     });
-    const restored = generationState.databaseMode === "replace";
-    recordLog(project.id, release.id, "platform", restored
-      ? `Provider ${node.id} restored encrypted backup ${generationState.restoreBackupId} in generation ${generation}; published managed ingress.`
-      : `Provider ${node.id} observed generation ${generation}; published managed ingress.`);
+    const recovered = generationState.databaseMode === "replace";
+    const failedOver = generationState.recoveryKind === "failover";
+    recordLog(
+      project.id,
+      release.id,
+      "platform",
+      failedOver
+        ? `Provider recovery moved fenced source ${generationState.recoverySourceNodeId} to ${node.id} from encrypted backup ${generationState.restoreBackupId} in generation ${generation}; published managed ingress.`
+        : recovered
+          ? `Provider ${node.id} restored encrypted backup ${generationState.restoreBackupId} in generation ${generation}; published managed ingress.`
+          : `Provider ${node.id} observed generation ${generation}; published managed ingress.`,
+    );
     audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.activate", {
       releaseId: release.id,
       previousReleaseId: project.activeReleaseId,
@@ -1774,16 +1807,26 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       generation,
       nodeId: node.id,
     });
-    if (restored) {
-      audit(storage.internal, principal.userId, principal.tokenId, project.id, "backup.restore", {
-        backupId: generationState.restoreBackupId,
-        safetyBackupId: generationState.safetyBackupId,
-        databaseSha256: generationState.restoreDatabaseSha256,
-        databaseBytes: generationState.restoreDatabaseBytes,
-        placement: "provider",
-        generation,
-        nodeId: node.id,
-      });
+    if (recovered) {
+      audit(
+        storage.internal,
+        principal.userId,
+        principal.tokenId,
+        project.id,
+        failedOver ? "provider.failover.activate" : "backup.restore",
+        {
+          backupId: generationState.restoreBackupId,
+          safetyBackupId: generationState.safetyBackupId,
+          ...(failedOver
+            ? { sourceNodeId: generationState.recoverySourceNodeId }
+            : {}),
+          databaseSha256: generationState.restoreDatabaseSha256,
+          databaseBytes: generationState.restoreDatabaseBytes,
+          placement: "provider",
+          generation,
+          nodeId: node.id,
+        },
+      );
     }
     backupScheduler.registerProject(project.id);
     const activatedProject = projectById(storage.internal, project.id)!;
@@ -1796,7 +1839,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     project: ProjectRow,
     release: ReleaseRow,
     generation: number,
-    intent: "deploy" | "restore" = "deploy",
+    intent: "deploy" | "restore" | "failover" = "deploy",
   ): Promise<Record<string, unknown>> => {
     const deadline = Date.now() + providerPlacement!.activationTimeoutMs;
     const operationKey = `reconcile:${project.id}:${generation}`;
@@ -1832,10 +1875,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           422,
           intent === "restore"
             ? "PROVIDER_RESTORE_FAILED"
-            : "PROVIDER_DEPLOYMENT_FAILED",
+            : intent === "failover"
+              ? "PROVIDER_FAILOVER_FAILED"
+              : "PROVIDER_DEPLOYMENT_FAILED",
           intent === "restore"
             ? "The provider failed to activate the restored recovery point."
-            : "The provider failed to activate this release.",
+            : intent === "failover"
+              ? "The recovery target failed to activate the encrypted recovery point."
+              : "The provider failed to activate this release.",
         );
       }
       const operation = storage.internal.prepare(
@@ -1851,10 +1898,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           422,
           intent === "restore"
             ? "PROVIDER_RESTORE_FAILED"
-            : "PROVIDER_DEPLOYMENT_FAILED",
+            : intent === "failover"
+              ? "PROVIDER_FAILOVER_FAILED"
+              : "PROVIDER_DEPLOYMENT_FAILED",
           intent === "restore"
             ? "The provider restore exhausted its safe retries."
-            : "The provider deployment exhausted its safe retries.",
+            : intent === "failover"
+              ? "The provider failover exhausted its safe retries."
+              : "The provider deployment exhausted its safe retries.",
         );
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1866,10 +1917,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       503,
       intent === "restore"
         ? "PROVIDER_RESTORE_PENDING"
-        : "PROVIDER_DEPLOYMENT_PENDING",
+        : intent === "failover"
+          ? "PROVIDER_FAILOVER_PENDING"
+          : "PROVIDER_DEPLOYMENT_PENDING",
       intent === "restore"
         ? "The provider restore is still pending. Retry this exact restore."
-        : "The provider deployment is still pending. Retry this exact deploy.",
+        : intent === "failover"
+          ? "The provider failover is still pending. Retry this exact recovery request."
+          : "The provider deployment is still pending. Retry this exact deploy.",
       1,
     );
   };
@@ -2112,6 +2167,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (
         !pending
         || pending.databaseMode !== "replace"
+        || pending.recoveryKind !== "restore"
         || pending.releaseId !== release.id
         || pending.restoreBackupId !== backupId
       ) {
@@ -2204,8 +2260,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     storage.internal.prepare(`INSERT INTO clank_platform_provider_generations
       (project_id, generation, release_id, encrypted_environment, database_mode,
         restore_backup_id, restore_database_sha256, restore_database_bytes,
-        safety_backup_id, created_at)
-      VALUES (?, ?, ?, ?, 'replace', ?, ?, ?, ?, ?)`)
+        safety_backup_id, recovery_kind, recovery_source_node_id, created_at)
+      VALUES (?, ?, ?, ?, 'replace', ?, ?, ?, ?, 'restore', NULL, ?)`)
       .run(
         project.id,
         generation,
@@ -2279,6 +2335,283 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       verification,
       safetyBackupId,
       generation,
+    };
+  };
+
+  const queueProviderFailover = async (
+    principal: TokenPrincipal,
+    project: ProjectRow,
+    release: ReleaseRow,
+    backupId: string,
+    sourceNodeId: string,
+  ): Promise<{
+    verification: BackupVerification;
+    generation: number;
+    sourceNodeId: string;
+    targetNodeId: string;
+  }> => {
+    if (!providerPlacement || !deploymentCoordinator) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_PLACEMENT_DISABLED",
+        "Provider placement is not enabled on this platform.",
+      );
+    }
+    if (
+      project.activeGeneration === null
+      || project.activeReleaseId !== release.id
+      || !project.databasePath
+      || project.providerNodeId !== sourceNodeId
+    ) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_FAILOVER_SOURCE_CHANGED",
+        "The selected source is no longer the active provider generation.",
+      );
+    }
+
+    const currentDesired = orchestrator.desired(project.id);
+    if (
+      currentDesired
+      && currentDesired.generation > project.activeGeneration
+      && currentDesired.desiredReleaseId
+    ) {
+      const pending = providerGeneration(
+        storage.internal,
+        project.id,
+        currentDesired.generation,
+        currentDesired.desiredReleaseId,
+      );
+      if (
+        !pending
+        || pending.databaseMode !== "replace"
+        || pending.recoveryKind !== "failover"
+        || pending.releaseId !== release.id
+        || pending.restoreBackupId !== backupId
+        || pending.recoverySourceNodeId !== sourceNodeId
+        || !currentDesired.assignedNodeId
+        || currentDesired.assignedNodeId === sourceNodeId
+      ) {
+        throw new PlatformError(
+          409,
+          "PROVIDER_DEPLOYMENT_IN_PROGRESS",
+          "Another provider generation is still converging.",
+        );
+      }
+      if (!providerSourceRevoked(sourceNodeId)) {
+        throw new PlatformError(
+          409,
+          "PROVIDER_FAILOVER_SOURCE_REENROLLED",
+          "The recovery source returned. Revoke it again before continuing failover.",
+        );
+      }
+      const verification = await verifyEncryptedProjectBackup(project, backupId);
+      if (
+        verification.databaseSha256 !== pending.restoreDatabaseSha256
+        || verification.databaseBytes !== pending.restoreDatabaseBytes
+      ) {
+        throw new PlatformError(
+          409,
+          "PROVIDER_FAILOVER_POINT_CHANGED",
+          "The selected recovery point no longer matches the pending failover.",
+        );
+      }
+      const operation = storage.internal.prepare(
+        "SELECT state FROM clank_deployment_operations WHERE idempotency_key = ?",
+      ).get(`reconcile:${project.id}:${pending.generation}`);
+      if (operation?.state === "failed" || operation?.state === "cancelled") {
+        throw new PlatformError(
+          422,
+          "PROVIDER_FAILOVER_FAILED",
+          "The provider failover exhausted its safe retries.",
+        );
+      }
+      if (release.providerGeneration !== pending.generation) {
+        storage.internal.prepare(
+          "UPDATE clank_platform_releases SET provider_generation = ? WHERE id = ?",
+        ).run(pending.generation, release.id);
+      }
+      await waitForProviderRelease(
+        principal,
+        project,
+        {
+          ...release,
+          providerGeneration: pending.generation,
+        },
+        pending.generation,
+        "failover",
+      );
+      return {
+        verification,
+        generation: pending.generation,
+        sourceNodeId,
+        targetNodeId: currentDesired.assignedNodeId,
+      };
+    }
+
+    const runtime = exactProviderRuntime(project, release);
+    if (runtime.nodeId !== sourceNodeId) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_FAILOVER_SOURCE_CHANGED",
+        "The selected source is no longer the exact active provider runtime.",
+      );
+    }
+    if (!providerSourceRevoked(sourceNodeId)) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_SOURCE_NOT_REVOKED",
+        "Revoke the source runner before requesting failover.",
+      );
+    }
+    const verification = await verifyEncryptedProjectBackup(project, backupId);
+    if (verification.databaseBytes > providerPlacement.maxDatabaseBytes) {
+      throw new PlatformError(
+        413,
+        "PROVIDER_FAILOVER_TOO_LARGE",
+        "The selected recovery point exceeds the provider database limit.",
+      );
+    }
+
+    const currentProject = projectById(storage.internal, project.id);
+    const currentRelease = releaseById(storage.internal, release.id);
+    if (
+      !currentProject
+      || !currentRelease
+      || currentProject.activeGeneration !== project.activeGeneration
+      || currentProject.activeReleaseId !== release.id
+      || currentProject.providerNodeId !== sourceNodeId
+    ) {
+      throw new PlatformError(
+        409,
+        "PROVIDER_FAILOVER_STALE",
+        "The active provider generation changed before failover allocation.",
+      );
+    }
+    exactProviderRuntime(currentProject, currentRelease);
+    const prior = orchestrator.desired(project.id);
+    const generation = (prior?.generation ?? 0) + 1;
+    const environment = providerRuntimeEnvironment(
+      currentRelease.config,
+      decryptProjectSecrets(storage.internal, project.id, masterKey),
+    );
+    const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
+    storage.internal.transaction((changes) => {
+      storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
+        WHERE project_id = ? AND generation = ? AND release_id = ?
+          AND recovery_kind = 'failover'`)
+        .run(project.id, generation, currentRelease.id);
+      storage.internal.prepare(`INSERT INTO clank_platform_provider_generations
+        (project_id, generation, release_id, encrypted_environment, database_mode,
+          restore_backup_id, restore_database_sha256, restore_database_bytes,
+          safety_backup_id, recovery_kind, recovery_source_node_id, created_at)
+        VALUES (?, ?, ?, ?, 'replace', ?, ?, ?, NULL, 'failover', ?, ?)`)
+        .run(
+          project.id,
+          generation,
+          currentRelease.id,
+          encryptedEnvironment,
+          backupId,
+          verification.databaseSha256,
+          verification.databaseBytes,
+          sourceNodeId,
+          Date.now(),
+        );
+      storage.internal.prepare(
+        "UPDATE clank_platform_releases SET provider_generation = ? WHERE id = ?",
+      ).run(generation, currentRelease.id);
+      const unpublished = storage.internal.prepare(`UPDATE clank_platform_projects
+        SET provider_origin = NULL, updated_at = ?
+        WHERE id = ? AND placement = 'provider'
+          AND active_generation = ? AND provider_node_id = ?`)
+        .run(Date.now(), project.id, project.activeGeneration, sourceNodeId);
+      if (Number(unpublished.changes) !== 1) {
+        throw new PlatformError(
+          409,
+          "PROVIDER_FAILOVER_STALE",
+          "The active provider generation changed before failover allocation.",
+        );
+      }
+      changes.record("__platform", project.id);
+    });
+    let desired;
+    try {
+      desired = await orchestrator.relocateStateful({
+        projectId: project.id,
+        sourceNodeId,
+        runtimeProtocol: DEPLOYMENT_RUNTIME_PROTOCOL,
+      });
+      if (
+        desired.generation !== generation
+        || desired.desiredReleaseId !== currentRelease.id
+        || !desired.assignedNodeId
+        || desired.assignedNodeId === sourceNodeId
+      ) {
+        throw new Error("Provider failover generation allocation changed unexpectedly.");
+      }
+      recordLog(
+        project.id,
+        currentRelease.id,
+        "platform",
+        `Queued encrypted provider failover from fenced source ${sourceNodeId} to ${desired.assignedNodeId} as generation ${generation} using backup ${backupId}.`,
+      );
+      audit(
+        storage.internal,
+        principal.userId,
+        principal.tokenId,
+        project.id,
+        "provider.failover.queue",
+        {
+          backupId,
+          databaseSha256: verification.databaseSha256,
+          databaseBytes: verification.databaseBytes,
+          generation,
+          sourceNodeId,
+          targetNodeId: desired.assignedNodeId,
+        },
+      );
+    } catch (error) {
+      const committedDesired = orchestrator.desired(project.id);
+      if (
+        committedDesired?.generation !== generation
+        || committedDesired.desiredReleaseId !== currentRelease.id
+      ) {
+        storage.internal.transaction((changes) => {
+          storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
+            WHERE project_id = ? AND generation = ? AND release_id = ?
+              AND recovery_kind = 'failover'`)
+            .run(project.id, generation, currentRelease.id);
+          storage.internal.prepare(`UPDATE clank_platform_releases
+            SET provider_generation = ?
+            WHERE id = ? AND provider_generation = ?`)
+            .run(currentRelease.providerGeneration, currentRelease.id, generation);
+          changes.record("__platform", project.id);
+        });
+      }
+      if (error instanceof DeploymentRelocationError) {
+        throw new PlatformError(
+          409,
+          "PROVIDER_FAILOVER_CAPACITY_UNAVAILABLE",
+          "No healthy compatible provider has capacity for this recovery.",
+        );
+      }
+      throw error;
+    }
+    await waitForProviderRelease(
+      principal,
+      currentProject,
+      {
+        ...currentRelease,
+        providerGeneration: generation,
+      },
+      generation,
+      "failover",
+    );
+    return {
+      verification,
+      generation,
+      sourceNodeId,
+      targetNodeId: desired.assignedNodeId!,
     };
   };
 
@@ -4835,6 +5168,90 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         audit(storage.internal, auth.user!.id, null, null, "runner.node.revoke", { nodeId });
         return api({ ok: true, node, revoked: true });
       }
+      const adminProviderFailoverMatch =
+        /^\/api\/admin\/projects\/([A-Za-z0-9_-]{8,128})\/provider-failover$/
+          .exec(url.pathname);
+      if (adminProviderFailoverMatch && request.method === "POST") {
+        const auth = await requirePlatformAdmin(storage, request, true);
+        if (Date.now() - auth.session!.createdAt > IMPERSONATION_RECENT_AUTH_MS) {
+          throw new PlatformError(
+            403,
+            "RECENT_AUTH_REQUIRED",
+            "Sign in again before recovering a provider deployment.",
+          );
+        }
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, [
+          "backupId",
+          "sourceNodeId",
+          "confirmation",
+          "acknowledgeDataLoss",
+          "acknowledgeSourceFenced",
+        ]);
+        const backupId = boundedString(input.backupId, "backupId", 19, 131);
+        if (!/^bk_[A-Za-z0-9_-]{16,128}$/u.test(backupId)) {
+          throw new PlatformError(422, "INVALID_INPUT", "backupId is invalid.");
+        }
+        const sourceNodeId = runnerIdentity(input.sourceNodeId, "sourceNodeId", 128);
+        const projectId = adminProviderFailoverMatch[1]!;
+        const project = projectById(storage.internal, projectId);
+        if (!project || project.placement !== "provider") {
+          throw new PlatformError(
+            404,
+            "PROJECT_NOT_FOUND",
+            "Provider project not found.",
+          );
+        }
+        const expectedConfirmation =
+          `failover ${project.slug} from ${sourceNodeId} using ${backupId}`;
+        if (input.confirmation !== expectedConfirmation) {
+          throw new PlatformError(
+            400,
+            "CONFIRMATION_REQUIRED",
+            `Pass confirmation "${expectedConfirmation}".`,
+          );
+        }
+        if (
+          input.acknowledgeDataLoss !== true
+          || input.acknowledgeSourceFenced !== true
+        ) {
+          throw new PlatformError(
+            422,
+            "FAILOVER_ACKNOWLEDGEMENT_REQUIRED",
+            "Acknowledge recovery-point data loss and confirm the source runtime is fenced.",
+          );
+        }
+        return await withProjectLock(project.id, async () => {
+          const current = projectById(storage.internal, project.id);
+          const release = current?.activeReleaseId
+            ? releaseById(storage.internal, current.activeReleaseId)
+            : null;
+          if (!current || !release) {
+            throw new PlatformError(
+              409,
+              "DATABASE_UNAVAILABLE",
+              "Deploy the provider project before requesting failover.",
+            );
+          }
+          const recovered = await queueProviderFailover(
+            {
+              tokenId: null,
+              userId: auth.user!.id,
+              email: auth.user!.email,
+              organizationId: null,
+              projectId: null,
+              permissions: [],
+              previewName: null,
+              impersonation: null,
+            },
+            current,
+            release,
+            backupId,
+            sourceNodeId,
+          );
+          return api({ ok: true, ...recovered }, 201);
+        });
+      }
       if (url.pathname === "/api/admin/users" && request.method === "GET") {
         await requirePlatformAdmin(storage, request);
         const limit = queryInteger(url.searchParams.get("limit"), "limit", 50, 1, 200);
@@ -7169,7 +7586,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   if (!projectColumns.some((column) => column.name === "provider_node_id")) {
     internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN provider_node_id TEXT");
   }
-  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_provider_generations (
+  const providerGenerationsTable = `CREATE TABLE IF NOT EXISTS clank_platform_provider_generations (
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
     generation INTEGER NOT NULL CHECK (generation > 0),
     release_id TEXT NOT NULL,
@@ -7180,48 +7597,93 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     restore_database_sha256 TEXT,
     restore_database_bytes INTEGER,
     safety_backup_id TEXT,
+    recovery_kind TEXT CHECK (recovery_kind IS NULL OR recovery_kind IN ('restore', 'failover')),
+    recovery_source_node_id TEXT,
     created_at INTEGER NOT NULL,
     CHECK (
       (database_mode = 'replace'
         AND restore_backup_id IS NOT NULL
         AND restore_database_sha256 IS NOT NULL
         AND restore_database_bytes IS NOT NULL
-        AND safety_backup_id IS NOT NULL)
+        AND (
+          (recovery_kind = 'restore'
+            AND safety_backup_id IS NOT NULL
+            AND recovery_source_node_id IS NULL)
+          OR
+          (recovery_kind = 'failover'
+            AND safety_backup_id IS NULL
+            AND recovery_source_node_id IS NOT NULL)
+        ))
       OR
       (database_mode <> 'replace'
         AND restore_backup_id IS NULL
         AND restore_database_sha256 IS NULL
         AND restore_database_bytes IS NULL
-        AND safety_backup_id IS NULL)
+        AND safety_backup_id IS NULL
+        AND recovery_kind IS NULL
+        AND recovery_source_node_id IS NULL)
     ),
     PRIMARY KEY (project_id, generation)
-  ) WITHOUT ROWID`);
+  ) WITHOUT ROWID`;
+  internal.exec(providerGenerationsTable);
   const providerGenerationColumns = internal.prepare(
     "PRAGMA table_info(clank_platform_provider_generations)",
   ).all();
-  if (!providerGenerationColumns.some((column) => column.name === "database_mode")) {
-    internal.exec(`ALTER TABLE clank_platform_provider_generations
-      ADD COLUMN database_mode TEXT NOT NULL DEFAULT 'preserve'`);
-  }
-  if (!providerGenerationColumns.some((column) => column.name === "restore_backup_id")) {
-    internal.exec(
-      "ALTER TABLE clank_platform_provider_generations ADD COLUMN restore_backup_id TEXT",
-    );
-  }
-  if (!providerGenerationColumns.some((column) =>
-    column.name === "restore_database_sha256")) {
-    internal.exec(`ALTER TABLE clank_platform_provider_generations
-      ADD COLUMN restore_database_sha256 TEXT`);
-  }
-  if (!providerGenerationColumns.some((column) =>
-    column.name === "restore_database_bytes")) {
-    internal.exec(`ALTER TABLE clank_platform_provider_generations
-      ADD COLUMN restore_database_bytes INTEGER`);
-  }
-  if (!providerGenerationColumns.some((column) => column.name === "safety_backup_id")) {
-    internal.exec(
-      "ALTER TABLE clank_platform_provider_generations ADD COLUMN safety_backup_id TEXT",
-    );
+  const providerGenerationColumnNames = new Set(
+    providerGenerationColumns.map((column) => String(column.name)),
+  );
+  const providerGenerationSql = String(internal.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'clank_platform_provider_generations'",
+  ).get()?.sql ?? "");
+  const providerGenerationRequiredColumns = [
+    "database_mode",
+    "restore_backup_id",
+    "restore_database_sha256",
+    "restore_database_bytes",
+    "safety_backup_id",
+    "recovery_kind",
+    "recovery_source_node_id",
+  ];
+  if (
+    providerGenerationRequiredColumns.some((name) =>
+      !providerGenerationColumnNames.has(name))
+    || !providerGenerationSql.includes("recovery_kind = 'failover'")
+  ) {
+    const legacyTable = "clank_platform_provider_generations_legacy_recovery";
+    if (internal.prepare(
+      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
+    ).get(legacyTable)) {
+      throw new Error("Cannot migrate provider generations: stale recovery table exists.");
+    }
+    const column = (name: string, fallback: string): string =>
+      providerGenerationColumnNames.has(name) ? name : fallback;
+    const databaseMode = column("database_mode", "'preserve'");
+    const restoreBackupId = column("restore_backup_id", "NULL");
+    const restoreDatabaseSha256 = column("restore_database_sha256", "NULL");
+    const restoreDatabaseBytes = column("restore_database_bytes", "NULL");
+    const safetyBackupId = column("safety_backup_id", "NULL");
+    const storedRecoveryKind = column("recovery_kind", "NULL");
+    const recoveryKind =
+      `CASE WHEN ${databaseMode} = 'replace' THEN coalesce(${storedRecoveryKind}, 'restore') ELSE NULL END`;
+    const recoverySourceNodeId = column("recovery_source_node_id", "NULL");
+    internal.transaction(() => {
+      internal.exec(`ALTER TABLE clank_platform_provider_generations
+        RENAME TO ${legacyTable}`);
+      internal.exec(providerGenerationsTable);
+      internal.exec(`INSERT INTO clank_platform_provider_generations
+        (project_id, generation, release_id, encrypted_environment, database_mode,
+          restore_backup_id, restore_database_sha256, restore_database_bytes,
+          safety_backup_id, recovery_kind, recovery_source_node_id, created_at)
+        SELECT project_id, generation, release_id, encrypted_environment,
+          ${databaseMode}, ${restoreBackupId}, ${restoreDatabaseSha256},
+          ${restoreDatabaseBytes},
+          CASE WHEN ${recoveryKind} = 'failover' THEN NULL ELSE ${safetyBackupId} END,
+          ${recoveryKind},
+          CASE WHEN ${recoveryKind} = 'failover' THEN ${recoverySourceNodeId} ELSE NULL END,
+          created_at
+        FROM ${legacyTable}`);
+      internal.exec(`DROP TABLE ${legacyTable}`);
+    });
   }
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_projects_org ON clank_platform_projects (organization_id, created_at)");
   internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_platform_projects_preview_name
@@ -13353,6 +13815,14 @@ function providerGeneration(
     || row.safety_backup_id === undefined
     ? null
     : String(row.safety_backup_id);
+  const recoveryKind = row.recovery_kind === null
+    || row.recovery_kind === undefined
+    ? null
+    : String(row.recovery_kind);
+  const recoverySourceNodeId = row.recovery_source_node_id === null
+    || row.recovery_source_node_id === undefined
+    ? null
+    : String(row.recovery_source_node_id);
   const restoreFieldsValid = databaseMode === "replace"
     ? (
         restoreBackupId !== null
@@ -13362,8 +13832,20 @@ function providerGeneration(
         && restoreDatabaseBytes !== null
         && Number.isSafeInteger(restoreDatabaseBytes)
         && restoreDatabaseBytes >= 16
-        && safetyBackupId !== null
-        && /^bk_[A-Za-z0-9_-]{16,128}$/u.test(safetyBackupId)
+        && (
+          (
+            recoveryKind === "restore"
+            && safetyBackupId !== null
+            && /^bk_[A-Za-z0-9_-]{16,128}$/u.test(safetyBackupId)
+            && recoverySourceNodeId === null
+          )
+          || (
+            recoveryKind === "failover"
+            && safetyBackupId === null
+            && recoverySourceNodeId !== null
+            && /^[A-Za-z0-9_-][A-Za-z0-9_.:-]{0,127}$/u.test(recoverySourceNodeId)
+          )
+        )
       )
     : (
         (databaseMode === "initialize" || databaseMode === "preserve")
@@ -13371,6 +13853,8 @@ function providerGeneration(
         && restoreDatabaseSha256 === null
         && restoreDatabaseBytes === null
         && safetyBackupId === null
+        && recoveryKind === null
+        && recoverySourceNodeId === null
       );
   if (!restoreFieldsValid) {
     throw new Error("Stored provider generation recovery state is invalid.");
@@ -13385,6 +13869,8 @@ function providerGeneration(
     restoreDatabaseSha256,
     restoreDatabaseBytes,
     safetyBackupId,
+    recoveryKind: recoveryKind as ProviderGenerationRow["recoveryKind"],
+    recoverySourceNodeId,
     createdAt: Number(row.created_at),
   };
 }
@@ -13402,6 +13888,8 @@ function sameProviderGeneration(
     && left.restoreDatabaseSha256 === right.restoreDatabaseSha256
     && left.restoreDatabaseBytes === right.restoreDatabaseBytes
     && left.safetyBackupId === right.safetyBackupId
+    && left.recoveryKind === right.recoveryKind
+    && left.recoverySourceNodeId === right.recoverySourceNodeId
     && left.createdAt === right.createdAt;
 }
 

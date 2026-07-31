@@ -235,6 +235,136 @@ test("stateful placements pin one node identity across generations, stops, and n
   }
 });
 
+test("stateful relocation requires an offline exact source and cancels stale work", async () => {
+  const test = await fixture();
+  try {
+    const source = await test.orchestrator.registerNode({
+      id: "node-relocation-source",
+      region: "us-central",
+      capacity: 2,
+      endpoint: "https://source.provider.test",
+      labels: { provider: "docker" },
+    });
+    const target = await test.orchestrator.registerNode({
+      id: "node-relocation-target",
+      region: "us-central",
+      capacity: 2,
+      endpoint: "https://target.provider.test",
+      labels: { provider: "docker" },
+    });
+    const first = await test.orchestrator.setDesired({
+      projectId: "project_stateful_relocation",
+      releaseId: "release-stateful-relocation",
+      state: "running",
+      region: "us-central",
+      placementMode: "stateful",
+      nodeRequirements: {
+        endpoint: true,
+        labels: { provider: "docker" },
+      },
+      runtimeProtocol: "clank-runtime/1",
+    });
+    assert.equal(first.assignedNodeId, source.node.id);
+    await assert.rejects(
+      test.orchestrator.relocateStateful({
+        projectId: first.projectId,
+        sourceNodeId: source.node.id,
+        runtimeProtocol: "clank-runtime/1",
+      }),
+      /must be offline/u,
+    );
+
+    test.orchestrator.revokeNode(source.node.id);
+    await assert.rejects(
+      test.orchestrator.relocateStateful({
+        projectId: first.projectId,
+        sourceNodeId: target.node.id,
+        runtimeProtocol: "clank-runtime/1",
+      }),
+      /source does not match/u,
+    );
+    const relocated = await test.orchestrator.relocateStateful({
+      projectId: first.projectId,
+      sourceNodeId: source.node.id,
+      runtimeProtocol: "clank-runtime/1",
+    });
+    assert.equal(relocated.assignedNodeId, target.node.id);
+    assert.equal(relocated.generation, first.generation + 1);
+    assert.equal(relocated.desiredReleaseId, first.desiredReleaseId);
+    assert.equal(relocated.placementMode, "stateful");
+    const claims = await test.orchestrator.claim(
+      target.node.id,
+      target.token,
+      10,
+    );
+    assert.equal(claims.length, 1);
+    assert.equal(claims[0].projectId, first.projectId);
+    assert.equal(claims[0].payload.generation, relocated.generation);
+    const internal = test.database[SQLITE_INTERNAL];
+    assert.equal(
+      Number(internal.prepare(`SELECT count(*) AS count
+        FROM clank_deployment_operations
+        WHERE project_id = ? AND state = 'cancelled'`).get(first.projectId).count),
+      1,
+    );
+  } finally {
+    await test.close();
+  }
+});
+
+test("stateful relocation preserves placement requirements and fails without target capacity", async () => {
+  const test = await fixture();
+  try {
+    const source = await test.orchestrator.registerNode({
+      id: "node-relocation-capacity-source",
+      region: "us-central",
+      capacity: 2,
+      endpoint: "https://source-capacity.provider.test",
+      labels: { provider: "docker", tier: "stateful" },
+    });
+    await test.orchestrator.registerNode({
+      id: "node-relocation-wrong-target",
+      region: "us-central",
+      capacity: 2,
+      endpoint: "https://wrong-target.provider.test",
+      labels: { provider: "docker", tier: "portable" },
+    });
+    const desired = await test.orchestrator.setDesired({
+      projectId: "project_stateful_relocation_capacity",
+      releaseId: "release-stateful-relocation-capacity",
+      state: "running",
+      region: "us-central",
+      placementMode: "stateful",
+      nodeRequirements: {
+        endpoint: true,
+        labels: { provider: "docker", tier: "stateful" },
+      },
+      capacityUnits: 2,
+      runtimeProtocol: "clank-runtime/1",
+    });
+    assert.equal(desired.assignedNodeId, source.node.id);
+    test.orchestrator.revokeNode(source.node.id);
+    await assert.rejects(
+      test.orchestrator.relocateStateful({
+        projectId: desired.projectId,
+        sourceNodeId: source.node.id,
+        runtimeProtocol: "clank-runtime/1",
+      }),
+      (error) => error?.code === "STATEFUL_RELOCATION_UNAVAILABLE",
+    );
+    assert.equal(
+      test.orchestrator.desired(desired.projectId).assignedNodeId,
+      source.node.id,
+    );
+    assert.equal(
+      test.orchestrator.desired(desired.projectId).generation,
+      desired.generation,
+    );
+  } finally {
+    await test.close();
+  }
+});
+
 test("an initially unassigned stateful placement binds once when capacity appears", async () => {
   const test = await fixture();
   try {

@@ -15,6 +15,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Added generation-bound provider filesystem-capacity telemetry with a path-free versioned
   protocol, version 1 rolling-upgrade compatibility, strict aggregate validation, and responsive
   platform-administrator dashboard reporting with tenant/token redaction.
+- Added explicit platform-administrator provider failover from a revoked source runner to a
+  healthy compatible target. Recovery requires recent browser authentication, CSRF, exact typed
+  confirmation, separate source-fencing and recovery-point-loss acknowledgements, and a verified
+  encrypted backup; it unpublishes old ingress, allocates a higher generation, preserves placement
+  requirements and process-slot demand, rechecks source revocation before target publication, and
+  records queue and activation audit events. Heartbeat loss alone never triggers stateful movement.
 
 ## 0.12.0 - 2026-07-30
 

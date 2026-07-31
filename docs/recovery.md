@@ -151,12 +151,47 @@ verification are bounded but memory-resident, so set `CLANK_PROVIDER_MAX_DATABAS
 control-plane memory headroom available while the configured backup concurrency is active.
 
 Provider restore is an intentional write pause, not a rolling database update. Its availability
-depends on the pinned stateful node and the configured recovery repository. Retain an independently
-tested provider-host and infrastructure recovery procedure for node or repository loss.
+depends on the pinned stateful node and the configured recovery repository.
+
+When that exact provider node cannot return, a platform administrator can instead choose
+**Recover…** beside a verified backup. Emergency recovery is deliberately separate from ordinary
+restore:
+
+1. Stop or network-fence the old application runtime out of band.
+2. Revoke the exact source runner under **Control plane → Deployment runner fleet**.
+3. Open the project backup list and select **Recover…** on the intended recovery point.
+4. Confirm the source and backup exactly, then acknowledge both source fencing and the loss of
+   changes newer than that backup.
+
+The browser-only API is
+`POST /api/admin/projects/:projectId/provider-failover`. It rejects CLI/project bearer tokens,
+support impersonation, stale administrator sessions, a source that is not the exact active node,
+an online or merely heartbeat-expired source, a changed backup digest/size, incompatible labels or
+region, and insufficient process-slot capacity. On acceptance it cancels stale source work,
+unpublishes the old provider origin, moves the durable placement to a compatible target with the
+same requirements and process demand, and supplies only the frozen encrypted recovery point to the
+new generation. Public ingress returns only after the target reports that exact release and
+generation healthy and the source credential is still revoked. If the source identity is
+re-enrolled during recovery, the target remains private; revoke the source again and retry the same
+request.
+
+An identical request resumes a pending recovery instead of allocating another generation. A
+failed or cancelled recovery remains failed for operator review; Clank does not start a second
+movement automatically. Queue and activation audit records include only project/node IDs, recovery
+metadata, digest, size, and generation—not snapshot bytes, secrets, or credentials.
+
+Revoking a credential fences the Clank control protocol; it cannot prove an isolated old process
+or host stopped. This is why the operator must affirm the separate infrastructure fence. A
+heartbeat timeout alone never moves stateful SQLite. Retain an independently tested provider-host
+and infrastructure recovery procedure for node or repository loss.
 
 Backup creation, verification, and restore are audited. The `rollback` project permission is required for mutations; read access can list backup metadata.
 
-The deployment console's **Backups** view shows the cadence, next run, active work, last failure, retained restore points, and manual create/verify actions. Host filesystem paths are deliberately omitted from browser and CLI responses. Unexpected scheduler errors go only to the operator error callback; users receive a fixed failure status without exception text.
+The deployment console's **Backups** view shows the cadence, next run, active work, last failure,
+retained restore points, and manual create/verify actions. Platform administrators also see the
+guarded emergency **Recover…** action for provider projects. Host filesystem paths are deliberately
+omitted from browser and CLI responses. Unexpected scheduler errors go only to the operator error
+callback; users receive a fixed failure status without exception text.
 
 Platform retention defaults to 30 backups and 90 days per project. Configure it with:
 

@@ -75,6 +75,10 @@ export declare class DeploymentCapacityError extends Error {
     readonly code = "PINNED_CAPACITY_UNAVAILABLE";
     constructor();
 }
+export declare class DeploymentRelocationError extends Error {
+    readonly code = "STATEFUL_RELOCATION_UNAVAILABLE";
+    constructor(message?: string);
+}
 export interface DesiredDeployment {
     projectId: string;
     desiredReleaseId: string | null;
@@ -135,6 +139,16 @@ export interface DeploymentOrchestrator {
         capacityUnits?: number;
         /** Selects the sensitive runtime capsule contract for the reconcile operation. */
         runtimeProtocol?: "clank-runtime/1";
+    }): Promise<DesiredDeployment>;
+    /**
+     * Explicitly moves a stateful placement after its exact source node has been
+     * revoked or its heartbeat lease has expired. Callers must separately fence
+     * the source provider and supply replacement data for the new generation.
+     */
+    relocateStateful(input: {
+        projectId: string;
+        sourceNodeId: string;
+        runtimeProtocol: "clank-runtime/1";
     }): Promise<DesiredDeployment>;
     desired(projectId: string): DesiredDeployment | null;
     observe(nodeId: string, token: string, input: {

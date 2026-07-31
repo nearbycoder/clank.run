@@ -94,6 +94,15 @@ export class DeploymentCapacityError extends Error {
   }
 }
 
+export class DeploymentRelocationError extends Error {
+  readonly code = "STATEFUL_RELOCATION_UNAVAILABLE";
+
+  constructor(message = "No healthy provider node can accept this stateful deployment.") {
+    super(message);
+    this.name = "DeploymentRelocationError";
+  }
+}
+
 export interface DesiredDeployment {
   projectId: string;
   desiredReleaseId: string | null;
@@ -155,6 +164,16 @@ export interface DeploymentOrchestrator {
     capacityUnits?: number;
     /** Selects the sensitive runtime capsule contract for the reconcile operation. */
     runtimeProtocol?: "clank-runtime/1";
+  }): Promise<DesiredDeployment>;
+  /**
+   * Explicitly moves a stateful placement after its exact source node has been
+   * revoked or its heartbeat lease has expired. Callers must separately fence
+   * the source provider and supply replacement data for the new generation.
+   */
+  relocateStateful(input: {
+    projectId: string;
+    sourceNodeId: string;
+    runtimeProtocol: "clank-runtime/1";
   }): Promise<DesiredDeployment>;
   desired(projectId: string): DesiredDeployment | null;
   observe(nodeId: string, token: string, input: {
@@ -598,6 +617,96 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         idempotencyKey: `reconcile:${projectId}:${generation}`,
         ...(assignedNodeId ? { nodeId: assignedNodeId } : {}),
         ...(desiredRegion ? { region: desiredRegion } : {}),
+      });
+      return orchestrator.desired(projectId)!;
+    },
+    async relocateStateful(input) {
+      ensureOpen();
+      const projectId = safeName(input.projectId, "projectId", 128);
+      const sourceNodeId = nodeId(input.sourceNodeId);
+      if (input.runtimeProtocol !== "clank-runtime/1") {
+        throw new TypeError("runtimeProtocol is unsupported.");
+      }
+      reassignExpired();
+      const now = Date.now();
+      const allocation = internal.transaction((changes) => {
+        const existing = internal.prepare(
+          "SELECT * FROM clank_deployment_placements WHERE project_id = ?",
+        ).get(projectId);
+        if (
+          !existing
+          || existing.placement_mode !== "stateful"
+          || existing.desired_state !== "running"
+          || existing.desired_release_id === null
+          || existing.assigned_node_id !== sourceNodeId
+        ) {
+          throw new TypeError(
+            "The stateful deployment source does not match its current placement.",
+          );
+        }
+        const source = internal.prepare(
+          "SELECT status, expires_at FROM clank_deployment_nodes WHERE id = ?",
+        ).get(sourceNodeId);
+        if (
+          !source
+          || (
+            source.status !== "offline"
+            && Number(source.expires_at) > now
+          )
+        ) {
+          throw new TypeError(
+            "The stateful deployment source must be offline before relocation.",
+          );
+        }
+        const region = existing.region === null
+          ? undefined
+          : String(existing.region);
+        const targetNodeId = chooseNode(
+          region,
+          sourceNodeId,
+          nodeRequirementsFromRow(existing),
+          Number(existing.capacity_units),
+          projectId,
+        );
+        if (!targetNodeId) throw new DeploymentRelocationError();
+        const generation = Number(existing.generation) + 1;
+        internal.prepare(`UPDATE clank_deployment_operations
+          SET state = 'cancelled', lease_token_hash = NULL,
+            lease_expires_at = NULL, updated_at = ?
+          WHERE project_id = ? AND state IN ('queued', 'retry', 'leased')`)
+          .run(now, projectId);
+        internal.prepare(`UPDATE clank_deployment_placements
+          SET assigned_node_id = ?, generation = ?, observed_release_id = NULL,
+            observed_state = 'unknown', observed_generation = 0, updated_at = ?
+          WHERE project_id = ? AND assigned_node_id = ? AND generation = ?`)
+          .run(
+            targetNodeId,
+            generation,
+            now,
+            projectId,
+            sourceNodeId,
+            existing.generation,
+          );
+        changes.record("__orchestration", projectId);
+        return {
+          generation,
+          releaseId: String(existing.desired_release_id),
+          targetNodeId,
+          region,
+        };
+      });
+      await orchestrator.enqueue({
+        projectId,
+        action: "reconcile",
+        payload: {
+          releaseId: allocation.releaseId,
+          state: "running",
+          generation: allocation.generation,
+          runtimeProtocol: input.runtimeProtocol,
+        },
+        idempotencyKey: `reconcile:${projectId}:${allocation.generation}`,
+        nodeId: allocation.targetNodeId,
+        ...(allocation.region ? { region: allocation.region } : {}),
       });
       return orchestrator.desired(projectId)!;
     },

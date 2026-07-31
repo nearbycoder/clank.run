@@ -225,7 +225,17 @@ recovery repository. Listing and verification use that repository even while the
 offline. Restore creates a new fenced generation on the pinned node after target verification and
 an encrypted safety backup, then drains the writer, replaces SQLite, applies current migrations,
 and publishes only after health succeeds. It is intentionally not zero-downtime. Maintain an
-independently tested provider-host restore policy before production use. Prefer
+independently tested provider-host restore policy before production use.
+
+If the pinned host cannot return, first stop or network-fence its runtime, then use the operator
+fleet to revoke that exact runner. A recent, non-impersonating platform-administrator browser can
+select **Recover…** beside a verified encrypted backup. Clank requires exact source/backup
+confirmation and separate fencing/data-loss acknowledgements, selects only a healthy compatible
+node with sufficient reserved process slots, removes old ingress, and activates a higher
+generation from that recovery point. It never interprets heartbeat expiry as permission to move a
+stateful database. See [Recovery](recovery.md#platform-workflow) for the runbook and API boundary.
+
+Prefer
 `CLANK_BACKUP_STORE=s3` when the control plane and provider have different volumes; otherwise the
 control-plane volume remains the backup failure domain.
 

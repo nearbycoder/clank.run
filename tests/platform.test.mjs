@@ -2014,6 +2014,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
   legacyProviderControl.close();
   platform = await openPlatform(options);
   let agent;
+  let targetAgent;
   try {
     const client = createDeploymentCoordinatorClient({
       baseUrl: "http://127.0.0.1:4200",
@@ -2548,6 +2549,50 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     );
 
     await platform.close();
+    const preFailoverProviderControl = new DatabaseSync(
+      join(dataDirectory, "control.sqlite"),
+    );
+    preFailoverProviderControl.exec(`
+      ALTER TABLE clank_platform_provider_generations
+        RENAME TO clank_platform_provider_generations_current;
+      CREATE TABLE clank_platform_provider_generations (
+        project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        release_id TEXT NOT NULL,
+        encrypted_environment TEXT NOT NULL,
+        database_mode TEXT NOT NULL DEFAULT 'preserve'
+          CHECK (database_mode IN ('initialize', 'preserve', 'replace')),
+        restore_backup_id TEXT,
+        restore_database_sha256 TEXT,
+        restore_database_bytes INTEGER,
+        safety_backup_id TEXT,
+        created_at INTEGER NOT NULL,
+        CHECK (
+          (database_mode = 'replace'
+            AND restore_backup_id IS NOT NULL
+            AND restore_database_sha256 IS NOT NULL
+            AND restore_database_bytes IS NOT NULL
+            AND safety_backup_id IS NOT NULL)
+          OR
+          (database_mode <> 'replace'
+            AND restore_backup_id IS NULL
+            AND restore_database_sha256 IS NULL
+            AND restore_database_bytes IS NULL
+            AND safety_backup_id IS NULL)
+        ),
+        PRIMARY KEY (project_id, generation)
+      ) WITHOUT ROWID;
+      INSERT INTO clank_platform_provider_generations
+        (project_id, generation, release_id, encrypted_environment, database_mode,
+          restore_backup_id, restore_database_sha256, restore_database_bytes,
+          safety_backup_id, created_at)
+        SELECT project_id, generation, release_id, encrypted_environment, database_mode,
+          restore_backup_id, restore_database_sha256, restore_database_bytes,
+          safety_backup_id, created_at
+        FROM clank_platform_provider_generations_current;
+      DROP TABLE clank_platform_provider_generations_current;
+    `);
+    preFailoverProviderControl.close();
     platform = await openPlatform(options);
     const afterRestart = await platform.handle(
       new Request("https://remote-app.apps.example.test/after-restart"),
@@ -2631,7 +2676,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     ).count), 4);
     const restoreGenerations = retained.prepare(`SELECT generation, database_mode,
         restore_backup_id, restore_database_sha256, restore_database_bytes,
-        safety_backup_id
+        safety_backup_id, recovery_kind, recovery_source_node_id
       FROM clank_platform_provider_generations
       WHERE project_id = ? AND generation IN (2, 3)
       ORDER BY generation`).all(created.project.id);
@@ -2642,6 +2687,8 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       restore_database_sha256: remoteBackup.backup.databaseSha256,
       restore_database_bytes: remoteBackup.backup.databaseBytes,
       safety_backup_id: safetyBackup.id,
+      recovery_kind: "restore",
+      recovery_source_node_id: null,
     }, {
       generation: 3,
       database_mode: "replace",
@@ -2649,6 +2696,8 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       restore_database_sha256: remoteBackup.backup.databaseSha256,
       restore_database_bytes: remoteBackup.backup.databaseBytes,
       safety_backup_id: safetyBackup.id,
+      recovery_kind: "restore",
+      recovery_source_node_id: null,
     }]);
     const restoreAudit = retained.prepare(`SELECT metadata
       FROM clank_platform_audit
@@ -2679,6 +2728,206 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       && metadata.safetyBackupId === safetyBackup.id));
     retained.close();
 
+    const failoverPath =
+      `/api/admin/projects/${created.project.id}/provider-failover`;
+    const failoverBody = {
+      backupId: remoteBackup.backup.id,
+      sourceNodeId: "provider-placement-one",
+      confirmation:
+        `failover remote-app from provider-placement-one using ${remoteBackup.backup.id}`,
+      acknowledgeDataLoss: true,
+      acknowledgeSourceFenced: true,
+    };
+    await agent.close();
+    agent = null;
+    const expiredSource = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    expiredSource.prepare(`UPDATE clank_deployment_nodes
+      SET status = 'active', expires_at = 0
+      WHERE id = ?`).run("provider-placement-one");
+    expiredSource.close();
+    const heartbeatOnlyFailover = await platform.handle(jsonRequest(failoverPath, {
+      method: "POST",
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
+      body: failoverBody,
+    }));
+    assert.equal(heartbeatOnlyFailover.status, 409);
+    assert.equal(
+      (await heartbeatOnlyFailover.json()).error.code,
+      "PROVIDER_SOURCE_NOT_REVOKED",
+    );
+    await payload(platform, jsonRequest(
+      "/api/admin/runners/provider-placement-one",
+      {
+        method: "DELETE",
+        cookie: owner.cookie,
+        csrf: owner.csrfToken,
+        body: { confirmation: "provider-placement-one" },
+      },
+    ));
+    const tokenFailover = await platform.handle(jsonRequest(failoverPath, {
+      method: "POST",
+      token: owner.accessToken,
+      body: failoverBody,
+    }));
+    assert.equal(tokenFailover.status, 403);
+    assert.equal((await tokenFailover.json()).error.code, "BROWSER_ADMIN_REQUIRED");
+    const missingAcknowledgement = await platform.handle(jsonRequest(failoverPath, {
+      method: "POST",
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
+      body: {
+        ...failoverBody,
+        acknowledgeSourceFenced: false,
+      },
+    }));
+    assert.equal(missingAcknowledgement.status, 422);
+    assert.equal(
+      (await missingAcknowledgement.json()).error.code,
+      "FAILOVER_ACKNOWLEDGEMENT_REQUIRED",
+    );
+    const missingCapacity = await platform.handle(jsonRequest(failoverPath, {
+      method: "POST",
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
+      body: failoverBody,
+    }));
+    assert.equal(missingCapacity.status, 409);
+    assert.equal(
+      (await missingCapacity.json()).error.code,
+      "PROVIDER_FAILOVER_CAPACITY_UNAVAILABLE",
+    );
+    const unpublishedIngress = await platform.handle(
+      new Request("https://remote-app.apps.example.test/no-recovery-capacity"),
+    );
+    assert.equal(unpublishedIngress.status, 404);
+    let reEnrollSourceDuringRecovery = true;
+    targetAgent = await openProviderDeploymentAgent({
+      client,
+      registrationToken,
+      node: {
+        id: "provider-placement-two",
+        region: "local",
+        endpoint: providerOrigin,
+        capacity: 5,
+      },
+      provider: {
+        kind: "http",
+        async reconcile(request) {
+          reconciliations.push(request);
+          if (request.runtime.manifest.database.mode === "replace") {
+            providerSnapshot = new Uint8Array(request.runtime.databaseSnapshot);
+            providerSnapshotSha256 = await deploymentDigest(providerSnapshot);
+          }
+          activeProviderReleaseId = request.desired.releaseId;
+          activeProviderGeneration = request.desired.generation;
+          if (reEnrollSourceDuringRecovery) {
+            reEnrollSourceDuringRecovery = false;
+            await client.register(registrationToken, {
+              id: "provider-placement-one",
+              region: "local",
+              endpoint: providerOrigin,
+              capacity: 5,
+            });
+          }
+        },
+        async rollback(request) {
+          rollbacks.push(request);
+        },
+        async delete(request) {
+          deletions.push(request);
+        },
+      },
+      pollIntervalMs: 10,
+      heartbeatIntervalMs: 100,
+    });
+    const reEnrolledFailover = await platform.handle(jsonRequest(failoverPath, {
+      method: "POST",
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
+      body: failoverBody,
+    }));
+    assert.equal(reEnrolledFailover.status, 409);
+    assert.equal(
+      (await reEnrolledFailover.json()).error.code,
+      "PROVIDER_FAILOVER_SOURCE_REENROLLED",
+    );
+    const unpublishedReEnrollment = await platform.handle(
+      new Request("https://remote-app.apps.example.test/source-returned"),
+    );
+    assert.equal(unpublishedReEnrollment.status, 404);
+    await payload(platform, jsonRequest(
+      "/api/admin/runners/provider-placement-one",
+      {
+        method: "DELETE",
+        cookie: owner.cookie,
+        csrf: owner.csrfToken,
+        body: { confirmation: "provider-placement-one" },
+      },
+    ));
+    const failedOver = await payload(platform, jsonRequest(failoverPath, {
+      method: "POST",
+      cookie: owner.cookie,
+      csrf: owner.csrfToken,
+      body: failoverBody,
+    }), 201);
+    assert.equal(failedOver.generation, 6);
+    assert.equal(failedOver.sourceNodeId, "provider-placement-one");
+    assert.equal(failedOver.targetNodeId, "provider-placement-two");
+    assert.equal(
+      failedOver.verification.databaseSha256,
+      remoteBackup.backup.databaseSha256,
+    );
+    assert.equal(reconciliations.at(-1).runtime.manifest.database.mode, "replace");
+    assert.equal(reconciliations.at(-1).desired.generation, 6);
+    const recoveredProject = await payload(platform, jsonRequest(
+      `/api/projects/${created.project.id}`,
+      { token: owner.accessToken },
+    ));
+    assert.equal(recoveredProject.project.activeGeneration, 6);
+    assert.equal(recoveredProject.project.providerNodeId, "provider-placement-two");
+    const afterFailover = await platform.handle(
+      new Request("https://remote-app.apps.example.test/after-failover"),
+    );
+    assert.equal(afterFailover.status, 200);
+    assert.equal(await afterFailover.text(), "remote response");
+    assert.equal(providerRequests.at(-1).generation, "6");
+    const recoveredControl = new DatabaseSync(
+      join(dataDirectory, "control.sqlite"),
+      { readOnly: true },
+    );
+    const failoverGeneration = recoveredControl.prepare(`SELECT
+        database_mode, restore_backup_id, restore_database_sha256,
+        restore_database_bytes, safety_backup_id, recovery_kind,
+        recovery_source_node_id
+      FROM clank_platform_provider_generations
+      WHERE project_id = ? AND generation = 6`).get(created.project.id);
+    assert.deepEqual({ ...failoverGeneration }, {
+      database_mode: "replace",
+      restore_backup_id: remoteBackup.backup.id,
+      restore_database_sha256: remoteBackup.backup.databaseSha256,
+      restore_database_bytes: remoteBackup.backup.databaseBytes,
+      safety_backup_id: null,
+      recovery_kind: "failover",
+      recovery_source_node_id: "provider-placement-one",
+    });
+    const failoverAudit = recoveredControl.prepare(`SELECT action, metadata
+      FROM clank_platform_audit
+      WHERE project_id = ? AND action = 'provider.failover.activate'
+      ORDER BY id DESC LIMIT 1`).get(created.project.id);
+    assert.ok(failoverAudit);
+    assert.deepEqual(JSON.parse(String(failoverAudit.metadata)), {
+      backupId: remoteBackup.backup.id,
+      safetyBackupId: null,
+      sourceNodeId: "provider-placement-one",
+      databaseSha256: remoteBackup.backup.databaseSha256,
+      databaseBytes: remoteBackup.backup.databaseBytes,
+      placement: "provider",
+      generation: 6,
+      nodeId: "provider-placement-two",
+    });
+    recoveredControl.close();
+
     const deleted = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}`,
       {
@@ -2692,7 +2941,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     ));
     assert.equal(deleted.project.id, created.project.id);
     assert.equal(deletions.length, 1);
-    assert.equal(deletions[0].generation, 5);
+    assert.equal(deletions[0].generation, 6);
     assert.equal(deletions[0].confirmation, `delete ${created.project.id}`);
     const missing = await platform.handle(jsonRequest(
       `/api/projects/${created.project.id}`,
@@ -2700,6 +2949,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     ));
     assert.equal(missing.status, 404);
   } finally {
+    await targetAgent?.close();
     await agent?.close();
     await platform.close();
     await new Promise((resolve) => providerServer.close(resolve));
