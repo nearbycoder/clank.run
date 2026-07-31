@@ -103,6 +103,11 @@ export default {
       confirmation: "always",
     },
   },
+  admin: {
+    roles: ["owner"],
+    entities: ["projects", "tasks"],
+    allowMutations: true,
+  },
   services: {
     reminders: {
       kind: "jobs",
@@ -203,6 +208,7 @@ Generation is no longer a single-table mock-up. The baseline includes:
 
 - every declared static route, with server rendering, hydration state, navigation, and server-side
   route-role checks;
+- an optional generated admin studio with schema summaries and backend-authorized data controls;
 - every entity, field constraint, index, ownership scope, field-aware create form, list, and safe
   delete/toggle controls;
 - exact declared action names, descriptions, roles, confirmation hints, browser bindings, and MCP
@@ -348,6 +354,22 @@ repeats the authorization check. Never treat a hidden button as authorization.
 
 The `permissions` strings on role declarations document domain intent for humans and agents.
 Generated enforcement comes from each route and action's explicit `roles` allowlist.
+
+## Admin studio
+
+When the role contract contains `owner` or `admin`, generation includes a responsive operations
+surface at `/__clank/studio`. Configure it with `admin: { path, roles, entities,
+allowMutations }`, or set `admin: false` to omit it. Apps without one of the conventional
+privileged roles must declare a non-empty `admin.roles` list to opt in.
+
+The studio reports schema and current-user-visible record information, then reuses the same typed
+actions as the product UI and per-app MCP server. Its server route enforces the studio role before
+loading data. Backend action roles and record ownership are still authoritative, so studio access
+does not imply global database access. `allowMutations: false` hides studio mutation controls
+without changing those actions elsewhere.
+
+See [Generated admin studio](admin-studio.md) for the complete configuration, authorization model,
+and generated verification contract.
 
 ## Actions and MCP
 

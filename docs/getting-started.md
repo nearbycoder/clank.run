@@ -67,6 +67,7 @@ npm install
 - an initial immutable database migration;
 - health checks and deterministic deployment configuration;
 - a deterministic synthetic fixture and application-owned backend/SSR contract test; and
+- a role-gated generated admin studio when the blueprint declares an `owner` or `admin` role;
 - `README.md` and `AGENTS.md` instructions for people and coding agents.
 
 The generated `package.json` has one application dependency:
