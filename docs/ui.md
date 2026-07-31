@@ -13,7 +13,11 @@ The library owns state transitions, ARIA relationships, keyboard behavior, focus
 
 The UI runtime is part of `@clank.run/framework` and adds no package dependencies. It does not load Base UI, React, Floating UI, a focus-trap package, or a CSS-in-JS runtime. It uses Clank's reactive core plus browser and web-platform APIs such as DOM events, `Intl`, `FormData`, `ResizeObserver`, and Pointer Events.
 
-Tailwind remains optional application build tooling. Clank emits ordinary classes, attributes, styles, and CSS custom properties, so it needs no Tailwind plugin and ships no visual theme.
+Tailwind remains optional application build tooling. Clank emits ordinary classes, attributes,
+styles, and CSS custom properties, so it needs no Tailwind plugin. The controllers ship no visual
+CSS; the optional typed preset layer at `@clank.run/framework/ui/theme` provides design tokens
+without changing component markup or behavior. Inspect it at
+[design.clank.run](https://design.clank.run) or read the [design-system guide](design-system.md).
 
 ## Imports
 
@@ -177,7 +181,8 @@ The same cancellation rule applies to button presses, menu actions, field change
 
 ## Tailwind and state attributes
 
-Clank has no visual CSS. Style the exact markup your product needs using ordinary `class` values:
+Clank controllers have no visual CSS. Style the exact markup your product needs using ordinary
+`class` values, optionally backed by the package's typed theme variables:
 
 ```tsx
 <button
@@ -220,7 +225,9 @@ Positioned and measured families expose values such as `--clank-anchor-width`, `
 Some utility families use purpose-specific hooks such as `data-toast-action` rather than `data-clank-part`. Inspect the returned part type or `manifest()` instead of assuming every family emits every common attribute.
 
 Keep utility classes statically discoverable by your Tailwind build, or safelist classes assembled
-from runtime data. Clank never injects a theme or visual stylesheet. It does write element-level
+from runtime data. Controllers never inject a theme or visual stylesheet. The optional theme API
+only emits CSS when your build calls `createClankThemeStylesheet()` or applies variables when your
+code explicitly calls `applyClankTheme()`. Controllers do write element-level
 style properties and CSS custom properties for measured primitives such as floating content,
 sliders, drawers, tabs, scroll areas, and toasts. The one behavioral stylesheet is a tiny
 document-deduplicated Scroll Area rule that hides Chromium/Safari's native scrollbar pseudo-element

@@ -24,6 +24,17 @@ await new Promise((resolve, reject) => {
     : reject(new Error(`Documentation site build exited with ${code}.`)));
 });
 
+await new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [
+    "--disable-warning=ExperimentalWarning",
+    fileURLToPath(new URL("../design-site/build.mjs", import.meta.url)),
+  ], { stdio: "inherit" });
+  child.once("error", reject);
+  child.once("exit", (code) => code === 0
+    ? resolve()
+    : reject(new Error(`Design Studio build exited with ${code}.`)));
+});
+
 await runCoverageGate();
 
 await new Promise((resolve, reject) => {
@@ -59,4 +70,4 @@ await new Promise((resolve, reject) => {
     : reject(new Error(`Security audit exited with ${code}.`)));
 });
 
-console.log("Check complete: framework and documentation site builds, dependency contract, coverage, documentation, packaged-release conformance, and security audit passed.");
+console.log("Check complete: framework, documentation, and Design Studio builds, dependency contract, coverage, documentation, packaged-release conformance, and security audit passed.");

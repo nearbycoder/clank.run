@@ -4,6 +4,18 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added a dependency-free theming layer for the headless UI library. Ten immutable presets span
+  light and dark color systems, square through pill geometry, compact through relaxed density,
+  typography, depth, focus, danger, and motion tokens. Typed custom themes are validated before
+  producing deterministic CSS variables; portal-safe DOM application includes reversible cleanup;
+  and the `/ui/theme` export makes the same contract available to applications and agents. The new
+  server-rendered Design Studio at `design.clank.run` exercises every one of the 37 real controllers,
+  provides responsive and anatomy inspection, serves structured JSON and a public read-only MCP
+  catalog, and deploys as an ordinary first-party Clank project. Its SSR coverage also corrected the
+  Scroll Area's legacy Microsoft overflow style to use the renderer-safe DOM property spelling.
+  Project and preview creation now also reserve the live rolling-release and startup ports, so a
+  newly allocated site cannot collide with an application that remains active on a rollout port.
+
 - Added a complete dependency-free headless UI library aligned to the 37-family Base UI 1.6
   catalog. Clank-native controllers expose canonical part anatomy, controlled and uncontrolled
   state with cancelable reasons, keyboard/focus and RTL behavior, native form projection and

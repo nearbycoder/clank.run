@@ -29,3 +29,4 @@ export * from "./ui-fields.js";
 export * from "./ui-utilities.js";
 export * from "./ui-legacy.js";
 export * from "./ui-catalog.js";
+export * from "./ui-theme.js";

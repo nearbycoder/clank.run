@@ -98,6 +98,7 @@ test("every catalog family has a stable package subpath and importable implement
     "./ui/foundation", "./ui/composition", "./ui/overlay", "./ui/popups",
     "./ui/controls", "./ui/selection", "./ui/collections", "./ui/fields",
     "./ui/utilities", "./ui/catalog", "./ui/legacy",
+    "./ui/theme",
   ];
   const expectedUiSubpaths = [
     ...infrastructureSubpaths,
@@ -187,6 +188,7 @@ test("the headless library remains dependency-free at source and package boundar
     "ui.ts", "ui-catalog.ts", "ui-composition.ts", "ui-controls.ts", "ui-fields.ts",
     "ui-foundation.ts", "ui-legacy.ts", "ui-overlay.ts", "ui-popups.ts", "ui-selection.ts",
     "ui-collections.ts", "ui-utilities.ts",
+    "ui-theme.ts",
   ];
   for (const filename of modules) {
     for (const extension of [".ts", ".d.ts"]) {
@@ -214,7 +216,7 @@ test("the headless library remains dependency-free at source and package boundar
       runtimeQueue.push(dependency);
     }
   }
-  assert.ok(visitedRuntimeModules.size >= 15, "the dependency audit traversed the complete UI runtime graph");
+  assert.ok(visitedRuntimeModules.size >= 16, "the dependency audit traversed the complete UI runtime graph");
 });
 
 function createCatalogFixture(name) {

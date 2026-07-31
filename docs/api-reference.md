@@ -68,6 +68,12 @@ complete anatomy table.
   `BASE_UI_REFERENCE_URL`. Types: `UiCatalogEntry`, `UiCatalogModule`, `UiComponentName`,
   `UiComponentSlug`, `UiComponentFactoryName`, `UiComponentNameForSlug`, `UiCatalogEntryFor`,
   `UiComponentContractMap`, and `UiComponentFactoryMap`.
+- Themes: `CLANK_THEME_PRESETS` (ten immutable presets), `CLANK_THEME_COUNT`,
+  `CLANK_THEME_TOKEN_NAMES`, `defineClankTheme()`, `getClankTheme()`,
+  `clankThemeVariables()`, `createClankThemeStylesheet()`, and `applyClankTheme()` from
+  `@clank.run/framework/ui/theme`. Types: `ClankTheme`, `ClankThemeInput`,
+  `ClankThemeTokens`, `ClankThemeTokenName`, `ClankThemeScheme`, and
+  `ClankThemeStylesheetOptions`. See [Design system and component workshop](design-system.md).
 - State and composition: `createChangeDetails()`, `createControllableState()`,
   `isEventCanceled()`, `composeEventHandlers()`, `mergeProps()`, `mergeRefs()`, `renderPart()`,
   `createInteractionState()`, and `createMediaQuery()`.
