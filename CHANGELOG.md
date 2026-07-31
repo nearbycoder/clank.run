@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.13.0 - 2026-07-30
+
 - Fixed the operator memory dashboard to render control-plane process attribution from the
   diagnostics API's `controlPlane` field instead of confusing it with control-database storage.
 - Hardened the release gate against Node's occasional truncated experimental coverage artifact:
