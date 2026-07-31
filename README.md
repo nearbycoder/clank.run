@@ -159,7 +159,7 @@ applications do not need a separate runtime compiler or bundler.
 | Reactivity | Signals, lazy computed values, effects with cleanup, batching, rollback transactions, untracked reads, owned roots, deep proxy stores, snapshots, async resources, stream reduction |
 | UI | Typed compiler-powered TSX, automatic reactive expressions and props, keyed lists, stable text nodes, lifecycle/context, forms, dialogs, tabs, disclosures, pagination, directives, `Show`, `For`, `Switch`, lazy components |
 | Forms | Schema validation, typed fields, accessible control/error props, touched/dirty state, cross-field rules, cancellation, server errors, invalid-focus behavior, reset, agent-readable manifests |
-| AI | Approval-bound conversational application composition, web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface with secret-value redaction |
+| AI | Approval-bound conversational application composition, web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, per-user agent access inboxes and revocable scoped grants, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface with secret-value redaction |
 | UI↔MCP parity | Typed `agentAction` function references, bounded SSR/DOM inspection, manifest and revision verification, stable-control enforcement, structured mismatch reports |
 | Generated verification | Blueprint-derived synthetic fixture users and related records, real backend seeding, ownership isolation, exact agent/UI manifest parity, and per-route SSR smoke tests with Node's built-in test runner |
 | Routing | Parameters, optional segments, wildcards, repeated query values, async loaders, aborts, guards, redirects, titles, links, history navigation |
@@ -233,6 +233,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Performance model](docs/performance.md)
 - [AI-first contracts](docs/ai-first.md)
 - [Conversational application building](docs/conversational-build.md)
+- [Agent access inbox and scoped grants](docs/agent-access.md)
 - [Organizations, RBAC, invitations, and scoped tokens](docs/organizations.md)
 - [Service drivers for files, email, jobs, and webhooks](docs/services.md)
 - [Atomic local and S3-compatible object storage](docs/object-storage.md)

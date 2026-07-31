@@ -4,6 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added an application-local, server-rendered agent access inbox and a no-store
+  `clank-agent-grants/1` API. Users can inspect, reduce to read-only, or revoke their own MCP OAuth
+  token families with immediate per-request enforcement, CSRF protection, cross-user isolation,
+  bounded listings, configurable per-user admission limits, and discovery metadata. The internal
+  project maintenance ledger is no longer included in the npm tarball, preserving the existing
+  5 MiB unpacked distribution ceiling without removing user or operator documentation.
 - Added `clank compose`, a provider-neutral conversational build loop with data-only blueprint
   proposals, bounded external-agent stdin/stdout protocols, sanitized process context, private
   resumable reviews, exact SHA-256 plan approvals, stale-baseline rejection, transactional writes,

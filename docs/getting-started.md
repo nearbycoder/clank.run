@@ -238,6 +238,10 @@ Clank CLI, deployment-account access, or a manual callback copy. See
 [The MCP server built into every app](per-app-mcp.md) for the query/mutation mapping, OAuth model,
 typed UI action binding, parity verifier, and contract-freshness checklist.
 
+After connecting, the application user can review, reduce, or revoke that client at
+`https://<project>.apps.clank.run/__clank/oauth/access`. See [Agent access inbox and scoped
+grants](agent-access.md) for the human page and JSON management contract.
+
 ## Use Tailwind
 
 The starter is already configured for Tailwind utility classes and compiles `src/styles.css` to

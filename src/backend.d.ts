@@ -369,6 +369,8 @@ export interface OpenBackendOptions extends SQLiteOptions {
         instructions?: string;
         mcpPath?: string;
         oauthPrefix?: string;
+        /** Maximum simultaneously active OAuth grants for one application user. Defaults to 100. */
+        maxUserGrants?: number;
     };
 }
 export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>, options?: OpenBackendOptions): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>>;
