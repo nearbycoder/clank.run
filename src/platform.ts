@@ -910,6 +910,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const paths = await prepareDirectories(options.dataDirectory);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
+  const signupPolicy = signupMode === true
+    ? "public"
+    : signupMode === false
+      ? "disabled"
+      : "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
@@ -4033,6 +4038,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           {
             platformRole,
             billingEnabled: billing !== null,
+            hostingProfile,
+            runnerKind: runner.kind,
+            signupMode: signupPolicy,
             impersonation: impersonation ? {
               id: impersonation.id,
               actor: {
@@ -4647,6 +4655,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           enabled: deploymentCoordinator !== null,
           managedEnrollment: managedRunnerEnrollment,
           placementActive: providerPlacement !== null,
+          trustBoundary: {
+            hostingProfile,
+            runnerKind: runner.kind,
+            signupMode: signupPolicy,
+          },
           nodes,
           enrollments,
           summary: {

@@ -81,6 +81,13 @@ credential after exact confirmation. Local projects remain supervised on the con
 only projects created explicitly with provider placement reserve remote slots. See [Deployment
 runner fleet](runner-fleet.md).
 
+The runner panel always renders the local application trust boundary before browser hydration and
+refreshes it from the browser-admin-only runner API. It distinguishes the `trusted` process
+boundary from the `isolated` Docker boundary, names the configured signup mode, and displays a
+critical warning if a programmatic embedding ever combines public signup with trusted local
+execution. The packaged production command already refuses that unsafe combination; the visible
+status keeps the operator's current posture explicit while planning a larger rollout.
+
 The **Limits…** action on every account opens the durable capacity editor. Operators can set
 account-wide workspace and project capacity, then select any workspace owned by that account to
 override its project, domain, release, release-storage, backup retention, monthly request,
@@ -292,7 +299,8 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `PUT /api/admin/quotas/workspace/:workspaceId` — the same update contract for workspace-compatible keys.
 - `POST /api/admin/impersonation` — recent-auth platform administrator starts a reason-bound read-only support session after exact email confirmation.
 - `DELETE /api/admin/impersonation` — revoke the current browser-session-bound support session.
-- `GET /api/admin/runners` — browser-platform-admin-only runner health, capacity, work, and active enrollment metadata; no credentials.
+- `GET /api/admin/runners` — browser-platform-admin-only local trust boundary, signup mode, runner
+  health, capacity, work, and active enrollment metadata; no credentials.
 - `POST /api/admin/runners/enrollments` — recent-auth and CSRF-protected one-time enrollment creation bound to exact `nodeId` and `region`.
 - `DELETE /api/admin/runners/enrollments/:enrollmentId` — revoke one unused enrollment.
 - `PUT /api/admin/runners/:nodeId/drain` — drain or reactivate a live node with `{ "draining": boolean }`.
