@@ -267,6 +267,12 @@ test("app blueprints normalize, validate references, remain immutable, and expla
   assert.equal(app.fixtures.default.protocol, "clank-fixture/1");
   assert.equal(app.fixtures.default.users.primary.email, "fixture@focused-tasks.example.invalid");
   assert.equal(app.fixtures.default.records.tasks.primary.values.title, "Task Title");
+  assert.deepEqual(app.admin, {
+    path: "/__clank/studio",
+    roles: ["owner"],
+    entities: ["tasks"],
+    allowMutations: true,
+  });
   assert.equal(Object.hasOwn(app.fixtures.default.records.tasks.primary.values, "done"), false);
   assert.equal(Object.isFrozen(app.entities.tasks.fields), true);
   assert.equal(Object.isFrozen(app.fixtures.default.records.tasks.primary.values), true);
@@ -340,6 +346,46 @@ test("app blueprints normalize, validate references, remain immutable, and expla
       },
     },
   }), /typed API reference protocol/u);
+  assert.equal(defineApp({
+    ...todoist,
+    auth: { roles: { member: todoist.auth.roles.member } },
+    routes: [{ ...todoist.routes[0], access: "authenticated" }],
+    actions: Object.fromEntries(Object.entries(todoist.actions).map(([name, action]) => [
+      name,
+      { ...action, roles: ["member"] },
+    ])),
+  }).admin, false);
+  assert.equal(defineApp({ ...todoist, admin: false }).admin, false);
+  assert.deepEqual(defineApp({
+    ...todoist,
+    admin: {
+      path: "/operations",
+      roles: ["owner"],
+      entities: ["tasks"],
+      allowMutations: false,
+    },
+  }).admin, {
+    path: "/operations",
+    roles: ["owner"],
+    entities: ["tasks"],
+    allowMutations: false,
+  });
+  assert.throws(() => defineApp({
+    ...todoist,
+    admin: { roles: ["auditor"] },
+  }), /unknown role auditor/u);
+  assert.throws(() => defineApp({
+    ...todoist,
+    admin: { entities: ["secrets"] },
+  }), /unknown entity secrets/u);
+  assert.throws(() => defineApp({
+    ...todoist,
+    admin: { path: "/__clank/mcp" },
+  }), /framework endpoint/u);
+  assert.throws(() => defineApp({
+    ...todoist,
+    admin: { path: "/" },
+  }), /conflicts with an application route/u);
 });
 
 test("explicit fixtures validate users, field values, ownership, references, and seed order", () => {
@@ -492,6 +538,7 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.ok(first.files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
   assert.ok(first.warnings.some((warning) => warning.includes("Organization")));
   assert.equal(first.summary.fixtures, 1);
+  assert.equal(first.summary.routes, 2);
   const files = generateAppFiles(todoist, { frameworkVersion: version });
   assert.deepEqual(files.map((file) => file.path), [...files.map((file) => file.path)].sort());
   assert.match(files.find((file) => file.path === "src/backend.ts").contents, /by_priority/);
@@ -500,6 +547,10 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.match(view, /<nav class="my-6 flex flex-wrap gap-2"/);
   assert.match(view, /const api = createApi<typeof backend>\(\)/u);
   assert.match(view, /agentAction=\{api\["tasks"\]\["create"\]\}/u);
+  assert.match(view, /Generated admin studio/u);
+  assert.match(view, /Schema and data operations/u);
+  assert.match(view, /roleAllowed\(props\.user\.role, \["owner"\]\)/u);
+  assert.match(view, /studioReadOnly=\{false\}/u);
   assert.doesNotMatch(view, /overflow-x-auto/);
   const serverSource = files.find((file) => file.path === "src/server.tsx").contents;
   assert.match(
@@ -507,6 +558,8 @@ test("blueprint plans and generated files are deterministic and checksummed", as
     /imports: \{ "@clank\.run\/framework": "\/_clank\/index\.js" \}/,
   );
   assert.match(serverSource, /href="\/styles\.css"/);
+  assert.match(serverSource, /\.get\("\/__clank\/studio"/u);
+  assert.match(serverSource, /"\/__clank\/studio": \["owner"\]/u);
   assert.match(serverSource, /const serverClose = server\.close\(\);\s+runtime\.close\(\);\s+const closeResults = await Promise\.allSettled/u);
   assert.doesNotMatch(
     serverSource,
@@ -527,6 +580,13 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.match(generatedTest, /ownership visibility/u);
   assert.match(generatedTest, /assertAgentActionParity/u);
   assert.match(generatedTest, /rendered server actions match the current MCP-derived backend manifest/u);
+  assert.match(generatedTest, /Admin Studio/u);
+  const readOnlyFiles = generateAppFiles({
+    ...todoist,
+    admin: { path: "/operations", roles: ["owner"], entities: ["tasks"], allowMutations: false },
+  }, { frameworkVersion: version });
+  assert.match(readOnlyFiles.find((file) => file.path === "src/view.tsx").contents, /studioReadOnly=\{true\}/u);
+  assert.match(readOnlyFiles.find((file) => file.path === "src/server.tsx").contents, /\.get\("\/operations"/u);
   const readme = files.find((file) => file.path === "README.md").contents;
   assert.match(readme, /Focused Tasks/);
   assert.match(readme, /clank login\n/u);

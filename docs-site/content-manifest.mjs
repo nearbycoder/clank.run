@@ -53,6 +53,7 @@ export const groups = [
       ["agent-protocol", "docs/agent-protocol.md"],
       ["agent-access", "docs/agent-access.md"],
       ["conversational-build", "docs/conversational-build.md"],
+      ["admin-studio", "docs/admin-studio.md"],
       ["blueprints", "docs/blueprints.md"]
     ]
   },

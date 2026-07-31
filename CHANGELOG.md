@@ -4,6 +4,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- AI blueprints now generate an optional, server-rendered admin studio with inferred or explicit
+  privileged roles, an entity allowlist, read-only mode, schema and visibility summaries,
+  responsive live data controls, and generated SSR/UI-to-MCP parity tests. Route access, backend
+  action roles, record ownership, validation, and optimistic concurrency remain authoritative;
+  the studio introduces no database bypass.
 - Added an application-local, server-rendered agent access inbox and a no-store
   `clank-agent-grants/1` API. Users can inspect, reduce to read-only, or revoke their own MCP OAuth
   token families with immediate per-request enforcement, CSRF protection, cross-user isolation,

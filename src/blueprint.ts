@@ -109,6 +109,17 @@ export interface AppDeploymentDefinition {
   env?: Record<string, string>;
 }
 
+export interface AppAdminStudioDefinition {
+  /** Static route for the generated studio. Defaults to /__clank/studio. */
+  path?: string;
+  /** Application roles allowed to open the studio. Must be explicit unless owner/admin exists. */
+  roles?: readonly string[];
+  /** Entity collections shown in the studio. Defaults to every entity. */
+  entities?: readonly string[];
+  /** Show generated mutation controls. Defaults to true; backend action roles still apply. */
+  allowMutations?: boolean;
+}
+
 export type AppFixtureValue =
   | string
   | number
@@ -170,6 +181,7 @@ export interface AppBlueprintInput {
   migrations?: readonly AppMigrationDefinition[];
   services?: Record<string, AppServiceDefinition>;
   fixtures?: Record<string, AppFixtureDefinition>;
+  admin?: false | AppAdminStudioDefinition;
   deployment?: AppDeploymentDefinition;
 }
 
@@ -187,6 +199,12 @@ export interface AppBlueprint extends AppBlueprintInput {
   migrations: readonly AppMigrationDefinition[];
   services: Record<string, AppServiceDefinition>;
   fixtures: Record<string, AppFixture>;
+  admin: false | {
+    path: string;
+    roles: readonly string[];
+    entities: readonly string[];
+    allowMutations: boolean;
+  };
   deployment: Required<Omit<AppDeploymentDefinition, "region">> & { region?: string };
 }
 
@@ -442,11 +460,29 @@ function generatedTestSource(app: AppBlueprint): string {
       roles: action.roles,
     })));
   const roles = Object.keys(app.auth.roles);
+  const renderedRoutes = [
+    ...app.routes.map((route) => ({
+      path: route.path,
+      label: humanize(route.view),
+      roles: typeof route.access === "object" ? route.access.roles ?? [] : [],
+      entities: route.entity ? [route.entity] : [],
+      allowMutations: true,
+      admin: false,
+    })),
+    ...(app.admin ? [{
+      path: app.admin.path,
+      label: "Admin Studio",
+      roles: app.admin.roles,
+      entities: app.admin.entities,
+      allowMutations: app.admin.allowMutations,
+      admin: true,
+    }] : []),
+  ];
   const uiActions = actions.filter((action) => {
     if (!["create", "toggle", "delete"].includes(action.behavior)) return false;
-    return app.routes.some((route) => {
-      if (route.entity !== action.entity) return false;
-      const routeRoles = typeof route.access === "object" ? route.access.roles ?? [] : roles;
+    return renderedRoutes.some((route) => {
+      if (!route.allowMutations || !route.entities.includes(action.entity)) return false;
+      const routeRoles = route.roles.length ? route.roles : roles;
       const actionRoles = action.roles.length ? action.roles : roles;
       return routeRoles.some((role) => actionRoles.includes(role));
     });
@@ -464,11 +500,7 @@ function generatedTestSource(app: AppBlueprint): string {
       completionField: entity.completionField ?? null,
       sample: viewRecordSample(name, entity),
     }])),
-    routes: app.routes.map((route) => ({
-      path: route.path,
-      label: humanize(route.view),
-      roles: typeof route.access === "object" ? route.access.roles ?? [] : [],
-    })),
+    routes: renderedRoutes,
     uiActions,
     fixtures: Object.values(app.fixtures).map((fixture) => ({
       name: fixture.name,
@@ -507,6 +539,7 @@ function viewProps(route, role) {
     connected: true,
     pending: false,
     error: "",
+    studioReadOnly: false,
     logout: () => {},
   };
   for (const [entityName, entity] of Object.entries(contract.entities)) {
@@ -541,6 +574,7 @@ for (const route of contract.routes) {
     const html = await renderToString(AppView(viewProps(route, role)));
     assert.match(html, new RegExp(escapeRegExp(contract.app.name)));
     assert.match(html, new RegExp(escapeRegExp(route.label)));
+    if (route.admin) assert.match(html, /Schema and data operations/u);
   });
 }
 
@@ -746,7 +780,7 @@ export async function createAppPlan(
     summary: {
       entities: Object.keys(blueprint.entities).length,
       relationships: blueprint.relationships.length,
-      routes: blueprint.routes.length,
+      routes: blueprint.routes.length + (blueprint.admin ? 1 : 0),
       actions: Object.keys(blueprint.actions).length,
       services: Object.keys(blueprint.services).length,
       migrations: blueprint.migrations.length + 1,
@@ -760,7 +794,9 @@ export async function createAppPlan(
 
 function projectReadme(app: AppBlueprint): string {
   const routes = app.routes.map((route) =>
-    `- \`${route.path}\` — ${humanize(route.view)}${route.entity ? ` over \`${route.entity}\`` : ""}; ${routeAccessLabel(route.access)}.`).join("\n");
+    `- \`${route.path}\` — ${humanize(route.view)}${route.entity ? ` over \`${route.entity}\`` : ""}; ${routeAccessLabel(route.access)}.`)
+    .concat(app.admin ? [`- \`${app.admin.path}\` — Generated Admin Studio over ${app.admin.entities.map((name) => `\`${name}\``).join(", ")}; roles ${app.admin.roles.map((role) => `\`${role}\``).join(", ")}; ${app.admin.allowMutations ? "role-checked mutation controls" : "read-only"}.`] : [])
+    .join("\n");
   const entities = Object.entries(app.entities).map(([name, entity]) =>
     `- \`${name}\` — ${entity.description} ${entity.ownership} ownership; ${entity.realtime ? "live subscription" : "request/response refresh"}; ${Object.keys(entity.fields).length} fields.`).join("\n");
   const actions = Object.entries(app.actions).map(([name, action]) =>
@@ -839,7 +875,7 @@ npm test
 
 The generated suite builds the application, loads every deterministic fixture under
 \`fixtures/\` into an isolated in-memory database, verifies the exact agent manifest,
-checks ownership isolation, server-renders every declared route, and proves each rendered
+checks ownership isolation, server-renders every declared route and the enabled admin studio, and proves each rendered
 server-action control resolves to a current, described MCP-visible backend function. Fixture
 data is test-only and is never included in a deployment artifact.
 `;
@@ -885,6 +921,7 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 - When UI behavior changes, update the shared backend function name, schema, \`description\`, and \`agent\` metadata in the same change. The agent-enabled paths in \`GET /__clank/manifest\` and authenticated MCP \`tools/list\` must remain identical.
 - Give every backend function a precise \`description\`; mark additive writes with \`agent: { destructive: false }\`, destructive writes explicitly, and internal functions with \`agent: false\`.
 - Preserve the default MCP endpoint and OAuth flow unless the application has a documented integration reason to change them.
+- Preserve the admin studio role boundary and entity allowlist. Its controls must keep using the same typed backend actions and may never bypass backend role checks.
 - Never edit, rename, or remove an applied migration; add the next numbered migration.
 - Keep secrets out of source, \`clank.deploy.json\`, labels, logs, plans, and agent metadata. Use \`clank secrets set\`.
 - Add stable \`agentId\` and useful \`agentLabel\` values to important controls without exposing secret values.
@@ -913,7 +950,7 @@ export function explainApp(input: AppBlueprintInput | AppBlueprint): string {
     "",
     `Authentication: ${app.auth.required ? "required" : "optional"}; organizations ${app.auth.organizations ? "enabled" : "disabled"}.`,
     `Data: ${Object.keys(app.entities).length} entities, ${app.relationships.length} relationships, ${app.deployment.database}.`,
-    `Interface: ${app.routes.length} routes and ${Object.keys(app.actions).length} declared actions.`,
+    `Interface: ${app.routes.length} product routes${app.admin ? ` plus an admin studio at ${app.admin.path} for ${app.admin.roles.join(", ")}` : " with the admin studio disabled"}, and ${Object.keys(app.actions).length} declared actions.`,
     `Verification: ${Object.keys(app.fixtures).length} deterministic fixture${Object.keys(app.fixtures).length === 1 ? "" : "s"} plus generated backend and SSR contract tests.`,
     `Operations: ${app.deployment.scale} scale, ${app.deployment.isolation} isolation, health at ${app.deployment.healthPath}.`,
   ];
@@ -1025,6 +1062,45 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
   if (!roles.member) roles.member = { description: "Standard application member.", permissions: ["app.use"] };
   if (input.auth?.required === false) {
     throw new TypeError("Generated Clank applications currently require built-in authentication.");
+  }
+
+  const inferredAdminRoles = ["owner", "admin"].filter((role) => Object.hasOwn(roles, role));
+  let admin: AppBlueprint["admin"] = false;
+  if (input.admin !== false && (input.admin !== undefined || inferredAdminRoles.length > 0)) {
+    const definition = object(input.admin ?? {}, "admin");
+    const adminRoles = definition.roles === undefined
+      ? inferredAdminRoles
+      : stringArray(definition.roles, "admin.roles", 1);
+    if (adminRoles.length === 0) {
+      throw new TypeError("admin.roles is required when the app has no owner or admin role.");
+    }
+    unique(adminRoles, "admin.roles");
+    for (const role of adminRoles) {
+      if (!Object.hasOwn(roles, role)) throw new TypeError(`admin.roles references unknown role ${role}.`);
+    }
+    const adminEntities = definition.entities === undefined
+      ? Object.keys(entities)
+      : stringArray(definition.entities, "admin.entities", 1);
+    unique(adminEntities, "admin.entities");
+    for (const entity of adminEntities) {
+      if (!Object.hasOwn(entities, entity)) throw new TypeError(`admin.entities references unknown entity ${entity}.`);
+    }
+    const path = routePath(definition.path ?? "/__clank/studio", "admin.path");
+    if (
+      path === "/__clank"
+      || (path.startsWith("/__clank/") && path !== "/__clank/studio")
+      || path === "/_clank"
+      || path.startsWith("/_clank/")
+      || ["/app.js", "/view.js", "/styles.css"].includes(path)
+    ) {
+      throw new TypeError(`Admin studio path ${path} conflicts with a generated framework endpoint.`);
+    }
+    admin = {
+      path,
+      roles: adminRoles,
+      entities: adminEntities,
+      allowMutations: booleanValue(definition.allowMutations ?? true, "admin.allowMutations"),
+    };
   }
 
   const relationships = (input.relationships ?? []).map((raw, index) => {
@@ -1185,6 +1261,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     migrations,
     services,
     fixtures,
+    admin,
     deployment: {
       database: enumValue(deployment.database ?? "sqlite", ["sqlite", "postgres"], "deployment.database"),
       scale: enumValue(deployment.scale ?? "single", ["single", "horizontal"], "deployment.scale"),
@@ -1197,6 +1274,12 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
   };
   if (routes.some((route) => route.path === normalized.deployment.healthPath)) {
     throw new TypeError(`Health path ${normalized.deployment.healthPath} conflicts with an application route.`);
+  }
+  if (normalized.admin && routes.some((route) => route.path === normalized.admin.path)) {
+    throw new TypeError(`Admin studio path ${normalized.admin.path} conflicts with an application route.`);
+  }
+  if (normalized.admin && normalized.admin.path === normalized.deployment.healthPath) {
+    throw new TypeError(`Admin studio path ${normalized.admin.path} conflicts with the health route.`);
   }
   return deepFreeze(normalized);
 }
@@ -2190,6 +2273,7 @@ function viewSource(app: AppBlueprint): string {
   ${entity.completionField ? `${name}Toggle(id: ${type}["_id"], value: boolean, version: number): Promise<boolean>;\n  ` : ""}${name}Remove(id: ${type}["_id"], version: number): Promise<boolean>;`;
   }).join("\n");
   const panels = entityNames.map((name) => entityPanelSource(app, name, app.entities[name])).join("\n\n");
+  const studio = adminStudioSource(app);
   const navigation = app.routes.map((route) => {
     const routeAgentId = route.path === "/"
       ? "route-home"
@@ -2208,6 +2292,18 @@ function viewSource(app: AppBlueprint): string {
       ? `{roleAllowed(props.user.role, ${sourceLiteral(route.access.roles ?? [])}) ? (${link}) : null}`
       : link;
   }).join("\n            ");
+  const adminNavigation = app.admin
+    ? `{roleAllowed(props.user.role, ${sourceLiteral(app.admin.roles)}) ? (<a
+              classList={{
+                "rounded-lg px-3 py-2 text-sm font-semibold transition": true,
+                "bg-slate-950 text-white": props.route === ${sourceLiteral(app.admin.path)},
+                "text-slate-600 hover:bg-slate-100": props.route !== ${sourceLiteral(app.admin.path)},
+              }}
+              href=${sourceLiteral(app.admin.path)}
+              aria-current={props.route === ${sourceLiteral(app.admin.path)} ? "page" : undefined}
+              agentId="route-admin-studio"
+            >Admin Studio</a>) : null}`
+    : "";
   const routeViews = app.routes.map((route) => {
     const contents = route.entity
       ? `<${typeName(route.entity)}Panel {...props} />`
@@ -2218,6 +2314,9 @@ function viewSource(app: AppBlueprint): string {
             </section>`;
     return `{props.route === ${sourceLiteral(route.path)} ? (${contents}) : null}`;
   }).join("\n          ");
+  const adminView = app.admin
+    ? `{props.route === ${sourceLiteral(app.admin.path)} && roleAllowed(props.user.role, ${sourceLiteral(app.admin.roles)}) ? (<AdminStudio {...props} />) : null}`
+    : "";
   return `/* @clankImportSource @clank.run/framework */
 import { For, createApi, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
 import type { backend, ${types} } from "./backend.ts";
@@ -2233,6 +2332,7 @@ export interface AppViewProps {
   connected: boolean;
   pending: boolean;
   error: string;
+  studioReadOnly?: boolean;
 ${props}
   logout(): void | Promise<void>;
 }
@@ -2248,6 +2348,8 @@ function valueLabel(value: unknown): string {
 }
 
 ${panels}
+
+${studio}
 
 export function AppView(props: AppViewProps) {
   return (
@@ -2269,10 +2371,12 @@ export function AppView(props: AppViewProps) {
       </header>
       <nav class="my-6 flex flex-wrap gap-2" aria-label="Application">
         ${navigation}
+        ${adminNavigation}
       </nav>
       {props.error ? <p class="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800" role="alert">{props.error}</p> : null}
       <div aria-busy={props.pending}>
         ${routeViews}
+          ${adminView}
       </div>
     </main>
   );
@@ -2322,9 +2426,9 @@ function entityPanelSource(app: AppBlueprint, name: string, entity: AppEntityDef
     }).join("\n              ");
   return `function ${type}Panel(props: AppViewProps) {
 ${signals}
-  const canCreate = roleAllowed(props.user.role, ${sourceLiteral(create.roles)});
-  const canRemove = roleAllowed(props.user.role, ${sourceLiteral(remove.roles)});
-  ${toggle ? `const canToggle = roleAllowed(props.user.role, ${sourceLiteral(toggle.roles)});` : ""}
+  const canCreate = props.studioReadOnly !== true && roleAllowed(props.user.role, ${sourceLiteral(create.roles)});
+  const canRemove = props.studioReadOnly !== true && roleAllowed(props.user.role, ${sourceLiteral(remove.roles)});
+  ${toggle ? `const canToggle = props.studioReadOnly !== true && roleAllowed(props.user.role, ${sourceLiteral(toggle.roles)});` : ""}
   const submit = async (event: Event) => {
     event.preventDefault();
     if (!canCreate || props.pending) return;
@@ -2382,6 +2486,57 @@ ${controls}
             </article>
           )}
         </For>
+      </div>
+    </section>
+  );
+}`;
+}
+
+function adminStudioSource(app: AppBlueprint): string {
+  if (!app.admin) return "";
+  const entityCards = app.admin.entities.map((name) => {
+    const entity = app.entities[name];
+    const fields = Object.entries(entity.fields).map(([fieldName, field]) =>
+      `<li class="rounded-lg bg-slate-100 px-2 py-1"><span class="font-semibold">{${sourceLiteral(fieldName)}}</span> <span class="text-slate-500">{${sourceLiteral(field.type)}}</span></li>`).join("\n                ");
+    return `<article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="flex items-start justify-between gap-4">
+              <div><h3 class="font-semibold">{${sourceLiteral(humanize(name))}}</h3>
+              <p class="mt-1 text-sm text-slate-500">{${sourceLiteral(entity.description)}}</p></div>
+              <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">{props.${name}Records.length} records</span>
+            </div>
+            <dl class="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <div><dt class="text-slate-400">Ownership</dt><dd class="font-medium">{${sourceLiteral(humanize(entity.ownership ?? "user"))}}</dd></div>
+              <div><dt class="text-slate-400">Updates</dt><dd class="font-medium">{${sourceLiteral(entity.realtime ? "Realtime" : "Request / response")}}</dd></div>
+            </dl>
+            <ul class="mt-4 flex flex-wrap gap-2 text-xs" aria-label={${sourceLiteral(`${humanize(name)} fields`)}}>
+              ${fields}
+            </ul>
+          </article>`;
+  }).join("\n          ");
+  const panels = app.admin.entities.map((name) =>
+    `<${typeName(name)}Panel {...props} studioReadOnly={${sourceLiteral(!app.admin!.allowMutations)}} />`).join("\n        ");
+  return `function AdminStudio(props: AppViewProps) {
+  return (
+    <section>
+      <div class="rounded-2xl bg-slate-950 p-6 text-white shadow-sm sm:p-8">
+        <div class="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+          <div><p class="text-xs font-bold uppercase tracking-[.18em] text-emerald-300">Generated admin studio</p>
+          <h2 class="mt-2 text-2xl font-semibold sm:text-3xl">Schema and data operations</h2>
+          <p class="mt-3 max-w-2xl text-slate-300">Inspect the generated schema and operate records through the same typed, role-checked server actions used by the product UI and MCP.</p></div>
+          <div class="flex flex-wrap gap-2"><span class="rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold">{props.user.role}</span>
+          <a class="rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20" href="/__clank/oauth/access">Agent access</a></div>
+        </div>
+        <dl class="mt-6 grid gap-3 sm:grid-cols-3">
+          <div class="rounded-xl bg-white/5 p-4"><dt class="text-xs uppercase tracking-wide text-slate-400">Collections</dt><dd class="mt-1 text-2xl font-semibold">{${app.admin.entities.length}}</dd></div>
+          <div class="rounded-xl bg-white/5 p-4"><dt class="text-xs uppercase tracking-wide text-slate-400">Records visible</dt><dd class="mt-1 text-2xl font-semibold">{${app.admin.entities.map((name) => `props.${name}Records.length`).join(" + ")}}</dd></div>
+          <div class="rounded-xl bg-white/5 p-4"><dt class="text-xs uppercase tracking-wide text-slate-400">Mode</dt><dd class="mt-1 text-base font-semibold">{${sourceLiteral(app.admin.allowMutations ? "Role-checked writes" : "Read-only")}}</dd></div>
+        </dl>
+      </div>
+      <div class="mt-6 grid gap-4 lg:grid-cols-2">
+        ${entityCards}
+      </div>
+      <div class="mt-10 space-y-12">
+        ${panels}
       </div>
     </section>
   );
@@ -2646,9 +2801,15 @@ function serverSource(app: AppBlueprint): string {
   }).join("\n");
   const versions = names.map((name) => `initial_${name}.version`).join(", ");
   const access = app.routes.map((route) =>
-    `${sourceLiteral(route.path)}: ${typeof route.access === "object" ? sourceLiteral(route.access.roles ?? []) : "[]"}`).join(",\n  ");
+    `${sourceLiteral(route.path)}: ${typeof route.access === "object" ? sourceLiteral(route.access.roles ?? []) : "[]"}`)
+    .concat(app.admin ? [`${sourceLiteral(app.admin.path)}: ${sourceLiteral(app.admin.roles)}`] : [])
+    .join(",\n  ");
   const routeRegistrations = app.routes.map((route) =>
-    `  .get(${sourceLiteral(route.path)}, ({ request }) => renderRoute(request, ${sourceLiteral(route.path)}))`).join("\n");
+    `  .get(${sourceLiteral(route.path)}, ({ request }) => renderRoute(request, ${sourceLiteral(route.path)}))`)
+    .concat(app.admin
+      ? [`  .get(${sourceLiteral(app.admin.path)}, ({ request }) => renderRoute(request, ${sourceLiteral(app.admin.path)}))`]
+      : [])
+    .join("\n");
   return `/* @clankImportSource @clank.run/framework */
 import {
   AuthGate,

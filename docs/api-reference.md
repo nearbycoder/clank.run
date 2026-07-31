@@ -294,6 +294,9 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `generateAppFiles(blueprint, options?)`: return deterministic full-stack application files.
 - `createAppPlan(blueprint, options?)`: checksum every generated file and return a `clank-plan/1` review artifact.
 - `explainApp(blueprint)`: summarize identity, data, routes, services, deployment requirements, and warnings.
+- `AppAdminStudioDefinition`: configure the generated studio's static path, application roles,
+  entity allowlist, and mutation-control visibility. Backend action roles and ownership remain
+  authoritative.
 - Blueprint fixtures: `AppFixtureDefinition`, `AppFixtureUserDefinition`,
   `AppFixtureRecordDefinition`, and `AppFixtureValue` describe bounded synthetic states. Normalized
   `AppFixture`, `AppFixtureUser`, and `AppFixtureRecord` values are frozen, included in plan

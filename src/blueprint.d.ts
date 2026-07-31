@@ -87,6 +87,16 @@ export interface AppDeploymentDefinition {
     customDomains?: boolean;
     env?: Record<string, string>;
 }
+export interface AppAdminStudioDefinition {
+    /** Static route for the generated studio. Defaults to /__clank/studio. */
+    path?: string;
+    /** Application roles allowed to open the studio. Must be explicit unless owner/admin exists. */
+    roles?: readonly string[];
+    /** Entity collections shown in the studio. Defaults to every entity. */
+    entities?: readonly string[];
+    /** Show generated mutation controls. Defaults to true; backend action roles still apply. */
+    allowMutations?: boolean;
+}
 export type AppFixtureValue = string | number | boolean | null | {
     ref: string;
 };
@@ -142,6 +152,7 @@ export interface AppBlueprintInput {
     migrations?: readonly AppMigrationDefinition[];
     services?: Record<string, AppServiceDefinition>;
     fixtures?: Record<string, AppFixtureDefinition>;
+    admin?: false | AppAdminStudioDefinition;
     deployment?: AppDeploymentDefinition;
 }
 export interface AppBlueprint extends AppBlueprintInput {
@@ -158,6 +169,12 @@ export interface AppBlueprint extends AppBlueprintInput {
     migrations: readonly AppMigrationDefinition[];
     services: Record<string, AppServiceDefinition>;
     fixtures: Record<string, AppFixture>;
+    admin: false | {
+        path: string;
+        roles: readonly string[];
+        entities: readonly string[];
+        allowMutations: boolean;
+    };
     deployment: Required<Omit<AppDeploymentDefinition, "region">> & {
         region?: string;
     };
