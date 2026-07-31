@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   For,
+  Portal,
+  createCheckbox,
   createContext,
   h,
   onMount,
@@ -10,6 +12,7 @@ import {
   renderToString,
   signal,
   useContext,
+  useId,
 } from "../dist/index.js";
 
 test("SSR escapes content, resolves reactive attributes, and emits hydration markers", async () => {
@@ -27,6 +30,11 @@ test("SSR escapes content, resolves reactive attributes, and emits hydration mar
   assert.match(await renderToString(h("button", { "aria-expanded": false }, "Menu")), /aria-expanded="false"/);
   assert.doesNotMatch(html, /aria-label/);
   assert.match(html, /<!--clank:start-->&lt;unsafe&gt;<!--clank:end-->/);
+  const reversedClassOrder = await renderToString(h("div", {
+    classList: { active: true, hidden: false },
+    className: ["card active", { ready: true }],
+  }));
+  assert.match(reversedClassOrder, /class="card active ready"/);
 });
 
 test("SSR evaluates component context and keyed control flow without running mounts", async () => {
@@ -86,4 +94,51 @@ test("SSR rejects executable URL and raw iframe attributes and supports CSP nonc
     scripts: ["/app.js"],
   });
   assert.equal((document.match(new RegExp(`nonce="${nonce}"`, "g")) ?? []).length, 2);
+});
+
+test("SSR preserves portal content between hydration markers", async () => {
+  const html = await renderToString(h("main", {}, h(Portal, {}, h("dialog", {}, "Portalled"))));
+  assert.equal(html, "<main><!--clank:portal--><dialog>Portalled</dialog><!--clank:/portal--></main>");
+});
+
+test("headless control parts render deterministic hydration-ready form markup", async () => {
+  function HeadlessProbe() {
+    const checkbox = createCheckbox({
+      id: "ssr-sync",
+      name: "sync",
+      defaultChecked: false,
+      required: true,
+    });
+    return h("form", {},
+      h("button", checkbox.root(),
+        h("span", checkbox.indicator({ keepMounted: true }), "✓"),
+        "Keep synchronized",
+      ),
+      h("input", checkbox.input()),
+    );
+  }
+
+  const first = await renderToString(h(HeadlessProbe));
+  const second = await renderToString(h(HeadlessProbe));
+  assert.equal(first, second);
+  assert.match(first, /id="ssr-sync"/);
+  assert.match(first, /role="checkbox"/);
+  assert.match(first, /aria-checked="false"/);
+  assert.match(first, /data-state="unchecked"/);
+  assert.match(first, /id="ssr-sync-input"/);
+  assert.match(first, /name="sync"/);
+  assert.match(first, /aria-hidden="true"/);
+});
+
+test("render-root IDs are deterministic across independent SSR renders", async () => {
+  function LabelledInput() {
+    const id = useId("field");
+    return h("label", { for: id }, "Name", h("input", { id }));
+  }
+  const view = h("form", {}, h(LabelledInput), h(LabelledInput));
+  const first = await renderToString(view);
+  const second = await renderToString(view);
+  assert.equal(first, second);
+  assert.match(first, /for="clank-field-1"/);
+  assert.match(first, /for="clank-field-2"/);
 });

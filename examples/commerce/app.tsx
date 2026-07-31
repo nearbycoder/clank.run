@@ -170,7 +170,7 @@ function CartDialog() {
             <p class="text-xs font-bold uppercase tracking-[.2em] text-moss">Your order</p>
             <h2 {...cartDialog.title()} class="mt-1 text-3xl font-semibold">Shopping cart</h2>
           </div>
-          <button class="grid size-11 place-items-center rounded-full bg-black/5 text-xl" onClick={cartDialog.hide} agentId="close-cart" agentLabel="Close cart">×</button>
+          <button {...cartDialog.close({ agentId: "close-cart", agentLabel: "Close cart" })} class="grid size-11 place-items-center rounded-full bg-black/5 text-xl">×</button>
         </div>
         <p {...cartDialog.description()} class="mt-3 text-sm text-black/55">Review your items and securely enter delivery details.</p>
 

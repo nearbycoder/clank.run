@@ -1355,9 +1355,14 @@ test("deployments supervise independent worker and scheduler processes beside th
         { concurrency: "3", queues: "email,reports" },
       ],
     );
-    const logs = await payload(platform, jsonRequest(`/api/projects/${projectId}/logs`, {
-      token: owner.accessToken,
-    }));
+    let logs;
+    await waitFor(async () => {
+      logs = await payload(platform, jsonRequest(`/api/projects/${projectId}/logs`, {
+        token: owner.accessToken,
+      }));
+      return ["worker[1]:stdout", "worker[2]:stdout", "scheduler:stdout"]
+        .every((stream) => logs.logs.some((entry) => entry.stream === stream));
+    });
     assert.equal(logs.logs.some((entry) => entry.stream === "worker[1]:stdout"), true);
     assert.equal(logs.logs.some((entry) => entry.stream === "worker[2]:stdout"), true);
     assert.equal(logs.logs.some((entry) => entry.stream === "scheduler:stdout"), true);

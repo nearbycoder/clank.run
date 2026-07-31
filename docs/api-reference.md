@@ -1,6 +1,7 @@
 # API reference
 
-This is the compact index of every public export. The focused guides contain behavioral details and examples.
+This is a compact index of the primary public surfaces. The shipped `.d.ts` files are the
+exhaustive symbol contract; focused guides contain behavioral details and examples.
 
 ## Core
 
@@ -33,6 +34,9 @@ This is the compact index of every public export. The focused guides contain beh
 - `isVNode(value)`: VNode detection.
 - `onMount(callback)`: post-mount lifecycle with optional cleanup.
 - `createContext(defaultValue)`, `provideContext(context, value)`, `useContext(context)`.
+- `useId(prefix?)`: render-root-scoped deterministic ID for matching SSR and hydration trees.
+- `Portal({ target?, disabled?, children })`: same-document portal that server-renders at its
+  declaration markers and moves owned nodes after hydration.
 - `Show`, `Match`, `Switch`: reactive conditional control flow.
 - `For`: O(n) keyed reconciliation with row identity preservation; use `by="id"` or a key function.
 - `lazy(loader)`: promise-backed component.
@@ -52,13 +56,100 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 
 ## Headless UI
 
-- `createDisclosure(options)`: expandable state with trigger/panel ARIA props.
-- `createDialog(options)`: modal state, focus trap, Escape/backdrop handling, scroll lock, and focus restoration.
-- `createTabs(options)`: inferred tab values, panel relationships, roving tab index, and keyboard navigation.
-- `createPagination(options)`: page clamping, ranges, controls, and compact page items.
-- `clickOutside(handler)`: outside-pointer directive.
-- `autoFocus(element)`: mount-time focus directive.
-- Types: `DisclosureController`, `DialogController`, `TabsController`, `PaginationController`.
+The dependency-free headless library is available from the package root or
+`@clank.run/framework/ui`. Group entry points (`/ui/controls`, `/ui/fields`, and so on) and all
+37 family entry points (`/ui/dialog`, `/ui/number-field`, and so on) are also exported. Family
+paths are typed aliases to their category modules rather than symbol-isolated bundles. See
+[Headless UI](ui.md) for required markup, behavior, accessibility, forms, SSR, Tailwind, and the
+complete anatomy table.
+
+- Catalog: `UI_COMPONENT_COUNT` (`37`), `UI_COMPONENT_CATALOG`,
+  `UI_COMPONENT_FACTORIES`, `getUiCatalogEntry()`, `BASE_UI_REFERENCE_VERSION` (`"1.6.0"`), and
+  `BASE_UI_REFERENCE_URL`. Types: `UiCatalogEntry`, `UiCatalogModule`, `UiComponentName`,
+  `UiComponentSlug`, `UiComponentFactoryName`, `UiComponentNameForSlug`, `UiCatalogEntryFor`,
+  `UiComponentContractMap`, and `UiComponentFactoryMap`.
+- State and composition: `createChangeDetails()`, `createControllableState()`,
+  `isEventCanceled()`, `composeEventHandlers()`, `mergeProps()`, `mergeRefs()`, `renderPart()`,
+  `createInteractionState()`, and `createMediaQuery()`.
+- IDs and environment: `createIdScope()`/`createUiIdScope()`, `createUiId()`, `UiProvider`,
+  `DirectionProvider`, `CSPProvider`, `useUiEnvironment()`, `useDirection()`, and `useCspNonce()`.
+- Direction and DOM ownership: `resolveDirection()`, `isRtl()`, `resolveLogicalSide()`,
+  `getOwnerDocument()`, `getComposedPath()`, and `containsEventTarget()`.
+- Focus and collections: `isFocusable()`, `focusableElements()`, `focusFirst()`,
+  `getCollectionNavigationIntent()`, `findCollectionIndex()`, `findTypeaheadMatch()`, and
+  `createTypeahead()`.
+- Agent contracts and data hooks: `createUiManifest()` and `dataState()`.
+- Overlay foundations: `createOverlay()`, `createFloating()`, and `createPresence()`.
+- Popup families: `createAlertDialog()`, `createCollapsible()`, `createDialog()`,
+  `createDrawer()`, `createDrawerProvider()`, `createDrawerVirtualKeyboardProvider()`,
+  `createPopover()`, `createPreviewCard()`, `createTooltip()`, and `createTooltipProvider()`.
+- Control families: `createAvatar()`, `createButton()`, `createCheckbox()`,
+  `createCheckboxGroup()`, `createMeter()`, `createProgress()`, `createRadioGroup()`,
+  `createSeparator()`, `createSwitch()`, `createToggle()`, and `createToggleGroup()`.
+- Selection families: `createAutocomplete()`, `createCombobox()`, `createSelect()`, and
+  `filterSelectionItems()`.
+- Collection families: `createAccordion()`, `createContextMenu()`, `createMenu()`,
+  `createMenubar()`, `createNavigationMenu()`, `createTabs()`, and `createToolbar()`.
+- Field families: `createField()`, `createFieldset()`, `createFormFacade()`, `createInput()`,
+  `createNumberField()`, `createOtpField()`, and `createSlider()`. `createFormFacade()` is distinct
+  from the schema-oriented `createForm()` above.
+- Utility families: `createScrollArea()`, `createToastManager()`, and `createToastProvider()`.
+- Compatibility helpers outside the 37-family catalog: `createDisclosure()`,
+  `createPagination()`, `clickOutside()`, and `autoFocus()`.
+
+Common contracts include `ChangeDetails`, `ControllableState`, `UiProps`, `UiRef`, `UiManifest`,
+`UiPartManifest`, `UiActionManifest`, `Direction`, `Orientation`, `OverlayController`,
+`FloatingController`, `PresenceController`, and the family-specific `*Options` and `*Controller`
+types.
+
+- Popup presence: `PopupOptions.keepMounted`, `PopupPortalOptions { keepMounted? }`,
+  `PopupController.isMounted(options?)`, and `portal(options?)`. Popup-backed collection and
+  selection controllers expose the same methods. Collapsible exposes `isPanelMounted(options?)`;
+  Accordion and Tabs expose `isPanelMounted(value, options?)`. A default-closed popup is not
+  mounted, an exiting popup remains mounted, and a kept popup remains mounted but hidden.
+- Popup dismissal and triggers: nonmodal Popover, Dialog, and Drawer infer focus-out dismissal
+  while pointer dismissal is enabled; `closeOnFocusOutside` overrides the inference. Multiple
+  triggers share one popup, only the active trigger reports expanded/open, interaction transfers
+  ownership without closing, late mounts do not steal ownership, and every mounted trigger remains
+  inside the outside-event boundary.
+- Checkbox and Switch: `uncheckedValue?: string` plus `uncheckedInput()` opt into an explicit
+  unchecked/off submitted value without changing native checked submission. Their catalog anatomy
+  includes `unchecked-input`. `ControlIndicatorOptions.keepMounted` retains inactive Checkbox,
+  Checkbox Group, and Radio indicators.
+- Checkbox Group: `parentState`, `toggleAll()`, `parent(CheckboxGroupParentOptions?)`, and
+  `parentIndicator(CheckboxGroupParentIndicatorOptions?)` provide checked/mixed parent control
+  semantics. Canonical anatomy includes `parent` and `parent-indicator`.
+- Selection values: `SelectionValue<Value> = Value | readonly Value[] | null` and
+  `AutocompleteFieldValue<Value> = string | readonly Value[]`. `SelectOptions.field` and
+  `ComboboxOptions.field` bind the committed selection; `AutocompleteOptions.field` binds a string
+  in single mode and selected values in multiple mode. Field and explicit controlling props are
+  mutually exclusive. Values must match declared items, shape, and uniqueness.
+- Editable selection: `CompletionMode`, `ComboboxOptions.openOnInputClick` (Combobox default
+  `true`, Autocomplete default `false`), and `AutocompleteOptions.keepHighlight` (default `false`).
+  Paired committed-value/text transitions roll back together when either change is canceled.
+- Select typeahead and focus: a closed single Select commits a printable-key match; a closed
+  multiple/read-only Select ignores it; an open Select only moves its highlight. Trigger-to-popup
+  focus remains internal to a composed Field, while an accepted focus-out/outside dismissal or
+  actual external blur completes touched/blur validation.
+- Field relationships are mount-aware. `label()`, `description()`, and `error()` register reactive
+  relationships when requested/mounted and remove them on directive cleanup; composed controls
+  inherit Field constraints, state hooks, native validity, reset, and cancellation.
+- OTP: `OtpFieldOptions.onValueComplete`, deprecated `onComplete`, and `autoSubmit`. Completion
+  callbacks receive `ChangeDetails<OtpFieldChangeReason>`; cancellation suppresses auto-submit.
+- Slider: `SliderThumbPartOptions` supports `ariaLabel`, `ariaLabelledBy`, `ariaValueText`,
+  `getAriaLabel(index)`, and `getAriaValueText(formattedValue, value, index)` through
+  `thumb(index, options?)`.
+- Scroll Area: `ScrollAreaScrollbarOptions { label?, labelledBy? }` names each `role="scrollbar"`;
+  axis names are the defaults and `labelledBy` takes precedence. Viewports expose
+  `data-clank-scroll-area-viewport`; mounted viewports share one nonce-aware behavioral rule per
+  document that hides WebKit native bars, and custom tracks preserve Ctrl+wheel browser zoom.
+- Drawer-specific contracts include `DrawerSnapPoint`, `DrawerResolvedSnapPoint`, and
+  `DrawerMeasurements`. Toast swipe ignores interactive descendants and
+  `[data-base-ui-swipe-ignore]`/`[data-swipe-ignore]`, and always releases timer pauses on cancel,
+  capture loss, or root cleanup. Toast root relationships follow mounted title/description parts;
+  empty F6 is a no-op, and dismissing a keyboard-focused toast repairs focus.
+- Tooltip Provider: only an accepted-open tooltip can own the provider. Canceled opens never steal
+  ownership, and a contender rolls back when the active tooltip vetoes closing.
 
 ## Compiler
 

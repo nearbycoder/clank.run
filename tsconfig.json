@@ -7,7 +7,9 @@
     "baseUrl": ".",
     "paths": {
       "/dist/index.js": ["./src/index.ts"],
-      "@clank.run/framework": ["./src/index.ts"]
+      "@clank.run/framework": ["./src/index.ts"],
+      "@clank.run/framework/dom": ["./src/dom.ts"],
+      "@clank.run/framework/ui": ["./src/ui.ts"]
     },
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "strict": true,
