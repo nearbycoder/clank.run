@@ -81,6 +81,14 @@ credential after exact confirmation. Local projects remain supervised on the con
 only projects created explicitly with provider placement reserve remote slots. See [Deployment
 runner fleet](runner-fleet.md).
 
+For an unavailable stateful provider, the project **Backups** view gives platform administrators a
+guarded **Recover…** action. The operator must first stop or network-fence the old runtime and
+revoke its exact runner credential. Recovery then requires recent authentication, an exact
+source/backup phrase, separate fencing and recovery-point-loss acknowledgements, and a verified
+encrypted backup. The old provider origin is unpublished while Clank allocates a higher generation
+on a compatible target. Heartbeat loss never starts this workflow automatically. See
+[Recovery](recovery.md).
+
 The runner panel always renders the local application trust boundary before browser hydration and
 refreshes it from the browser-admin-only runner API. It distinguishes the `trusted` process
 boundary from the `isolated` Docker boundary, names the configured signup mode, and displays a

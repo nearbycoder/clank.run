@@ -137,6 +137,12 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   platform-administrator browser session; token, project-member, and support-impersonation
   responses redact shared capacity to an unavailable record. Secret values are redacted at the control plane. `placement.maxDatabaseBytes` bounds snapshot transfer, recovery reads, and
   runtime-capsule capacity. Provider placement requires managed ingress.
+- `POST /api/admin/projects/:projectId/provider-failover`: browser-admin-only emergency recovery
+  from a revoked and independently fenced exact source. Requires recent authentication, CSRF,
+  `backupId`, `sourceNodeId`, exact `confirmation`, `acknowledgeSourceFenced: true`, and
+  `acknowledgeDataLoss: true`. It verifies the encrypted recovery point, preserves target
+  requirements/capacity, removes old ingress, and publishes only an exactly observed higher
+  generation. Bearer tokens and support impersonation are rejected.
 
 ## Object storage
 
@@ -182,6 +188,12 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 - `DeploymentOrchestrator.setDesired({ placementMode })`: `portable` placements may move after node
   loss; `stateful` placements durably reserve one node identity and fail closed instead of moving
   node-local data implicitly.
+- `DeploymentOrchestrator.relocateStateful({ projectId, sourceNodeId, runtimeProtocol })`: advances
+  an exact running stateful placement to a different compatible node only after the source is
+  offline or expired, preserves region/capability/process-slot requirements, cancels stale work,
+  clears observed state, and queues one higher-generation reconcile. This low-level primitive does
+  not move data or prove physical fencing; platform callers must supply and verify recovery data
+  and enforce the operator boundary.
 - `DeploymentOrchestrator.setDesired({ nodeRequirements })`: persists endpoint and exact-label
   capability requirements so initial and delayed placement select only compatible nodes.
 - Types: `DeploymentCoordinatorHandler`, `DeploymentCoordinatorHandlerOptions`,

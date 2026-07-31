@@ -312,7 +312,13 @@ failover commit under the same SQLite write transaction, and a node cannot heart
 with less capacity than its existing reservations. Portable placements wait for a node with
 enough matching slots and may move after node loss. Provider projects remain `stateful`: their
 node-local SQLite data stays pinned and fails closed until that node identity returns or an
-operator restores an encrypted backup through an explicit recovery workflow. Provider filesystem
+operator restores an encrypted backup through an explicit recovery workflow. For a different-node
+recovery, the platform administrator must independently fence and revoke the exact source, confirm
+the exact source/backup, acknowledge recovery-point loss, and have a healthy target satisfying the
+same region, labels, endpoint, and process-slot demand. Clank cancels stale source operations,
+unpublishes the old provider origin, allocates a higher generation, and publishes only after exact
+target observation. A missed heartbeat never authorizes this movement because the old runtime may
+still be writing during a network partition. Provider filesystem
 capacity is visible to platform administrators in the project dashboard, while per-project disk quotas and block-device
 provisioning remain operator responsibilities.
 

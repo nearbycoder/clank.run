@@ -50,6 +50,39 @@ This is the repeatable maintainer checklist for substantial framework or platfor
   still requires external state and stateless replicas. No service, replica, volume, database,
   bucket, or other paid resource was added.
 
+## 2026-07-30 provider telemetry and explicit recovery phase
+
+- [x] Added generation-bound provider filesystem-capacity diagnostics with version 1 rolling
+  compatibility, strict aggregate validation, and platform-administrator-only visibility for the
+  shared cross-project capacity signal.
+- [x] Added explicit stateful relocation that preserves region, endpoint/label requirements, and
+  process-slot demand, cancels stale source work, clears observation, and queues one exact higher
+  generation without weakening the portable/stateful distinction.
+- [x] Added recent-auth, same-origin, browser-admin-only emergency provider recovery from a
+  cryptographically verified encrypted backup. It requires the exact source credential to be
+  revoked, separate out-of-band source-fencing and recovery-point-loss acknowledgements, and exact
+  typed source/backup confirmation.
+- [x] Unpublished old ingress before relocation, failed closed when no compatible capacity
+  existed, made identical pending requests resumable, kept failed recovery explicit, and recorded
+  bounded queue/activation audit metadata without snapshot bytes, secrets, paths, or credentials.
+- [x] Rebuilt the provider-generation table transactionally on upgrade so pre-recovery restore
+  rows retain their safety points and gain an explicit `restore` kind while new failover rows can
+  bind a fenced source without inventing a target safety backup.
+- [x] Covered exact source/offline checks, stale-work cancellation, requirement/capacity
+  preservation, bearer-token rejection, heartbeat-expiry rejection, acknowledgement enforcement,
+  no-capacity ingress withdrawal, old-schema migration, encrypted target replacement, target
+  observation, source re-enrollment publication fencing, ingress publication, audit state, and
+  cleanup in focused and full integration tests.
+- [x] Browser-verified the recovery dialog at 1280×900 and 390×844 with readable identities,
+  focused confirmation, complete risk boundaries, stacked mobile actions, no horizontal overflow,
+  no application exceptions, and no failed application requests.
+- [x] Passed the complete local gate: 378 tests at 86.60% line / 75.34% branch / 87.72%
+  function coverage, 61 Markdown files, 273 local links, 38 synchronized declaration files,
+  35 package exports, packed consumer/auth/MCP/live-sync/deploy/migration/failure/rollback/restore
+  conformance, and package/current-tree/reachable-history credential scans.
+- [x] Kept heartbeat-only stateful failover disabled and added no Railway service, replica, volume,
+  database, bucket, or other paid resource.
+
 ## 2026-07-30 production diagnostics correction
 
 - [x] Compared Railway series with Clank's live filesystem and process attribution. Memory remained

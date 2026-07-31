@@ -242,9 +242,15 @@ generation. The same boundary reports shared provider-filesystem capacity, which
 returns only to a platform administrator's interactive browser session, and exposes payload-free
 durable-job inspection plus conditional cancellation/retry. The control plane verifies every
 private response and redacts project secrets before showing it. Automatic failover from node-local
-SQLite is not implemented. A stateful project stays pinned and unavailable when its node is
-unavailable. Operators must not treat release-object retention as a database backup. See [Remote runtime
-placement](runtime-placement.md#current-support-boundary) for the precise boundary.
+SQLite is intentionally not implemented: heartbeat loss alone cannot prove that the old writer
+stopped. A stateful project stays pinned and unavailable until its node returns or a platform
+administrator explicitly recovers a verified encrypted backup. Emergency recovery requires the
+exact source to be revoked and independently fenced, recent browser authentication, exact
+confirmation, two risk acknowledgements, and compatible target capacity. It unpublishes old
+ingress before the replacement becomes active and retains an exact generation/audit trail.
+Operators must not treat release-object retention as a database backup. See [Recovery](recovery.md)
+and [Remote runtime placement](runtime-placement.md#current-support-boundary) for the precise
+boundary.
 
 See [Remote runtime placement](runtime-placement.md) for operator configuration, exact body, and
 trust boundary, then [Provider data lifecycle](provider-data-lifecycle.md) for its safe

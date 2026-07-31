@@ -116,7 +116,7 @@ To upgrade a runner:
 
 **Revoke** rotates the stored credential digest immediately, marks the node offline, and
 reassigns eligible portable desired placement. A stateful placement stays pinned and unavailable
-until its node identity is re-enrolled or an explicit backup/restore workflow moves it. The old
+until its node identity is re-enrolled or an explicit encrypted recovery workflow moves it. The old
 runner can no longer authenticate, renew, complete,
 or observe work. A leased operation stays fenced until its lease expires, then becomes retryable on
 the replacement node with a higher fence. Fences increase across all operations for that project,
@@ -125,6 +125,14 @@ one-time enrollment.
 
 Draining is graceful maintenance; revocation is credential invalidation. Do not use revocation as
 the normal shutdown path.
+
+For a stateful provider whose source host cannot return, revocation is one prerequisite—not the
+whole fence. Stop or network-isolate the old runtime first, revoke its credential here, then choose
+**Recover…** on the project's intended encrypted backup. The recent-auth, browser-admin-only
+workflow preserves the placement's region, labels, and process-slot demand while assigning a new
+generation to a different healthy node. It unpublishes the old provider origin until exact target
+observation succeeds. Clank will not relocate stateful work from a missed heartbeat because a
+network partition could leave the old SQLite writer alive. See [Recovery](recovery.md).
 
 ## Legacy shared enrollment
 
@@ -150,11 +158,13 @@ runner can be another small service or host on a private network. An S3-compatib
 is strongly recommended when control and runtime live on different volumes, but add it only when
 that durability is needed.
 
-Provider placement is now implemented for explicit stateful projects. It does not relocate local
-projects or fail node-local SQLite over to another node. Generation-bound backup creation,
-scheduling, listing, verification, and fenced restore use the ordinary encrypted recovery
-repository. Restore remains pinned to the current stateful node and intentionally pauses the
-writer while a replacement generation is validated. The same generation-bound private control
+Provider placement is implemented for explicit stateful projects. It never relocates local
+projects and never moves node-local SQLite automatically. Generation-bound backup creation,
+scheduling, listing, verification, pinned restore, and operator-acknowledged recovery use the
+ordinary encrypted recovery repository. Restore remains pinned to the current stateful node and
+intentionally pauses the writer while a replacement generation is validated. Explicit recovery
+requires a revoked and independently fenced source before selecting a different compatible target.
+The same generation-bound private control
 credential now carries bounded runtime logs and Docker resource/I/O attribution back to the
 control plane and provides payload-free job inspection plus conditional cancellation/retry; it
 never authorizes public ingress. See [Remote runtime
