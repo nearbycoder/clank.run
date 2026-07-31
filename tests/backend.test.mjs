@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   BackendActionError,
   DatabaseConflictError,
+  DatabaseRevisionNotFoundError,
   createApi,
   createSyncClient,
   defineBackend,
@@ -86,6 +87,10 @@ test("SQLite documents validate, query, index, patch, and roll back atomically",
   assert.equal(runtime.query("todos.list", { done: true }).value[0].title, "First");
   assert.throws(() => runtime.mutation("todos.fail", {}), /rollback/);
   assert.equal(runtime.query("todos.list", {}).value.length, 2);
+  assert.equal(
+    runtime.database.read((db) => db.table("todos").history()).some((entry) => entry.document.title === "must roll back"),
+    false,
+  );
   assert.throws(() => runtime.mutation("todos.add", { title: "" }), /at least 1/);
   runtime.close();
 });
@@ -462,7 +467,91 @@ test("document versions reject lost updates and no-op writes do not create revis
     db.table("notes").insert({ body: "two" });
   });
   assert.equal(runtime.version, beforeBatch + 1);
+  const batchHistory = runtime.database.read((db) => db.table("notes").history());
+  assert.deepEqual(batchHistory.map((entry) => entry.cursor), [
+    { revision: beforeBatch + 1, sequence: 1 },
+    { revision: beforeBatch + 1, sequence: 0 },
+  ]);
   runtime.close();
+});
+
+test("document history is immutable, ownership-scoped, bounded, and restored by compensation", async () => {
+  const schema = defineDatabase({
+    notes: defineTable({ body: s.string() }).owned(),
+  });
+  const backend = defineBackend({ schema }).functions(({ query, mutation }) => ({
+    notes: {
+      history: query({
+        args: { id: s.optional(s.id("notes")) },
+        handler: ({ db }, { id }) => id ? db.table("notes").history(id) : db.table("notes").history(),
+      }),
+      add: mutation({ args: { body: s.string() }, handler: ({ db }, input) => db.table("notes").insert(input) }),
+    },
+  }));
+  const runtime = await openBackend(backend, {
+    path: ":memory:",
+    historyRetentionPerDocument: 3,
+  });
+  try {
+    const alice = { userId: "alice" };
+    const bob = { userId: "bob" };
+    const id = runtime.database.transaction((db) => db.table("notes").insert({ body: "one" }), alice);
+    const created = runtime.database.read((db) => db.table("notes").history(id), alice)[0];
+    assert.equal(created.operation, "create");
+    assert.equal(created.document.body, "one");
+    assert.equal(created.document._version, 1);
+    assert.equal(Object.isFrozen(created), true);
+    assert.equal(Object.isFrozen(created.cursor), true);
+    assert.deepEqual(runtime.database.read((db) => db.table("notes").history(id), bob), []);
+
+    runtime.database.transaction((db) => db.table("notes").patch(id, { body: "two" }, { ifVersion: 1 }), alice);
+    const updated = runtime.database.read((db) => db.table("notes").history(id), alice)[0];
+    assert.equal(updated.operation, "update");
+    assert.equal(updated.document._version, 2);
+    runtime.database.transaction((db) => db.table("notes").delete(id, { ifVersion: 2 }), alice);
+    const deleted = runtime.database.read((db) => db.table("notes").history(id), alice)[0];
+    assert.equal(deleted.operation, "delete");
+    assert.equal(deleted.document.body, "two");
+    assert.equal(runtime.database.read((db) => db.table("notes").get(id), alice), null);
+
+    assert.throws(
+      () => runtime.database.transaction(
+        (db) => db.table("notes").restore(id, created.cursor, { ifVersion: null }),
+        bob,
+      ),
+      (error) => error instanceof DatabaseRevisionNotFoundError,
+    );
+    const restored = runtime.database.transaction(
+      (db) => db.table("notes").restore(id, created.cursor, { ifVersion: null }),
+      alice,
+    );
+    assert.equal(restored.body, "one");
+    assert.equal(restored._version, 3);
+    const restoreRevision = runtime.database.read((db) => db.table("notes").history(id), alice)[0];
+    assert.equal(restoreRevision.operation, "restore");
+    assert.deepEqual(restoreRevision.restoredFrom, created.cursor);
+    assert.throws(
+      () => runtime.database.transaction(
+        (db) => db.table("notes").restore(id, updated.cursor, { ifVersion: 2 }),
+        alice,
+      ),
+      (error) => error instanceof DatabaseConflictError
+        && error.expectedVersion === 2
+        && error.actualVersion === 3,
+    );
+
+    const retained = runtime.database.read((db) => db.table("notes").history(id, { limit: 100 }), alice);
+    assert.equal(retained.length, 3);
+    assert.deepEqual(retained.map((entry) => entry.operation), ["restore", "delete", "update"]);
+    const page = runtime.database.read((db) => db.table("notes").history({
+      limit: 1,
+      before: retained[0].cursor,
+    }), alice);
+    assert.deepEqual(page.map((entry) => entry.operation), ["delete"]);
+    assert.throws(() => runtime.database.read((db) => db.table("notes").history({ limit: 101 }), alice), /cannot exceed 100/);
+  } finally {
+    runtime.close();
+  }
 });
 
 test("subscriber setup failures clean themselves up", async () => {

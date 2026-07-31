@@ -261,7 +261,7 @@ The generated local key is onboarding convenience, not protection from a comprom
 - Previews are independent project/data/token namespaces, never inherit production secrets or raw
   database contents, cannot be nested, and consume the same account/workspace project quotas as
   production. Opt-in data branches use only the active production release's bounded policy, purge
-  auth/OAuth/jobs and unlisted tables, HMAC-pseudonymize per preview, securely clear staging files,
+  auth/OAuth/jobs/document-history snapshots and unlisted tables, HMAC-pseudonymize per preview, securely clear staging files,
   disclose only counts, and pass target migrations plus health before publication. Expiration uses
   the complete locked project-deletion path before startup recovery.
 - Per-account and per-workspace quota overrides are validated against a fixed key/range registry,

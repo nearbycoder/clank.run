@@ -549,6 +549,10 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.match(view, /agentAction=\{api\["tasks"\]\["create"\]\}/u);
   assert.match(view, /Generated admin studio/u);
   assert.match(view, /Schema and data operations/u);
+  assert.match(view, /Revision timeline/u);
+  assert.match(view, /Every restore adds a new version/u);
+  assert.match(view, /agentAction=\{api\["tasks"\]\["restore"\]\}/u);
+  assert.doesNotMatch(view, /\$\{name\}/u);
   assert.match(view, /roleAllowed\(props\.user\.role, \["owner"\]\)/u);
   assert.match(view, /studioReadOnly=\{false\}/u);
   assert.doesNotMatch(view, /overflow-x-auto/);
@@ -560,6 +564,7 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.match(serverSource, /href="\/styles\.css"/);
   assert.match(serverSource, /\.get\("\/__clank\/studio"/u);
   assert.match(serverSource, /"\/__clank\/studio": \["owner"\]/u);
+  assert.match(serverSource, /initialHistory_tasks/u);
   assert.match(serverSource, /const serverClose = server\.close\(\);\s+runtime\.close\(\);\s+const closeResults = await Promise\.allSettled/u);
   assert.doesNotMatch(
     serverSource,
@@ -581,6 +586,25 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.match(generatedTest, /assertAgentActionParity/u);
   assert.match(generatedTest, /rendered server actions match the current MCP-derived backend manifest/u);
   assert.match(generatedTest, /Admin Studio/u);
+  const backendSource = files.find((file) => file.path === "src/backend.ts").contents;
+  assert.match(backendSource, /db\.table\("tasks"\)\.history/u);
+  assert.match(backendSource, /db\.table\("tasks"\)\.restore/u);
+  const nullableDefaultFiles = generateAppFiles({
+    ...todoist,
+    entities: {
+      tasks: {
+        ...todoist.entities.tasks,
+        fields: {
+          ...todoist.entities.tasks.fields,
+          dueOn: { type: "date", nullable: true, default: null },
+        },
+      },
+    },
+  }, { frameworkVersion: version });
+  assert.match(
+    nullableDefaultFiles.find((file) => file.path === "src/backend.ts").contents,
+    /dueOn: s\.default\(s\.nullable\(s\.date\(\)\), null\)/u,
+  );
   const readOnlyFiles = generateAppFiles({
     ...todoist,
     admin: { path: "/operations", roles: ["owner"], entities: ["tasks"], allowMutations: false },
@@ -738,7 +762,20 @@ test("generated multi-route backends enforce roles and transactional relationshi
     assert.equal(ownerCaller.query("notes.list", {}).value[0].projectId, projectId, "nullify work must roll back after restrict");
 
     const gate = ownerCaller.query("gates.list", {}).value.find((entry) => entry._id === gateId);
+    const gateCreated = ownerCaller.query("gates.history", { id: gateId, limit: 25 }).value[0];
+    assert.equal(gateCreated.operation, "create");
     ownerCaller.mutation("gates.remove", { id: gate._id, version: gate._version });
+    const gateDeleted = ownerCaller.query("gates.history", { id: gateId, limit: 25 }).value[0];
+    assert.equal(gateDeleted.operation, "delete");
+    const restoredGate = ownerCaller.mutation("gates.restore", {
+      id: gateId,
+      revision: gateCreated.cursor.revision,
+      sequence: gateCreated.cursor.sequence,
+      version: null,
+    }).value;
+    assert.equal(restoredGate.title, "Security review");
+    assert.equal(restoredGate._version, 2);
+    ownerCaller.mutation("gates.remove", { id: gateId, version: restoredGate._version });
     ownerCaller.mutation("projects.delete", { id: projectId, version: project._version });
     assert.equal(ownerCaller.query("tasks.view", {}).value.length, 0);
     assert.equal(ownerCaller.query("notes.list", {}).value[0].projectId, null);
@@ -752,6 +789,10 @@ test("generated multi-route backends enforce roles and transactional relationshi
     assert.equal(memberProject._id, memberProjectId);
     assert.throws(
       () => memberCaller.mutation("projects.delete", { id: memberProjectId, version: memberProject._version }),
+      /required role/u,
+    );
+    assert.throws(
+      () => memberCaller.query("projects.history", { limit: 25 }),
       /required role/u,
     );
     assert.throws(
@@ -780,6 +821,8 @@ test("generated multi-route backends enforce roles and transactional relationshi
     assert.ok(agentFunctions.includes("projects.rename"));
     assert.ok(agentFunctions.includes("tasks.complete"));
     assert.ok(agentFunctions.includes("tasks.edit"));
+    assert.ok(agentFunctions.includes("tasks.history"));
+    assert.ok(agentFunctions.includes("tasks.restore"));
     assert.equal(agentFunctions.includes("projects.list"), false);
     assert.equal(agentFunctions.includes("projects.remove"), false);
 
@@ -790,7 +833,8 @@ test("generated multi-route backends enforce roles and transactional relationshi
     const browser = await readFile(join(target, "src", "app.tsx"), "utf8");
     assert.match(browser, /records_notes = signal/u);
     assert.match(browser, /client\.query\(client\.api\["notes"\]\["list"\]\)/u);
-    assert.doesNotMatch(browser, /client\.live\(client\.api\["notes"\]/u);
+    assert.doesNotMatch(browser, /client\.live\(client\.api\["notes"\]\["list"\]/u);
+    assert.match(browser, /client\.live\(client\.api\["notes"\]\["history"\]/u);
     await runNodeTests(target, "tests/app.contract.mjs");
   } finally {
     runtime?.close();

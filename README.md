@@ -67,6 +67,7 @@ The generated app is already a working product—not an empty component. It incl
 
 - registration, login, logout, secure sessions, and CSRF protection;
 - private per-user SQLite data with typed queries and mutations;
+- bounded document revision history with conflict-safe compensating restores;
 - server rendering and node-preserving hydration;
 - live updates across tabs and browsers;
 - Tailwind-compatible styling;
@@ -165,7 +166,7 @@ applications do not need a separate runtime compiler or bundler.
 | Routing | Parameters, optional segments, wildcards, repeated query values, async loaders, aborts, guards, redirects, titles, links, history navigation |
 | Full stack | Inferred schemas, documents, arguments, and results; branded IDs; query and mutation functions; zero-codegen typed API references |
 | Auth | Email/password sessions, scrypt hashing, secure cookies, CSRF, roles, revocation, default auth UI, SSR boot state |
-| Data | Node's built-in SQLite, JSON documents, declared expression indexes, owned tables, atomic mutations, persisted revisions, dependency-tracked query cache |
+| Data | Node's built-in SQLite, JSON documents, declared expression indexes, owned tables, atomic mutations, immutable document history, compensating restores, persisted live revisions, dependency-tracked query cache |
 | Live sync | Auth-partitioned Fetch RPC and cache, EventSource streams, session revocation, automatic invalidation, SSR seeding, multi-tab synchronization |
 | SSR | Async string rendering, full-document templates, safe state serialization, CSP nonces, context and keyed lists, marker-based DOM-preserving hydration |
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |

@@ -479,7 +479,7 @@ function generatedTestSource(app: AppBlueprint): string {
     }] : []),
   ];
   const uiActions = actions.filter((action) => {
-    if (!["create", "toggle", "delete"].includes(action.behavior)) return false;
+    if (!["create", "toggle", "delete", "restore"].includes(action.behavior)) return false;
     return renderedRoutes.some((route) => {
       if (!route.allowMutations || !route.entities.includes(action.entity)) return false;
       const routeRoles = route.roles.length ? route.roles : roles;
@@ -498,6 +498,7 @@ function generatedTestSource(app: AppBlueprint): string {
       ownership: entity.ownership,
       displayField: entity.displayField,
       completionField: entity.completionField ?? null,
+      history: Boolean(app.admin && app.admin.entities.includes(name)),
       sample: viewRecordSample(name, entity),
     }])),
     routes: renderedRoutes,
@@ -543,11 +544,21 @@ function viewProps(route, role) {
     logout: () => {},
   };
   for (const [entityName, entity] of Object.entries(contract.entities)) {
-    props[\`\${entityName}Records\`] = [entity.sample];
+    props[\`\${entityName}Records\`] = [{ ...entity.sample, _version: entity.history ? 2 : entity.sample._version }];
     props[\`\${entityName}Version\`] = 0;
     props[\`\${entityName}Create\`] = async () => true;
     if (entity.completionField) props[\`\${entityName}Toggle\`] = async () => true;
     props[\`\${entityName}Remove\`] = async () => true;
+    if (entity.history) {
+      props[\`\${entityName}Revisions\`] = [{
+        cursor: { revision: 1, sequence: 0 },
+        operation: "create",
+        recordedAt: 1,
+        document: entity.sample,
+      }];
+      props[\`\${entityName}RefreshHistory\`] = async () => {};
+      props[\`\${entityName}Restore\`] = async () => true;
+    }
   }
   return props;
 }
@@ -1944,7 +1955,7 @@ function appWarnings(app: AppBlueprint): string[] {
 
 interface GeneratedEntityAction {
   localName: string;
-  behavior: NonNullable<AppActionDefinition["behavior"]>;
+  behavior: NonNullable<AppActionDefinition["behavior"]> | "history" | "restore";
   description: string;
   roles: readonly string[];
   confirmation: NonNullable<AppActionDefinition["confirmation"]>;
@@ -2042,6 +2053,19 @@ function generatedEntityActions(
       roles: routeRolesForEntity(app, name),
       confirmation: "write" as const,
     }] : []),
+    ...(app.admin && app.admin.entities.includes(name) ? [{
+      preferredName: "history",
+      behavior: "history" as const,
+      description: `List recent ${singular.toLowerCase()} revisions visible to the current administrator.`,
+      roles: [...app.admin.roles],
+      confirmation: "never" as const,
+    }, {
+      preferredName: "restore",
+      behavior: "restore" as const,
+      description: `Restore one historical ${singular.toLowerCase()} snapshot as a new version.`,
+      roles: [...app.admin.roles],
+      confirmation: "always" as const,
+    }] : []),
   ];
   const output = [...declared];
   const used = new Set(output.map((action) => action.localName));
@@ -2109,7 +2133,7 @@ function entityFunctions(app: AppBlueprint, name: string, entity: AppEntityDefin
         title: ${sourceLiteral(humanize(action.localName))},
         description: ${sourceLiteral(action.description)},
         destructive: ${action.behavior === "delete" || action.confirmation === "always"},
-        idempotent: ${action.behavior === "list" || action.behavior === "toggle"},
+        idempotent: ${action.behavior === "list" || action.behavior === "history" || action.behavior === "toggle"},
       }`;
     if (action.behavior === "list") {
       return `    ${property(action.localName)}: query({
@@ -2118,6 +2142,21 @@ function entityFunctions(app: AppBlueprint, name: string, entity: AppEntityDefin
       agent: ${agent},
       handler: ({ db, auth }) => {
 ${guard}        return db.table(${sourceLiteral(name)}).query().orderBy("_creationTime", "asc").collect();
+      },
+    })`;
+    }
+    if (action.behavior === "history") {
+      return `    ${property(action.localName)}: query({
+      description: ${sourceLiteral(action.description)},
+      args: {
+        id: s.optional(s.id(${sourceLiteral(name)})),
+        limit: s.default(s.number({ integer: true, min: 1, max: 100 }), 25),
+      },
+      agent: ${agent},
+      handler: ({ db, auth }, { id, limit }) => {
+${guard}        return id
+          ? db.table(${sourceLiteral(name)}).history(id, { limit })
+          : db.table(${sourceLiteral(name)}).history({ limit });
       },
     })`;
     }
@@ -2172,6 +2211,25 @@ ${cleanUpdateFields}
           throw new BackendActionError(400, "EMPTY_UPDATE", "At least one field must be changed.");
         }
         return db.table(${sourceLiteral(name)}).patch(id, update, { ifVersion: version });
+      },
+    })`;
+    }
+    if (action.behavior === "restore") {
+      return `    ${property(action.localName)}: mutation({
+      description: ${sourceLiteral(action.description)},
+      args: {
+        id: s.id(${sourceLiteral(name)}),
+        revision: s.number({ integer: true, min: 1 }),
+        sequence: s.number({ integer: true, min: 0 }),
+        version: s.nullable(documentVersion),
+      },
+      agent: ${agent},
+      handler: ({ db, auth }, { id, revision, sequence, version }) => {
+${guard}        return db.table(${sourceLiteral(name)}).restore(
+          id,
+          { revision, sequence },
+          { ifVersion: version },
+        );
       },
     })`;
     }
@@ -2267,10 +2325,15 @@ function viewSource(app: AppBlueprint): string {
   const props = entityNames.map((name) => {
     const type = typeName(name);
     const entity = app.entities[name];
+    const revisionProps = app.admin && app.admin.entities.includes(name)
+      ? `\n  ${name}Revisions: Array<DocumentRevision<typeof schema, ${sourceLiteral(name)}>>;
+  ${name}RefreshHistory(): void | Promise<void>;
+  ${name}Restore(id: ${type}["_id"], cursor: DocumentRevisionCursor, version: number | null): Promise<boolean>;`
+      : "";
     return `  ${name}Records: ${type}[];
   ${name}Version: number;
   ${name}Create(input: ${type}CreateInput): Promise<boolean>;
-  ${entity.completionField ? `${name}Toggle(id: ${type}["_id"], value: boolean, version: number): Promise<boolean>;\n  ` : ""}${name}Remove(id: ${type}["_id"], version: number): Promise<boolean>;`;
+  ${entity.completionField ? `${name}Toggle(id: ${type}["_id"], value: boolean, version: number): Promise<boolean>;\n  ` : ""}${name}Remove(id: ${type}["_id"], version: number): Promise<boolean>;${revisionProps}`;
   }).join("\n");
   const panels = entityNames.map((name) => entityPanelSource(app, name, app.entities[name])).join("\n\n");
   const studio = adminStudioSource(app);
@@ -2318,8 +2381,8 @@ function viewSource(app: AppBlueprint): string {
     ? `{props.route === ${sourceLiteral(app.admin.path)} && roleAllowed(props.user.role, ${sourceLiteral(app.admin.roles)}) ? (<AdminStudio {...props} />) : null}`
     : "";
   return `/* @clankImportSource @clank.run/framework */
-import { For, createApi, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
-import type { backend, ${types} } from "./backend.ts";
+import { For, createApi, signal, type AuthUser, type DefaultAuthProfile, type DocumentRevision, type DocumentRevisionCursor } from "@clank.run/framework";
+import type { backend, schema, ${types} } from "./backend.ts";
 
 ${createTypes}
 
@@ -2333,6 +2396,7 @@ export interface AppViewProps {
   pending: boolean;
   error: string;
   studioReadOnly?: boolean;
+  showHistory?: boolean;
 ${props}
   logout(): void | Promise<void>;
 }
@@ -2403,6 +2467,8 @@ function entityPanelSource(app: AppBlueprint, name: string, entity: AppEntityDef
   const create = actions.find((action) => action.behavior === "create")!;
   const remove = actions.find((action) => action.behavior === "delete")!;
   const toggle = actions.find((action) => action.behavior === "toggle");
+  const history = actions.find((action) => action.behavior === "history");
+  const restore = actions.find((action) => action.behavior === "restore");
   const signals = Object.entries(entity.fields).map(([fieldName, field]) =>
     `  const draft_${fieldName} = signal(${draftDefaultSource(field)});`).join("\n");
   const reset = Object.entries(entity.fields).map(([fieldName, field]) =>
@@ -2424,11 +2490,37 @@ function entityPanelSource(app: AppBlueprint, name: string, entity: AppEntityDef
                 <dd class="mt-1 break-words text-sm text-slate-700">{${value}}</dd>
               </div>`;
     }).join("\n              ");
+  const historyPanel = history && restore ? `{props.showHistory ? (
+        <section class="mt-8 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm" aria-labelledby=${sourceLiteral(`${name}-history-title`)}>
+          <div class="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div><h3 id=${sourceLiteral(`${name}-history-title`)} class="font-semibold">Revision timeline</h3>
+            <p class="mt-1 text-sm text-slate-500">Every restore adds a new version; history is never rewound or rewritten.</p></div>
+            <button class="self-start rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-50" type="button" disabled={props.pending} onClick={props.${name}RefreshHistory} agentId=${sourceLiteral(`${name}-history-refresh`)} agentAction={api[${sourceLiteral(name)}][${sourceLiteral(history.localName)}]} agentLabel=${sourceLiteral(`Refresh ${title.toLowerCase()} revision timeline`)}>Refresh activity</button>
+          </div>
+          <ol class="divide-y divide-slate-100 px-5" aria-live="polite">
+            <For each={props.${name}Revisions} by={(revision) => \`\${revision.cursor.revision}:\${revision.cursor.sequence}\`} fallback={<li class="py-6 text-sm text-slate-500">No retained revisions yet.</li>}>
+              {(revision) => {
+                const current = props.${name}Records.find((record) => record._id === revision.document._id);
+                const canRestoreRevision = canRestore && (current?._version ?? null) !== revision.document._version;
+                return (
+                  <li class="relative grid gap-3 py-4 pl-7 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                    <span classList={{ "absolute left-0 top-5 grid h-4 w-4 place-items-center rounded-full ring-4 ring-white": true, "bg-emerald-500": revision.operation === "create" || revision.operation === "restore", "bg-sky-500": revision.operation === "update", "bg-rose-500": revision.operation === "delete" }} aria-hidden="true" />
+                    <div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><span class="font-semibold">{valueLabel(revision.document.${entity.displayField})}</span><span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-slate-600">{revision.operation}</span></div>
+                    <p class="mt-1 text-xs text-slate-500"><time datetime={new Date(revision.recordedAt).toISOString()}>{new Date(revision.recordedAt).toISOString()}</time> · document v{revision.document._version} · database r{revision.cursor.revision}.{revision.cursor.sequence}</p></div>
+                    {canRestoreRevision ? <button class="justify-self-start rounded-lg bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50 sm:justify-self-end" type="button" disabled={props.pending} onClick={() => props.${name}Restore(revision.document._id, revision.cursor, current?._version ?? null)} agentId={\`${name}-\${revision.document._id}-restore-\${revision.cursor.revision}-\${revision.cursor.sequence}\`} agentAction={api[${sourceLiteral(name)}][${sourceLiteral(restore.localName)}]} agentLabel={\`Restore \${revision.document.${entity.displayField}} from document version \${revision.document._version}\`}>Restore this version</button> : null}
+                  </li>
+                );
+              }}
+            </For>
+          </ol>
+        </section>
+      ) : null}` : "";
   return `function ${type}Panel(props: AppViewProps) {
 ${signals}
   const canCreate = props.studioReadOnly !== true && roleAllowed(props.user.role, ${sourceLiteral(create.roles)});
   const canRemove = props.studioReadOnly !== true && roleAllowed(props.user.role, ${sourceLiteral(remove.roles)});
   ${toggle ? `const canToggle = props.studioReadOnly !== true && roleAllowed(props.user.role, ${sourceLiteral(toggle.roles)});` : ""}
+  ${restore ? `const canRestore = props.studioReadOnly !== true && roleAllowed(props.user.role, ${sourceLiteral(restore.roles)});` : ""}
   const submit = async (event: Event) => {
     event.preventDefault();
     if (!canCreate || props.pending) return;
@@ -2487,6 +2579,7 @@ ${controls}
           )}
         </For>
       </div>
+      ${historyPanel}
     </section>
   );
 }`;
@@ -2514,7 +2607,7 @@ function adminStudioSource(app: AppBlueprint): string {
           </article>`;
   }).join("\n          ");
   const panels = app.admin.entities.map((name) =>
-    `<${typeName(name)}Panel {...props} studioReadOnly={${sourceLiteral(!app.admin!.allowMutations)}} />`).join("\n        ");
+    `<${typeName(name)}Panel {...props} studioReadOnly={${sourceLiteral(!app.admin!.allowMutations)}} showHistory={true} />`).join("\n        ");
   return `function AdminStudio(props: AppViewProps) {
   return (
     <section>
@@ -2638,14 +2731,17 @@ function fieldControlSource(
 
 function browserSource(app: AppBlueprint): string {
   const names = Object.keys(app.entities);
+  const historyNames = app.admin ? [...app.admin.entities] : [];
   const types = names.map(typeName).join(", ");
   const state = names.map((name) =>
-    `    ${name}: { records: ${typeName(name)}[]; version: number };`).join("\n");
+    `    ${name}: { records: ${typeName(name)}[]; version: number;${historyNames.includes(name) ? ` revisions: Array<DocumentRevision<typeof schema, ${sourceLiteral(name)}>>;` : ""} };`).join("\n");
   const fallback = names.map((name) =>
-    `      ${name}: { records: [], version: 0 },`).join("\n");
+    `      ${name}: { records: [], version: 0${historyNames.includes(name) ? ", revisions: []" : ""} },`).join("\n");
   const seeds = names.map((name) => {
     const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
-    return `client.seed(client.api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}], {}, boot.entities.${name}.records, boot.entities.${name}.version);`;
+    const history = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "history");
+    return `client.seed(client.api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}], {}, boot.entities.${name}.records, boot.entities.${name}.version);${history ? `
+client.seed(client.api[${sourceLiteral(name)}][${sourceLiteral(history.localName)}], { limit: 25 }, boot.entities.${name}.revisions, boot.entities.${name}.version);` : ""}`;
   }).join("\n");
   const live = names.map((name) => {
     const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
@@ -2660,6 +2756,23 @@ function browserSource(app: AppBlueprint): string {
   const dispose = names
     .filter((name) => app.entities[name].realtime)
     .map((name) => `    live_${name}?.dispose();`).join("\n");
+  const historyState = historyNames.map((name) => {
+    const history = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "history")!;
+    return `  const revisions_${name} = signal(boot.entities.${name}.revisions);
+  const canReadHistory_${name} = boot.route === ${sourceLiteral(app.admin!.path)} && roleAllowed(user.role, ${sourceLiteral(history.roles)});
+  const liveHistory_${name} = canReadHistory_${name}
+    ? client.live(client.api[${sourceLiteral(name)}][${sourceLiteral(history.localName)}], { limit: 25 })
+    : null;
+  const stopHistory_${name} = effect(() => {
+    const next = liveHistory_${name}?.data.value;
+    if (next) revisions_${name}.value = next;
+  });
+  const refreshHistory_${name} = () => canReadHistory_${name}
+    ? client.query(client.api[${sourceLiteral(name)}][${sourceLiteral(history.localName)}], { limit: 25 }).then((value) => { revisions_${name}.value = value; })
+    : Promise.resolve();`;
+  }).join("\n");
+  const historyDispose = historyNames.map((name) => `    stopHistory_${name}();
+    liveHistory_${name}?.dispose();`).join("\n");
   const refresh = names
     .filter((name) => !app.entities[name].realtime)
     .map((name) => {
@@ -2668,42 +2781,55 @@ function browserSource(app: AppBlueprint): string {
       ? client.query(client.api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}]).then((value) => { records_${name}.value = value; })
       : Promise.resolve(),`;
     }).join("\n");
-  const version = names.map((name) => app.entities[name].realtime
-    ? `live_${name}?.version.value ?? boot.entities.${name}.version`
-    : `boot.entities.${name}.version`).join(", ");
-  const connected = names
-    .filter((name) => app.entities[name].realtime)
-    .map((name) => `(!live_${name} || (!live_${name}.loading.value && !live_${name}.error.value))`)
-    .join(" && ") || "true";
+  const refreshHistory = historyNames.map((name) => `    refreshHistory_${name}(),`).join("\n");
+  const version = [
+    ...names.map((name) => app.entities[name].realtime
+      ? `live_${name}?.version.value ?? boot.entities.${name}.version`
+      : `boot.entities.${name}.version`),
+    ...historyNames.map((name) => `liveHistory_${name}?.version.value ?? boot.entities.${name}.version`),
+  ].join(", ");
+  const connected = [
+    ...names.filter((name) => app.entities[name].realtime)
+      .map((name) => `(!live_${name} || (!live_${name}.loading.value && !live_${name}.error.value))`),
+    ...historyNames.map((name) => `(!liveHistory_${name} || (!liveHistory_${name}.loading.value && !liveHistory_${name}.error.value))`),
+  ].join(" && ") || "true";
   const props = names.map((name) => {
     const entity = app.entities[name];
     const actions = generatedEntityActions(app, name, entity);
     const create = actions.find((action) => action.behavior === "create")!;
     const remove = actions.find((action) => action.behavior === "delete")!;
     const toggle = actions.find((action) => action.behavior === "toggle");
+    const history = actions.find((action) => action.behavior === "history");
+    const restore = actions.find((action) => action.behavior === "restore");
     const records = entity.realtime
       ? `live_${name}?.data.value ?? boot.entities.${name}.records`
       : `records_${name}.value`;
     const entityVersion = entity.realtime
       ? `live_${name}?.version.value ?? boot.entities.${name}.version`
       : `boot.entities.${name}.version`;
+    const revisionProps = history && restore ? `
+      ${name}Revisions={revisions_${name}.value}
+      ${name}RefreshHistory={refreshHistory_${name}}
+      ${name}Restore={(id, cursor, version) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(restore.localName)}], { id, revision: cursor.revision, sequence: cursor.sequence, version }))}` : "";
     return `      ${name}Records={${records}}
       ${name}Version={${entityVersion}}
       ${name}Create={(input) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(create.localName)}], input))}
-      ${toggle ? `${name}Toggle={(id, value, version) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(toggle.localName)}], { id, value, version }))}\n      ` : ""}${name}Remove={(id, version) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(remove.localName)}], { id, version }))}`;
+      ${toggle ? `${name}Toggle={(id, value, version) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(toggle.localName)}], { id, value, version }))}\n      ` : ""}${name}Remove={(id, version) => mutate(() => client.mutate(client.api[${sourceLiteral(name)}][${sourceLiteral(remove.localName)}], { id, version }))}${revisionProps}`;
   }).join("\n");
   return `/* @clankImportSource @clank.run/framework */
 import {
   AuthGate,
   createClient,
+  effect,
   hydrate,
   onCleanup,
   readState,
   signal,
   type AuthState,
   type DefaultAuthProfile,
+  type DocumentRevision,
 } from "@clank.run/framework";
-import type { backend, ${types} } from "./backend.ts";
+import type { backend, schema, ${types} } from "./backend.ts";
 import { AppView } from "./view.tsx";
 
 interface PageState {
@@ -2733,13 +2859,16 @@ function roleAllowed(role: string, roles: readonly string[]): boolean {
 function LiveApp() {
   const user = client.auth.user.value!;
 ${live}
+${historyState}
   const pending = signal(0);
   const error = signal("");
   const refreshStatic = () => Promise.all([
 ${refresh}
+${refreshHistory}
   ]);
   onCleanup(() => {
 ${dispose}
+${historyDispose}
   });
   const mutate = async <Output,>(operation: () => Promise<Output>): Promise<boolean> => {
     pending.value++;
@@ -2782,24 +2911,43 @@ hydrate(document.getElementById("app")!, (
 function serverSource(app: AppBlueprint): string {
   const names = Object.keys(app.entities);
   const initials = names.map((name) => {
-    const list = generatedEntityActions(app, name, app.entities[name]).find((action) => action.behavior === "list")!;
+    const actions = generatedEntityActions(app, name, app.entities[name]);
+    const list = actions.find((action) => action.behavior === "list")!;
+    const history = actions.find((action) => action.behavior === "history");
     const allowed = list.roles.length
       ? `${sourceLiteral(list.roles)}.includes(caller.auth.user.role)`
       : "true";
+    const historyAllowed = history?.roles.length
+      ? `${sourceLiteral(history.roles)}.includes(caller.auth.user.role)`
+      : "true";
     return `  const initial_${name} = caller.auth.user && ${allowed}
     ? caller.query(api[${sourceLiteral(name)}][${sourceLiteral(list.localName)}])
-    : { value: [], version: runtime.version };`;
+    : { value: [], version: runtime.version };${history ? `
+  const initialHistory_${name} = caller.auth.user && ${historyAllowed} && route === ${sourceLiteral(app.admin && app.admin.entities.includes(name) ? app.admin.path : "")}
+    ? caller.query(api[${sourceLiteral(name)}][${sourceLiteral(history.localName)}], { limit: 25 })
+    : { value: [], version: runtime.version };` : ""}`;
   }).join("\n");
-  const stateEntities = names.map((name) =>
-    `        ${name}: { records: initial_${name}.value, version: initial_${name}.version },`).join("\n");
+  const stateEntities = names.map((name) => {
+    const history = generatedEntityActions(app, name, app.entities[name]).some((action) => action.behavior === "history");
+    return `        ${name}: { records: initial_${name}.value, version: initial_${name}.version${history ? `, revisions: initialHistory_${name}.value` : ""} },`;
+  }).join("\n");
   const props = names.map((name) => {
     const entity = app.entities[name];
+    const history = generatedEntityActions(app, name, entity).some((action) => action.behavior === "history");
     return `          ${name}Records={initial_${name}.value}
           ${name}Version={initial_${name}.version}
           ${name}Create={() => Promise.resolve(false)}
-          ${entity.completionField ? `${name}Toggle={() => Promise.resolve(false)}\n          ` : ""}${name}Remove={() => Promise.resolve(false)}`;
+          ${entity.completionField ? `${name}Toggle={() => Promise.resolve(false)}\n          ` : ""}${name}Remove={() => Promise.resolve(false)}${history ? `
+          ${name}Revisions={initialHistory_${name}.value}
+          ${name}RefreshHistory={() => Promise.resolve()}
+          ${name}Restore={() => Promise.resolve(false)}` : ""}`;
   }).join("\n");
-  const versions = names.map((name) => `initial_${name}.version`).join(", ");
+  const versions = names.flatMap((name) => [
+    `initial_${name}.version`,
+    ...(generatedEntityActions(app, name, app.entities[name]).some((action) => action.behavior === "history")
+      ? [`initialHistory_${name}.version`]
+      : []),
+  ]).join(", ");
   const access = app.routes.map((route) =>
     `${sourceLiteral(route.path)}: ${typeof route.access === "object" ? sourceLiteral(route.access.roles ?? []) : "[]"}`)
     .concat(app.admin ? [`${sourceLiteral(app.admin.path)}: ${sourceLiteral(app.admin.roles)}`] : [])
@@ -3005,7 +3153,6 @@ function schemaSource(field: AppFieldDefinition, wrappers = true): string {
 }
 
 function createSchemaSource(field: AppFieldDefinition): string {
-  if (Object.hasOwn(field, "default")) return `s.default(${schemaSource({ ...field, default: undefined }, false)}, ${sourceLiteral(field.default)})`;
   return schemaSource(field);
 }
 

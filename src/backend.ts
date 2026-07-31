@@ -163,6 +163,10 @@ export interface ReadTable<Schema extends DatabaseSchema<any>, Name extends Tabl
   get(id: Id<Name>): DocumentFor<Schema, Name> | null;
   query(): QueryBuilder<Schema, Name>;
   collect(): Array<DocumentFor<Schema, Name>>;
+  /** Newest-first immutable snapshots for this visible collection. */
+  history(options?: DocumentHistoryOptions): Array<DocumentRevision<Schema, Name>>;
+  /** Newest-first immutable snapshots for one visible document ID. */
+  history(id: Id<Name>, options?: DocumentHistoryOptions): Array<DocumentRevision<Schema, Name>>;
 }
 
 export interface WriteTable<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> extends ReadTable<Schema, Name> {
@@ -178,11 +182,51 @@ export interface WriteTable<Schema extends DatabaseSchema<any>, Name extends Tab
     options?: DocumentWriteOptions,
   ): DocumentFor<Schema, Name> | null;
   delete(id: Id<Name>, options?: DocumentWriteOptions): boolean;
+  /** Restore a historical snapshot as a new, conflict-checked document version. */
+  restore(
+    id: Id<Name>,
+    cursor: DocumentRevisionCursor,
+    options?: DocumentRestoreOptions,
+  ): DocumentFor<Schema, Name>;
 }
 
 export interface DocumentWriteOptions {
   /** Reject the write unless the stored document has this exact version. */
   ifVersion?: number;
+}
+
+export interface DocumentRevisionCursor {
+  /** The committed database revision containing the snapshot. */
+  revision: number;
+  /** The snapshot's stable order inside that atomic revision. */
+  sequence: number;
+}
+
+export interface DocumentHistoryOptions {
+  /** Maximum snapshots to return. Defaults to 25 and cannot exceed 100. */
+  limit?: number;
+  /** Return snapshots strictly older than this cursor. */
+  before?: DocumentRevisionCursor;
+}
+
+export interface DocumentRestoreOptions {
+  /**
+   * Reject unless the current document has this version. Pass null only when
+   * the caller observed that the document was deleted.
+   */
+  ifVersion?: number | null;
+}
+
+export interface DocumentRevision<
+  Schema extends DatabaseSchema<any>,
+  Name extends TableName<Schema>,
+> {
+  readonly cursor: Readonly<DocumentRevisionCursor>;
+  readonly operation: "create" | "update" | "delete" | "restore";
+  readonly recordedAt: number;
+  /** Snapshot created/updated/restored, or the last snapshot removed by delete. */
+  readonly document: DocumentFor<Schema, Name>;
+  readonly restoredFrom?: Readonly<DocumentRevisionCursor>;
 }
 
 export class DatabaseConflictError extends Error {
@@ -201,6 +245,20 @@ export class DatabaseConflictError extends Error {
       : actualVersion === null
         ? `${table}/${id} no longer exists.`
         : `${table}/${id} changed from version ${expectedVersion} to ${actualVersion}.`);
+  }
+}
+
+export class DatabaseRevisionNotFoundError extends Error {
+  readonly name = "DatabaseRevisionNotFoundError";
+  readonly code = "REVISION_NOT_FOUND";
+  readonly status = 404;
+
+  constructor(
+    readonly table: string,
+    readonly id: string,
+    readonly cursor: Readonly<DocumentRevisionCursor>,
+  ) {
+    super(`The requested ${table} revision is unavailable.`);
   }
 }
 
@@ -257,6 +315,18 @@ interface ReadDependency {
   ownerId?: string | null;
 }
 
+interface PendingDocumentRevision {
+  table: string;
+  id: string;
+  ownerId?: string;
+  documentVersion: number;
+  creationTime: number;
+  operation: DocumentRevision<any, any>["operation"];
+  snapshotData: string;
+  recordedAt: number;
+  restoredFrom?: DocumentRevisionCursor;
+}
+
 export interface TrackedResult<Value> {
   value: Value;
   dependencies: readonly ReadDependency[];
@@ -288,6 +358,10 @@ export interface SQLiteOptions {
   integrityCheck?: "quick" | "full" | false;
   changePollIntervalMs?: number;
   changeRetentionRevisions?: number;
+  /** Global committed-revision window retained for document history. Defaults to 10,000. */
+  historyRetentionRevisions?: number;
+  /** Maximum snapshots retained for any one document. Defaults to 100. */
+  historyRetentionPerDocument?: number;
   onError?: (error: unknown) => void;
 }
 
@@ -343,6 +417,14 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     options.changeRetentionRevisions ?? 10_000,
     "changeRetentionRevisions",
   );
+  const historyRetention = positiveIntegerOption(
+    options.historyRetentionRevisions ?? 10_000,
+    "historyRetentionRevisions",
+  );
+  const historyPerDocument = positiveIntegerOption(
+    options.historyRetentionPerDocument ?? 100,
+    "historyRetentionPerDocument",
+  );
   const reportError = (error: unknown) => {
     try { options.onError?.(error); } catch { /* Error reporting must never change database behavior. */ }
   };
@@ -374,6 +456,26 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     owner_id TEXT CHECK (owner_id IS NULL OR length(owner_id) > 0),
     PRIMARY KEY (revision, sequence)
   ) WITHOUT ROWID`);
+  native.exec(`CREATE TABLE IF NOT EXISTS clank_document_revisions (
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    sequence INTEGER NOT NULL CHECK (sequence >= 0),
+    table_name TEXT NOT NULL CHECK (length(table_name) > 0),
+    document_id TEXT NOT NULL CHECK (length(document_id) > 0),
+    owner_id TEXT CHECK (owner_id IS NULL OR length(owner_id) > 0),
+    document_version INTEGER NOT NULL CHECK (document_version > 0),
+    creation_time INTEGER NOT NULL CHECK (creation_time >= 0),
+    operation TEXT NOT NULL CHECK (operation IN ('create', 'update', 'delete', 'restore')),
+    snapshot_data TEXT NOT NULL CHECK (json_valid(snapshot_data)),
+    recorded_at INTEGER NOT NULL CHECK (recorded_at >= 0),
+    restored_from_revision INTEGER CHECK (restored_from_revision IS NULL OR restored_from_revision > 0),
+    restored_from_sequence INTEGER CHECK (restored_from_sequence IS NULL OR restored_from_sequence >= 0),
+    CHECK ((restored_from_revision IS NULL) = (restored_from_sequence IS NULL)),
+    PRIMARY KEY (revision, sequence)
+  ) WITHOUT ROWID`);
+  native.exec(`CREATE INDEX IF NOT EXISTS clank_document_revisions_document
+    ON clank_document_revisions (table_name, document_id, revision DESC, sequence DESC)`);
+  native.exec(`CREATE INDEX IF NOT EXISTS clank_document_revisions_owner
+    ON clank_document_revisions (table_name, owner_id, revision DESC, sequence DESC)`);
 
   const statements = new Map<string, StatementLike>();
   const prepared = (sql: string): StatementLike => {
@@ -533,6 +635,46 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     return row ? decodeDocument(schema, name, row) : null;
   };
 
+  const getHistory = <Name extends TableName<Schema>>(
+    name: Name,
+    id: Id<Name> | undefined,
+    optionsInput: DocumentHistoryOptions | undefined,
+    ownerId?: string | null,
+  ): Array<DocumentRevision<Schema, Name>> => {
+    ensureOpen();
+    const definition = tableDefinition(schema, name);
+    if (definition.ownership === "user" && ownerId === null) {
+      throw new Error(`Owned table ${name} requires an authenticated user.`);
+    }
+    const options = documentHistoryOptions(optionsInput);
+    const clauses = ["table_name = ?"];
+    const parameters: unknown[] = [name];
+    if (id !== undefined) {
+      clauses.push("document_id = ?");
+      parameters.push(id);
+    }
+    if (definition.ownership === "user" && ownerId !== undefined) {
+      clauses.push("owner_id = ?");
+      parameters.push(ownerId);
+    }
+    if (options.before) {
+      clauses.push("(revision < ? OR (revision = ? AND sequence < ?))");
+      parameters.push(
+        options.before.revision,
+        options.before.revision,
+        options.before.sequence,
+      );
+    }
+    const rows = prepared(`SELECT revision, sequence, table_name, document_id, owner_id,
+      document_version, creation_time, operation, snapshot_data, recorded_at,
+      restored_from_revision, restored_from_sequence
+      FROM clank_document_revisions
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY revision DESC, sequence DESC
+      LIMIT ${options.limit}`).all(...parameters);
+    return rows.map((row) => decodeDocumentRevision(schema, name, row));
+  };
+
   const makeReader = (dependencies?: Map<string, ReadDependency>, ownerId?: string | null): ReadDatabase<Schema> => ({
     table<Name extends TableName<Schema>>(name: Name): ReadTable<Schema, Name> {
       const definition = tableDefinition(schema, name);
@@ -557,12 +699,27 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           trackTable();
           return executeQuery(name, [], undefined, undefined, ownerId);
         },
+        history(idOrOptions?: Id<Name> | DocumentHistoryOptions, maybeOptions?: DocumentHistoryOptions) {
+          const id = typeof idOrOptions === "string" ? idOrOptions : undefined;
+          if (id === undefined) trackTable();
+          else dependencies?.set(
+            `${name}:${id}:${dependencyOwner ?? "*"}`,
+            { table: name, id, ...(dependencyOwner === undefined ? {} : { ownerId: dependencyOwner }) },
+          );
+          return getHistory(
+            name,
+            id,
+            typeof idOrOptions === "string" ? maybeOptions : idOrOptions,
+            ownerId,
+          );
+        },
       };
     },
   });
 
   const changesForTransaction = () => ({
     records: new Map<string, DatabaseChangeRecord>(),
+    history: [] as PendingDocumentRevision[],
   });
 
   const recordChange = (
@@ -581,6 +738,18 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       ...(ownerId === undefined || ownerId === null ? {} : { ownerId }),
     });
     changes.records.set(`${table}\n${id}`, record);
+  };
+
+  const recordDocumentRevision = (
+    changes: ReturnType<typeof changesForTransaction>,
+    input: PendingDocumentRevision,
+  ) => {
+    changes.history.push(Object.freeze({
+      ...input,
+      ...(input.restoredFrom
+        ? { restoredFrom: Object.freeze({ ...input.restoredFrom }) }
+        : {}),
+    }));
   };
 
   const makeWriter = (changes: ReturnType<typeof changesForTransaction>, ownerId?: string | null): WriteDatabase<Schema> => ({
@@ -606,6 +775,16 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           }
           if (!id) throw new Error(`Could not allocate a unique ID for ${name}.`);
           recordChange(changes, name, id, storedOwner);
+          recordDocumentRevision(changes, {
+            table: name,
+            id,
+            ...(storedOwner === undefined ? {} : { ownerId: storedOwner }),
+            documentVersion: 1,
+            creationTime: now,
+            operation: "create",
+            snapshotData: stringifyStoredData(value),
+            recordedAt: Date.now(),
+          });
           return id;
         },
         patch(id, patch, writeOptions = {}) {
@@ -632,6 +811,16 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             throw new DatabaseConflictError(name, id, previous._version, actual?._version ?? null);
           }
           recordChange(changes, name, id, storedOwner);
+          recordDocumentRevision(changes, {
+            table: name,
+            id,
+            ...(storedOwner === undefined ? {} : { ownerId: storedOwner }),
+            documentVersion: nextVersion,
+            creationTime: previous._creationTime,
+            operation: "update",
+            snapshotData: stringifyStoredData(value),
+            recordedAt: Date.now(),
+          });
           return documentWithMetadata(schema, name, value, id, previous._creationTime, nextVersion, storedOwner);
         },
         replace(id, raw, writeOptions = {}) {
@@ -656,6 +845,16 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             throw new DatabaseConflictError(name, id, previous._version, actual?._version ?? null);
           }
           recordChange(changes, name, id, storedOwner);
+          recordDocumentRevision(changes, {
+            table: name,
+            id,
+            ...(storedOwner === undefined ? {} : { ownerId: storedOwner }),
+            documentVersion: nextVersion,
+            creationTime: previous._creationTime,
+            operation: "update",
+            snapshotData: stringifyStoredData(value),
+            recordedAt: Date.now(),
+          });
           return documentWithMetadata(schema, name, value, id, previous._creationTime, nextVersion, storedOwner);
         },
         delete(id, writeOptions = {}) {
@@ -677,7 +876,78 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             throw new DatabaseConflictError(name, id, previous._version, actual?._version ?? null);
           }
           recordChange(changes, name, id, storedOwner);
+          recordDocumentRevision(changes, {
+            table: name,
+            id,
+            ...(storedOwner === undefined ? {} : { ownerId: storedOwner }),
+            documentVersion: previous._version,
+            creationTime: previous._creationTime,
+            operation: "delete",
+            snapshotData: stringifyStoredData(documentValue(previous)),
+            recordedAt: Date.now(),
+          });
           return changed;
+        },
+        restore(id, cursorInput, restoreOptions = {}) {
+          const cursor = documentRevisionCursor(cursorInput, "restore cursor");
+          const expected = validatedRestoreVersion(restoreOptions.ifVersion);
+          const current = getDocument(name, id, ownerId);
+          if (expected !== undefined && (current?._version ?? null) !== expected) {
+            throw new DatabaseConflictError(name, id, expected, current?._version ?? null);
+          }
+          const scoped = definition.ownership === "user" && ownerId !== undefined;
+          if (definition.ownership === "user" && (ownerId === null || ownerId === undefined)) {
+            throw new Error(`Owned table ${name} requires an authenticated user for restores.`);
+          }
+          const sourceRow = prepared(`SELECT revision, sequence, table_name, document_id, owner_id,
+            document_version, creation_time, operation, snapshot_data, recorded_at,
+            restored_from_revision, restored_from_sequence
+            FROM clank_document_revisions
+            WHERE table_name = ? AND document_id = ? AND revision = ? AND sequence = ?
+            ${scoped ? "AND owner_id = ?" : ""}`)
+            .get(name, id, cursor.revision, cursor.sequence, ...(scoped ? [ownerId] : []));
+          if (!sourceRow) throw new DatabaseRevisionNotFoundError(name, id, cursor);
+          const source = decodeDocumentRevision(schema, name, sourceRow);
+          const value = definition.schema.parse(documentValue(source.document));
+          const encoded = stringifyStoredData(value);
+          if (current && stringifyStoredData(documentValue(current)) === encoded) return current;
+          const maximum = Number(prepared(`SELECT max(document_version) AS version
+            FROM clank_document_revisions WHERE table_name = ? AND document_id = ?`).get(name, id)?.version ?? 0);
+          const nextVersion = nextDocumentVersion(Math.max(current?._version ?? 0, maximum));
+          const storedOwner = definition.ownership === "user"
+            ? (source.document as DocumentFor<Schema, Name> & { _ownerId: string })._ownerId
+            : undefined;
+          const creationTime = current?._creationTime ?? source.document._creationTime;
+          if (current) {
+            const result = prepared(`UPDATE ${tableIdentifier(name)} SET _version = ?, _data = ?
+              WHERE _id = ? AND _version = ?${storedOwner === undefined ? "" : " AND _owner_id = ?"}`)
+              .run(nextVersion, encoded, id, current._version, ...(storedOwner === undefined ? [] : [storedOwner]));
+            if (Number(result.changes) !== 1) {
+              const actual = getDocument(name, id, ownerId);
+              throw new DatabaseConflictError(name, id, current._version, actual?._version ?? null);
+            }
+          } else {
+            const result = prepared(`INSERT OR IGNORE INTO ${tableIdentifier(name)}
+              (_id, _owner_id, _creation_time, _version, _data) VALUES (?, ?, ?, ?, ?)`)
+              .run(id, storedOwner ?? null, creationTime, nextVersion, encoded);
+            if (Number(result.changes) !== 1) {
+              const actual = getDocument(name, id, ownerId);
+              throw new DatabaseConflictError(name, id, null, actual?._version ?? null);
+            }
+          }
+          recordChange(changes, name, id, storedOwner);
+          recordDocumentRevision(changes, {
+            table: name,
+            id,
+            ...(storedOwner === undefined ? {} : { ownerId: storedOwner }),
+            documentVersion: nextVersion,
+            creationTime,
+            operation: "restore",
+            snapshotData: encoded,
+            recordedAt: Date.now(),
+            restoredFrom: cursor,
+          });
+          return documentWithMetadata(schema, name, value, id, creationTime, nextVersion, storedOwner);
         },
       };
     },
@@ -715,8 +985,53 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             record.ownerId ?? null,
           );
         }
+        const insertRevision = prepared(`INSERT INTO clank_document_revisions
+          (revision, sequence, table_name, document_id, owner_id, document_version,
+            creation_time, operation, snapshot_data, recorded_at,
+            restored_from_revision, restored_from_sequence)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        let revisionSequence = 0;
+        for (const entry of changes.history) {
+          insertRevision.run(
+            committedVersion,
+            revisionSequence++,
+            entry.table,
+            entry.id,
+            entry.ownerId ?? null,
+            entry.documentVersion,
+            entry.creationTime,
+            entry.operation,
+            entry.snapshotData,
+            entry.recordedAt,
+            entry.restoredFrom?.revision ?? null,
+            entry.restoredFrom?.sequence ?? null,
+          );
+        }
         prepared("DELETE FROM clank_changes WHERE revision < ?")
           .run(Math.max(1, committedVersion - retention + 1));
+        prepared("DELETE FROM clank_document_revisions WHERE revision < ?")
+          .run(Math.max(1, committedVersion - historyRetention + 1));
+        const historyCutoff = prepared(`SELECT revision, sequence
+          FROM clank_document_revisions
+          WHERE table_name = ? AND document_id = ?
+          ORDER BY revision DESC, sequence DESC
+          LIMIT 1 OFFSET ?`);
+        const pruneDocumentHistory = prepared(`DELETE FROM clank_document_revisions
+          WHERE table_name = ? AND document_id = ?
+          AND (revision < ? OR (revision = ? AND sequence <= ?))`);
+        for (const record of changes.records.values()) {
+          const cutoff = historyCutoff.get(record.table, record.id, historyPerDocument);
+          if (!cutoff) continue;
+          const cutoffRevision = positiveIntegerOption(Number(cutoff.revision), "history cutoff revision");
+          const cutoffSequence = safeNonNegativeInteger(cutoff.sequence, "history cutoff sequence");
+          pruneDocumentHistory.run(
+            record.table,
+            record.id,
+            cutoffRevision,
+            cutoffRevision,
+            cutoffSequence,
+          );
+        }
       }
       native.exec("COMMIT");
     } catch (error) {
@@ -1641,6 +1956,12 @@ export async function openBackend<
                   actualVersion: error.actualVersion,
                 });
               }
+              if (error instanceof DatabaseRevisionNotFoundError) {
+                throw new McpToolError(error.code, error.message, {
+                  revision: error.cursor.revision,
+                  sequence: error.cursor.sequence,
+                });
+              }
               if (error instanceof BackendActionError) throw new McpToolError(error.code, error.message);
               if (error instanceof BackendInvocationError) throw new McpToolError(error.code, error.message);
               if (error instanceof BackendOutputError) reportError(error.cause);
@@ -1877,6 +2198,12 @@ export async function openBackend<
             id: error.id,
             expectedVersion: error.expectedVersion,
             actualVersion: error.actualVersion,
+          });
+        }
+        if (error instanceof DatabaseRevisionNotFoundError) {
+          return problem(error.status, error.code, error.message, {
+            revision: error.cursor.revision,
+            sequence: error.cursor.sequence,
           });
         }
         if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
@@ -2268,6 +2595,56 @@ function decodeDocument<Schema extends DatabaseSchema<any>, Name extends TableNa
   return documentWithMetadata(schema, name, value, id, creationTime, version, ownerId);
 }
 
+function decodeDocumentRevision<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>>(
+  schema: Schema,
+  name: Name,
+  row: Record<string, unknown>,
+): DocumentRevision<Schema, Name> {
+  if (String(row.table_name) !== name) throw new Error("Document revision table binding is invalid.");
+  const id = String(row.document_id) as Id<Name>;
+  if (!id) throw new Error("Document revision ID is invalid.");
+  const definition = tableDefinition(schema, name);
+  const ownerId = definition.ownership === "user" ? String(row.owner_id ?? "") : undefined;
+  if (definition.ownership === "user" && !ownerId) {
+    throw new Error(`Owned table ${name} contains an unowned revision (${id}).`);
+  }
+  const value = definition.schema.parse(parseStoredData(row.snapshot_data));
+  const operation = String(row.operation);
+  if (!["create", "update", "delete", "restore"].includes(operation)) {
+    throw new Error("Document revision operation is invalid.");
+  }
+  const cursor = documentRevisionCursor({
+    revision: Number(row.revision),
+    sequence: Number(row.sequence),
+  }, "document revision cursor");
+  const restoredRevision = row.restored_from_revision;
+  const restoredSequence = row.restored_from_sequence;
+  if ((restoredRevision === null || restoredRevision === undefined)
+    !== (restoredSequence === null || restoredSequence === undefined)) {
+    throw new Error("Document revision restore cursor is incomplete.");
+  }
+  return immutableSnapshot({
+    cursor,
+    operation,
+    recordedAt: safeNonNegativeInteger(row.recorded_at, "document revision recordedAt"),
+    document: documentWithMetadata(
+      schema,
+      name,
+      value,
+      id,
+      safeNonNegativeInteger(row.creation_time, `${name}/${id} revision creation time`),
+      positiveIntegerOption(Number(row.document_version), `${name}/${id} revision version`),
+      ownerId,
+    ),
+    ...(restoredRevision === null || restoredRevision === undefined
+      ? {}
+      : { restoredFrom: documentRevisionCursor({
+          revision: Number(restoredRevision),
+          sequence: Number(restoredSequence),
+        }, "restored-from cursor") }),
+  }) as DocumentRevision<Schema, Name>;
+}
+
 function documentWithMetadata<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>>(
   schema: Schema,
   name: Name,
@@ -2434,6 +2811,32 @@ function positiveIntegerOption(value: number, name: string): number {
 
 function validatedExpectedVersion(value: number | undefined): number | undefined {
   return value === undefined ? undefined : positiveIntegerOption(value, "ifVersion");
+}
+
+function validatedRestoreVersion(value: number | null | undefined): number | null | undefined {
+  return value === undefined || value === null ? value : positiveIntegerOption(value, "ifVersion");
+}
+
+function documentRevisionCursor(value: unknown, name: string): Readonly<DocumentRevisionCursor> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${name} must contain revision and sequence.`);
+  }
+  const input = value as Record<string, unknown>;
+  const revision = positiveIntegerOption(Number(input.revision), `${name}.revision`);
+  const sequence = safeNonNegativeInteger(input.sequence, `${name}.sequence`);
+  return Object.freeze({ revision, sequence });
+}
+
+function documentHistoryOptions(value: DocumentHistoryOptions | undefined): Readonly<Required<Pick<DocumentHistoryOptions, "limit">> & Pick<DocumentHistoryOptions, "before">> {
+  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
+    throw new TypeError("Document history options must be an object.");
+  }
+  const limit = positiveIntegerOption(value?.limit ?? 25, "history limit");
+  if (limit > 100) throw new TypeError("Document history limit cannot exceed 100.");
+  return Object.freeze({
+    limit,
+    ...(value?.before ? { before: documentRevisionCursor(value.before, "history before cursor") } : {}),
+  });
 }
 
 function nextDocumentVersion(value: number): number {

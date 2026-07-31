@@ -13442,6 +13442,9 @@ interface PreviewDataSanitizationReport {
 const PREVIEW_DATA_PRESERVED_TABLES = new Set(["clank_meta", "clank_migrations"]);
 const PREVIEW_DATA_PURGED_TABLES = new Set([
   "clank_changes",
+  // Revision snapshots contain prior application values and must never bypass
+  // the active release's explicit per-column preview sanitization policy.
+  "clank_document_revisions",
   "clank_job_events",
   "clank_job_schedules",
   "clank_jobs",

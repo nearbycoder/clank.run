@@ -4,6 +4,16 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added bounded, immutable per-document revision history and conflict-safe compensating restore.
+  Typed queries inherit owned-table isolation; deletes retain recoverable snapshots; restores
+  validate the current schema, require an observed version or deletion state, and append a new
+  version without rewinding live revisions. Blueprint admin studios now server-render responsive
+  timelines and expose role-checked history/restore browser and MCP actions that refresh after
+  every mutation. Browser verification also corrected generated validators so nullable fields keep
+  their default-aware wrappers. Sanitized preview branches always purge historical snapshots. Compiled JavaScript
+  duplicates under `examples/` remain in the repository and docs workflow but are omitted from the
+  npm tarball; the TypeScript examples stay published, preserving the fixed 5 MiB package ceiling.
+
 - Added opt-in sanitized preview database branches for local and provider placement. Policies are
   frozen in the active production release, table/row bounded, deterministic and per-preview keyed;
   auth/OAuth/jobs and unlisted data are purged, staging files are vacuumed and overwritten, target

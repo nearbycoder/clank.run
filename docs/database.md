@@ -33,6 +33,7 @@ Framework state uses:
 
 - `clank_meta`: the persisted global revision;
 - `clank_changes`: the bounded cross-process change journal;
+- `clank_document_revisions`: bounded immutable application-document snapshots;
 - `clank_auth_users` and `clank_auth_sessions`: built-in auth;
 - `clank_migrations`: immutable SQL migration history.
 
@@ -78,6 +79,49 @@ const saved = db.table("todos").patch(
 If another browser changed or deleted the document first, Clank throws `DatabaseConflictError`. RPC converts it to HTTP `409 VERSION_CONFLICT` with the expected and actual versions. The stale mutation commits nothing.
 
 This is optimistic concurrency control. It avoids holding a lock while a person edits and prevents last-write-wins data loss.
+
+## Document history and compensating restore
+
+Every create, content-changing update, delete, and restore records an immutable snapshot in the
+same SQLite transaction as the application write and global revision. Rolled-back mutations leave
+no snapshot. Multiple writes in one transaction share the global revision and receive stable
+sequence numbers.
+
+Read a single document or a whole visible collection newest-first:
+
+```ts
+const recent = db.table("todos").history(todoId, { limit: 25 });
+const nextPage = db.table("todos").history({
+  limit: 25,
+  before: recent.at(-1)?.cursor,
+});
+```
+
+`history()` uses the same ownership scope as `get()` and `collect()`. Alice cannot discover Bob's
+revision IDs, deleted records, values, or counts. The result contains the operation, commit cursor,
+timestamp, validated document snapshot, and (for a restore) its source cursor. Delete entries keep
+the last removed snapshot so an authorized action can recover it.
+
+A restore never rewinds SQLite, the live revision, or the audit trail. It validates the retained
+snapshot against the current table schema and writes it as a new document version:
+
+```ts
+const restored = db.table("todos").restore(
+  revision.document._id,
+  revision.cursor,
+  { ifVersion: current?._version ?? null },
+);
+```
+
+Pass a number when the editor saw a current document and `null` when it saw a deletion. A race
+returns `409 VERSION_CONFLICT`; a missing, expired, or other-owner cursor returns
+`404 REVISION_NOT_FOUND` through browser RPC and MCP. Restoring the exact current value is a no-op.
+
+History defaults to 10,000 committed database revisions globally and 100 snapshots per document.
+Set `historyRetentionRevisions` and `historyRetentionPerDocument` in `openSQLite`/`openBackend` to
+smaller positive limits when values are large. Reads return at most 100 entries per call. Sanitized
+preview branching always purges the revision table because old snapshots may contain values that
+are no longer present in the current production row.
 
 Singleton records, such as one profile per user, should accept `version: number | null`. `null` means “I observed no record”; the mutation checks and inserts inside one transaction, so simultaneous creates cannot silently overwrite one another.
 
