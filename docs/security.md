@@ -249,6 +249,9 @@ Before release, verify:
 - analytics writes require explicit consent, honor do-not-track, admit only aggregate-safe typed
   properties, pseudonymize identity with an independent HMAC secret, enforce retention and storage
   ceilings, and never expose raw events or small cohorts;
+- signed blueprint installs pin explicit Ed25519 roles and namespace/origin scopes, exact semantic
+  versions, normalized data/digests, monotonic catalogs, revocations, and same-origin bounded JSON;
+  redirects, mutable tags, executable registry content, and implicit wildcard authority fail;
 
 Clank's test suite contains executable checks for these invariants. Security is iterative: repeat this review when adding a new transport, credential type, storage backend, raw-HTML path, or deployment topology.
 

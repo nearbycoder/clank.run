@@ -15,6 +15,15 @@ import {
   generateAppFiles,
   parseAppBlueprint,
 } from "../dist/blueprint.js";
+import {
+  createBlueprintTrustPolicy,
+  fetchBlueprintCatalog,
+  generateBlueprintSigningKey,
+  resolveBlueprintRelease,
+  signBlueprintCatalog,
+  signBlueprintRelease,
+  verifyBlueprintRelease,
+} from "../dist/blueprint-registry.js";
 import { applyMigrations, loadMigrations, planMigrations } from "../dist/migrations.js";
 import { readResponseBytes, ResponseBodyLimitError } from "../dist/security.js";
 import { composeApp, ComposeError } from "./cli-compose.mjs";
@@ -92,6 +101,10 @@ const COMMANDS = Object.freeze({
   generate: {
     usage: "clank generate [directory] [--blueprint <file>] [--framework <version|local|spec>] [--force]",
     summary: "Generate an app from a data-only blueprint.",
+  },
+  registry: {
+    usage: "clank registry <keygen|sign|verify|catalog|install> [arguments] [--json]",
+    summary: "Sign, verify, catalog, and install immutable data-only app blueprints.",
   },
   build: {
     usage: "clank build [input=src] [output=dist] [--jsx-import-source=@clank.run/framework] [--tailwind=src/styles.css]",
@@ -208,6 +221,7 @@ const VALUE_OPTIONS = Object.freeze({
   plan: ["blueprint", "output", "framework"],
   explain: ["blueprint"],
   generate: ["blueprint", "framework"],
+  registry: ["private", "trust", "key", "out", "label", "description", "path-prefix", "framework"],
   login: ["server"],
   logout: ["server"],
   org: ["slug", "role"],
@@ -243,6 +257,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   create: ["json"],
   compose: ["json"],
   generate: ["force"],
+  registry: ["force", "json"],
   logout: ["local"],
   project: ["acknowledge-data-loss"],
   activity: ["json"],
@@ -276,6 +291,7 @@ export async function run(command, args) {
       case "compose": return await composeCommand(args);
       case "plan": return await blueprintPlan(args);
       case "generate": return await generateProject(args);
+      case "registry": return await registryCommand(args);
       case "explain": return await explainBlueprint(args);
       case "doctor": return await doctor(args);
       case "jobs": return await jobsCommand(args);
@@ -665,12 +681,28 @@ async function generateProject(args) {
   const target = resolve(positionals(args)[0] ?? ".");
   const path = await blueprintPath(option(args, "blueprint"));
   const blueprint = parseAppBlueprint(await readFile(path, "utf8"), path);
-  const generation = generationOptions(args);
+  const result = await writeBlueprintProject(blueprint, target, generationOptions(args), {
+    force: flag(args, "force"),
+    preserveBlueprintPath: path,
+  });
+  printGeneratedProject(blueprint, target, result);
+}
+
+async function writeBlueprintProject(blueprint, target, generation, options = {}) {
   const files = generateAppFiles(blueprint, generation);
-  const force = flag(args, "force");
   let created = 0;
   let unchanged = 0;
+  let targetMetadata;
+  try { targetMetadata = await lstat(target); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+  if (targetMetadata && (targetMetadata.isSymbolicLink() || !targetMetadata.isDirectory())) {
+    throw new CliError(`Generated target must be a real directory: ${target}`);
+  }
   await mkdir(target, { recursive: true });
+  targetMetadata = await lstat(target);
+  if (targetMetadata.isSymbolicLink() || !targetMetadata.isDirectory()) {
+    throw new CliError(`Generated target must be a real directory: ${target}`);
+  }
   for (const file of files) {
     const destination = resolve(target, file.path);
     if (!inside(target, destination)) throw new CliError(`Generated path escaped the target: ${file.path}`);
@@ -683,11 +715,12 @@ async function generateProject(args) {
       unchanged++;
       continue;
     }
-    const isSourceBlueprint = resolve(path) === destination;
-    if (existing !== undefined && !force && !isSourceBlueprint) {
+    const isSourceBlueprint = options.preserveBlueprintPath !== undefined
+      && resolve(options.preserveBlueprintPath) === destination;
+    if (existing !== undefined && !options.force && !isSourceBlueprint) {
       throw new CliError(`Refusing to overwrite ${destination}. Re-run with --force after reviewing the plan.`);
     }
-    if (isSourceBlueprint && existing !== undefined && !force) {
+    if (isSourceBlueprint && existing !== undefined && !options.force) {
       unchanged++;
       continue;
     }
@@ -701,11 +734,176 @@ async function generateProject(args) {
   const planPath = join(target, ".clank", "plan.json");
   await mkdir(dirname(planPath), { recursive: true, mode: 0o700 });
   await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
-  console.log(`Generated ${blueprint.name}: ${created} files written, ${unchanged} unchanged.`);
-  console.log(`Plan ${plan.digest}`);
+  return { created, unchanged, plan };
+}
+
+function printGeneratedProject(blueprint, target, result) {
+  console.log(`Generated ${blueprint.name}: ${result.created} files written, ${result.unchanged} unchanged.`);
+  console.log(`Plan ${result.plan.digest}`);
   console.log(`Next: cd ${target} && npm install && npm run dev`);
   console.log("Test: npm test");
   console.log("Check: npm run doctor");
+}
+
+async function registryCommand(args) {
+  const values = positionals(args);
+  const subcommand = values.shift();
+  const json = flag(args, "json");
+  const force = flag(args, "force");
+  if (subcommand === "keygen") {
+    const role = values.shift();
+    const scope = values.shift();
+    if ((role !== "publisher" && role !== "registry") || !scope || values.length) {
+      throw new CliError("Usage: clank registry keygen <publisher namespace|registry https-origin> [--private <file>] [--trust <file>] [--label <text>] [--force] [--json]");
+    }
+    const label = option(args, "label") ?? `${role} ${scope}`;
+    const pair = await generateBlueprintSigningKey(label, {
+      scope: role === "publisher"
+        ? { role, namespaces: [scope] }
+        : { role, registries: [scope] },
+    });
+    const privatePath = resolve(option(args, "private") ?? `clank-blueprint-${role}.private.json`);
+    const trustPath = resolve(option(args, "trust") ?? "clank-blueprint.trust.json");
+    await writeCliJson(privatePath, pair.privateKey, { force, privateFile: true });
+    let trust;
+    try {
+      const current = await readBoundedJsonFile(trustPath, "Blueprint trust policy");
+      trust = createBlueprintTrustPolicy({
+        keys: [...current.keys, pair.trustKey],
+        revokedKeyIds: current.revokedKeyIds,
+        revokedReleaseDigests: current.revokedReleaseDigests,
+        minimumCatalogSequences: current.minimumCatalogSequences,
+      });
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      trust = createBlueprintTrustPolicy({ keys: [pair.trustKey] });
+    }
+    await writeCliJson(trustPath, trust, { force: true, privateFile: false });
+    const output = {
+      protocol: "clank-registry-result/1",
+      operation: "keygen",
+      keyId: pair.privateKey.keyId,
+      role,
+      privatePath,
+      trustPath,
+    };
+    if (json) console.log(JSON.stringify(output, null, 2));
+    else console.log(`Created ${role} key ${pair.privateKey.keyId}\nPrivate: ${privatePath}\nTrust: ${trustPath}`);
+    return;
+  }
+
+  if (subcommand === "sign") {
+    const blueprintFile = values.shift();
+    const identity = values.shift();
+    if (!blueprintFile || !identity || values.length) {
+      throw new CliError("Usage: clank registry sign <clank.app.ts> <owner/name@version> --key <private-key.json> [--out <release.json>] [--description <text>] [--force] [--json]");
+    }
+    const { name, version } = registryIdentity(identity);
+    const keyPath = requiredPathOption(args, "key");
+    const sourcePath = resolve(blueprintFile);
+    const source = await readBoundedTextFile(sourcePath, "Blueprint", MAX_LOCAL_CONFIG_BYTES);
+    const key = await readBoundedJsonFile(keyPath, "Blueprint private key");
+    const release = await signBlueprintRelease(parseAppBlueprint(source, sourcePath), {
+      name,
+      version,
+      description: option(args, "description"),
+      key,
+    });
+    const outputPath = resolve(option(args, "out") ?? `${name.replace("/", "-")}-${version}.release.json`);
+    await writeCliJson(outputPath, release, { force, privateFile: false });
+    const output = { protocol: "clank-registry-result/1", operation: "sign", name, version, digest: release.digest, outputPath };
+    if (json) console.log(JSON.stringify(output, null, 2));
+    else console.log(`Signed ${name}@${version}\nDigest ${release.digest}\nRelease: ${outputPath}`);
+    return;
+  }
+
+  if (subcommand === "verify") {
+    const releaseFile = values.shift();
+    if (!releaseFile || values.length) throw new CliError("Usage: clank registry verify <release.json> --trust <trust.json> [--json]");
+    const trust = await readBoundedJsonFile(requiredPathOption(args, "trust"), "Blueprint trust policy");
+    const release = await readBoundedJsonFile(resolve(releaseFile), "Blueprint release", 2 * 1024 * 1024);
+    const verified = await verifyBlueprintRelease(release, trust);
+    const output = {
+      protocol: "clank-registry-result/1",
+      operation: "verify",
+      valid: true,
+      name: verified.release.name,
+      version: verified.release.version,
+      digest: verified.release.digest,
+      publisherKeyId: verified.publisher.keyId,
+    };
+    if (json) console.log(JSON.stringify(output, null, 2));
+    else console.log(`Verified ${output.name}@${output.version}\nDigest ${output.digest}\nPublisher ${output.publisherKeyId}`);
+    return;
+  }
+
+  if (subcommand === "catalog") {
+    const registry = values.shift();
+    const rawSequence = values.shift();
+    if (!registry || !rawSequence || !values.length) {
+      throw new CliError("Usage: clank registry catalog <https-origin> <sequence> <release.json...> --key <registry-key.json> --trust <trust.json> [--path-prefix <path>] [--out <catalog.json>] [--force] [--json]");
+    }
+    const sequence = Number(rawSequence);
+    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new CliError("Catalog sequence must be a positive integer.");
+    const trust = await readBoundedJsonFile(requiredPathOption(args, "trust"), "Blueprint trust policy");
+    const key = await readBoundedJsonFile(requiredPathOption(args, "key"), "Blueprint registry private key");
+    const prefix = registryPathPrefix(option(args, "path-prefix") ?? "releases");
+    const entries = [];
+    for (const releaseFile of values) {
+      const value = await readBoundedJsonFile(resolve(releaseFile), "Blueprint release", 2 * 1024 * 1024);
+      const verified = await verifyBlueprintRelease(value, trust);
+      entries.push({
+        name: verified.release.name,
+        version: verified.release.version,
+        description: verified.release.description,
+        releaseDigest: verified.release.digest,
+        publisherKeyId: verified.release.publisherKeyId,
+        path: `${prefix}/${verified.release.name}/${verified.release.version}.json`,
+      });
+    }
+    const catalog = await signBlueprintCatalog({ registry, sequence, releases: entries, key });
+    const outputPath = resolve(option(args, "out") ?? "catalog.json");
+    await writeCliJson(outputPath, catalog, { force, privateFile: false });
+    const output = { protocol: "clank-registry-result/1", operation: "catalog", sequence, digest: catalog.digest, releases: catalog.releases.length, outputPath };
+    if (json) console.log(JSON.stringify(output, null, 2));
+    else console.log(`Signed catalog sequence ${sequence} with ${output.releases} releases\nDigest ${catalog.digest}\nCatalog: ${outputPath}`);
+    return;
+  }
+
+  if (subcommand === "install") {
+    const catalogUrl = values.shift();
+    const identity = values.shift();
+    const target = resolve(values.shift() ?? ".");
+    if (!catalogUrl || !identity || values.length) {
+      throw new CliError("Usage: clank registry install <catalog-url> <owner/name@version> [directory] --trust <trust.json> [--framework <version|local|spec>] [--force] [--json]");
+    }
+    const trust = await readBoundedJsonFile(requiredPathOption(args, "trust"), "Blueprint trust policy");
+    const requested = registryIdentity(identity);
+    const catalog = await fetchBlueprintCatalog(catalogUrl, trust);
+    const verified = await resolveBlueprintRelease(catalog, requested, trust);
+    const result = await writeBlueprintProject(verified.blueprint, target, generationOptions(args), { force });
+    const output = {
+      protocol: "clank-registry-result/1",
+      operation: "install",
+      name: verified.release.name,
+      version: verified.release.version,
+      releaseDigest: verified.release.digest,
+      planDigest: result.plan.digest,
+      publisherKeyId: verified.publisher.keyId,
+      target,
+      created: result.created,
+      unchanged: result.unchanged,
+    };
+    if (json) console.log(JSON.stringify(output, null, 2));
+    else {
+      console.log(`Verified ${output.name}@${output.version} from ${catalog.catalog.registry}`);
+      console.log(`Release ${output.releaseDigest}\nPublisher ${output.publisherKeyId}`);
+      printGeneratedProject(verified.blueprint, target, result);
+    }
+    return;
+  }
+
+  throw new CliError("Usage: clank registry <keygen|sign|verify|catalog|install>");
 }
 
 async function blueprintPath(value) {
@@ -3162,6 +3360,48 @@ async function readLocalJson(path) {
 
 async function writePrivateJson(path, value) {
   await writePrivateFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function readBoundedTextFile(path, label, maximum = MAX_LOCAL_CONFIG_BYTES) {
+  const metadata = await lstat(path);
+  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new CliError(`${label} must be a regular non-symbolic-link file: ${path}`);
+  if (metadata.size > maximum) throw new CliError(`${label} exceeds ${maximum} bytes: ${path}`);
+  return readFile(path, "utf8");
+}
+
+async function readBoundedJsonFile(path, label, maximum = MAX_LOCAL_CONFIG_BYTES) {
+  const source = await readBoundedTextFile(path, label, maximum);
+  try { return JSON.parse(source); }
+  catch { throw new CliError(`${label} is not valid JSON: ${path}`); }
+}
+
+async function writeCliJson(path, value, options) {
+  let metadata;
+  try { metadata = await lstat(path); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+  if (metadata?.isSymbolicLink()) throw new CliError(`Refusing to replace a symbolic link: ${path}`);
+  if (metadata && !options.force) throw new CliError(`Refusing to overwrite ${path}. Re-run with --force after reviewing it.`);
+  await writePrivateJson(path, value);
+  await chmod(path, options.privateFile ? 0o600 : 0o644);
+}
+
+function requiredPathOption(args, name) {
+  const value = option(args, name);
+  if (!value) throw new CliError(`--${name} requires a file path.`);
+  return resolve(value);
+}
+
+function registryIdentity(value) {
+  const separator = value.lastIndexOf("@");
+  if (separator <= 0 || separator === value.length - 1) throw new CliError("Blueprint identity must be owner/name@exact-version.");
+  return { name: value.slice(0, separator), version: value.slice(separator + 1) };
+}
+
+function registryPathPrefix(value) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(value) || value.includes("//") || value.split("/").some((part) => !part || part === "." || part === "..")) {
+    throw new CliError("--path-prefix must be a safe registry-relative path without traversal.");
+  }
+  return value.replace(/\/$/u, "");
 }
 
 async function writePrivateFile(path, value) {

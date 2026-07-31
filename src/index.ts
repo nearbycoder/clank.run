@@ -8,6 +8,7 @@ export * from "./collaboration.ts";
 export * from "./analytics.ts";
 export * from "./mcp.ts";
 export * from "./blueprint.ts";
+export * from "./blueprint-registry.ts";
 export * from "./webauthn.ts";
 export * from "./services.ts";
 export * from "./object-storage.ts";

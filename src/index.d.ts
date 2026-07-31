@@ -10,6 +10,7 @@ export * from "./collaboration.js";
 export * from "./analytics.js";
 export * from "./mcp.js";
 export * from "./blueprint.js";
+export * from "./blueprint-registry.js";
 export * from "./webauthn.js";
 export * from "./services.js";
 export * from "./object-storage.js";

@@ -161,7 +161,7 @@ applications do not need a separate runtime compiler or bundler.
 | Reactivity | Signals, lazy computed values, effects with cleanup, batching, rollback transactions, untracked reads, owned roots, deep proxy stores, snapshots, async resources, stream reduction |
 | UI | Typed compiler-powered TSX, automatic reactive expressions and props, keyed lists, stable text nodes, lifecycle/context, forms, dialogs, tabs, disclosures, pagination, directives, `Show`, `For`, `Switch`, lazy components |
 | Forms | Schema validation, typed fields, accessible control/error props, touched/dirty state, cross-field rules, cancellation, server errors, invalid-focus behavior, reset, agent-readable manifests |
-| AI | Approval-bound conversational application composition, web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, per-user agent access inboxes and revocable scoped grants, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface, and isolated real-browser journeys with secret-value redaction |
+| AI | Approval-bound conversational application composition, signed exact-version blueprint registries, web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, per-user agent access inboxes and revocable scoped grants, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface, and isolated real-browser journeys with secret-value redaction |
 | UI↔MCP parity | Typed `agentAction` function references, bounded SSR/DOM inspection, manifest and revision verification, stable-control enforcement, structured mismatch reports |
 | Generated verification | Blueprint-derived synthetic fixture users and related records, real backend seeding, ownership isolation, exact agent/UI manifest parity, per-route SSR contracts, and a selector-free mobile Chrome smoke journey |
 | Routing | Parameters, optional segments, wildcards, repeated query values, async loaders, aborts, guards, redirects, titles, links, history navigation |
@@ -238,6 +238,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Semantic real-browser journeys](https://docs.clank.run/docs/browser-journeys)
 - [Realtime presence, cursors, and signals](https://docs.clank.run/docs/collaboration)
 - [Privacy-first typed product analytics](https://docs.clank.run/docs/product-analytics)
+- [Signed blueprint registry](https://docs.clank.run/docs/blueprint-registry)
 - [Agent access inbox and scoped grants](https://docs.clank.run/docs/agent-access)
 - [Blueprint-generated admin studio](https://docs.clank.run/docs/admin-studio)
 - [Organizations, RBAC, invitations, and scoped tokens](https://docs.clank.run/docs/organizations)

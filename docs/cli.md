@@ -67,6 +67,21 @@ a shell or ambient application secrets. Interactive runs can send revision feedb
 approval. See [Conversational application building](conversational-build.md) for the complete
 protocol, security boundary, review storage, and existing-app workflow.
 
+## Signed blueprint registry
+
+```sh
+clank registry keygen publisher acme --private=publisher.private.json --trust=trust.json
+clank registry sign clank.app.ts acme/tasks@1.0.0 --key=publisher.private.json --out=release.json
+clank registry verify release.json --trust=trust.json
+clank registry install https://blueprints.example/catalog.json acme/tasks@1.0.0 ./tasks --trust=trust.json
+```
+
+`registry` creates explicitly scoped Ed25519 keys, signs and verifies normalized data-only
+blueprints, creates monotonic same-origin static catalogs, and installs only exact signed versions.
+It supports `--json` as `clank-registry-result/1`; private bytes never enter results. There are no
+mutable tags, redirects, remote generators, or install hooks. See [Signed blueprint registry](blueprint-registry.md)
+for catalog publishing, trust bootstrap, rotation, revocation, and the complete verification chain.
+
 ## Create
 
 ```sh

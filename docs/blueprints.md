@@ -5,6 +5,10 @@ source, and deployment resources. It is deliberately data rather than executable
 an agent can propose one, a person can inspect the complete contract, and Clank can generate the
 same app from it every time.
 
+For reusable third-party blueprints, [Signed blueprint registry](./blueprint-registry.md) adds
+exact semantic versions, scoped Ed25519 publishers, monotonic static catalogs, explicit trust and
+revocation, and an install path that still uses this same data-only normalizer and generator.
+
 The default file is `clank.app.ts`. It must export one literal:
 
 ```ts

@@ -351,6 +351,19 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   `AppFixtureRecordDefinition`, and `AppFixtureValue` describe bounded synthetic states. Normalized
   `AppFixture`, `AppFixtureUser`, and `AppFixtureRecord` values are frozen, included in plan
   checksums, written under `fixtures/`, and exercised by the generated app-owned test.
+- `generateBlueprintSigningKey(label, options)`: create a separately scoped Ed25519 publisher or
+  registry key plus its public trust record.
+- `signBlueprintRelease(blueprint, input)` / `verifyBlueprintRelease(value, trust, options?)`:
+  bind exact name, semantic version, normalized blueprint, SHA-256 digests, namespace, and key.
+- `signBlueprintCatalog(input)` / `verifyBlueprintCatalog(value, trust, options?)`: bind an exact
+  HTTPS origin, monotonic sequence, sorted release entries, registry key, digest, and signature.
+- `fetchBlueprintCatalog(url, trust, options?)` / `resolveBlueprintRelease(...)`: bounded,
+  no-redirect, same-origin, exact-version remote discovery with complete re-verification.
+- `createBlueprintTrustPolicy(input)`: immutable explicit roles/scopes, revocations, and minimum
+  catalog sequences. `BlueprintRegistryError.code` identifies safe verification failures.
+- Types: `BlueprintPrivateKey`, `BlueprintTrustKey`, `BlueprintTrustPolicy`,
+  `SignedBlueprintRelease`, `SignedBlueprintCatalog`, `BlueprintCatalogEntry`,
+  `VerifiedBlueprintRelease`, `VerifiedBlueprintCatalog`, `BlueprintRegistryFetchOptions`.
 
 - `s`: runtime schema builders and JSON Schema generation. Includes string, email, URL, date, date-time, number, boolean, literal, enum, array, record, object, optional, nullable, default, refinement, union, and numeric/boolean coercion.
 - `ValidationError`: aggregate issues with paths.
