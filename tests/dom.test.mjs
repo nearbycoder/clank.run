@@ -580,3 +580,17 @@ test("client render and hydration reuse deterministic component IDs", () => {
   assert.equal(root.children[0], form);
   assert.equal(root.getAttribute("data-clank-hydration"), "attached");
 });
+
+test("useId normalizes uncontrolled prefixes and still requires a letter", () => {
+  function SanitizedField() {
+    const id = useId("  --profile ! field--  ");
+    return h("input", { id });
+  }
+  const root = new FakeElement("main");
+  render(root, h(SanitizedField));
+  assert.equal(root.children[0].getAttribute("id"), "clank-profile-field-1");
+  assert.throws(
+    () => render(new FakeElement("main"), h(() => h("input", { id: useId("---123---") }))),
+    /prefix must contain a letter/,
+  );
+});

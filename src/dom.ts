@@ -1385,6 +1385,31 @@ export function useContext<T>(context: ClankContext<T>): T {
     : context.defaultValue;
 }
 
+function sanitizeIdPrefix(prefix: string): { token: string; hasLetter: boolean } {
+  const input = prefix.trim();
+  const output: string[] = [];
+  let pendingSeparator = false;
+  let hasLetter = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    const letter = (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    const allowed = letter || (code >= 48 && code <= 57) || code === 45 || code === 95;
+    if (!allowed) {
+      pendingSeparator = true;
+      continue;
+    }
+    if (pendingSeparator) output.push("-");
+    output.push(input.charAt(index));
+    pendingSeparator = false;
+    if (letter) hasLetter = true;
+  }
+  let start = 0;
+  let end = output.length;
+  while (start < end && output[start] === "-") start += 1;
+  while (end > start && output[end - 1] === "-") end -= 1;
+  return { token: output.slice(start, end).join(""), hasLetter };
+}
+
 /**
  * Returns a deterministic ID scoped to the current render root. Server rendering and hydration
  * produce the same sequence as long as the component tree is structurally identical.
@@ -1393,8 +1418,8 @@ export function useId(prefix = "ui"): string {
   if (!currentFrame) throw new Error("useId() must run while a component is being created.");
   const state = currentFrame.contexts.get(RENDER_ID_CONTEXT) as RenderIdState | undefined;
   if (!state) throw new Error("The current renderer does not provide deterministic IDs.");
-  const token = prefix.trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!token || !/[A-Za-z]/.test(token)) throw new TypeError("useId prefix must contain a letter.");
+  const { token, hasLetter } = sanitizeIdPrefix(prefix);
+  if (!token || !hasLetter) throw new TypeError("useId prefix must contain a letter.");
   return `clank-${token}-${++state.next}`;
 }
 
