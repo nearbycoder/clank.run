@@ -5161,6 +5161,27 @@ test("preview environments are isolated, quota-bound, refreshable, removable, an
     }));
     productionDatabase.prepare("INSERT INTO private_notes (body) VALUES (?)")
       .run("never leave production");
+    productionDatabase.exec(`CREATE TABLE clank_document_revisions (
+      revision INTEGER NOT NULL,
+      sequence INTEGER NOT NULL,
+      table_name TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      owner_id TEXT,
+      document_version INTEGER NOT NULL,
+      creation_time INTEGER NOT NULL,
+      operation TEXT NOT NULL,
+      snapshot_data TEXT NOT NULL,
+      recorded_at INTEGER NOT NULL,
+      restored_from_revision INTEGER,
+      restored_from_sequence INTEGER,
+      PRIMARY KEY (revision, sequence)
+    ) WITHOUT ROWID`);
+    productionDatabase.prepare(`INSERT INTO clank_document_revisions
+      (revision, sequence, table_name, document_id, owner_id, document_version,
+        creation_time, operation, snapshot_data, recorded_at,
+        restored_from_revision, restored_from_sequence)
+      VALUES (1, 0, 'items', 'old-production-item', NULL, 1, 1, 'create', ?, 1, NULL, NULL)`)
+      .run(JSON.stringify({ value: "historical production secret" }));
     assert.equal(productionDatabase.prepare("SELECT count(*) AS count FROM items").get().count, 1);
     assert.equal(previewDatabase.prepare("SELECT count(*) AS count FROM items").get().count, 0);
     productionDatabase.close();
@@ -5207,6 +5228,7 @@ test("preview environments are isolated, quota-bound, refreshable, removable, an
     assert.match(sanitizedSettings.profile.name, /^pv_[a-f0-9]{16}$/u);
     assert.match(sanitizedSettings.profile.email, /^preview\+[a-f0-9]{16}@example\.invalid$/u);
     assert.equal(branchedDatabase.prepare("SELECT count(*) AS count FROM private_notes").get().count, 0);
+    assert.equal(branchedDatabase.prepare("SELECT count(*) AS count FROM clank_document_revisions").get().count, 0);
     branchedDatabase.close();
     const unchangedProduction = new DatabaseSync(
       join(dataDirectory, "projects", projectId, "data", "app.sqlite"),

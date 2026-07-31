@@ -76,6 +76,7 @@
     "!docs/code-audit.md",
     "!docs/public-beta.md",
     "examples",
+    "!examples/**/*.js",
     "!examples/**/*.sqlite",
     "!examples/**/*.sqlite-shm",
     "!examples/**/*.sqlite-wal",

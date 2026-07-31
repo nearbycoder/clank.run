@@ -368,6 +368,13 @@ loading data. Backend action roles and record ownership are still authoritative,
 does not imply global database access. `allowMutations: false` hides studio mutation controls
 without changing those actions elsewhere.
 
+For every studio entity, generation also adds `<entity>.history` and `<entity>.restore` actions.
+The responsive timeline is server rendered and refreshed after mutations. History queries inherit
+owned-table isolation; restores validate the retained snapshot and create a new optimistic version.
+They never rewind the live database cursor or erase intervening history. These actions are emitted
+from the same backend function tree as browser RPC and MCP, so contract-revision and UI-parity
+checks cover them automatically.
+
 See [Generated admin studio](admin-studio.md) for the complete configuration, authorization model,
 and generated verification contract.
 

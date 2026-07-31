@@ -25,6 +25,10 @@ export const backend = defineBackend({ schema }).functions(({ query, mutation })
         ? db.table("todos").collect()
         : db.table("todos").query().where("done", done).collect(),
     }),
+    history: query({
+      args: { id: s.id("todos") },
+      handler: ({ db }, { id }) => db.table("todos").history(id, { limit: 10 }),
+    }),
     add: mutation({
       args: { title: s.string(), note: s.optional(s.string()) },
       handler: ({ db }, input) => db.table("todos").insert({ ...input, done: false }),
@@ -35,6 +39,16 @@ export const backend = defineBackend({ schema }).functions(({ query, mutation })
         const todo = db.table("todos").get(id);
         return todo && db.table("todos").patch(id, { done: !todo.done });
       },
+    }),
+    restore: mutation({
+      args: {
+        id: s.id("todos"),
+        revision: s.number({ integer: true, min: 1 }),
+        sequence: s.number({ integer: true, min: 0 }),
+        version: s.nullable(s.number({ integer: true, min: 1 })),
+      },
+      handler: ({ db }, { id, revision, sequence, version }) =>
+        db.table("todos").restore(id, { revision, sequence }, { ifVersion: version }),
     }),
   },
 }));
@@ -51,6 +65,15 @@ async function inferredCalls() {
   const filtered = await client.query(api.todos.list, { done: false });
   const id = await client.mutate(api.todos.add, { title: "Inferred" });
   await client.mutate(api.todos.toggle, { id });
+  const history = await client.query(api.todos.history, { id });
+  if (history[0]) {
+    await client.mutate(api.todos.restore, {
+      id,
+      revision: history[0].cursor.revision,
+      sequence: history[0].cursor.sequence,
+      version: history[0].document._version,
+    });
+  }
   const live = client.live(api.todos.list, {});
   const current: Array<DocumentFor<typeof schema, "todos">> | undefined = live.data.value;
   const title: string = todos[0]!.title;

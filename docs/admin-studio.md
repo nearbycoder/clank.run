@@ -75,6 +75,8 @@ The studio is generated into the application's normal `src/view.tsx`, `src/app.t
 - browser hydration without replacing the server-rendered document;
 - live updates for realtime entities and ordinary post-mutation refresh for other entities;
 - responsive entity forms and lists built from the blueprint field contract;
+- a server-rendered, newest-first revision timeline for every selected entity;
+- role-checked restores that add a new version instead of rewriting history;
 - role-filtered links and controls; and
 - a direct link to the app-local Agent access inbox.
 
@@ -92,6 +94,12 @@ Authorization is enforced in layers:
 3. Each query and mutation checks its own backend action role.
 4. Owned tables constrain records to the authenticated owner.
 5. Mutations validate inputs and expected document versions inside a transaction.
+
+The generated `<entity>.history` query and `<entity>.restore` mutation use the studio roles and are
+also documented MCP tools. History refreshes after every browser mutation, and the server renders
+the initial timeline before hydration. A restore sends the exact database revision/sequence plus
+the current document version (or `null` for a deleted document), so two administrators cannot
+silently overwrite each other. `allowMutations: false` keeps the timeline but omits restore controls.
 
 The backend is authoritative. For example, an `owner` allowed into the studio still cannot invoke
 an action declared only for `member`. A user-owned entity count is the number visible to the

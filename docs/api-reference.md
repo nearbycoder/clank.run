@@ -391,10 +391,14 @@ details, and [Agent access](agent-access.md) for grant inspection, reduction, an
 - `openSQLite(schema, options?)`: opens Node's built-in synchronous SQLite engine.
 - `createSQLiteDatabase(schema, connection, options?)`: wraps a compatible connection.
 - `SQLiteDatabase`: `.read`, `.tracked`, `.transaction`, `.subscribe`, `.version`, `.close`.
-- Read table: `.get`, `.query`, `.collect`.
-- Write table: `.insert`, `.patch`, `.replace`, `.delete`.
+- Read table: `.get`, `.query`, `.collect`, `.history(id?, options?)`.
+- Write table: `.insert`, `.patch`, `.replace`, `.delete`, `.restore(id, cursor, options?)`.
 - `DocumentWriteOptions`: `{ ifVersion }` optimistic concurrency for patch, replace, and delete.
 - `DatabaseConflictError`: stale-write error exposed as HTTP `409 VERSION_CONFLICT`.
+- `DocumentRevision`, `DocumentRevisionCursor`, `DocumentHistoryOptions`, and
+  `DocumentRestoreOptions`: typed immutable snapshots, bounded pagination, and compensating restore.
+- `DatabaseRevisionNotFoundError`: unavailable or ownership-hidden history exposed as
+  `404 REVISION_NOT_FOUND`.
 - Query builder: `.where`, `.orderBy`, `.limit`, `.collect`, `.first`.
 - `defineBackend({ schema, auth? }).functions(builders)`: inference-first nested function tree. Auth backends make `query`/`mutation` required and expose explicit `publicQuery`/`publicMutation`.
 - `createApi<typeof backend>()`: zero-codegen typed function-reference proxy.

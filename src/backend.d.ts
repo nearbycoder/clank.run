@@ -44,16 +44,46 @@ export interface ReadTable<Schema extends DatabaseSchema<any>, Name extends Tabl
     get(id: Id<Name>): DocumentFor<Schema, Name> | null;
     query(): QueryBuilder<Schema, Name>;
     collect(): Array<DocumentFor<Schema, Name>>;
+    /** Newest-first immutable snapshots for this visible collection. */
+    history(options?: DocumentHistoryOptions): Array<DocumentRevision<Schema, Name>>;
+    /** Newest-first immutable snapshots for one visible document ID. */
+    history(id: Id<Name>, options?: DocumentHistoryOptions): Array<DocumentRevision<Schema, Name>>;
 }
 export interface WriteTable<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> extends ReadTable<Schema, Name> {
     insert(value: TableValue<Schema["tables"][Name]>): Id<Name>;
     patch(id: Id<Name>, value: Partial<TableValue<Schema["tables"][Name]>>, options?: DocumentWriteOptions): DocumentFor<Schema, Name> | null;
     replace(id: Id<Name>, value: TableValue<Schema["tables"][Name]>, options?: DocumentWriteOptions): DocumentFor<Schema, Name> | null;
     delete(id: Id<Name>, options?: DocumentWriteOptions): boolean;
+    /** Restore a historical snapshot as a new, conflict-checked document version. */
+    restore(id: Id<Name>, cursor: DocumentRevisionCursor, options?: DocumentRestoreOptions): DocumentFor<Schema, Name>;
 }
 export interface DocumentWriteOptions {
     /** Reject the write unless the stored document has this exact version. */
     ifVersion?: number;
+}
+export interface DocumentRevisionCursor {
+    /** The committed database revision containing the snapshot. */
+    revision: number;
+    /** The snapshot's stable order inside that atomic revision. */
+    sequence: number;
+}
+export interface DocumentHistoryOptions {
+    /** Maximum snapshots to return. Defaults to 25 and cannot exceed 100. */
+    limit?: number;
+    /** Return snapshots strictly older than this cursor. */
+    before?: DocumentRevisionCursor;
+}
+export interface DocumentRestoreOptions {
+    /** Reject unless the current document has this version; null means deleted. */
+    ifVersion?: number | null;
+}
+export interface DocumentRevision<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> {
+    readonly cursor: Readonly<DocumentRevisionCursor>;
+    readonly operation: "create" | "update" | "delete" | "restore";
+    readonly recordedAt: number;
+    /** Snapshot created/updated/restored, or the last snapshot removed by delete. */
+    readonly document: DocumentFor<Schema, Name>;
+    readonly restoredFrom?: Readonly<DocumentRevisionCursor>;
 }
 export declare class DatabaseConflictError extends Error {
     readonly table: string;
@@ -64,6 +94,15 @@ export declare class DatabaseConflictError extends Error {
     readonly code = "VERSION_CONFLICT";
     readonly status = 409;
     constructor(table: string, id: string, expectedVersion: number | null, actualVersion: number | null);
+}
+export declare class DatabaseRevisionNotFoundError extends Error {
+    readonly table: string;
+    readonly id: string;
+    readonly cursor: Readonly<DocumentRevisionCursor>;
+    readonly name = "DatabaseRevisionNotFoundError";
+    readonly code = "REVISION_NOT_FOUND";
+    readonly status = 404;
+    constructor(table: string, id: string, cursor: Readonly<DocumentRevisionCursor>);
 }
 /**
  * A bounded, intentional application failure that is safe to expose through
@@ -125,6 +164,10 @@ export interface SQLiteOptions {
     integrityCheck?: "quick" | "full" | false;
     changePollIntervalMs?: number;
     changeRetentionRevisions?: number;
+    /** Global committed-revision window retained for document history. Defaults to 10,000. */
+    historyRetentionRevisions?: number;
+    /** Maximum snapshots retained for any one document. Defaults to 100. */
+    historyRetentionPerDocument?: number;
     onError?: (error: unknown) => void;
 }
 export interface SQLiteDatabase<Schema extends DatabaseSchema<any>> {

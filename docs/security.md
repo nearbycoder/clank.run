@@ -44,6 +44,10 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 - Disabling users, role changes, and revoking sessions close associated live streams across same-host processes.
 - Document `ifVersion` checks reject stale writes instead of silently overwriting newer edits.
 - Mutation writes, output validation, revision updates, and journal records share one transaction.
+- Document-history snapshots share that transaction, inherit owned-record filtering, are bounded by
+  global and per-document retention, and restore only through a new expected-version-checked write.
+  Treat retained snapshots and backups as application data because changed or deleted values remain
+  readable to authorized history actions until retention expires.
 - Mutation application writes and durable job enqueue share that transaction when using the
   mutation-scoped publisher.
 - Query snapshots and change metadata are immutable at runtime.
