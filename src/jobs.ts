@@ -140,9 +140,11 @@ export interface JobBuilders<
 export interface JobSystemDefinition<
   DB extends DatabaseSchema<any>,
   Jobs extends JobTree,
+  Workflows extends WorkflowTree = {},
 > {
   readonly schema: DB;
   readonly jobs: Jobs;
+  readonly workflows: Workflows;
 }
 
 export interface JobSystemBuilder<DB extends DatabaseSchema<any>> {
@@ -152,6 +154,7 @@ export interface JobSystemBuilder<DB extends DatabaseSchema<any>> {
 }
 
 const JOB_PATH = Symbol.for("clank.job.path");
+const WORKFLOW_PATH = Symbol.for("clank.workflow.path");
 
 export function defineJobs<DB extends DatabaseSchema<any>>(
   options: { schema: DB },
@@ -179,6 +182,7 @@ export function defineJobs<DB extends DatabaseSchema<any>>(
       return Object.freeze({
         schema: options.schema,
         jobs: freezeJobTree(jobs) as typeof jobs,
+        workflows: Object.freeze({}),
       });
     },
   };
@@ -233,6 +237,190 @@ function createJobDefinition(definition: {
 export type JobInput<Job> = Job extends JobDefinition<infer Input, any, any, any> ? Input : never;
 export type JobOutput<Job> = Job extends JobDefinition<any, infer Output, any, any> ? Output : never;
 
+export interface WorkflowAgentOptions {
+  /** Human-readable title for manifests and agent planning. */
+  title?: string;
+  /** Human-readable business outcome and side-effect description. */
+  description?: string;
+  /** Whether one or more steps communicate outside this application. */
+  openWorld?: boolean;
+  /** Whether repeated starts with the same key safely converge. */
+  idempotent?: boolean;
+}
+
+export interface WorkflowStepContext<Input> {
+  readonly input: Input;
+  /** Read the validated result of a declared dependency. */
+  result<Step extends AnyWorkflowStepDefinition>(step: Step): JobOutput<Step["job"]>;
+}
+
+export interface WorkflowStepDefinition<Input, Job extends AnyJobDefinition> {
+  readonly kind: "workflow-step";
+  readonly job: Job;
+  readonly needs: readonly AnyWorkflowStepDefinition[];
+  readonly description?: string;
+  readonly args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
+}
+
+export type AnyWorkflowStepDefinition = WorkflowStepDefinition<any, AnyJobDefinition>;
+export type WorkflowStepTree = Readonly<Record<string, AnyWorkflowStepDefinition>>;
+export type WorkflowResults<Steps extends WorkflowStepTree> = Readonly<{
+  [Name in keyof Steps]: JobOutput<Steps[Name]["job"]>;
+}>;
+
+export interface WorkflowOutputContext<Input, Steps extends WorkflowStepTree> {
+  readonly input: Input;
+  readonly results: WorkflowResults<Steps>;
+  result<Step extends Steps[keyof Steps]>(step: Step): JobOutput<Step["job"]>;
+}
+
+export interface WorkflowDefinition<
+  Input,
+  Output,
+  Steps extends WorkflowStepTree = WorkflowStepTree,
+> {
+  readonly kind: "workflow";
+  readonly args: Schema<Input>;
+  readonly returns?: Schema<Output>;
+  readonly steps: Steps;
+  readonly description?: string;
+  readonly agent: false | Readonly<WorkflowAgentOptions>;
+  readonly output: (context: WorkflowOutputContext<Input, Steps>) => Output;
+}
+
+export type AnyWorkflowDefinition = WorkflowDefinition<any, any, any>;
+export type WorkflowTree = {
+  readonly [key: string]: AnyWorkflowDefinition | WorkflowTree;
+};
+export type WorkflowOfTree<Tree> = Tree extends AnyWorkflowDefinition
+  ? Tree
+  : Tree extends Readonly<Record<string, unknown>>
+    ? { [Key in keyof Tree]: WorkflowOfTree<Tree[Key]> }[keyof Tree]
+    : never;
+export type WorkflowInput<Workflow> = Workflow extends WorkflowDefinition<infer Input, any, any>
+  ? Input
+  : never;
+export type WorkflowOutput<Workflow> = Workflow extends WorkflowDefinition<any, infer Output, any>
+  ? Output
+  : never;
+
+export interface WorkflowGraphBuilder<Input> {
+  step<Job extends AnyJobDefinition>(
+    job: Job,
+    definition: {
+      needs?: readonly AnyWorkflowStepDefinition[];
+      description?: string;
+      args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
+    },
+  ): WorkflowStepDefinition<Input, Job>;
+}
+
+export function defineWorkflow<
+  const Args extends JobArgs,
+  const Steps extends WorkflowStepTree,
+  Output = WorkflowResults<Steps>,
+>(definition: {
+  args: Args;
+  graph: (builder: WorkflowGraphBuilder<InferJobArgs<Args>>) => Steps;
+  returns?: Schema<Output>;
+  description?: string;
+  agent?: false | WorkflowAgentOptions;
+  output?: (context: WorkflowOutputContext<InferJobArgs<Args>, Steps>) => Output;
+}): WorkflowDefinition<InferJobArgs<Args>, Output, Steps> {
+  const args = toSchema(definition.args);
+  const created = new Set<AnyWorkflowStepDefinition>();
+  const builder: WorkflowGraphBuilder<InferJobArgs<Args>> = Object.freeze({
+    step(job, stepDefinition) {
+      if (!isJobDefinition(job)) throw new TypeError("Workflow steps require a job from defineJobs().");
+      if (typeof stepDefinition?.args !== "function") throw new TypeError("Workflow steps require an args mapper.");
+      if ((stepDefinition.needs?.length ?? 0) > 100) {
+        throw new TypeError("A workflow step cannot have more than 100 dependencies.");
+      }
+      const description = optionalText(stepDefinition.description, "workflow step description", 16 * 1024);
+      const step = {
+        kind: "workflow-step" as const,
+        job,
+        needs: Object.freeze([...(stepDefinition.needs ?? [])]),
+        ...(description ? { description } : {}),
+        args: stepDefinition.args,
+      };
+      created.add(step);
+      return Object.freeze(step) as WorkflowStepDefinition<InferJobArgs<Args>, typeof job>;
+    },
+  });
+  const steps = definition.graph(builder);
+  if (!steps || typeof steps !== "object" || Array.isArray(steps)) {
+    throw new TypeError("Workflow graph must return a named step object.");
+  }
+  const entries = Object.entries(steps);
+  if (entries.length === 0 || entries.length > 100) {
+    throw new TypeError("A workflow must contain from 1 through 100 steps.");
+  }
+  const names = new Map<AnyWorkflowStepDefinition, string>();
+  for (const [name, step] of entries) {
+    identifier(name, "workflow step name", 128);
+    if (!created.has(step)) throw new TypeError(`Workflow step ${name} was not created by this graph.`);
+    if (names.has(step)) throw new TypeError(`Workflow step ${name} is reused as ${names.get(step)}.`);
+    names.set(step, name);
+  }
+  for (const [name, step] of entries) {
+    const dependencies = new Set<AnyWorkflowStepDefinition>();
+    for (const dependency of step.needs) {
+      if (!names.has(dependency)) throw new TypeError(`Workflow step ${name} depends on a step outside its graph.`);
+      if (dependency === step) throw new TypeError(`Workflow step ${name} cannot depend on itself.`);
+      if (dependencies.has(dependency)) throw new TypeError(`Workflow step ${name} repeats a dependency.`);
+      dependencies.add(dependency);
+    }
+  }
+  assertAcyclicWorkflow(entries, names);
+  const frozenSteps = Object.freeze(Object.fromEntries(entries)) as Steps;
+  const description = optionalText(definition.description, "workflow description", 16 * 1024);
+  const agent = normalizeWorkflowAgent(definition.agent);
+  const output = definition.output ?? ((context: WorkflowOutputContext<any, any>) => context.results as Output);
+  if (typeof output !== "function") throw new TypeError("Workflow output must be a function.");
+  return {
+    kind: "workflow" as const,
+    args,
+    ...(definition.returns ? { returns: definition.returns } : {}),
+    steps: frozenSteps,
+    ...(description ? { description } : {}),
+    agent,
+    output,
+  } as WorkflowDefinition<InferJobArgs<Args>, Output, Steps>;
+}
+
+export function defineWorkflows<
+  DB extends DatabaseSchema<any>,
+  Jobs extends JobTree,
+  const Workflows extends WorkflowTree,
+>(
+  definition: JobSystemDefinition<DB, Jobs, any>,
+  workflows: Workflows,
+): JobSystemDefinition<DB, Jobs, Workflows> {
+  const registry = flattenWorkflows(workflows);
+  const jobs = flattenJobs(definition.jobs);
+  if (registry.size > 1_000) throw new TypeError("A job system cannot contain more than 1,000 workflows.");
+  const seen = new Set<AnyWorkflowDefinition>();
+  for (const [path, workflow] of registry) {
+    if (path.length > 512) throw new TypeError(`Workflow path exceeds 512 characters: ${path}`);
+    if (seen.has(workflow)) throw new TypeError(`A workflow definition cannot be reused at more than one path: ${path}`);
+    seen.add(workflow);
+    for (const [stepName, step] of Object.entries(workflow.steps)) {
+      const jobName = jobPath(step.job);
+      if (jobs.get(jobName) !== step.job) {
+        throw new TypeError(`Workflow step ${path}.${stepName} uses a job outside this job system.`);
+      }
+    }
+    Object.defineProperty(workflow, WORKFLOW_PATH, { value: path, enumerable: false });
+    Object.freeze(workflow);
+  }
+  return Object.freeze({
+    schema: definition.schema,
+    jobs: definition.jobs,
+    workflows: freezeWorkflowTree(workflows) as Workflows,
+  });
+}
+
 export interface EnqueueOptions {
   /** Earliest execution time as an epoch millisecond timestamp. */
   runAt?: number;
@@ -253,12 +441,83 @@ export interface JobHandle {
   readonly deduplicated: boolean;
 }
 
+export type WorkflowState = "running" | "succeeded" | "failed" | "cancelled";
+export type WorkflowStepState = "blocked" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+export interface WorkflowStartOptions {
+  /** Stable caller key. Repeated starts return the existing retained run. */
+  idempotencyKey?: string;
+}
+
+export interface WorkflowHandle {
+  readonly id: string;
+  readonly deduplicated: boolean;
+}
+
+export interface StoredWorkflowStep {
+  readonly name: string;
+  readonly job: string;
+  readonly needs: readonly string[];
+  readonly state: WorkflowStepState;
+  readonly jobId: string | null;
+  readonly result?: unknown;
+  readonly error?: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly startedAt: number | null;
+  readonly completedAt: number | null;
+}
+
+export interface StoredWorkflowRun {
+  readonly id: string;
+  readonly name: string;
+  readonly state: WorkflowState;
+  readonly input: unknown;
+  readonly output?: unknown;
+  readonly error?: string;
+  readonly ownerId: string | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly completedAt: number | null;
+  readonly cancelRequested: boolean;
+  readonly steps: readonly StoredWorkflowStep[];
+}
+
+export interface WorkflowListOptions {
+  state?: WorkflowState;
+  name?: string;
+  limit?: number;
+}
+
+export interface WorkflowEvent {
+  readonly id: number;
+  readonly workflowId: string;
+  readonly event: string;
+  readonly step: string | null;
+  readonly details: Readonly<Record<string, unknown>>;
+  readonly createdAt: number;
+}
+
+export interface WorkflowPurgeOptions {
+  /** Terminal run states to remove. Defaults to succeeded and cancelled. */
+  states?: readonly Extract<WorkflowState, "succeeded" | "failed" | "cancelled">[];
+  /** Remove runs completed before this timestamp. Defaults to now. */
+  before?: number;
+  /** Maximum runs removed in this transaction. Defaults to 1,000. */
+  limit?: number;
+}
+
 export interface JobPublisher<Definition extends JobSystemDefinition<any, any>> {
   enqueue<Job extends JobOfTree<Definition["jobs"]>>(
     job: Job,
     args: JobInput<Job>,
     options?: EnqueueOptions,
   ): JobHandle;
+  startWorkflow<Workflow extends WorkflowOfTree<Definition["workflows"]>>(
+    workflow: Workflow,
+    input: WorkflowInput<Workflow>,
+    options?: WorkflowStartOptions,
+  ): WorkflowHandle;
 }
 
 export interface StoredJob {
@@ -328,6 +587,12 @@ export interface JobRetentionOptions {
   cancelledMs?: number | false;
   /** Dead-letter retention. Defaults to indefinite. */
   deadMs?: number | false;
+  /** Successful workflow history retention. Defaults to 30 days. */
+  workflowSucceededMs?: number | false;
+  /** Cancelled workflow history retention. Defaults to 7 days. */
+  workflowCancelledMs?: number | false;
+  /** Failed workflow history retention. Defaults to indefinite. */
+  workflowFailedMs?: number | false;
   /** Opportunistic cleanup interval. Defaults to 1 hour. */
   cleanupIntervalMs?: number;
 }
@@ -348,6 +613,20 @@ export interface JobManifestEntry {
     readonly suspended: boolean;
   }[];
   readonly agent: false | Readonly<JobAgentOptions>;
+}
+
+export interface WorkflowManifestEntry {
+  readonly name: string;
+  readonly description?: string;
+  readonly args: Record<string, unknown>;
+  readonly returns?: Record<string, unknown>;
+  readonly steps: readonly {
+    readonly name: string;
+    readonly job: string;
+    readonly needs: readonly string[];
+    readonly description?: string;
+  }[];
+  readonly agent: false | Readonly<WorkflowAgentOptions>;
 }
 
 export interface JobWorkerOptions {
@@ -409,6 +688,13 @@ export interface JobRuntime<Definition extends JobSystemDefinition<any, any>>
   get(id: string): StoredJob | null;
   list(options?: JobListOptions): StoredJob[];
   events(id: string, options?: { limit?: number }): JobEvent[];
+  getWorkflow(id: string): StoredWorkflowRun | null;
+  listWorkflows(options?: WorkflowListOptions): StoredWorkflowRun[];
+  workflowEvents(id: string, options?: { limit?: number }): WorkflowEvent[];
+  cancelWorkflow(id: string): boolean;
+  purgeWorkflows(options?: WorkflowPurgeOptions): number;
+  /** Reconcile bounded durable workflow state; workers call this automatically. */
+  advanceWorkflows(options?: { limit?: number }): number;
   stats(): JobStats;
   cancel(id: string): boolean;
   retry(id: string, options?: { runAt?: number }): boolean;
@@ -468,6 +754,36 @@ interface ScheduleRow extends Record<string, unknown> {
   lease_until: number | null;
 }
 
+interface WorkflowRow extends Record<string, unknown> {
+  id: string;
+  name: string;
+  definition_hash: string;
+  state: WorkflowState;
+  input: string;
+  output: string | null;
+  error: string | null;
+  owner_id: string | null;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+  cancel_requested: number;
+}
+
+interface WorkflowStepRow extends Record<string, unknown> {
+  workflow_id: string;
+  step_name: string;
+  job_name: string;
+  needs: string;
+  state: WorkflowStepState;
+  job_id: string | null;
+  result: string | null;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+  started_at: number | null;
+  completed_at: number | null;
+}
+
 export function openJobs<Definition extends JobSystemDefinition<any, any>>(
   definition: Definition,
   options: OpenJobsOptions & { database: SQLiteDatabase<Definition["schema"]> },
@@ -479,6 +795,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
   const internal = database[SQLITE_INTERNAL];
   ensureJobSchema(internal);
   const registry = flattenJobs(definition.jobs);
+  const workflowRegistry = flattenWorkflows(definition.workflows ?? {});
   const now = options.now ?? Date.now;
   const random = options.random ?? Math.random;
   const maxPayloadBytes = integer(options.maxPayloadBytes ?? 256 * 1024, "maxPayloadBytes", 1_024, 4 * 1024 * 1024);
@@ -563,11 +880,346 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     return Object.freeze({ id: String(existing.id), deduplicated: true });
   };
 
+  const startWorkflow = (
+    scope: DatabaseScope | undefined,
+    workflow: AnyWorkflowDefinition,
+    rawInput: unknown,
+    startOptions: WorkflowStartOptions = {},
+  ): WorkflowHandle => {
+    ensureOpen();
+    const name = workflowPath(workflow);
+    if (workflowRegistry.get(name) !== workflow) {
+      throw new TypeError(`Workflow ${name} does not belong to this runtime.`);
+    }
+    const input = workflow.args.parse(rawInput ?? {});
+    const serializedInput = boundedJson(input, maxPayloadBytes, "Workflow input");
+    const idempotencyKey = startOptions.idempotencyKey === undefined
+      ? null
+      : identifier(startOptions.idempotencyKey, "workflow idempotencyKey", 512, true);
+    const ownerId = scope?.userId ?? null;
+    const startedAt = now();
+    const create = (): WorkflowHandle => {
+      const id = workflowId();
+      const inserted = internal.prepare(`INSERT OR IGNORE INTO clank_workflow_runs (
+        id, name, definition_hash, state, input, output, error, owner_id, idempotency_key,
+        created_at, updated_at, completed_at, cancel_requested
+      ) VALUES (?, ?, ?, 'running', ?, NULL, NULL, ?, ?, ?, ?, NULL, 0)`).run(
+        id,
+        name,
+        workflowDefinitionRevision(workflow),
+        serializedInput,
+        ownerId,
+        idempotencyKey,
+        startedAt,
+        startedAt,
+      );
+      if (Number(inserted.changes) !== 1) {
+        if (idempotencyKey === null) throw new Error("Could not allocate a unique workflow ID.");
+        const existing = internal.prepare(`SELECT id FROM clank_workflow_runs
+          WHERE name = ? AND owner_id IS ? AND idempotency_key = ?`).get(
+          name,
+          ownerId,
+          idempotencyKey,
+        );
+        if (!existing) throw new Error("Workflow start lost its idempotency record.");
+        return Object.freeze({ id: String(existing.id), deduplicated: true });
+      }
+      const names = workflowStepNames(workflow);
+      for (const [stepName, step] of Object.entries(workflow.steps)) {
+        internal.prepare(`INSERT INTO clank_workflow_steps (
+          workflow_id, step_name, job_name, needs, state, job_id, result, error,
+          created_at, updated_at, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, 'blocked', NULL, NULL, NULL, ?, ?, NULL, NULL)`).run(
+          id,
+          stepName,
+          jobPath(step.job),
+          JSON.stringify(step.needs.map((dependency) => names.get(dependency))),
+          startedAt,
+          startedAt,
+        );
+      }
+      workflowEvent(internal, id, "started", null, startedAt, { name });
+      reconcileWorkflowCore(id);
+      return Object.freeze({ id, deduplicated: false });
+    };
+    return internal.inTransaction ? create() : internal.transaction(create);
+  };
+
   const publisher = (scope?: DatabaseScope): JobPublisher<Definition> => Object.freeze({
     enqueue<Job extends JobOfTree<Definition["jobs"]>>(job: Job, args: JobInput<Job>, enqueueOptions?: EnqueueOptions) {
       return enqueue(scope, job, args, enqueueOptions);
     },
+    startWorkflow(workflow, input, startOptions) {
+      return startWorkflow(scope, workflow, input, startOptions);
+    },
   });
+
+  const requestJobCancellation = (jobId: string, requestedAt: number): boolean => {
+    const result = internal.prepare(`UPDATE clank_jobs
+      SET cancel_requested = 1,
+        state = CASE WHEN state IN ('queued', 'retry') THEN 'cancelled' ELSE state END,
+        completed_at = CASE WHEN state IN ('queued', 'retry') THEN ? ELSE completed_at END,
+        updated_at = ?
+      WHERE id = ? AND state IN ('queued', 'retry', 'running') AND cancel_requested = 0`).run(
+      requestedAt,
+      requestedAt,
+      jobId,
+    );
+    if (Number(result.changes) === 1) event(internal, jobId, "cancel_requested", requestedAt, {});
+    return Number(result.changes) === 1;
+  };
+
+  const cancelWorkflowChildren = (workflowIdValue: string, requestedAt: number): void => {
+    const rows = internal.prepare(`SELECT * FROM clank_workflow_steps
+      WHERE workflow_id = ?`).all(workflowIdValue) as WorkflowStepRow[];
+    for (const step of rows) {
+      if ((step.state === "queued" || step.state === "running") && step.job_id) {
+        const job = internal.prepare("SELECT state FROM clank_jobs WHERE id = ?").get(step.job_id);
+        requestJobCancellation(step.job_id, requestedAt);
+        if (job?.state === "queued" || job?.state === "retry") {
+          updateWorkflowStep(internal, step, "cancelled", requestedAt);
+        }
+      }
+      if (step.state === "blocked") updateWorkflowStep(internal, step, "cancelled", requestedAt);
+    }
+  };
+
+  const reconcileWorkflowCore = (workflowIdValue: string): number => {
+    const row = internal.prepare("SELECT * FROM clank_workflow_runs WHERE id = ?").get(
+      workflowIdValue,
+    ) as WorkflowRow | undefined;
+    if (!row || row.state !== "running") return 0;
+    const current = now();
+    const workflow = workflowRegistry.get(row.name);
+    if (!workflow) {
+      const message = "Workflow definition is not present in this release.";
+      cancelWorkflowChildren(row.id, current);
+      internal.prepare(`UPDATE clank_workflow_runs SET state = 'failed', error = ?,
+        updated_at = ?, completed_at = ? WHERE id = ? AND state = 'running'`).run(
+        message,
+        current,
+        current,
+        row.id,
+      );
+      workflowEvent(internal, row.id, "failed", null, current, { error: message });
+      return 1;
+    }
+    if (row.definition_hash !== workflowDefinitionRevision(workflow)) {
+      const message = "Workflow definition changed before the retained run completed.";
+      cancelWorkflowChildren(row.id, current);
+      failWorkflowRun(internal, row.id, message, current);
+      return 1;
+    }
+    const definitionEntries = Object.entries(workflow.steps);
+    const names = workflowStepNames(workflow);
+    const rows = internal.prepare(`SELECT * FROM clank_workflow_steps
+      WHERE workflow_id = ? ORDER BY step_name ASC`).all(row.id) as WorkflowStepRow[];
+    const byName = new Map(rows.map((step) => [step.step_name, step]));
+    if (rows.length !== definitionEntries.length
+      || definitionEntries.some(([name, step]) => byName.get(name)?.job_name !== jobPath(step.job))) {
+      const message = "Workflow graph does not match the retained run.";
+      cancelWorkflowChildren(row.id, current);
+      failWorkflowRun(internal, row.id, message, current);
+      return 1;
+    }
+    let changed = 0;
+    const cancellationRequested = Number(row.cancel_requested) === 1;
+
+    for (const [stepName] of definitionEntries) {
+      const stepRow = byName.get(stepName)!;
+      if ((stepRow.state !== "queued" && stepRow.state !== "running") || !stepRow.job_id) continue;
+      const job = internal.prepare("SELECT * FROM clank_jobs WHERE id = ?").get(stepRow.job_id) as JobRow | undefined;
+      if (!job) {
+        updateWorkflowStep(internal, stepRow, "failed", current, {
+          error: "Workflow step job was removed before the run completed.",
+        });
+        changed++;
+        continue;
+      }
+      if (cancellationRequested && (job.state === "queued" || job.state === "retry" || job.state === "running")) {
+        if (requestJobCancellation(job.id, current)) changed++;
+        if (job.state === "queued" || job.state === "retry") {
+          updateWorkflowStep(internal, stepRow, "cancelled", current);
+          workflowEvent(internal, row.id, "step_cancelled", stepName, current, { jobId: job.id });
+          changed++;
+          continue;
+        }
+      }
+      if (job.state === "running" && stepRow.state !== "running") {
+        updateWorkflowStep(internal, stepRow, "running", current, {
+          startedAt: job.started_at ?? current,
+        });
+        changed++;
+      } else if (job.state === "succeeded") {
+        const result = job.result === null ? null : JSON.parse(job.result);
+        updateWorkflowStep(internal, stepRow, "succeeded", current, { result });
+        workflowEvent(internal, row.id, "step_succeeded", stepName, current, { jobId: job.id });
+        changed++;
+      } else if (job.state === "dead") {
+        updateWorkflowStep(internal, stepRow, "failed", current, {
+          error: job.error ?? "Workflow step exhausted its retries.",
+        });
+        workflowEvent(internal, row.id, "step_failed", stepName, current, { jobId: job.id });
+        changed++;
+      } else if (job.state === "cancelled") {
+        const state = cancellationRequested ? "cancelled" : "failed";
+        updateWorkflowStep(internal, stepRow, state, current, {
+          ...(state === "failed" ? { error: "Workflow step was cancelled outside its workflow." } : {}),
+        });
+        workflowEvent(internal, row.id, `step_${state}`, stepName, current, { jobId: job.id });
+        changed++;
+      }
+    }
+
+    const refreshed = () => internal.prepare(`SELECT * FROM clank_workflow_steps
+      WHERE workflow_id = ? ORDER BY step_name ASC`).all(row.id) as WorkflowStepRow[];
+    let currentRows = refreshed();
+    const currentByName = () => new Map(currentRows.map((step) => [step.step_name, step]));
+
+    if (cancellationRequested) {
+      for (const stepRow of currentRows) {
+        if (stepRow.state === "blocked") {
+          updateWorkflowStep(internal, stepRow, "cancelled", current);
+          changed++;
+        }
+      }
+      currentRows = refreshed();
+      if (currentRows.every((step) => isTerminalWorkflowStep(step.state))) {
+        internal.prepare(`UPDATE clank_workflow_runs SET state = 'cancelled', updated_at = ?,
+          completed_at = ? WHERE id = ? AND state = 'running'`).run(current, current, row.id);
+        workflowEvent(internal, row.id, "cancelled", null, current, {});
+        changed++;
+      }
+      return changed;
+    }
+
+    const failed = currentRows.find((step) => step.state === "failed" || step.state === "cancelled");
+    if (failed) {
+      for (const stepRow of currentRows) {
+        if (stepRow.state === "queued" || stepRow.state === "running") {
+          if (stepRow.job_id && requestJobCancellation(stepRow.job_id, current)) changed++;
+        } else if (stepRow.state === "blocked") {
+          updateWorkflowStep(internal, stepRow, "cancelled", current);
+          changed++;
+        }
+      }
+      const message = failed.error ?? `Workflow step ${failed.step_name} did not succeed.`;
+      failWorkflowRun(internal, row.id, message, current);
+      return changed + 1;
+    }
+
+    const parsedInput = workflow.args.parse(JSON.parse(row.input));
+    for (const [stepName, step] of definitionEntries) {
+      const stepRow = currentByName().get(stepName)!;
+      if (stepRow.state !== "blocked") continue;
+      const dependencyNames = step.needs.map((dependency) => names.get(dependency)!);
+      if (!dependencyNames.every((name) => currentByName().get(name)?.state === "succeeded")) continue;
+      try {
+        const rawArgs = step.args(workflowStepContext(
+          parsedInput,
+          workflow,
+          step,
+          currentByName(),
+        ));
+        const parsedArgs = step.job.args.parse(rawArgs);
+        const handle = enqueue(
+          row.owner_id === null ? undefined : { userId: row.owner_id },
+          step.job,
+          parsedArgs,
+          { idempotencyKey: `workflow:${row.id}:${stepName}` },
+        );
+        internal.prepare(`UPDATE clank_workflow_steps SET state = 'queued', job_id = ?,
+          updated_at = ? WHERE workflow_id = ? AND step_name = ? AND state = 'blocked'`).run(
+          handle.id,
+          current,
+          row.id,
+          stepName,
+        );
+        workflowEvent(internal, row.id, "step_queued", stepName, current, { jobId: handle.id });
+        changed++;
+      } catch (error) {
+        const message = safeError(error, maxErrorBytes);
+        updateWorkflowStep(internal, stepRow, "failed", current, { error: message });
+        workflowEvent(internal, row.id, "step_failed", stepName, current, { error: message });
+        for (const remaining of refreshed()) {
+          if ((remaining.state === "queued" || remaining.state === "running") && remaining.job_id) {
+            requestJobCancellation(remaining.job_id, current);
+          } else if (remaining.state === "blocked" && remaining.step_name !== stepName) {
+            updateWorkflowStep(internal, remaining, "cancelled", current);
+          }
+        }
+        failWorkflowRun(internal, row.id, message, current);
+        return changed + 2;
+      }
+    }
+
+    currentRows = refreshed();
+    if (currentRows.every((step) => step.state === "succeeded")) {
+      try {
+        const context = workflowOutputContext(parsedInput, workflow, new Map(
+          currentRows.map((step) => [step.step_name, step]),
+        ));
+        const rawOutput = workflow.output(context);
+        const output = workflow.returns ? workflow.returns.parse(rawOutput) : rawOutput;
+        const serialized = boundedJson(output ?? null, maxResultBytes, "Workflow output");
+        internal.prepare(`UPDATE clank_workflow_runs SET state = 'succeeded', output = ?,
+          error = NULL, updated_at = ?, completed_at = ?
+          WHERE id = ? AND state = 'running'`).run(serialized, current, current, row.id);
+        workflowEvent(internal, row.id, "succeeded", null, current, {});
+        changed++;
+      } catch (error) {
+        const message = safeError(error, maxErrorBytes);
+        failWorkflowRun(internal, row.id, message, current);
+        changed++;
+      }
+    }
+    return changed;
+  };
+
+  const reconcileWorkflow = (workflowIdValue: string): number =>
+    internal.inTransaction
+      ? reconcileWorkflowCore(workflowIdValue)
+      : internal.transaction(() => reconcileWorkflowCore(workflowIdValue));
+
+  const advanceWorkflows = (advanceOptions: { limit?: number } = {}): number => {
+    ensureOpen();
+    const limit = integer(advanceOptions.limit ?? 100, "workflow advance limit", 1, 1_000);
+    const rows = internal.prepare(`SELECT id FROM clank_workflow_runs
+      WHERE state = 'running' ORDER BY updated_at ASC, id ASC LIMIT ?`).all(limit);
+    let changed = 0;
+    for (const row of rows) changed += reconcileWorkflow(String(row.id));
+    return changed;
+  };
+
+  const purgeWorkflows = (purgeOptions: WorkflowPurgeOptions = {}): number => {
+    ensureOpen();
+    const states = purgeOptions.states ?? ["succeeded", "cancelled"];
+    if (states.length === 0) return 0;
+    const normalizedStates = [...new Set(states.map((state) => {
+      if (state !== "succeeded" && state !== "failed" && state !== "cancelled") {
+        throw new TypeError(`Only terminal workflows can be purged: ${String(state)}`);
+      }
+      return state;
+    }))];
+    const before = integer(purgeOptions.before ?? now(), "workflow purge before", 0, Number.MAX_SAFE_INTEGER);
+    const limit = integer(purgeOptions.limit ?? 1_000, "workflow purge limit", 1, 10_000);
+    return internal.transaction(() => {
+      const rows = internal.prepare(`SELECT id FROM clank_workflow_runs
+        WHERE state IN (${normalizedStates.map(() => "?").join(", ")})
+          AND completed_at IS NOT NULL AND completed_at < ?
+        ORDER BY completed_at ASC, id ASC LIMIT ?`).all(...normalizedStates, before, limit);
+      if (rows.length === 0) return 0;
+      const ids = rows.map((row) => String(row.id));
+      const placeholders = ids.map(() => "?").join(", ");
+      internal.prepare(`DELETE FROM clank_workflow_events
+        WHERE workflow_id IN (${placeholders})`).run(...ids);
+      internal.prepare(`DELETE FROM clank_workflow_steps
+        WHERE workflow_id IN (${placeholders})`).run(...ids);
+      internal.prepare(`DELETE FROM clank_workflow_runs
+        WHERE id IN (${placeholders})`).run(...ids);
+      return ids.length;
+    });
+  };
 
   const purge = (purgeOptions: JobPurgeOptions = {}): number => {
     ensureOpen();
@@ -610,7 +1262,15 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     ] as const) {
       if (duration === false) continue;
       // One bounded batch per tick keeps cleanup from delaying normal claims.
-      purge({ states: [state], before: current - duration, limit: 1_000 });
+      purge({ states: [state], before: Math.max(0, current - duration), limit: 1_000 });
+    }
+    for (const [state, duration] of [
+      ["succeeded", retention.workflowSucceededMs],
+      ["cancelled", retention.workflowCancelledMs],
+      ["failed", retention.workflowFailedMs],
+    ] as const) {
+      if (duration === false) continue;
+      purgeWorkflows({ states: [state], before: Math.max(0, current - duration), limit: 1_000 });
     }
   };
 
@@ -667,6 +1327,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     workerOptions: Omit<JobWorkerOptions, "concurrency" | "pollIntervalMs"> = {},
   ): Promise<boolean> => {
     ensureOpen();
+    const workflowChanges = advanceWorkflows();
     const workerId = identifier(
       workerOptions.workerId ?? `worker-${processId()}-${crypto.randomUUID()}`,
       "workerId",
@@ -676,8 +1337,9 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     const queues = workerQueues(workerOptions.queues);
     const leaseMs = integer(workerOptions.leaseMs ?? 30_000, "worker leaseMs", 1_000, 60 * 60_000);
     const claimed = claim(workerId, queues, leaseMs);
-    if (!claimed) return false;
+    if (!claimed) return workflowChanges > 0;
     await executeClaim(claimed, workerId, leaseMs);
+    advanceWorkflows();
     return true;
   };
 
@@ -870,6 +1532,9 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     enqueue(job, args, enqueueOptions) {
       return enqueue(undefined, job, args, enqueueOptions);
     },
+    startWorkflow(workflow, input, startOptions) {
+      return startWorkflow(undefined, workflow, input, startOptions);
+    },
     publisher,
     get(id) {
       ensureOpen();
@@ -914,6 +1579,71 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
           createdAt: Number(row.created_at),
         }));
     },
+    getWorkflow(id) {
+      ensureOpen();
+      const workflowIdValue = identifier(id, "workflow id", 128, true);
+      const row = internal.prepare("SELECT * FROM clank_workflow_runs WHERE id = ?").get(
+        workflowIdValue,
+      ) as WorkflowRow | undefined;
+      return row ? storedWorkflow(internal, row) : null;
+    },
+    listWorkflows(listOptions = {}) {
+      ensureOpen();
+      const clauses: string[] = [];
+      const values: unknown[] = [];
+      if (listOptions.state !== undefined) {
+        if (!WORKFLOW_STATES.has(listOptions.state)) {
+          throw new TypeError(`Invalid workflow state: ${listOptions.state}`);
+        }
+        clauses.push("state = ?");
+        values.push(listOptions.state);
+      }
+      if (listOptions.name !== undefined) {
+        clauses.push("name = ?");
+        values.push(identifier(listOptions.name, "workflow name", 512, true));
+      }
+      const limit = integer(listOptions.limit ?? 100, "workflow list limit", 1, 1_000);
+      return (internal.prepare(`SELECT * FROM clank_workflow_runs
+        ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
+        ORDER BY created_at DESC, id DESC LIMIT ?`).all(...values, limit) as WorkflowRow[])
+        .map((entry) => storedWorkflow(internal, entry));
+    },
+    workflowEvents(id, eventOptions = {}) {
+      ensureOpen();
+      const workflowIdValue = identifier(id, "workflow id", 128, true);
+      const limit = integer(eventOptions.limit ?? 100, "workflow event limit", 1, 1_000);
+      return internal.prepare(`SELECT id, workflow_id, event, step_name, details, created_at
+        FROM clank_workflow_events WHERE workflow_id = ?
+        ORDER BY id DESC LIMIT ?`).all(workflowIdValue, limit).map((entry) => Object.freeze({
+          id: Number(entry.id),
+          workflowId: String(entry.workflow_id),
+          event: String(entry.event),
+          step: entry.step_name === null ? null : String(entry.step_name),
+          details: Object.freeze(JSON.parse(String(entry.details)) as Record<string, unknown>),
+          createdAt: Number(entry.created_at),
+        }));
+    },
+    cancelWorkflow(id) {
+      ensureOpen();
+      const workflowIdValue = identifier(id, "workflow id", 128, true);
+      const cancelledAt = now();
+      const changed = internal.transaction(() => {
+        const result = internal.prepare(`UPDATE clank_workflow_runs
+          SET cancel_requested = 1, updated_at = ?
+          WHERE id = ? AND state = 'running' AND cancel_requested = 0`).run(
+          cancelledAt,
+          workflowIdValue,
+        );
+        if (Number(result.changes) === 1) {
+          workflowEvent(internal, workflowIdValue, "cancel_requested", null, cancelledAt, {});
+          reconcileWorkflow(workflowIdValue);
+        }
+        return Number(result.changes) === 1;
+      });
+      return changed;
+    },
+    purgeWorkflows,
+    advanceWorkflows,
     stats() {
       ensureOpen();
       const current = now();
@@ -938,18 +1668,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       ensureOpen();
       const cancelledAt = now();
       return internal.transaction(() => {
-        const result = internal.prepare(`UPDATE clank_jobs
-          SET cancel_requested = 1,
-            state = CASE WHEN state IN ('queued', 'retry') THEN 'cancelled' ELSE state END,
-            completed_at = CASE WHEN state IN ('queued', 'retry') THEN ? ELSE completed_at END,
-            updated_at = ?
-          WHERE id = ? AND state IN ('queued', 'retry', 'running')`).run(
-          cancelledAt,
-          cancelledAt,
-          identifier(id, "job id", 128, true),
-        );
-        if (Number(result.changes) === 1) event(internal, id, "cancel_requested", cancelledAt, {});
-        return Number(result.changes) === 1;
+        return requestJobCancellation(identifier(id, "job id", 128, true), cancelledAt);
       });
     },
     retry(id, retryOptions = {}) {
@@ -985,9 +1704,11 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       const queues = workerQueues(workerOptions.queues);
       const leaseMs = integer(workerOptions.leaseMs ?? 30_000, "worker leaseMs", 1_000, 60 * 60_000);
       return startLoop("worker", workerId, concurrency, pollIntervalMs, async () => {
+        const workflowChanges = advanceWorkflows();
         const claimed = claim(workerId, queues, leaseMs);
-        if (!claimed) return false;
+        if (!claimed) return workflowChanges > 0;
         await executeClaim(claimed, workerId, leaseMs);
+        advanceWorkflows();
         return true;
       });
     },
@@ -1058,6 +1779,7 @@ export async function runJobProcess(
 }
 
 const JOB_STATES = new Set<JobState>(["queued", "running", "retry", "succeeded", "dead", "cancelled"]);
+const WORKFLOW_STATES = new Set<WorkflowState>(["running", "succeeded", "failed", "cancelled"]);
 
 function ensureJobSchema(internal: SQLiteInternal): void {
   migrateLegacyServiceJobs(internal);
@@ -1126,6 +1848,53 @@ function ensureJobSchema(internal: SQLiteInternal): void {
   )`);
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_job_schedules_due
     ON clank_job_schedules (enabled, next_run_at, lease_until)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_workflow_runs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 512),
+    definition_hash TEXT NOT NULL CHECK (length(definition_hash) = 16),
+    state TEXT NOT NULL CHECK (state IN ('running', 'succeeded', 'failed', 'cancelled')),
+    input TEXT NOT NULL CHECK (json_valid(input)),
+    output TEXT CHECK (output IS NULL OR json_valid(output)),
+    error TEXT,
+    owner_id TEXT,
+    idempotency_key TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0, 1))
+  )`);
+  internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_workflow_runs_idempotency
+    ON clank_workflow_runs (name, coalesce(owner_id, ''), idempotency_key)
+    WHERE idempotency_key IS NOT NULL`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_workflow_runs_active
+    ON clank_workflow_runs (state, updated_at, id)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_workflow_steps (
+    workflow_id TEXT NOT NULL,
+    step_name TEXT NOT NULL CHECK (length(step_name) BETWEEN 1 AND 128),
+    job_name TEXT NOT NULL CHECK (length(job_name) BETWEEN 1 AND 512),
+    needs TEXT NOT NULL CHECK (json_valid(needs)),
+    state TEXT NOT NULL CHECK (state IN ('blocked', 'queued', 'running', 'succeeded', 'failed', 'cancelled')),
+    job_id TEXT,
+    result TEXT CHECK (result IS NULL OR json_valid(result)),
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    started_at INTEGER,
+    completed_at INTEGER,
+    PRIMARY KEY (workflow_id, step_name)
+  ) WITHOUT ROWID`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_workflow_steps_job
+    ON clank_workflow_steps (job_id) WHERE job_id IS NOT NULL`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workflow_id TEXT NOT NULL,
+    event TEXT NOT NULL,
+    step_name TEXT,
+    details TEXT NOT NULL CHECK (json_valid(details)),
+    created_at INTEGER NOT NULL
+  )`);
+  internal.exec(`CREATE INDEX IF NOT EXISTS clank_workflow_events_run
+    ON clank_workflow_events (workflow_id, id)`);
 }
 
 function migrateLegacyServiceJobs(internal: SQLiteInternal): void {
@@ -1496,6 +2265,102 @@ function storedJob(row: JobRow): StoredJob {
   });
 }
 
+function storedWorkflow(internal: SQLiteInternal, row: WorkflowRow): StoredWorkflowRun {
+  const steps = internal.prepare(`SELECT * FROM clank_workflow_steps
+    WHERE workflow_id = ? ORDER BY step_name ASC`).all(row.id) as WorkflowStepRow[];
+  return Object.freeze({
+    id: String(row.id),
+    name: String(row.name),
+    state: String(row.state) as WorkflowState,
+    input: JSON.parse(String(row.input)),
+    ...(row.output === null || row.output === undefined ? {} : { output: JSON.parse(String(row.output)) }),
+    ...(row.error === null || row.error === undefined ? {} : { error: String(row.error) }),
+    ownerId: row.owner_id === null || row.owner_id === undefined ? null : String(row.owner_id),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    completedAt: row.completed_at === null || row.completed_at === undefined ? null : Number(row.completed_at),
+    cancelRequested: Number(row.cancel_requested) === 1,
+    steps: Object.freeze(steps.map((step) => Object.freeze({
+      name: String(step.step_name),
+      job: String(step.job_name),
+      needs: Object.freeze(JSON.parse(String(step.needs)) as string[]),
+      state: String(step.state) as WorkflowStepState,
+      jobId: step.job_id === null || step.job_id === undefined ? null : String(step.job_id),
+      ...(step.result === null || step.result === undefined ? {} : { result: JSON.parse(String(step.result)) }),
+      ...(step.error === null || step.error === undefined ? {} : { error: String(step.error) }),
+      createdAt: Number(step.created_at),
+      updatedAt: Number(step.updated_at),
+      startedAt: step.started_at === null || step.started_at === undefined ? null : Number(step.started_at),
+      completedAt: step.completed_at === null || step.completed_at === undefined ? null : Number(step.completed_at),
+    }))),
+  });
+}
+
+function updateWorkflowStep(
+  internal: SQLiteInternal,
+  row: WorkflowStepRow,
+  state: WorkflowStepState,
+  updatedAt: number,
+  options: { result?: unknown; error?: string; startedAt?: number } = {},
+): void {
+  const terminal = isTerminalWorkflowStep(state);
+  internal.prepare(`UPDATE clank_workflow_steps SET state = ?, result = ?, error = ?,
+    started_at = coalesce(started_at, ?), completed_at = ?, updated_at = ?
+    WHERE workflow_id = ? AND step_name = ?`).run(
+    state,
+    Object.hasOwn(options, "result") ? JSON.stringify(options.result ?? null) : row.result,
+    options.error ?? null,
+    options.startedAt ?? (state === "running" ? updatedAt : null),
+    terminal ? updatedAt : null,
+    updatedAt,
+    row.workflow_id,
+    row.step_name,
+  );
+}
+
+function failWorkflowRun(
+  internal: SQLiteInternal,
+  workflowIdValue: string,
+  error: string,
+  failedAt: number,
+): void {
+  const result = internal.prepare(`UPDATE clank_workflow_runs SET state = 'failed', error = ?,
+    updated_at = ?, completed_at = ? WHERE id = ? AND state = 'running'`).run(
+    error,
+    failedAt,
+    failedAt,
+    workflowIdValue,
+  );
+  if (Number(result.changes) === 1) {
+    workflowEvent(internal, workflowIdValue, "failed", null, failedAt, { error });
+  }
+}
+
+function workflowEvent(
+  internal: SQLiteInternal,
+  workflowIdValue: string,
+  name: string,
+  step: string | null,
+  createdAt: number,
+  details: Record<string, unknown>,
+): void {
+  internal.prepare(`INSERT INTO clank_workflow_events
+    (workflow_id, event, step_name, details, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+    workflowIdValue,
+    name,
+    step,
+    JSON.stringify(details),
+    createdAt,
+  );
+  internal.prepare(`DELETE FROM clank_workflow_events WHERE id <= (
+    SELECT max(id) - 100000 FROM clank_workflow_events
+  )`).run();
+}
+
+function isTerminalWorkflowStep(state: WorkflowStepState): boolean {
+  return state === "succeeded" || state === "failed" || state === "cancelled";
+}
+
 function jobMetadata(row: JobRow): JobMetadata {
   return Object.freeze({
     id: String(row.id),
@@ -1529,6 +2394,9 @@ function normalizeRetention(options: JobRetentionOptions = {}): Readonly<{
   succeededMs: number | false;
   cancelledMs: number | false;
   deadMs: number | false;
+  workflowSucceededMs: number | false;
+  workflowCancelledMs: number | false;
+  workflowFailedMs: number | false;
   cleanupIntervalMs: number;
 }> {
   const duration = (value: number | false | undefined, fallback: number | false, name: string) => {
@@ -1541,6 +2409,21 @@ function normalizeRetention(options: JobRetentionOptions = {}): Readonly<{
     succeededMs: duration(options.succeededMs, 7 * 24 * 60 * 60_000, "job retention succeededMs"),
     cancelledMs: duration(options.cancelledMs, 7 * 24 * 60 * 60_000, "job retention cancelledMs"),
     deadMs: duration(options.deadMs, false, "job retention deadMs"),
+    workflowSucceededMs: duration(
+      options.workflowSucceededMs,
+      30 * 24 * 60 * 60_000,
+      "job retention workflowSucceededMs",
+    ),
+    workflowCancelledMs: duration(
+      options.workflowCancelledMs,
+      7 * 24 * 60 * 60_000,
+      "job retention workflowCancelledMs",
+    ),
+    workflowFailedMs: duration(
+      options.workflowFailedMs,
+      false,
+      "job retention workflowFailedMs",
+    ),
     cleanupIntervalMs: integer(
       options.cleanupIntervalMs ?? 60 * 60_000,
       "job retention cleanupIntervalMs",
@@ -1621,6 +2504,30 @@ function normalizeAgent(value: false | JobAgentOptions | undefined): false | Rea
   });
 }
 
+function normalizeWorkflowAgent(
+  value: false | WorkflowAgentOptions | undefined,
+): false | Readonly<WorkflowAgentOptions> {
+  if (value === false) return false;
+  const source = value ?? {};
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    throw new TypeError("workflow agent metadata must be an object or false.");
+  }
+  if (source.idempotent !== undefined && typeof source.idempotent !== "boolean") {
+    throw new TypeError("workflow agent idempotent must be boolean.");
+  }
+  if (source.openWorld !== undefined && typeof source.openWorld !== "boolean") {
+    throw new TypeError("workflow agent openWorld must be boolean.");
+  }
+  const title = optionalText(source.title, "workflow agent title", 256);
+  const description = optionalText(source.description, "workflow agent description", 16 * 1024);
+  return Object.freeze({
+    ...(title ? { title } : {}),
+    ...(description ? { description } : {}),
+    ...(source.idempotent === undefined ? {} : { idempotent: source.idempotent }),
+    ...(source.openWorld === undefined ? {} : { openWorld: source.openWorld }),
+  });
+}
+
 function flattenJobs(
   tree: JobTree,
   prefix: string[] = [],
@@ -1672,9 +2579,160 @@ function freezeJobTree(tree: JobTree): JobTree {
   ));
 }
 
+function flattenWorkflows(
+  tree: WorkflowTree,
+  prefix: string[] = [],
+  output = new Map<string, AnyWorkflowDefinition>(),
+  stack = new Set<object>(),
+): Map<string, AnyWorkflowDefinition> {
+  if (!tree || typeof tree !== "object" || Array.isArray(tree)) {
+    throw new TypeError(`Workflow namespace ${prefix.join(".") || "<root>"} must be an object.`);
+  }
+  if (stack.has(tree)) throw new TypeError("Workflow trees cannot contain cycles.");
+  if (prefix.length > 16) throw new TypeError("Workflow namespaces cannot be deeper than 16 segments.");
+  stack.add(tree);
+  try {
+    for (const [key, value] of Object.entries(tree)) {
+      identifier(key, "workflow segment", 128);
+      const path = [...prefix, key];
+      if (path.length > 16) throw new TypeError("Workflow namespaces cannot be deeper than 16 segments.");
+      if (isWorkflowDefinition(value)) {
+        const name = path.join(".");
+        if (output.has(name)) throw new TypeError(`Duplicate workflow path: ${name}`);
+        output.set(name, value);
+      } else {
+        flattenWorkflows(value, path, output, stack);
+      }
+    }
+  } finally {
+    stack.delete(tree);
+  }
+  return output;
+}
+
+function isWorkflowDefinition(value: AnyWorkflowDefinition | WorkflowTree): value is AnyWorkflowDefinition {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (value as AnyWorkflowDefinition).kind === "workflow"
+    && typeof (value as AnyWorkflowDefinition).args?.parse === "function"
+    && typeof (value as AnyWorkflowDefinition).output === "function",
+  );
+}
+
+function freezeWorkflowTree(tree: WorkflowTree): WorkflowTree {
+  return Object.freeze(Object.fromEntries(
+    Object.entries(tree).map(([key, value]) => [
+      key,
+      isWorkflowDefinition(value) ? value : freezeWorkflowTree(value),
+    ]),
+  ));
+}
+
+function workflowStepNames(workflow: AnyWorkflowDefinition): Map<AnyWorkflowStepDefinition, string> {
+  return new Map(Object.entries(workflow.steps).map(([name, step]) => [step, name]));
+}
+
+function workflowDefinitionRevision(workflow: AnyWorkflowDefinition): string {
+  const names = workflowStepNames(workflow);
+  const source = JSON.stringify({
+    args: workflow.args.toJSONSchema(),
+    returns: workflow.returns?.toJSONSchema() ?? null,
+    output: Function.prototype.toString.call(workflow.output),
+    steps: Object.entries(workflow.steps).sort(([left], [right]) => left.localeCompare(right)).map(([name, step]) => ({
+      name,
+      job: jobPath(step.job),
+      args: step.job.args.toJSONSchema(),
+      returns: step.job.returns?.toJSONSchema() ?? null,
+      needs: step.needs.map((dependency) => names.get(dependency)).sort(),
+      mapper: Function.prototype.toString.call(step.args),
+    })),
+  });
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < source.length; index++) {
+    const code = source.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193) >>> 0;
+    second = Math.imul(second ^ code, 0x85ebca6b) >>> 0;
+  }
+  return first.toString(16).padStart(8, "0") + second.toString(16).padStart(8, "0");
+}
+
+function workflowStepContext(
+  input: unknown,
+  workflow: AnyWorkflowDefinition,
+  currentStep: AnyWorkflowStepDefinition,
+  rows: ReadonlyMap<string, WorkflowStepRow>,
+): WorkflowStepContext<any> {
+  const names = workflowStepNames(workflow);
+  return Object.freeze({
+    input,
+    result(step: AnyWorkflowStepDefinition) {
+      if (!currentStep.needs.includes(step)) {
+        throw new Error("A workflow step can only read results from its declared dependencies.");
+      }
+      const name = names.get(step);
+      const row = name ? rows.get(name) : undefined;
+      if (!row || row.state !== "succeeded" || row.result === null) {
+        throw new Error(`Workflow dependency ${name ?? "<unknown>"} has no successful result.`);
+      }
+      return JSON.parse(row.result);
+    },
+  });
+}
+
+function workflowOutputContext(
+  input: unknown,
+  workflow: AnyWorkflowDefinition,
+  rows: ReadonlyMap<string, WorkflowStepRow>,
+): WorkflowOutputContext<any, any> {
+  const names = workflowStepNames(workflow);
+  const result = (step: AnyWorkflowStepDefinition) => {
+    const name = names.get(step);
+    const row = name ? rows.get(name) : undefined;
+    if (!row || row.state !== "succeeded" || row.result === null) {
+      throw new Error(`Workflow step ${name ?? "<unknown>"} has no successful result.`);
+    }
+    return JSON.parse(row.result);
+  };
+  return Object.freeze({
+    input,
+    results: Object.freeze(Object.fromEntries(
+      Object.entries(workflow.steps).map(([name, step]) => [name, result(step)]),
+    )),
+    result,
+  });
+}
+
+function assertAcyclicWorkflow(
+  entries: readonly [string, AnyWorkflowStepDefinition][],
+  names: ReadonlyMap<AnyWorkflowStepDefinition, string>,
+): void {
+  const visiting = new Set<AnyWorkflowStepDefinition>();
+  const visited = new Set<AnyWorkflowStepDefinition>();
+  const visit = (step: AnyWorkflowStepDefinition) => {
+    if (visited.has(step)) return;
+    if (visiting.has(step)) throw new TypeError(`Workflow graph contains a cycle at ${names.get(step)}.`);
+    visiting.add(step);
+    for (const dependency of step.needs) visit(dependency);
+    visiting.delete(step);
+    visited.add(step);
+  };
+  for (const [, step] of entries) visit(step);
+}
+
 export function jobPath(job: AnyJobDefinition): string {
   const value = (job as unknown as Record<PropertyKey, unknown>)[JOB_PATH];
   if (typeof value !== "string" || !value) throw new TypeError("Expected a job from defineJobs().");
+  return value;
+}
+
+export function workflowPath(workflow: AnyWorkflowDefinition): string {
+  const value = (workflow as unknown as Record<PropertyKey, unknown>)[WORKFLOW_PATH];
+  if (typeof value !== "string" || !value) {
+    throw new TypeError("Expected a workflow registered with defineWorkflows().");
+  }
   return value;
 }
 
@@ -1699,6 +2757,30 @@ export function jobManifest(
     }))),
     agent: job.agent,
   })));
+}
+
+/** Returns the agent- and operator-readable durable workflow graph contract. */
+export function workflowManifest(
+  definition: JobSystemDefinition<any, any, any>,
+): readonly WorkflowManifestEntry[] {
+  return Object.freeze([...flattenWorkflows(definition.workflows ?? {})]
+    .sort(([left], [right]) => left.localeCompare(right)).map(([name, workflow]) => {
+    const names = workflowStepNames(workflow);
+    return Object.freeze({
+      name,
+      ...(workflow.description ? { description: workflow.description } : {}),
+      args: workflow.args.toJSONSchema(),
+      ...(workflow.returns ? { returns: workflow.returns.toJSONSchema() } : {}),
+      steps: Object.freeze(Object.entries(workflow.steps)
+        .sort(([left], [right]) => left.localeCompare(right)).map(([stepName, step]) => Object.freeze({
+        name: stepName,
+        job: jobPath(step.job),
+        needs: Object.freeze(step.needs.map((dependency) => names.get(dependency)!).sort()),
+        ...(step.description ? { description: step.description } : {}),
+      }))),
+      agent: workflow.agent,
+    });
+  }));
 }
 
 const CRON_MACROS: Readonly<Record<string, string>> = Object.freeze({
@@ -1978,6 +3060,10 @@ function finite(value: unknown, label: string, minimum: number, maximum: number)
 
 function jobId(): string {
   return `job_${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+function workflowId(): string {
+  return `workflow_${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
 function processId(): number {

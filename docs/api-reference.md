@@ -318,8 +318,10 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 ## MCP
 
 - `createMcpServer(options)`: zero-dependency MCP Streamable HTTP server for custom typed tools.
-- `McpServer.revision`: deterministic identity of server metadata and the complete visible tool
-  contract.
+- `McpServerOptions.metadata`: optional bounded immutable contract data published inside the
+  authenticated `clank://actions` resource; framework workflow graphs use this channel.
+- `McpServer.revision`: deterministic identity of server metadata, contract metadata, and the
+  complete visible tool contract.
 - `McpServer.notifyToolsChanged()`: sends `notifications/tools/list_changed` to initialized
   stateful clients; `close()` terminates bounded sessions and streams.
 - `MCP_PROTOCOL_VERSION`: current stable protocol revision (`2025-11-25`).
@@ -429,6 +431,9 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
 
 - `defineJobs({ schema }).jobs(builders)`: inference-first nested job tree sharing an application
   database schema.
+- `defineWorkflow({ args, graph, returns?, output?, agent? })`: typed acyclic graph over ordinary
+  jobs. `step(job, { needs?, args })` declares explicit result flow and parallel-ready work.
+- `defineWorkflows(jobSystem, tree)`: registers stable nested workflow paths on a job system.
 - `job({ args, returns?, queue?, priority?, timeoutMs?, retry?, schedules?, handler })`: validated
   async handler definition with agent/operator metadata.
 - Mutation `context.jobs.enqueue(definition, args, options?)`: transactional, owner-scoped enqueue.
@@ -440,8 +445,12 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
   five-field cron parser and IANA-zone occurrence calculation.
 - `jobPath(definition)` / `jobManifest(system)`: stable definition identity and agent-readable
   metadata.
+- `workflowPath(definition)` / `workflowManifest(system)`: stable graph identity, schemas, step job
+  paths, dependency edges, descriptions, and agent metadata.
 - `JobRuntime`: `.enqueue`, `.publisher`, `.get`, `.list`, `.events`, `.stats`, `.cancel`, `.retry`,
-  `.purge`, `.workOnce`, `.scheduleOnce`, `.startWorker`, `.startScheduler`, `.close`.
+  `.purge`, `.startWorkflow`, `.getWorkflow`, `.listWorkflows`, `.workflowEvents`,
+  `.cancelWorkflow`, `.purgeWorkflows`, `.advanceWorkflows`, `.workOnce`, `.scheduleOnce`,
+  `.startWorker`, `.startScheduler`, `.close`.
 - `openPlatform({ jobs: { alertDueAfterMs } })`: sets the hosted overdue-work alert threshold
   without changing application retry or scheduling policy.
 - Hosted job API:
@@ -453,7 +462,8 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
   `PROVIDER_JOBS_UNAVAILABLE` during node or generation instability.
 - Types: `JobDefinition`, `JobHandlerContext`, `JobPublisher`, `JobHandle`, `StoredJob`, `JobEvent`,
   `JobStats`, `JobRetryOptions`, `CronDefinition`, `JobWorkerOptions`, `JobSchedulerOptions`,
-  `JobRetentionOptions`.
+  `JobRetentionOptions`, `WorkflowDefinition`, `WorkflowStepDefinition`, `WorkflowHandle`,
+  `StoredWorkflowRun`, `StoredWorkflowStep`, `WorkflowEvent`, and `WorkflowManifestEntry`.
 
 See [Durable jobs and cron](jobs-and-cron.md) for transaction, lease, retry, scheduling, process,
 deployment, and at-least-once semantics.

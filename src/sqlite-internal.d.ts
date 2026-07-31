@@ -11,6 +11,7 @@ export interface SQLiteInternalChangeRecorder {
     record(table: string, id: string, ownerId?: string | null): void;
 }
 export interface SQLiteInternal {
+    readonly inTransaction: boolean;
     exec(sql: string): void;
     prepare(sql: string): SQLiteStatement;
     transaction<Value>(handler: (changes: SQLiteInternalChangeRecorder) => Value): Value;

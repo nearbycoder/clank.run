@@ -28,6 +28,7 @@ export interface McpServerOptions<Context = unknown> {
     title?: string;
     description?: string;
     instructions?: string;
+    metadata?: Readonly<Record<string, unknown>>;
     tools: readonly McpTool<Context>[];
     sessions?: false | {
         idleTimeoutMs?: number;
@@ -58,6 +59,7 @@ export interface McpServer<Context = unknown> {
             baseVersion: string;
             description?: string;
         };
+        metadata?: Readonly<Record<string, unknown>>;
         tools: Array<{
             name: string;
             title?: string;

@@ -5182,6 +5182,14 @@ test("preview environments are isolated, quota-bound, refreshable, removable, an
         restored_from_revision, restored_from_sequence)
       VALUES (1, 0, 'items', 'old-production-item', NULL, 1, 1, 'create', ?, 1, NULL, NULL)`)
       .run(JSON.stringify({ value: "historical production secret" }));
+    productionDatabase.exec(`
+      CREATE TABLE clank_workflow_runs (id TEXT PRIMARY KEY, input TEXT NOT NULL);
+      CREATE TABLE clank_workflow_steps (workflow_id TEXT NOT NULL, result TEXT);
+      CREATE TABLE clank_workflow_events (workflow_id TEXT NOT NULL, details TEXT NOT NULL);
+      INSERT INTO clank_workflow_runs VALUES ('workflow-secret', '{"token":"production-only"}');
+      INSERT INTO clank_workflow_steps VALUES ('workflow-secret', '{"value":"private"}');
+      INSERT INTO clank_workflow_events VALUES ('workflow-secret', '{"message":"private"}');
+    `);
     assert.equal(productionDatabase.prepare("SELECT count(*) AS count FROM items").get().count, 1);
     assert.equal(previewDatabase.prepare("SELECT count(*) AS count FROM items").get().count, 0);
     productionDatabase.close();
@@ -5229,6 +5237,9 @@ test("preview environments are isolated, quota-bound, refreshable, removable, an
     assert.match(sanitizedSettings.profile.email, /^preview\+[a-f0-9]{16}@example\.invalid$/u);
     assert.equal(branchedDatabase.prepare("SELECT count(*) AS count FROM private_notes").get().count, 0);
     assert.equal(branchedDatabase.prepare("SELECT count(*) AS count FROM clank_document_revisions").get().count, 0);
+    assert.equal(branchedDatabase.prepare("SELECT count(*) AS count FROM clank_workflow_runs").get().count, 0);
+    assert.equal(branchedDatabase.prepare("SELECT count(*) AS count FROM clank_workflow_steps").get().count, 0);
+    assert.equal(branchedDatabase.prepare("SELECT count(*) AS count FROM clank_workflow_events").get().count, 0);
     branchedDatabase.close();
     const unchangedProduction = new DatabaseSync(
       join(dataDirectory, "projects", projectId, "data", "app.sqlite"),

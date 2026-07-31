@@ -1,4 +1,4 @@
-# Durable jobs and cron
+# Durable jobs, workflow graphs, and cron
 
 Clank runs slow, failure-prone, delayed, and scheduled work outside the web request process. The
 queue is durable in the application's isolated SQLite database, enqueue can share the mutation
@@ -141,6 +141,138 @@ the handler in the web process.
 
 Idempotency applies while the original terminal job is retained. After an operator or retention
 cleanup purges it, the key can be used again.
+
+## Compose jobs into a durable workflow graph
+
+Use a workflow when an outcome has several steps, parallel gates, or dependencies. A workflow is
+a directed acyclic graph of ordinary jobs, so every step keeps the same validation, retry, lease,
+timeout, ownership, and at-least-once guarantees described above. Clank persists the run, every
+step transition, dependency result, and bounded event history in the app's SQLite database.
+
+```ts
+import {
+  defineJobs,
+  defineWorkflow,
+  defineWorkflows,
+  s,
+} from "@clank.run/framework";
+
+const jobDefinitions = defineJobs({ schema }).jobs(({ job }) => ({
+  build: job({
+    args: { release: s.string() },
+    returns: s.object({ artifact: s.string() }),
+    handler: async (_context, { release }) => ({
+      artifact: await buildArtifact(release),
+    }),
+  }),
+  audit: job({
+    args: { release: s.string() },
+    returns: s.object({ approved: s.boolean() }),
+    handler: async (_context, { release }) => ({
+      approved: await auditRelease(release),
+    }),
+  }),
+  publish: job({
+    args: { artifact: s.string(), approved: s.literal(true) },
+    returns: s.object({ url: s.url() }),
+    handler: (_context, input) => publishRelease(input),
+  }),
+}));
+
+const publishReleaseWorkflow = defineWorkflow({
+  args: { release: s.string({ min: 1 }) },
+  returns: s.object({ url: s.url() }),
+  description: "Build, audit, and publish one release.",
+  agent: {
+    title: "Publish release",
+    openWorld: true,
+    idempotent: true,
+  },
+  graph: ({ step }) => {
+    // These roots can run in parallel.
+    const build = step(jobDefinitions.jobs.build, {
+      args: ({ input }) => ({ release: input.release }),
+    });
+    const audit = step(jobDefinitions.jobs.audit, {
+      args: ({ input }) => ({ release: input.release }),
+    });
+    const publish = step(jobDefinitions.jobs.publish, {
+      needs: [build, audit],
+      args: ({ result }) => ({
+        artifact: result(build).artifact,
+        approved: result(audit).approved,
+      }),
+    });
+    return { build, audit, publish };
+  },
+  output: ({ results }) => results.publish,
+});
+
+export const background = defineWorkflows(jobDefinitions, {
+  releases: { publish: publishReleaseWorkflow },
+});
+```
+
+`result(step)` is typed from that job's `returns` schema and is available only when the step lists
+that exact dependency in `needs`. This makes data flow visible to humans, agents, and the runtime;
+a hidden dependency fails the run instead of introducing an ordering race. Cycles, reused steps,
+outside-graph dependencies, unknown jobs, excessive graph size, and invalid names are rejected at
+definition time. Keep `args` mappers and `output` pure: they can be evaluated again after a crash,
+so remote effects belong in idempotent job handlers.
+
+Start the graph from a mutation just like a job:
+
+```ts
+const backend = defineBackend({ schema, jobs: background }).functions(({ mutation }) => ({
+  releases: {
+    publish: mutation({
+      args: { release: s.string() },
+      handler: ({ jobs }, input) => jobs.startWorkflow(
+        publishReleaseWorkflow,
+        input,
+        { idempotencyKey: `publish:${input.release}` },
+      ),
+    }),
+  },
+}));
+```
+
+The workflow run, its ready root jobs, and other writes in that mutation share one SQLite
+transaction. A rollback leaves none of them behind. Idempotency keys are scoped to the signed-in
+owner, so two users cannot suppress each other's run. Worker processes reconcile graphs before and
+after ordinary claims; there is no separate workflow service or process to deploy.
+
+When a step succeeds, all newly ready dependants are queued exactly once. A retry remains the same
+step occurrence. A dead-letter step fails the run and cancels unfinished siblings; cancelling a run
+requests cancellation of active children and prevents blocked children from starting. Clank copies
+settled results into workflow history, so normal job retention cannot make a completed graph
+unreadable.
+
+Each active run records a deterministic structural revision covering its input/output schemas,
+step jobs, dependency edges, and mapper/output code. A rolling release may safely continue an
+unchanged graph. If the release changes the retained graph before it finishes, Clank fails closed
+and cancels its children instead of silently reinterpreting old state with new logic.
+
+Inspect or operate runs through the runtime:
+
+```ts
+runtime.jobs.getWorkflow(runId);
+runtime.jobs.listWorkflows({ state: "running", limit: 50 });
+runtime.jobs.workflowEvents(runId, { limit: 100 });
+runtime.jobs.cancelWorkflow(runId);
+runtime.jobs.purgeWorkflows({ states: ["succeeded"], before: cutoff });
+```
+
+Workers call `advanceWorkflows()` automatically; it is public for deterministic tests and repair
+tools. Successful runs default to 30-day retention, cancelled runs to 7 days, and failed runs are
+kept indefinitely. Configure those bounds with `workflowSucceededMs`, `workflowCancelledMs`, and
+`workflowFailedMs` in `openBackend({ jobs: { retention: ... } })`.
+
+The live backend manifest includes an agent-readable `workflows` graph beside `jobs`. A workflow is
+not automatically made callable: expose the start through a documented mutation so normal auth,
+role checks, validation, MCP scopes, confirmation metadata, and audit behavior remain authoritative.
+Set `agent: false` on a workflow to omit its graph from authenticated MCP contract metadata while
+retaining it for application and operator use.
 
 ## Add cron schedules
 

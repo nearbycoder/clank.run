@@ -4,6 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added typed durable workflow graphs over ordinary jobs. Explicit acyclic dependencies support
+  parallel roots and typed result handoff; mutation starts atomically persist runs and ready jobs;
+  owner-scoped idempotency, retries, cancellation propagation, structural release revisions,
+  bounded run/step/event history, restart reconciliation, worker integration, preview-data purge,
+  and revisioned MCP/backend graph manifests keep orchestration safe without another process or package.
+
 - Added bounded, immutable per-document revision history and conflict-safe compensating restore.
   Typed queries inherit owned-table isolation; deletes retain recoverable snapshots; restores
   validate the current schema, require an observed version or deletion state, and append a new

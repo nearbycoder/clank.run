@@ -60,6 +60,14 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 - Expired workers are fenced and work is retried with bounded exponential backoff.
 - Exhausted work is retained as an explicit dead letter; cancellation fences later success.
 - Owner scope follows authenticated enqueue and applies to handler database reads/writes.
+- Workflow starts, root enqueue, and surrounding mutation writes are atomic; workflow idempotency
+  is owner scoped.
+- Workflow steps can read results only from explicit dependency edges. Graph shape, schemas, mapper
+  code, and output code are revision-bound so a rolling release cannot reinterpret an active run.
+- Workflow inputs, step results, errors, and outputs are retained application data. Keep mapper and
+  output callbacks pure, bound sensitive history retention, and put remote effects in idempotent jobs.
+- Dead, cancelled, missing, or changed workflow steps fail closed, cancel unfinished children, and
+  never make blocked dependants runnable. Run, step, and event history is bounded by retention.
 - Cron occurrences use deterministic idempotency keys and independently leased schedulers.
 - Worker queues and concurrency are bounded in both config and environment parsing.
 - Rolling deployments quiesce old background code before starting the candidate and resume it on
@@ -75,7 +83,7 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 
 Delivery remains at least once. A handler can complete an external side effect before losing its
 lease, so the application must make that side effect idempotent. Abort signals are cooperative and
-do not sandbox handler code. See [Durable jobs and cron](jobs-and-cron.md#handler-security-checklist).
+do not sandbox handler code. See [Durable jobs, workflow graphs, and cron](jobs-and-cron.md#handler-security-checklist).
 
 ### Node and files
 

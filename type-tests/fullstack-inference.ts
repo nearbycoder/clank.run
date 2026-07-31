@@ -3,9 +3,13 @@ import {
   createSyncClient,
   defineBackend,
   defineDatabase,
+  defineJobs,
   defineTable,
+  defineWorkflow,
+  defineWorkflows,
   s,
   type DocumentFor,
+  type JobRuntime,
 } from "../dist/index.js";
 
 const schema = defineDatabase({
@@ -16,6 +20,43 @@ const schema = defineDatabase({
   }).index("by_done", ["done"]),
   users: defineTable({ name: s.string() }),
 });
+
+const jobDefinitions = defineJobs({ schema }).jobs(({ job }) => ({
+  prepare: job({
+    args: { title: s.string() },
+    returns: s.object({ normalized: s.string() }),
+    handler: (_context, { title }) => ({ normalized: title.trim() }),
+  }),
+  finish: job({
+    args: { title: s.string() },
+    returns: s.object({ id: s.id("todos") }),
+    handler: ({ db }, { title }) => ({
+      id: db.transaction((write) => write.table("todos").insert({ title, done: false })),
+    }),
+  }),
+}));
+
+const createTodoWorkflow = defineWorkflow({
+  args: { title: s.string() },
+  returns: s.object({ id: s.id("todos") }),
+  graph: ({ step }) => {
+    const prepare = step(jobDefinitions.jobs.prepare, {
+      args: ({ input }) => ({ title: input.title }),
+    });
+    const finish = step(jobDefinitions.jobs.finish, {
+      needs: [prepare],
+      args: ({ result }) => ({ title: result(prepare).normalized }),
+    });
+    return { prepare, finish };
+  },
+  output: ({ results }) => results.finish,
+});
+
+const background = defineWorkflows(jobDefinitions, { todos: { create: createTodoWorkflow } });
+declare const jobRuntime: JobRuntime<typeof background>;
+jobRuntime.startWorkflow(createTodoWorkflow, { title: "Typed workflow" });
+// @ts-expect-error workflow input is inferred from its argument schema.
+jobRuntime.startWorkflow(createTodoWorkflow, { value: "wrong" });
 
 export const backend = defineBackend({ schema }).functions(({ query, mutation }) => ({
   todos: {

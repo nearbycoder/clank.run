@@ -11,6 +11,8 @@ export interface SQLiteInternalChangeRecorder {
 }
 
 export interface SQLiteInternal {
+  /** True only while this database instance owns a write transaction. */
+  readonly inTransaction: boolean;
   exec(sql: string): void;
   prepare(sql: string): SQLiteStatement;
   transaction<Value>(handler: (changes: SQLiteInternalChangeRecorder) => Value): Value;
