@@ -31,6 +31,7 @@
     "./agent-contract": { "types": "./dist/agent-contract.d.ts", "import": "./dist/agent-contract.js" },
     "./mcp": { "types": "./dist/mcp.d.ts", "import": "./dist/mcp.js" },
     "./blueprint": { "types": "./dist/blueprint.d.ts", "import": "./dist/blueprint.js" },
+    "./blueprint-registry": { "types": "./dist/blueprint-registry.d.ts", "import": "./dist/blueprint-registry.js" },
     "./webauthn": { "types": "./dist/webauthn.d.ts", "import": "./dist/webauthn.js" },
     "./services": { "types": "./dist/services.d.ts", "import": "./dist/services.js" },
     "./object-storage": { "types": "./dist/object-storage.d.ts", "import": "./dist/object-storage.js" },

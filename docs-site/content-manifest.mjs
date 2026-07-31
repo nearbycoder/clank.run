@@ -57,7 +57,8 @@ export const groups = [
       ["conversational-build", "docs/conversational-build.md"],
       ["browser-journeys", "docs/browser-journeys.md"],
       ["admin-studio", "docs/admin-studio.md"],
-      ["blueprints", "docs/blueprints.md"]
+      ["blueprints", "docs/blueprints.md"],
+      ["blueprint-registry", "docs/blueprint-registry.md"]
     ]
   },
   {

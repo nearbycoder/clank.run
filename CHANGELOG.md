@@ -4,6 +4,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added a dependency-free signed blueprint registry protocol and `clank registry` CLI. Scoped
+  Ed25519 publisher keys bind normalized data-only blueprints to exact semantic versions; separate
+  registry keys bind monotonic catalogs to exact HTTPS origins, release digests, publisher keys,
+  and traversal-safe relative paths. Explicit trust policies support roles, namespace/origin
+  scopes, key/release revocation, and minimum catalog sequences. Remote install refuses redirects,
+  mutable tags, cross-origin paths, wrong media types, oversized/slow responses, forged verified
+  wrappers, remote generators, and install hooks before using the ordinary deterministic plan.
+
 - Added typed, privacy-first product analytics in each application's isolated SQLite database.
   Finite event contracts accept only aggregate-safe properties, publish an immutable agent-readable
   manifest, and support bounded time-series, dimension, measure, and ordered-funnel queries. Every
