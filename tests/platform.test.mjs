@@ -6576,17 +6576,34 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /class="table mobile-card-table backup-table"/);
     assert.match(signedInHtml, /class="table mobile-card-table job-table"/);
     assert.match(signedInHtml, /class="table admin-user-table mobile-card-table"/);
-    assert.match(signedInHtml, /class="button-label">Refresh<\/span><span class="button-icon" aria-hidden="true">↻<\/span>/);
+    assert.match(
+      signedInHtml,
+      /class="button-label">Refresh<\/span><span class="button-icon" aria-hidden="true"><svg><use href="#ui-icon-refresh"><\/use><\/svg><\/span>/,
+    );
+    assert.match(
+      signedInHtml,
+      /class="button-label">New project<\/span><span class="button-icon" aria-hidden="true"><svg><use href="#ui-icon-plus"><\/use><\/svg><\/span>/,
+    );
     assert.match(signedInHtml, /\.topbar \.button\{min-width:44px;height:44px;padding:0 12px;line-height:1\}/);
     assert.match(signedInHtml, /\.quota-number\{display:flex;align-items:baseline;gap:9px;/);
     assert.match(signedInHtml, /class="quota-used">—<\/strong><span class="quota-total">projects<\/span>/);
     assert.match(signedInHtml, /q\("#quota-number \.quota-total"\)\.textContent=total\+" projects"/);
     assert.match(signedInHtml, /@media\(max-width:900px\)/);
     assert.match(signedInHtml, /\.button,\.input,\.nav-button\{min-height:44px\}/);
+    assert.match(signedInHtml, /\.button\{[^}]*text-decoration:none;/);
     assert.match(signedInHtml, /\.breadcrumbs\{flex:1;min-width:0;overflow:hidden;white-space:nowrap\}/);
     assert.match(signedInHtml, /\.sidebar-account \.button\{flex:0 0 44px;min-width:44px\}/);
+    assert.match(signedInHtml, /\.sidebar\{position:fixed;left:0;z-index:20;width:252px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;/);
     assert.match(signedInHtml, /\.activity-details summary\{display:inline-flex;align-items:center;min-height:44px\}/);
     assert.match(signedInHtml, /grid-template-columns:repeat\(5,minmax\(44px,1fr\)\)/);
+    assert.match(
+      signedInHtml,
+      /\.desktop-project-tabs\{display:grid;grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/,
+    );
+    assert.match(signedInHtml, /data-project-tab="previews"[^>]*><span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-previews"/);
+    assert.match(signedInHtml, /\.section-gap\{margin-top:var\(--layout-gap\)!important\}/);
+    assert.match(signedInHtml, /\.stat\{display:flex;flex-direction:column;min-height:128px;/);
+    assert.match(signedInHtml, /manage\.parentElement\.hidden=manage\.hidden/);
     assert.match(signedInHtml, /link\.title=project\.name;link\.append\(el\("span","nav-text",project\.name\)\)/);
     assert.match(signedInHtml, /aria-labelledby="site-dialog-title"/);
     for (const path of [
