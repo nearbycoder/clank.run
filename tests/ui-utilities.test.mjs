@@ -145,11 +145,15 @@ test("scrollbar wheel, keyboard, track, and thumb input consume movement only wh
 
   area.scrollTo({ left: 0 });
   const thumbProps = area.thumb("horizontal");
+  let dragging = false;
+  const stopDragging = effect(() => { dragging = thumbProps["data-dragging"]() === ""; });
   thumbProps.onPointerDown(pointerEvent({ currentTarget: thumb, target: thumb, pointerId: 7, clientX: 0 }));
+  assert.equal(dragging, true, "thumb drag state updates reactive DOM bindings immediately");
   document.dispatch("pointermove", pointerEvent({ pointerId: 7, clientX: 37.5 }));
   assert.equal(area.scrollX.value, 150);
   document.dispatch("pointerup", pointerEvent({ pointerId: 7, clientX: 37.5 }));
-  assert.equal(thumbProps["data-dragging"](), undefined);
+  assert.equal(dragging, false);
+  stopDragging();
   stopAccessibleOffset();
   area.dispose();
 });

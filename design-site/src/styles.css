@@ -346,14 +346,18 @@ svg { display: block; }
 .radio-card small { margin-top: 4px; color: var(--clank-text-faint); font-size: 7px; }
 .demo-scroll { position: relative; width: min(100%, 390px); height: 240px; overflow: hidden; border: 1px solid var(--clank-border); border-radius: var(--clank-radius-md); background: var(--clank-surface); }
 .scroll-viewport { width: 100%; height: 100%; overflow: auto; }
-.scroll-content { padding: 7px 18px; }
+.scroll-content { padding: 7px 24px 7px 18px; }
 .scroll-event { display: flex; gap: 10px; border-bottom: 1px solid var(--clank-border); padding: 13px 0; }
 .scroll-event > span { color: var(--clank-accent); }
 .scroll-event p { margin: 0; }
 .scroll-event strong, .scroll-event small { display: block; font-size: 9px; }
 .scroll-event small { color: var(--clank-text-faint); font-size: 7px; }
-.scrollbar.vertical { position: absolute; top: 5px; right: 4px; bottom: 5px; width: 7px; border-radius: 99px; background: var(--clank-canvas-raised); }
-.scroll-thumb { width: 100%; min-height: 30px; border-radius: 99px; background: var(--clank-border-strong); }
+.scrollbar.vertical { position: absolute; top: 5px; right: 1px; bottom: 5px; width: 16px; border-radius: 99px; background: transparent; cursor: pointer; touch-action: none; }
+.scrollbar.vertical::before { position: absolute; inset: 0 5px; border-radius: 99px; background: var(--clank-canvas-raised); content: ""; pointer-events: none; }
+.scroll-thumb { position: relative; width: 100%; min-height: 30px; border-radius: 99px; background: transparent; cursor: grab; }
+.scroll-thumb::after { position: absolute; inset: 0 5px; border-radius: 99px; background: var(--clank-border-strong); content: ""; pointer-events: none; transition: inset 120ms ease, background 120ms ease; }
+.scroll-thumb:hover::after, .scroll-thumb[data-dragging]::after { inset-inline: 4px; background: var(--clank-accent); }
+.scroll-thumb[data-dragging] { cursor: grabbing; }
 .select-trigger { display: flex; align-items: center; justify-content: space-between; cursor: pointer; text-align: left; }
 .select-trigger svg { width: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; }
 .separator-demo { display: grid; gap: 25px; width: min(100%, 390px); color: var(--clank-text-muted); font-size: 10px; }

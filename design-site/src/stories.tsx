@@ -416,7 +416,7 @@ export function RadioStory() {
 export function ScrollAreaStory() {
   const scroll = createScrollArea({ id: "story-scroll", label: "Release activity", scrollbarMode: "always" });
   cleanup(scroll);
-  const events = ["Release activated", "Health check passed", "Artifact verified", "Migrations complete", "Upload accepted", "Build finished"];
+  const events = ["Release activated", "Health check passed", "Artifact verified", "Migrations complete", "Upload accepted", "Build finished", "Security scan cleared", "Preview promoted", "Traffic switched", "Old release drained"];
   return <div {...scroll.root()} class="demo-scroll"><div {...scroll.viewport()} class="scroll-viewport"><div {...scroll.content()} class="scroll-content"><For each={events}>{(event, index) => <div class="scroll-event"><span>{index() < 2 ? "✓" : "·"}</span><p><strong>{event}</strong><small>{index() + 1} minute{index() ? "s" : ""} ago</small></p></div>}</For></div></div><div {...scroll.scrollbar("vertical")} class="scrollbar vertical"><div {...scroll.thumb("vertical")} class="scroll-thumb" /></div><div {...scroll.corner()} class="scroll-corner" /></div>;
 }
 

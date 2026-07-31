@@ -116,6 +116,7 @@ export function createScrollArea(options: ScrollAreaOptions): ScrollAreaControll
   const scrollY = signal(0, { name: `${id}.scrollY` });
   const maxScrollX = signal(0, { name: `${id}.maxScrollX` });
   const maxScrollY = signal(0, { name: `${id}.maxScrollY` });
+  const draggingOrientation = signal<Orientation | null>(null, { name: `${id}.draggingOrientation` });
   const measurementVersion = signal(0, { name: `${id}.measurementVersion` });
   const measurements: ScrollMeasurements = {
     viewportWidth: 0,
@@ -316,9 +317,11 @@ export function createScrollArea(options: ScrollAreaOptions): ScrollAreaControll
         state.document?.removeEventListener?.("pointerup", state.end as EventListener, true);
         state.document?.removeEventListener?.("pointercancel", state.end as EventListener, true);
         drag = null;
+        draggingOrientation.value = null;
       },
     };
     drag = state;
+    draggingOrientation.value = orientation;
     try { target.setPointerCapture?.(event.pointerId); } catch { /* Document listeners are the fallback. */ }
     document?.addEventListener?.("pointermove", state.move as EventListener, true);
     document?.addEventListener?.("pointerup", state.end as EventListener, true);
@@ -475,7 +478,7 @@ export function createScrollArea(options: ScrollAreaOptions): ScrollAreaControll
         "aria-hidden": true,
         "data-clank-part": "thumb",
         "data-orientation": orientation,
-        "data-dragging": () => drag?.orientation === orientation ? "" : undefined,
+        "data-dragging": () => draggingOrientation.value === orientation ? "" : undefined,
         style: () => orientation === "horizontal" ? {
           touchAction: "none",
           userSelect: "none",
