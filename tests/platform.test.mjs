@@ -1579,6 +1579,11 @@ test("managed runner enrollment is one-time, bound, durable, browser-admin-only,
     assert.equal(initial.enabled, true);
     assert.equal(initial.managedEnrollment, true);
     assert.equal(initial.placementActive, false);
+    assert.deepEqual(initial.trustBoundary, {
+      hostingProfile: "trusted",
+      runnerKind: "process",
+      signupMode: "public",
+    });
     assert.deepEqual(initial.nodes, []);
 
     const ordinaryDenied = await platform.handle(jsonRequest(
@@ -2842,6 +2847,9 @@ test("operator allowlist grants browser-only global administration and revokes i
     assert.match(operatorHtml, /id="invite-scope"/);
     assert.match(operatorHtml, /id="admin-memory-projects"/);
     assert.match(operatorHtml, /id="admin-storage-projects"/);
+    assert.match(operatorHtml, /"trustBoundary":\{"hostingProfile":"trusted","runnerKind":"process","signupMode":"public"\}/);
+    assert.match(operatorHtml, /class="admin-warning critical" id="admin-runner-boundary"/);
+    assert.match(operatorHtml, /Stop public onboarding until isolated hosting is configured/);
     assert.match(operatorHtml, />Storage attribution</);
     assert.match(operatorHtml, /Provider dashboards can include block-device metadata/);
     assert.match(operatorHtml, />Unattributed</);
@@ -6106,6 +6114,34 @@ test("bootstrap registration applies configured platform admin access before ret
     assert.equal(dashboard.account.platformRole, "platform_admin");
     const runners = await payload(platform, jsonRequest("/api/admin/runners", { cookie }));
     assert.equal(runners.enabled, false);
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("server-rendered console reports the isolated application boundary before hydration", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-isolated-boundary-"));
+  const platform = await openPlatform({
+    dataDirectory: root,
+    publicUrl: "https://deploy.example.test",
+    signup: false,
+    hostingProfile: "isolated",
+    runner: {
+      kind: "docker",
+      executable: "unused-docker-test-runner",
+      image: "node@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    },
+    backups: { intervalMs: false },
+  });
+  try {
+    const response = await platform.handle(new Request("https://deploy.example.test/login"));
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /"trustBoundary":\{"hostingProfile":"isolated","runnerKind":"docker","signupMode":"disabled"\}/);
+    assert.match(html, /class="admin-warning safe" id="admin-runner-boundary"/);
+    assert.match(html, /Isolated local runtime · Local apps use the docker runner/);
+    assert.match(html, /Account signup is disabled/);
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });

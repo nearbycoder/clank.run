@@ -9,6 +9,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Hardened the release gate against Node's occasional truncated experimental coverage artifact:
   it retries that exact all-tests-passed reporter failure once while continuing to fail
   immediately for test failures, threshold misses, and every other nonzero exit.
+- Added a server-rendered, live-refreshed operator status for the local application trust boundary,
+  runner kind, and signup mode, including a critical warning for public signup on trusted local
+  execution.
 
 ## 0.12.0 - 2026-07-30
 
