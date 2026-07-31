@@ -243,6 +243,9 @@ Before release, verify:
   reports or inspected surfaces;
 - untrusted agent-proposed journeys use JSON, because local `.js` and `.mjs` journey modules are
   executable project code rather than a sandbox;
+- collaboration endpoints re-authorize the exact room on every stream, heartbeat, presence, and
+  signal request; writes reuse the application's CSRF check, and presence contains no secret or
+  hidden database values;
 
 Clank's test suite contains executable checks for these invariants. Security is iterative: repeat this review when adding a new transport, credential type, storage backend, raw-HTML path, or deployment topology.
 

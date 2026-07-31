@@ -330,3 +330,7 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
 
 Treat agent input as untrusted even after OAuth. Authorization identifies the user; it does not
 make model-generated arguments safe.
+
+Realtime collaboration presence is not an MCP tool or durable application record. Agents continue
+to use the typed backend queries and mutations as the source of truth; cursors, typing indicators,
+and ephemeral signals remain short-lived UI context for currently authorized room participants.

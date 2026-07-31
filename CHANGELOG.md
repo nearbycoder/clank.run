@@ -4,6 +4,13 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added dependency-free realtime collaboration primitives for presence, cursors, selections,
+  typing state, and ephemeral signals. The Fetch + SSE hub re-authorizes exact room access on every
+  request, requires the application's CSRF check for writes, enforces same-origin and bounded
+  capacity/rate/data/idle leases, exposes identity-free diagnostics, and publishes immutable
+  snapshots with room revisions. A Clank auth adapter and reconnecting reactive browser client make
+  setup small while keeping persistent backend mutations and MCP actions authoritative.
+
 - Added dependency-free semantic browser journeys with data-only definitions, stable agent/native
   control IDs, real isolated Chrome execution, same-origin and timeout boundaries, mobile viewport
   support, hydration/live-update waits, page-exception failure, value-redacted reports, atomic
