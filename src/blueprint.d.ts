@@ -155,7 +155,7 @@ export interface AppBlueprintInput {
     admin?: false | AppAdminStudioDefinition;
     deployment?: AppDeploymentDefinition;
 }
-export interface AppBlueprint extends AppBlueprintInput {
+export interface AppBlueprint extends Omit<AppBlueprintInput, "protocol" | "slug" | "version" | "auth" | "relationships" | "actions" | "migrations" | "services" | "fixtures" | "admin" | "deployment"> {
     protocol: "clank-app/1";
     slug: string;
     version: number;

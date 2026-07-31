@@ -98,6 +98,27 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
   `CollaborationClient`, `CollaborationClientState`, `CreateCollaborationHubOptions`,
   `CreateAuthCollaborationHubOptions`, `CreateCollaborationClientOptions`.
 
+## Product analytics
+
+- `defineAnalytics({ events, funnels? })` → immutable typed event/funnel contract with bounded,
+  aggregate-safe properties and a `clank-analytics/1` manifest.
+- `openAnalytics(definition, database, options)` → per-app SQLite analytics runtime with
+  consent/DNT gates, HMAC pseudonyms, idempotency, sampling, expiry, erasure, and storage bounds.
+- `AnalyticsRuntime.track(name, properties, context)`: validate and conditionally persist one event.
+- `AnalyticsRuntime.ingest(events, context)`: ingest at most 25 typed memory-only client events
+  after server-side identity and consent resolution.
+- `AnalyticsRuntime.query(input)`: cohort-protected time series, finite dimension breakdown, and
+  bounded numeric average; no raw-event read API exists.
+- `AnalyticsRuntime.funnel(name, range)`: ordered, windowed, bounded, cohort-protected conversion.
+- `AnalyticsRuntime.forgetSubject(input)`, `.purge(now?)`, `.diagnostics()`: privacy erasure,
+  retention, and identity-free aggregate operations.
+- `createAnalyticsClient(definition, options)`: typed memory-only consent/DNT-aware batching client
+  with application-owned transport and no browser identity or local persistence.
+- Types: `AnalyticsDefinition`, `AnalyticsEventInput`, `AnalyticsFunnelInput`,
+  `AnalyticsRuntime`, `AnalyticsManifest`, `AnalyticsTrackContext`, `AnalyticsTrackResult`,
+  `AnalyticsQueryInput`, `AnalyticsQueryResult`, `AnalyticsFunnelResult`, `AnalyticsClient`,
+  `AnalyticsClientEvent`, `OpenAnalyticsOptions`.
+
 ## Deployment artifacts
 
 - `readDeploymentConfig(root, filename?)`: read and normalize `clank.deploy.json`.
