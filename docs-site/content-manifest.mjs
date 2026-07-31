@@ -22,6 +22,7 @@ export const groups = [
       ["routing", "docs/routing.md"],
       ["forms", "docs/forms.md"],
       ["ui", "docs/ui.md"],
+      ["design-system", "docs/design-system.md"],
       ["tailwind", "docs/tailwind.md"],
       ["performance", "docs/performance.md"],
       ["api-reference", "docs/api-reference.md"]

@@ -1190,7 +1190,7 @@ test("code-only deployments keep serving until a healthy candidate takes traffic
     publicUrl: "http://127.0.0.1:4200",
     signup: true,
     appPortStart: 4610,
-    appPortEnd: 4611,
+    appPortEnd: 4612,
     ingress: {
       enabled: true,
       baseDomain: "apps.example.test",
@@ -1267,6 +1267,13 @@ test("code-only deployments keep serving until a healthy candidate takes traffic
     }));
     assert.equal(logs.logs.some((entry) => entry.message.includes("switched managed ingress")), true);
     assert.equal(logs.logs.some((entry) => entry.message.includes("Drained the prior release")), true);
+
+    const afterRollout = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "After rollout", slug: "after-rollout" },
+    }), 201);
+    assert.equal(afterRollout.project.port, 4612, "project allocation must skip the active rollout port");
   } finally {
     await platform.close();
     await rm(root, { recursive: true, force: true });

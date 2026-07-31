@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "entry": "dist/server.js",
+  "include": [
+    "dist",
+    "vendor",
+    "migrations"
+  ],
+  "build": {
+    "command": [
+      "node",
+      "build.mjs"
+    ]
+  },
+  "database": {
+    "path": "design.sqlite",
+    "migrations": "migrations",
+    "allowUnsafeMigrations": false
+  },
+  "health": {
+    "path": "/healthz",
+    "timeoutMs": 15000
+  },
+  "env": {
+    "DESIGN_ORIGIN": "https://design.clank.run"
+  }
+}

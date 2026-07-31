@@ -1130,6 +1130,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const active = new Map<string, ActiveProcess>();
   const starting = new Set<ActiveProcess>();
   const reservedRolloutPorts = new Set<number>();
+  const unavailableApplicationPorts = (): ReadonlySet<number> => new Set([
+    ...reservedAppPorts,
+    ...reservedRolloutPorts,
+    ...[...active.values()].map((running) => running.port),
+    ...[...starting].map((running) => running.port),
+  ]);
   const locks = new Map<string, Promise<unknown>>();
   let storageDiagnosticsCache: { expiresAt: number; value: Record<string, unknown> } | undefined;
   let storageDiagnosticsFlight: Promise<Record<string, unknown>> | undefined;
@@ -6119,7 +6125,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 `This organization has reached its ${organizationLimits.projectsPerOrganization}-site limit.`,
               );
             }
-            port = allocatePort(storage.internal, appPortStart, appPortEnd, reservedAppPorts);
+            port = allocatePort(storage.internal, appPortStart, appPortEnd, unavailableApplicationPorts());
             storage.internal.prepare(`INSERT INTO clank_platform_projects
               (id, owner_id, organization_id, name, slug, port, active_release_id,
                database_path, placement, created_at, updated_at)
@@ -6513,7 +6519,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                   `This organization has reached its ${organizationLimits.projectsPerOrganization}-site limit.`,
                 );
               }
-              port = allocatePort(storage.internal, appPortStart, appPortEnd, reservedAppPorts);
+              port = allocatePort(storage.internal, appPortStart, appPortEnd, unavailableApplicationPorts());
               storage.internal.prepare(`INSERT INTO clank_platform_projects
                 (id, owner_id, organization_id, name, slug, port, active_release_id, database_path,
                   placement, parent_project_id, preview_name, preview_expires_at, created_at, updated_at)

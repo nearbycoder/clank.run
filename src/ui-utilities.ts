@@ -413,7 +413,7 @@ export function createScrollArea(options: ScrollAreaOptions): ScrollAreaControll
         overflowY: "auto",
         // Scrolling remains native; only the browser-drawn track is replaced.
         scrollbarWidth: "none",
-        "-ms-overflow-style": "none",
+        msOverflowStyle: "none",
       },
       onScroll: () => measure(),
       use: (element: Element) => {

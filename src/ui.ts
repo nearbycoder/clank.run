@@ -37,3 +37,4 @@ export * from "./ui-fields.ts";
 export * from "./ui-utilities.ts";
 export * from "./ui-legacy.ts";
 export * from "./ui-catalog.ts";
+export * from "./ui-theme.ts";
