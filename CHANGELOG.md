@@ -4,6 +4,16 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Added dependency-free semantic browser journeys with data-only definitions, stable agent/native
+  control IDs, real isolated Chrome execution, same-origin and timeout boundaries, mobile viewport
+  support, hydration/live-update waits, page-exception failure, value-redacted reports, atomic
+  failure screenshots, and agent-readable CLI output. Environment-backed secret references enable
+  login flows without putting passwords in journey files or reports; generated blueprint apps now
+  include a mobile smoke journey and agent maintenance guidance. The npm README now links to the
+  canonical hosted guides instead of duplicating the complete Markdown documentation corpus in
+  every installation; full source documentation remains versioned in the repository and docs site,
+  restoring durable headroom under the fixed 5 MiB unpacked package ceiling.
+
 - Added typed durable workflow graphs over ordinary jobs. Explicit acyclic dependencies support
   parallel roots and typed result handoff; mutation starts atomically persist runs and ready jobs;
   owner-scoped idempotency, retries, cancellation propagation, structural release revisions,

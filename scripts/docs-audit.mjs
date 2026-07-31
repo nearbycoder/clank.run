@@ -47,7 +47,9 @@ const readme = await readFile(path.join(root, "README.md"), "utf8");
 const documentation = await walkMarkdown(path.join(root, "docs"));
 for (const file of documentation) {
   const target = relative(file);
-  if (!readme.includes(`](${target})`)) {
+  const slug = path.basename(target, ".md");
+  const canonical = `https://docs.clank.run/docs/${slug}`;
+  if (!readme.includes(`](${target})`) && !readme.includes(`](${canonical})`)) {
     failures.push(`README.md does not index ${target}.`);
   }
 }

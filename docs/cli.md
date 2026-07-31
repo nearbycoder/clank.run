@@ -34,6 +34,19 @@ The templates are:
 framework version, default template, capability identifiers, and recommendation state. The human
 form prints the same catalog and copyable create commands.
 
+## Browser journeys
+
+```sh
+clank journey journeys/smoke.json
+clank journey journeys/acceptance.json --headed
+clank journey journeys/acceptance.json --output=.clank/journey.json --json
+```
+
+`journey` replays bounded, selector-free acceptance flows against a real Chrome browser in a fresh
+profile. Generated blueprint apps include a mobile smoke journey and `npm run test:journey`.
+Environment-backed secret inputs support login without recording passwords. See [Semantic browser
+journeys](browser-journeys.md) for operations, security boundaries, and CI output.
+
 ## Compose with an agent
 
 ```sh

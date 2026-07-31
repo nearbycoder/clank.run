@@ -704,12 +704,17 @@ test("plan, explain, and generate CLI commands create a buildable app without bl
     const packageJson = JSON.parse(await readFile(join(target, "package.json"), "utf8"));
     assert.equal(packageJson.dependencies["@clank.run/framework"], `^${version}`);
     assert.equal(packageJson.scripts.doctor, "clank doctor");
+    assert.equal(packageJson.scripts["test:journey"], "clank journey journeys/smoke.json");
+    const smokeJourney = JSON.parse(await readFile(join(target, "journeys", "smoke.json"), "utf8"));
+    assert.equal(smokeJourney.viewport.width, 390);
+    assert.deepEqual(smokeJourney.steps, [{ expect: { text: "Focused Tasks" } }]);
+    assert.match(await readFile(join(target, "AGENTS.md"), "utf8"), /journeys\/.*stable `agentId`/u);
     assert.match(await readFile(join(target, "src", "server.tsx"), "utf8"), /Focused Tasks/);
     const savedPlan = JSON.parse(await readFile(join(target, ".clank", "plan.json"), "utf8"));
     assert.equal(savedPlan.digest, parsedPlan.digest);
 
     const repeated = await run(["generate", target, `--blueprint=${source}`]);
-    assert.match(repeated.stdout, /0 files written, 17 unchanged/);
+    assert.match(repeated.stdout, /0 files written, 18 unchanged/);
     await run(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "backend.js"), "utf8"), /by_priority/);
   } finally {
