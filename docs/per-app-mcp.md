@@ -201,6 +201,12 @@ This prevents the MCP action list from silently remaining on an older release wh
 ahead. A client connected before session-aware revisions were introduced may need one manual
 reconnect; later deployments refresh automatically.
 
+Apps that register durable workflow graphs also publish a `workflows` section in
+`GET /__clank/manifest`: input/output schemas, step job paths, dependency edges, descriptions, and
+side-effect metadata. The graph is documentation, not an authorization bypass. Make a workflow
+callable by wrapping `jobs.startWorkflow()` in an ordinary mutation; that mutation then supplies
+the MCP tool, authentication, roles, scopes, validation, confirmation policy, and audit boundary.
+
 ## Verify an app's MCP surface
 
 Before deployment, check that every server-backed UI operation has one matching backend function

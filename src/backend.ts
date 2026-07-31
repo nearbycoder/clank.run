@@ -41,6 +41,7 @@ import { createProjectOAuth } from "./oauth.ts";
 import {
   jobManifest,
   openJobs,
+  workflowManifest,
   type OpenJobsOptions,
   type JobPublisher,
   type JobRuntime,
@@ -140,6 +141,9 @@ const RESERVED_TABLE_NAMES = new Set([
   "jobs",
   "job_events",
   "job_schedules",
+  "workflow_runs",
+  "workflow_steps",
+  "workflow_events",
 ]);
 
 export type TableName<Schema extends DatabaseSchema<any>> = keyof Schema["tables"] & string;
@@ -1106,6 +1110,9 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       native.close();
     },
     [SQLITE_INTERNAL]: {
+      get inTransaction() {
+        return transactionActive;
+      },
       exec(sql) {
         ensureOpen();
         native.exec(sql);
@@ -1972,6 +1979,8 @@ export async function openBackend<
         } satisfies McpTool<AuthRequest<any> | null>;
       })
     : [];
+  const workflowContract = definition.jobs ? workflowManifest(definition.jobs) : [];
+  const agentWorkflowContract = workflowContract.filter((workflow) => workflow.agent !== false);
   const mcp = agentOptions
     ? createMcpServer<AuthRequest<any> | null>({
         name: agentName,
@@ -1979,6 +1988,7 @@ export async function openBackend<
         version: agentOptions.version ?? "1.0.0",
         description: agentDescription,
         instructions: agentOptions.instructions,
+        ...(agentWorkflowContract.length > 0 ? { metadata: { workflows: agentWorkflowContract } } : {}),
         tools: mcpTools,
         allowedOrigins: options.allowedOrigins,
         maxRequestBytes,
@@ -2012,6 +2022,9 @@ export async function openBackend<
       },
       documentation: {
         actions: "Connect with MCP and call tools/list or read clank://actions.",
+        ...(agentWorkflowContract.length > 0
+          ? { workflows: "Read clank://actions metadata.workflows for durable graph schemas and dependencies." }
+          : {}),
       },
     }, {
       headers: {
@@ -2131,6 +2144,7 @@ export async function openBackend<
               ...(fn.returns ? { returns: fn.returns.toJSONSchema() } : {}),
             })),
             jobs: definition.jobs ? jobManifest(definition.jobs) : [],
+            workflows: workflowContract,
           }, {
             headers: {
               "cache-control": "no-store",

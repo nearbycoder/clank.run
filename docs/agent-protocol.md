@@ -167,8 +167,9 @@ Clank publishes only non-sensitive connection metadata before authentication:
 | `/.well-known/oauth-authorization-server` | RFC 8414 authorization-server metadata |
 
 Detailed action descriptions and schemas are returned after connection through `tools/list`, or
-as the authenticated `clank://actions` MCP resource. The public documents do not contain action
-arguments, user data, credentials, private routes, or implementation paths.
+as the authenticated `clank://actions` MCP resource. Its bounded contract metadata also includes
+registered durable workflow schemas and dependency graphs. The public documents do not contain
+action arguments, workflow run data, credentials, private routes, or implementation paths.
 
 The Server Card endpoint follows the current MCP Server Card proposal. Stable clients can ignore
 it and connect directly to `/__clank/mcp`. Both discovery documents include

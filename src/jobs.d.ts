@@ -122,9 +122,11 @@ export interface JobBuilders<
 export interface JobSystemDefinition<
     DB extends DatabaseSchema<any>,
     Jobs extends JobTree,
+    Workflows extends WorkflowTree = {},
 > {
     readonly schema: DB;
     readonly jobs: Jobs;
+    readonly workflows: Workflows;
 }
 
 export interface JobSystemBuilder<DB extends DatabaseSchema<any>> {
@@ -140,6 +142,89 @@ export declare function defineJobs<DB extends DatabaseSchema<any>>(
 export type JobInput<Job> = Job extends JobDefinition<infer Input, any, any, any> ? Input : never;
 export type JobOutput<Job> = Job extends JobDefinition<any, infer Output, any, any> ? Output : never;
 
+export interface WorkflowAgentOptions {
+    title?: string;
+    description?: string;
+    openWorld?: boolean;
+    idempotent?: boolean;
+}
+export interface WorkflowStepContext<Input> {
+    readonly input: Input;
+    result<Step extends AnyWorkflowStepDefinition>(step: Step): JobOutput<Step["job"]>;
+}
+export interface WorkflowStepDefinition<Input, Job extends AnyJobDefinition> {
+    readonly kind: "workflow-step";
+    readonly job: Job;
+    readonly needs: readonly AnyWorkflowStepDefinition[];
+    readonly description?: string;
+    readonly args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
+}
+export type AnyWorkflowStepDefinition = WorkflowStepDefinition<any, AnyJobDefinition>;
+export type WorkflowStepTree = Readonly<Record<string, AnyWorkflowStepDefinition>>;
+export type WorkflowResults<Steps extends WorkflowStepTree> = Readonly<{
+    [Name in keyof Steps]: JobOutput<Steps[Name]["job"]>;
+}>;
+export interface WorkflowOutputContext<Input, Steps extends WorkflowStepTree> {
+    readonly input: Input;
+    readonly results: WorkflowResults<Steps>;
+    result<Step extends Steps[keyof Steps]>(step: Step): JobOutput<Step["job"]>;
+}
+export interface WorkflowDefinition<
+    Input,
+    Output,
+    Steps extends WorkflowStepTree = WorkflowStepTree,
+> {
+    readonly kind: "workflow";
+    readonly args: Schema<Input>;
+    readonly returns?: Schema<Output>;
+    readonly steps: Steps;
+    readonly description?: string;
+    readonly agent: false | Readonly<WorkflowAgentOptions>;
+    readonly output: (context: WorkflowOutputContext<Input, Steps>) => Output;
+}
+export type AnyWorkflowDefinition = WorkflowDefinition<any, any, any>;
+export type WorkflowTree = {
+    readonly [key: string]: AnyWorkflowDefinition | WorkflowTree;
+};
+export type WorkflowOfTree<Tree> = Tree extends AnyWorkflowDefinition
+    ? Tree
+    : Tree extends Readonly<Record<string, unknown>>
+        ? { [Key in keyof Tree]: WorkflowOfTree<Tree[Key]> }[keyof Tree]
+        : never;
+export type WorkflowInput<Workflow> = Workflow extends WorkflowDefinition<infer Input, any, any>
+    ? Input
+    : never;
+export type WorkflowOutput<Workflow> = Workflow extends WorkflowDefinition<any, infer Output, any>
+    ? Output
+    : never;
+export interface WorkflowGraphBuilder<Input> {
+    step<Job extends AnyJobDefinition>(job: Job, definition: {
+        needs?: readonly AnyWorkflowStepDefinition[];
+        description?: string;
+        args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
+    }): WorkflowStepDefinition<Input, Job>;
+}
+export declare function defineWorkflow<
+    const Args extends JobArgs,
+    const Steps extends WorkflowStepTree,
+    Output = WorkflowResults<Steps>,
+>(definition: {
+    args: Args;
+    graph: (builder: WorkflowGraphBuilder<InferJobArgs<Args>>) => Steps;
+    returns?: Schema<Output>;
+    description?: string;
+    agent?: false | WorkflowAgentOptions;
+    output?: (context: WorkflowOutputContext<InferJobArgs<Args>, Steps>) => Output;
+}): WorkflowDefinition<InferJobArgs<Args>, Output, Steps>;
+export declare function defineWorkflows<
+    DB extends DatabaseSchema<any>,
+    Jobs extends JobTree,
+    const Workflows extends WorkflowTree,
+>(
+    definition: JobSystemDefinition<DB, Jobs, any>,
+    workflows: Workflows,
+): JobSystemDefinition<DB, Jobs, Workflows>;
+
 export interface EnqueueOptions {
     runAt?: number;
     delayMs?: number;
@@ -154,12 +239,72 @@ export interface JobHandle {
     readonly deduplicated: boolean;
 }
 
+export type WorkflowState = "running" | "succeeded" | "failed" | "cancelled";
+export type WorkflowStepState = "blocked" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export interface WorkflowStartOptions {
+    idempotencyKey?: string;
+}
+export interface WorkflowHandle {
+    readonly id: string;
+    readonly deduplicated: boolean;
+}
+export interface StoredWorkflowStep {
+    readonly name: string;
+    readonly job: string;
+    readonly needs: readonly string[];
+    readonly state: WorkflowStepState;
+    readonly jobId: string | null;
+    readonly result?: unknown;
+    readonly error?: string;
+    readonly createdAt: number;
+    readonly updatedAt: number;
+    readonly startedAt: number | null;
+    readonly completedAt: number | null;
+}
+export interface StoredWorkflowRun {
+    readonly id: string;
+    readonly name: string;
+    readonly state: WorkflowState;
+    readonly input: unknown;
+    readonly output?: unknown;
+    readonly error?: string;
+    readonly ownerId: string | null;
+    readonly createdAt: number;
+    readonly updatedAt: number;
+    readonly completedAt: number | null;
+    readonly cancelRequested: boolean;
+    readonly steps: readonly StoredWorkflowStep[];
+}
+export interface WorkflowListOptions {
+    state?: WorkflowState;
+    name?: string;
+    limit?: number;
+}
+export interface WorkflowEvent {
+    readonly id: number;
+    readonly workflowId: string;
+    readonly event: string;
+    readonly step: string | null;
+    readonly details: Readonly<Record<string, unknown>>;
+    readonly createdAt: number;
+}
+export interface WorkflowPurgeOptions {
+    states?: readonly Extract<WorkflowState, "succeeded" | "failed" | "cancelled">[];
+    before?: number;
+    limit?: number;
+}
+
 export interface JobPublisher<Definition extends JobSystemDefinition<any, any>> {
     enqueue<Job extends JobOfTree<Definition["jobs"]>>(
         job: Job,
         args: JobInput<Job>,
         options?: EnqueueOptions,
     ): JobHandle;
+    startWorkflow<Workflow extends WorkflowOfTree<Definition["workflows"]>>(
+        workflow: Workflow,
+        input: WorkflowInput<Workflow>,
+        options?: WorkflowStartOptions,
+    ): WorkflowHandle;
 }
 
 export interface StoredJob {
@@ -220,6 +365,9 @@ export interface JobRetentionOptions {
     succeededMs?: number | false;
     cancelledMs?: number | false;
     deadMs?: number | false;
+    workflowSucceededMs?: number | false;
+    workflowCancelledMs?: number | false;
+    workflowFailedMs?: number | false;
     cleanupIntervalMs?: number;
 }
 export interface JobManifestEntry {
@@ -238,6 +386,19 @@ export interface JobManifestEntry {
         readonly suspended: boolean;
     }[];
     readonly agent: false | Readonly<JobAgentOptions>;
+}
+export interface WorkflowManifestEntry {
+    readonly name: string;
+    readonly description?: string;
+    readonly args: Record<string, unknown>;
+    readonly returns?: Record<string, unknown>;
+    readonly steps: readonly {
+        readonly name: string;
+        readonly job: string;
+        readonly needs: readonly string[];
+        readonly description?: string;
+    }[];
+    readonly agent: false | Readonly<WorkflowAgentOptions>;
 }
 
 export interface JobWorkerOptions {
@@ -286,6 +447,12 @@ export interface JobRuntime<Definition extends JobSystemDefinition<any, any>>
     get(id: string): StoredJob | null;
     list(options?: JobListOptions): StoredJob[];
     events(id: string, options?: { limit?: number }): JobEvent[];
+    getWorkflow(id: string): StoredWorkflowRun | null;
+    listWorkflows(options?: WorkflowListOptions): StoredWorkflowRun[];
+    workflowEvents(id: string, options?: { limit?: number }): WorkflowEvent[];
+    cancelWorkflow(id: string): boolean;
+    purgeWorkflows(options?: WorkflowPurgeOptions): number;
+    advanceWorkflows(options?: { limit?: number }): number;
     stats(): JobStats;
     cancel(id: string): boolean;
     retry(id: string, options?: { runAt?: number }): boolean;
@@ -305,6 +472,8 @@ export declare function runJobProcess(runtime: JobRuntime<any>, options?: RunJob
 
 export declare function jobPath(job: AnyJobDefinition): string;
 export declare function jobManifest(definition: JobSystemDefinition<any, any>): readonly JobManifestEntry[];
+export declare function workflowPath(workflow: AnyWorkflowDefinition): string;
+export declare function workflowManifest(definition: JobSystemDefinition<any, any, any>): readonly WorkflowManifestEntry[];
 export declare function normalizeCron(input: string): string;
 export declare function nextCronOccurrence(
     expression: string,

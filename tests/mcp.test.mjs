@@ -519,12 +519,35 @@ test("MCP contract revisions change for action and metadata changes but remain d
       testTool("cards.move", { description: "Move a card to a user-defined column." }),
     ],
   });
+  const workflowMetadata = createMcpServer({
+    name: "contract-test",
+    version: "2.0.0",
+    metadata: { workflows: [{ name: "releases.publish", steps: ["build", "publish"] }] },
+    tools: [testTool("cards.list"), testTool("cards.move")],
+  });
+  const equivalentWorkflowMetadata = createMcpServer({
+    name: "contract-test",
+    version: "2.0.0",
+    metadata: { workflows: [{ steps: ["build", "publish"], name: "releases.publish" }] },
+    tools: [testTool("cards.move"), testTool("cards.list")],
+  });
 
   assert.match(first.revision, /^mcp-[a-f0-9]{32}$/u);
   assert.equal(first.revision, equivalent.revision);
   assert.notEqual(first.revision, renamed.revision);
   assert.notEqual(first.revision, added.revision);
   assert.notEqual(first.revision, metadataChanged.revision);
+  assert.notEqual(first.revision, workflowMetadata.revision);
+  assert.equal(workflowMetadata.revision, equivalentWorkflowMetadata.revision);
+  assert.deepEqual(workflowMetadata.manifest().metadata, {
+    workflows: [{ name: "releases.publish", steps: ["build", "publish"] }],
+  });
+  assert.ok(Object.isFrozen(workflowMetadata.manifest().metadata.workflows));
+  assert.throws(() => createMcpServer({
+    name: "contract-test",
+    metadata: { oversized: "x".repeat(262_145) },
+    tools: [],
+  }), /metadata exceeds 262144 bytes/);
   assert.equal(first.manifest().revision, first.revision);
   assert.match(first.manifest().server.version, /^2\.0\.0\+clank\.[a-f0-9]{16}$/u);
 
@@ -533,6 +556,8 @@ test("MCP contract revisions change for action and metadata changes but remain d
   renamed.close();
   added.close();
   metadataChanged.close();
+  workflowMetadata.close();
+  equivalentWorkflowMetadata.close();
 });
 
 test("MCP sessions invalidate cached tools across deployments and stream list change notifications", async () => {

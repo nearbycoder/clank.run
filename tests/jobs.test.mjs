@@ -9,12 +9,15 @@ import {
   defineBackend,
   defineJobs,
   defineTable,
+  defineWorkflow,
+  defineWorkflows,
   nextCronOccurrence,
   normalizeCron,
   openJobs,
   openBackend,
   openSQLite,
   s,
+  workflowManifest,
 } from "../dist/index.js";
 
 async function fixture(define, options = {}) {
@@ -109,7 +112,7 @@ test("backend mutations enqueue through their transaction-scoped jobs context", 
   const schema = defineDatabase({
     events: defineTable({ value: s.string() }),
   });
-  const jobs = defineJobs({ schema }).jobs(({ job }) => ({
+  const jobDefinitions = defineJobs({ schema }).jobs(({ job }) => ({
     deliver: job({
       args: { value: s.string() },
       description: "Deliver one committed application event.",
@@ -117,6 +120,14 @@ test("backend mutations enqueue through their transaction-scoped jobs context", 
       handler: ({ db }, { value }) => db.transaction((tx) => tx.table("events").insert({ value })),
     }),
   }));
+  const delivery = defineWorkflow({
+    args: { value: s.string() },
+    description: "Deliver one event through a durable graph.",
+    graph: ({ step }) => ({
+      deliver: step(jobDefinitions.jobs.deliver, { args: ({ input }) => input }),
+    }),
+  });
+  const jobs = defineWorkflows(jobDefinitions, { delivery });
   const backend = defineBackend({ schema, jobs }).functions(({ mutation }) => ({
     create: mutation({
       args: { value: s.string(), fail: s.boolean() },
@@ -127,12 +138,25 @@ test("backend mutations enqueue through their transaction-scoped jobs context", 
         return handle.id;
       },
     }),
+    startDelivery: mutation({
+      args: { value: s.string(), fail: s.boolean() },
+      handler: ({ jobs: publisher }, { value, fail }) => {
+        const handle = publisher.startWorkflow(delivery, { value });
+        if (fail) throw new Error("rollback workflow");
+        return handle.id;
+      },
+    }),
   }));
   const runtime = await openBackend(backend, { path, changePollIntervalMs: 0 });
   try {
     assert.ok(runtime.jobs);
     assert.throws(() => runtime.mutation("create", { value: "bad", fail: true }), /rollback all/);
     assert.equal(runtime.jobs.stats().queued, 0);
+    assert.throws(
+      () => runtime.mutation("startDelivery", { value: "bad", fail: true }),
+      /rollback workflow/,
+    );
+    assert.equal(runtime.jobs.listWorkflows().length, 0);
     assert.equal(runtime.database.read((db) => db.table("events").collect()).length, 0);
 
     const created = runtime.mutation("create", { value: "ok", fail: false }).value;
@@ -142,6 +166,49 @@ test("backend mutations enqueue through their transaction-scoped jobs context", 
     const payload = await manifest.json();
     assert.equal(payload.jobs[0].name, "deliver");
     assert.equal(payload.jobs[0].description, "Deliver one committed application event.");
+    assert.equal(payload.workflows[0].name, "delivery");
+    assert.equal(payload.workflows[0].steps[0].job, "deliver");
+    const mcpHeaders = {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2025-11-25",
+    };
+    const initialized = await runtime.handle(new Request("http://app.test/__clank/mcp", {
+      method: "POST",
+      headers: mcpHeaders,
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 0,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "workflow-test", version: "1.0.0" },
+        },
+      }),
+    }));
+    assert.equal(initialized.status, 200, await initialized.text());
+    const mcpSession = initialized.headers.get("mcp-session-id");
+    assert.ok(mcpSession);
+    const workflowResource = await runtime.handle(new Request("http://app.test/__clank/mcp", {
+      method: "POST",
+      headers: {
+        ...mcpHeaders,
+        "mcp-session-id": mcpSession,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "resources/read",
+        params: { uri: "clank://actions" },
+      }),
+    }));
+    const workflowResourceText = await workflowResource.text();
+    assert.equal(workflowResource.status, 200, workflowResourceText);
+    const resourcePayload = JSON.parse(workflowResourceText);
+    const resourceManifest = JSON.parse(resourcePayload.result.contents[0].text);
+    assert.equal(resourceManifest.metadata.workflows[0].name, "delivery");
+    assert.equal(resourceManifest.revision, runtime.contractRevision);
 
     await runtime.jobs.workOnce({ workerId: "backend-worker" });
     assert.deepEqual(
@@ -152,6 +219,353 @@ test("backend mutations enqueue through their transaction-scoped jobs context", 
     runtime.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("durable workflow graphs run parallel roots, pass declared results, and survive restarts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-workflows-"));
+  const path = join(root, "app.sqlite");
+  const schema = defineDatabase({
+    events: defineTable({ value: s.string() }).owned(),
+  });
+  const jobs = defineJobs({ schema }).jobs(({ job }) => ({
+    prepare: job({
+      args: { release: s.string() },
+      returns: s.object({ artifact: s.string() }),
+      priority: 10,
+      handler: ({ db }, { release }) => {
+        db.transaction((tx) => tx.table("events").insert({ value: `prepare:${release}` }));
+        return { artifact: `artifact:${release}` };
+      },
+    }),
+    audit: job({
+      args: { release: s.string() },
+      returns: s.object({ approved: s.boolean() }),
+      priority: 10,
+      handler: ({ db }, { release }) => {
+        db.transaction((tx) => tx.table("events").insert({ value: `audit:${release}` }));
+        return { approved: true };
+      },
+    }),
+    publish: job({
+      args: { artifact: s.string(), approved: s.literal(true) },
+      returns: s.object({ url: s.url() }),
+      handler: ({ db }, { artifact }) => {
+        db.transaction((tx) => tx.table("events").insert({ value: `publish:${artifact}` }));
+        return { url: "https://release.example.test/v1" };
+      },
+    }),
+  }));
+  const release = defineWorkflow({
+    args: { release: s.string({ min: 1 }) },
+    returns: s.object({ url: s.url() }),
+    description: "Prepare, audit, and publish one release.",
+    agent: { title: "Publish release", openWorld: true, idempotent: true },
+    graph: ({ step }) => {
+      const prepare = step(jobs.jobs.prepare, {
+        description: "Build the immutable artifact.",
+        args: ({ input }) => ({ release: input.release }),
+      });
+      const audit = step(jobs.jobs.audit, {
+        description: "Check the release independently.",
+        args: ({ input }) => ({ release: input.release }),
+      });
+      const publish = step(jobs.jobs.publish, {
+        needs: [prepare, audit],
+        description: "Publish after both gates pass.",
+        args: ({ result }) => ({
+          artifact: result(prepare).artifact,
+          approved: result(audit).approved,
+        }),
+      });
+      return { prepare, audit, publish };
+    },
+    output: ({ results }) => results.publish,
+  });
+  const definition = defineWorkflows(jobs, { releases: { publish: release } });
+  const manifest = workflowManifest(definition);
+  assert.equal(manifest[0].name, "releases.publish");
+  assert.deepEqual(manifest[0].steps.map((step) => [step.name, step.needs]), [
+    ["audit", []],
+    ["prepare", []],
+    ["publish", ["audit", "prepare"]],
+  ]);
+
+  const database = await openSQLite(schema, { path, changePollIntervalMs: 0 });
+  const runtime = openJobs(definition, { database });
+  try {
+    const scoped = runtime.publisher({ userId: "user-a" });
+    const handle = scoped.startWorkflow(release, { release: "v1" }, {
+      idempotencyKey: "publish-v1",
+    });
+    assert.equal(handle.deduplicated, false);
+    assert.equal(runtime.getWorkflow(handle.id).ownerId, "user-a");
+    assert.equal(runtime.getWorkflow(handle.id).state, "running");
+    assert.deepEqual(
+      runtime.getWorkflow(handle.id).steps.map((step) => step.state).sort(),
+      ["blocked", "queued", "queued"],
+    );
+    assert.equal(
+      scoped.startWorkflow(release, { release: "v1" }, { idempotencyKey: "publish-v1" }).id,
+      handle.id,
+    );
+    const otherOwner = runtime.publisher({ userId: "user-b" }).startWorkflow(
+      release,
+      { release: "v1" },
+      { idempotencyKey: "publish-v1" },
+    );
+    assert.notEqual(otherOwner.id, handle.id, "workflow idempotency is owner scoped");
+    assert.equal(runtime.cancelWorkflow(otherOwner.id), true);
+
+    for (let count = 0; count < 10 && runtime.getWorkflow(handle.id).state === "running"; count++) {
+      assert.equal(await runtime.workOnce({ workerId: "workflow-worker" }), true);
+    }
+    const completed = runtime.getWorkflow(handle.id);
+    assert.equal(completed.state, "succeeded");
+    assert.deepEqual(completed.output, { url: "https://release.example.test/v1" });
+    assert.deepEqual(completed.steps.map((step) => step.state), ["succeeded", "succeeded", "succeeded"]);
+    assert.deepEqual(
+      database.read((db) => db.table("events").collect(), { userId: "user-a" })
+        .map((entry) => entry.value).sort(),
+      ["audit:v1", "prepare:v1", "publish:artifact:v1"],
+    );
+    assert.deepEqual(
+      runtime.workflowEvents(handle.id).map((entry) => entry.event),
+      ["succeeded", "step_succeeded", "step_queued", "step_succeeded", "step_succeeded", "step_queued", "step_queued", "started"],
+    );
+  } finally {
+    runtime.close();
+    database.close();
+  }
+
+  const reopenedDatabase = await openSQLite(schema, { path, changePollIntervalMs: 0 });
+  const reopened = openJobs(definition, { database: reopenedDatabase });
+  try {
+    assert.equal(reopened.listWorkflows({ state: "succeeded" }).length, 1);
+    assert.equal(reopened.listWorkflows({ state: "succeeded" })[0].output.url, "https://release.example.test/v1");
+  } finally {
+    reopened.close();
+    reopenedDatabase.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workflow failure, cancellation, dependency guards, and starts are atomic", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-workflow-failure-"));
+  const path = join(root, "app.sqlite");
+  const schema = defineDatabase({ events: defineTable({ value: s.string() }) });
+  const jobs = defineJobs({ schema }).jobs(({ job }) => ({
+    pass: job({
+      args: { value: s.string() },
+      returns: s.object({ value: s.string() }),
+      handler: (_context, input) => input,
+    }),
+    fail: job({
+      args: {},
+      retry: { maxAttempts: 1 },
+      handler: () => { throw new Error("deliberate workflow failure"); },
+    }),
+  }));
+  const failing = defineWorkflow({
+    args: {},
+    graph: ({ step }) => {
+      const fail = step(jobs.jobs.fail, { args: () => ({}) });
+      const never = step(jobs.jobs.pass, {
+        needs: [fail],
+        args: () => ({ value: "never" }),
+      });
+      return { fail, never };
+    },
+  });
+  const cancellable = defineWorkflow({
+    args: { value: s.string() },
+    graph: ({ step }) => {
+      const first = step(jobs.jobs.pass, { args: ({ input }) => input });
+      const second = step(jobs.jobs.pass, {
+        needs: [first],
+        args: ({ result }) => result(first),
+      });
+      return { first, second };
+    },
+  });
+  const hiddenDependency = defineWorkflow({
+    args: {},
+    graph: ({ step }) => {
+      const first = step(jobs.jobs.pass, { args: () => ({ value: "first" }) });
+      const invalid = step(jobs.jobs.pass, {
+        args: ({ result }) => result(first),
+      });
+      return { first, invalid };
+    },
+  });
+  const definition = defineWorkflows(jobs, { failing, cancellable, hiddenDependency });
+  const database = await openSQLite(schema, { path, changePollIntervalMs: 0 });
+  const runtime = openJobs(definition, { database });
+  try {
+    const failed = runtime.startWorkflow(failing, {});
+    assert.equal(await runtime.workOnce({ workerId: "failure-worker" }), true);
+    const failedRun = runtime.getWorkflow(failed.id);
+    assert.equal(failedRun.state, "failed");
+    assert.match(failedRun.error, /deliberate workflow failure/);
+    assert.deepEqual(failedRun.steps.map((step) => step.state), ["failed", "cancelled"]);
+
+    const cancelled = runtime.startWorkflow(cancellable, { value: "cancel" });
+    assert.equal(runtime.cancelWorkflow(cancelled.id), true);
+    const cancelledRun = runtime.getWorkflow(cancelled.id);
+    assert.equal(cancelledRun.state, "cancelled");
+    assert.deepEqual(cancelledRun.steps.map((step) => step.state), ["cancelled", "cancelled"]);
+
+    const guarded = runtime.startWorkflow(hiddenDependency, {});
+    const guardedRun = runtime.getWorkflow(guarded.id);
+    assert.equal(guardedRun.state, "failed");
+    assert.match(guardedRun.error, /declared dependencies/);
+    assert.equal(runtime.get(guardedRun.steps.find((step) => step.name === "first").jobId).state, "cancelled");
+
+    const beforeRuns = runtime.listWorkflows({ limit: 100 }).length;
+    const beforeJobs = runtime.list({ limit: 100 }).length;
+    assert.throws(() => database.transaction(() => {
+      runtime.startWorkflow(cancellable, { value: "rollback" });
+      throw new Error("rollback workflow start");
+    }), /rollback workflow start/);
+    assert.equal(runtime.listWorkflows({ limit: 100 }).length, beforeRuns);
+    assert.equal(runtime.list({ limit: 100 }).length, beforeJobs);
+
+    assert.equal(runtime.purgeWorkflows({
+      states: ["failed", "cancelled"],
+      before: Date.now() + 1,
+    }), 3);
+    assert.equal(runtime.listWorkflows({ limit: 100 }).length, 0);
+    assert.deepEqual(runtime.workflowEvents(failed.id), []);
+  } finally {
+    runtime.close();
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workflow reconciliation converges across workers and fails closed on graph drift", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-workflow-race-"));
+  const path = join(root, "app.sqlite");
+  const schema = defineDatabase({ events: defineTable({ value: s.string() }) });
+  let executions = 0;
+  const makeSystem = (changed) => {
+    const jobs = defineJobs({ schema }).jobs(({ job }) => ({
+      record: job({
+        args: { value: s.string() },
+        returns: s.object({ value: s.string() }),
+        handler: (_context, input) => {
+          executions++;
+          return input;
+        },
+      }),
+    }));
+    const workflow = defineWorkflow({
+      args: { value: s.string() },
+      graph: ({ step }) => {
+        const first = step(jobs.jobs.record, {
+          args: changed
+            ? ({ input }) => ({ value: `${input.value}:changed` })
+            : ({ input }) => ({ value: input.value }),
+        });
+        const second = step(jobs.jobs.record, {
+          needs: [first],
+          args: ({ result }) => result(first),
+        });
+        return { first, second };
+      },
+    });
+    return { definition: defineWorkflows(jobs, { sequence: workflow }), workflow };
+  };
+  const original = makeSystem(false);
+  const firstDatabase = await openSQLite(schema, { path, changePollIntervalMs: 0 });
+  const secondDatabase = await openSQLite(schema, { path, changePollIntervalMs: 0 });
+  const first = openJobs(original.definition, { database: firstDatabase });
+  const second = openJobs(original.definition, { database: secondDatabase });
+  let driftingId;
+  try {
+    const run = first.startWorkflow(original.workflow, { value: "race" });
+    for (let count = 0; count < 5 && first.getWorkflow(run.id).state === "running"; count++) {
+      await Promise.all([
+        first.workOnce({ workerId: "workflow-race-a" }),
+        second.workOnce({ workerId: "workflow-race-b" }),
+      ]);
+    }
+    assert.equal(first.getWorkflow(run.id).state, "succeeded");
+    assert.equal(executions, 2);
+    assert.equal(first.list().length, 2, "each graph step must have one retained job");
+
+    driftingId = first.startWorkflow(original.workflow, { value: "old-definition" }).id;
+    assert.equal(first.getWorkflow(driftingId).steps[0].state, "queued");
+  } finally {
+    first.close();
+    second.close();
+    firstDatabase.close();
+    secondDatabase.close();
+  }
+
+  const changed = makeSystem(true);
+  const changedDatabase = await openSQLite(schema, { path, changePollIntervalMs: 0 });
+  const changedRuntime = openJobs(changed.definition, { database: changedDatabase });
+  try {
+    assert.ok(changedRuntime.advanceWorkflows() > 0);
+    const failed = changedRuntime.getWorkflow(driftingId);
+    assert.equal(failed.state, "failed");
+    assert.match(failed.error, /definition changed/);
+    assert.equal(changedRuntime.get(failed.steps[0].jobId).state, "cancelled");
+  } finally {
+    changedRuntime.close();
+    changedDatabase.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workflow definitions reject ambiguous graphs and foreign jobs before runtime", () => {
+  const schema = defineDatabase({ events: defineTable({ value: s.string() }) });
+  const firstJobs = defineJobs({ schema }).jobs(({ job }) => ({
+    work: job({ args: {}, handler: () => null }),
+  }));
+  const foreignJobs = defineJobs({ schema }).jobs(({ job }) => ({
+    work: job({ args: {}, handler: () => null }),
+  }));
+  assert.throws(() => defineWorkflow({
+    args: {},
+    graph: () => ({}),
+  }), /1 through 100 steps/);
+  assert.throws(() => defineWorkflow({
+    args: {},
+    graph: ({ step }) => {
+      const work = step(firstJobs.jobs.work, { args: () => ({}) });
+      return { first: work, second: work };
+    },
+  }), /reused/);
+  let outside;
+  defineWorkflow({
+    args: {},
+    graph: ({ step }) => {
+      outside = step(firstJobs.jobs.work, { args: () => ({}) });
+      return { outside };
+    },
+  });
+  assert.throws(() => defineWorkflow({
+    args: {},
+    graph: ({ step }) => ({
+      inside: step(firstJobs.jobs.work, { needs: [outside], args: () => ({}) }),
+    }),
+  }), /outside its graph/);
+  const foreignWorkflow = defineWorkflow({
+    args: {},
+    graph: ({ step }) => ({
+      work: step(foreignJobs.jobs.work, { args: () => ({}) }),
+    }),
+  });
+  assert.throws(
+    () => defineWorkflows(firstJobs, { foreign: foreignWorkflow }),
+    /outside this job system/,
+  );
+  assert.throws(() => defineWorkflow({
+    args: {},
+    agent: { openWorld: "yes" },
+    graph: ({ step }) => ({ work: step(firstJobs.jobs.work, { args: () => ({}) }) }),
+  }), /openWorld must be boolean/);
 });
 
 test("failed jobs retry with bounded backoff and enter dead-letter state", async () => {
@@ -506,8 +920,15 @@ test("job history is inspectable and terminal retention is bounded without delet
   }
 });
 
-test("application schemas cannot shadow durable job tables", () => {
-  for (const name of ["jobs", "job_events", "job_schedules"]) {
+test("application schemas cannot shadow durable job and workflow tables", () => {
+  for (const name of [
+    "jobs",
+    "job_events",
+    "job_schedules",
+    "workflow_runs",
+    "workflow_steps",
+    "workflow_events",
+  ]) {
     assert.throws(
       () => defineDatabase({ [name]: defineTable({ value: s.string() }) }),
       /reserved for Clank internals/,

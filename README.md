@@ -30,7 +30,7 @@ first-class interfaces backed by the same typed contracts:
 
 | For people | For agents |
 | --- | --- |
-| Accessible HTML, responsive state, forms, navigation, Tailwind CSS, SSR, and live updates | Authenticated MCP tools, JSON Schema, OAuth + PKCE, explicit side-effect metadata, and semantic UI inspection |
+| Accessible HTML, responsive state, forms, navigation, Tailwind CSS, SSR, live updates, and inspectable workflow progress | Authenticated MCP tools, JSON Schema, OAuth + PKCE, explicit side-effect metadata, semantic UI inspection, and workflow graph manifests |
 
 ## From zero to deployed
 
@@ -68,6 +68,7 @@ The generated app is already a working product—not an empty component. It incl
 - registration, login, logout, secure sessions, and CSRF protection;
 - private per-user SQLite data with typed queries and mutations;
 - bounded document revision history with conflict-safe compensating restores;
+- durable typed job workflows with parallel branches, retries, cancellation, and visible graphs;
 - server rendering and node-preserving hydration;
 - live updates across tabs and browsers;
 - Tailwind-compatible styling;
@@ -150,7 +151,7 @@ applications do not need a separate runtime compiler or bundler.
 
 | Build the interface | Own the backend | Ship the product |
 | --- | --- | --- |
-| Signals, computed values, effects, stores, resources, typed TSX, keyed lists, forms, dialogs, tabs, routing, Tailwind CSS, SSR, and hydration | Runtime schemas, inferred API clients, auth, roles, owned documents, SQLite indexes, atomic mutations, live queries, files, email, jobs, and webhooks | Interactive CLI, browser-approved login, project provisioning, durable invitation email, secrets, migrations, backups, job/cron operations, health gates, rolling activation, metrics, logs, custom domains, and rollback |
+| Signals, computed values, effects, stores, resources, typed TSX, keyed lists, forms, dialogs, tabs, routing, Tailwind CSS, SSR, and hydration | Runtime schemas, inferred API clients, auth, roles, owned documents, SQLite indexes, atomic mutations, live queries, files, email, jobs, workflow graphs, and webhooks | Interactive CLI, browser-approved login, project provisioning, durable invitation email, secrets, migrations, backups, job/cron/workflow operations, health gates, rolling activation, metrics, logs, custom domains, and rollback |
 
 <details>
 <summary><strong>Explore the complete framework feature map</strong></summary>

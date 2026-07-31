@@ -44,6 +44,8 @@ export interface McpServerOptions<Context = unknown> {
   title?: string;
   description?: string;
   instructions?: string;
+  /** Additional bounded, immutable contract data exposed by clank://actions. */
+  metadata?: Readonly<Record<string, unknown>>;
   tools: readonly McpTool<Context>[];
   /**
    * Stateful MCP sessions keep long-lived clients synchronized across rolling
@@ -80,6 +82,7 @@ export interface McpServer<Context = unknown> {
       baseVersion: string;
       description?: string;
     };
+    metadata?: Readonly<Record<string, unknown>>;
     tools: Array<{
       name: string;
       title?: string;
@@ -142,6 +145,9 @@ export function createMcpServer<Context = unknown>(
   if (options.title !== undefined) boundedText(options.title, "MCP server title", 256);
   if (options.description !== undefined) boundedText(options.description, "MCP server description", 16 * 1024);
   if (options.instructions !== undefined) boundedText(options.instructions, "MCP server instructions", 16 * 1024);
+  const metadata = options.metadata === undefined
+    ? undefined
+    : normalizedContractMetadata(options.metadata);
   const maxRequestBytes = positiveInteger(options.maxRequestBytes ?? 64 * 1024, "maxRequestBytes");
   const maxResponseBytes = positiveInteger(options.maxResponseBytes ?? 4 * 1024 * 1024, "maxResponseBytes");
   const sessionOptions = options.sessions === false ? null : options.sessions ?? {};
@@ -191,6 +197,7 @@ export function createMcpServer<Context = unknown>(
       description: options.description,
       instructions: options.instructions,
     },
+    metadata,
     tools: visibleTools().map((tool) => ({
       name: tool.name,
       title: tool.title,
@@ -216,6 +223,7 @@ export function createMcpServer<Context = unknown>(
       baseVersion,
       ...(options.description ? { description: options.description } : {}),
     },
+    ...(metadata ? { metadata } : {}),
     tools: visibleTools(scopes).map((tool) => ({
       name: tool.name,
       ...(tool.title ? { title: tool.title } : {}),
@@ -843,6 +851,26 @@ function contractRevision(value: unknown): string {
     (h4 ^ h1) >>> 0,
   ];
   return `mcp-${parts.map((part) => part.toString(16).padStart(8, "0")).join("")}`;
+}
+
+function normalizedContractMetadata(
+  value: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("MCP contract metadata must be an object.");
+  }
+  const encoded = canonicalJson(value);
+  if (new TextEncoder().encode(encoded).byteLength > 256 * 1024) {
+    throw new TypeError("MCP contract metadata exceeds 262144 bytes.");
+  }
+  const freeze = (entry: unknown): unknown => {
+    if (!entry || typeof entry !== "object") return entry;
+    if (Array.isArray(entry)) return Object.freeze(entry.map(freeze));
+    return Object.freeze(Object.fromEntries(
+      Object.entries(entry).map(([key, child]) => [key, freeze(child)]),
+    ));
+  };
+  return freeze(JSON.parse(encoded)) as Readonly<Record<string, unknown>>;
 }
 
 function canonicalJson(value: unknown): string {

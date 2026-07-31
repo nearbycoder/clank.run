@@ -13449,6 +13449,9 @@ const PREVIEW_DATA_PURGED_TABLES = new Set([
   "clank_job_schedules",
   "clank_jobs",
   "clank_service_jobs",
+  "clank_workflow_events",
+  "clank_workflow_steps",
+  "clank_workflow_runs",
 ]);
 const PREVIEW_DATA_PURGED_PREFIXES = ["clank_auth_", "clank_oauth_"];
 
