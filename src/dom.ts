@@ -651,7 +651,7 @@ function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, 
   };
 
   const stop = effect(() => {
-    const values = unwrapReactive(block.each as Renderable) as T[];
+    const values = resolve(block.each) as T[];
     if (!Array.isArray(values)) throw new TypeError("For expects an array, signal, computed value, or array accessor.");
     const keyedValues = values.map((item, index) => ({ item, index, key: keyOf(item, index) }));
     const uniqueKeys = new Set<unknown>();
@@ -732,7 +732,7 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
     if ((typeof item === "object" && item !== null) || typeof item === "function") return item;
     return `${typeof item}:${String(item)}:${index}`;
   };
-  const initial = unwrapReactive(block.each as Renderable) as T[];
+  const initial = resolve(block.each) as T[];
   if (!Array.isArray(initial)) throw new HydrationMismatch("For did not resolve to an array during hydration.");
   const initialKeys = new Set<unknown>();
   for (let index = 0; index < initial.length; index++) {
@@ -775,7 +775,7 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
   let stop: Cleanup;
   try {
     stop = effect(() => {
-      const values = unwrapReactive(block.each as Renderable) as T[];
+      const values = resolve(block.each) as T[];
       if (!Array.isArray(values)) throw new TypeError("For expects an array, signal, computed value, or array accessor.");
       if (first) {
         first = false;

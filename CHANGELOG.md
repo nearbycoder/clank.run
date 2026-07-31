@@ -15,6 +15,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   Scroll Area's legacy Microsoft overflow style to use the renderer-safe DOM property spelling.
   Project and preview creation now also reserve the live rolling-release and startup ports, so a
   newly allocated site cannot collide with an application that remains active on a rollout port.
+  Design Studio navigation now keys component content to the selected catalog entry, and keyed
+  `For` rendering now fulfills its typed array-accessor contract during mount and hydration.
 
 - Added a complete dependency-free headless UI library aligned to the 37-family Base UI 1.6
   catalog. Clank-native controllers expose canonical part anatomy, controlled and uncontrolled

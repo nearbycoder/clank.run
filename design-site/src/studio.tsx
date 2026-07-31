@@ -7,6 +7,7 @@ import {
   UI_COMPONENT_COUNT,
   clankThemeVariables,
   getClankTheme,
+  type UiCatalogEntry,
 } from "../vendor/ui.js";
 import { ComponentStory } from "./stories.js";
 
@@ -53,16 +54,16 @@ function Icon(props: { name: "grid" | "palette" | "search" | "menu" | "code" | "
   return <svg class="studio-icon" viewBox="0 0 24 24" aria-hidden="true"><path d={paths[props.name]} /></svg>;
 }
 
-function ThemeMiniature(props: { theme: (typeof CLANK_THEME_PRESETS)[number]; active?: boolean; onSelect?: () => void }) {
+function ThemeMiniature(props: { theme: (typeof CLANK_THEME_PRESETS)[number]; active: () => boolean; onSelect?: () => void }) {
   return (
     <button
       type="button"
       class="theme-miniature"
-      classList={{ active: Boolean(props.active) }}
+      classList={{ active: props.active() }}
       style={clankThemeVariables(getClankTheme(props.theme.id) ?? CLANK_THEME_PRESETS[0])}
       data-scheme={props.theme.scheme}
       onClick={props.onSelect}
-      aria-pressed={props.active ? "true" : "false"}
+      aria-pressed={props.active() ? "true" : "false"}
     >
       <span class="miniature-preview"><i /><i /><i /></span>
       <span><strong>{props.theme.name}</strong><small>{props.theme.scheme}</small></span>
@@ -70,7 +71,7 @@ function ThemeMiniature(props: { theme: (typeof CLANK_THEME_PRESETS)[number]; ac
   );
 }
 
-function ThemeGallery(props: { selected: string; onSelect: (themeId: string) => void }) {
+function ThemeGallery(props: { selected: () => string; onSelect: (themeId: string) => void }) {
   return (
     <section class="theme-gallery" aria-labelledby="theme-gallery-title">
       <header class="view-heading">
@@ -82,7 +83,7 @@ function ThemeGallery(props: { selected: string; onSelect: (themeId: string) => 
         <For each={CLANK_THEME_PRESETS} by="id">
           {(theme, index) => (
             <article class="theme-card" style={clankThemeVariables(getClankTheme(theme.id) ?? CLANK_THEME_PRESETS[0])} data-scheme={theme.scheme}>
-              <header><span>{String(index() + 1).padStart(2, "0")}</span><button type="button" onClick={() => props.onSelect(theme.id)}>{props.selected === theme.id ? "Selected" : "Use theme"}</button></header>
+              <header><span>{String(index() + 1).padStart(2, "0")}</span><button type="button" onClick={() => props.onSelect(theme.id)}>{props.selected() === theme.id ? "Selected" : "Use theme"}</button></header>
               <div class="theme-card-canvas">
                 <div class="theme-sample-nav"><i /><span /><span /></div>
                 <div class="theme-sample-panel">
@@ -100,7 +101,7 @@ function ThemeGallery(props: { selected: string; onSelect: (themeId: string) => 
   );
 }
 
-function Overview(props: { themeId: string; onView: (view: StudioView) => void; onTheme: (id: string) => void }) {
+function Overview(props: { themeId: () => string; onView: (view: StudioView) => void; onTheme: (id: string) => void }) {
   return (
     <div class="overview-page">
       <section class="overview-hero">
@@ -117,7 +118,7 @@ function Overview(props: { themeId: string; onView: (view: StudioView) => void; 
       <section class="proof-row" aria-label="Design system properties"><article><strong>37</strong><span>interactive families</span></article><article><strong>10</strong><span>complete themes</span></article><article><strong>32</strong><span>typed design tokens</span></article><article><strong>0</strong><span>runtime dependencies</span></article></section>
       <section class="overview-section">
         <header><div><span class="view-kicker">Theme presets</span><h2>Change the entire system in one click.</h2></div><button type="button" class="text-action" onClick={() => props.onView("themes")}>Open laboratory →</button></header>
-        <div class="theme-miniature-grid"><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <ThemeMiniature theme={theme} active={theme.id === props.themeId} onSelect={() => props.onTheme(theme.id)} />}</For></div>
+        <div class="theme-miniature-grid"><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <ThemeMiniature theme={theme} active={() => theme.id === props.themeId()} onSelect={() => props.onTheme(theme.id)} />}</For></div>
       </section>
       <section class="overview-section">
         <header><div><span class="view-kicker">Complete catalog</span><h2>Built from real Clank controllers.</h2></div><span class="section-note">Every example is interactive</span></header>
@@ -127,9 +128,8 @@ function Overview(props: { themeId: string; onView: (view: StudioView) => void; 
   );
 }
 
-function ComponentView(props: { slug: string; viewport: string; panel: string; grid: boolean; outlines: boolean; onViewport: (value: string) => void; onPanel: (value: string) => void; onGrid: () => void; onOutlines: () => void }) {
-  const entry = UI_COMPONENT_CATALOG.find((candidate) => candidate.slug === props.slug);
-  if (!entry) return <section class="not-found"><span>404</span><h1>That component is not in the catalog.</h1><a href="/">Return to the workshop</a></section>;
+function ComponentView(props: { entry: UiCatalogEntry; viewport: () => string; panel: () => string; grid: () => boolean; outlines: () => boolean; onViewport: (value: string) => void; onPanel: (value: string) => void; onGrid: () => void; onOutlines: () => void }) {
+  const entry = props.entry;
   const importLine = `import { ${entry.factory} } from "@clank.run/framework/ui/${entry.slug}";`;
   return (
     <section class="component-page">
@@ -138,20 +138,20 @@ function ComponentView(props: { slug: string; viewport: string; panel: string; g
         <div class="heading-links"><a href={entry.referenceUrl} target="_blank" rel="noreferrer">Anatomy reference <Icon name="external" /></a><a href="https://docs.clank.run/docs/ui">Framework guide <Icon name="external" /></a></div>
       </header>
       <div class="preview-toolbar" aria-label="Preview controls">
-        <div class="segmented viewport-segments"><For each={Object.keys(viewportWidths)}>{(value) => <button type="button" classList={{ active: props.viewport === value }} onClick={() => props.onViewport(value)}>{value}</button>}</For></div>
-        <div class="preview-flags"><button type="button" classList={{ active: props.grid }} onClick={props.onGrid}>Grid</button><button type="button" classList={{ active: props.outlines }} onClick={props.onOutlines}>Outlines</button></div>
+        <div class="segmented viewport-segments"><For each={Object.keys(viewportWidths)}>{(value) => <button type="button" classList={{ active: props.viewport() === value }} onClick={() => props.onViewport(value)}>{value}</button>}</For></div>
+        <div class="preview-flags"><button type="button" classList={{ active: props.grid() }} onClick={props.onGrid}>Grid</button><button type="button" classList={{ active: props.outlines() }} onClick={props.onOutlines}>Outlines</button></div>
       </div>
-      <div class="preview-stage" data-grid={props.grid ? "" : undefined} data-outlines={props.outlines ? "" : undefined}>
-        <div class="preview-frame" data-viewport={props.viewport} style={{ "--preview-width": viewportWidths[props.viewport as keyof typeof viewportWidths] ?? "100%" }}>
-          <div class="preview-frame-label"><span>{entry.name} / interactive</span><span>{props.viewport === "responsive" ? "Fluid" : viewportWidths[props.viewport as keyof typeof viewportWidths]}</span></div>
+      <div class="preview-stage" data-grid={props.grid() ? "" : undefined} data-outlines={props.outlines() ? "" : undefined}>
+        <div class="preview-frame" data-viewport={props.viewport()} style={{ "--preview-width": viewportWidths[props.viewport() as keyof typeof viewportWidths] ?? "100%" }}>
+          <div class="preview-frame-label"><span>{entry.name} / interactive</span><span>{props.viewport() === "responsive" ? "Fluid" : viewportWidths[props.viewport() as keyof typeof viewportWidths]}</span></div>
           <div class="story-root"><ComponentStory slug={entry.slug} /></div>
         </div>
       </div>
       <section class="inspector">
-        <div class="inspector-tabs" role="tablist" aria-label="Component details"><button type="button" role="tab" aria-selected={props.panel === "anatomy" ? "true" : "false"} onClick={() => props.onPanel("anatomy")}><Icon name="details" />Anatomy</button><button type="button" role="tab" aria-selected={props.panel === "code" ? "true" : "false"} onClick={() => props.onPanel("code")}><Icon name="code" />Usage</button><button type="button" role="tab" aria-selected={props.panel === "tokens" ? "true" : "false"} onClick={() => props.onPanel("tokens")}><Icon name="tokens" />Agent contract</button></div>
-        <Show when={props.panel === "anatomy"}><div class="inspector-panel"><h2>Semantic parts</h2><p>Spread each part getter onto the matching element, then style its stable state attributes.</p><div class="part-list"><For each={entry.parts}>{(part) => <code>{part}</code>}</For></div></div></Show>
-        <Show when={props.panel === "code"}><div class="inspector-panel"><h2>Focused package import</h2><p>The theme is visual. The controller remains unstyled, accessible, and fully typed.</p><pre><code>{importLine}{"\n\n"}{`const ${entry.slug.replaceAll("-", "_")} = ${entry.factory}({\n  id: "product-${entry.slug}",\n});`}</code></pre></div></Show>
-        <Show when={props.panel === "tokens"}><div class="inspector-panel"><h2>Machine-readable by construction</h2><p>Agents can discover this component through the public catalog API or the Design Studio MCP server.</p><dl class="contract-grid"><div><dt>Factory</dt><dd><code>{entry.factory}</code></dd></div><div><dt>Subpath</dt><dd><code>@clank.run/framework/ui/{entry.slug}</code></dd></div><div><dt>Catalog module</dt><dd>{entry.module}</dd></div><div><dt>Form projection</dt><dd>{entry.formAssociated ? "Included" : "Not required"}</dd></div></dl></div></Show>
+        <div class="inspector-tabs" role="tablist" aria-label="Component details"><button type="button" role="tab" aria-selected={props.panel() === "anatomy" ? "true" : "false"} onClick={() => props.onPanel("anatomy")}><Icon name="details" />Anatomy</button><button type="button" role="tab" aria-selected={props.panel() === "code" ? "true" : "false"} onClick={() => props.onPanel("code")}><Icon name="code" />Usage</button><button type="button" role="tab" aria-selected={props.panel() === "tokens" ? "true" : "false"} onClick={() => props.onPanel("tokens")}><Icon name="tokens" />Agent contract</button></div>
+        <Show when={() => props.panel() === "anatomy"}><div class="inspector-panel"><h2>Semantic parts</h2><p>Spread each part getter onto the matching element, then style its stable state attributes.</p><div class="part-list"><For each={entry.parts}>{(part) => <code>{part}</code>}</For></div></div></Show>
+        <Show when={() => props.panel() === "code"}><div class="inspector-panel"><h2>Focused package import</h2><p>The theme is visual. The controller remains unstyled, accessible, and fully typed.</p><pre><code>{importLine}{"\n\n"}{`const ${entry.slug.replaceAll("-", "_")} = ${entry.factory}({\n  id: "product-${entry.slug}",\n});`}</code></pre></div></Show>
+        <Show when={() => props.panel() === "tokens"}><div class="inspector-panel"><h2>Machine-readable by construction</h2><p>Agents can discover this component through the public catalog API or the Design Studio MCP server.</p><dl class="contract-grid"><div><dt>Factory</dt><dd><code>{entry.factory}</code></dd></div><div><dt>Subpath</dt><dd><code>@clank.run/framework/ui/{entry.slug}</code></dd></div><div><dt>Catalog module</dt><dd>{entry.module}</dd></div><div><dt>Form projection</dt><dd>{entry.formAssociated ? "Included" : "Not required"}</dd></div></dl></div></Show>
       </section>
     </section>
   );
@@ -175,6 +175,7 @@ export function DesignStudio(props: DesignStudioProps) {
     module,
     computed(() => filtered.value.filter((entry) => entry.module === module)),
   ]));
+  const activeComponents = computed(() => UI_COMPONENT_CATALOG.filter((entry) => entry.slug === view.value));
 
   function selectView(next: StudioView, replace = false) {
     view.value = next;
@@ -221,9 +222,17 @@ export function DesignStudio(props: DesignStudioProps) {
           <label class="theme-picker"><span class="theme-dot" /><span class="theme-picker-label">Theme</span><select value={themeId} onChange={(event: Event) => { themeId.value = (event.currentTarget as HTMLSelectElement).value; }}><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <option value={theme.id}>{theme.name}</option>}</For></select></label>
         </div>
         <div class="studio-content">
-          <Show when={() => view.value === "overview"}><Overview themeId={themeId.value} onView={selectView} onTheme={(id) => { themeId.value = id; }} /></Show>
-          <Show when={() => view.value === "themes"}><ThemeGallery selected={themeId.value} onSelect={(id) => { themeId.value = id; }} /></Show>
-          <Show when={() => view.value !== "overview" && view.value !== "themes"}><ComponentView slug={view.value} viewport={viewport.value} panel={panel.value} grid={grid.value} outlines={outlines.value} onViewport={(value) => { viewport.value = value; }} onPanel={(value) => { panel.value = value; }} onGrid={() => { grid.value = !grid.peek(); }} onOutlines={() => { outlines.value = !outlines.peek(); }} /></Show>
+          <Show when={() => view.value === "overview"}><Overview themeId={() => themeId.value} onView={selectView} onTheme={(id) => { themeId.value = id; }} /></Show>
+          <Show when={() => view.value === "themes"}><ThemeGallery selected={() => themeId.value} onSelect={(id) => { themeId.value = id; }} /></Show>
+          <Show when={() => view.value !== "overview" && view.value !== "themes"}>
+            <For
+              each={activeComponents}
+              by="slug"
+              fallback={<section class="not-found"><span>404</span><h1>That component is not in the catalog.</h1><a href="/">Return to the workshop</a></section>}
+            >
+              {(entry) => <ComponentView entry={entry} viewport={() => viewport.value} panel={() => panel.value} grid={() => grid.value} outlines={() => outlines.value} onViewport={(value) => { viewport.value = value; }} onPanel={(value) => { panel.value = value; }} onGrid={() => { grid.value = !grid.peek(); }} onOutlines={() => { outlines.value = !outlines.peek(); }} />}
+            </For>
+          </Show>
         </div>
       </main>
     </div>

@@ -538,6 +538,21 @@ test("keyed For preserves row and text identity across edits and reorders", () =
   assert.equal(root.insertions, 2, "one new row and one moved row are the only insertions");
 });
 
+test("keyed For resolves array accessors and tracks their reactive dependencies", () => {
+  const items = signal([
+    { id: "navigation-menu", name: "NavigationMenu" },
+  ]);
+  const root = new FakeElement("main");
+  render(root, h(For, { each: () => items.value, by: "id" }, (item) =>
+    h("article", { "data-id": expression(() => item.id) }, expression(() => item.name)),
+  ));
+
+  assert.equal(root.textContent, "NavigationMenu");
+  items.value = [{ id: "toolbar", name: "Toolbar" }];
+  assert.equal(root.textContent, "Toolbar");
+  assert.deepEqual(root.children.map((node) => node.getAttribute("data-id")), ["toolbar"]);
+});
+
 test("Portal mounts into an explicit target and cleans up without disturbing siblings", () => {
   const root = new FakeElement("main");
   const target = new FakeElement("aside");
