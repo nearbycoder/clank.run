@@ -17,6 +17,27 @@ This is the repeatable maintainer checklist for substantial framework or platfor
 
 `npm run check` covers the build, dependency contract, coverage floors, documentation/declaration audit, packed-release conformance, deterministic chaos tests, package/current-tree/history credential scans, and workflow-policy checks. Browser review remains intentionally explicit because visual and interaction regressions need a rendered application.
 
+## 2026-07-30 version 0.13.0 release phase
+
+- [x] Selected a minor release because the accumulated provider telemetry and explicit recovery
+  phase adds public protocol fields, orchestration APIs, and platform behavior. The existing
+  `v0.12.0` tag and staged artifact remain immutable.
+- [x] Synchronized `package.json`, the dated changelog release heading, and the exact dependency
+  example in Getting Started at `0.13.0`.
+- [x] Confirmed there are no open repository issues or pull requests, no unbounded source
+  TODO/FIXME markers, and no CLI regression: bare non-interactive invocation returns complete
+  help while the agent-readable template catalog reports the new release identity.
+- [x] Passed the complete release gate: 378 tests at 86.60% line / 75.35% branch / 87.72%
+  function coverage, 61 Markdown files, 273 local links, 56 indexed guides, 38 synchronized
+  declaration files, 35 package exports, all nine packed-release scenarios, and package/
+  current-tree/reachable-history credential scans.
+- [x] Inspected the dry-run package: 224 bounded files, 1,312,516-byte tarball, 5,170,153-byte
+  unpacked size, SHA-1 `ce6a7cd766a85e8a2f4e3281f5b9d112fc88d60a`, and no dependencies.
+- [ ] Merge the version pull request after CI and CodeQL, create protected annotated tag
+  `v0.13.0`, publish the matching GitHub release, and verify its attested npm stage.
+- [ ] Approve only that verified stage with a fresh proof-of-presence code, confirm registry
+  signatures and provenance, and exercise a fresh-registry consumer.
+
 ## 2026-07-30 version 0.12.0 and hosted billing phase
 
 - [x] Added provider-neutral hosted plans, durable entitlement snapshots, exact effective limits,
