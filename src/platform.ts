@@ -44,6 +44,7 @@ import {
 } from "./runtime-placement.ts";
 import {
   DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL,
+  DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL_V1,
   type DockerDeploymentRuntimeDiagnostics,
   type DockerDeploymentRuntimeLog,
 } from "./provider-docker.ts";
@@ -6554,13 +6555,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             runtime = { available: false, reason: "not_deployed" };
           } else {
             try {
+              const diagnostics = await fetchProviderDiagnostics(
+                project,
+                activeRelease,
+                0,
+              );
               runtime = {
                 available: true,
-                ...await fetchProviderDiagnostics(
-                  project,
-                  activeRelease,
-                  0,
-                ),
+                ...diagnostics,
+                filesystem: platformPrincipalCanInspectProviderFilesystem(
+                  storage.internal,
+                  principal,
+                )
+                  ? diagnostics.filesystem
+                  : unavailableProviderFilesystem(),
               };
             } catch (error) {
               if (!(error instanceof PlatformError)) throw error;
@@ -10940,7 +10948,9 @@ function providerDiagnostics(
   input: unknown,
 ): DockerDeploymentRuntimeDiagnostics {
   const value = diagnosticObject(input, "provider diagnostics");
-  diagnosticExactKeys(value, [
+  const legacy = value.protocol
+    === DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL_V1;
+  const keys = [
     "protocol",
     "projectId",
     "releaseId",
@@ -10952,9 +10962,17 @@ function providerDiagnostics(
     "logs",
     "retainedLogBytes",
     "logsTruncated",
-  ], "provider diagnostics");
+  ];
+  diagnosticExactKeys(
+    value,
+    legacy ? keys : [...keys, "filesystem"],
+    "provider diagnostics",
+  );
   if (
-    value.protocol !== DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL
+    (
+      value.protocol !== DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL
+      && !legacy
+    )
     || typeof value.projectId !== "string"
     || !/^[A-Za-z0-9_-]{1,128}$/u.test(value.projectId)
     || typeof value.releaseId !== "string"
@@ -11077,6 +11095,9 @@ function providerDiagnostics(
     }
     return [name, metric];
   })) as unknown as DockerDeploymentRuntimeDiagnostics["totals"];
+  const filesystem = legacy
+    ? unavailableProviderFilesystem()
+    : providerFilesystemDiagnostics(value.filesystem);
   if (!Array.isArray(value.logs) || value.logs.length > 1_000) {
     throw new Error("Provider diagnostics logs are invalid.");
   }
@@ -11156,9 +11177,96 @@ function providerDiagnostics(
     statisticsAvailable: value.statisticsAvailable,
     containers: Object.freeze(containers),
     totals: Object.freeze({ ...totals }),
+    filesystem,
     logs: Object.freeze(logs),
     retainedLogBytes,
     logsTruncated: value.logsTruncated,
+  });
+}
+
+function platformPrincipalCanInspectProviderFilesystem(
+  internal: SQLiteInternal,
+  principal: TokenPrincipal,
+): boolean {
+  if (principal.tokenId !== null || principal.impersonation !== null) {
+    return false;
+  }
+  const user = internal.prepare(
+    "SELECT role FROM clank_auth_users WHERE id = ?",
+  ).get(principal.userId);
+  return user?.role === PLATFORM_ADMIN_ROLE;
+}
+
+function unavailableProviderFilesystem(
+): DockerDeploymentRuntimeDiagnostics["filesystem"] {
+  return Object.freeze({
+    available: false,
+    capacityBytes: null,
+    usedBytes: null,
+    availableBytes: null,
+    utilization: null,
+  });
+}
+
+function providerFilesystemDiagnostics(
+  input: unknown,
+): DockerDeploymentRuntimeDiagnostics["filesystem"] {
+  const value = diagnosticObject(input, "provider diagnostics filesystem");
+  diagnosticExactKeys(value, [
+    "available",
+    "capacityBytes",
+    "usedBytes",
+    "availableBytes",
+    "utilization",
+  ], "provider diagnostics filesystem");
+  if (typeof value.available !== "boolean") {
+    throw new Error("Provider diagnostics filesystem availability is invalid.");
+  }
+  if (!value.available) {
+    if (
+      value.capacityBytes !== null
+      || value.usedBytes !== null
+      || value.availableBytes !== null
+      || value.utilization !== null
+    ) {
+      throw new Error("Unavailable provider filesystem diagnostics contain values.");
+    }
+    return unavailableProviderFilesystem();
+  }
+  const capacityBytes = diagnosticSafeInteger(
+    value.capacityBytes,
+    "provider diagnostics filesystem capacity",
+    1,
+  );
+  const usedBytes = diagnosticSafeInteger(
+    value.usedBytes,
+    "provider diagnostics filesystem used bytes",
+    0,
+  );
+  const availableBytes = diagnosticSafeInteger(
+    value.availableBytes,
+    "provider diagnostics filesystem available bytes",
+    0,
+  );
+  if (
+    usedBytes > capacityBytes
+    || availableBytes > capacityBytes
+    || usedBytes + availableBytes > capacityBytes
+    || typeof value.utilization !== "number"
+    || !Number.isFinite(value.utilization)
+    || value.utilization < 0
+    || value.utilization > 1
+    || Math.abs(value.utilization - usedBytes / capacityBytes)
+      > 1e-12
+  ) {
+    throw new Error("Provider diagnostics filesystem values are inconsistent.");
+  }
+  return Object.freeze({
+    available: true,
+    capacityBytes,
+    usedBytes,
+    availableBytes,
+    utilization: value.utilization,
   });
 }
 

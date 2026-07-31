@@ -131,8 +131,12 @@ instead of failing the whole screen.
 
 For provider-hosted projects, Performance adds a current-generation resource panel with
 memory/limit, CPU, PID, network-I/O, and block-I/O attribution across web, workers, and scheduler.
-The counters reset on deployment or restore and are explicitly separate from managed-ingress
-traffic accounting. Logs merges the provider's bounded memory-only output tail with durable
+For a platform administrator using an interactive browser session, it also shows used, available,
+and total capacity for the shared provider filesystem that contains the project data directory,
+with an amber warning at 90% utilization. Tokens, project members, and support-impersonation
+sessions receive an unavailable filesystem record so shared capacity cannot become a cross-project
+activity signal. The capacity sample is not per-project attribution or a quota. Container counters reset on deployment or restore and are
+explicitly separate from managed-ingress traffic accounting. Logs merges the provider's bounded memory-only output tail with durable
 control-plane lifecycle entries after project-secret redaction. If the private diagnostics sample
 is unavailable, traffic charts and stored lifecycle logs still render; the panel reports the
 degraded sample without taking the application out of service.

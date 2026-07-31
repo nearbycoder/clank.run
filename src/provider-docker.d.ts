@@ -1,7 +1,8 @@
 import type { PreparedDeploymentRuntimeData } from "./provider-data.js";
 
 export declare const DEPLOYMENT_PROVIDER_DOCKER_PROTOCOL: "clank-provider-docker/1";
-export declare const DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL: "clank-provider-docker-diagnostics/1";
+export declare const DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL_V1: "clank-provider-docker-diagnostics/1";
+export declare const DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL: "clank-provider-docker-diagnostics/2";
 
 export interface DockerDeploymentRuntimeLauncherOptions {
     /** Same private provider root passed to openDeploymentProviderDataStore(). */
@@ -93,6 +94,19 @@ export interface DockerDeploymentContainerDiagnostics {
     readonly pids: number | null;
 }
 
+export interface DockerDeploymentFilesystemDiagnostics {
+    /** Whether the provider could safely sample the project data filesystem. */
+    readonly available: boolean;
+    /** Provider-volume capacity. This is not per-project storage attribution. */
+    readonly capacityBytes: number | null;
+    /** Allocated bytes across the provider filesystem. */
+    readonly usedBytes: number | null;
+    /** Bytes available to the provider process after filesystem reservations. */
+    readonly availableBytes: number | null;
+    /** `usedBytes / capacityBytes`, from zero through one. */
+    readonly utilization: number | null;
+}
+
 export interface DockerDeploymentRuntimeDiagnostics {
     readonly protocol: typeof DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL;
     readonly projectId: string;
@@ -111,6 +125,7 @@ export interface DockerDeploymentRuntimeDiagnostics {
         readonly blockWriteBytes: number | null;
         readonly pids: number | null;
     };
+    readonly filesystem: DockerDeploymentFilesystemDiagnostics;
     readonly logs: readonly DockerDeploymentRuntimeLog[];
     readonly retainedLogBytes: number;
     readonly logsTruncated: boolean;

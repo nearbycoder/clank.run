@@ -2,8 +2,10 @@ import { parseDeploymentConfig, type DeploymentConfig } from "./deploy.ts";
 import type { PreparedDeploymentRuntimeData } from "./provider-data.ts";
 
 export const DEPLOYMENT_PROVIDER_DOCKER_PROTOCOL = "clank-provider-docker/1";
-export const DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL =
+export const DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL_V1 =
   "clank-provider-docker-diagnostics/1";
+export const DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL =
+  "clank-provider-docker-diagnostics/2";
 
 export interface DockerDeploymentRuntimeLauncherOptions {
   /** Same private provider root passed to openDeploymentProviderDataStore(). */
@@ -96,6 +98,19 @@ export interface DockerDeploymentContainerDiagnostics {
   readonly pids: number | null;
 }
 
+export interface DockerDeploymentFilesystemDiagnostics {
+  /** Whether the provider could safely sample the project data filesystem. */
+  readonly available: boolean;
+  /** Provider-volume capacity. This is not per-project storage attribution. */
+  readonly capacityBytes: number | null;
+  /** Allocated bytes across the provider filesystem. */
+  readonly usedBytes: number | null;
+  /** Bytes available to the provider process after filesystem reservations. */
+  readonly availableBytes: number | null;
+  /** `usedBytes / capacityBytes`, from zero through one. */
+  readonly utilization: number | null;
+}
+
 export interface DockerDeploymentRuntimeDiagnostics {
   readonly protocol: typeof DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL;
   readonly projectId: string;
@@ -114,6 +129,7 @@ export interface DockerDeploymentRuntimeDiagnostics {
     readonly blockWriteBytes: number | null;
     readonly pids: number | null;
   };
+  readonly filesystem: DockerDeploymentFilesystemDiagnostics;
   readonly logs: readonly DockerDeploymentRuntimeLog[];
   readonly retainedLogBytes: number;
   readonly logsTruncated: boolean;
@@ -186,6 +202,7 @@ interface RuntimeRecord {
   launchedAt: number;
   containers: ContainerProcess[];
   plannedContainers: number;
+  dataDirectory: string;
   deferredBackground: boolean;
   pendingBackground: PendingBackgroundPlan | null;
   controller: AbortController;
@@ -225,6 +242,12 @@ interface NodeFs {
     isSymbolicLink(): boolean;
   }>;
   realpath(path: string): Promise<string>;
+  statfs?(path: string): Promise<{
+    bsize: number;
+    blocks: number;
+    bfree: number;
+    bavail: number;
+  }>;
 }
 
 interface NodePath {
@@ -681,6 +704,7 @@ export async function openDockerDeploymentRuntimeLauncher(
           launchedAt: Date.now(),
           containers: [],
           plannedContainers,
+          dataDirectory: prepared.dataDirectory,
           deferredBackground: deferBackground,
           pendingBackground: null,
           controller: new AbortController(),
@@ -872,6 +896,11 @@ export async function openDockerDeploymentRuntimeLauncher(
             ? value
             : null;
         };
+        const filesystem = await runtimeFilesystemDiagnostics(
+          fs,
+          record.dataDirectory,
+        );
+        throwIfAborted(signal);
         return Object.freeze({
           protocol: DEPLOYMENT_PROVIDER_DOCKER_DIAGNOSTICS_PROTOCOL,
           projectId: record.candidate.projectId,
@@ -890,6 +919,7 @@ export async function openDockerDeploymentRuntimeLauncher(
             blockWriteBytes: total("blockWriteBytes"),
             pids: total("pids"),
           }),
+          filesystem,
           logs: Object.freeze(
             record.logs.slice(Math.max(0, record.logs.length - logLimit))
               .map((entry) => Object.freeze({ ...entry })),
@@ -1574,6 +1604,57 @@ function diagnosticInteger(value: unknown, label: string): number {
   const result = Number(normalized);
   if (!Number.isSafeInteger(result)) throw new Error(`${label} is invalid.`);
   return result;
+}
+
+async function runtimeFilesystemDiagnostics(
+  fs: NodeFs,
+  dataDirectory: string,
+): Promise<DockerDeploymentFilesystemDiagnostics> {
+  const unavailable = (): DockerDeploymentFilesystemDiagnostics => Object.freeze({
+    available: false,
+    capacityBytes: null,
+    usedBytes: null,
+    availableBytes: null,
+    utilization: null,
+  });
+  if (typeof fs.statfs !== "function") return unavailable();
+  try {
+    const stats = await fs.statfs(dataDirectory);
+    const blockSize = safeDiagnosticInteger(stats.bsize);
+    const capacityBytes = safeDiagnosticProduct(
+      safeDiagnosticInteger(stats.blocks),
+      blockSize,
+    );
+    if (capacityBytes < 1) return unavailable();
+    const freeBytes = Math.min(
+      capacityBytes,
+      safeDiagnosticProduct(safeDiagnosticInteger(stats.bfree), blockSize),
+    );
+    const availableBytes = Math.min(
+      freeBytes,
+      safeDiagnosticProduct(safeDiagnosticInteger(stats.bavail), blockSize),
+    );
+    const usedBytes = capacityBytes - freeBytes;
+    return Object.freeze({
+      available: true,
+      capacityBytes,
+      usedBytes,
+      availableBytes,
+      utilization: usedBytes / capacityBytes,
+    });
+  } catch {
+    return unavailable();
+  }
+}
+
+function safeDiagnosticInteger(value: unknown): number {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : 0;
+}
+
+function safeDiagnosticProduct(left: number, right: number): number {
+  const value = left * right;
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function shortDiagnosticString(value: unknown, label: string): string {

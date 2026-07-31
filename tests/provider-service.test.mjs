@@ -176,6 +176,8 @@ test("provider service orders durable data, deferred jobs, ingress, stop, and re
     assert.equal(diagnostics.releaseId, "release_service_01");
     assert.equal(diagnostics.generation, 1);
     assert.equal(diagnostics.statisticsAvailable, true);
+    assert.equal(diagnostics.filesystem.availableBytes, 70 * 1024 * 1024 * 1024);
+    assert.equal(diagnostics.filesystem.utilization, 0.25);
     assert.equal(diagnostics.logs[0].message, "fake provider runtime output");
     assert.deepEqual(
       await first.service.diagnostics("project_service_01", 1),
@@ -911,7 +913,7 @@ function fakeRuntimes(events, options = {}) {
       const record = records.get(projectId);
       if (!record) return null;
       return Object.freeze({
-        protocol: "clank-provider-docker-diagnostics/1",
+        protocol: "clank-provider-docker-diagnostics/2",
         projectId: record.projectId,
         releaseId: record.releaseId,
         generation: record.generation,
@@ -939,6 +941,13 @@ function fakeRuntimes(events, options = {}) {
           blockReadBytes: 4_096,
           blockWriteBytes: 8_192,
           pids: 7,
+        }),
+        filesystem: Object.freeze({
+          available: true,
+          capacityBytes: 100 * 1024 * 1024 * 1024,
+          usedBytes: 25 * 1024 * 1024 * 1024,
+          availableBytes: 70 * 1024 * 1024 * 1024,
+          utilization: 0.25,
         }),
         logs: Object.freeze(logLimit === 0 ? [] : [Object.freeze({
           sequence: 1,

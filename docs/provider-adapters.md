@@ -238,11 +238,12 @@ durable generation is still converging and the same request should be retried.
 
 The complete Docker provider also supplies a bounded memory-only application-output tail and
 one-shot memory/limit, CPU, PID, network-I/O, and block-I/O attribution for the exact active
-generation. The control plane verifies the private response and redacts project secrets before
-showing it. Provider filesystem-capacity telemetry, remote durable-job inspection/mutation, and
-automatic failover from node-local SQLite are not implemented. A stateful project stays pinned and
-unavailable when its node is unavailable. Operators must not treat release-object retention as a
-database backup. See [Remote runtime
+generation. The same boundary reports shared provider-filesystem capacity, which the control plane
+returns only to a platform administrator's interactive browser session, and exposes payload-free
+durable-job inspection plus conditional cancellation/retry. The control plane verifies every
+private response and redacts project secrets before showing it. Automatic failover from node-local
+SQLite is not implemented. A stateful project stays pinned and unavailable when its node is
+unavailable. Operators must not treat release-object retention as a database backup. See [Remote runtime
 placement](runtime-placement.md#current-support-boundary) for the precise boundary.
 
 See [Remote runtime placement](runtime-placement.md) for operator configuration, exact body, and
