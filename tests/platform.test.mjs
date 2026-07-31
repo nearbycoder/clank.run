@@ -138,7 +138,12 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
     version: 1,
     entry: "dist/server.js",
     include: ["dist", "migrations"],
-    database: { path: "app.sqlite", migrations: "migrations", allowUnsafeMigrations },
+    database: {
+      path: "app.sqlite",
+      migrations: "migrations",
+      allowUnsafeMigrations,
+      ...(options.previewData ? { previewData: options.previewData } : {}),
+    },
     health: { path: "/healthz", timeoutMs: 5_000 },
     env: {},
     ...(options.jobs
@@ -5062,8 +5067,35 @@ test("preview environments are isolated, quota-bound, refreshable, removable, an
       body: { values: { PRODUCTION_ONLY: "never-copy-this" } },
     }));
     const artifact = await appArtifact(join(root, "artifact"), "preview-test", [
-      ["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);"],
-    ]);
+      ["0001_items.sql", `CREATE TABLE items (
+        id INTEGER PRIMARY KEY,
+        value TEXT NOT NULL,
+        contact TEXT NOT NULL,
+        done INTEGER NOT NULL CHECK (done IN (0, 1)),
+        settings TEXT NOT NULL CHECK (json_valid(settings))
+      );
+      CREATE TABLE private_notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL);`],
+    ], false, {
+      previewData: {
+        tables: {
+          items: {
+            rows: 100,
+            columns: {
+              id: "keep",
+              value: "hash",
+              contact: "email",
+              done: "keep",
+              settings: {
+                json: {
+                  default: "hash",
+                  paths: { "/done": "keep", "/profile/email": "email" },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
     const productionDeploy = await deploy(
       platform,
       projectId,
@@ -5121,11 +5153,114 @@ test("preview environments are isolated, quota-bound, refreshable, removable, an
     const previewDatabase = new DatabaseSync(
       join(dataDirectory, "projects", previewId, "data", "app.sqlite"),
     );
-    productionDatabase.prepare("INSERT INTO items (value) VALUES (?)").run("production");
+    productionDatabase.prepare(
+      "INSERT INTO items (value, contact, done, settings) VALUES (?, ?, ?, ?)",
+    ).run("production title", "person@example.com", 1, JSON.stringify({
+      done: false,
+      profile: { name: "Private Person", email: "private@example.com" },
+    }));
+    productionDatabase.prepare("INSERT INTO private_notes (body) VALUES (?)")
+      .run("never leave production");
     assert.equal(productionDatabase.prepare("SELECT count(*) AS count FROM items").get().count, 1);
     assert.equal(previewDatabase.prepare("SELECT count(*) AS count FROM items").get().count, 0);
     productionDatabase.close();
     previewDatabase.close();
+
+    const invalidDataMode = await platform.handle(jsonRequest(
+      `/api/projects/${projectId}/previews/${previewId}/data`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { mode: "production", confirmation: "branch-sanitized-data feature-accounts" },
+      },
+    ));
+    assert.equal(invalidDataMode.status, 422);
+    assert.equal((await invalidDataMode.json()).error.code, "INVALID_PREVIEW_DATA_MODE");
+    const branched = await payload(platform, jsonRequest(
+      `/api/projects/${projectId}/previews/${previewId}/data`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { mode: "sanitized", confirmation: "branch-sanitized-data feature-accounts" },
+      },
+    ));
+    assert.equal(branched.data.mode, "sanitized");
+    assert.equal(branched.data.report.tablesCopied, 1);
+    assert.ok(branched.data.report.tablesEmptied >= 1);
+    assert.equal(branched.data.report.rowsRetained, 1);
+    assert.doesNotMatch(
+      JSON.stringify(branched),
+      /production title|person@example|private_notes|items/u,
+    );
+    const branchedDatabase = new DatabaseSync(
+      join(dataDirectory, "projects", previewId, "data", "app.sqlite"),
+      { readOnly: true },
+    );
+    const sanitizedItem = branchedDatabase.prepare(
+      "SELECT value, contact, done, settings FROM items",
+    ).get();
+    assert.match(sanitizedItem.value, /^pv_[a-f0-9]{16}$/u);
+    assert.match(sanitizedItem.contact, /^preview\+[a-f0-9]{16}@example\.invalid$/u);
+    assert.equal(sanitizedItem.done, 1);
+    const sanitizedSettings = JSON.parse(sanitizedItem.settings);
+    assert.equal(sanitizedSettings.done, false);
+    assert.match(sanitizedSettings.profile.name, /^pv_[a-f0-9]{16}$/u);
+    assert.match(sanitizedSettings.profile.email, /^preview\+[a-f0-9]{16}@example\.invalid$/u);
+    assert.equal(branchedDatabase.prepare("SELECT count(*) AS count FROM private_notes").get().count, 0);
+    branchedDatabase.close();
+    const unchangedProduction = new DatabaseSync(
+      join(dataDirectory, "projects", projectId, "data", "app.sqlite"),
+      { readOnly: true },
+    );
+    assert.deepEqual({ ...unchangedProduction.prepare(
+      "SELECT value, contact, done, settings FROM items",
+    ).get() }, {
+      value: "production title",
+      contact: "person@example.com",
+      done: 1,
+      settings: JSON.stringify({
+        done: false,
+        profile: { name: "Private Person", email: "private@example.com" },
+      }),
+    });
+    unchangedProduction.close();
+
+    const unsafePolicyArtifact = await appArtifact(join(root, "unsafe-policy-artifact"), "preview-test-v2", [
+      ["0001_items.sql", `CREATE TABLE items (
+        id INTEGER PRIMARY KEY,
+        value TEXT NOT NULL,
+        contact TEXT NOT NULL,
+        done INTEGER NOT NULL CHECK (done IN (0, 1)),
+        settings TEXT NOT NULL CHECK (json_valid(settings))
+      );
+      CREATE TABLE private_notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL);`],
+    ], false, {
+      previewData: { tables: { clank_migrations: { columns: { checksum: "keep" } } } },
+    });
+    const unsafePolicyDeploy = await deploy(
+      platform,
+      projectId,
+      owner.accessToken,
+      unsafePolicyArtifact,
+      "preview_production_unsafe_policy_0002",
+    );
+    assert.equal(unsafePolicyDeploy.response.status, 201, JSON.stringify(unsafePolicyDeploy.body));
+    const rejectedUnsafePolicy = await platform.handle(jsonRequest(
+      `/api/projects/${projectId}/previews/${previewId}/data`,
+      {
+        method: "POST",
+        token: owner.accessToken,
+        body: { mode: "sanitized", confirmation: "branch-sanitized-data feature-accounts" },
+      },
+    ));
+    assert.equal(rejectedUnsafePolicy.status, 422);
+    assert.equal((await rejectedUnsafePolicy.json()).error.code, "PREVIEW_DATA_SANITIZATION_FAILED");
+    const preservedPreview = new DatabaseSync(
+      join(dataDirectory, "projects", previewId, "data", "app.sqlite"),
+      { readOnly: true },
+    );
+    assert.equal(preservedPreview.prepare("SELECT value FROM items").get().value, sanitizedItem.value);
+    preservedPreview.close();
 
     const projects = await payload(platform, jsonRequest("/api/projects", {
       token: owner.accessToken,
@@ -5137,7 +5272,16 @@ test("preview environments are isolated, quota-bound, refreshable, removable, an
     }));
     assert.equal(listed.previews.length, 1);
     assert.equal(listed.policy.copiesProductionData, false);
+    assert.equal(listed.policy.rawProductionCopies, false);
+    assert.equal(listed.policy.sanitizedDataBranches, true);
     assert.equal(listed.policy.countsTowardProjectQuota, true);
+    assert.equal(listed.previews[0].dataBranch.mode, "sanitized");
+    assert.equal(listed.previews[0].dataBranch.report.valuesTransformed, 4);
+    assert.notEqual(
+      listed.previews[0].dataBranch.sourceReleaseId,
+      unsafePolicyDeploy.body.release.id,
+      "a rejected policy must not replace branch provenance",
+    );
 
     const parentDelete = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
       method: "DELETE",
@@ -5199,6 +5343,7 @@ test("preview environments are isolated, quota-bound, refreshable, removable, an
     ));
     assert.ok(audit.events.some((event) => event.action === "preview.create"));
     assert.ok(audit.events.some((event) => event.action === "preview.refresh"));
+    assert.ok(audit.events.some((event) => event.action === "preview.data.branch"));
     assert.ok(audit.events.some((event) => event.action === "preview.delete"));
     assert.ok(audit.events.some((event) => event.action === "preview.expire"));
   } finally {

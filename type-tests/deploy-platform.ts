@@ -20,6 +20,18 @@ const config: DeploymentConfig = parseDeploymentConfig({
     path: "app.sqlite",
     migrations: "migrations",
     allowUnsafeMigrations: false,
+    previewData: {
+      tables: {
+        tasks: {
+          rows: 100,
+          columns: {
+            id: "keep",
+            owner_email: "email",
+            payload: { json: { default: "hash", paths: { "/done": "keep" } } },
+          },
+        },
+      },
+    },
   },
   health: {
     path: "/healthz",
@@ -30,6 +42,10 @@ const config: DeploymentConfig = parseDeploymentConfig({
 
 config.entry satisfies string;
 config.database.path satisfies string;
+config.database.previewData?.tables.tasks?.columns?.owner_email satisfies
+  | import("@clank.run/framework").DeployPreviewDataTransform
+  | import("@clank.run/framework").DeployPreviewJsonTransform
+  | undefined;
 
 const runner: PlatformRunnerOptions = {
   kind: "docker",

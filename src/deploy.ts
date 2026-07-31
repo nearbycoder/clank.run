@@ -7,6 +7,31 @@ export interface DeployDatabaseConfig {
   path: string;
   migrations: string;
   allowUnsafeMigrations: boolean;
+  /** Trusted production policy for opt-in sanitized preview data branches. */
+  previewData?: DeployPreviewDataConfig;
+}
+
+export type DeployPreviewDataTransform = "keep" | "hash" | "redact" | "email";
+
+export interface DeployPreviewJsonTransform {
+  json: {
+    /** Applied to every JSON leaf not named in paths. Defaults to hash. */
+    default?: DeployPreviewDataTransform;
+    /** JSON Pointer to transform overrides. */
+    paths?: Record<string, DeployPreviewDataTransform>;
+  };
+}
+
+export interface DeployPreviewDataTableConfig {
+  /** Deterministically retain at most this many rows. Defaults to 1,000. */
+  rows?: number;
+  /** Column overrides. Text/blob columns default to hash; numeric values remain structural. */
+  columns?: Record<string, DeployPreviewDataTransform | DeployPreviewJsonTransform>;
+}
+
+export interface DeployPreviewDataConfig {
+  /** Only named tables retain rows; every other non-framework table is emptied. */
+  tables: Record<string, DeployPreviewDataTableConfig>;
 }
 
 export interface DeployBuildConfig {
@@ -79,6 +104,8 @@ const SENSITIVE_SEGMENTS = new Set([
   "id_ed25519",
 ]);
 const SAFE_ENV_NAME = /^[A-Z_][A-Z0-9_]{0,127}$/;
+const SAFE_SQL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+const PREVIEW_DATA_TRANSFORMS = new Set(["keep", "hash", "redact", "email"]);
 const ATOMIC_BUILD_TEMPORARY_FILE = /\.clank-build-\d+-\d+$/u;
 const MAX_SOURCE_SNAPSHOT_ATTEMPTS = 8;
 
@@ -154,7 +181,10 @@ export function parseDeploymentConfig(value: unknown): DeploymentConfig {
     build = { command };
   }
   const rawDatabase = source.database === undefined ? {} : object(source.database, "database");
-  exactKeys(rawDatabase, ["path", "migrations", "allowUnsafeMigrations"], "database");
+  exactKeys(rawDatabase, ["path", "migrations", "allowUnsafeMigrations", "previewData"], "database");
+  const previewData = rawDatabase.previewData === undefined
+    ? undefined
+    : parsePreviewDataConfig(rawDatabase.previewData);
   const database: DeployDatabaseConfig = {
     path: safeDataPath(rawDatabase.path === undefined ? "app.sqlite" : string(rawDatabase.path, "database.path")),
     migrations: safeRelativePath(
@@ -162,6 +192,7 @@ export function parseDeploymentConfig(value: unknown): DeploymentConfig {
       "database.migrations",
     ),
     allowUnsafeMigrations: rawDatabase.allowUnsafeMigrations === true,
+    ...(previewData ? { previewData } : {}),
   };
   if (!include.some((path) =>
     database.migrations === path || database.migrations.startsWith(`${path}/`))) {
@@ -229,6 +260,93 @@ export function parseDeploymentConfig(value: unknown): DeploymentConfig {
     health: Object.freeze(health),
     env: Object.freeze(env),
     ...(jobs ? { jobs } : {}),
+  });
+}
+
+function parsePreviewDataConfig(value: unknown): DeployPreviewDataConfig {
+  const source = object(value, "database.previewData");
+  exactKeys(source, ["tables"], "database.previewData");
+  const rawTables = object(source.tables, "database.previewData.tables");
+  const tableEntries = Object.entries(rawTables);
+  if (tableEntries.length === 0 || tableEntries.length > 64) {
+    throw new Error("database.previewData.tables must contain between 1 and 64 tables.");
+  }
+  const tables = Object.create(null) as Record<string, DeployPreviewDataTableConfig>;
+  for (const [tableName, rawTable] of tableEntries) {
+    if (!SAFE_SQL_IDENTIFIER.test(tableName) || tableName.startsWith("sqlite_")) {
+      throw new Error(`database.previewData table ${tableName} is invalid.`);
+    }
+    const table = object(rawTable, `database.previewData.tables.${tableName}`);
+    exactKeys(table, ["rows", "columns"], `database.previewData.tables.${tableName}`);
+    const rows = table.rows === undefined
+      ? undefined
+      : integer(table.rows, `database.previewData.tables.${tableName}.rows`, 1, 10_000);
+    const columns = Object.create(null) as Record<
+      string,
+      DeployPreviewDataTransform | DeployPreviewJsonTransform
+    >;
+    if (table.columns !== undefined) {
+      const rawColumns = object(table.columns, `database.previewData.tables.${tableName}.columns`);
+      if (Object.keys(rawColumns).length > 128) {
+        throw new Error(`database.previewData.tables.${tableName}.columns cannot exceed 128 columns.`);
+      }
+      for (const [columnName, rawTransform] of Object.entries(rawColumns)) {
+        if (!SAFE_SQL_IDENTIFIER.test(columnName)) {
+          throw new Error(`database.previewData column ${tableName}.${columnName} is invalid.`);
+        }
+        columns[columnName] = parsePreviewDataTransform(rawTransform, `${tableName}.${columnName}`);
+      }
+    }
+    tables[tableName] = Object.freeze({
+      ...(rows === undefined ? {} : { rows }),
+      ...(Object.keys(columns).length === 0 ? {} : { columns: Object.freeze(columns) }),
+    });
+  }
+  return Object.freeze({ tables: Object.freeze(tables) });
+}
+
+function parsePreviewDataTransform(
+  value: unknown,
+  path: string,
+): DeployPreviewDataTransform | DeployPreviewJsonTransform {
+  if (typeof value === "string") {
+    if (!PREVIEW_DATA_TRANSFORMS.has(value)) {
+      throw new Error(`database.previewData transform ${path} is invalid.`);
+    }
+    return value as DeployPreviewDataTransform;
+  }
+  const wrapper = object(value, `database.previewData transform ${path}`);
+  exactKeys(wrapper, ["json"], `database.previewData transform ${path}`);
+  const json = object(wrapper.json, `database.previewData transform ${path}.json`);
+  exactKeys(json, ["default", "paths"], `database.previewData transform ${path}.json`);
+  const fallback = json.default === undefined
+    ? undefined
+    : parsePreviewDataTransform(json.default, `${path}.json.default`);
+  if (fallback !== undefined && typeof fallback !== "string") {
+    throw new Error(`database.previewData transform ${path}.json.default must be scalar.`);
+  }
+  const paths = Object.create(null) as Record<string, DeployPreviewDataTransform>;
+  if (json.paths !== undefined) {
+    const rawPaths = object(json.paths, `database.previewData transform ${path}.json.paths`);
+    if (Object.keys(rawPaths).length > 128) {
+      throw new Error(`database.previewData transform ${path}.json.paths cannot exceed 128 entries.`);
+    }
+    for (const [pointer, raw] of Object.entries(rawPaths)) {
+      if (pointer.length < 1 || pointer.length > 512 || !pointer.startsWith("/") || pointer.includes("\0")) {
+        throw new Error(`database.previewData JSON Pointer ${path}${pointer} is invalid.`);
+      }
+      const transform = parsePreviewDataTransform(raw, `${path}.json.paths.${pointer}`);
+      if (typeof transform !== "string") {
+        throw new Error(`database.previewData JSON Pointer ${path}${pointer} must be scalar.`);
+      }
+      paths[pointer] = transform;
+    }
+  }
+  return Object.freeze({
+    json: Object.freeze({
+      ...(fallback === undefined ? {} : { default: fallback }),
+      ...(Object.keys(paths).length === 0 ? {} : { paths: Object.freeze(paths) }),
+    }),
   });
 }
 

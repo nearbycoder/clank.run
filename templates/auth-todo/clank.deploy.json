@@ -17,7 +17,28 @@
   "database": {
     "path": "app.sqlite",
     "migrations": "migrations",
-    "allowUnsafeMigrations": false
+    "allowUnsafeMigrations": false,
+    "previewData": {
+      "tables": {
+        "clank_todos": {
+          "rows": 500,
+          "columns": {
+            "_id": "keep",
+            "_owner_id": "hash",
+            "_creation_time": "keep",
+            "_version": "keep",
+            "_data": {
+              "json": {
+                "default": "hash",
+                "paths": {
+                  "/done": "keep"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   },
   "health": {
     "path": "/healthz",

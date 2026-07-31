@@ -51,4 +51,9 @@ npm run deploy
 
 Login defaults to https://clank.run. Pass `--server` only for a self-hosted Clank platform. The first deployment creates and links the project automatically. No remote package install or build hook runs: the CLI sends a deterministic artifact containing the exact Clank runtime.
 
+Preview data starts empty. This starter includes a production-reviewed policy that hashes Todo
+text, pseudonymizes ownership, retains only structural completion state, and purges auth, OAuth,
+jobs, and every unlisted table. Opt in with `clank preview deploy <name> --data=sanitized`; raw
+production copies and production secrets are never available.
+
 See `AGENTS.md` for the app map and safety invariants.

@@ -1820,6 +1820,20 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
       return;
     }
     if (
+      request.method === "POST"
+      && request.url === "/api/projects/project_preview_parent/previews/preview_cli_test/data"
+    ) {
+      response.writeHead(200);
+      response.end(JSON.stringify({
+        ok: true,
+        data: {
+          mode: "sanitized",
+          report: { rowsRetained: 3, valuesTransformed: 4 },
+        },
+      }));
+      return;
+    }
+    if (
       request.method === "GET"
       && request.url === "/api/projects/project_preview_parent/previews"
     ) {
@@ -1876,6 +1890,7 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
       "deploy",
       "feature-auth",
       "--ttl=24",
+      "--data=sanitized",
       "--json",
     ], target, environment);
     assert.equal(deployed.code, 0, deployed.stderr);
@@ -1884,6 +1899,8 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
     assert.equal(result.preview.id, preview.id);
     assert.equal(result.preview.expiresAt, expiresAt);
     assert.equal(result.release.url, preview.url);
+    assert.equal(result.data.mode, "sanitized");
+    assert.equal(result.data.report.valuesTransformed, 4);
 
     const listed = await runCliResult(["preview", "list", "--json"], target, environment);
     assert.equal(listed.code, 0, listed.stderr);
@@ -1907,6 +1924,9 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
       method: "POST",
       url: "/api/projects/preview_cli_test/releases",
     }, {
+      method: "POST",
+      url: "/api/projects/project_preview_parent/previews/preview_cli_test/data",
+    }, {
       method: "GET",
       url: "/api/projects/project_preview_parent/previews",
     }, {
@@ -1918,7 +1938,11 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
     }]);
     assert.deepEqual(observed[0].body, { name: "feature-auth", ttlHours: 24 });
     assert.equal(observed[1].contentType, "application/vnd.clank.deploy+gzip");
-    assert.deepEqual(observed[4].body, {
+    assert.deepEqual(observed[2].body, {
+      mode: "sanitized",
+      confirmation: "branch-sanitized-data feature-auth",
+    });
+    assert.deepEqual(observed[5].body, {
       confirmation: "delete-preview feature-auth",
       acknowledgeDataLoss: true,
     });

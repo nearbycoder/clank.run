@@ -73,6 +73,8 @@
     "dist",
     "docs",
     "!docs/maintenance.md",
+    "!docs/code-audit.md",
+    "!docs/public-beta.md",
     "examples",
     "!examples/**/*.sqlite",
     "!examples/**/*.sqlite-shm",

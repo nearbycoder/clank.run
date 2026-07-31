@@ -113,6 +113,9 @@ Rules:
 - `PORT`, `HOST`, `NODE_OPTIONS`, and `CLANK_*` variables are reserved.
 - `database.path` is persistent project data outside release directories.
 - Changing `database.path` during deployment is rejected to prevent silently forking production data.
+- `database.previewData`, when present, is the active production release's bounded sanitization
+  contract for explicit `clank preview deploy --data=sanitized` branches. It is never read from the
+  preview artifact, and raw database copying remains unavailable.
 - `jobs.entry` is one compiled provider-neutral worker/scheduler module inside an included path.
 - `jobs.workers` controls independent processes; `jobs.concurrency` controls handlers per worker.
 - `jobs.queues` is an optional allowlist and `jobs.scheduler` enables one independently leased
@@ -188,7 +191,9 @@ Cleanup requires `rollback` permission. The active artifact is never removable. 
 `clank preview deploy <name>` creates or refreshes an expiring child environment without changing
 the directory's production link. The child receives an independent project ID, hostname, port,
 database, migration ledger, releases, secrets, jobs, logs, metrics, backups, and token namespace.
-No production database rows or secret values are copied.
+Data starts empty and secret values are never copied. An explicit `--data=sanitized` request may
+branch only the rows and transforms frozen into the active production release; raw copies remain
+unavailable and pull-request code cannot change the trusted policy.
 
 Previews consume normal account/workspace project capacity, cannot contain nested previews, and
 are grouped under their parent in the control-plane UI. Startup cleanup runs before release
