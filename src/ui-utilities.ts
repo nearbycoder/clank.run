@@ -273,18 +273,23 @@ export function createScrollArea(options: ScrollAreaOptions): ScrollAreaControll
     }
   };
 
-  const pageTrack = (orientation: Orientation, event: PointerEvent): void => {
+  const beginTrackDrag = (orientation: Orientation, event: PointerEvent): void => {
     if (event.defaultPrevented || !visible(orientation) || maximum(orientation) <= 0 || event.button > 0) return;
     if (event.target !== event.currentTarget) return;
     const track = event.currentTarget as HTMLElement;
     const rect = track.getBoundingClientRect?.();
     if (!rect) return;
     const coordinate = orientation === "horizontal" ? event.clientX - rect.left : event.clientY - rect.top;
-    const center = thumbOffset(orientation) + thumbSize(orientation) / 2;
-    let physicalDirection = coordinate < center ? -1 : 1;
-    if (orientation === "horizontal" && direction() === "rtl") physicalDirection *= -1;
-    setOffset(orientation, offset(orientation) + physicalDirection * viewportSize(orientation));
-    event.preventDefault?.();
+    const travel = Math.max(1, trackSize(orientation) - thumbSize(orientation));
+    const physicalOffset = clamp(coordinate - thumbSize(orientation) / 2, 0, travel);
+    const logicalOffset = orientation === "horizontal" && direction() === "rtl"
+      ? travel - physicalOffset
+      : physicalOffset;
+    setOffset(orientation, logicalOffset * maximum(orientation) / travel);
+    // Keep the pointer captured after the initial scrub so the entire track is
+    // draggable. This is especially useful on touch screens, where acquiring a
+    // narrow thumb precisely is needlessly difficult.
+    beginDrag(orientation, event);
   };
 
   const beginDrag = (orientation: Orientation, event: PointerEvent): void => {
@@ -312,12 +317,12 @@ export function createScrollArea(options: ScrollAreaOptions): ScrollAreaControll
       end(endEvent) {
         if (endEvent && endEvent.pointerId !== state.pointerId) return;
         if (drag !== state) return;
-        try { state.target.releasePointerCapture?.(state.pointerId); } catch { /* Capture may already be gone. */ }
         state.document?.removeEventListener?.("pointermove", state.move as EventListener, true);
         state.document?.removeEventListener?.("pointerup", state.end as EventListener, true);
         state.document?.removeEventListener?.("pointercancel", state.end as EventListener, true);
         drag = null;
         draggingOrientation.value = null;
+        try { state.target.releasePointerCapture?.(state.pointerId); } catch { /* Capture may already be gone. */ }
       },
     };
     drag = state;
@@ -451,18 +456,24 @@ export function createScrollArea(options: ScrollAreaOptions): ScrollAreaControll
         "aria-valuemin": 0,
         "aria-valuemax": () => maximum(orientation),
         "aria-valuenow": () => offset(orientation),
-        "aria-disabled": () => maximum(orientation) <= 0,
+        // Omit the attribute entirely while usable. Some agent/browser
+        // accessibility bridges treat the mere presence of aria-disabled as
+        // disabled even when its serialized value is "false".
+        "aria-disabled": () => maximum(orientation) <= 0 ? true : undefined,
         "aria-hidden": () => scrollbarHidden(orientation) ? true : undefined,
         hidden: () => scrollbarHidden(orientation),
         "data-orientation": orientation,
         "data-visible": () => visible(orientation) ? "" : undefined,
         "data-overflowing": () => maximum(orientation) > 0 ? "" : undefined,
         style: () => ({
+          touchAction: "none",
+          userSelect: "none",
           "--clank-scroll-area-measurement": measurementVersion.value,
           "--clank-scroll-area-thumb-size": px(thumbSize(orientation)),
           "--clank-scroll-area-thumb-offset": px(thumbOffset(orientation)),
         }),
-        onPointerDown: (event: PointerEvent) => pageTrack(orientation, event),
+        onPointerDown: (event: PointerEvent) => beginTrackDrag(orientation, event),
+        onLostPointerCapture: () => clearDrag(),
         onWheel: (event: WheelEvent) => wheel(orientation, event),
         onKeyDown: (event: KeyboardEvent) => keydown(orientation, event),
         use: (element: Element) => bind(element, (next) => {
@@ -497,6 +508,7 @@ export function createScrollArea(options: ScrollAreaOptions): ScrollAreaControll
           "--clank-scroll-area-thumb-offset": px(thumbOffset(orientation)),
         },
         onPointerDown: (event: PointerEvent) => beginDrag(orientation, event),
+        onLostPointerCapture: () => clearDrag(),
         use: (element: Element) => bind(element, (next) => {
           if (next) thumbElements[orientation] = next;
           else delete thumbElements[orientation];

@@ -1777,6 +1777,67 @@ export function createDrawer(options: DrawerOptions): DrawerController {
   }
 }
 
+export interface BottomSheetOptions extends Omit<DrawerOptions, "direction" | "swipeDirection"> {
+  /**
+   * Visible sheet sizes. Defaults to a compact half-height stop and a nearly full-height stop.
+   * Consumers can pass an empty array for a single fully expanded sheet.
+   */
+  snapPoints?: readonly DrawerSnapPoint[];
+}
+
+export interface BottomSheetController extends DrawerController {
+  /** Decorative grab handle that can also be nested inside the swipe area. */
+  handle(): Record<string, unknown>;
+}
+
+/**
+ * Mobile-first dialog surface presented from the bottom edge with safe swipe dismissal,
+ * snap points, focus trapping, scroll locking, and virtual-keyboard measurements.
+ */
+export function createBottomSheet(options: BottomSheetOptions): BottomSheetController {
+  const sheet = createDrawer({
+    ...options,
+    direction: "bottom",
+    swipeDirection: "down",
+    snapPoints: options.snapPoints ?? [0.5, 0.92],
+  });
+  const originalPortal = sheet.portal;
+  const originalBackdrop = sheet.backdrop;
+  const originalViewport = sheet.viewport;
+  const originalPopup = sheet.popup;
+  const originalDialog = sheet.dialog;
+  const originalContent = sheet.content;
+  const originalManifest = sheet.manifest;
+  const decorate = (part: Record<string, unknown>) => mergeProps(part, { "data-clank-bottom-sheet": "" });
+  return Object.assign(sheet, {
+    portal: (portalOptions?: PopupPortalOptions) => decorate(originalPortal(portalOptions)),
+    backdrop: (backdropOptions?: { dismiss?: boolean }) => decorate(originalBackdrop(backdropOptions)),
+    viewport: () => decorate(originalViewport()),
+    popup: (popupOptions?: Parameters<PopupController["popup"]>[0]) => decorate(originalPopup(popupOptions)),
+    dialog: (popupOptions?: Parameters<PopupController["popup"]>[0]) => decorate(originalDialog(popupOptions)),
+    content: (contentOptions?: { swipeIgnore?: boolean }) => decorate(originalContent(contentOptions)),
+    handle: () => ({
+      "aria-hidden": true,
+      "data-clank-part": "handle",
+      "data-clank-bottom-sheet": "",
+    }),
+    manifest: () => {
+      const base = originalManifest();
+      const parts = base.parts.flatMap((part) => part.name === "popup"
+        ? [part, { name: "handle", defaultElement: "div" }]
+        : [part]);
+      return createUiManifest({
+        component: "BottomSheet",
+        id: base.id,
+        state: base.state,
+        parts,
+        actions: base.actions,
+        ...(base.keyboard ? { keyboard: base.keyboard } : {}),
+      });
+    },
+  }) as BottomSheetController;
+}
+
 function popupManifest(component: string, id: string, open: boolean, role?: string): UiManifest {
   const parts = popupParts(component, role);
   return createUiManifest({

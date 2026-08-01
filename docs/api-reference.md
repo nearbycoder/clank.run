@@ -58,12 +58,12 @@ Element protocols include `onClick`/`on:click`, `bind:value`, `classList`, objec
 
 The dependency-free headless library is available from the package root or
 `@clank.run/framework/ui`. Group entry points (`/ui/controls`, `/ui/fields`, and so on) and all
-37 family entry points (`/ui/dialog`, `/ui/number-field`, and so on) are also exported. Family
+39 family entry points (`/ui/dialog`, `/ui/number-field`, and so on) are also exported. Family
 paths are typed aliases to their category modules rather than symbol-isolated bundles. See
 [Headless UI](ui.md) for required markup, behavior, accessibility, forms, SSR, Tailwind, and the
 complete anatomy table.
 
-- Catalog: `UI_COMPONENT_COUNT` (`37`), `UI_COMPONENT_CATALOG`,
+- Catalog: `UI_COMPONENT_COUNT` (`39`), `UI_COMPONENT_CATALOG`,
   `UI_COMPONENT_FACTORIES`, `getUiCatalogEntry()`, `BASE_UI_REFERENCE_VERSION` (`"1.6.0"`), and
   `BASE_UI_REFERENCE_URL`. Types: `UiCatalogEntry`, `UiCatalogModule`, `UiComponentName`,
   `UiComponentSlug`, `UiComponentFactoryName`, `UiComponentNameForSlug`, `UiCatalogEntryFor`,
@@ -86,7 +86,7 @@ complete anatomy table.
   `createTypeahead()`.
 - Agent contracts and data hooks: `createUiManifest()` and `dataState()`.
 - Overlay foundations: `createOverlay()`, `createFloating()`, and `createPresence()`.
-- Popup families: `createAlertDialog()`, `createCollapsible()`, `createDialog()`,
+- Popup families: `createAlertDialog()`, `createBottomSheet()`, `createCollapsible()`, `createDialog()`,
   `createDrawer()`, `createDrawerProvider()`, `createDrawerVirtualKeyboardProvider()`,
   `createPopover()`, `createPreviewCard()`, `createTooltip()`, and `createTooltipProvider()`.
 - Control families: `createAvatar()`, `createButton()`, `createCheckbox()`,
@@ -100,13 +100,23 @@ complete anatomy table.
   `createNumberField()`, `createOtpField()`, and `createSlider()`. `createFormFacade()` is distinct
   from the schema-oriented `createForm()` above.
 - Utility families: `createScrollArea()`, `createToastManager()`, and `createToastProvider()`.
-- Compatibility helpers outside the 37-family catalog: `createDisclosure()`,
-  `createPagination()`, `clickOutside()`, and `autoFocus()`.
+- Navigation families: `createPagination()`.
+- Compatibility helpers outside the 39-family catalog: `createDisclosure()`, `clickOutside()`,
+  and `autoFocus()`.
 
 Common contracts include `ChangeDetails`, `ControllableState`, `UiProps`, `UiRef`, `UiManifest`,
 `UiPartManifest`, `UiActionManifest`, `Direction`, `Orientation`, `OverlayController`,
 `FloatingController`, `PresenceController`, and the family-specific `*Options` and `*Controller`
 types.
+
+- Responsive selection: `SelectionPresentation = "popover" | "bottom-sheet" | "responsive"`
+  is available through `AutocompleteOptions.presentation`, `ComboboxOptions.presentation`, and
+  `SelectOptions.presentation`. Responsive mode uses a positioned popup on desktop and sheet-ready
+  attributes on narrow viewports without changing controller state or rendered content.
+- Bottom Sheet: `BottomSheetOptions` fixes the Drawer motion axis to the bottom edge while retaining
+  modal behavior, snap points, swipe handling, and the `BottomSheetController` handle part.
+- Pagination: `PaginationOptions` and `PaginationController` expose bounded page state, page-size
+  changes, first/previous/next/last actions, a status live region, and semantic page buttons.
 
 - Popup presence: `PopupOptions.keepMounted`, `PopupPortalOptions { keepMounted? }`,
   `PopupController.isMounted(options?)`, and `portal(options?)`. Popup-backed collection and

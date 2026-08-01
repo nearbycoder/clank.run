@@ -149,9 +149,10 @@ applications do not need a separate runtime compiler or bundler.
 
 ## A complete headless UI, already included
 
-Clank includes a zero-dependency, Clank-native headless library aligned to the 37 component
-families and canonical anatomy in Base UI 1.6. It is not a React compatibility layer: factories
-return reactive controllers and DOM props that work directly with Clank TSX.
+Clank includes a zero-dependency, Clank-native headless library with all 37 Base UI 1.6 families
+plus native Bottom Sheet and Pagination controllers: 39 documented families in total. It is not a
+React compatibility layer; factories return reactive controllers and DOM props that work directly
+with Clank TSX.
 
 ```tsx
 import { Portal, Show, onMount } from "@clank.run/framework/dom";
@@ -205,7 +206,7 @@ inspectable surface instead of hiding behavior in generated component code.
 | Layer | Features |
 | --- | --- |
 | Reactivity | Signals, lazy computed values, effects with cleanup, batching, rollback transactions, untracked reads, owned roots, deep proxy stores, snapshots, async resources, stream reduction |
-| UI | Typed compiler-powered TSX, automatic reactive expressions and props, keyed lists, stable text nodes, lifecycle/context, a 37-family dependency-free headless catalog, native form parts, overlays, portals, RTL, SSR/hydration, agent manifests, directives, `Show`, `For`, `Switch`, and lazy components |
+| UI | Typed compiler-powered TSX, automatic reactive expressions and props, keyed lists, stable text nodes, lifecycle/context, a 39-family dependency-free headless catalog, native form parts, responsive bottom sheets, overlays, portals, RTL, SSR/hydration, agent manifests, directives, `Show`, `For`, `Switch`, and lazy components |
 | Forms | Schema validation, typed fields, accessible control/error props, touched/dirty state, cross-field rules, cancellation, server errors, invalid-focus behavior, reset, agent-readable manifests |
 | AI | Approval-bound conversational application composition, signed exact-version blueprint registries, web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, per-user agent access inboxes and revocable scoped grants, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface, and isolated real-browser journeys with secret-value redaction |
 | UI↔MCP parity | Typed `agentAction` function references, bounded SSR/DOM inspection, manifest and revision verification, stable-control enforcement, structured mismatch reports |

@@ -1,11 +1,12 @@
 # Headless UI
 
-Clank includes a dependency-free headless UI library aligned to the complete 37-family
-[Base UI 1.6 component catalog](https://base-ui.com/react/components). The implementation records
-`BASE_UI_REFERENCE_VERSION` as `1.6.0`, and every catalog record links to the corresponding
-upstream anatomy page. The API is intentionally Clank-native rather than a React or Base UI
-drop-in: factories return reactive controllers and ordinary DOM prop getters instead of React
-components.
+Clank includes a dependency-free headless UI library with the complete 37-family
+[Base UI 1.6 component catalog](https://base-ui.com/react/components) plus Clank-native Bottom
+Sheet and Pagination families, for 39 documented families in total. The implementation records
+`BASE_UI_REFERENCE_VERSION` as `1.6.0`; Base UI-derived records link to their upstream anatomy and
+Clank extensions identify their closest pattern reference. The API is intentionally Clank-native
+rather than a React or Base UI drop-in: factories return reactive controllers and ordinary DOM
+prop getters instead of React components.
 
 The library owns state transitions, ARIA relationships, keyboard behavior, focus, form projection, presence, and positioning. Your application owns the elements, content, Tailwind classes, and visual design.
 
@@ -63,7 +64,7 @@ Every catalog slug in the table below has a matching `@clank.run/framework/ui/<s
 Foundation, composition, overlay, popups, controls, selection, collections, fields, utilities,
 catalog, and legacy group paths are available as well. The root package also re-exports the UI
 surface; use `/ui` or a focused subpath when import intent matters. Family paths are stable typed
-aliases to six category modules, not 37 symbol-isolated bundles, so a namespace import from
+aliases to seven category modules, not 39 symbol-isolated bundles, so a namespace import from
 `/ui/button` can also see neighboring control exports.
 
 ## The controller and part model
@@ -400,6 +401,13 @@ do not intercept Ctrl+wheel, preserving browser zoom. A mounted viewport receive
 `data-clank-scroll-area-viewport`; Clank uses that hook for its nonce-aware, deduplicated WebKit
 scrollbar-hiding rule.
 
+The rendered thumb and the full track are pointer-draggable. Pressing the track first scrubs the
+thumb center to that position, then captures the pointer so the same gesture can continue. Both
+parts set touch-action and selection safeguards as behavioral inline styles; application CSS may
+make the visual rail narrower while preserving a generous hit target. When overflow exists Clank
+omits `aria-disabled` entirely, avoiding accessibility bridges that interpret a serialized
+`aria-disabled="false"` as unavailable.
+
 ### Nullable tabs
 
 Tabs accept `value`, `defaultValue`, and `select()` values of `Value | null`. A `null` value leaves
@@ -443,6 +451,44 @@ so clicking even an empty editable input opens its list. Autocomplete defaults i
 highlight when the pointer leaves that item by default. Set `keepHighlight: true` to preserve it.
 Touch pointer movement never creates a hover highlight.
 
+### Responsive searchable selection
+
+Select, Combobox, and Autocomplete accept
+`presentation: "popover" | "bottom-sheet" | "responsive"`. The option is a stable rendering hint:
+each portal, backdrop, positioner, and popup receives `data-selection-presentation`, while the
+controller keeps one SSR-safe DOM contract. Use CSS media queries to render `"responsive"` as an
+anchored popover on larger screens and a full-width bottom sheet on smaller screens. There is no
+viewport branch during render, so hydration does not replace the selection tree.
+
+Combobox and Autocomplete can render a second synchronized search input inside that sheet with
+`input({ insidePopup: true, ariaLabel })`. It gets a unique ID and never duplicates the native form
+field. `trigger({ standalone: true })` gives Combobox a Select-like button while retaining a real
+filterable list. Opening that standalone single Combobox clears only its transient query so all
+options are visible; the committed value and trigger label remain intact:
+
+```tsx
+const workspace = createCombobox({
+  id: "workspace",
+  items: workspaces,
+  presentation: "responsive",
+  autoHighlight: true,
+});
+
+<button {...workspace.trigger({ standalone: true })}>
+  <span {...workspace.valuePart({ placeholder: "Choose a workspace" })} />
+</button>
+
+// Inside workspace.popup():
+<input
+  {...workspace.input({ insidePopup: true, ariaLabel: "Search workspaces" })}
+  placeholder="Type to filter…"
+/>
+```
+
+Prefer Select for a short, immediately scannable list. Prefer Combobox for longer or filterable
+choices; the mobile bottom sheet should keep its search input visible, use at least 44px option
+targets, constrain its list with `dvh`, and include safe-area bottom padding.
+
 Filtered lists preserve the highlighted item's declared value identity rather than a transient
 filtered index. `aria-activedescendant` always uses the item's canonical declared ID and disappears
 when filtering removes or disables that item. Values are equally strict: initial, controlled,
@@ -480,6 +526,30 @@ rolls back without committing. `dismissible: false` retains the drawer at its ne
 Application CSS consumes `--drawer-snap-point-offset`, `--drawer-swipe-progress`,
 `--drawer-swipe-strength`, and the axis movement variables. The controller provides measurements
 and state, not the transform or transition theme.
+
+### Bottom Sheet
+
+`createBottomSheet()` is the Clank-native bottom-edge specialization of Drawer. It fixes direction
+to bottom, swipe dismissal to down, defaults to compact and expanded snap points, exposes a
+decorative `handle()` part, and identifies its manifest as `BottomSheet`. All Dialog and Drawer
+focus, dismissal, nesting, inerting, scroll-lock, measurement, and cancellation guarantees remain
+available.
+
+```tsx
+const sheet = createBottomSheet({
+  id: "project-actions",
+  snapPoints: [0.5, 0.92],
+  defaultSnapPoint: 0.5,
+});
+
+<button {...sheet.trigger()}>Project actions</button>
+<section {...sheet.dialog()} class="fixed inset-x-0 bottom-0 rounded-t-3xl">
+  <div {...sheet.swipeArea()}>
+    <span {...sheet.handle()} />
+  </div>
+  <h2 {...sheet.title()}>Project actions</h2>
+</section>
+```
 
 ### Toast swipe ownership
 
@@ -669,7 +739,7 @@ Sensitive values receive extra treatment. Password Input manifests report `[reda
 
 For code generation and inspection, the `/ui/catalog` entry point exposes:
 
-- `UI_COMPONENT_COUNT`, fixed at `37`;
+- `UI_COMPONENT_COUNT`, fixed at `39`;
 - `BASE_UI_REFERENCE_VERSION` (`"1.6.0"`) and the pinned upstream release URL;
 - immutable `UI_COMPONENT_CATALOG` records with name, slug, factory, module, canonical parts,
   form association, description, `referenceVersion`, and per-family `referenceUrl`;
@@ -680,7 +750,7 @@ For code generation and inspection, the `/ui/catalog` entry point exposes:
 
 Use this inventory instead of maintaining a second hard-coded family list in an agent.
 
-## Complete 37-family catalog
+## Complete 39-family catalog
 
 Part names below are the immutable canonical `UI_COMPONENT_CATALOG.parts` values, not necessarily
 JavaScript method spellings. Hyphenated `scrub-area` maps to `scrubArea()`, for example; `value`
@@ -694,6 +764,7 @@ repeated parts once per declared item, option, thumb, or toast as appropriate.
 | **Alert Dialog** | `createAlertDialog()` | `trigger`, `portal`, `backdrop`, `viewport`, `popup`, `title`, `description`, `close` | Modal `alertdialog`, focus trap/restoration, inert background, scroll lock, and top-layer Escape. Outside and backdrop presses never dismiss it. |
 | **Autocomplete** | `createAutocomplete()` | `label`, `input-group`, `input`, `trigger`, `icon`, `clear`, `value`, `portal`, `backdrop`, `positioner`, `popup`, `arrow`, `status`, `empty`, `list`, `row`, `item`, `separator`, `group`, `group-label`, `collection` | Free-form native input with canonical active-descendant suggestions, custom or locale-aware filtering, four completion modes, typed Field composition, explicit popup presence, opt-in input-click opening, and configurable pointer-leave highlighting. Single mode submits the input directly. |
 | **Avatar** | `createAvatar()` | `root`, `image`, `fallback` | Controlled or uncontrolled `idle`, `loading`, `loaded`, and `error` status; image load/error wiring; an accessible fallback that remains exposed when visible; SSR-safe initial state. |
+| **Bottom Sheet** | `createBottomSheet()` | `provider`, `indent-background`, `indent`, `trigger`, `swipe-area`, `portal`, `backdrop`, `viewport`, `popup`, `handle`, `content`, `title`, `description`, `close`, `virtual-keyboard-provider` | Bottom-edge Drawer specialization with compact/expanded default snaps, downward swipe dismissal, a stable handle part, modal focus/inerting/scroll-lock behavior, safe-area-friendly markup, and the complete Drawer measurement and cancellation contract. |
 | **Button** | `createButton()` | `root` | Native-first cancelable press handling, disabled or focusable-disabled behavior, form attributes, and correct Enter-keydown/Space-keyup activation for a custom element. |
 | **Checkbox** | `createCheckbox()` | `root`, `indicator`, `input`, `unchecked-input` | Checked, unchecked, and indeterminate state; Space activation; native checkbox synchronization, optional explicit unchecked projection, submission, required state, and form reset. |
 | **Checkbox Group** | `createCheckboxGroup()` | `root`, `parent`, `parent-indicator`, `item`, `indicator`, `input` | Ordered multiple values, checked/mixed “select all” parent APIs, per-item disabled/read-only state, one-or-more native required validation, repeated form values, and reset coordination. |
@@ -712,11 +783,12 @@ repeated parts once per declared item, option, thumb, or toast as appropriate.
 | **Navigation Menu** | `createNavigationMenu()` | `root`, `list`, `item`, `trigger`, `icon`, `content`, `link`, `portal`, `backdrop`, `positioner`, `popup`, `arrow`, `viewport`, `indicator` | Trigger flyouts and current links, explicit popup naming, delayed hover intent without focus theft, external-focus dismissal, opt-in link closing, roving/typeahead with disabled recovery, orientation/RTL, collision-aware position, measured viewport/indicator, active-content focus, and Escape restoration. |
 | **Number Field** | `createNumberField()` | `root`, `scrub-area`, `scrub-area-cursor`, `group`, `decrement`, `input`, `increment` | Locale-aware nullable input whose first step seeds zero before bounds are applied, min/max and snapping, regular/small/large steps, keyboard and opt-in focused-wheel input, repeating held step buttons, pointer scrubbing, and commit callbacks. |
 | **OTP Field** | `createOtpField()` | `root`, `input`, `separator`, `hidden-input` | Numeric/alpha/alphanumeric/regex/custom normalization, paste distribution, masking, RTL navigation, deletion, logical first-slot labeling, exact completion notifications, cancelable optional form submit, one native form value, and manifest redaction. |
+| **Pagination** | `createPagination()` | `root`, `status`, `previous`, `page`, `ellipsis`, `next`, `page-size` | Responsive semantic navigation with clamped pages and page sizes, compact sibling/ellipsis ranges, current-page and disabled relationships, native page-size selection, machine-readable status, and agent manifest actions. |
 | **Popover** | `createPopover()` | `trigger`, `portal`, `backdrop`, `positioner`, `popup`, `arrow`, `viewport`, `title`, `description`, `close` | Non-modal anchored popup by default, explicit conditional/kept-mounted portal presence, configurable dismissal/focus, collision-aware placement and arrow, optional hover opening, and focus restoration. |
 | **Preview Card** | `createPreviewCard()` | `trigger`, `portal`, `backdrop`, `positioner`, `popup`, `arrow`, `viewport` | Non-modal sighted-user preview with delayed pointer/focus opening and delayed closing that permits pointer travel into the popup. It does not replace accessible trigger content. |
 | **Progress** | `createProgress()` | `root`, `label`, `track`, `indicator`, `value` | Determinate or `null` indeterminate progress, clamped values, progressbar ARIA, status hooks, optional value text, and a percentage CSS variable. |
 | **Radio** | `createRadioGroup()` | `root`, `item`, `indicator`, `input` | Single selection, roving focus with internal Field-focus containment, orientation-aware arrows, Home/End, disabled/read-only items, native radio submission and required validation, and reset. |
-| **Scroll Area** | `createScrollArea()` | `root`, `viewport`, `content`, `scrollbar`, `thumb`, `corner` | Native scrolling with independently named accessible tracks, two-axis measurement, resize updates, keyboard/wheel/track/thumb input, Ctrl+wheel zoom preservation, boundary scroll chaining, touch preservation, normalized RTL browser models, and a deduplicated WebKit scrollbar-hiding rule. |
+| **Scroll Area** | `createScrollArea()` | `root`, `viewport`, `content`, `scrollbar`, `thumb`, `corner` | Native scrolling with independently named accessible tracks, two-axis measurement, resize updates, keyboard/wheel input, full-track scrubbing and dragging, thumb pointer capture, Ctrl+wheel zoom preservation, boundary scroll chaining, touch preservation, normalized RTL browser models, and a deduplicated WebKit scrollbar-hiding rule. |
 | **Select** | `createSelect()` | `label`, `trigger`, `value`, `icon`, `portal`, `backdrop`, `positioner`, `popup`, `scroll-up-arrow`, `arrow`, `list`, `item`, `item-text`, `item-indicator`, `separator`, `group`, `group-label`, `scroll-down-arrow`, `form-control`, `hidden-input` | Strict single or multiple listbox selection, closed single-select typeahead, typed Field composition with popup-focus containment, mount-aware labels, explicit popup presence, disabled options, looping arrows, Home/End, grouping, modal behavior by default, and mount-stable serialized form values. |
 | **Separator** | `createSeparator()` | `root` | Horizontal or vertical semantic separator, or a decorative presentation-only separator, with orientation hooks. |
 | **Slider** | `createSlider()` | `root`, `label`, `value`, `control`, `track`, `indicator`, `thumb`, `input` | Single or multi-thumb values, per-thumb accessible name/value-text APIs, mount-aware shared labels, atomic cancelable pointer gestures and thumb swaps, full keyboard input, RTL/vertical geometry, native range projection, min gaps, collision policies, and commit callbacks. |
@@ -751,7 +823,7 @@ The public UI entry point also exposes the lower-level building blocks used by t
 | `dataState()` | A common `data-state` plus Base UI-style boolean data flags. |
 | `createUiManifest()` | Validation, cloning, freezing, and serialization of `clank-ui/1` manifests. |
 
-Use these foundations when a product needs a new interaction pattern that is not one of the 37 families. Reusing them keeps cancellation, ownership, RTL, focus, and agent semantics consistent with the built-in catalog.
+Use these foundations when a product needs a new interaction pattern that is not one of the 39 families. Reusing them keeps cancellation, ownership, RTL, focus, and agent semantics consistent with the built-in catalog.
 
 ## Lifecycle and cleanup
 
@@ -805,12 +877,11 @@ fresh state snapshot is needed.
 
 ## Compatibility helpers
 
-The UI entry point retains four older helpers outside the 37-family catalog:
+The UI entry point retains three older helpers outside the 39-family catalog:
 
 - `createDisclosure()` preserves the original `initialOpen`/`onChange` API. New code should use `createCollapsible()`.
-- `createPagination()` provides clamped pagination state and a compact page/ellipsis range.
 - `clickOutside()` is a captured pointer directive for a simple non-layered region. Popup families should use their shared overlay behavior instead.
-- `autoFocus` focuses a connected element in the next microtask.
+- `autoFocus()` focuses a connected element in the next microtask.
 
 ## Verification
 
@@ -829,7 +900,7 @@ npm run check
 npm pack --dry-run --json --ignore-scripts
 ```
 
-The catalog tests compare all 37 immutable catalog records with live controller manifests, import
+The catalog tests compare all 39 immutable catalog records with live controller manifests, import
 every family subpath, and reject non-local UI imports or package dependency fields. Focused suites
 cover state, cancellation, keyboard dispatch, focus/overlay behavior, gestures, forms/reset,
 floating/presence, portals, SSR, and hydration. `npm run check` additionally builds the docs,

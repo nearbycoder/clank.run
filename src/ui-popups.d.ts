@@ -239,3 +239,11 @@ export interface DrawerController extends DialogController {
   swipeArea(options?: DrawerSwipeAreaOptions): Record<string, unknown>;
 }
 export declare function createDrawer(options: DrawerOptions): DrawerController;
+
+export interface BottomSheetOptions extends Omit<DrawerOptions, "direction" | "swipeDirection"> {
+  snapPoints?: readonly DrawerSnapPoint[];
+}
+export interface BottomSheetController extends DrawerController {
+  handle(): Record<string, unknown>;
+}
+export declare function createBottomSheet(options: BottomSheetOptions): BottomSheetController;

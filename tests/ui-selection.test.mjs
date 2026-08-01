@@ -256,6 +256,58 @@ test("editable input-click and Autocomplete pointer-leave defaults match their f
   kept.dispose();
 });
 
+test("responsive selection surfaces expose SSR-stable sheet hooks and synchronized popup search", async () => {
+  const select = createSelect({ id: "responsive-select", items, presentation: "responsive" });
+  for (const part of [select.portal(), select.backdrop(), select.positioner(), select.popup()]) {
+    assert.equal(part["data-selection-presentation"], "responsive");
+  }
+  assert.equal(select.manifest().state.presentation, "responsive");
+  select.dispose();
+
+  const box = createCombobox({
+    id: "responsive-box",
+    items,
+    defaultValue: "apple",
+    presentation: "responsive",
+  });
+  const primary = box.input();
+  const popupSearch = box.input({ insidePopup: true, ariaLabel: "Search fruit" });
+  const trigger = box.trigger({ standalone: true, agentId: "choose-fruit" });
+  assert.equal(primary.id, "responsive-box-input");
+  assert.equal(popupSearch.id, "responsive-box-popup-input");
+  assert.equal(popupSearch.name, undefined);
+  assert.equal(popupSearch.required, undefined);
+  assert.equal(popupSearch["data-inside-popup"], "");
+  assert.equal(popupSearch["aria-label"], "Search fruit");
+  assert.equal(trigger.role, "combobox");
+  assert.equal(trigger.tabIndex, 0);
+  assert.equal(trigger["data-standalone"], "");
+  assert.equal(trigger.agentId, "choose-fruit");
+
+  const primaryElement = { value: "Ápple", form: null, ownerDocument: { getElementById() { return null; } }, closest() { return null; } };
+  let popupFocusCount = 0;
+  const popupElement = { value: "Ápple", focus() { popupFocusCount++; } };
+  primary.ref(primaryElement);
+  popupSearch.ref(popupElement);
+  popupElement.value = "ban";
+  popupSearch.onInput({ ...event(), currentTarget: popupElement });
+  assert.equal(box.inputValue.value, "ban");
+  assert.equal(primaryElement.value, "ban", "every mounted rendering stays synchronized");
+  assert.deepEqual(box.filteredItems.value.map((item) => item.value), ["banana"]);
+  assert.equal(box.open.value, true, "typing into sheet search opens the result surface");
+  box.hide();
+  trigger.onClick(event());
+  await Promise.resolve();
+  assert.equal(box.open.value, true);
+  assert.equal(box.inputValue.value, "", "opening standalone mode starts with an unfiltered query");
+  assert.equal(popupElement.value, "");
+  assert.equal(box.filteredItems.value.length, items.length);
+  assert.ok(popupFocusCount > 0, "opening the standalone trigger focuses sheet search");
+  popupSearch.ref(null);
+  primary.ref(null);
+  box.dispose();
+});
+
 test("standalone selection labels are referenced only while their parts are requested or mounted", () => {
   const select = createSelect({ id: "optional-label-select", items });
   const trigger = select.trigger();

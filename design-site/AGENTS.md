@@ -25,5 +25,5 @@ downstream applications use.
 ## Definition of done
 
 Run `npm run build`, `npm run doctor`, and `npm run deploy:check`. Verify the overview, theme lab,
-all 37 component routes, direct SSR, hydration, theme switching, viewport controls, search, dialogs,
+all 39 component routes, direct SSR, hydration, theme switching, viewport controls, search, dialogs,
 menus, selection, forms, portal styling, the JSON catalog, MCP discovery, and mobile layout.

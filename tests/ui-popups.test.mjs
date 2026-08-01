@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createAlertDialog,
+  createBottomSheet,
   createCollapsible,
   createDialog,
   createDrawer,
@@ -242,6 +243,27 @@ test("drawer swipe state is direction-aware and dismisses beyond its threshold",
   assert.equal(drawer.open.value, false);
   assert.equal(drawer.dragOffset.value, 0);
   drawer.dispose();
+});
+
+test("BottomSheet specializes Drawer with safe defaults and a stable handle contract", () => {
+  const sheet = createBottomSheet({ id: "project-actions", defaultOpen: true });
+  const manifest = sheet.manifest();
+  assert.equal(manifest.component, "BottomSheet");
+  assert.equal(manifest.state.direction, "bottom");
+  assert.equal(manifest.state.swipeDirection, "down");
+  assert.deepEqual(manifest.state.snapPoints, [0.5, 0.92]);
+  assert.deepEqual(
+    manifest.parts.map((part) => part.name),
+    ["provider", "indent-background", "indent", "trigger", "swipe-area", "portal", "backdrop", "viewport", "popup", "handle", "content", "title", "description", "close", "virtual-keyboard-provider"],
+  );
+  assert.equal(sheet.handle()["data-clank-part"], "handle");
+  assert.equal(sheet.handle()["data-clank-bottom-sheet"], "");
+  assert.equal(sheet.handle()["aria-hidden"], true);
+  for (const part of [sheet.portal(), sheet.backdrop(), sheet.viewport(), sheet.popup(), sheet.content()]) {
+    assert.equal(part["data-clank-bottom-sheet"], "");
+  }
+  assert.equal(sheet.swipeArea()["data-swipe-direction"], "up");
+  sheet.dispose();
 });
 
 test("popup manifests and part props match Base UI anatomy without dangling relationships", () => {

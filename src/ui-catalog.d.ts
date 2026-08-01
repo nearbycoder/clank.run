@@ -31,6 +31,7 @@ import {
 } from "./ui-fields.js";
 import {
     createAlertDialog,
+    createBottomSheet,
     createCollapsible,
     createDialog,
     createDrawer,
@@ -40,6 +41,7 @@ import {
 } from "./ui-popups.js";
 import { createAutocomplete, createCombobox, createSelect } from "./ui-selection.js";
 import { createScrollArea, createToastProvider } from "./ui-utilities.js";
+import { createPagination } from "./ui-legacy.js";
 
 /** The upstream release whose component inventory and anatomy Clank tracks. */
 export declare const BASE_UI_REFERENCE_VERSION: "1.6.0";
@@ -51,6 +53,7 @@ export type UiComponentContractMap = Readonly<{
     readonly AlertDialog: readonly ["alert-dialog", "createAlertDialog", "popups"];
     readonly Autocomplete: readonly ["autocomplete", "createAutocomplete", "selection"];
     readonly Avatar: readonly ["avatar", "createAvatar", "controls"];
+    readonly BottomSheet: readonly ["bottom-sheet", "createBottomSheet", "popups"];
     readonly Button: readonly ["button", "createButton", "controls"];
     readonly Checkbox: readonly ["checkbox", "createCheckbox", "controls"];
     readonly CheckboxGroup: readonly ["checkbox-group", "createCheckboxGroup", "controls"];
@@ -69,6 +72,7 @@ export type UiComponentContractMap = Readonly<{
     readonly NavigationMenu: readonly ["navigation-menu", "createNavigationMenu", "collections"];
     readonly NumberField: readonly ["number-field", "createNumberField", "fields"];
     readonly OTPField: readonly ["otp-field", "createOtpField", "fields"];
+    readonly Pagination: readonly ["pagination", "createPagination", "legacy"];
     readonly Popover: readonly ["popover", "createPopover", "popups"];
     readonly PreviewCard: readonly ["preview-card", "createPreviewCard", "popups"];
     readonly Progress: readonly ["progress", "createProgress", "controls"];
@@ -102,10 +106,9 @@ export type UiCatalogEntry<Name extends UiComponentName = UiComponentName> = Nam
     parts: readonly string[];
     formAssociated: boolean;
     description: string;
-    /** Canonical upstream anatomy/API page used for this compatibility surface. */
-    referenceUrl: `https://base-ui.com/react/components/${UiComponentContractMap[Name][0]}`;
-    /** Upstream release used when this entry was authored and verified. */
-    referenceVersion: typeof BASE_UI_REFERENCE_VERSION;
+    source: "base-ui" | "clank";
+    referenceUrl: string;
+    referenceVersion: string;
 }> : never;
 
 /** Resolves a canonical family name or slug to its exact catalog entry type. */
@@ -117,6 +120,7 @@ export type UiComponentFactoryMap = Readonly<{
     readonly AlertDialog: typeof createAlertDialog;
     readonly Autocomplete: typeof createAutocomplete;
     readonly Avatar: typeof createAvatar;
+    readonly BottomSheet: typeof createBottomSheet;
     readonly Button: typeof createButton;
     readonly Checkbox: typeof createCheckbox;
     readonly CheckboxGroup: typeof createCheckboxGroup;
@@ -135,6 +139,7 @@ export type UiComponentFactoryMap = Readonly<{
     readonly NavigationMenu: typeof createNavigationMenu;
     readonly NumberField: typeof createNumberField;
     readonly OTPField: typeof createOtpField;
+    readonly Pagination: typeof createPagination;
     readonly Popover: typeof createPopover;
     readonly PreviewCard: typeof createPreviewCard;
     readonly Progress: typeof createProgress;
@@ -154,6 +159,6 @@ export type UiComponentFactoryMap = Readonly<{
 
 export declare const UI_COMPONENT_FACTORIES: UiComponentFactoryMap;
 export declare const UI_COMPONENT_CATALOG: readonly UiCatalogEntry[];
-export declare const UI_COMPONENT_COUNT: 37;
+export declare const UI_COMPONENT_COUNT: 39;
 
 export declare function getUiCatalogEntry<Key extends string>(nameOrSlug: Key): UiCatalogEntryFor<Key>;

@@ -146,6 +146,14 @@ test("pagination clamps changing totals and emits compact page ranges", () => {
   assert.deepEqual(pagination.pages.value, [1, "ellipsis", 9, 10, 11, "ellipsis", 20]);
   assert.equal(pagination.start.value, 91);
   assert.equal(pagination.end.value, 100);
+  assert.equal(pagination.root({ label: "Audit events" }).role, "navigation");
+  assert.equal(pagination.root({ label: "Audit events" })["aria-label"], "Audit events");
+  assert.equal(pagination.status().children(), "91–100 of 200");
+  assert.equal(pagination.pageButton(10)["aria-current"](), "page");
+  assert.equal(pagination.previousButton().disabled(), false);
+  assert.equal(pagination.nextButton().disabled(), false);
+  assert.equal(pagination.manifest().component, "Pagination");
+  assert.deepEqual(pagination.manifest().parts.map((part) => part.name), ["root", "status", "previous", "page", "ellipsis", "next", "page-size"]);
 
   total.value = 12;
   assert.equal(pagination.page.value, 2);
@@ -154,5 +162,8 @@ test("pagination clamps changing totals and emits compact page ranges", () => {
   assert.equal(pagination.end.value, 12);
   pagination.previous();
   assert.equal(pagination.page.value, 1);
+  pagination.pageSizeSelect().onChange({ currentTarget: { value: "25" } });
+  assert.equal(pagination.pageSize.value, 25);
+  assert.equal(pagination.status().children(), "1–12 of 12");
   pagination.dispose();
 });

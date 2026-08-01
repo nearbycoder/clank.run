@@ -5,6 +5,7 @@ import {
   createAlertDialog,
   createAutocomplete,
   createAvatar,
+  createBottomSheet,
   createButton,
   createCheckbox,
   createCheckboxGroup,
@@ -23,6 +24,7 @@ import {
   createNavigationMenu,
   createNumberField,
   createOtpField,
+  createPagination,
   createPopover,
   createPreviewCard,
   createProgress,
@@ -44,6 +46,15 @@ const optionItems = [
   { value: "design", label: "Design systems" },
   { value: "agents", label: "Agent interfaces" },
   { value: "platform", label: "Deployment platforms" },
+  { value: "auth", label: "Authentication", keywords: ["login", "security"] },
+  { value: "data", label: "Databases", keywords: ["sqlite", "storage"] },
+  { value: "realtime", label: "Realtime collaboration", keywords: ["live", "sync"] },
+  { value: "jobs", label: "Background jobs", keywords: ["queue", "cron"] },
+  { value: "analytics", label: "Product analytics", keywords: ["metrics", "funnels"] },
+  { value: "billing", label: "Usage billing", keywords: ["plans", "payments"] },
+  { value: "domains", label: "Custom domains", keywords: ["dns", "tls"] },
+  { value: "mcp", label: "Agent protocol", keywords: ["mcp", "tools"] },
+  { value: "observability", label: "Observability", keywords: ["logs", "traces"] },
 ] as const;
 const collectionItems = [
   { value: "overview", textValue: "Overview" },
@@ -165,26 +176,32 @@ export function AlertDialogStory() {
 
 function EditableSelectionStory(props: { mode: "autocomplete" | "combobox" }) {
   const selection = props.mode === "autocomplete"
-    ? createAutocomplete({ id: "story-autocomplete", items: optionItems, completionMode: "both", autoHighlight: true })
-    : createCombobox({ id: "story-combobox", items: optionItems, defaultValue: "design" });
+    ? createAutocomplete({ id: "story-autocomplete", items: optionItems, completionMode: "both", autoHighlight: true, openOnInputClick: true, presentation: "responsive" })
+    : createCombobox({ id: "story-combobox", items: optionItems, defaultValue: "design", autoHighlight: true, presentation: "responsive" });
   cleanup(selection);
+  const searchLabel = props.mode === "autocomplete" ? "Search topics" : "Search workspaces";
   return (
     <div class="demo-field-stack wide-control">
-      <label {...selection.label()} class="demo-label">{props.mode === "autocomplete" ? "Search topics" : "Choose a workspace"}</label>
-      <div {...selection.inputGroup()} class="combo-group">
-        <input {...selection.input()} class="demo-input" placeholder={props.mode === "autocomplete" ? "Start typing…" : "Select a workspace"} />
-        <button {...selection.clear()} class="icon-button" aria-label="Clear">×</button>
-        <button {...selection.trigger()} class="icon-button" aria-label="Open options"><Chevron /></button>
-      </div>
-      <span {...selection.status()} class="demo-status" />
+      <label {...selection.label()} class="demo-label">{props.mode === "autocomplete" ? "Explore capabilities" : "Primary workspace"}</label>
+      <Show
+        when={() => props.mode === "combobox"}
+        fallback={<div {...selection.inputGroup()} class="combo-group"><input {...selection.input()} class="demo-input" placeholder="Start typing…" /><button {...selection.clear()} class="icon-button" aria-label="Clear">×</button><button {...selection.trigger()} class="icon-button" aria-label="Open options"><Chevron /></button></div>}
+      >
+        <button {...selection.trigger({ standalone: true })} class="select-trigger combo-select-trigger"><span {...selection.valuePart({ placeholder: "Choose a workspace" })} /><span {...selection.icon()}><Chevron /></span></button>
+      </Show>
       <For each={selection.hiddenInputs()}>{(input) => <HiddenInput {...input} />}</For>
       <Show when={() => selection.isMounted()}>
         <Portal>
-          <div {...selection.portal()} class="portal-root">
-            <div {...selection.positioner()} class="floating-positioner">
-              <div {...selection.popup()} class="demo-floating selection-popup">
-                <div {...selection.list()}>
-                  <For each={selection.filteredItems} by="value" fallback={<div {...selection.empty()} class="empty-option">No matching topics</div>}>
+          <div {...selection.portal()} class="portal-root selection-portal">
+            <div {...selection.backdrop()} class="selection-backdrop" />
+            <div {...selection.positioner()} class="floating-positioner selection-positioner">
+              <div {...selection.popup()} class="demo-floating selection-popup adaptive-selection-popup">
+                <div class="selection-sheet-handle" aria-hidden="true"><span /></div>
+                <div class="selection-sheet-header"><div><small>{props.mode === "autocomplete" ? "Free-form search" : "Choose one"}</small><strong>{searchLabel}</strong></div><button type="button" class="selection-sheet-close" aria-label="Close options" onClick={(event: Event) => selection.hide("close-press", event)}>×</button></div>
+                <div class="selection-popup-search"><span aria-hidden="true">⌕</span><input {...selection.input({ insidePopup: true, ariaLabel: searchLabel })} placeholder="Type to filter…" /></div>
+                <span {...selection.status()} class="demo-status selection-result-status" />
+                <div {...selection.list()} class="selection-list">
+                  <For each={selection.filteredItems} by="value" fallback={<div {...selection.empty()} class="empty-option">No matching capabilities</div>}>
                     {(item) => <div {...selection.item(item.value)} class="demo-option"><span>{item.label}</span><span {...selection.itemIndicator(item.value)}><CheckGlyph /></span></div>}
                   </For>
                 </div>
@@ -212,12 +229,26 @@ export function AvatarStory() {
   );
 }
 
+export function BottomSheetStory() {
+  const sheet = createBottomSheet({
+    id: "story-bottom-sheet",
+    modal: true,
+    snapPoints: [0.48, 0.9],
+    defaultSnapPoint: 0.48,
+  });
+  cleanup(sheet);
+  const destinations = ["Production", "Preview", "Local development"];
+  return <><button {...sheet.trigger()} class="demo-button">Choose environment</button><Show when={() => sheet.isMounted()}><Portal><div {...sheet.portal()} class="portal-root"><div {...sheet.backdrop()} class="demo-backdrop" /><div {...sheet.viewport()} class="bottom-sheet-viewport"><section {...sheet.dialog()} class="demo-bottom-sheet"><div {...sheet.swipeArea()} class="bottom-sheet-swipe"><span {...sheet.handle()} class="bottom-sheet-handle" /></div><div class="bottom-sheet-header"><div><span class="eyebrow">Deploy target</span><h3 {...sheet.title()}>Choose environment</h3><p {...sheet.description()}>A thumb-friendly surface with compact and expanded snap points.</p></div><button {...sheet.close()} class="dialog-close" aria-label="Close">×</button></div><div {...sheet.content()} class="bottom-sheet-content"><div class="bottom-sheet-variants"><button type="button" onClick={() => sheet.setSnapPoint(0.48)}>Compact</button><button type="button" onClick={() => sheet.setSnapPoint(0.9)}>Expanded</button></div><div class="bottom-sheet-options"><For each={destinations}>{(destination, index) => <button type="button" onClick={(event: Event) => sheet.hide("close-press", event)}><span>{index() === 0 ? "●" : index() === 1 ? "◐" : "○"}</span><span><strong>{destination}</strong><small>{index() === 0 ? "Live customer traffic" : index() === 1 ? "Pull request releases" : "Your current machine"}</small></span><i>→</i></button>}</For></div></div></section></div></div></Portal></Show></>;
+}
+
 export function ButtonStory() {
   const result = signal("");
   const primary = createButton({ id: "story-button-primary", onPress: () => { result.value = "Deploy started."; } });
   const secondary = createButton({ id: "story-button-secondary", onPress: () => { result.value = "Draft saved."; } });
+  const danger = createButton({ id: "story-button-danger", onPress: () => { result.value = "Release removed."; } });
+  const compact = createButton({ id: "story-button-compact", onPress: () => { result.value = "Preview copied."; } });
   const disabled = createButton({ id: "story-button-disabled", disabled: true });
-  return <div class="demo-action-demo"><div class="button-row"><button {...primary.root()} class="demo-button">Deploy project</button><button {...secondary.root()} class="demo-button quiet">Save draft</button><button {...disabled.root()} class="demo-button" disabled>Unavailable</button></div><p class="demo-action-status" role="status">{() => result.value}</p></div>;
+  return <div class="demo-action-demo button-variant-demo"><div class="button-variant-group"><small>Tones</small><div class="button-row"><button {...primary.root()} class="demo-button">Deploy project</button><button {...secondary.root()} class="demo-button quiet">Save draft</button><button {...danger.root()} class="demo-button danger">Delete release</button></div></div><div class="button-variant-group"><small>Sizes and states</small><div class="button-row"><button {...compact.root()} class="demo-button compact" aria-label="Copy preview URL">⧉ <span>Copy URL</span></button><button {...disabled.root()} class="demo-button" disabled>Unavailable</button></div></div><p class="demo-action-status" role="status">{() => result.value}</p></div>;
 }
 
 export function CheckboxStory() {
@@ -392,6 +423,12 @@ export function OTPFieldStory() {
   return <div {...otp.root()} class="otp-wrap"><label class="demo-label">Verification code</label><div class="otp-inputs"><For each={[0, 1, 2]}>{(index) => <input {...otp.input(index, { ariaLabel: `Digit ${index + 1}` })} class="otp-input" />}</For><span {...otp.separator()} class="otp-separator">—</span><For each={[3, 4, 5]}>{(index) => <input {...otp.input(index, { ariaLabel: `Digit ${index + 1}` })} class="otp-input" />}</For></div><HiddenInput {...otp.hiddenInput()} /><small class="field-description">Paste all six digits into any field.</small></div>;
 }
 
+export function PaginationStory() {
+  const pagination = createPagination({ id: "story-pagination", total: 247, pageSize: 10, initialPage: 7, siblingCount: 1 });
+  cleanup(pagination);
+  return <div class="pagination-demo"><div class="pagination-summary"><span {...pagination.status()} /><label>Rows <select {...pagination.pageSizeSelect()}><option value="10">10</option><option value="25">25</option><option value="50">50</option></select></label></div><nav {...pagination.root({ label: "Project results" })} class="pagination-controls"><button {...pagination.previousButton()}><span aria-hidden="true">←</span><span class="pagination-long-label">Previous</span></button><div class="pagination-pages"><For each={pagination.pages}>{(item, index) => item === "ellipsis" ? <span {...pagination.ellipsis()} key={`ellipsis-${index()}`}>…</span> : <button {...pagination.pageButton(item)}>{item}</button>}</For></div><button {...pagination.nextButton()}><span class="pagination-long-label">Next</span><span aria-hidden="true">→</span></button></nav></div>;
+}
+
 export function PopoverStory() {
   const popover = createPopover({ id: "story-popover", side: "bottom", align: "start", sideOffset: 8 });
   cleanup(popover);
@@ -423,9 +460,10 @@ export function ScrollAreaStory() {
 }
 
 export function SelectStory() {
-  const select = createSelect({ id: "story-select", items: optionItems, defaultValue: "design", name: "focus" });
+  const compactOptions = optionItems.slice(0, 4);
+  const select = createSelect({ id: "story-select", items: compactOptions, defaultValue: "design", name: "focus", presentation: "responsive" });
   cleanup(select);
-  return <div class="demo-field-stack wide-control"><label {...select.label()} class="demo-label">Primary focus</label><button {...select.trigger()} class="select-trigger"><span {...select.valuePart({ placeholder: "Choose a focus" })} /><span {...select.icon()}><Chevron /></span></button><For each={select.hiddenInputs()}>{(input) => <HiddenInput {...input} />}</For><Show when={() => select.isMounted()}><Portal><div {...select.portal()} class="portal-root"><div {...select.positioner()} class="floating-positioner"><div {...select.popup()} class="demo-floating selection-popup"><div {...select.list()}><For each={optionItems} by="value">{(item) => <div {...select.item(item.value)} class="demo-option"><span {...select.itemText(item.value)}>{item.label}</span><span {...select.itemIndicator(item.value)}><CheckGlyph /></span></div>}</For></div></div></div></div></Portal></Show></div>;
+  return <div class="demo-field-stack wide-control"><label {...select.label()} class="demo-label">Primary focus</label><button {...select.trigger()} class="select-trigger"><span {...select.valuePart({ placeholder: "Choose a focus" })} /><span {...select.icon()}><Chevron /></span></button><small class="field-description">Short list; use Combobox when filtering is useful.</small><For each={select.hiddenInputs()}>{(input) => <HiddenInput {...input} />}</For><Show when={() => select.isMounted()}><Portal><div {...select.portal()} class="portal-root selection-portal"><div {...select.backdrop()} class="selection-backdrop" /><div {...select.positioner()} class="floating-positioner selection-positioner"><div {...select.popup()} class="demo-floating selection-popup adaptive-selection-popup"><div class="selection-sheet-handle" aria-hidden="true"><span /></div><div class="selection-sheet-header"><div><small>Choose one</small><strong>Primary focus</strong></div><button type="button" class="selection-sheet-close" aria-label="Close options" onClick={(event: Event) => select.hide("close-press", event)}>×</button></div><div {...select.list()} class="selection-list"><For each={compactOptions} by="value">{(item) => <div {...select.item(item.value)} class="demo-option"><span {...select.itemText(item.value)}>{item.label}</span><span {...select.itemIndicator(item.value)}><CheckGlyph /></span></div>}</For></div></div></div></div></Portal></Show></div>;
 }
 
 export function SeparatorStory() {
@@ -496,6 +534,7 @@ export const COMPONENT_STORIES: Readonly<Record<string, () => unknown>> = Object
   "alert-dialog": AlertDialogStory,
   autocomplete: AutocompleteStory,
   avatar: AvatarStory,
+  "bottom-sheet": BottomSheetStory,
   button: ButtonStory,
   checkbox: CheckboxStory,
   "checkbox-group": CheckboxGroupStory,
@@ -514,6 +553,7 @@ export const COMPONENT_STORIES: Readonly<Record<string, () => unknown>> = Object
   "navigation-menu": NavigationMenuStory,
   "number-field": NumberFieldStory,
   "otp-field": OTPFieldStory,
+  pagination: PaginationStory,
   popover: PopoverStory,
   "preview-card": PreviewCardStory,
   progress: ProgressStory,
