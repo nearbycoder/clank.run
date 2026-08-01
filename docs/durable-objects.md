@@ -110,8 +110,9 @@ const detailed = await cart.invoke(Cart.methods.read, {});
 `call()` returns the method value. `invoke()` also returns the committed object revision and whether
 a mutation result came from the idempotency ledger. An idempotency key is scoped to one namespace
 and object ID. Reusing it with different method arguments fails closed. Successful results are
-retained for 24 hours by default; callers must not treat that bounded window as a permanent
-business uniqueness constraint.
+retained for 24 hours by default and stop deduplicating at that exact deadline even when no
+maintenance call ran. Reinitializing a deleted object clears its prior incarnation's ledger.
+Callers must not treat that bounded window as a permanent business uniqueness constraint.
 
 Do not call a durable object from inside `database.transaction()`. A call can await and obtain a
 distributed lease, while Clank database mutation handlers are intentionally synchronous. Call the
@@ -143,11 +144,15 @@ can call a remote API and lose its lease before committing local state. Use the 
 idempotency key with the remote provider too, or move failure-prone delivery into a durable job.
 Honor `context.signal` in fetches and long-running work.
 
-Defaults bound state to 1 MiB, arguments and results to 256 KiB, errors to 16 KiB, leases to 30
-seconds, and acquisition to 30 seconds. `OpenDurableObjectsOptions` can lower or raise these within
-hard ceilings. State is JSON—not class instances, functions, promises, cyclic structures, or binary
-buffers. Store large bytes in [object storage](object-storage.md) and retain only the verified key
-and metadata in object state.
+Defaults bound state to 1 MiB, arguments and results to 256 KiB, UTF-8 error diagnostics to 16 KiB,
+retained identities to 100,000 per namespace, retained idempotency results to 10,000 per object,
+leases to 30 seconds, and acquisition to 30 seconds. Tombstones count toward the identity ceiling,
+so repeatedly creating and deleting attacker-selected IDs cannot evade it. Expired retry records
+are removed only from namespaces registered by that runtime, and maintenance failure is reported
+without changing an already committed method result. `OpenDurableObjectsOptions` can lower or
+raise these defaults within hard ceilings. State is JSON—not class instances, functions, promises,
+cyclic structures, or binary buffers. Store large bytes in [object storage](object-storage.md) and
+retain only the verified key and metadata in object state.
 
 ## Durable alarms
 

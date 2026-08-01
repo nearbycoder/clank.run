@@ -68,6 +68,22 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
   output callbacks pure, bound sensitive history retention, and put remote effects in idempotent jobs.
 - Dead, cancelled, missing, or changed workflow steps fail closed, cancel unfinished children, and
   never make blocked dependants runnable. Run, step, and event history is bounded by retention.
+
+### Durable objects
+
+- Stable namespace and object IDs are ASCII allowlisted, state/arguments/results are schema and byte
+  bounded, and retained object identities have a fail-closed per-namespace ceiling.
+- Per-object calls serialize through renewable random leases; settlement fences the exact lease
+  owner, token, and prior revision so an expired runtime cannot commit stale state.
+- Mutation state and its idempotency result commit atomically. Exact retention deadlines, a
+  per-object record ceiling, and namespace-scoped best-effort cleanup prevent an unrelated runtime
+  or maintenance failure from changing retry semantics.
+- Tombstones remain capacity-accounted. Reinitialization advances the revision and clears the prior
+  incarnation's idempotency ledger so an old result cannot be replayed into new state.
+- Alarms use the same fencing and transactional state path, park after bounded retry, and retain
+  control-character-free UTF-8-bounded diagnostics.
+- MCP exposure is opt-in per method and still requires application authorization for the exact
+  authenticated context, namespace, object ID, method, and request on every invocation.
 - Cron occurrences use deterministic idempotency keys and independently leased schedulers.
 - Worker queues and concurrency are bounded in both config and environment parsing.
 - Rolling deployments quiesce old background code before starting the candidate and resume it on

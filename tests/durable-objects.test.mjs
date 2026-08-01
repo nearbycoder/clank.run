@@ -219,6 +219,106 @@ test("mutations roll back on failure and deduplicate exact successful calls", as
   }
 });
 
+test("durable object identity and idempotency ceilings fail closed without committing state", async () => {
+  let current = 1_000;
+  const counter = counterDefinition({ name: "bounded_counters" });
+  const app = await fixture(counter, {}, {
+    now: () => current,
+    maxObjectsPerNamespace: 2,
+    maxIdempotencyRecordsPerObject: 2,
+    idempotencyRetentionMs: 60_000,
+  });
+  try {
+    const first = app.runtime.get(counter, "first");
+    await first.call(counter.methods.add, { amount: 1 }, { idempotencyKey: "request-1" });
+    await first.call(counter.methods.add, { amount: 1 }, { idempotencyKey: "request-2" });
+    await assert.rejects(
+      first.call(counter.methods.add, { amount: 1 }, { idempotencyKey: "request-3" }),
+      (error) => error.code === "IDEMPOTENCY_LIMIT",
+    );
+    assert.equal((await first.call(counter.methods.read, {})).value, 2);
+
+    current = 61_001;
+    const expiredRetry = await first.invoke(
+      counter.methods.add,
+      { amount: 1 },
+      { idempotencyKey: "request-1" },
+    );
+    assert.equal(expiredRetry.deduplicated, false, "expired keys stop deduplicating even after an idle period");
+    assert.equal(expiredRetry.value, 3);
+
+    await app.runtime.get(counter, "second").call(counter.methods.read, {});
+    await assert.rejects(
+      app.runtime.get(counter, "third").call(counter.methods.read, {}),
+      (error) => error.code === "OBJECT_LIMIT",
+    );
+    await first.call(counter.methods.remove, {});
+    await assert.rejects(
+      app.runtime.get(counter, "third").call(counter.methods.read, {}),
+      (error) => error.code === "OBJECT_LIMIT",
+      "tombstones remain capacity-accounted so ID churn cannot bypass the ceiling",
+    );
+
+    const resumed = await first.invoke(
+      counter.methods.add,
+      { amount: 1 },
+      { idempotencyKey: "request-3" },
+    );
+    assert.equal(resumed.deduplicated, false);
+    assert.equal(resumed.value, 1, "the known ID reinitializes after deletion without consuming capacity");
+  } finally {
+    await app.close();
+  }
+});
+
+test("idempotency cleanup is namespace-scoped and cannot turn a committed call into an error", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-durable-cleanup-"));
+  const path = join(root, "app.sqlite");
+  const database = await openSQLite(emptySchema, { path, changePollIntervalMs: 0 });
+  const short = counterDefinition({ name: "short_retention" });
+  const long = counterDefinition({ name: "long_retention" });
+  let current = 1_000;
+  const reported = [];
+  const shortRuntime = openDurableObjects({ short }, {
+    database,
+    now: () => current,
+    idempotencyRetentionMs: 60_000,
+    onError: (error) => reported.push(error),
+  });
+  const longRuntime = openDurableObjects({ long }, {
+    database,
+    now: () => current,
+    idempotencyRetentionMs: 120_000,
+  });
+  try {
+    const shortStub = shortRuntime.get(short, "shared");
+    const longStub = longRuntime.get(long, "shared");
+    await shortStub.invoke(short.methods.add, { amount: 1 }, { idempotencyKey: "same-request" });
+    await longStub.invoke(long.methods.add, { amount: 1 }, { idempotencyKey: "same-request" });
+
+    current = 61_001;
+    assert.equal(await shortStub.call(short.methods.add, { amount: 1 }), 2);
+    const retained = await longStub.invoke(long.methods.add, { amount: 1 }, { idempotencyKey: "same-request" });
+    assert.equal(retained.deduplicated, true, "short retention must not delete another namespace's ledger");
+    const expired = await shortStub.invoke(short.methods.add, { amount: 1 }, { idempotencyKey: "same-request" });
+    assert.equal(expired.deduplicated, false);
+
+    const internal = database[Symbol.for("clank.sqlite.internal")];
+    internal.exec(`CREATE TRIGGER deny_durable_cleanup BEFORE DELETE ON clank_durable_object_calls
+      BEGIN SELECT RAISE(FAIL, 'cleanup denied'); END`);
+    current = 181_002;
+    const committed = await shortStub.call(short.methods.add, { amount: 1 });
+    assert.equal(committed, 4, "maintenance failure cannot hide a committed mutation result");
+    assert.equal((await shortStub.call(short.methods.read, {})).value, 4);
+    assert.ok(reported.some((error) => String(error).includes("cleanup denied")));
+  } finally {
+    await shortRuntime.close();
+    await longRuntime.close();
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("deletion publishes a tombstone and the next call reinitializes the stable ID", async () => {
   const counter = counterDefinition();
   const app = await fixture(counter);
@@ -228,7 +328,20 @@ test("deletion publishes a tombstone and the next call reinitializes the stable 
     assert.equal(await stub.call(counter.methods.remove, {}), true);
     assert.equal(stub.inspect(), null);
     assert.equal(app.runtime.namespace(counter).list().length, 0);
-    assert.deepEqual(await stub.call(counter.methods.read, {}), { value: 0, label: "temporary" });
+    const reinitialized = await stub.invoke(
+      counter.methods.add,
+      { amount: 1 },
+      { idempotencyKey: "prior-incarnation" },
+    );
+    assert.equal(reinitialized.deduplicated, false);
+    assert.equal(await stub.call(counter.methods.remove, {}), true);
+    const nextIncarnation = await stub.invoke(
+      counter.methods.add,
+      { amount: 1 },
+      { idempotencyKey: "prior-incarnation" },
+    );
+    assert.equal(nextIncarnation.deduplicated, false, "reinitialization cannot replay a prior incarnation's result");
+    assert.deepEqual(await stub.call(counter.methods.read, {}), { value: 1, label: "temporary" });
     assert.ok(stub.inspect().revision > 2);
   } finally {
     await app.close();
@@ -298,10 +411,10 @@ test("exhausted alarms park with bounded diagnostics instead of looping", async 
     name: "parked_alarms",
     alarm: {
       retry: { maxAttempts: 2, initialDelayMs: 10, factor: 1, maxDelayMs: 10 },
-      handler() { throw new Error("permanent alarm failure"); },
+      handler() { throw new Error(`permanent\nalarm\u0000failure ${"🔥".repeat(200)}`); },
     },
   });
-  const app = await fixture(counter, {}, { now: () => current });
+  const app = await fixture(counter, {}, { now: () => current, maxErrorBytes: 256 });
   try {
     const stub = app.runtime.get(counter, "clock");
     await stub.call(counter.methods.alarm, { at: current });
@@ -312,6 +425,8 @@ test("exhausted alarms park with bounded diagnostics instead of looping", async 
     assert.equal(snapshot.alarm.scheduledAt, null);
     assert.equal(snapshot.alarm.attempts, 2);
     assert.match(snapshot.alarm.lastError, /permanent alarm failure/u);
+    assert.ok(new TextEncoder().encode(snapshot.alarm.lastError).byteLength <= 256);
+    assert.doesNotMatch(snapshot.alarm.lastError, /[\u0000-\u001f\u007f]/u);
     assert.equal(app.runtime.diagnostics().dueAlarms, 0);
   } finally {
     await app.close();

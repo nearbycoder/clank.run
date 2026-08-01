@@ -214,6 +214,10 @@ export interface OpenDurableObjectsOptions {
   maxArgumentsBytes?: number;
   maxResultBytes?: number;
   maxErrorBytes?: number;
+  /** Maximum retained object identities, including tombstones, in each namespace. Defaults to 100,000. */
+  maxObjectsPerNamespace?: number;
+  /** Maximum live idempotency records retained for one object. Defaults to 10,000. */
+  maxIdempotencyRecordsPerObject?: number;
   idempotencyRetentionMs?: number;
 }
 export declare class DurableObjectError extends Error {
