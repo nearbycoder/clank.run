@@ -154,7 +154,7 @@ svg { display: block; }
 .theme-tags span { border: 1px solid var(--clank-border); border-radius: var(--clank-radius-full); color: var(--clank-text-faint); padding: 3px 8px; font: 7px var(--clank-font-mono); text-transform: uppercase; }
 
 .component-heading { display: flex; align-items: end; justify-content: space-between; gap: 45px; margin-bottom: 37px; }
-.component-heading h1 { font-size: clamp(42px, 6vw, 76px); }
+.component-heading h1 { max-width: 100%; overflow-wrap: anywhere; font-size: clamp(42px, 6vw, 76px); }
 .heading-links { display: flex; flex-direction: column; align-items: end; gap: 8px; padding-bottom: 5px; }
 .heading-links a { display: inline-flex; align-items: center; gap: 7px; color: var(--clank-text-muted); text-decoration: none; font-size: 9px; white-space: nowrap; }
 .heading-links a:hover { color: var(--clank-accent); }
@@ -204,6 +204,8 @@ svg { display: block; }
 .demo-button.full { width: 100%; margin-top: 14px; }
 .demo-button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 .button-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; }
+.demo-action-demo { display: grid; max-width: 100%; justify-items: center; gap: 10px; }
+.demo-action-status { min-height: 14px; margin: 0; color: var(--clank-text-muted); font-size: 9px; text-align: center; }
 .demo-label { display: block; color: var(--clank-text-muted); font-size: 10px; font-weight: 670; }
 .demo-input, .select-trigger { width: 100%; min-height: var(--clank-control-height); border: var(--clank-border-width) solid var(--clank-border); border-radius: var(--clank-radius-sm); outline: 0; background: var(--clank-canvas-raised); color: var(--clank-text); padding: 0 11px; font-size: 11px; }
 .demo-input:focus, .select-trigger:focus { border-color: var(--clank-focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--clank-focus) 15%, transparent); }
@@ -465,6 +467,7 @@ svg { display: block; }
   .otp-input { width: 35px; height: 44px; }
   .demo-toolbar { max-width: 100%; overflow-x: auto; }
   .toolbar-input { width: 85px; }
+  .nav-popup { width: min(320px, calc(100vw - 32px)); min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

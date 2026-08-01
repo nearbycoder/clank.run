@@ -68,6 +68,8 @@ test("Design Studio serves every real component and theme contract securely", as
   const styleSource = await styleResponse.text();
   assert.match(styleSource, /\.scrollbar\.vertical\s*\{[^}]*width:\s*16px/u);
   assert.match(styleSource, /\.scroll-thumb::after\s*\{[^}]*pointer-events:\s*none/u);
+  assert.match(styleSource, /\.component-heading h1\s*\{[^}]*overflow-wrap:\s*anywhere/u);
+  assert.match(styleSource, /\.nav-popup\s*\{[^}]*width:\s*min\(320px,\s*calc\(100vw - 32px\)\)[^}]*min-width:\s*0/u);
   assert.equal(appResponse.status, 200);
   assert.match(appResponse.headers.get("cache-control") ?? "", /immutable/u);
   assert.match(await appResponse.text(), /\.\/studio\.js/u);
@@ -77,6 +79,9 @@ test("Design Studio serves every real component and theme contract securely", as
   assert.match(storiesModule.headers.get("cache-control") ?? "", /must-revalidate/u);
   const studioSource = await studioModule.text();
   const storiesSource = await storiesModule.text();
+  for (const feedback of ["Deploy started.", "Draft saved.", "was added as", "Bold applied.", "Italic applied.", "Link inserted."]) {
+    assert.ok(storiesSource.includes(feedback), `interactive story feedback is missing: ${feedback}`);
+  }
   for (const source of [studioSource, storiesSource]) {
     assert.match(source, /\.\.\/vendor\/[^"']+\.js\?v=[a-f0-9]{16}/u);
     assert.ok(source.includes(`?v=${manifest.vendorVersion}`));
