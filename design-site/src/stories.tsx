@@ -213,10 +213,11 @@ export function AvatarStory() {
 }
 
 export function ButtonStory() {
-  const primary = createButton({ id: "story-button-primary" });
-  const secondary = createButton({ id: "story-button-secondary" });
+  const result = signal("");
+  const primary = createButton({ id: "story-button-primary", onPress: () => { result.value = "Deploy started."; } });
+  const secondary = createButton({ id: "story-button-secondary", onPress: () => { result.value = "Draft saved."; } });
   const disabled = createButton({ id: "story-button-disabled", disabled: true });
-  return <div class="button-row"><button {...primary.root()} class="demo-button">Deploy project</button><button {...secondary.root()} class="demo-button quiet">Save draft</button><button {...disabled.root()} class="demo-button" disabled>Unavailable</button></div>;
+  return <div class="demo-action-demo"><div class="button-row"><button {...primary.root()} class="demo-button">Deploy project</button><button {...secondary.root()} class="demo-button quiet">Save draft</button><button {...disabled.root()} class="demo-button" disabled>Unavailable</button></div><p class="demo-action-status" role="status">{() => result.value}</p></div>;
 }
 
 export function CheckboxStory() {
@@ -312,13 +313,14 @@ export function FieldsetStory() {
 }
 
 export function FormStory() {
+  const result = signal("");
   const email = createField({ id: "story-form-email", name: "email", defaultValue: "", required: true, validate: (value) => value.includes("@") ? null : "Enter a valid email." });
   const role = createField({ id: "story-form-role", name: "role", defaultValue: "member" });
-  const form = createFormFacade({ id: "story-form", onFormSubmit: async () => undefined });
+  const form = createFormFacade({ id: "story-form", onFormSubmit: async (values) => { result.value = `${values.email} was added as ${values.role}.`; } });
   const unregisterEmail = form.register("email", email);
   const unregisterRole = form.register("role", role);
   if (typeof document !== "undefined") onCleanup(() => { unregisterEmail(); unregisterRole(); form.dispose(); email.dispose(); role.dispose(); });
-  return <form {...form.root()} class="demo-form"><div {...email.root()} class="demo-field-stack"><label {...email.label()} class="demo-label">Email</label><input {...email.control({ type: "email" })} class="demo-input" placeholder="ada@example.com" /><p {...email.error()} class="field-error">{() => email.errors.value[0] ?? ""}</p></div><div {...role.root()} class="demo-field-stack"><label {...role.label()} class="demo-label">Role</label><select {...role.control()} class="demo-input"><option value="member">Member</option><option value="admin">Administrator</option></select></div><button class="demo-button" type="submit">Create member</button></form>;
+  return <form {...form.root()} class="demo-form"><div {...email.root()} class="demo-field-stack"><label {...email.label()} class="demo-label">Email</label><input {...email.control({ type: "email" })} class="demo-input" placeholder="ada@example.com" /><p {...email.error()} class="field-error">{() => email.errors.value[0] ?? ""}</p></div><div {...role.root()} class="demo-field-stack"><label {...role.label()} class="demo-label">Role</label><select {...role.control()} class="demo-input"><option value="member">Member</option><option value="admin">Administrator</option></select></div><button class="demo-button" type="submit">Create member</button><p class="demo-action-status" role="status">{() => result.value}</p></form>;
 }
 
 export function InputStory() {
@@ -467,18 +469,19 @@ export function ToggleGroupStory() {
 }
 
 export function ToolbarStory() {
+  const result = signal("");
   const toolbar = createToolbar({
     id: "story-toolbar",
     label: "Text formatting",
     items: [
-      { value: "bold", textValue: "Bold", kind: "button" },
-      { value: "italic", textValue: "Italic", kind: "button" },
-      { value: "link", textValue: "Insert link", kind: "button" },
+      { value: "bold", textValue: "Bold", kind: "button", onPress: () => { result.value = "Bold applied."; } },
+      { value: "italic", textValue: "Italic", kind: "button", onPress: () => { result.value = "Italic applied."; } },
+      { value: "link", textValue: "Insert link", kind: "button", onPress: () => { result.value = "Link inserted."; } },
       { value: "separator", textValue: "Separator", kind: "separator" },
       { value: "search", textValue: "Search", kind: "input", type: "search", placeholder: "Find…" },
     ],
   });
-  return <div {...toolbar.root()} class="demo-toolbar"><button {...toolbar.button("bold")} class="toolbar-button" aria-label="Bold"><strong aria-hidden="true">B</strong></button><button {...toolbar.button("italic")} class="toolbar-button" aria-label="Italic"><em aria-hidden="true">I</em></button><button {...toolbar.button("link")} class="toolbar-button" aria-label="Insert link"><span aria-hidden="true">↗</span></button><span {...toolbar.separator("separator")} class="demo-separator vertical" /><input {...toolbar.input("search")} class="toolbar-input" aria-label="Find" /></div>;
+  return <div class="demo-action-demo"><div {...toolbar.root()} class="demo-toolbar"><button {...toolbar.button("bold")} class="toolbar-button" aria-label="Bold"><strong aria-hidden="true">B</strong></button><button {...toolbar.button("italic")} class="toolbar-button" aria-label="Italic"><em aria-hidden="true">I</em></button><button {...toolbar.button("link")} class="toolbar-button" aria-label="Insert link"><span aria-hidden="true">↗</span></button><span {...toolbar.separator("separator")} class="demo-separator vertical" /><input {...toolbar.input("search")} class="toolbar-input" aria-label="Find" /></div><p class="demo-action-status" role="status">{() => result.value}</p></div>;
 }
 
 export function TooltipStory() {
