@@ -10,8 +10,9 @@ cd synth-site
 npm run dev
 ```
 
-Open `http://127.0.0.1:4600` and press **Play**. Audio is created only after that user gesture, so
-the demo remains safe for browsers that block autoplay.
+Open `http://127.0.0.1:4600` and tap **Enable audio** (or **Play**) once. Mobile browsers require
+that explicit user gesture before Web Audio can produce sound; the synth unlocks a silent source
+first, then starts the loop without autoplaying on page load.
 
 ## Program a beat
 

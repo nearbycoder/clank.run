@@ -1,5 +1,5 @@
 /* @clankImportSource ../vendor/dom.js */
-import { For, computed, effect, signal } from "../vendor/dom.js";
+import { For, Show, computed, effect, signal } from "../vendor/dom.js";
 import { CLANK_THEME_PRESETS } from "../vendor/ui-theme.js";
 
 export interface SynthBootState {
@@ -165,14 +165,55 @@ export function SynthView(_props: SynthBootState) {
   const currentStep = signal(-1);
   const elapsed = signal(0);
   const status = signal("Ready to play");
+  const audioReady = signal(false);
   const activeCount = computed(() => pattern.value.flat().filter(Boolean).length);
   const audio = { current: null as AudioState | null };
   let startedAt = 0;
   let elapsedTimer: number | null = null;
   let starting = false;
+  let unlockPromise: Promise<AudioState | null> | null = null;
+  let ignoreNextPlayClick = false;
 
   function setStatus(message: string): void {
     status.value = message;
+  }
+
+  function unlockAudio(): Promise<AudioState | null> {
+    if (unlockPromise) return unlockPromise;
+    unlockPromise = (async () => {
+      try {
+        if (!audio.current) audio.current = createAudioState();
+        const state = audio.current;
+        if (!state) {
+          setStatus("Web Audio is unavailable in this browser");
+          return null;
+        }
+        if (state.context.state !== "running") await state.context.resume();
+        if (state.context.state !== "running") {
+          setStatus("Tap Enable audio to allow playback");
+          audioReady.value = false;
+          return null;
+        }
+        // A zero-gain source completes the mobile browser unlock handshake
+        // without producing an audible click or changing the mix.
+        const warmup = state.context.createOscillator();
+        const silent = state.context.createGain();
+        silent.gain.setValueAtTime(0, state.context.currentTime);
+        warmup.connect(silent).connect(state.context.destination);
+        warmup.start();
+        warmup.stop(state.context.currentTime + 0.02);
+        audioReady.value = true;
+        setStatus("Audio enabled · Ready to play");
+        return state;
+      } catch {
+        audioReady.value = false;
+        setStatus("Tap Enable audio to allow playback");
+        return null;
+      } finally {
+        unlockPromise = null;
+      }
+    })();
+    return unlockPromise;
   }
 
   function toggleStep(trackIndex: number, step: number): void {
@@ -251,10 +292,8 @@ export function SynthView(_props: SynthBootState) {
     if (playing.value || starting) return;
     starting = true;
     try {
-      if (!audio.current) audio.current = createAudioState();
-      const state = audio.current;
-      if (!state) { setStatus("Web Audio is unavailable in this browser"); return; }
-      await state.context.resume();
+      const state = await unlockAudio();
+      if (!state) return;
       playing.value = true;
       state.nextStep = 0;
       state.nextTime = state.context.currentTime + 0.05;
@@ -267,6 +306,22 @@ export function SynthView(_props: SynthBootState) {
     } finally {
       starting = false;
     }
+  }
+
+  function handlePlayPointerDown(): void {
+    if (playing.value) return;
+    // Start from pointerdown so iOS treats the resume call as the original
+    // user activation. The subsequent synthetic click must not toggle it off.
+    ignoreNextPlayClick = true;
+    void start();
+  }
+
+  function handlePlayClick(): void {
+    if (ignoreNextPlayClick) {
+      ignoreNextPlayClick = false;
+      return;
+    }
+    if (playing.value) stop(); else void start();
   }
 
   function stop(): void {
@@ -320,7 +375,7 @@ export function SynthView(_props: SynthBootState) {
     <div class="synth-app">
       <header class="topbar">
         <a class="wordmark" href="/" aria-label="Clank Synth home"><span class="mark">✦</span><strong>Clank</strong><span class="wordmark-product">Synth</span></a>
-        <div class="topbar-tools"><div class="topbar-meta"><span class="live-dot" classList={{ playing: playing.value }} /> <span>{status.value}</span><span class="topbar-divider" /><span class="mono">{_props.frameworkVersion}</span></div><label class="theme-control"><span>Theme</span><select value={selectedTheme.value} onChange={(event: Event) => { selectedTheme.value = (event.currentTarget as HTMLSelectElement).value; }} aria-label="Select a Clank design system theme"><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <option value={theme.id}>{theme.name}</option>}</For></select></label></div>
+        <div class="topbar-tools"><div class="topbar-meta" aria-live="polite"><span class="live-dot" classList={{ playing: playing.value }} /> <span>{status.value}</span><span class="topbar-divider" /><span class="mono">{_props.frameworkVersion}</span></div><label class="theme-control"><span>Theme</span><select value={selectedTheme.value} onChange={(event: Event) => { selectedTheme.value = (event.currentTarget as HTMLSelectElement).value; }} aria-label="Select a Clank design system theme"><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <option value={theme.id}>{theme.name}</option>}</For></select></label></div>
       </header>
 
       <main class="synth-shell">
@@ -329,8 +384,16 @@ export function SynthView(_props: SynthBootState) {
           <div class="hero-meter"><div class="meter-orbit"><span class="meter-core" classList={{ active: playing.value }} /><i /><i /><i /><i /></div><div><span class="meter-label">SESSION TIME</span><strong>{formatTime(elapsed.value)}</strong></div><div class="hero-meter-footer"><span>{activeCount.value} active steps</span><span class="mono">SPACE TO PLAY</span></div></div>
         </section>
 
+        <Show when={!audioReady.value}>
+          <aside class="audio-gate panel" aria-label="Enable audio playback">
+            <span class="audio-gate-icon">♫</span>
+            <div><strong>Audio is off</strong><small>Mobile browsers require a tap before sound can play.</small></div>
+            <button class="audio-gate-button" type="button" onPointerDown={() => void unlockAudio()} onClick={() => void unlockAudio()} agentId="audio-enable" agentLabel="Enable audio playback">Enable audio</button>
+          </aside>
+        </Show>
+
         <section class="transport panel" aria-label="Transport controls">
-          <div class="transport-main"><button class="play-button" type="button" onClick={() => playing.value ? stop() : void start()} agentId="transport-play" agentLabel={playing.value ? "Stop the synth" : "Play the synth"}><span>{playing.value ? "■" : "▶"}</span>{playing.value ? "Stop" : "Play"}</button><button class="secondary-button" type="button" onClick={clearPattern} agentId="pattern-clear" agentLabel="Clear all sequencer steps">Clear</button><button class="secondary-button" type="button" onClick={randomize} agentId="pattern-randomize" agentLabel="Generate a random beat">Randomize <span>⌘</span></button></div>
+          <div class="transport-main"><button class="play-button" type="button" onPointerDown={handlePlayPointerDown} onPointerCancel={() => { ignoreNextPlayClick = false; }} onClick={handlePlayClick} agentId="transport-play" agentLabel={playing.value ? "Stop the synth" : audioReady.value ? "Play the synth" : "Enable audio and play the synth"}><span>{playing.value ? "■" : "▶"}</span>{playing.value ? "Stop" : "Play"}</button><button class="secondary-button" type="button" onClick={clearPattern} agentId="pattern-clear" agentLabel="Clear all sequencer steps">Clear</button><button class="secondary-button" type="button" onClick={randomize} agentId="pattern-randomize" agentLabel="Generate a random beat">Randomize <span>⌘</span></button></div>
           <div class="transport-sliders"><label><span>Tempo <strong>{bpm.value} BPM</strong></span><input type="range" min="60" max="180" step="1" value={bpm.value} onInput={(event: InputEvent) => { bpm.value = parseNumber((event.currentTarget as HTMLInputElement).value, bpm.value, 60, 180); }} aria-label="Tempo in beats per minute" /></label><label><span>Swing <strong>{swing.value}%</strong></span><input type="range" min="0" max="40" step="1" value={swing.value} onInput={(event: InputEvent) => { swing.value = parseNumber((event.currentTarget as HTMLInputElement).value, swing.value, 0, 40); }} aria-label="Swing percentage" /></label><label><span>Master <strong>{Math.round(masterVolume.value * 100)}%</strong></span><input type="range" min="0" max="1" step="0.01" value={masterVolume.value} onInput={(event: InputEvent) => { masterVolume.value = parseNumber((event.currentTarget as HTMLInputElement).value, masterVolume.value, 0, 1); }} aria-label="Master volume" /></label></div>
         </section>
 

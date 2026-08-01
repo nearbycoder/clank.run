@@ -11,6 +11,8 @@ test("synth view server-renders a deterministic, hydrated sequencer", async () =
   assert.match(first, /Build a loop/gu);
   assert.match(first, /Toggle Kick step 1/gu);
   assert.match(first, /Select a Clank design system theme/gu);
+  assert.match(first, /Audio is off/gu);
+  assert.match(first, /data-clank-id="audio-enable"/gu);
   assert.match(first, /data-clank-id="transport-play"/gu);
   assert.equal((first.match(/data-clank-id="step-/gu) ?? []).length, 96);
 });
