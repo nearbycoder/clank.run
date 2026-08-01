@@ -39,6 +39,7 @@ export const groups = [
       ["auth", "docs/auth.md"],
       ["authentication", "docs/authentication.md"],
       ["server", "docs/server.md"],
+      ["durable-objects", "docs/durable-objects.md"],
       ["jobs-and-cron", "docs/jobs-and-cron.md"],
       ["services", "docs/services.md"],
       ["object-storage", "docs/object-storage.md"],
