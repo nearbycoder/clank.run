@@ -1,7 +1,7 @@
 # Design system and component workshop
 
 Clank Design Studio at [design.clank.run](https://design.clank.run) is the canonical interactive
-workshop for the framework's dependency-free headless UI. It renders all 37 component families
+workshop for the framework's dependency-free headless UI. It renders all 39 component families
 with their real Clank controllers, lets you compare ten complete themes, and exposes the same
 contracts to people and agents through HTML, JSON, and MCP.
 
@@ -169,7 +169,7 @@ node design-site/dist/server.js
 Then open `http://127.0.0.1:4400` for local development only. Production documentation and agent
 configuration should always use `https://design.clank.run`.
 
-The root `npm test` and `npm run check` commands build the studio, verify all 37 SSR routes, inspect
+The root `npm test` and `npm run check` commands build the studio, verify all 39 SSR routes, inspect
 its security headers and immutable assets, exercise both JSON catalogs, and connect to its MCP
 server. A successful main CI revision can deploy the fixed Design Studio project without changing
 the public domain.

@@ -25,6 +25,7 @@ const moduleLabels: Readonly<Record<string, string>> = Object.freeze({
   collections: "Collections",
   popups: "Popups",
   utilities: "Utilities",
+  legacy: "Navigation",
 });
 
 const viewportWidths = Object.freeze({ responsive: "100%", mobile: "390px", tablet: "768px", desktop: "1120px" });
@@ -114,7 +115,7 @@ function Overview(props: { themeId: () => string; onView: (view: StudioView) => 
           <div class="specimen-window"><header><i /><i /><i /><span>design.clank.run</span></header><div><aside><span /><span /><span /><span /></aside><main><span class="specimen-label">Component</span><h2>Dialog</h2><div class="specimen-dialog"><small>Workspace access</small><strong>Invite a teammate</strong><p>Send a secure invitation to your project.</p><button type="button">Send invite</button></div></main></div></div>
         </div>
       </section>
-      <section class="proof-row" aria-label="Design system properties"><article><strong>37</strong><span>interactive families</span></article><article><strong>10</strong><span>complete themes</span></article><article><strong>32</strong><span>typed design tokens</span></article><article><strong>0</strong><span>runtime dependencies</span></article></section>
+      <section class="proof-row" aria-label="Design system properties"><article><strong>{UI_COMPONENT_COUNT}</strong><span>interactive families</span></article><article><strong>10</strong><span>complete themes</span></article><article><strong>32</strong><span>typed design tokens</span></article><article><strong>0</strong><span>runtime dependencies</span></article></section>
       <section class="overview-section">
         <header><div><span class="view-kicker">Theme presets</span><h2>Change the entire system in one click.</h2></div><button type="button" class="text-action" onClick={() => props.onView("themes")}>Open laboratory →</button></header>
         <div class="theme-miniature-grid"><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <ThemeMiniature theme={theme} active={() => theme.id === props.themeId()} onSelect={() => props.onTheme(theme.id)} />}</For></div>
@@ -133,8 +134,8 @@ function ComponentView(props: { entry: UiCatalogEntry; viewport: () => string; p
   return (
     <section class="component-page">
       <header class="component-heading">
-        <div><span class="view-kicker">{entry.module} / {entry.formAssociated ? "form associated" : "headless primitive"}</span><h1>{entry.name}</h1><p>{entry.description}</p></div>
-        <div class="heading-links"><a href={entry.referenceUrl} target="_blank" rel="noreferrer">Anatomy reference <Icon name="external" /></a><a href="https://docs.clank.run/docs/ui">Framework guide <Icon name="external" /></a></div>
+        <div><span class="view-kicker">{moduleLabels[entry.module] ?? entry.module} / {entry.formAssociated ? "form associated" : "headless primitive"}</span><h1>{entry.name}</h1><p>{entry.description}</p></div>
+        <div class="heading-links"><a href={entry.referenceUrl} target="_blank" rel="noreferrer">{entry.source === "clank" ? "Pattern reference" : "Anatomy reference"} <Icon name="external" /></a><a href="https://docs.clank.run/docs/ui">Framework guide <Icon name="external" /></a></div>
       </header>
       <div class="preview-toolbar" aria-label="Preview controls">
         <div class="segmented viewport-segments"><For each={Object.keys(viewportWidths)}>{(value) => <button type="button" classList={{ active: props.viewport() === value }} onClick={() => props.onViewport(value)}>{value}</button>}</For></div>
@@ -204,7 +205,7 @@ export function DesignStudio(props: DesignStudioProps) {
       <header class="studio-header">
         <button class="mobile-nav-trigger" type="button" aria-label="Open component navigation" aria-expanded={navOpen} onClick={() => { navOpen.value = !navOpen.peek(); }}><Icon name="menu" /></button>
         <a class="studio-wordmark" href="/" onClick={(event: MouseEvent) => { event.preventDefault(); selectView("overview"); }}><img src="/brand/clank-mark-64.png" width="25" height="25" alt="" /><strong>Clank</strong><span>Design</span></a>
-        <label class="studio-search"><Icon name="search" /><input type="search" value={query} onInput={(event: InputEvent) => { query.value = (event.currentTarget as HTMLInputElement).value; }} placeholder="Search 37 components…" /><kbd>/</kbd></label>
+        <label class="studio-search"><Icon name="search" /><input type="search" value={query} onInput={(event: InputEvent) => { query.value = (event.currentTarget as HTMLInputElement).value; }} placeholder={`Search ${UI_COMPONENT_COUNT} components…`} /><kbd>/</kbd></label>
         <nav class="studio-header-links" aria-label="Project"><a href="https://docs.clank.run/docs/ui">Docs</a><a href="https://github.com/nearbycoder/clank.run" target="_blank" rel="noreferrer">GitHub ↗</a></nav>
       </header>
       <aside class="studio-sidebar" classList={{ open: navOpen }}>

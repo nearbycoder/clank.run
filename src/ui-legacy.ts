@@ -6,6 +6,7 @@ import {
   type Computed,
   type ReactiveSignal,
 } from "./core.ts";
+import { createUiManifest, type UiManifest } from "./ui-foundation.ts";
 
 /** Compatibility options for Clank's original disclosure controller. */
 export interface DisclosureOptions {
@@ -82,6 +83,7 @@ export function createDisclosure(options: DisclosureOptions): DisclosureControll
 }
 
 export interface PaginationOptions {
+  id?: string;
   total: number | ReactiveSignal<number> | Computed<number> | (() => number);
   pageSize?: number;
   initialPage?: number;
@@ -89,6 +91,7 @@ export interface PaginationOptions {
 }
 
 export interface PaginationController {
+  readonly id: string;
   readonly page: ReactiveSignal<number>;
   readonly pageSize: ReactiveSignal<number>;
   readonly total: Computed<number>;
@@ -102,11 +105,20 @@ export interface PaginationController {
   setPageSize(size: number): void;
   previous(): void;
   next(): void;
+  root(options?: { label?: string }): Record<string, unknown>;
+  status(): Record<string, unknown>;
+  previousButton(): Record<string, unknown>;
+  pageButton(page: number): Record<string, unknown>;
+  ellipsis(): Record<string, unknown>;
+  nextButton(): Record<string, unknown>;
+  pageSizeSelect(): Record<string, unknown>;
+  manifest(): UiManifest;
   dispose(): void;
 }
 
 /** Pagination state with clamping and a compact, UI-ready page range. */
 export function createPagination(options: PaginationOptions): PaginationController {
+  const id = requireId(options.id ?? "pagination", "Pagination");
   const pageSize = signal(positiveInteger(options.pageSize ?? 20, "pageSize"));
   const page = signal(positiveInteger(options.initialPage ?? 1, "initialPage"));
   const total = computed(() => {
@@ -130,6 +142,7 @@ export function createPagination(options: PaginationOptions): PaginationControll
     if (page.peek() > maximum) page.value = maximum;
   });
   return {
+    id,
     page,
     pageSize,
     total,
@@ -146,6 +159,91 @@ export function createPagination(options: PaginationOptions): PaginationControll
     },
     previous: () => setPage(page.peek() - 1),
     next: () => setPage(page.peek() + 1),
+    root: (rootOptions = {}) => ({
+      id,
+      role: "navigation",
+      "aria-label": rootOptions.label ?? "Pagination",
+      "data-clank-part": "root",
+    }),
+    status: () => ({
+      id: `${id}-status`,
+      role: "status",
+      "aria-live": "polite",
+      "aria-atomic": true,
+      "data-clank-part": "status",
+      children: () => total.value === 0
+        ? "No results"
+        : `${start.value}–${end.value} of ${total.value}`,
+    }),
+    previousButton: () => ({
+      type: "button",
+      disabled: () => !canPrevious.value,
+      "aria-label": "Previous page",
+      "aria-controls": `${id}-status`,
+      "data-clank-part": "previous",
+      onClick: (event: Event) => { if (!event.defaultPrevented) setPage(page.peek() - 1); },
+    }),
+    pageButton: (value: number) => {
+      if (!Number.isInteger(value) || value < 1) throw new TypeError("Pagination page button requires a positive integer.");
+      return {
+        type: "button",
+        "aria-label": `Page ${value}`,
+        "aria-current": () => page.value === value ? "page" : undefined,
+        "aria-controls": `${id}-status`,
+        "data-clank-part": "page",
+        "data-selected": () => page.value === value ? "" : undefined,
+        onClick: (event: Event) => { if (!event.defaultPrevented) setPage(value); },
+      };
+    },
+    ellipsis: () => ({
+      "aria-hidden": true,
+      "data-clank-part": "ellipsis",
+    }),
+    nextButton: () => ({
+      type: "button",
+      disabled: () => !canNext.value,
+      "aria-label": "Next page",
+      "aria-controls": `${id}-status`,
+      "data-clank-part": "next",
+      onClick: (event: Event) => { if (!event.defaultPrevented) setPage(page.peek() + 1); },
+    }),
+    pageSizeSelect: () => ({
+      id: `${id}-page-size`,
+      "aria-label": "Results per page",
+      value: () => String(pageSize.value),
+      "data-clank-part": "page-size",
+      onChange: (event: Event) => {
+        const value = Number((event.currentTarget as HTMLSelectElement).value);
+        pageSize.value = positiveInteger(value, "pageSize");
+        setPage(1);
+      },
+    }),
+    manifest: () => createUiManifest({
+      component: "Pagination",
+      id,
+      state: {
+        page: page.peek(),
+        pageSize: pageSize.peek(),
+        total: total.peek(),
+        pageCount: pageCount.peek(),
+      },
+      parts: [
+        { name: "root", role: "navigation", defaultElement: "nav", required: true },
+        { name: "status", role: "status", defaultElement: "span" },
+        { name: "previous", role: "button", defaultElement: "button", required: true },
+        { name: "page", role: "button", defaultElement: "button", required: true },
+        { name: "ellipsis", defaultElement: "span" },
+        { name: "next", role: "button", defaultElement: "button", required: true },
+        { name: "page-size", defaultElement: "select" },
+      ],
+      actions: [
+        { name: "setPage", description: "Move to a specific result page.", sideEffects: "write", reasons: ["press", "programmatic"] },
+        { name: "setPageSize", description: "Change the result count per page and return to page one.", sideEffects: "write", reasons: ["input", "programmatic"] },
+        { name: "previous", description: "Move to the previous result page.", sideEffects: "write", reasons: ["press"] },
+        { name: "next", description: "Move to the next result page.", sideEffects: "write", reasons: ["press"] },
+      ],
+      keyboard: { Enter: "Activate the focused page control", Space: "Activate the focused page control" },
+    }),
     dispose: stop,
   };
 }

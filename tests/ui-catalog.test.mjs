@@ -17,6 +17,7 @@ const expectedContracts = [
   ["AlertDialog", "alert-dialog", "createAlertDialog", "popups"],
   ["Autocomplete", "autocomplete", "createAutocomplete", "selection"],
   ["Avatar", "avatar", "createAvatar", "controls"],
+  ["BottomSheet", "bottom-sheet", "createBottomSheet", "popups"],
   ["Button", "button", "createButton", "controls"],
   ["Checkbox", "checkbox", "createCheckbox", "controls"],
   ["CheckboxGroup", "checkbox-group", "createCheckboxGroup", "controls"],
@@ -35,6 +36,7 @@ const expectedContracts = [
   ["NavigationMenu", "navigation-menu", "createNavigationMenu", "collections"],
   ["NumberField", "number-field", "createNumberField", "fields"],
   ["OTPField", "otp-field", "createOtpField", "fields"],
+  ["Pagination", "pagination", "createPagination", "legacy"],
   ["Popover", "popover", "createPopover", "popups"],
   ["PreviewCard", "preview-card", "createPreviewCard", "popups"],
   ["Progress", "progress", "createProgress", "controls"],
@@ -53,19 +55,19 @@ const expectedContracts = [
 ];
 const expected = expectedContracts.map(([name]) => name);
 
-test("the public headless catalog covers the exact 37 Base UI families", () => {
+test("the public headless catalog covers all Base UI families and Clank-native extensions", () => {
   assert.equal(BASE_UI_REFERENCE_VERSION, "1.6.0");
   assert.equal(BASE_UI_REFERENCE_URL, "https://base-ui.com/react/overview/releases/v1-6-0");
-  assert.equal(UI_COMPONENT_COUNT, 37);
-  assert.equal(UI_COMPONENT_CATALOG.length, 37);
+  assert.equal(UI_COMPONENT_COUNT, 39);
+  assert.equal(UI_COMPONENT_CATALOG.length, 39);
   assert.deepEqual(UI_COMPONENT_CATALOG.map((entry) => entry.name), expected);
   assert.deepEqual(
     UI_COMPONENT_CATALOG.map(({ name, slug, factory, module }) => [name, slug, factory, module]),
     expectedContracts,
   );
   assert.deepEqual(Object.keys(UI_COMPONENT_FACTORIES), expected);
-  assert.equal(new Set(UI_COMPONENT_CATALOG.map((entry) => entry.slug)).size, 37);
-  assert.equal(new Set(UI_COMPONENT_CATALOG.map((entry) => entry.factory)).size, 37);
+  assert.equal(new Set(UI_COMPONENT_CATALOG.map((entry) => entry.slug)).size, 39);
+  assert.equal(new Set(UI_COMPONENT_CATALOG.map((entry) => entry.factory)).size, 39);
   assert.ok(Object.isFrozen(UI_COMPONENT_CATALOG));
   assert.ok(Object.isFrozen(UI_COMPONENT_FACTORIES));
   assert.ok(UI_COMPONENT_CATALOG.every((entry) => Object.isFrozen(entry) && Object.isFrozen(entry.parts)));
@@ -79,8 +81,15 @@ test("the public headless catalog covers the exact 37 Base UI families", () => {
     assert.equal(getUiCatalogEntry(entry.slug), entry);
     assert.ok(entry.parts.length > 0, entry.name);
     assert.ok(entry.description.endsWith("."), entry.name);
-    assert.equal(entry.referenceUrl, `https://base-ui.com/react/components/${entry.slug}`);
-    assert.equal(entry.referenceVersion, BASE_UI_REFERENCE_VERSION);
+    if (entry.source === "base-ui") {
+      assert.equal(entry.referenceUrl, `https://base-ui.com/react/components/${entry.slug}`);
+      assert.equal(entry.referenceVersion, BASE_UI_REFERENCE_VERSION);
+    } else {
+      assert.equal(entry.source, "clank");
+      assert.ok(["BottomSheet", "Pagination"].includes(entry.name), entry.name);
+      assert.match(entry.referenceUrl, /^https:\/\//u);
+      assert.equal(entry.referenceVersion, "clank-ui/1");
+    }
   }
   assert.equal(getUiCatalogEntry("  button  "), getUiCatalogEntry("Button"));
   assert.equal(getUiCatalogEntry("not-a-component"), undefined);
@@ -227,6 +236,7 @@ function createCatalogFixture(name) {
     case "AlertDialog": return framework.createAlertDialog({ id: "catalog-alert-dialog" });
     case "Autocomplete": return framework.createAutocomplete({ id: "catalog-autocomplete", items: [option] });
     case "Avatar": return framework.createAvatar({ id: "catalog-avatar" });
+    case "BottomSheet": return framework.createBottomSheet({ id: "catalog-bottom-sheet" });
     case "Button": return framework.createButton({ id: "catalog-button" });
     case "Checkbox": return framework.createCheckbox({ id: "catalog-checkbox" });
     case "CheckboxGroup": return framework.createCheckboxGroup({ id: "catalog-checkbox-group", items: [item] });
@@ -245,6 +255,7 @@ function createCatalogFixture(name) {
     case "NavigationMenu": return framework.createNavigationMenu({ id: "catalog-navigation-menu", items: [{ ...item, kind: "link", href: "/" }] });
     case "NumberField": return framework.createNumberField({ id: "catalog-number-field" });
     case "OTPField": return framework.createOtpField({ id: "catalog-otp-field", length: 6 });
+    case "Pagination": return framework.createPagination({ id: "catalog-pagination", total: 100 });
     case "Popover": return framework.createPopover({ id: "catalog-popover" });
     case "PreviewCard": return framework.createPreviewCard({ id: "catalog-preview-card" });
     case "Progress": return framework.createProgress({ id: "catalog-progress" });

@@ -45,6 +45,7 @@ test("scroll areas retain native scrolling, measure both axes, and expose Tailwi
   assert.equal(area.scrollbar("vertical", { labelledBy: "message-axis" })["aria-labelledby"], "message-axis");
   assert.equal(area.scrollbar("vertical", { labelledBy: "message-axis" })["aria-label"], undefined);
   assert.equal(area.scrollbar("horizontal").hidden(), false);
+  assert.equal(area.scrollbar("horizontal")["aria-disabled"](), undefined);
   assert.equal(area.scrollbar("horizontal")["aria-valuemax"](), 300);
   assert.equal(area.corner().hidden(), false);
   assert.deepEqual([
@@ -91,7 +92,7 @@ test("scroll areas retain native scrolling, measure both axes, and expose Tailwi
   area.dispose();
 });
 
-test("scrollbar wheel, keyboard, track, and thumb input consume movement only when useful", () => {
+test("scrollbar wheel, keyboard, track scrubbing, and thumb input consume movement only when useful", () => {
   const document = eventTarget();
   document.defaultView = eventTarget();
   const viewport = scrollElement(document, {
@@ -139,9 +140,15 @@ test("scrollbar wheel, keyboard, track, and thumb input consume movement only wh
   assert.equal(accessibleOffset, 300);
 
   area.scrollTo({ left: 0 });
-  const trackPress = pointerEvent({ currentTarget: track, target: track, clientX: 90 });
+  const trackPress = pointerEvent({ currentTarget: track, target: track, pointerId: 6, clientX: 90 });
   horizontal.onPointerDown(trackPress);
-  assert.equal(area.scrollX.value, 100);
+  assert.equal(area.scrollX.value, 300, "pressing the track scrubs the thumb to the pointer");
+  assert.equal(trackPress.prevented, true);
+  document.dispatch("pointermove", pointerEvent({ pointerId: 6, clientX: 15 }));
+  assert.equal(area.scrollX.value, 0, "the entire track remains draggable after pointer acquisition");
+  document.dispatch("pointerup", pointerEvent({ pointerId: 6, clientX: 15 }));
+  assert.equal(horizontal.style().touchAction, "none");
+  assert.equal(horizontal.style().userSelect, "none");
 
   area.scrollTo({ left: 0 });
   const thumbProps = area.thumb("horizontal");

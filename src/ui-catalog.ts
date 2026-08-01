@@ -1,9 +1,10 @@
 import { createAccordion, createContextMenu, createMenu, createMenubar, createNavigationMenu, createTabs, createToolbar } from "./ui-collections.ts";
 import { createAvatar, createButton, createCheckbox, createCheckboxGroup, createMeter, createProgress, createRadioGroup, createSeparator, createSwitch, createToggle, createToggleGroup } from "./ui-controls.ts";
 import { createField, createFieldset, createFormFacade, createInput, createNumberField, createOtpField, createSlider } from "./ui-fields.ts";
-import { createAlertDialog, createCollapsible, createDialog, createDrawer, createPopover, createPreviewCard, createTooltip } from "./ui-popups.ts";
+import { createAlertDialog, createBottomSheet, createCollapsible, createDialog, createDrawer, createPopover, createPreviewCard, createTooltip } from "./ui-popups.ts";
 import { createAutocomplete, createCombobox, createSelect } from "./ui-selection.ts";
 import { createScrollArea, createToastProvider } from "./ui-utilities.ts";
+import { createPagination } from "./ui-legacy.ts";
 
 /** The upstream release whose component inventory and anatomy Clank tracks. */
 export const BASE_UI_REFERENCE_VERSION = "1.6.0" as const;
@@ -19,6 +20,7 @@ export type UiComponentContractMap = Readonly<{
   readonly AlertDialog: readonly ["alert-dialog", "createAlertDialog", "popups"];
   readonly Autocomplete: readonly ["autocomplete", "createAutocomplete", "selection"];
   readonly Avatar: readonly ["avatar", "createAvatar", "controls"];
+  readonly BottomSheet: readonly ["bottom-sheet", "createBottomSheet", "popups"];
   readonly Button: readonly ["button", "createButton", "controls"];
   readonly Checkbox: readonly ["checkbox", "createCheckbox", "controls"];
   readonly CheckboxGroup: readonly ["checkbox-group", "createCheckboxGroup", "controls"];
@@ -37,6 +39,7 @@ export type UiComponentContractMap = Readonly<{
   readonly NavigationMenu: readonly ["navigation-menu", "createNavigationMenu", "collections"];
   readonly NumberField: readonly ["number-field", "createNumberField", "fields"];
   readonly OTPField: readonly ["otp-field", "createOtpField", "fields"];
+  readonly Pagination: readonly ["pagination", "createPagination", "legacy"];
   readonly Popover: readonly ["popover", "createPopover", "popups"];
   readonly PreviewCard: readonly ["preview-card", "createPreviewCard", "popups"];
   readonly Progress: readonly ["progress", "createProgress", "controls"];
@@ -72,10 +75,12 @@ export type UiCatalogEntry<Name extends UiComponentName = UiComponentName> =
       parts: readonly string[];
       formAssociated: boolean;
       description: string;
-      /** Canonical upstream anatomy/API page used for this compatibility surface. */
-      referenceUrl: `https://base-ui.com/react/components/${UiComponentContractMap[Name][0]}`;
-      /** Upstream release used when this entry was authored and verified. */
-      referenceVersion: typeof BASE_UI_REFERENCE_VERSION;
+      /** Whether this family tracks Base UI anatomy or extends it with a Clank-native pattern. */
+      source: "base-ui" | "clank";
+      /** Canonical anatomy/API page used for this surface. */
+      referenceUrl: string;
+      /** Reference revision used when this entry was authored and verified. */
+      referenceVersion: string;
     }>
     : never;
 
@@ -92,6 +97,7 @@ const componentFactories = {
   AlertDialog: createAlertDialog,
   Autocomplete: createAutocomplete,
   Avatar: createAvatar,
+  BottomSheet: createBottomSheet,
   Button: createButton,
   Checkbox: createCheckbox,
   CheckboxGroup: createCheckboxGroup,
@@ -110,6 +116,7 @@ const componentFactories = {
   NavigationMenu: createNavigationMenu,
   NumberField: createNumberField,
   OTPField: createOtpField,
+  Pagination: createPagination,
   Popover: createPopover,
   PreviewCard: createPreviewCard,
   Progress: createProgress,
@@ -132,8 +139,8 @@ export type UiComponentFactoryMap = Readonly<typeof componentFactories>;
 
 /**
  * Runtime factory lookup for agent generators, inspectors, examples, and
- * catalog conformance tests. It deliberately contains the same 37 families as
- * the official Base UI 1.6 catalog while exposing Clank-native controllers.
+ * catalog conformance tests. It contains the complete Base UI 1.6 family set plus
+ * Clank-native extensions for common application patterns.
  */
 export const UI_COMPONENT_FACTORIES: UiComponentFactoryMap = Object.freeze(componentFactories);
 
@@ -142,6 +149,7 @@ const componentCatalog = [
   entry("AlertDialog", "alert-dialog", "createAlertDialog", "popups", ["trigger", "portal", "backdrop", "viewport", "popup", "title", "description", "close"], false, "A modal decision that cannot be dismissed accidentally."),
   entry("Autocomplete", "autocomplete", "createAutocomplete", "selection", ["label", "input-group", "input", "trigger", "icon", "clear", "value", "portal", "backdrop", "positioner", "popup", "arrow", "status", "empty", "list", "row", "item", "separator", "group", "group-label", "collection"], true, "Editable free-form input with filtered suggestions."),
   entry("Avatar", "avatar", "createAvatar", "controls", ["root", "image", "fallback"], false, "Image loading state with an accessible fallback."),
+  entry("BottomSheet", "bottom-sheet", "createBottomSheet", "popups", ["provider", "indent-background", "indent", "trigger", "swipe-area", "portal", "backdrop", "viewport", "popup", "handle", "content", "title", "description", "close", "virtual-keyboard-provider"], false, "Mobile-first modal surface with snap points, safe-area layout, and swipe dismissal.", { source: "clank", referenceUrl: "https://base-ui.com/react/components/drawer" }),
   entry("Button", "button", "createButton", "controls", ["root"], true, "Native-first press behavior and agent metadata."),
   entry("Checkbox", "checkbox", "createCheckbox", "controls", ["root", "indicator", "input", "unchecked-input"], true, "Binary or indeterminate choice with checked and unchecked native form projection."),
   entry("CheckboxGroup", "checkbox-group", "createCheckboxGroup", "controls", ["root", "parent", "parent-indicator", "item", "indicator", "input"], true, "An ordered group with independently checked values and an optional mixed-state parent."),
@@ -160,6 +168,7 @@ const componentCatalog = [
   entry("NavigationMenu", "navigation-menu", "createNavigationMenu", "collections", ["root", "list", "item", "trigger", "icon", "content", "link", "portal", "backdrop", "positioner", "popup", "arrow", "viewport", "indicator"], false, "Focus-safe site navigation with current links and flyout content."),
   entry("NumberField", "number-field", "createNumberField", "fields", ["root", "scrub-area", "scrub-area-cursor", "group", "decrement", "input", "increment"], true, "Locale-aware nullable numeric entry with zero-seeded stepping."),
   entry("OTPField", "otp-field", "createOtpField", "fields", ["root", "input", "separator", "hidden-input"], true, "One-time-code entry with paste, masking, and autofill projection."),
+  entry("Pagination", "pagination", "createPagination", "legacy", ["root", "status", "previous", "page", "ellipsis", "next", "page-size"], false, "Compact result navigation with clamped state and native page controls.", { source: "clank", referenceUrl: "https://docs.clank.run/docs/ui" }),
   entry("Popover", "popover", "createPopover", "popups", ["trigger", "portal", "backdrop", "positioner", "popup", "arrow", "viewport", "title", "description", "close"], false, "Anchored interactive popup content."),
   entry("PreviewCard", "preview-card", "createPreviewCard", "popups", ["trigger", "portal", "backdrop", "positioner", "popup", "arrow", "viewport"], false, "Delayed pointer and focus preview enhancement."),
   entry("Progress", "progress", "createProgress", "controls", ["root", "label", "track", "indicator", "value"], false, "Determinate or indeterminate progress status."),
@@ -198,6 +207,10 @@ function entry<Name extends UiComponentName>(
   parts: readonly string[],
   formAssociated: boolean,
   description: string,
+  reference: { source: "base-ui" | "clank"; referenceUrl: string } = {
+    source: "base-ui",
+    referenceUrl: `https://base-ui.com/react/components/${slug}`,
+  },
 ): UiCatalogEntry<Name> {
   return {
     name,
@@ -207,8 +220,9 @@ function entry<Name extends UiComponentName>(
     parts,
     formAssociated,
     description,
-    referenceUrl: `https://base-ui.com/react/components/${slug}`,
-    referenceVersion: BASE_UI_REFERENCE_VERSION,
+    source: reference.source,
+    referenceUrl: reference.referenceUrl,
+    referenceVersion: reference.source === "base-ui" ? BASE_UI_REFERENCE_VERSION : "clank-ui/1",
   } as UiCatalogEntry<Name>;
 }
 

@@ -34,6 +34,10 @@ export interface SelectionFilterOptions {
   mode?: "contains" | "starts-with";
 }
 
+/** Rendering hint for selection popups. Responsive keeps the anchored desktop popup contract
+ * while allowing mobile CSS to present the same modal surface as a bottom sheet. */
+export type SelectionPresentation = "popover" | "bottom-sheet" | "responsive";
+
 /** Locale-aware, accent-insensitive filter shared by Select, Combobox, and Autocomplete. */
 export function filterSelectionItems<Value>(
   items: readonly SelectionItem<Value>[],
@@ -82,6 +86,7 @@ export interface SelectOptions<Value> extends Omit<PopupOptions, "onOpenChange">
   loop?: boolean;
   direction?: Direction;
   closeOnSelect?: boolean;
+  presentation?: SelectionPresentation;
 }
 
 export interface SelectController<Value> {
@@ -125,6 +130,7 @@ export function createSelect<Value>(options: SelectOptions<Value>): SelectContro
     throw new TypeError("Select cannot use both field and value control.");
   }
   const direction = options.direction ?? useDirection();
+  const presentation = options.presentation ?? "popover";
   const items = validateItems(options.items, options.equals);
   const equals = options.equals ?? Object.is;
   const multiple = Boolean(options.multiple);
@@ -391,14 +397,18 @@ export function createSelect<Value>(options: SelectOptions<Value>): SelectContro
       "data-popup-open": () => popup.open.value ? "" : undefined,
     }),
     isMounted: popup.isMounted,
-    portal: (portalOptions) => mergeProps(popup.portal(portalOptions), { "data-clank-part": "portal" }),
-    backdrop: popup.backdrop,
+    portal: (portalOptions) => mergeProps(popup.portal(portalOptions), {
+      "data-clank-part": "portal",
+      "data-selection-presentation": presentation,
+    }),
+    backdrop: () => mergeProps(popup.backdrop(), { "data-selection-presentation": presentation }),
     positioner: () => mergeProps(popup.positioner(), {
+      "data-selection-presentation": presentation,
       ref: (element: HTMLElement | null) => { positionerElement.value = element; },
     }),
     popup: () => mergeProps(
       popup.popup({ role: "presentation", labelledBy: false, describedBy: false }),
-      { onKeyDown: onListKeyDown },
+      { "data-selection-presentation": presentation, onKeyDown: onListKeyDown },
     ),
     arrow: popup.arrow,
     list: () => ({
@@ -474,6 +484,7 @@ export function createSelect<Value>(options: SelectOptions<Value>): SelectContro
     },
     manifest: () => createSelectionManifest("Select", id, {
       open: popup.open.peek(),
+      presentation,
       multiple,
       selected: selectedItems.peek().map((item) => item.label),
       highlightedIndex: highlightedIndex.peek(),
@@ -500,6 +511,22 @@ export interface ComboboxOptions<Value> extends Omit<SelectOptions<Value>, "valu
   allowCustomValue?: boolean;
 }
 
+export interface EditableSelectionInputOptions {
+  /** Override the generated input id when rendering more than one responsive presentation. */
+  id?: string;
+  /** Marks an additional search field rendered inside the popup or mobile bottom sheet. */
+  insidePopup?: boolean;
+  ariaLabel?: string;
+}
+
+export interface EditableSelectionTriggerOptions {
+  id?: string;
+  /** Render the trigger as the primary combobox control for an input-inside-popup pattern. */
+  standalone?: boolean;
+  agentId?: string;
+  agentLabel?: string;
+}
+
 export interface AutocompleteOptions<Value> extends Omit<ComboboxOptions<Value>, "field"> {
   field?: FieldController<AutocompleteFieldValue<Value>>;
   /** Preserve the highlighted suggestion when the pointer leaves its item. Defaults to false. */
@@ -514,9 +541,11 @@ export interface ComboboxController<Value> {
   readonly filteredItems: Computed<readonly SelectionItem<Value>[]>;
   readonly highlightedIndex: ReactiveSignal<number>;
   label(): Record<string, unknown>;
-  input(): Record<string, unknown>;
+  show(reason?: OpenChangeReason, event?: Event): boolean;
+  hide(reason?: OpenChangeReason, event?: Event): boolean;
+  input(options?: EditableSelectionInputOptions): Record<string, unknown>;
   inputGroup(): Record<string, unknown>;
-  trigger(): Record<string, unknown>;
+  trigger(options?: EditableSelectionTriggerOptions): Record<string, unknown>;
   clear(): Record<string, unknown>;
   icon(): Record<string, unknown>;
   valuePart(options?: { placeholder?: string }): Record<string, unknown>;
@@ -562,6 +591,7 @@ function createEditableSelection<Value>(
 ): ComboboxController<Value> {
   const id = requireId(options.id, autocomplete ? "Autocomplete" : "Combobox");
   const direction = options.direction ?? useDirection();
+  const presentation = options.presentation ?? "popover";
   const items = validateItems(options.items, options.equals);
   const equals = options.equals ?? Object.is;
   const multiple = Boolean(options.multiple);
@@ -717,14 +747,22 @@ function createEditableSelection<Value>(
     filled: () => localFilled.value,
     focused: () => focused.value,
   });
-  const popup = createPopover({ ...options, id, modal: options.modal ?? false, onOpenChange: options.onOpenChange });
+  const inputElements = new Set<HTMLInputElement>();
+  let activeInputElement: HTMLInputElement | null = null;
+  let popupInputElement: HTMLInputElement | null = null;
+  const popup = createPopover({
+    ...options,
+    id,
+    modal: options.modal ?? (presentation === "popover" ? false : true),
+    initialFocus: options.initialFocus ?? (() => popupInputElement),
+    onOpenChange: options.onOpenChange,
+  });
   const filteredItems = computed<readonly SelectionItem<Value>[]>(() => {
     const query = inputState.value.value;
     if (completionMode === "none") return items;
     return options.filter ? [...options.filter(items, query)] : filterSelectionItems(items, query);
   });
   const highlightedIndex = signal(-1, { name: `${id}.highlighted` });
-  let inputElement: HTMLInputElement | null = null;
   let previousFilteredItems = filteredItems.peek();
   let hasHighlightedValue = false;
   let highlightedValue!: Value;
@@ -814,32 +852,36 @@ function createEditableSelection<Value>(
     return candidate;
   };
   function renderInlineCompletion(): void {
-    const element = inputElement;
-    if (!element) return;
     const query = inputState.value.peek();
     const candidate = inlineCandidate();
-    element.value = candidate?.label ?? query;
-    try {
-      const end = candidate?.label.length ?? query.length;
-      element.setSelectionRange?.(query.length, end, candidate ? "forward" : "none");
-    } catch { /* Selection APIs can be unavailable in partial DOM adapters. */ }
+    for (const element of inputElements) {
+      element.value = candidate?.label ?? query;
+      if (element !== activeInputElement) continue;
+      try {
+        const end = candidate?.label.length ?? query.length;
+        element.setSelectionRange?.(query.length, end, candidate ? "forward" : "none");
+      } catch { /* Selection APIs can be unavailable in partial DOM adapters. */ }
+    }
   }
   const acceptInlineCompletion = (event?: Event): boolean => {
     const candidate = inlineCandidate();
     if (!candidate) return false;
     if (!autocomplete) return choose(candidate.value, "keyboard", event);
     const changed = inputState.set(candidate.label, "input", event);
-    if (changed && inputElement) {
-      inputElement.value = candidate.label;
-      try { inputElement.setSelectionRange?.(candidate.label.length, candidate.label.length, "none"); } catch { /* Optional API. */ }
+    if (changed) {
+      for (const element of inputElements) element.value = candidate.label;
+      if (activeInputElement) {
+        try { activeInputElement.setSelectionRange?.(candidate.label.length, candidate.label.length, "none"); } catch { /* Optional API. */ }
+      }
     }
     return changed;
   };
   const restoreTypedInput = (): void => {
-    if (!inputElement) return;
-    inputElement.value = inputState.value.peek();
-    const end = inputElement.value.length;
-    try { inputElement.setSelectionRange?.(end, end, "none"); } catch { /* Optional API. */ }
+    const value = inputState.value.peek();
+    for (const element of inputElements) element.value = value;
+    if (!activeInputElement) return;
+    const end = activeInputElement.value.length;
+    try { activeInputElement.setSelectionRange?.(end, end, "none"); } catch { /* Optional API. */ }
   };
   const clearEditable = (event: Event): boolean => {
     const emptySelection: SelectionValue<Value> = multiple ? [] : null;
@@ -849,6 +891,10 @@ function createEditableSelection<Value>(
       return false;
     }
     return transition.changed;
+  };
+  const prepareStandaloneSearch = (event?: Event): void => {
+    if (autocomplete || multiple || inputState.value.peek() === "") return;
+    if (inputState.set("", "programmatic", event)) renderInlineCompletion();
   };
   const onInputKeyDown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || disabled.peek() || readOnly.peek()) return;
@@ -905,6 +951,8 @@ function createEditableSelection<Value>(
     highlightedIndex,
     setInput,
     choose,
+    show: popup.show,
+    hide: popup.hide,
     label: () => field
       ? mergeProps(field.label(), { "data-clank-part": "label", ...commonStateProps() })
       : ({
@@ -914,89 +962,147 @@ function createEditableSelection<Value>(
         ...commonStateProps(),
         use: labelPresence!.register(),
       }),
-    input: () => ({
-      id: controlId,
-      role: "combobox",
-      type: "text",
-      value: () => inputState.value.value,
-      disabled: () => disabled.value,
-      readOnly: () => readOnly.value,
-      required: autocomplete && !multiple
-        ? field ? () => required.value : Boolean(options.required)
-        : undefined,
-      name: autocomplete && !multiple ? name : undefined,
-      form: options.form,
-      autoComplete: options.autoComplete ?? "off",
-      dir: direction,
-      "aria-autocomplete": completionMode,
-      "aria-haspopup": "listbox",
-      "aria-expanded": () => popup.open.value,
-      "aria-controls": `${id}-list`,
-      "aria-labelledby": labelId,
-      "aria-describedby": fieldPart?.["aria-describedby"],
-      "aria-errormessage": fieldPart?.["aria-errormessage"],
-      "aria-invalid": fieldPart?.["aria-invalid"],
-      "aria-required": () => required.value || undefined,
-      "aria-activedescendant": activeDescendantId,
-      "data-open": () => popup.open.value ? "" : undefined,
-      "data-popup-open": () => popup.open.value ? "" : undefined,
-      ...commonStateProps(),
-      "data-list-empty": () => filteredItems.value.length === 0 ? "" : undefined,
-      "data-clank-part": "input",
-      ref: (element: HTMLElement | null) => {
-        popup.triggerElement.value = element;
-        inputElement = element as HTMLInputElement | null;
-        resetBinding.ref(element);
-        renderInlineCompletion();
-      },
-      ...(textField ? { use: (element: Element): Cleanup | undefined => mountPartUse(fieldPart, element) } : {}),
-      onInput: (event: Event) => {
-        if (event.defaultPrevented) return;
-        if (!setInput((event.currentTarget as HTMLInputElement).value, "input", event)) restoreTypedInput();
-      },
-      onClick: (event: MouseEvent) => {
-        const openOnInputClick = options.openOnInputClick ?? !autocomplete;
-        if (!event.defaultPrevented && !disabled.peek() && openOnInputClick) {
-          popup.show("trigger-press", event);
-        }
-      },
-      onKeyDown: onInputKeyDown,
-      onFocus: (event: FocusEvent) => {
-        focused.value = true;
-        field?.setFocused(true);
-        if (!event.defaultPrevented && inputState.value.peek()) {
-          popup.show("focus", event);
+    input: (inputOptions = {}) => {
+      const insidePopup = inputOptions.insidePopup === true;
+      let mountedElement: HTMLInputElement | null = null;
+      return {
+        id: inputOptions.id ?? (insidePopup ? `${id}-popup-input` : controlId),
+        role: "combobox",
+        type: "text",
+        value: () => inputState.value.value,
+        disabled: () => disabled.value,
+        readOnly: () => readOnly.value,
+        required: !insidePopup && autocomplete && !multiple
+          ? field ? () => required.value : Boolean(options.required)
+          : undefined,
+        name: !insidePopup && autocomplete && !multiple ? name : undefined,
+        form: options.form,
+        autoComplete: options.autoComplete ?? "off",
+        dir: direction,
+        "aria-label": inputOptions.ariaLabel,
+        "aria-autocomplete": completionMode,
+        "aria-haspopup": "listbox",
+        "aria-expanded": () => popup.open.value,
+        "aria-controls": `${id}-list`,
+        "aria-labelledby": inputOptions.ariaLabel ? undefined : labelId,
+        "aria-describedby": insidePopup ? undefined : fieldPart?.["aria-describedby"],
+        "aria-errormessage": insidePopup ? undefined : fieldPart?.["aria-errormessage"],
+        "aria-invalid": insidePopup ? undefined : fieldPart?.["aria-invalid"],
+        "aria-required": () => required.value || undefined,
+        "aria-activedescendant": activeDescendantId,
+        "data-open": () => popup.open.value ? "" : undefined,
+        "data-popup-open": () => popup.open.value ? "" : undefined,
+        "data-inside-popup": insidePopup ? "" : undefined,
+        "data-selection-presentation": presentation,
+        ...commonStateProps(),
+        "data-list-empty": () => filteredItems.value.length === 0 ? "" : undefined,
+        "data-clank-part": "input",
+        ref: (element: HTMLElement | null) => {
+          const previousElement = mountedElement;
+          if (previousElement) inputElements.delete(previousElement);
+          if (activeInputElement === previousElement) activeInputElement = null;
+          mountedElement = element as HTMLInputElement | null;
+          if (mountedElement) inputElements.add(mountedElement);
+          if (!activeInputElement && mountedElement) activeInputElement = mountedElement;
+          else if (!activeInputElement && inputElements.size) activeInputElement = inputElements.values().next().value ?? null;
+          if (insidePopup) {
+            if (mountedElement || popupInputElement === previousElement) popupInputElement = mountedElement;
+          }
+          else {
+            popup.triggerElement.value = element;
+            resetBinding.ref(element);
+          }
           renderInlineCompletion();
-        }
-      },
-      onBlur: (event: FocusEvent) => {
-        if (!event.defaultPrevented) acceptInlineCompletion(event);
-        focused.value = false;
-        touched.value = true;
-        field?.setFocused(false);
-        field?.touch();
-        if (shouldValidateSelectionFieldOnBlur(field)) void field!.validate("blur", event);
-      },
-      onInvalid: textField ? fieldPart?.onInvalid : undefined,
-    }),
+        },
+        ...(!insidePopup && textField ? { use: (element: Element): Cleanup | undefined => mountPartUse(fieldPart, element) } : {}),
+        onInput: (event: Event) => {
+          if (event.defaultPrevented) return;
+          if (!setInput((event.currentTarget as HTMLInputElement).value, "input", event)) restoreTypedInput();
+        },
+        onClick: (event: MouseEvent) => {
+          const openOnInputClick = options.openOnInputClick ?? !autocomplete;
+          if (!event.defaultPrevented && !disabled.peek() && (insidePopup || openOnInputClick)) {
+            popup.show("trigger-press", event);
+          }
+        },
+        onKeyDown: onInputKeyDown,
+        onFocus: (event: FocusEvent) => {
+          activeInputElement = event.currentTarget as HTMLInputElement;
+          focused.value = true;
+          field?.setFocused(true);
+          if (!insidePopup && !event.defaultPrevented && inputState.value.peek()) {
+            popup.show("focus", event);
+            renderInlineCompletion();
+          }
+        },
+        onBlur: (event: FocusEvent) => {
+          if (!event.defaultPrevented) acceptInlineCompletion(event);
+          const related = event.relatedTarget as HTMLInputElement | null;
+          if (related && inputElements.has(related)) {
+            activeInputElement = related;
+            return;
+          }
+          activeInputElement = null;
+          focused.value = false;
+          touched.value = true;
+          field?.setFocused(false);
+          field?.touch();
+          if (shouldValidateSelectionFieldOnBlur(field)) void field!.validate("blur", event);
+        },
+        onInvalid: !insidePopup && textField ? fieldPart?.onInvalid : undefined,
+      };
+    },
     inputGroup: () => ({
       "data-clank-part": "input-group",
       ...commonStateProps(),
     }),
-    trigger: () => ({
+    trigger: (triggerOptions = {}) => ({
+      id: triggerOptions.id ?? (triggerOptions.standalone ? controlId : undefined),
       type: "button",
-      tabIndex: -1,
-      "aria-label": () => popup.open.value ? "Close suggestions" : "Open suggestions",
+      role: triggerOptions.standalone ? "combobox" : undefined,
+      tabIndex: triggerOptions.standalone ? 0 : -1,
+      "aria-label": triggerOptions.standalone ? undefined : () => popup.open.value ? "Close suggestions" : "Open suggestions",
+      "aria-labelledby": triggerOptions.standalone
+        ? () => [labelId(), `${id}-value`].filter(Boolean).join(" ") || undefined
+        : undefined,
+      "aria-haspopup": triggerOptions.standalone ? "listbox" : undefined,
       "aria-controls": `${id}-list`,
       "aria-expanded": () => popup.open.value,
+      "aria-activedescendant": triggerOptions.standalone ? activeDescendantId : undefined,
       disabled: () => disabled.value,
       form: options.form,
       "data-clank-part": "trigger",
+      "data-standalone": triggerOptions.standalone ? "" : undefined,
+      "data-selection-presentation": presentation,
       ...commonStateProps(),
+      ...(triggerOptions.agentId ? { agentId: triggerOptions.agentId } : {}),
+      ...(triggerOptions.agentLabel ? { agentLabel: triggerOptions.agentLabel } : {}),
+      ...(triggerOptions.standalone ? {
+        ref: (element: HTMLElement | null) => {
+          popup.triggerElement.value = element;
+          resetBinding.ref(element);
+        },
+      } : {}),
+      onKeyDown: triggerOptions.standalone
+        ? (event: KeyboardEvent) => {
+          if (event.defaultPrevented || disabled.peek() || readOnly.peek()) return;
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          if (!popup.open.peek()) {
+            prepareStandaloneSearch(event);
+            popup.show("trigger-press", event);
+          }
+          queueMicrotask(() => popupInputElement?.focus());
+          event.preventDefault();
+        }
+        : undefined,
       onClick: (event: Event) => {
         if (event.defaultPrevented || disabled.peek()) return;
+        const opening = triggerOptions.standalone && !popup.open.peek();
+        if (opening) prepareStandaloneSearch(event);
         popup.toggle("trigger-press", event);
-        focusById(event.currentTarget, controlId);
+        if (triggerOptions.standalone) {
+          if (popup.open.peek()) queueMicrotask(() => popupInputElement?.focus());
+        } else focusById(event.currentTarget, controlId);
       },
     }),
     clear: () => ({
@@ -1018,6 +1124,7 @@ function createEditableSelection<Value>(
       "data-popup-open": () => popup.open.value ? "" : undefined,
     }),
     valuePart: (valueOptions = {}) => ({
+      id: `${id}-value`,
       "data-clank-part": "value",
       "data-placeholder": () => selectionValues(valueState.value.value, multiple).length === 0 && inputState.value.value === "" ? "" : undefined,
       ...commonStateProps(),
@@ -1030,7 +1137,10 @@ function createEditableSelection<Value>(
       },
     }),
     isMounted: popup.isMounted,
-    portal: (portalOptions) => mergeProps(popup.portal(portalOptions), { "data-clank-part": "portal" }),
+    portal: (portalOptions) => mergeProps(popup.portal(portalOptions), {
+      "data-clank-part": "portal",
+      "data-selection-presentation": presentation,
+    }),
     list: () => ({
       id: `${id}-list`, role: "listbox", tabIndex: -1, dir: direction,
       "aria-labelledby": labelId,
@@ -1040,9 +1150,12 @@ function createEditableSelection<Value>(
       ...commonStateProps(),
       onMouseDown: (event: MouseEvent) => { if (!event.defaultPrevented) event.preventDefault(); },
     }),
-    popup: () => popup.popup({ role: "presentation", labelledBy: false, describedBy: false }),
-    positioner: popup.positioner,
-    backdrop: popup.backdrop,
+    popup: () => mergeProps(
+      popup.popup({ role: "presentation", labelledBy: false, describedBy: false }),
+      { "data-selection-presentation": presentation },
+    ),
+    positioner: () => mergeProps(popup.positioner(), { "data-selection-presentation": presentation }),
+    backdrop: () => mergeProps(popup.backdrop(), { "data-selection-presentation": presentation }),
     arrow: popup.arrow,
     status: () => ({
       role: "status", "aria-live": "polite", "aria-atomic": true,
@@ -1129,11 +1242,18 @@ function createEditableSelection<Value>(
       return controls;
     },
     manifest: () => createSelectionManifest(autocomplete ? "Autocomplete" : "Combobox", id, {
-      open: popup.open.peek(), inputValue: inputState.value.peek(), multiple,
+      open: popup.open.peek(), inputValue: inputState.value.peek(), multiple, presentation,
       selected: selectionValues(valueState.value.peek(), multiple).map((value) => findItem(items, value, equals)?.label ?? "unknown"),
       resultCount: filteredItems.peek().length, highlightedIndex: highlightedIndex.peek(),
     }),
-    dispose() { stopHighlightReconciliation(); resetBinding.dispose(); popup.dispose(); },
+    dispose() {
+      inputElements.clear();
+      activeInputElement = null;
+      popupInputElement = null;
+      stopHighlightReconciliation();
+      resetBinding.dispose();
+      popup.dispose();
+    },
   };
   return controller;
 }

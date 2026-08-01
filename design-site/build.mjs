@@ -85,6 +85,7 @@ for (const path of await filesUnder(sourceRoot)) {
 }
 
 const { CLANK_THEME_PRESETS, createClankThemeStylesheet } = await import("../dist/ui-theme.js");
+const { UI_COMPONENT_COUNT } = await import("../dist/ui-catalog.js");
 const sourceStyles = await readFile(join(sourceRoot, "styles.css"), "utf8");
 await writeAtomically(join(outputRoot, "styles.css"), `${createClankThemeStylesheet(CLANK_THEME_PRESETS)}\n${sourceStyles}`);
 
@@ -101,8 +102,8 @@ await writeAtomically(join(outputRoot, "manifest.json"), `${JSON.stringify({
   frameworkVersion: packageJson.version,
   assetVersion,
   vendorVersion,
-  componentCount: 37,
+  componentCount: UI_COMPONENT_COUNT,
   themeCount: CLANK_THEME_PRESETS.length,
 }, null, 2)}\n`);
 
-console.log(`Built Clank Design Studio: 37 components, ${CLANK_THEME_PRESETS.length} themes, zero dependencies.`);
+console.log(`Built Clank Design Studio: ${UI_COMPONENT_COUNT} components, ${CLANK_THEME_PRESETS.length} themes, zero dependencies.`);

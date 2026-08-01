@@ -47,7 +47,7 @@ test("Design Studio serves every real component and theme contract securely", as
   assert.match(response.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/u);
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.match(home, /Inspect every state/u);
-  assert.match(home, /37[^<]*<\/strong><span>interactive families/u);
+  assert.match(home, /<strong><!--clank:start-->39<!--clank:end--><\/strong><span>interactive families/u);
   assert.match(home, /10[^<]*<\/strong><span>complete themes/u);
   assert.match(home, /<link rel="canonical" href="https:\/\/design\.clank\.run\/"/u);
   assert.match(home, /rel="icon" href="\/brand\/favicon\.ico\?v=[a-f0-9]{16}"/u);
@@ -68,6 +68,12 @@ test("Design Studio serves every real component and theme contract securely", as
   const styleSource = await styleResponse.text();
   assert.match(styleSource, /\.scrollbar\.vertical\s*\{[^}]*width:\s*16px/u);
   assert.match(styleSource, /\.scroll-thumb::after\s*\{[^}]*pointer-events:\s*none/u);
+  assert.match(styleSource, /\.selection-positioner\[data-selection-presentation="responsive"\][^{]*\{[^}]*position:\s*fixed\s*!important/u);
+  assert.match(styleSource, /\.adaptive-selection-popup\[data-selection-presentation="responsive"\][^{]*\{[^}]*max-height:\s*min\(82dvh,\s*720px\)/u);
+  assert.match(styleSource, /\.pagination-pages\s*\{[^}]*overflow-x:\s*auto/u);
+  assert.match(styleSource, /\.pagination-controls > button[^}]*\{[^}]*width:\s*44px[^}]*height:\s*44px/u);
+  assert.match(styleSource, /\.bottom-sheet-swipe\s*\{[^}]*min-height:\s*44px/u);
+  assert.doesNotMatch(styleSource, /--clank-radius-xl/u);
   assert.match(styleSource, /\.component-heading h1\s*\{[^}]*overflow-wrap:\s*anywhere/u);
   assert.match(styleSource, /\.nav-popup\s*\{[^}]*width:\s*min\(320px,\s*calc\(100vw - 32px\)\)[^}]*min-width:\s*0/u);
   assert.equal(appResponse.status, 200);
@@ -82,6 +88,9 @@ test("Design Studio serves every real component and theme contract securely", as
   for (const feedback of ["Deploy started.", "Draft saved.", "was added as", "Bold applied.", "Italic applied.", "Link inserted."]) {
     assert.ok(storiesSource.includes(feedback), `interactive story feedback is missing: ${feedback}`);
   }
+  for (const capability of ["createBottomSheet", "createPagination", "modal: true", "presentation: \"responsive\"", "insidePopup: true"]) {
+    assert.ok(storiesSource.includes(capability), `expanded component story is missing: ${capability}`);
+  }
   for (const source of [studioSource, storiesSource]) {
     assert.match(source, /\.\.\/vendor\/[^"']+\.js\?v=[a-f0-9]{16}/u);
     assert.ok(source.includes(`?v=${manifest.vendorVersion}`));
@@ -94,8 +103,8 @@ test("Design Studio serves every real component and theme contract securely", as
   const catalog = await catalogResponse.json();
   assert.equal(catalogResponse.headers.get("access-control-allow-origin"), "*");
   assert.equal(catalog.protocol, "clank-design/1");
-  assert.equal(catalog.total, 37);
-  assert.equal(new Set(catalog.components.map((entry) => entry.slug)).size, 37);
+  assert.equal(catalog.total, 39);
+  assert.equal(new Set(catalog.components.map((entry) => entry.slug)).size, 39);
   assert.ok(catalog.components.every((entry) => entry.import === `@clank.run/framework/ui/${entry.slug}`));
 
   for (const component of catalog.components) {
@@ -127,13 +136,13 @@ test("Design Studio serves every real component and theme contract securely", as
     fetch(`${origin}/sitemap.xml`).then((entry) => entry.text()),
     fetch(`${origin}/favicon.ico`),
   ]);
-  assert.deepEqual(health, { ok: true, service: "clank-design", version: manifest.frameworkVersion, components: 37, themes: 10 });
+  assert.deepEqual(health, { ok: true, service: "clank-design", version: manifest.frameworkVersion, components: 39, themes: 10 });
   assert.equal(discovery.mcp.endpoint, "https://design.clank.run/__clank/mcp");
   assert.equal(discovery.mcp.authentication, "none");
   assert.equal(serverCard.serverInfo.name, "clank-design");
   assert.equal(serverCard.authentication.required, false);
   assert.match(compact, /@clank\.run\/framework\/ui\/theme/u);
-  assert.equal((sitemap.match(/<url>/gu) ?? []).length, 39);
+  assert.equal((sitemap.match(/<url>/gu) ?? []).length, 41);
   assert.equal(favicon.status, 200);
   assert.equal(favicon.headers.get("content-type"), "image/x-icon");
 
@@ -169,6 +178,6 @@ test("Design Studio source remains a zero-dependency first-party Clank project",
   }
   assert.equal(manifest.protocol, "clank-design/1");
   assert.match(manifest.vendorVersion, /^[a-f0-9]{16}$/u);
-  assert.equal(manifest.componentCount, 37);
+  assert.equal(manifest.componentCount, 39);
   assert.equal(manifest.themeCount, 10);
 });

@@ -75,7 +75,7 @@ const designMcp = createMcpServer({
     {
       name: "design.components",
       title: "List components",
-      description: "List all 37 Clank UI families, optionally filtered by implementation module.",
+      description: `List all ${UI_COMPONENT_COUNT} Clank UI families, optionally filtered by implementation module.`,
       inputSchema: { type: "object", properties: { module: { type: "string", maxLength: 32 } }, additionalProperties: false },
       outputSchema: { type: "object", properties: { total: { type: "integer" }, components: { type: "array", items: { type: "object" } } }, required: ["total", "components"], additionalProperties: false },
       annotations: { title: "List components", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -155,7 +155,7 @@ function versionedAsset(request: Request, filename: string): Response | Promise<
 async function page(view: StudioView, path: string, status = 200): Promise<Response> {
   const entry = UI_COMPONENT_CATALOG.find((candidate) => candidate.slug === view);
   const title = view === "overview" ? "Clank Design Studio" : view === "themes" ? "Themes · Clank Design Studio" : entry ? `${entry.name} · Clank Design Studio` : "Not found · Clank Design Studio";
-  const description = entry?.description ?? (view === "themes" ? "Compare ten dependency-free Clank themes across color, radius, density, typography, depth, focus, and motion." : "Explore all 37 Clank headless UI component families and ten live dependency-free themes.");
+  const description = entry?.description ?? (view === "themes" ? "Compare ten dependency-free Clank themes across color, radius, density, typography, depth, focus, and motion." : `Explore all ${UI_COMPONENT_COUNT} Clank headless UI component families and ten live dependency-free themes.`);
   const nonce = crypto.randomUUID().replaceAll("-", "");
   const state = { initialView: view, initialTheme: "clank", frameworkVersion: manifest.frameworkVersion };
   const document = await renderDocument(<div id="design-root"><DesignStudio {...state} /></div>, {

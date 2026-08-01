@@ -1,4 +1,5 @@
 import { type Cleanup, type Computed, type ReactiveSignal } from "./core.js";
+import { type UiManifest } from "./ui-foundation.js";
 export interface DisclosureOptions {
     id: string;
     initialOpen?: boolean;
@@ -17,12 +18,14 @@ export interface DisclosureController {
 }
 export declare function createDisclosure(options: DisclosureOptions): DisclosureController;
 export interface PaginationOptions {
+    id?: string;
     total: number | ReactiveSignal<number> | Computed<number> | (() => number);
     pageSize?: number;
     initialPage?: number;
     siblingCount?: number;
 }
 export interface PaginationController {
+    readonly id: string;
     readonly page: ReactiveSignal<number>;
     readonly pageSize: ReactiveSignal<number>;
     readonly total: Computed<number>;
@@ -36,6 +39,14 @@ export interface PaginationController {
     setPageSize(size: number): void;
     previous(): void;
     next(): void;
+    root(options?: { label?: string }): Record<string, unknown>;
+    status(): Record<string, unknown>;
+    previousButton(): Record<string, unknown>;
+    pageButton(page: number): Record<string, unknown>;
+    ellipsis(): Record<string, unknown>;
+    nextButton(): Record<string, unknown>;
+    pageSizeSelect(): Record<string, unknown>;
+    manifest(): UiManifest;
     dispose(): void;
 }
 export declare function createPagination(options: PaginationOptions): PaginationController;
