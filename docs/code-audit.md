@@ -1,6 +1,6 @@
 # Code and product audit
 
-Audit date: 2026-07-30
+Audit date: 2026-08-01
 
 This document records what was inspected, what changed, and what remains intentionally out of scope. It is evidence for maintainers, not a claim that any framework can make every application correct automatically.
 
@@ -65,6 +65,7 @@ The audit covered:
 | Platform auth and device-start throttles reset per process, while successful login cleared a malformed key | Added one atomic HMAC-keyed SQLite sliding-window store shared by auth and device onboarding, corrected successful-login clearing, and bounded high-cardinality retention | Framework reset, cross-runtime accumulation, restart persistence, raw-identity absence, clock rollback, 429, and 20k-key pruning regressions |
 | Generated auth pages rendered correctly but mapped `clank` while compiled browser modules imported the framework package, preventing hydration | Aligned both scaffold import maps with `@clank.run/framework` and added generated-source regression coverage | Fresh scaffold registration and two-browser live-sync verification |
 | CLI help could execute a command, offline dry-runs required auth, unknown options were ignored, and async failures had inconsistent exit behavior | Added command-aware help, strict option validation and suggestions, reliable async error handling, offline dry-runs, readiness diagnostics, and structured agent output | CLI regression tests, local-checkout consumer, packaged conformance, and fresh-app browser review |
+| Durable-object retry cleanup could cross namespace retention policies or surface an error after state had committed; expired/incarnation-old keys and attacker-selected IDs were not all enforced by exact lifecycle and count boundaries | Scoped best-effort cleanup to registered namespaces, made retention exact at lookup, atomically cleared old-incarnation results, added fail-closed object and per-object retry ceilings, and byte-bounded persisted alarm diagnostics | Durable-object idle-expiry, namespace-isolation, cleanup-failure, lifecycle, cardinality, rollback, and UTF-8-bound regressions |
 
 ## Readability decisions
 

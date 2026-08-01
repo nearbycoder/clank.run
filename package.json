@@ -1,6 +1,6 @@
 {
   "name": "@clank.run/framework",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, deployment, and a complete headless UI library.",
   "homepage": "https://docs.clank.run",
   "bugs": {

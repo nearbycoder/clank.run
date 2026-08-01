@@ -372,6 +372,10 @@ export interface OpenDurableObjectsOptions {
   maxArgumentsBytes?: number;
   maxResultBytes?: number;
   maxErrorBytes?: number;
+  /** Maximum retained object identities, including tombstones, in each namespace. Defaults to 100,000. */
+  maxObjectsPerNamespace?: number;
+  /** Maximum live idempotency records retained for one object. Defaults to 10,000. */
+  maxIdempotencyRecordsPerObject?: number;
   idempotencyRetentionMs?: number;
 }
 
@@ -457,6 +461,18 @@ export function openDurableObjects<
   const maxArgumentsBytes = integer(options.maxArgumentsBytes ?? 256 * 1024, "durable object maxArgumentsBytes", 1_024, 4 * 1024 * 1024);
   const maxResultBytes = integer(options.maxResultBytes ?? 256 * 1024, "durable object maxResultBytes", 1_024, 4 * 1024 * 1024);
   const maxErrorBytes = integer(options.maxErrorBytes ?? 16 * 1024, "durable object maxErrorBytes", 256, 256 * 1024);
+  const maxObjectsPerNamespace = integer(
+    options.maxObjectsPerNamespace ?? 100_000,
+    "durable object maxObjectsPerNamespace",
+    1,
+    10_000_000,
+  );
+  const maxIdempotencyRecordsPerObject = integer(
+    options.maxIdempotencyRecordsPerObject ?? 10_000,
+    "durable object maxIdempotencyRecordsPerObject",
+    1,
+    1_000_000,
+  );
   const idempotencyRetentionMs = integer(options.idempotencyRetentionMs ?? 24 * 60 * 60_000, "durable object idempotencyRetentionMs", 60_000, 365 * 24 * 60 * 60_000);
   const runtimeId = `durable-${processId()}-${secureId()}`;
   const lanes = new Map<string, Promise<void>>();
@@ -520,9 +536,17 @@ export function openDurableObjects<
         let row = internal.prepare(`SELECT * FROM clank_durable_objects
           WHERE namespace = ? AND object_id = ?`).get(definition.name, id) as ObjectRow | undefined;
         if (!row || Number(row.deleted) === 1) {
-          seed ??= initialState(definition, id);
           if (!row) {
-            const inserted = internal.prepare(`INSERT OR IGNORE INTO clank_durable_objects
+            const capacity = internal.prepare(`SELECT count(*) AS count FROM clank_durable_objects
+              WHERE namespace = ?`).get(definition.name)!;
+            if (Number(capacity.count) >= maxObjectsPerNamespace) {
+              throw new DurableObjectError(
+                "OBJECT_LIMIT",
+                `Durable object namespace ${definition.name} has reached its ${maxObjectsPerNamespace} identity limit.`,
+              );
+            }
+            seed ??= initialState(definition, id);
+            const inserted = internal.prepare(`INSERT INTO clank_durable_objects
               (namespace, object_id, schema_version, object_version, state_json, deleted,
                 alarm_at, alarm_attempts, alarm_error, created_at, updated_at,
                 lease_token, lease_owner, lease_until)
@@ -530,6 +554,7 @@ export function openDurableObjects<
               .run(definition.name, id, definition.version, seed.encoded, current, current, token, runtimeId, current + leaseMs);
             if (Number(inserted.changes) === 1) changes.record(CHANGE_TABLE, changeId(definition.name, id));
           } else if (leaseAvailable(row, current)) {
+            seed ??= initialState(definition, id);
             const restored = internal.prepare(`UPDATE clank_durable_objects
               SET schema_version = ?, object_version = object_version + 1, state_json = ?, deleted = 0,
                 alarm_at = NULL, alarm_attempts = 0, alarm_error = NULL,
@@ -538,7 +563,11 @@ export function openDurableObjects<
                 AND (lease_until IS NULL OR lease_until <= ?)`)
               .run(definition.version, seed.encoded, current, current, token, runtimeId, current + leaseMs,
                 definition.name, id, current);
-            if (Number(restored.changes) === 1) changes.record(CHANGE_TABLE, changeId(definition.name, id));
+            if (Number(restored.changes) === 1) {
+              internal.prepare(`DELETE FROM clank_durable_object_calls
+                WHERE namespace = ? AND object_id = ?`).run(definition.name, id);
+              changes.record(CHANGE_TABLE, changeId(definition.name, id));
+            }
           }
         } else if (leaseAvailable(row, current)) {
           internal.prepare(`UPDATE clank_durable_objects SET lease_token = ?, lease_owner = ?, lease_until = ?
@@ -703,6 +732,19 @@ export function openDurableObjects<
     const committedAt = now();
     const nextUpdatedAt = mutable.changed ? committedAt : Number(acquired.row.updated_at);
     return internal.transaction((changes) => {
+      if (idempotency) {
+        internal.prepare(`DELETE FROM clank_durable_object_calls
+          WHERE namespace = ? AND object_id = ? AND created_at < ?`)
+          .run(definition.name, id, committedAt - idempotencyRetentionMs);
+        const retained = internal.prepare(`SELECT count(*) AS count FROM clank_durable_object_calls
+          WHERE namespace = ? AND object_id = ?`).get(definition.name, id)!;
+        if (Number(retained.count) >= maxIdempotencyRecordsPerObject) {
+          throw new DurableObjectError(
+            "IDEMPOTENCY_LIMIT",
+            `Durable object ${definition.name}/${id} has reached its ${maxIdempotencyRecordsPerObject} idempotency-record limit.`,
+          );
+        }
+      }
       const updated = internal.prepare(`UPDATE clank_durable_objects SET
           schema_version = ?, object_version = ?, state_json = ?, deleted = ?,
           alarm_at = ?, alarm_attempts = ?, alarm_error = ?, updated_at = ?,
@@ -741,11 +783,17 @@ export function openDurableObjects<
 
   const cleanupCalls = () => {
     const current = now();
-    if (current - lastCleanupAt < Math.min(60 * 60_000, idempotencyRetentionMs)) return;
-    lastCleanupAt = current;
-    internal.transaction(() => internal.prepare(`DELETE FROM clank_durable_object_calls WHERE rowid IN (
-      SELECT rowid FROM clank_durable_object_calls WHERE created_at < ? ORDER BY created_at LIMIT 1000
-    )`).run(current - idempotencyRetentionMs));
+    const cleanupInterval = Math.min(60 * 60_000, idempotencyRetentionMs);
+    if (current < lastCleanupAt) lastCleanupAt = current;
+    if (current - lastCleanupAt < cleanupInterval) return;
+    const namespaces = [...definitions.keys()];
+    const placeholders = namespaces.map(() => "?").join(", ");
+    const result = internal.transaction(() => internal.prepare(`DELETE FROM clank_durable_object_calls WHERE rowid IN (
+      SELECT rowid FROM clank_durable_object_calls
+      WHERE namespace IN (${placeholders}) AND created_at < ?
+      ORDER BY created_at LIMIT 1000
+    )`).run(...namespaces, current - idempotencyRetentionMs));
+    if (Number(result.changes) < 1_000) lastCleanupAt = current;
   };
 
   const executeMethod = async <Method extends AnyDurableObjectMethod>(
@@ -783,8 +831,8 @@ export function openDurableObjects<
         if (idempotencyKey) {
           const prior = internal.prepare(`SELECT method, arguments_json, result_json, object_version
             FROM clank_durable_object_calls
-            WHERE namespace = ? AND object_id = ? AND idempotency_key = ?`)
-            .get(definition.name, id, idempotencyKey) as CallRow | undefined;
+            WHERE namespace = ? AND object_id = ? AND idempotency_key = ? AND created_at >= ?`)
+            .get(definition.name, id, idempotencyKey, now() - idempotencyRetentionMs) as CallRow | undefined;
           if (prior) {
             if (prior.method !== path || prior.arguments_json !== argumentsJson) {
               throw new DurableObjectError(
@@ -819,7 +867,8 @@ export function openDurableObjects<
           idempotencyKey ? { key: idempotencyKey, method: path, argumentsJson } : undefined,
         );
         acquired = undefined;
-        cleanupCalls();
+        try { cleanupCalls(); }
+        catch (error) { report(error, { namespace: definition.name, id, method: path }); }
         return Object.freeze({ value: parsedResult, revision, deduplicated: false });
       } catch (error) {
         report(error, { namespace: definition.name, id, method: path });
@@ -1598,8 +1647,20 @@ function byteLength(value: string): number {
 }
 
 function safeError(error: unknown, maximum: number): string {
-  const value = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-  return value.length <= maximum ? value : `${value.slice(0, Math.max(0, maximum - 1))}…`;
+  const value = (error instanceof Error ? `${error.name}: ${error.message}` : String(error))
+    .replace(/[\u0000-\u001f\u007f]/gu, " ");
+  if (byteLength(value) <= maximum) return value;
+  const ellipsis = "…";
+  const budget = maximum - byteLength(ellipsis);
+  let output = "";
+  let used = 0;
+  for (const character of value) {
+    const size = byteLength(character);
+    if (used + size > budget) break;
+    output += character;
+    used += size;
+  }
+  return `${output}${ellipsis}`;
 }
 
 function secureId(): string {

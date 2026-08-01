@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.14.0 - 2026-08-01
+
 - Added first-party typed durable objects over each application's isolated SQLite database. Stable
   namespace/ID stubs serialize calls locally and across processes with renewable leases and stale
   revision fencing; validated state commits only after successful handlers. The runtime includes
@@ -12,6 +14,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   aggregate diagnostics, immutable manifests, and opt-in MCP tools with mandatory exact-object
   authorization. The public `/durable-objects` export remains dependency-free and follows Clank's
   statefully pinned durable-volume placement boundary.
+- Hardened durable-object storage against retry and capacity abuse. Idempotency expiry is exact
+  even after idle periods, reinitialization cannot replay a prior incarnation's result, cleanup is
+  namespace-scoped and cannot turn a committed mutation into an error, tombstones remain under a
+  fail-closed per-namespace identity ceiling, per-object retry records have a hard ceiling, and
+  persisted alarm diagnostics are control-character-free and UTF-8 byte bounded.
 
 - Added a dependency-free theming layer for the headless UI library. Ten immutable presets span
   light and dark color systems, square through pill geometry, compact through relaxed density,
