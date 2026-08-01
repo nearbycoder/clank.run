@@ -523,9 +523,12 @@ Pointer release chooses a point from drag distance and velocity. `snapToSequenti
 a fast gesture from skipping intermediate points. `swipeArea()` can open from an edge;
 `content({ swipeIgnore: true })` excludes an interactive subtree; pointer cancel or lost capture
 rolls back without committing. `dismissible: false` retains the drawer at its nearest point.
-Application CSS consumes `--drawer-snap-point-offset`, `--drawer-swipe-progress`,
-`--drawer-swipe-strength`, and the axis movement variables. The controller provides measurements
-and state, not the transform or transition theme.
+Application CSS consumes `--drawer-snap-point-offset`, `--drawer-snap-point-size`,
+`--drawer-swipe-progress`, `--drawer-swipe-strength`, and the axis movement variables. For a
+translated bottom sheet, size an inner flex or grid frame to `--drawer-snap-point-size` and make
+its content region scrollable. That keeps the scrollport inside the visible snap height instead of
+placing its final rows below mobile browser chrome. The controller provides measurements and state,
+not the transform or transition theme.
 
 ### Bottom Sheet
 
@@ -543,13 +546,53 @@ const sheet = createBottomSheet({
 });
 
 <button {...sheet.trigger()}>Project actions</button>
-<section {...sheet.dialog()} class="fixed inset-x-0 bottom-0 rounded-t-3xl">
-  <div {...sheet.swipeArea()}>
-    <span {...sheet.handle()} />
-  </div>
-  <h2 {...sheet.title()}>Project actions</h2>
-</section>
+<div {...sheet.viewport()} class="sheet-viewport">
+  <section {...sheet.dialog()} class="sheet">
+    <div class="sheet-frame">
+      <div {...sheet.swipeArea()}>
+        <span {...sheet.handle()} />
+      </div>
+      <h2 {...sheet.title()}>Project actions</h2>
+      <div {...sheet.content()} class="sheet-content">...</div>
+    </div>
+  </section>
+</div>
 ```
+
+```css
+.sheet-viewport {
+  position: fixed;
+  inset: auto 0 0;
+  height: 100dvh;
+  overflow: hidden;
+}
+.sheet {
+  height: 92dvh;
+  transform: translateY(calc(
+    var(--drawer-swipe-movement-y, 0px) + var(--drawer-snap-point-offset, 0px)
+  ));
+}
+.sheet-frame {
+  display: flex;
+  flex-direction: column;
+  height: min(100%, var(--drawer-snap-point-size, 100%));
+  min-height: 0;
+  overflow: hidden;
+}
+.sheet-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+```
+
+The outer sheet retains its fully expanded measurement for stable snap calculations. The inner
+frame follows the active visible size, so compact snaps scroll internally and dynamic iOS browser
+toolbars cannot strand content below the visual viewport.
 
 ### Toast swipe ownership
 
