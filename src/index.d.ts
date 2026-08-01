@@ -33,6 +33,7 @@ export * from "./backend.js";
 export * from "./deploy.js";
 export * from "./migrations.js";
 export * from "./jobs.js";
+export * from "./durable-objects.js";
 export * from "./platform.js";
 export * from "./ssr.js";
 export * from "./node.js";

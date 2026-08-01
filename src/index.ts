@@ -31,6 +31,7 @@ export * from "./backend.ts";
 export * from "./deploy.ts";
 export * from "./migrations.ts";
 export * from "./jobs.ts";
+export * from "./durable-objects.ts";
 export * from "./platform.ts";
 export * from "./ssr.ts";
 export * from "./node.ts";
