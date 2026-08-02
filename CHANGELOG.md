@@ -4,6 +4,18 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.16.0 - 2026-08-02
+
+- Added the opt-in, dependency-free `Task<Success, Failure, Requirements>` runtime. Typed expected
+  failures remain distinct from defects and interruption; nominal services and memoized layers
+  expose requirements; scopes guarantee reverse-order release; reusable schedules provide bounded
+  retry; fibers, races, and concurrency-limited task groups use structured cancellation; Clank
+  tracing plugs in directly; and an injectable deterministic clock covers sleep, retry, race, and
+  timeout tests. Existing promise-based framework APIs remain unchanged.
+- Added the focused `@clank.run/framework/task` package export, complete declarations, behavioral
+  and failure-path coverage, compact API reference, and an agent-friendly guide explaining when to
+  choose Task, promises, durable jobs, workflows, or durable objects.
+
 ## 0.15.0 - 2026-08-01
 
 - Added a unified dependency-free governance contract for users, agents, services, hosted
