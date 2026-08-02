@@ -135,6 +135,81 @@ export class DeploymentProviderError extends Error {
   }
 }
 
+export interface DeploymentProviderConformanceCheck {
+  readonly name: "shape" | "stopped-reconcile" | "idempotency" | "rollback" | "delete";
+  readonly status: "passed" | "skipped" | "failed";
+  readonly message: string;
+}
+
+export interface DeploymentProviderConformanceReport {
+  readonly protocol: "clank-provider-conformance/1";
+  readonly provider: string;
+  readonly ok: boolean;
+  readonly checks: readonly DeploymentProviderConformanceCheck[];
+}
+
+/**
+ * Provider SDK acceptance kit. It exercises credential-free frozen requests,
+ * stopped-state idempotency, and optional destructive lifecycle operations
+ * without requiring a deployment artifact or a Clank control plane.
+ */
+export async function runDeploymentProviderConformance(
+  provider: DeploymentProvider,
+  options: { projectId?: string; timeoutMs?: number; destructive?: boolean } = {},
+): Promise<DeploymentProviderConformanceReport> {
+  const checks: DeploymentProviderConformanceCheck[] = [];
+  let kind = "invalid";
+  try {
+    kind = providerKind(provider?.kind);
+    if (typeof provider.reconcile !== "function") throw new TypeError("Provider reconcile must be a function.");
+    checks.push(Object.freeze({ name: "shape", status: "passed", message: "Provider shape and stable kind are valid." }));
+  } catch (error) {
+    checks.push(Object.freeze({ name: "shape", status: "failed", message: providerConformanceError(error) }));
+    return Object.freeze({ protocol: "clank-provider-conformance/1", provider: kind, ok: false, checks: Object.freeze(checks) });
+  }
+  const projectId = options.projectId ?? "conformance-project";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(projectId)) throw new TypeError("Provider conformance projectId is invalid.");
+  const timeoutMs = integer(options.timeoutMs ?? 5_000, "timeoutMs", 100, 60_000);
+  const operation = Object.freeze({ id: "conformance-operation", projectId, fence: 1, attempt: 1, maxAttempts: 3 });
+  const desired = Object.freeze({ generation: 1, releaseId: null, state: "stopped" as const, runtimeProtocol: null });
+  const invoke = async (name: DeploymentProviderConformanceCheck["name"], task: (signal: AbortSignal) => Promise<unknown>, success: string) => {
+    const controller = new AbortController();
+    try {
+      await conformanceDeadline(task(controller.signal), timeoutMs, controller);
+      checks.push(Object.freeze({ name, status: "passed" as const, message: success }));
+    } catch (error) {
+      checks.push(Object.freeze({ name, status: "failed" as const, message: providerConformanceError(error) }));
+    }
+  };
+  const stoppedRequest = (signal: AbortSignal) => Object.freeze({ operation, desired, artifact: null, runtime: null, signal });
+  await invoke("stopped-reconcile", (signal) => provider.reconcile(stoppedRequest(signal)), "Provider accepts a credential-free stopped-state request.");
+  if (checks.at(-1)?.status === "passed") await invoke("idempotency", (signal) => provider.reconcile(stoppedRequest(signal)), "Provider safely accepts the exact operation and fence twice.");
+  else checks.push(Object.freeze({ name: "idempotency", status: "skipped", message: "Stopped reconciliation failed." }));
+  for (const action of ["rollback", "delete"] as const) {
+    const capability = provider[action];
+    if (!capability) { checks.push(Object.freeze({ name: action, status: "skipped", message: `Provider does not advertise ${action}.` })); continue; }
+    if (options.destructive !== true) { checks.push(Object.freeze({ name: action, status: "skipped", message: `Provider ${action} requires the explicit destructive conformance option.` })); continue; }
+    if (checks[1]?.status !== "passed") { checks.push(Object.freeze({ name: action, status: "skipped", message: "Stopped reconciliation failed." })); continue; }
+    const confirmation = action === "rollback" ? `rollback ${projectId} 1` : `delete ${projectId}`;
+    await invoke(action, (signal) => capability.call(provider, Object.freeze({ operation, generation: 1, confirmation, signal })), `Provider ${action} accepts the canonical fenced confirmation.`);
+  }
+  return Object.freeze({ protocol: "clank-provider-conformance/1", provider: kind, ok: checks.every((check) => check.status !== "failed"), checks: Object.freeze(checks) });
+}
+
+async function conformanceDeadline<T>(promise: Promise<T>, timeoutMs: number, controller: AbortController): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("Provider conformance operation timed out.")); }, timeoutMs); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+
+function providerConformanceError(error: unknown): string {
+  return (error instanceof Error ? error.message : "Provider conformance failed.").replace(/[\r\n\0]/gu, " ").slice(0, 500);
+}
+
 /**
  * Runs the standard node lifecycle and gives the selected provider only a
  * verified, credential-free desired-state request.

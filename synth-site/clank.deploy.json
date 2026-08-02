@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "entry": "dist/server.js",
+  "include": [
+    "dist",
+    "vendor",
+    "migrations"
+  ],
+  "build": {
+    "command": [
+      "node",
+      "build.mjs"
+    ]
+  },
+  "health": {
+    "path": "/healthz",
+    "timeoutMs": 15000
+  },
+  "env": {
+    "SYNTH_ORIGIN": "https://synth.clank.run"
+  }
+}

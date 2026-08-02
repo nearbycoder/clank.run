@@ -35,6 +35,20 @@ await new Promise((resolve, reject) => {
     : reject(new Error(`Design Studio build exited with ${code}.`)));
 });
 
+const synthRoot = fileURLToPath(new URL("../synth-site/", import.meta.url));
+for (const [script, label] of [["build.mjs", "build"], ["tests/app.contract.mjs", "contract test"]]) {
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [
+      "--disable-warning=ExperimentalWarning",
+      fileURLToPath(new URL(`../synth-site/${script}`, import.meta.url)),
+    ], { stdio: "inherit", cwd: synthRoot });
+    child.once("error", reject);
+    child.once("exit", (code) => code === 0
+      ? resolve()
+      : reject(new Error(`Synth demo ${label} exited with ${code}.`)));
+  });
+}
+
 await runCoverageGate();
 
 await new Promise((resolve, reject) => {
@@ -70,4 +84,4 @@ await new Promise((resolve, reject) => {
     : reject(new Error(`Security audit exited with ${code}.`)));
 });
 
-console.log("Check complete: framework, documentation, and Design Studio builds, dependency contract, coverage, documentation, packaged-release conformance, and security audit passed.");
+console.log("Check complete: framework, documentation, Design Studio, and Synth demo builds, dependency contract, coverage, documentation, packaged-release conformance, and security audit passed.");

@@ -1,5 +1,14 @@
 # API reference
 
+## Governance, lifecycle, and tooling
+
+Use `@clank.run/framework/governance` for policy decisions, expiring agent approvals,
+entitlements, and feature flags. Use `@clank.run/framework/lifecycle` for revision replay,
+provenance, promotions, rollout guardrails, sanitized clones, portable exports, and capacity.
+Use `@clank.run/framework/tooling` for App Studio reviews, visual regression, parity, schema
+planning, contract tests, upgrades, and the agent playground. Provider adapters can call
+`runDeploymentProviderConformance()` from `@clank.run/framework/provider`.
+
 This is a compact index of the primary public surfaces. The shipped `.d.ts` files are the
 exhaustive symbol contract; focused guides contain behavioral details and examples.
 

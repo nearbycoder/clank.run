@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS synth_metadata (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO synth_metadata (id) VALUES (1);

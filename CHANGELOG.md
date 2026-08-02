@@ -4,6 +4,28 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.15.0 - 2026-08-01
+
+- Added a unified dependency-free governance contract for users, agents, services, hosted
+  entitlement layers, short-lived action/resource-bound HMAC approvals, and deterministic typed
+  feature flags. The control plane now resolves default, billing, workspace, and operator limits
+  through the same typed entitlement layering primitive, and its SSR design consumes the shared
+  Clank theme tokens used by Design Studio.
+- Added release and data lifecycle contracts for canonical provenance, promotion evidence,
+  progressive canary guardrails, causal revision inspection and time travel, deterministic
+  sanitized clones, checksummed portable project exports, and transparent capacity estimates.
+  Deployment bundles now bind source revision, configuration, migration IDs, and every packaged
+  material digest and verify those bindings at each decoding trust boundary.
+- Added public App Studio/tooling APIs and `clank workbench` commands for policy/flag evaluation,
+  revision replay, production parity, classified schema migration plans, capacity simulation,
+  upgrades, provenance and promotions, exports and safe clones, action-contract tests, visual
+  regression, and provider conformance. The provider acceptance kit verifies frozen
+  credential-free requests, idempotency, abortable deadlines, and—with an explicit disposable
+  project opt-in—advertised destructive capabilities.
+- Added three user- and agent-oriented guides for governance, the revision/release lifecycle, and
+  App Studio/workbench workflows, plus package exports at `/governance`, `/lifecycle`, and
+  `/tooling`.
+
 ## 0.14.0 - 2026-08-01
 
 - Added first-party typed durable objects over each application's isolated SQLite database. Stable

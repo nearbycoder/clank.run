@@ -41,15 +41,21 @@ test("deployment bundles are deterministic, checksummed, bounded, and traversal-
     const first = await createDeploymentBundle(root, config, {
       frameworkVersion: "0.5.0",
       nodeVersion: "v22.22.2",
+      sourceRevision: "git-abc123",
     });
     const second = await createDeploymentBundle(root, config, {
       frameworkVersion: "0.5.0",
       nodeVersion: "v22.22.2",
+      sourceRevision: "git-abc123",
     });
     assert.deepEqual(first, second);
     assert.equal(await deploymentDigest(first), await deploymentDigest(second));
     const decoded = await decodeDeploymentBundle(first);
     assert.equal(decoded.config.entry, "dist/server.js");
+    assert.equal(decoded.provenance.sourceRevision, "git-abc123");
+    assert.deepEqual(decoded.provenance.migrationIds, ["0001_init"]);
+    assert.match(decoded.provenance.configurationSha256, /^[a-f0-9]{64}$/u);
+    assert.match(decoded.provenance.materialsSha256, /^[a-f0-9]{64}$/u);
     assert.deepEqual(decoded.files.map((file) => file.path), [
       "dist/server.js",
       "migrations/0001_init.sql",
@@ -61,6 +67,15 @@ test("deployment bundles are deterministic, checksummed, bounded, and traversal-
     raw.files[0].path = "../escape.js";
     const malicious = gzipSync(JSON.stringify(raw));
     await assert.rejects(() => decodeDeploymentBundle(malicious), /parent segments|safe relative POSIX path/);
+
+    const alteredConfiguration = JSON.parse(new TextDecoder().decode(
+      await import("node:zlib").then(({ gunzipSync }) => gunzipSync(first)),
+    ));
+    alteredConfiguration.config.env.FEATURE = "tampered";
+    await assert.rejects(
+      () => decodeDeploymentBundle(gzipSync(JSON.stringify(alteredConfiguration))),
+      /configuration provenance/u,
+    );
 
     const legacyRaw = JSON.parse(new TextDecoder().decode(
       await import("node:zlib").then(({ gunzipSync }) => gunzipSync(first)),
@@ -77,6 +92,9 @@ test("deployment bundles are deterministic, checksummed, bounded, and traversal-
       include: ["dist", "migrations", ".env"],
     });
     await assert.rejects(() => createDeploymentBundle(root, unsafe), /Sensitive path/);
+    await writeFile(join(root, ".npmrc"), "//registry.npmjs.org/:_authToken=do-not-package\n");
+    const unsafeRegistry = parseDeploymentConfig({ ...config, include: ["dist", "migrations", ".npmrc"] });
+    await assert.rejects(() => createDeploymentBundle(root, unsafeRegistry), /Sensitive path/u);
     assert.throws(() => parseDeploymentConfig({
       version: 1,
       entry: "dist/server.js",
