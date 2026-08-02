@@ -17,6 +17,7 @@ export const groups = [
     entries: [
       ["architecture", "docs/architecture.md"],
       ["reactivity", "docs/reactivity.md"],
+      ["typed-tasks", "docs/task.md"],
       ["collaboration", "docs/collaboration.md"],
       ["rendering", "docs/rendering.md"],
       ["routing", "docs/routing.md"],

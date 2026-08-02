@@ -1,6 +1,6 @@
 {
   "name": "@clank.run/framework",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, deployment, and a complete headless UI library.",
   "homepage": "https://docs.clank.run",
   "bugs": {
@@ -25,6 +25,7 @@
       "import": "./dist/index.js"
     },
     "./core": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },
+    "./task": { "types": "./dist/task.d.ts", "import": "./dist/task.js" },
     "./dom": { "types": "./dist/dom.d.ts", "import": "./dist/dom.js" },
     "./router": { "types": "./dist/router.d.ts", "import": "./dist/router.js" },
     "./ai": { "types": "./dist/ai.d.ts", "import": "./dist/ai.js" },

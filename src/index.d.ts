@@ -1,6 +1,7 @@
 /// <reference path="./jsx.d.ts" />
 
 export * from "./core.js";
+export * from "./task.js";
 export * from "./dom.js";
 export * from "./router.js";
 export * from "./ai.js";

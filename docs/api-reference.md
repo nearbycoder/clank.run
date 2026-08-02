@@ -31,6 +31,35 @@ exhaustive symbol contract; focused guides contain behavioral details and exampl
 - `consumeStream(iterable, initial, reduce?)`: folds an async iterable into a signal.
 - `SIGNAL`, `STORE`: global protocol symbols for integrations.
 
+## Typed Task runtime
+
+The opt-in runtime is available from the package root or `@clank.run/framework/task`. See
+[Typed tasks, failures, and services](task.md) for the complete execution, cleanup, cancellation,
+and security contract.
+
+- `Task<A, E, R>`: lazy computation with success `A`, typed failure `E`, and service requirements
+  `R`. Composition includes `map`, `flatMap`, `tap`, `as`, `mapError`, `catchAll`, `catchCause`,
+  `ensuring`, `retry`, `timeout`, `provide`, `withSpan`, and generator yielding.
+- Constructors: `Task.succeed`, `Task.fail`, `Task.failCause`, `Task.sync`, `Task.suspend`, `Task.try`,
+  `Task.tryPromise`, `Task.fromPromise`, and `Task.gen`.
+- Execution: `Task.runExit`, `Task.runPromise`, `TaskRuntime`, and `createTaskRuntime`.
+  `runPromise` rejects with inspectable `TaskExecutionError`; `runExit` returns every outcome as
+  data.
+- Outcomes: `Exit`, `Cause`, and `Result`. Cause variants distinguish typed `Failure`, unexpected
+  `Defect`, `Interrupted`, `Sequential`, and `Parallel` outcomes.
+- Services: `service<T>(name)`, nominal `Service<T>`, and memoized `Layer`. `Layer.succeed`,
+  `Layer.effect`, `Layer.fromValue`, `merge`, and `task.provide` compose requirements and scoped
+  implementations.
+- Resources: `Task.acquireRelease`, `Task.addFinalizer`, `Task.scoped`, and `TaskScope`. Finalizers
+  run exactly once in LIFO order and cleanup causes are retained.
+- Scheduling: `Schedule.recurs`, `Schedule.spaced`, `Schedule.exponential`, `while`, `mapDelay`,
+  `intersect`, and `union`.
+- Concurrency: `Task.all`, `Task.race`, `Task.fork`, and `Fiber`. Children own scopes, propagate
+  interruption, and cannot outlive an enclosing runtime scope.
+- Time: `realClock`, injectable `Clock`, and deterministic `TestClock`.
+- Diagnostics: `TaskTracer`, `withSpan`, `TimeoutError`, and `MissingServiceError`. Clank's
+  observability tracer can be passed directly as the runtime tracer.
+
 ## DOM
 
 - TSX: preferred component syntax; dynamic braces become fine-grained bindings automatically.
