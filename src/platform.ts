@@ -25,6 +25,7 @@ import {
   planMigrations,
   restoreSQLiteBackup,
 } from "./migrations.ts";
+import { resolveEntitlements } from "./governance.ts";
 import {
   openBackupManager,
   type BackupManifest,
@@ -97,6 +98,7 @@ import {
   type IngressRequestMetric,
 } from "./data-plane.ts";
 import { platformConsolePage } from "./platform-console.ts";
+import { platformMarketingPage } from "./platform-marketing.ts";
 import {
   readRequestBytes,
   requestOriginAllowed,
@@ -4559,6 +4561,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       if (consolePath) {
         const auth = await storage.auth.resolve(request);
+        if (consolePath === "/" && !auth.user) {
+          return platformMarketingPage(publicUrl);
+        }
         const impersonation = auth.user && auth.session
           ? resolvePlatformImpersonation(storage.internal, request, auth)
           : null;
@@ -10398,12 +10403,12 @@ function accountQuotas(
   accountId: string,
   defaults: PlatformQuotaValues,
 ): PlatformQuotaValues {
-  return {
-    ...defaults,
-    ...billingEntitlementQuotas(internal, accountId),
+  return resolveEntitlements(
+    defaults,
+    billingEntitlementQuotas(internal, accountId),
     // Explicit operator overrides always win over commercial plan capacity.
-    ...quotaOverrides(internal, "account", accountId),
-  };
+    quotaOverrides(internal, "account", accountId),
+  );
 }
 
 function workspaceQuotas(
@@ -10415,10 +10420,10 @@ function workspaceQuotas(
     "SELECT created_by FROM clank_platform_organizations WHERE id = ?",
   ).get(workspaceId);
   if (!workspace) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "Workspace not found.");
-  return {
-    ...accountQuotas(internal, String(workspace.created_by), defaults),
-    ...quotaOverrides(internal, "workspace", workspaceId),
-  };
+  return resolveEntitlements(
+    accountQuotas(internal, String(workspace.created_by), defaults),
+    quotaOverrides(internal, "workspace", workspaceId),
+  );
 }
 
 function projectQuotas(

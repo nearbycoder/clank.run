@@ -4,8 +4,8 @@ import { renderToString } from "../vendor/index.js";
 import { SynthView } from "../dist/view.js";
 
 test("synth view server-renders a deterministic, hydrated sequencer", async () => {
-  const first = await renderToString(SynthView({ frameworkVersion: "0.14.0" }));
-  const second = await renderToString(SynthView({ frameworkVersion: "0.14.0" }));
+  const first = await renderToString(SynthView({ frameworkVersion: "0.15.0" }));
+  const second = await renderToString(SynthView({ frameworkVersion: "0.15.0" }));
   assert.equal(first, second);
   assert.match(first, /Program your own/gu);
   assert.match(first, /Build a loop/gu);

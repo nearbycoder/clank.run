@@ -1,6 +1,6 @@
 {
   "name": "@clank.run/framework",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, deployment, and a complete headless UI library.",
   "homepage": "https://docs.clank.run",
   "bugs": {
@@ -109,6 +109,9 @@
     "./journey": { "types": "./dist/journey.d.ts", "import": "./dist/journey.js" },
     "./collaboration": { "types": "./dist/collaboration.d.ts", "import": "./dist/collaboration.js" },
     "./analytics": { "types": "./dist/analytics.d.ts", "import": "./dist/analytics.js" },
+    "./governance": { "types": "./dist/governance.d.ts", "import": "./dist/governance.js" },
+    "./lifecycle": { "types": "./dist/lifecycle.d.ts", "import": "./dist/lifecycle.js" },
+    "./tooling": { "types": "./dist/tooling.d.ts", "import": "./dist/tooling.js" },
     "./billing": { "types": "./dist/billing.d.ts", "import": "./dist/billing.js" },
     "./platform": { "types": "./dist/platform.d.ts", "import": "./dist/platform.js" },
     "./ssr": { "types": "./dist/ssr.d.ts", "import": "./dist/ssr.js" },
@@ -139,6 +142,7 @@
     "scripts/cli-deploy.mjs",
     "scripts/cli-compose.mjs",
     "scripts/cli-journey.mjs",
+    "scripts/cli-workbench.mjs",
     "scripts/clank-platform.mjs",
     "scripts/clank-runner.mjs",
     "scripts/clank-provider.mjs",

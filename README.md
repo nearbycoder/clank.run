@@ -63,6 +63,21 @@ until a person or orchestrator approves that exact digest. [Read the composition
 healthy replacements, keeps the last good process after errors, and reloads connected browsers.
 Agents can use `clank dev --json` for stable newline-delimited lifecycle events.
 
+For deeper inspection, the dependency-free developer workbench makes policy, feature flags,
+revision replay, local/production parity, schema evolution, release provenance, progressive
+delivery, portable exports, sanitized clones, capacity estimates, action contract tests, provider
+conformance, visual baselines, and framework upgrades available to people, agents, and CI:
+
+```sh
+clank workbench help
+clank workbench parity local-runtime.json production-runtime.json --json
+clank workbench schema schema-current.json schema-target.json --json
+```
+
+[Read the workbench guide →](https://docs.clank.run/docs/workbench)
+[Governance and approvals →](https://docs.clank.run/docs/governance) ·
+[Revision and release lifecycle →](https://docs.clank.run/docs/release-lifecycle)
+
 The generated app is already a working product—not an empty component. It includes:
 
 - registration, login, logout, secure sessions, and CSRF protection;
@@ -208,7 +223,8 @@ inspectable surface instead of hiding behavior in generated component code.
 | Reactivity | Signals, lazy computed values, effects with cleanup, batching, rollback transactions, untracked reads, owned roots, deep proxy stores, snapshots, async resources, stream reduction |
 | UI | Typed compiler-powered TSX, automatic reactive expressions and props, keyed lists, stable text nodes, lifecycle/context, a 39-family dependency-free headless catalog, native form parts, responsive bottom sheets, overlays, portals, RTL, SSR/hydration, agent manifests, directives, `Show`, `For`, `Switch`, and lazy components |
 | Forms | Schema validation, typed fields, accessible control/error props, touched/dirty state, cross-field rules, cancellation, server errors, invalid-focus behavior, reset, agent-readable manifests |
-| AI | Approval-bound conversational application composition, signed exact-version blueprint registries, web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, per-user agent access inboxes and revocable scoped grants, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface, and isolated real-browser journeys with secret-value redaction |
+| AI | Approval-bound conversational App Studio, unified user/agent governance, typed feature flags, signed exact-version blueprint registries, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, scoped grants and HMAC approvals, contract-generated tests, a redacted agent playground, semantic views, and isolated real-browser journeys |
+| Delivery lifecycle | Immutable provenance, promotion evidence, progressive rollout guardrails, end-to-end revision traces and replay, production parity, schema evolution plans, sanitized clones, portable exports, capacity estimates, framework upgrade plans, and provider conformance |
 | UI↔MCP parity | Typed `agentAction` function references, bounded SSR/DOM inspection, manifest and revision verification, stable-control enforcement, structured mismatch reports |
 | Generated verification | Blueprint-derived synthetic fixture users and related records, real backend seeding, ownership isolation, exact agent/UI manifest parity, per-route SSR contracts, and a selector-free mobile Chrome smoke journey |
 | Routing | Parameters, optional segments, wildcards, repeated query values, async loaders, aborts, guards, redirects, titles, links, history navigation |

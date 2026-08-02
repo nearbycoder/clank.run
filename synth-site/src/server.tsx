@@ -26,12 +26,12 @@ function asset(request: Request): Response | Promise<Response> {
 
 async function page(): Promise<Response> {
   const nonce = crypto.randomUUID().replaceAll("-", "");
-  const document = await renderDocument(<div id="synth-root"><SynthView frameworkVersion="0.14.0" /></div>, {
+  const document = await renderDocument(<div id="synth-root"><SynthView frameworkVersion="0.15.0" /></div>, {
     title: "Clank Synth · Audio Lab",
     nonce,
     bodyClass: "synth-body",
     stylesheets: ["/assets/styles.css"],
-    state: { frameworkVersion: "0.14.0" },
+    state: { frameworkVersion: "0.15.0" },
     head: <>
       <meta name="description" content="A playable 16-step Web Audio groovebox built with Clank." />
       <meta name="theme-color" content="#080a0d" />
@@ -62,16 +62,16 @@ async function page(): Promise<Response> {
 
 const app = createApp({ onError(error) { console.error("Clank Synth request failed.", error instanceof Error ? error.message : "Unknown error"); } })
   .use(securityHeaders({ contentSecurityPolicy: false }))
-  .get("/healthz", () => json({ ok: true, service: "clank-synth", frameworkVersion: "0.14.0", instruments: 6, steps: 16 }, { headers: { "cache-control": "no-store" } }))
+  .get("/healthz", () => json({ ok: true, service: "clank-synth", frameworkVersion: "0.15.0", instruments: 6, steps: 16 }, { headers: { "cache-control": "no-store" } }))
   .get("/.well-known/clank", () => json({ protocol: "clank-agent/2", name: "clank-synth", title: "Clank Synth", description: "A playable 16-step audio groovebox.", documentation: { home: canonicalOrigin, source: "https://github.com/nearbycoder/clank.run/tree/main/synth-site" }, capabilities: { browserAudio: true, persistence: "localStorage" } }, { headers: { "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } }))
-  .get("/api/info", () => json({ protocol: "clank-synth/1", frameworkVersion: "0.14.0", instruments: 6, steps: 16, presets: ["Neon Pulse", "Night Drive", "Arcade Bloom", "Half Time"] }, { headers: { "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } }))
+  .get("/api/info", () => json({ protocol: "clank-synth/1", frameworkVersion: "0.15.0", instruments: 6, steps: 16, presets: ["Neon Pulse", "Night Drive", "Arcade Bloom", "Half Time"] }, { headers: { "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } }))
   .route("HEAD", "/favicon.ico", ({ request }) => asset(new Request(new URL("/brand/favicon.ico", request.url), { headers: request.headers })))
   .get("/favicon.ico", ({ request }) => asset(new Request(new URL("/brand/favicon.ico", request.url), { headers: request.headers })))
   .route("*", "/brand/*", ({ request }) => appFiles.handle(request))
   .get("/assets/*", ({ request }) => asset(request))
   .get("/vendor/*", ({ request }) => vendorFiles.handle(request))
   .get("/", page)
-  .get("/llms.txt", () => text(`# Clank Synth\n\nA playable 16-step Web Audio groovebox built with Clank.\n\n- Home: ${canonicalOrigin}\n- Metadata: ${canonicalOrigin}/api/info\n- Framework: @clank.run/framework 0.14.0\n- Six voices: kick, snare, hi-hat, clap, bass, lead\n- Patterns remain in browser localStorage.\n`, { headers: { "cache-control": "public, max-age=3600" } }))
+  .get("/llms.txt", () => text(`# Clank Synth\n\nA playable 16-step Web Audio groovebox built with Clank.\n\n- Home: ${canonicalOrigin}\n- Metadata: ${canonicalOrigin}/api/info\n- Framework: @clank.run/framework 0.15.0\n- Six voices: kick, snare, hi-hat, clap, bass, lead\n- Patterns remain in browser localStorage.\n`, { headers: { "cache-control": "public, max-age=3600" } }))
   .route("*", "*", page);
 
 const server = await serve(app, {

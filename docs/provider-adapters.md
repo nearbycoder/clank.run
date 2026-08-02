@@ -190,7 +190,18 @@ Every adapter must satisfy all of these rules:
    errors in operator telemetry.
 9. Garbage-collect only releases no longer referenced by desired, observed, or rollback state.
 10. Test retry after commit, lease loss, stale fences, abort, health failure, partial ingress
-    switch, restart from durable state, and provider outage.
+   switch, restart from durable state, and provider outage.
+
+Run the package-supported baseline kit before an adapter joins a runner:
+
+```sh
+clank workbench provider ./provider.mjs --json
+```
+
+It checks provider shape, a frozen credential-free stopped request, exact operation/fence
+idempotency, time bounds, and advertised rollback/delete capabilities with canonical confirmations.
+Missing optional capabilities are skipped. Provider-specific crash, persistence, ingress, and
+isolation tests remain required.
 
 `openDeploymentProviderDataStore()` implements the provider-owned portion of rules 1, 2, 5, 6,
 and 9 for immutable releases plus SQLite. It independently binds runtime capsules to desired
