@@ -339,6 +339,8 @@ test("provider Docker launcher defers background work until durable activation",
     assert.equal(active.status, "active");
     assert.equal(active.containers, 4);
     assert.deepEqual(await launcher.activate(candidate, signal), active);
+    await waitUntil(async () =>
+      (await fixture.audit()).filter((entry) => entry.command === "start").length === 4);
     const starts = (await fixture.audit()).filter((entry) => entry.command === "start");
     assert.equal(starts.length, 4);
     assert.deepEqual(
