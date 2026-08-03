@@ -62,6 +62,10 @@ export interface DeploymentBundle {
         readonly builder: "clank-cli/1";
         readonly frameworkVersion: string;
         readonly nodeVersion: string;
+        readonly sourceRevision?: string;
+        readonly configurationSha256?: string;
+        readonly materialsSha256?: string;
+        readonly migrationIds?: readonly string[];
     };
     readonly files: DeploymentFile[];
 }
@@ -74,6 +78,7 @@ export interface CreateDeploymentBundleOptions extends BundleLimits {
     frameworkRoot?: string;
     frameworkVersion?: string;
     nodeVersion?: string;
+    sourceRevision?: string;
 }
 /** Reads and strictly validates the transparent deployment contract. */
 export declare function readDeploymentConfig(root: string, filename?: string): Promise<DeploymentConfig>;

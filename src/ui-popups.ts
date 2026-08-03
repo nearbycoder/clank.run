@@ -1638,6 +1638,14 @@ export function createDrawer(options: DrawerOptions): DrawerController {
         "--drawer-swipe-movement-x": () => axis === "clientX" ? `${visualMovement.value * sign}px` : "0px",
         "--drawer-swipe-movement-y": () => axis === "clientY" ? `${visualMovement.value * sign}px` : "0px",
         "--drawer-snap-point-offset": () => `${renderedSnapPointOffset.value * sign}px`,
+        // Themes can size an inner scroll frame to the portion of a snapped
+        // drawer that is actually visible. Without this value, a translated
+        // bottom sheet can leave the end of its scrollport below the visual
+        // viewport, which is especially apparent under iOS browser chrome.
+        "--drawer-snap-point-size": () => {
+          const size = activeResolvedSnapPoint.value?.size ?? popupSize.value;
+          return size > 0 ? `${size}px` : undefined;
+        },
         "--drawer-swipe-progress": () => swipeProgress.value,
         "--drawer-swipe-strength": () => releaseStrength.value,
         "--drawer-height": () => popupSize.value > 0 ? `${popupSize.value}px` : undefined,

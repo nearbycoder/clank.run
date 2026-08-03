@@ -4,6 +4,56 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.16.0 - 2026-08-02
+
+- Added the opt-in, dependency-free `Task<Success, Failure, Requirements>` runtime. Typed expected
+  failures remain distinct from defects and interruption; nominal services and memoized layers
+  expose requirements; scopes guarantee reverse-order release; reusable schedules provide bounded
+  retry; fibers, races, and concurrency-limited task groups use structured cancellation; Clank
+  tracing plugs in directly; and an injectable deterministic clock covers sleep, retry, race, and
+  timeout tests. Existing promise-based framework APIs remain unchanged.
+- Added the focused `@clank.run/framework/task` package export, complete declarations, behavioral
+  and failure-path coverage, compact API reference, and an agent-friendly guide explaining when to
+  choose Task, promises, durable jobs, workflows, or durable objects.
+
+## 0.15.0 - 2026-08-01
+
+- Added a unified dependency-free governance contract for users, agents, services, hosted
+  entitlement layers, short-lived action/resource-bound HMAC approvals, and deterministic typed
+  feature flags. The control plane now resolves default, billing, workspace, and operator limits
+  through the same typed entitlement layering primitive, and its SSR design consumes the shared
+  Clank theme tokens used by Design Studio.
+- Added release and data lifecycle contracts for canonical provenance, promotion evidence,
+  progressive canary guardrails, causal revision inspection and time travel, deterministic
+  sanitized clones, checksummed portable project exports, and transparent capacity estimates.
+  Deployment bundles now bind source revision, configuration, migration IDs, and every packaged
+  material digest and verify those bindings at each decoding trust boundary.
+- Added public App Studio/tooling APIs and `clank workbench` commands for policy/flag evaluation,
+  revision replay, production parity, classified schema migration plans, capacity simulation,
+  upgrades, provenance and promotions, exports and safe clones, action-contract tests, visual
+  regression, and provider conformance. The provider acceptance kit verifies frozen
+  credential-free requests, idempotency, abortable deadlines, and—with an explicit disposable
+  project opt-in—advertised destructive capabilities.
+- Added three user- and agent-oriented guides for governance, the revision/release lifecycle, and
+  App Studio/workbench workflows, plus package exports at `/governance`, `/lifecycle`, and
+  `/tooling`.
+
+## 0.14.0 - 2026-08-01
+
+- Added first-party typed durable objects over each application's isolated SQLite database. Stable
+  namespace/ID stubs serialize calls locally and across processes with renewable leases and stale
+  revision fencing; validated state commits only after successful handlers. The runtime includes
+  bounded mutation idempotency, tombstone/reinitialization semantics, sequential state migrations,
+  one durable alarm per object with retry diagnostics, cross-process revision subscriptions,
+  aggregate diagnostics, immutable manifests, and opt-in MCP tools with mandatory exact-object
+  authorization. The public `/durable-objects` export remains dependency-free and follows Clank's
+  statefully pinned durable-volume placement boundary.
+- Hardened durable-object storage against retry and capacity abuse. Idempotency expiry is exact
+  even after idle periods, reinitialization cannot replay a prior incarnation's result, cleanup is
+  namespace-scoped and cannot turn a committed mutation into an error, tombstones remain under a
+  fail-closed per-namespace identity ceiling, per-object retry records have a hard ceiling, and
+  persisted alarm diagnostics are control-character-free and UTF-8 byte bounded.
+
 - Added a dependency-free theming layer for the headless UI library. Ten immutable presets span
   light and dark color systems, square through pill geometry, compact through relaxed density,
   typography, depth, focus, danger, and motion tokens. Typed custom themes are validated before

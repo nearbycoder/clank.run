@@ -238,7 +238,31 @@ export function BottomSheetStory() {
   });
   cleanup(sheet);
   const destinations = ["Production", "Preview", "Local development"];
-  return <><button {...sheet.trigger()} class="demo-button">Choose environment</button><Show when={() => sheet.isMounted()}><Portal><div {...sheet.portal()} class="portal-root"><div {...sheet.backdrop()} class="demo-backdrop" /><div {...sheet.viewport()} class="bottom-sheet-viewport"><section {...sheet.dialog()} class="demo-bottom-sheet"><div {...sheet.swipeArea()} class="bottom-sheet-swipe"><span {...sheet.handle()} class="bottom-sheet-handle" /></div><div class="bottom-sheet-header"><div><span class="eyebrow">Deploy target</span><h3 {...sheet.title()}>Choose environment</h3><p {...sheet.description()}>A thumb-friendly surface with compact and expanded snap points.</p></div><button {...sheet.close()} class="dialog-close" aria-label="Close">×</button></div><div {...sheet.content()} class="bottom-sheet-content"><div class="bottom-sheet-variants"><button type="button" onClick={() => sheet.setSnapPoint(0.48)}>Compact</button><button type="button" onClick={() => sheet.setSnapPoint(0.9)}>Expanded</button></div><div class="bottom-sheet-options"><For each={destinations}>{(destination, index) => <button type="button" onClick={(event: Event) => sheet.hide("close-press", event)}><span>{index() === 0 ? "●" : index() === 1 ? "◐" : "○"}</span><span><strong>{destination}</strong><small>{index() === 0 ? "Live customer traffic" : index() === 1 ? "Pull request releases" : "Your current machine"}</small></span><i>→</i></button>}</For></div></div></section></div></div></Portal></Show></>;
+  return <>
+    <button {...sheet.trigger()} class="demo-button">Choose environment</button>
+    <Show when={() => sheet.isMounted()}>
+      <Portal>
+        <div {...sheet.portal()} class="portal-root">
+          <div {...sheet.backdrop()} class="demo-backdrop" />
+          <div {...sheet.viewport()} class="bottom-sheet-viewport">
+            <section {...sheet.dialog()} class="demo-bottom-sheet">
+              <div class="bottom-sheet-frame">
+                <div {...sheet.swipeArea()} class="bottom-sheet-swipe"><span {...sheet.handle()} class="bottom-sheet-handle" /></div>
+                <div class="bottom-sheet-header">
+                  <div><span class="eyebrow">Deploy target</span><h3 {...sheet.title()}>Choose environment</h3><p {...sheet.description()}>A thumb-friendly surface with compact and expanded snap points.</p></div>
+                  <button {...sheet.close()} class="dialog-close" aria-label="Close">×</button>
+                </div>
+                <div {...sheet.content()} class="bottom-sheet-content">
+                  <div class="bottom-sheet-variants"><button type="button" onClick={() => sheet.setSnapPoint(0.48)}>Compact</button><button type="button" onClick={() => sheet.setSnapPoint(0.9)}>Expanded</button></div>
+                  <div class="bottom-sheet-options"><For each={destinations}>{(destination, index) => <button type="button" onClick={(event: Event) => sheet.hide("close-press", event)}><span>{index() === 0 ? "●" : index() === 1 ? "◐" : "○"}</span><span><strong>{destination}</strong><small>{index() === 0 ? "Live customer traffic" : index() === 1 ? "Pull request releases" : "Your current machine"}</small></span><i>→</i></button>}</For></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </Portal>
+    </Show>
+  </>;
 }
 
 export function ButtonStory() {

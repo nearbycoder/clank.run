@@ -1,6 +1,7 @@
 /// <reference path="./jsx.d.ts" />
 
 export * from "./core.js";
+export * from "./task.js";
 export * from "./dom.js";
 export * from "./router.js";
 export * from "./ai.js";
@@ -8,6 +9,9 @@ export * from "./agent-contract.js";
 export * from "./journey.js";
 export * from "./collaboration.js";
 export * from "./analytics.js";
+export * from "./governance.js";
+export * from "./lifecycle.js";
+export * from "./tooling.js";
 export * from "./mcp.js";
 export * from "./blueprint.js";
 export * from "./blueprint-registry.js";
@@ -33,6 +37,7 @@ export * from "./backend.js";
 export * from "./deploy.js";
 export * from "./migrations.js";
 export * from "./jobs.js";
+export * from "./durable-objects.js";
 export * from "./platform.js";
 export * from "./ssr.js";
 export * from "./node.js";

@@ -101,6 +101,15 @@ Expired work is retried with bounded backoff; stale workers are fenced; cron sch
 separate durable lease and deterministic occurrence keys. Web, worker, and scheduler are separate
 OS processes even when one Clank supervisor manages all three.
 
+Durable objects add a finer stateful unit inside that same database. A stable namespace/ID pair
+owns validated JSON state, one alarm, a monotonic revision, and a bounded mutation-idempotency
+ledger. Calls for one ID enter a local FIFO lane and acquire a renewable SQLite lease; settlement
+compares its random token, runtime owner, and starting revision. That serializes healthy runtimes
+and prevents a stale runtime from committing after lease loss while allowing unrelated IDs to run
+concurrently. Object commits publish through the ordinary cross-process database revision journal.
+The SQLite driver deliberately inherits the one durable-volume placement boundary; it is not a
+multi-host consensus protocol.
+
 Project mutations also acquire durable distributed leases. Authenticated deployment nodes, desired
 generations, idempotent durable operations, lease expiry, retries, draining, capacity placement, and
 monotonic fences reject stale workers. The provider-neutral remote-agent loop implements

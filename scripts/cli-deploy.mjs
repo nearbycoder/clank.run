@@ -122,6 +122,10 @@ const COMMANDS = Object.freeze({
     usage: "clank journey [journey.json|journey.mjs] [--url <app-url>] [--browser <executable> | --cdp <loopback-url>] [--headed] [--output <report.json>] [--json]",
     summary: "Replay agent-authored semantic acceptance journeys in an isolated real browser.",
   },
+  workbench: {
+    usage: "clank workbench <policy|flag|revision|parity|schema|capacity|upgrade|provenance|promotion|rollout|export|sanitize|provider|contract|visual> [arguments] [--json]",
+    summary: "Inspect, test, govern, promote, and port applications through data-only developer tools.",
+  },
   doctor: {
     usage: "clank doctor [directory] [--json]",
     summary: "Check whether an app is ready to build and deploy.",
@@ -523,6 +527,7 @@ Build and agents:
   clank jobs cancel <job-id>           Request cancellation
   clank jobs retry <job-id>            Retry a dead or cancelled job
   clank journey [journey.json]          Replay semantic acceptance flows in real Chrome
+  clank workbench help                  Open policy, revision, schema, parity, release, and provider tools
 
 Platform:
   clank login                          Authorize with https://clank.run
@@ -1932,6 +1937,7 @@ async function deploy(args) {
     frameworkRoot: packageRoot,
     frameworkVersion: packageJson.version,
     nodeVersion: process.version,
+    sourceRevision: deploymentSourceRevision(),
   });
   const digest = await deploymentDigest(artifact);
   const packageMs = performance.now() - packageStartedAt;
@@ -2111,6 +2117,7 @@ async function previewCommand(args) {
       frameworkRoot: packageRoot,
       frameworkVersion: packageJson.version,
       nodeVersion: process.version,
+      sourceRevision: deploymentSourceRevision(),
     });
     const digest = await deploymentDigest(artifact);
     const packageMs = performance.now() - packageStartedAt;
@@ -3643,6 +3650,13 @@ function markdownText(value) {
 
 function randomToken() {
   return crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+}
+
+function deploymentSourceRevision() {
+  return process.env.CLANK_SOURCE_REVISION
+    ?? process.env.GITHUB_SHA
+    ?? process.env.RAILWAY_GIT_COMMIT_SHA
+    ?? "unknown";
 }
 
 function roundedMilliseconds(value) {

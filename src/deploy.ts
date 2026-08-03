@@ -77,6 +77,10 @@ export interface DeploymentBundle {
     readonly builder: "clank-cli/1";
     readonly frameworkVersion: string;
     readonly nodeVersion: string;
+    readonly sourceRevision?: string;
+    readonly configurationSha256?: string;
+    readonly materialsSha256?: string;
+    readonly migrationIds?: readonly string[];
   };
   readonly files: DeploymentFile[];
 }
@@ -91,13 +95,23 @@ export interface CreateDeploymentBundleOptions extends BundleLimits {
   frameworkRoot?: string;
   frameworkVersion?: string;
   nodeVersion?: string;
+  /** Git/OIDC source revision supplied by the caller; never inferred from project files. */
+  sourceRevision?: string;
 }
 
 const SENSITIVE_SEGMENTS = new Set([
   ".env",
+  ".envrc",
+  ".dev.vars",
   ".git",
   ".hg",
   ".clank",
+  ".npmrc",
+  ".yarnrc",
+  ".pypirc",
+  ".netrc",
+  ".ssh",
+  ".aws",
   ".proact",
   ".svn",
   "id_rsa",
@@ -398,6 +412,19 @@ export async function createDeploymentBundle(
   }
   if (!files) throw new Error("Deployment source could not be snapshotted.");
   if (!files.has(config.entry)) throw new Error(`Deployment entry ${config.entry} was not packaged.`);
+  const sortedFiles = [...files.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const configurationSha256 = await sha256(new TextEncoder().encode(JSON.stringify(config)));
+  const materialsSha256 = await sha256(new TextEncoder().encode(JSON.stringify(
+    sortedFiles.map(({ path, size, sha256, mode }) => ({ path, size, sha256, mode })),
+  )));
+  const migrationPrefix = `${config.database.migrations}/`;
+  const migrationIds = sortedFiles
+    .filter((file) => file.path.startsWith(migrationPrefix) && file.path.endsWith(".sql"))
+    .map((file) => file.path.slice(migrationPrefix.length, -4));
+  const sourceRevision = options.sourceRevision ?? "unknown";
+  if (sourceRevision.length === 0 || sourceRevision.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/u.test(sourceRevision)) {
+    throw new Error("Deployment source revision is invalid.");
+  }
   const bundle: DeploymentBundle = {
     protocol: "clank-deploy/1",
     config,
@@ -405,8 +432,12 @@ export async function createDeploymentBundle(
       builder: "clank-cli/1",
       frameworkVersion: options.frameworkVersion ?? "unknown",
       nodeVersion: options.nodeVersion ?? "unknown",
+      sourceRevision,
+      configurationSha256,
+      materialsSha256,
+      migrationIds: Object.freeze(migrationIds),
     },
-    files: [...files.values()].sort((left, right) => left.path.localeCompare(right.path)),
+    files: sortedFiles,
   };
   const json = new TextEncoder().encode(JSON.stringify(bundle));
   const zlibName = "node:zlib";
@@ -446,14 +477,26 @@ export async function decodeDeploymentBundle(
   }
   const config = parseDeploymentConfig(source.config);
   const provenanceSource = object(source.provenance, "provenance");
-  exactKeys(provenanceSource, ["builder", "frameworkVersion", "nodeVersion"], "provenance");
+  exactKeys(provenanceSource, ["builder", "frameworkVersion", "nodeVersion", "sourceRevision", "configurationSha256", "materialsSha256", "migrationIds"], "provenance");
   if (provenanceSource.builder !== "clank-cli/1" && provenanceSource.builder !== "proact-cli/1") {
     throw new Error("Unsupported deployment artifact builder.");
   }
   const provenance = {
     builder: "clank-cli/1" as const,
-    frameworkVersion: string(provenanceSource.frameworkVersion, "provenance.frameworkVersion"),
-    nodeVersion: string(provenanceSource.nodeVersion, "provenance.nodeVersion"),
+    frameworkVersion: boundedProvenanceString(provenanceSource.frameworkVersion, "provenance.frameworkVersion"),
+    nodeVersion: boundedProvenanceString(provenanceSource.nodeVersion, "provenance.nodeVersion"),
+    ...(provenanceSource.sourceRevision === undefined ? {} : {
+      sourceRevision: boundedProvenanceString(provenanceSource.sourceRevision, "provenance.sourceRevision"),
+    }),
+    ...(provenanceSource.configurationSha256 === undefined ? {} : {
+      configurationSha256: provenanceDigest(provenanceSource.configurationSha256, "provenance.configurationSha256"),
+    }),
+    ...(provenanceSource.materialsSha256 === undefined ? {} : {
+      materialsSha256: provenanceDigest(provenanceSource.materialsSha256, "provenance.materialsSha256"),
+    }),
+    ...(provenanceSource.migrationIds === undefined ? {} : {
+      migrationIds: provenanceMigrationIds(provenanceSource.migrationIds),
+    }),
   };
   const rawFiles = array(source.files, "files");
   const maxFiles = limits.maxFiles ?? 20_000;
@@ -483,6 +526,25 @@ export async function decodeDeploymentBundle(
     files.push({ path: name, size, sha256: digest, mode, content });
   }
   if (!names.has(config.entry)) throw new Error("Deployment entry is missing from the artifact.");
+  if (provenance.configurationSha256) {
+    const expected = await sha256(new TextEncoder().encode(JSON.stringify(config)));
+    if (expected !== provenance.configurationSha256) throw new Error("Deployment configuration provenance does not match the artifact.");
+  }
+  if (provenance.materialsSha256) {
+    const expected = await sha256(new TextEncoder().encode(JSON.stringify(
+      files.map(({ path, size, sha256, mode }) => ({ path, size, sha256, mode })),
+    )));
+    if (expected !== provenance.materialsSha256) throw new Error("Deployment material provenance does not match the artifact.");
+  }
+  if (provenance.migrationIds) {
+    const prefix = `${config.database.migrations}/`;
+    const expected = files
+      .filter((file) => file.path.startsWith(prefix) && file.path.endsWith(".sql"))
+      .map((file) => file.path.slice(prefix.length, -4));
+    if (JSON.stringify(expected) !== JSON.stringify(provenance.migrationIds)) {
+      throw new Error("Deployment migration provenance does not match the artifact.");
+    }
+  }
   return Object.freeze({
     protocol: "clank-deploy/1",
     config,
@@ -693,6 +755,26 @@ function array(value: unknown, label: string): unknown[] {
 function string(value: unknown, label: string): string {
   if (typeof value !== "string") throw new Error(`${label} must be a string.`);
   return value;
+}
+
+function boundedProvenanceString(value: unknown, label: string): string {
+  const result = string(value, label);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/u.test(result)) throw new Error(`${label} is invalid.`);
+  return result;
+}
+
+function provenanceDigest(value: unknown, label: string): string {
+  const result = string(value, label);
+  if (!/^[a-f0-9]{64}$/u.test(result)) throw new Error(`${label} is invalid.`);
+  return result;
+}
+
+function provenanceMigrationIds(value: unknown): readonly string[] {
+  const values = array(value, "provenance.migrationIds");
+  if (values.length > 20_000) throw new Error("provenance.migrationIds exceeds 20,000 entries.");
+  const output = values.map((item, index) => boundedProvenanceString(item, `provenance.migrationIds[${index}]`));
+  if (new Set(output).size !== output.length) throw new Error("provenance.migrationIds contains duplicates.");
+  return Object.freeze(output);
 }
 
 function integer(value: unknown, label: string, minimum: number, maximum: number): number {

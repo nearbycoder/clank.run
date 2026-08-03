@@ -129,7 +129,9 @@ Rules:
 The wire media type is `application/vnd.clank.deploy+gzip`. Its document protocol is `clank-deploy/1` and contains:
 
 - normalized configuration;
-- builder protocol, Clank version, and Node version;
+- builder protocol, Clank version, Node version, and source revision;
+- SHA-256 bindings for normalized configuration and the complete material manifest;
+- the exact ordered immutable migration IDs;
 - a sorted file list with path, size, mode, SHA-256 digest, and base64 content.
 
 The gzip timestamp is fixed, so identical inputs on the same Clank and Node versions produce identical bytes. The CLI also sends an artifact digest and idempotency key.
@@ -141,7 +143,11 @@ clank inspect .clank/artifacts/<digest>.clank.gz
 
 Dry-run artifact creation is offline and does not require platform credentials. Ambiguous upload failures retain a private local attempt record for 24 hours, allowing the next identical command to reuse its idempotency key instead of accidentally creating a second release after a lost response.
 
-The metadata supports the traceability goals of [SLSA provenance](https://slsa.dev/spec/v1.2/provenance), but `clank-deploy/1` is not a signed SLSA attestation. Signing and transparency-log integration are future extensions.
+The decoder verifies the configuration, material, and migration bindings before returning an
+artifact. Set `CLANK_SOURCE_REVISION` when a nonstandard CI system cannot provide `GITHUB_SHA` or
+`RAILWAY_GIT_COMMIT_SHA`. The metadata supports the traceability goals of
+[SLSA provenance](https://slsa.dev/spec/v1.2/provenance), but `clank-deploy/1` is not a signed SLSA
+attestation. Signing and transparency-log integration are future extensions.
 
 ## Release transaction
 
