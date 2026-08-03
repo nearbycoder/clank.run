@@ -275,15 +275,16 @@ svg { display: block; }
 .drawer-viewport.right { place-items: stretch end; padding: 0; }
 .demo-drawer { position: relative; width: min(92vw, 420px); height: 100%; border-left: 1px solid var(--clank-border-strong); background: var(--clank-surface); color: var(--clank-text); padding: 42px 28px; box-shadow: var(--clank-shadow-lg); pointer-events: auto; }
 .drawer-handle { position: absolute; inset: 0 auto 0 0; width: 18px; }
-.bottom-sheet-viewport { position: fixed; inset: 0; display: grid; align-items: end; pointer-events: none; }
-.demo-bottom-sheet { position: relative; width: min(100%, 720px); max-height: min(90dvh, 760px); min-height: min(48dvh, 420px); justify-self: center; overflow: hidden; border: 1px solid var(--clank-border-strong); border-bottom: 0; border-radius: var(--clank-radius-lg) var(--clank-radius-lg) 0 0; background: var(--clank-surface); color: var(--clank-text); box-shadow: var(--clank-shadow-lg); pointer-events: auto; transform: translateY(calc(var(--drawer-swipe-movement-y, 0px) + var(--drawer-snap-point-offset, 0px))); transition: transform var(--clank-motion-normal); }
+.bottom-sheet-viewport { position: fixed; inset: auto 0 0; display: grid; align-items: end; width: 100%; height: 100dvh; max-height: 100%; overflow: hidden; pointer-events: none; }
+.demo-bottom-sheet { position: relative; width: min(100%, 720px); height: min(90dvh, 760px); max-height: 100%; min-height: 0; justify-self: center; overflow: hidden; border: 1px solid var(--clank-border-strong); border-bottom: 0; border-radius: var(--clank-radius-lg) var(--clank-radius-lg) 0 0; background: var(--clank-surface); color: var(--clank-text); box-shadow: var(--clank-shadow-lg); pointer-events: auto; transform: translateY(calc(var(--drawer-swipe-movement-y, 0px) + var(--drawer-snap-point-offset, 0px))); transition: transform var(--clank-motion-normal); }
 .demo-bottom-sheet[data-dragging] { transition: none; }
+.bottom-sheet-frame { display: flex; flex-direction: column; width: 100%; height: min(100%, var(--drawer-snap-point-size, 100%)); min-height: 0; overflow: hidden; }
 .bottom-sheet-swipe { display: grid; place-items: center; min-height: 28px; touch-action: none; cursor: grab; }
 .bottom-sheet-handle { width: 44px; height: 5px; border-radius: var(--clank-radius-full); background: var(--clank-border-strong); }
 .bottom-sheet-header { display: flex; align-items: start; justify-content: space-between; gap: 24px; padding: 5px 24px 16px; }
 .bottom-sheet-header h3 { margin: 6px 0; font-size: 24px; letter-spacing: -.04em; }
 .bottom-sheet-header p { max-width: 430px; margin: 0; color: var(--clank-text-muted); font-size: 10px; }
-.bottom-sheet-content { overflow-y: auto; max-height: calc(90dvh - 128px); padding: 0 24px max(24px, env(safe-area-inset-bottom)); overscroll-behavior: contain; }
+.bottom-sheet-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 24px max(24px, env(safe-area-inset-bottom)); overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
 .bottom-sheet-variants { display: flex; gap: 5px; margin-bottom: 13px; }
 .bottom-sheet-variants button { min-height: 28px; border: 1px solid var(--clank-border); border-radius: var(--clank-radius-full); background: transparent; color: var(--clank-text-muted); padding: 0 10px; cursor: pointer; font-size: 8px; }
 .bottom-sheet-variants button:hover { border-color: var(--clank-accent); color: var(--clank-accent); }
@@ -545,11 +546,11 @@ svg { display: block; }
   .pagination-long-label { display: none; }
   .pagination-controls > button { min-width: 44px; min-height: 44px; padding: 0; }
   .pagination-pages button { min-width: 44px; min-height: 44px; }
-  .demo-bottom-sheet { width: 100%; max-height: 92dvh; min-height: 56dvh; }
+  .demo-bottom-sheet { width: 100%; height: min(92dvh, 760px); max-height: 100%; min-height: 0; }
   .bottom-sheet-swipe { min-height: 44px; }
   .demo-bottom-sheet .dialog-close { width: 44px; height: 44px; }
   .bottom-sheet-header { padding-inline: 18px; }
-  .bottom-sheet-content { max-height: calc(92dvh - 128px); padding-inline: 14px; }
+  .bottom-sheet-content { padding-inline: 14px; }
 }
 
 @keyframes selection-sheet-enter { from { transform: translateY(18px); opacity: .7; } to { transform: translateY(0); opacity: 1; } }

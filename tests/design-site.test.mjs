@@ -73,6 +73,9 @@ test("Design Studio serves every real component and theme contract securely", as
   assert.match(styleSource, /\.pagination-pages\s*\{[^}]*overflow-x:\s*auto/u);
   assert.match(styleSource, /\.pagination-controls > button[^}]*\{[^}]*width:\s*44px[^}]*height:\s*44px/u);
   assert.match(styleSource, /\.bottom-sheet-swipe\s*\{[^}]*min-height:\s*44px/u);
+  assert.match(styleSource, /\.bottom-sheet-viewport\s*\{[^}]*height:\s*100dvh[^}]*overflow:\s*hidden/u);
+  assert.match(styleSource, /\.bottom-sheet-frame\s*\{[^}]*height:\s*min\(100%,\s*var\(--drawer-snap-point-size,\s*100%\)\)[^}]*overflow:\s*hidden/u);
+  assert.match(styleSource, /\.bottom-sheet-content\s*\{[^}]*overflow-y:\s*auto[^}]*touch-action:\s*pan-y/u);
   assert.doesNotMatch(styleSource, /--clank-radius-xl/u);
   assert.match(styleSource, /\.component-heading h1\s*\{[^}]*overflow-wrap:\s*anywhere/u);
   assert.match(styleSource, /\.nav-popup\s*\{[^}]*width:\s*min\(320px,\s*calc\(100vw - 32px\)\)[^}]*min-width:\s*0/u);
@@ -88,7 +91,7 @@ test("Design Studio serves every real component and theme contract securely", as
   for (const feedback of ["Deploy started.", "Draft saved.", "was added as", "Bold applied.", "Italic applied.", "Link inserted."]) {
     assert.ok(storiesSource.includes(feedback), `interactive story feedback is missing: ${feedback}`);
   }
-  for (const capability of ["createBottomSheet", "createPagination", "modal: true", "presentation: \"responsive\"", "insidePopup: true"]) {
+  for (const capability of ["createBottomSheet", "createPagination", "modal: true", "bottom-sheet-frame", "presentation: \"responsive\"", "insidePopup: true"]) {
     assert.ok(storiesSource.includes(capability), `expanded component story is missing: ${capability}`);
   }
   for (const source of [studioSource, storiesSource]) {

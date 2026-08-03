@@ -477,10 +477,12 @@ test("drawer resolves and deduplicates safe snap points with reactive CSS state"
   ]);
   assert.equal(drawer.snapPointOffset.value, 340);
   assert.equal(styleValue(drawer.popup(), "--drawer-snap-point-offset"), "340px");
+  assert.equal(styleValue(drawer.popup(), "--drawer-snap-point-size"), "160px");
   assert.equal(readProp(drawer.popup()["data-expanded"]), undefined);
 
   assert.equal(drawer.setSnapPoint(1), true);
   assert.equal(drawer.snapPoint.value, 1);
+  assert.equal(styleValue(drawer.popup(), "--drawer-snap-point-size"), "500px");
   assert.equal(readProp(drawer.popup()["data-expanded"]), "");
   assert.deepEqual(changes, [[1, "programmatic"]]);
   assert.ok(drawer.manifest().actions.some((action) => action.name === "setSnapPoint" && action.sideEffects === "write"));

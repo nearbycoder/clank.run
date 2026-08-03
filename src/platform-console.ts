@@ -1,4 +1,8 @@
 import type { AuthRequest, DefaultAuthProfile } from "./auth.ts";
+import { createClankThemeStylesheet, getClankTheme } from "./ui-theme.ts";
+
+const CONTROL_PLANE_THEME = getClankTheme("clank")!;
+const CONTROL_PLANE_THEME_CSS = createClankThemeStylesheet([CONTROL_PLANE_THEME]);
 
 export interface PlatformConsoleContext {
   platformRole: string | null;
@@ -141,6 +145,8 @@ dialog{background:#111;border-color:#383838;border-radius:12px}dialog::backdrop{
 @media(max-width:430px){.stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.stat{padding:15px}.stat-value{font-size:22px}.project-page-head{gap:16px}.project-heading h1{font-size:clamp(24px,8vw,30px)}.analytics-facts{grid-template-columns:1fr}.detail-row{grid-template-columns:1fr;gap:3px}.admin-facts{grid-template-columns:1fr 1fr}.admin-growth-row{grid-template-columns:minmax(88px,.55fr) 1fr auto;gap:8px}.analytics-chart-panel .metric-toolbar{grid-template-columns:repeat(5,minmax(44px,1fr));gap:4px}#admin-runner-status{flex:1 0 100%;margin-left:0;text-align:left;overflow-wrap:anywhere}.dialog-actions{display:grid;grid-template-columns:1fr}.dialog-actions .button{width:100%}}
 @media(max-width:620px){.quota-fields{grid-template-columns:1fr}.quota-field-copy{min-height:0}.usage-controls{align-items:stretch;flex-direction:column;width:100%}.usage-controls .input{width:100%;min-width:0}}
 @media(max-width:340px){.stat-grid{grid-template-columns:1fr}.breakdown-row{grid-template-columns:minmax(72px,.7fr) minmax(0,1fr)}.breakdown-value{grid-column:1/-1}.dialog-actions{display:grid;grid-template-columns:1fr}.dialog-actions .button{width:100%}.domain-actions{grid-template-columns:1fr}.desktop-project-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}}
+${CONTROL_PLANE_THEME_CSS}
+:root{--bg:var(--clank-canvas);--panel:var(--clank-surface);--panel-2:var(--clank-surface-muted);--line:var(--clank-border);--line-2:var(--clank-border-strong);--text:var(--clank-text);--muted:var(--clank-text-muted);--faint:var(--clank-text-faint);--lime:var(--clank-accent);--lime-2:var(--clank-accent-hover);--red:var(--clank-danger);--radius:var(--clank-radius-md);--shadow:var(--clank-shadow-lg)}
 </style></head><body><div class="noise"></div>
 <svg class="icon-sprite" aria-hidden="true" focusable="false"><defs>
   <symbol id="nav-icon-overview" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1"></rect><rect x="14" y="3.5" width="6.5" height="6.5" rx="1"></rect><rect x="3.5" y="14" width="6.5" height="6.5" rx="1"></rect><rect x="14" y="14" width="6.5" height="6.5" rx="1"></rect></symbol>

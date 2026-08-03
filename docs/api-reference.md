@@ -1,5 +1,14 @@
 # API reference
 
+## Governance, lifecycle, and tooling
+
+Use `@clank.run/framework/governance` for policy decisions, expiring agent approvals,
+entitlements, and feature flags. Use `@clank.run/framework/lifecycle` for revision replay,
+provenance, promotions, rollout guardrails, sanitized clones, portable exports, and capacity.
+Use `@clank.run/framework/tooling` for App Studio reviews, visual regression, parity, schema
+planning, contract tests, upgrades, and the agent playground. Provider adapters can call
+`runDeploymentProviderConformance()` from `@clank.run/framework/provider`.
+
 This is a compact index of the primary public surfaces. The shipped `.d.ts` files are the
 exhaustive symbol contract; focused guides contain behavioral details and examples.
 
@@ -21,6 +30,35 @@ exhaustive symbol contract; focused guides contain behavioral details and exampl
 - `resource(loader, options?)`: async state with abort and stale-result protection.
 - `consumeStream(iterable, initial, reduce?)`: folds an async iterable into a signal.
 - `SIGNAL`, `STORE`: global protocol symbols for integrations.
+
+## Typed Task runtime
+
+The opt-in runtime is available from the package root or `@clank.run/framework/task`. See
+[Typed tasks, failures, and services](task.md) for the complete execution, cleanup, cancellation,
+and security contract.
+
+- `Task<A, E, R>`: lazy computation with success `A`, typed failure `E`, and service requirements
+  `R`. Composition includes `map`, `flatMap`, `tap`, `as`, `mapError`, `catchAll`, `catchCause`,
+  `ensuring`, `retry`, `timeout`, `provide`, `withSpan`, and generator yielding.
+- Constructors: `Task.succeed`, `Task.fail`, `Task.failCause`, `Task.sync`, `Task.suspend`, `Task.try`,
+  `Task.tryPromise`, `Task.fromPromise`, and `Task.gen`.
+- Execution: `Task.runExit`, `Task.runPromise`, `TaskRuntime`, and `createTaskRuntime`.
+  `runPromise` rejects with inspectable `TaskExecutionError`; `runExit` returns every outcome as
+  data.
+- Outcomes: `Exit`, `Cause`, and `Result`. Cause variants distinguish typed `Failure`, unexpected
+  `Defect`, `Interrupted`, `Sequential`, and `Parallel` outcomes.
+- Services: `service<T>(name)`, nominal `Service<T>`, and memoized `Layer`. `Layer.succeed`,
+  `Layer.effect`, `Layer.fromValue`, `merge`, and `task.provide` compose requirements and scoped
+  implementations.
+- Resources: `Task.acquireRelease`, `Task.addFinalizer`, `Task.scoped`, and `TaskScope`. Finalizers
+  run exactly once in LIFO order and cleanup causes are retained.
+- Scheduling: `Schedule.recurs`, `Schedule.spaced`, `Schedule.exponential`, `while`, `mapDelay`,
+  `intersect`, and `union`.
+- Concurrency: `Task.all`, `Task.race`, `Task.fork`, and `Fiber`. Children own scopes, propagate
+  interruption, and cannot outlive an enclosing runtime scope.
+- Time: `realClock`, injectable `Clock`, and deterministic `TestClock`.
+- Diagnostics: `TaskTracer`, `withSpan`, `TimeoutError`, and `MissingServiceError`. Clank's
+  observability tracer can be passed directly as the runtime tracer.
 
 ## DOM
 
@@ -635,6 +673,32 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
 
 See [Durable jobs and cron](jobs-and-cron.md) for transaction, lease, retry, scheduling, process,
 deployment, and at-least-once semantics.
+
+## Durable objects
+
+- `defineDurableObject({ name, state, initial, version?, migrations?, methods, alarm? })`: define a
+  stable stateful namespace with typed query and mutation methods.
+- `openDurableObjects(definitions, { database, ...options })`: open the SQLite-backed runtime with
+  per-ID local lanes, renewable cross-process leases, revision fencing, bounded state, and durable
+  mutation idempotency.
+- `runtime.get(definition, id)` / `runtime.namespace(definition).get(id)`: obtain an inert typed
+  stub. `.call()` returns the method value; `.invoke()` also returns revision and deduplication.
+- `stub.inspect()` / `.subscribe(listener)`: trusted server snapshot and cross-process revision
+  observation. `namespace.list()` is a bounded operator read, not a browser endpoint.
+- `storage.get()`, mutation `.set()`, `.update()`, `.deleteAll()`, `.getAlarm()`, `.setAlarm()`:
+  immutable reads and commit-on-success state operations.
+- `runtime.runAlarmsOnce()` / `.startAlarmScheduler()`: fenced one-alarm-per-object execution with
+  bounded exponential retry and retained failure diagnostics.
+- `durableObjectManifest(definitions)`: immutable state/method/alarm JSON Schema contract.
+- `durableObjectMcpTools(runtime, definition, { authorize })`: convert explicitly agent-enabled
+  methods into scoped MCP tools with mandatory exact-object authorization.
+- Types: `DurableObjectDefinition`, `DurableObjectMethod`, `DurableObjectStorage`,
+  `DurableObjectMutableStorage`, `DurableObjectStub`, `DurableObjectNamespace`,
+  `DurableObjectRuntime`, `DurableObjectSnapshot`, `DurableObjectCallResult`,
+  `DurableObjectAlarmDefinition`, and `DurableObjectMcpToolsOptions`.
+
+See [Durable objects](durable-objects.md) for state evolution, serialization, external side-effect,
+alarm-process, authorization, backup, and placement guarantees.
 
 ## SSR
 

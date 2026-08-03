@@ -75,7 +75,7 @@ The generated `package.json` has one application dependency:
 ```json
 {
   "dependencies": {
-    "@clank.run/framework": "^0.13.0"
+    "@clank.run/framework": "^0.16.0"
   }
 }
 ```
@@ -315,6 +315,8 @@ Imports do not mutate global state. The package ships its TypeScript declaration
 - [Authentication](auth.md): customize profiles, sessions, authorization, and the default auth UI.
 - [Durable jobs and cron](jobs-and-cron.md): add transactional queues, worker processes, retries,
   dead letters, and time-zone-aware schedules.
+- [Durable objects](durable-objects.md): give carts, sessions, coordinators, and agents a stable ID,
+  serialized behavior, transactional state, alarms, migrations, and opt-in MCP tools.
 - [Per-app MCP servers](per-app-mcp.md): connect agents directly to application queries and mutations.
 - [Deployment CLI](cli.md): ship and operate the application.
 - [Contributing to Clank](../CONTRIBUTING.md): clone the framework repository only when you want to change Clank itself.

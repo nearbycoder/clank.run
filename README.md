@@ -63,6 +63,21 @@ until a person or orchestrator approves that exact digest. [Read the composition
 healthy replacements, keeps the last good process after errors, and reloads connected browsers.
 Agents can use `clank dev --json` for stable newline-delimited lifecycle events.
 
+For deeper inspection, the dependency-free developer workbench makes policy, feature flags,
+revision replay, local/production parity, schema evolution, release provenance, progressive
+delivery, portable exports, sanitized clones, capacity estimates, action contract tests, provider
+conformance, visual baselines, and framework upgrades available to people, agents, and CI:
+
+```sh
+clank workbench help
+clank workbench parity local-runtime.json production-runtime.json --json
+clank workbench schema schema-current.json schema-target.json --json
+```
+
+[Read the workbench guide →](https://docs.clank.run/docs/workbench)
+[Governance and approvals →](https://docs.clank.run/docs/governance) ·
+[Revision and release lifecycle →](https://docs.clank.run/docs/release-lifecycle)
+
 The generated app is already a working product—not an empty component. It includes:
 
 - registration, login, logout, secure sessions, and CSRF protection;
@@ -198,23 +213,25 @@ inspectable surface instead of hiding behavior in generated component code.
 
 | Build the interface | Own the backend | Ship the product |
 | --- | --- | --- |
-| Signals, computed values, effects, stores, resources, typed TSX, keyed lists, forms, dialogs, tabs, routing, Tailwind CSS, SSR, and hydration | Runtime schemas, inferred API clients, auth, roles, owned documents, SQLite indexes, atomic mutations, live queries, files, email, jobs, workflow graphs, and webhooks | Interactive CLI, browser-approved login, project provisioning, durable invitation email, secrets, migrations, backups, job/cron/workflow operations, health gates, rolling activation, metrics, logs, custom domains, and rollback |
+| Signals, computed values, effects, stores, resources, typed TSX, keyed lists, forms, dialogs, tabs, routing, Tailwind CSS, SSR, and hydration | Runtime schemas, inferred API clients, auth, roles, owned documents, SQLite indexes, atomic mutations, live queries, first-party durable objects, files, email, jobs, workflow graphs, and webhooks | Interactive CLI, browser-approved login, project provisioning, durable invitation email, secrets, migrations, backups, job/cron/workflow operations, health gates, rolling activation, metrics, logs, custom domains, and rollback |
 
 <details>
 <summary><strong>Explore the complete framework feature map</strong></summary>
 
 | Layer | Features |
 | --- | --- |
-| Reactivity | Signals, lazy computed values, effects with cleanup, batching, rollback transactions, untracked reads, owned roots, deep proxy stores, snapshots, async resources, stream reduction |
+| Reactivity and tasks | Signals, lazy computed values, effects with cleanup, batching, rollback transactions, untracked reads, owned roots, deep proxy stores, snapshots, async resources, stream reduction, plus an opt-in `Task<Success, Failure, Requirements>` runtime with typed causes, service layers, scoped resources, schedules, structured cancellation, tracing, and deterministic time |
 | UI | Typed compiler-powered TSX, automatic reactive expressions and props, keyed lists, stable text nodes, lifecycle/context, a 39-family dependency-free headless catalog, native form parts, responsive bottom sheets, overlays, portals, RTL, SSR/hydration, agent manifests, directives, `Show`, `For`, `Switch`, and lazy components |
 | Forms | Schema validation, typed fields, accessible control/error props, touched/dirty state, cross-field rules, cancellation, server errors, invalid-focus behavior, reset, agent-readable manifests |
-| AI | Approval-bound conversational application composition, signed exact-version blueprint registries, web-focused runtime schemas, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, per-user agent access inboxes and revocable scoped grants, JSON Schema output, side-effect policy, action runners, semantic views, native-label-aware inspect/activate/input surface, and isolated real-browser journeys with secret-value redaction |
+| AI | Approval-bound conversational App Studio, unified user/agent governance, typed feature flags, signed exact-version blueprint registries, automatic MCP Streamable HTTP actions, OAuth + PKCE agent authorization, scoped grants and HMAC approvals, contract-generated tests, a redacted agent playground, semantic views, and isolated real-browser journeys |
+| Delivery lifecycle | Immutable provenance, promotion evidence, progressive rollout guardrails, end-to-end revision traces and replay, production parity, schema evolution plans, sanitized clones, portable exports, capacity estimates, framework upgrade plans, and provider conformance |
 | UI↔MCP parity | Typed `agentAction` function references, bounded SSR/DOM inspection, manifest and revision verification, stable-control enforcement, structured mismatch reports |
 | Generated verification | Blueprint-derived synthetic fixture users and related records, real backend seeding, ownership isolation, exact agent/UI manifest parity, per-route SSR contracts, and a selector-free mobile Chrome smoke journey |
 | Routing | Parameters, optional segments, wildcards, repeated query values, async loaders, aborts, guards, redirects, titles, links, history navigation |
 | Full stack | Inferred schemas, documents, arguments, and results; branded IDs; query and mutation functions; zero-codegen typed API references |
 | Auth | Email/password sessions, scrypt hashing, secure cookies, CSRF, roles, revocation, default auth UI, SSR boot state |
 | Data | Node's built-in SQLite, JSON documents, declared expression indexes, owned tables, atomic mutations, immutable document history, compensating restores, persisted live revisions, dependency-tracked query cache, and privacy-first typed product analytics |
+| Durable objects | Stable typed namespace/ID stubs, per-ID local FIFO lanes, renewable cross-process leases, stale-runtime fencing, transactional state, mutation idempotency, schema migrations, alarms with retry, live revision subscriptions, aggregate diagnostics, and opt-in exact-authorized MCP tools |
 | Live sync | Auth-partitioned Fetch RPC and cache, EventSource streams, session revocation, automatic invalidation, SSR seeding, multi-tab synchronization, and bounded presence/cursor/signal rooms |
 | SSR | Async string rendering, full-document templates, safe state serialization, CSP nonces, context and keyed lists, marker-based DOM-preserving hydration |
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |
@@ -249,6 +266,7 @@ scripts here; it does not install a framework toolchain.
 | [`/examples/booking`](examples/booking) | Multi-step selection, validation, pricing, and confirmation |
 | [`examples/fullstack`](examples/fullstack) | SSR, SQLite, live queries, and synchronization |
 | [`examples/auth-todo`](examples/auth-todo) | Auth, isolated user data, Tailwind, SSR, and full live CRUD |
+| [`examples/durable-counter`](examples/durable-counter) | Stable typed object IDs, serialized state, idempotent calls, and diagnostics |
 
 Run the full-stack references separately:
 
@@ -272,12 +290,13 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 
 | Start | Build | Operate | Verify |
 | --- | --- | --- | --- |
-| [Getting started](https://docs.clank.run/docs/getting-started)<br>[Application recipes](https://docs.clank.run/docs/application-recipes)<br>[AI blueprints](https://docs.clank.run/docs/blueprints)<br>[Generated admin studio](https://docs.clank.run/docs/admin-studio)<br>[CLI](https://docs.clank.run/docs/cli) | [Reactivity](https://docs.clank.run/docs/reactivity)<br>[Rendering](https://docs.clank.run/docs/rendering)<br>[Headless UI](https://docs.clank.run/docs/ui)<br>[Design system](https://docs.clank.run/docs/design-system)<br>[Forms](https://docs.clank.run/docs/forms)<br>[Routing](https://docs.clank.run/docs/routing)<br>[Full stack](https://docs.clank.run/docs/full-stack)<br>[Durable jobs and cron](https://docs.clank.run/docs/jobs-and-cron)<br>[Tailwind](https://docs.clank.run/docs/tailwind) | [Deployment](https://docs.clank.run/docs/deployment-platform)<br>[Invitations and email](https://docs.clank.run/docs/invitations)<br>[Preview environments](https://docs.clank.run/docs/preview-environments)<br>[Usage and limits](https://docs.clank.run/docs/usage-and-limits)<br>[Hosted plans and billing](https://docs.clank.run/docs/hosted-plans-and-billing)<br>[Runner fleet](https://docs.clank.run/docs/runner-fleet)<br>[Runtime placement](https://docs.clank.run/docs/runtime-placement)<br>[Provider adapters](https://docs.clank.run/docs/provider-adapters)<br>[Provider data lifecycle](https://docs.clank.run/docs/provider-data-lifecycle)<br>[Provider Docker runtime](https://docs.clank.run/docs/provider-docker-runtime)<br>[Provider runtime ingress](https://docs.clank.run/docs/provider-runtime-ingress)<br>[Complete provider service](https://docs.clank.run/docs/provider-service)<br>[Dashboard and domains](https://docs.clank.run/docs/platform-dashboard)<br>[Migrations](https://docs.clank.run/docs/migrations)<br>[Backups](https://docs.clank.run/docs/recovery)<br>[Self-hosting](https://docs.clank.run/docs/self-hosting)<br>[Railway](https://docs.clank.run/docs/railway) | [Agent protocol](https://docs.clank.run/docs/agent-protocol)<br>[Per-app MCP](https://docs.clank.run/docs/per-app-mcp)<br>[Authentication](https://docs.clank.run/docs/authentication)<br>[Threat model](https://docs.clank.run/docs/threat-model)<br>[ASVS verification](https://docs.clank.run/docs/security-asvs)<br>[Conformance](https://docs.clank.run/docs/conformance) |
+| [Getting started](https://docs.clank.run/docs/getting-started)<br>[Application recipes](https://docs.clank.run/docs/application-recipes)<br>[AI blueprints](https://docs.clank.run/docs/blueprints)<br>[Generated admin studio](https://docs.clank.run/docs/admin-studio)<br>[CLI](https://docs.clank.run/docs/cli) | [Reactivity](https://docs.clank.run/docs/reactivity)<br>[Typed tasks](https://docs.clank.run/docs/typed-tasks)<br>[Rendering](https://docs.clank.run/docs/rendering)<br>[Headless UI](https://docs.clank.run/docs/ui)<br>[Design system](https://docs.clank.run/docs/design-system)<br>[Forms](https://docs.clank.run/docs/forms)<br>[Routing](https://docs.clank.run/docs/routing)<br>[Full stack](https://docs.clank.run/docs/full-stack)<br>[Durable objects](https://docs.clank.run/docs/durable-objects)<br>[Durable jobs and cron](https://docs.clank.run/docs/jobs-and-cron)<br>[Tailwind](https://docs.clank.run/docs/tailwind) | [Deployment](https://docs.clank.run/docs/deployment-platform)<br>[Invitations and email](https://docs.clank.run/docs/invitations)<br>[Preview environments](https://docs.clank.run/docs/preview-environments)<br>[Usage and limits](https://docs.clank.run/docs/usage-and-limits)<br>[Hosted plans and billing](https://docs.clank.run/docs/hosted-plans-and-billing)<br>[Runner fleet](https://docs.clank.run/docs/runner-fleet)<br>[Runtime placement](https://docs.clank.run/docs/runtime-placement)<br>[Provider adapters](https://docs.clank.run/docs/provider-adapters)<br>[Provider data lifecycle](https://docs.clank.run/docs/provider-data-lifecycle)<br>[Provider Docker runtime](https://docs.clank.run/docs/provider-docker-runtime)<br>[Provider runtime ingress](https://docs.clank.run/docs/provider-runtime-ingress)<br>[Complete provider service](https://docs.clank.run/docs/provider-service)<br>[Dashboard and domains](https://docs.clank.run/docs/platform-dashboard)<br>[Migrations](https://docs.clank.run/docs/migrations)<br>[Backups](https://docs.clank.run/docs/recovery)<br>[Self-hosting](https://docs.clank.run/docs/self-hosting)<br>[Railway](https://docs.clank.run/docs/railway) | [Agent protocol](https://docs.clank.run/docs/agent-protocol)<br>[Per-app MCP](https://docs.clank.run/docs/per-app-mcp)<br>[Authentication](https://docs.clank.run/docs/authentication)<br>[Threat model](https://docs.clank.run/docs/threat-model)<br>[ASVS verification](https://docs.clank.run/docs/security-asvs)<br>[Conformance](https://docs.clank.run/docs/conformance) |
 
 <details>
 <summary><strong>Complete documentation index</strong></summary>
 
 - [Documentation site source](docs-site/README.md)
+- [Typed tasks, failures, and services](docs/task.md)
 - [Headless UI behavior](https://docs.clank.run/docs/ui)
 - [Performance model](https://docs.clank.run/docs/performance)
 - [AI-first contracts](https://docs.clank.run/docs/ai-first)

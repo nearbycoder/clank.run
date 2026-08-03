@@ -47,6 +47,21 @@ profile. Generated blueprint apps include a mobile smoke journey and `npm run te
 Environment-backed secret inputs support login without recording passwords. See [Semantic browser
 journeys](browser-journeys.md) for operations, security boundaries, and CI output.
 
+## Developer workbench
+
+```sh
+clank workbench help
+clank workbench parity local.json production.json --json
+clank workbench schema current.json target.json --output=0004_change.sql
+clank workbench provider ./provider.mjs --json
+```
+
+`workbench` provides policy and flag evaluation, revision replay, production parity, schema
+evolution, capacity simulation, upgrades, provenance, portable exports, sanitized clones, provider
+conformance, action-contract tests, and visual comparison. See [App Studio and the developer
+workbench](workbench.md), [Governance](governance.md), and [Revision and release
+lifecycle](release-lifecycle.md).
+
 ## Compose with an agent
 
 ```sh
