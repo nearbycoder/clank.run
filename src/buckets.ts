@@ -2097,7 +2097,15 @@ function base64Url(bytes: Uint8Array): string {
 
 function fromBase64Url(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error("Invalid base64url.");
-  return fromBase64Standard(value.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - value.length % 4) % 4), 16 * 1024);
+  const bytes = fromBase64Standard(
+    value.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - value.length % 4) % 4),
+    16 * 1024,
+  );
+  // Reject alternate encodings whose unused trailing bits decode to the same
+  // bytes. Capability URLs are security tokens and must have one canonical
+  // representation so changing any token character always invalidates them.
+  if (base64Url(bytes) !== value) throw new Error("Invalid base64url.");
+  return bytes;
 }
 
 function base64Standard(bytes: Uint8Array): string {

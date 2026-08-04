@@ -13431,6 +13431,7 @@ const PLATFORM_PROJECT_SECTIONS = new Set([
   "deployments",
   "previews",
   "backups",
+  "storage",
   "logs",
   "jobs",
   "settings",
