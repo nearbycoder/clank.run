@@ -47,6 +47,10 @@ import {
   type JobRuntime,
   type JobSystemDefinition,
 } from "./jobs.ts";
+import {
+  createBucketMcpTools,
+  type BucketManager,
+} from "./buckets.ts";
 
 /** A nominal document ID. At runtime this is a compact random string. */
 export type Id<Table extends string> = DocumentId<Table>;
@@ -1605,6 +1609,8 @@ export interface BackendRuntime<
   readonly database: SQLiteDatabase<Schema>;
   readonly auth: Auth extends AuthDefinition<infer Profile> ? AuthRuntime<Profile> : undefined;
   readonly jobs: Jobs extends JobSystemDefinition<Schema, any> ? JobRuntime<Jobs> : undefined;
+  /** First-class application buckets, when configured for this backend. */
+  readonly buckets: BucketManager | undefined;
   readonly version: number;
   /** Deterministic revision of the MCP-visible backend action contract. */
   readonly contractRevision: string | null;
@@ -1634,6 +1640,8 @@ export interface OpenBackendOptions extends SQLiteOptions {
   onError?: (error: unknown) => void;
   /** Queue limits, retention, clock hooks, and job-specific error reporting. */
   jobs?: Omit<OpenJobsOptions, "database">;
+  /** Managed application files, images, quotas, signed uploads, and MCP file tools. */
+  buckets?: BucketManager;
   /**
    * Every backend function is exposed as an MCP tool by default. Set false to
    * disable the protocol, or customize its public identity and endpoint paths.
@@ -1981,6 +1989,12 @@ export async function openBackend<
         } satisfies McpTool<AuthRequest<any> | null>;
       })
     : [];
+  const bucketMcpTools = agentOptions && options.buckets
+    ? createBucketMcpTools<AuthRequest<any> | null>(options.buckets, {
+        identity: (auth) => ({ userId: auth?.user?.id }),
+        maxInlineBytes: Math.min(maxRequestBytes, 1024 * 1024),
+      })
+    : [];
   const workflowContract = definition.jobs ? workflowManifest(definition.jobs) : [];
   const agentWorkflowContract = workflowContract.filter((workflow) => workflow.agent !== false);
   const mcp = agentOptions
@@ -1990,8 +2004,13 @@ export async function openBackend<
         version: agentOptions.version ?? "1.0.0",
         description: agentDescription,
         instructions: agentOptions.instructions,
-        ...(agentWorkflowContract.length > 0 ? { metadata: { workflows: agentWorkflowContract } } : {}),
-        tools: mcpTools,
+        ...(agentWorkflowContract.length > 0 || options.buckets
+          ? { metadata: {
+              ...(agentWorkflowContract.length > 0 ? { workflows: agentWorkflowContract } : {}),
+              ...(options.buckets ? { buckets: options.buckets.manifest() } : {}),
+            } }
+          : {}),
+        tools: [...mcpTools, ...bucketMcpTools],
         allowedOrigins: options.allowedOrigins,
         maxRequestBytes,
         maxResponseBytes,
@@ -2024,6 +2043,9 @@ export async function openBackend<
       },
       documentation: {
         actions: "Connect with MCP and call tools/list or read clank://actions.",
+        ...(options.buckets
+          ? { buckets: "Bucket tools expose owner-isolated file listing, reads, uploads, deletes, and declared image variants." }
+          : {}),
         ...(agentWorkflowContract.length > 0
           ? { workflows: "Read clank://actions metadata.workflows for durable graph schemas and dependencies." }
           : {}),
@@ -2085,6 +2107,7 @@ export async function openBackend<
     database,
     auth: authRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["auth"],
     jobs: jobsRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["jobs"],
+    buckets: options.buckets,
     get version() { return database.version; },
     contractRevision: mcp?.revision ?? null,
     query(pathOrReference: string | FunctionReference<"query", any, any>, input: unknown = {}) {
@@ -2111,6 +2134,21 @@ export async function openBackend<
       }
       if (mcp && request.method === "GET" && url.pathname === "/.well-known/mcp/server-card.json") {
         return mcpServerCard(request);
+      }
+      if (options.buckets && (url.pathname === options.buckets.basePath || url.pathname.startsWith(`${options.buckets.basePath}/`))) {
+        const capabilityRequest = url.pathname.includes("/cap/") || url.pathname.includes("/public/");
+        if (!capabilityRequest && options.verifyOrigin !== false
+          && !requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins })) {
+          return problem(403, "ORIGIN_MISMATCH", "Cross-origin bucket request rejected.");
+        }
+        const auth = authRuntime ? await authRuntime.resolve(request) : null;
+        return options.buckets.handle(request, {
+          authenticated: Boolean(auth?.user),
+          userId: auth?.user?.id,
+          verifyWrite: authRuntime && auth?.session
+            ? () => authRuntime!.verifyCsrf(request, auth)
+            : undefined,
+        });
       }
       if (!url.pathname.startsWith(`${prefix}/`) && url.pathname !== prefix) return problem(404, "NOT_FOUND", "Backend endpoint not found.");
       if (authRuntime && (url.pathname === `${prefix}/auth` || url.pathname.startsWith(`${prefix}/auth/`))) {
@@ -2147,6 +2185,7 @@ export async function openBackend<
             })),
             jobs: definition.jobs ? jobManifest(definition.jobs) : [],
             workflows: workflowContract,
+            buckets: options.buckets?.manifest() ?? [],
           }, {
             headers: {
               "cache-control": "no-store",
@@ -2243,6 +2282,7 @@ export async function openBackend<
       mcp?.close();
       jobsRuntime?.close();
       authRuntime?.close();
+      options.buckets?.close();
       database.close();
     },
   };

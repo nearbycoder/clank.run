@@ -3,6 +3,7 @@ import { type InferSchema, type InferSchemaShape, type DocumentId, type Schema, 
 import { type AuthClient, type AuthDefinition, type AuthRequest, type AuthRuntime, type AuthState, type AuthUser, type DefaultAuthProfile } from "./auth.js";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.js";
 import { type JobPublisher, type JobRuntime, type JobSystemDefinition, type OpenJobsOptions } from "./jobs.js";
+import type { BucketManager } from "./buckets.js";
 /** A nominal document ID. At runtime this is a compact random string. */
 export type Id<Table extends string> = DocumentId<Table>;
 export type DocumentFor<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> = TableValue<Schema["tables"][Name]> & {
@@ -366,6 +367,7 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     readonly database: SQLiteDatabase<Schema>;
     readonly auth: Auth extends AuthDefinition<infer Profile> ? AuthRuntime<Profile> : undefined;
     readonly jobs: Jobs extends JobSystemDefinition<Schema, any> ? JobRuntime<Jobs> : undefined;
+    readonly buckets: BucketManager | undefined;
     readonly version: number;
     readonly contractRevision: string | null;
     query<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): {
@@ -404,6 +406,7 @@ export interface OpenBackendOptions extends SQLiteOptions {
     maxCacheEntries?: number;
     onError?: (error: unknown) => void;
     jobs?: Omit<OpenJobsOptions, "database">;
+    buckets?: BucketManager;
     agent?: false | {
         name?: string;
         title?: string;

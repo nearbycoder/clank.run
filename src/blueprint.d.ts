@@ -78,6 +78,28 @@ export interface AppServiceDefinition {
     required?: boolean;
     capabilities?: readonly string[];
 }
+export interface AppBucketDefinition {
+    description?: string;
+    visibility?: "private" | "public";
+    ownership?: "app" | "user";
+    browserAccess?: "authenticated" | "public" | "server";
+    allowedContentTypes?: readonly string[];
+    maxObjectBytes?: number;
+    maxObjects?: number;
+    maxBytes?: number;
+    perOwnerMaxObjects?: number;
+    perOwnerMaxBytes?: number;
+    cacheControl?: string;
+    resumable?: boolean;
+    maxChunkBytes?: number;
+    image?: false | {
+        maxWidth?: number;
+        maxHeight?: number;
+        maxPixels?: number;
+        formats?: readonly ("png" | "jpeg" | "gif" | "webp" | "avif")[];
+        variants?: Record<string, { width: number; height: number; fit?: "cover" | "contain"; format?: "original" | "png" | "jpeg" | "webp" | "avif"; quality?: number }>;
+    };
+}
 export interface AppDeploymentDefinition {
     database?: "sqlite" | "postgres";
     scale?: "single" | "horizontal";
@@ -151,11 +173,12 @@ export interface AppBlueprintInput {
     actions?: Record<string, AppActionDefinition>;
     migrations?: readonly AppMigrationDefinition[];
     services?: Record<string, AppServiceDefinition>;
+    buckets?: Record<string, AppBucketDefinition>;
     fixtures?: Record<string, AppFixtureDefinition>;
     admin?: false | AppAdminStudioDefinition;
     deployment?: AppDeploymentDefinition;
 }
-export interface AppBlueprint extends Omit<AppBlueprintInput, "protocol" | "slug" | "version" | "auth" | "relationships" | "actions" | "migrations" | "services" | "fixtures" | "admin" | "deployment"> {
+export interface AppBlueprint extends Omit<AppBlueprintInput, "protocol" | "slug" | "version" | "auth" | "relationships" | "actions" | "migrations" | "services" | "buckets" | "fixtures" | "admin" | "deployment"> {
     protocol: "clank-app/1";
     slug: string;
     version: number;
@@ -168,6 +191,7 @@ export interface AppBlueprint extends Omit<AppBlueprintInput, "protocol" | "slug
     actions: Record<string, AppActionDefinition>;
     migrations: readonly AppMigrationDefinition[];
     services: Record<string, AppServiceDefinition>;
+    buckets: Record<string, AppBucketDefinition>;
     fixtures: Record<string, AppFixture>;
     admin: false | {
         path: string;
@@ -193,6 +217,7 @@ export interface AppPlan {
         routes: number;
         actions: number;
         services: number;
+        buckets: number;
         migrations: number;
         fixtures: number;
     };

@@ -207,6 +207,13 @@ side-effect metadata. The graph is documentation, not an authorization bypass. M
 callable by wrapping `jobs.startWorkflow()` in an ordinary mutation; that mutation then supplies
 the MCP tool, authentication, roles, scopes, validation, confirmation policy, and audit boundary.
 
+Managed buckets follow the same freshness rule. Every declared bucket adds current
+`bucket_<name>_list`, `read`, `put`, and `delete` tools; image variants add `transform`. Bucket
+definitions are included in MCP metadata and the backend manifest, so changing MIME policy,
+ownership, quotas, or variants changes the contract revision and refreshes connected clients.
+OAuth supplies the owner identity—bucket tools never accept a user ID argument. See
+[Managed buckets](buckets.md).
+
 ## Verify an app's MCP surface
 
 Before deployment, check that every server-backed UI operation has one matching backend function

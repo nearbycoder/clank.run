@@ -18,6 +18,7 @@ export * from "./blueprint-registry.js";
 export * from "./webauthn.js";
 export * from "./services.js";
 export * from "./object-storage.js";
+export * from "./buckets.js";
 export * from "./observability.js";
 export * from "./recovery.js";
 export * from "./orchestration.js";

@@ -1101,6 +1101,7 @@ function runtimeEnvironment(
     PORT: String(port),
     CLANK_DATABASE_PATH: database,
     CLANK_DATABASE: database,
+    CLANK_BUCKET_ROOT: "/data/buckets",
     PROACT_DATABASE_PATH: database,
     PROACT_DATABASE: database,
     ALLOWED_HOSTS: "",

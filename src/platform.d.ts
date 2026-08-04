@@ -16,7 +16,7 @@ export interface DockerRunnerOptions {
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
 export type PlatformHostingProfile = "trusted" | "isolated";
 export type PlatformProjectPlacement = "local" | "provider";
-export type PlatformQuotaKey = "organizationsPerAccount" | "projectsPerAccount" | "projectsPerOrganization" | "domainsPerProject" | "releasesPerProject" | "releaseStorageBytesPerProject" | "backupsPerProject" | "requestsPerMonthPerOrganization" | "transferBytesPerMonthPerOrganization" | "requestsPerMinutePerProject";
+export type PlatformQuotaKey = "organizationsPerAccount" | "projectsPerAccount" | "projectsPerOrganization" | "domainsPerProject" | "releasesPerProject" | "releaseStorageBytesPerProject" | "bucketStorageBytesPerProject" | "bucketObjectsPerProject" | "backupsPerProject" | "requestsPerMonthPerOrganization" | "transferBytesPerMonthPerOrganization" | "requestsPerMinutePerProject";
 export type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
 export interface PlatformLimits {
     /** Maximum organizations created by one account. Defaults to 5. */
@@ -33,6 +33,10 @@ export interface PlatformLimits {
     releasesPerProject?: number;
     /** Maximum retained release and pre-deploy snapshot bytes per project. Defaults to 20 GiB. */
     releaseStorageBytesPerProject?: number;
+    /** Maximum application bucket bytes across one project. Defaults to 5 GiB. */
+    bucketStorageBytesPerProject?: number;
+    /** Maximum application bucket objects across one project. Defaults to 100,000. */
+    bucketObjectsPerProject?: number;
     /** Maximum admitted requests per UTC month in one workspace. Defaults to 5,000,000. */
     requestsPerMonthPerOrganization?: number;
     /** Maximum known ingress plus declared-response bytes per UTC month in one workspace. Defaults to 100 GiB. */

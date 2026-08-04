@@ -155,6 +155,10 @@ export interface PlatformLimits {
   releasesPerProject?: number;
   /** Maximum retained release and pre-deploy snapshot bytes per project. Defaults to 20 GiB. */
   releaseStorageBytesPerProject?: number;
+  /** Maximum application bucket bytes across one project. Defaults to 5 GiB. */
+  bucketStorageBytesPerProject?: number;
+  /** Maximum application bucket objects across one project. Defaults to 100,000. */
+  bucketObjectsPerProject?: number;
   /** Maximum admitted requests per UTC month in one workspace. Defaults to 5,000,000. */
   requestsPerMonthPerOrganization?: number;
   /** Maximum known ingress plus declared-response bytes per UTC month in one workspace. Defaults to 100 GiB. */
@@ -214,6 +218,8 @@ export type PlatformQuotaKey =
   | "domainsPerProject"
   | "releasesPerProject"
   | "releaseStorageBytesPerProject"
+  | "bucketStorageBytesPerProject"
+  | "bucketObjectsPerProject"
   | "backupsPerProject"
   | "requestsPerMonthPerOrganization"
   | "transferBytesPerMonthPerOrganization"
@@ -274,6 +280,8 @@ const PLATFORM_QUOTA_KEYS = Object.freeze([
   "domainsPerProject",
   "releasesPerProject",
   "releaseStorageBytesPerProject",
+  "bucketStorageBytesPerProject",
+  "bucketObjectsPerProject",
   "backupsPerProject",
   "requestsPerMonthPerOrganization",
   "transferBytesPerMonthPerOrganization",
@@ -285,6 +293,8 @@ const WORKSPACE_QUOTA_KEYS = Object.freeze([
   "domainsPerProject",
   "releasesPerProject",
   "releaseStorageBytesPerProject",
+  "bucketStorageBytesPerProject",
+  "bucketObjectsPerProject",
   "backupsPerProject",
   "requestsPerMonthPerOrganization",
   "transferBytesPerMonthPerOrganization",
@@ -302,6 +312,18 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
     maximum: Number.MAX_SAFE_INTEGER,
     unit: "bytes",
     label: "Release storage per project",
+  },
+  bucketStorageBytesPerProject: {
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    unit: "bytes",
+    label: "Application bucket storage per project",
+  },
+  bucketObjectsPerProject: {
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    unit: "objects",
+    label: "Application bucket objects per project",
   },
   backupsPerProject: { minimum: 1, maximum: 10_000, unit: "backups", label: "Retained backups per project" },
   requestsPerMonthPerOrganization: {
@@ -828,6 +850,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       1,
       Number.MAX_SAFE_INTEGER,
     ),
+    bucketStorageBytesPerProject: integerInRange(
+      options.limits?.bucketStorageBytesPerProject ?? 5 * 1024 * 1024 * 1024,
+      "limits.bucketStorageBytesPerProject",
+      1,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    bucketObjectsPerProject: integerInRange(
+      options.limits?.bucketObjectsPerProject ?? 100_000,
+      "limits.bucketObjectsPerProject",
+      1,
+      Number.MAX_SAFE_INTEGER,
+    ),
     requestsPerMonthPerOrganization: integerInRange(
       options.limits?.requestsPerMonthPerOrganization ?? DEFAULT_REQUESTS_PER_MONTH,
       "limits.requestsPerMonthPerOrganization",
@@ -860,6 +894,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     domainsPerProject: limits.domainsPerProject,
     releasesPerProject: limits.releasesPerProject,
     releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
+    bucketStorageBytesPerProject: limits.bucketStorageBytesPerProject,
+    bucketObjectsPerProject: limits.bucketObjectsPerProject,
     backupsPerProject: backupPolicy.maxBackups,
     requestsPerMonthPerOrganization: limits.requestsPerMonthPerOrganization,
     transferBytesPerMonthPerOrganization: limits.transferBytesPerMonthPerOrganization,
@@ -1584,6 +1620,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   ): Promise<{ dataRoot: string; environment: Record<string, string> }> => {
     const dataRoot = await projectDataDirectory(paths.projects, project.id);
     const databaseHostPath = await safeProjectDataPath(dataRoot, release.config.database.path);
+    const effectiveQuotas = projectQuotas(storage.internal, project, quotaDefaults);
     return {
       dataRoot,
       environment: {
@@ -1593,6 +1630,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         PORT: String(port),
         CLANK_DATABASE_PATH: databaseHostPath,
         CLANK_DATABASE: databaseHostPath,
+        CLANK_BUCKET_ROOT: `${dataRoot}/buckets`,
+        CLANK_BUCKET_SIGNING_KEY: projectBucketSigningKey(masterKey, project.id),
+        CLANK_BUCKET_PREFIX: project.id,
+        CLANK_BUCKET_MAX_BYTES: String(effectiveQuotas.bucketStorageBytesPerProject),
+        CLANK_BUCKET_MAX_OBJECTS: String(effectiveQuotas.bucketObjectsPerProject),
+        CLANK_PUBLIC_ORIGIN: appUrlTemplate
+          .replaceAll("{slug}", project.slug)
+          .replaceAll("{port}", String(port)),
         PROACT_DATABASE_PATH: databaseHostPath,
         PROACT_DATABASE: databaseHostPath,
         // Managed applications are reachable only through the loopback-bound
@@ -2032,6 +2077,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const environment = providerRuntimeEnvironment(
       config,
       decryptProjectSecrets(storage.internal, project.id, masterKey),
+      {
+        signingKey: projectBucketSigningKey(masterKey, project.id),
+        prefix: project.id,
+        publicOrigin: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
+        maxBytes: projectQuotas(storage.internal, project, quotaDefaults).bucketStorageBytesPerProject,
+        maxObjects: projectQuotas(storage.internal, project, quotaDefaults).bucketObjectsPerProject,
+      },
     );
     const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
     const databaseMode = project.activeGeneration === null
@@ -2266,6 +2318,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const environment = providerRuntimeEnvironment(
       currentRelease.config,
       decryptProjectSecrets(storage.internal, project.id, masterKey),
+      {
+        signingKey: projectBucketSigningKey(masterKey, project.id),
+        prefix: project.id,
+        publicOrigin: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
+        maxBytes: projectQuotas(storage.internal, project, quotaDefaults).bucketStorageBytesPerProject,
+        maxObjects: projectQuotas(storage.internal, project, quotaDefaults).bucketObjectsPerProject,
+      },
     );
     const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
     storage.internal.prepare(`INSERT INTO clank_platform_provider_generations
@@ -2505,6 +2564,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const environment = providerRuntimeEnvironment(
       currentRelease.config,
       decryptProjectSecrets(storage.internal, project.id, masterKey),
+      {
+        signingKey: projectBucketSigningKey(masterKey, project.id),
+        prefix: project.id,
+        publicOrigin: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
+        maxBytes: projectQuotas(storage.internal, project, quotaDefaults).bucketStorageBytesPerProject,
+        maxObjects: projectQuotas(storage.internal, project, quotaDefaults).bucketObjectsPerProject,
+      },
     );
     const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
     storage.internal.transaction((changes) => {
@@ -6208,6 +6274,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
         ).get(project.id)?.count ?? 0);
         const releaseUsage = releaseStorageUsage(storage.internal, project.id);
+        const bucketUsage = await inspectProjectBucketUsage(paths.projects, project);
         return api({
           ok: true,
           project: {
@@ -6230,6 +6297,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           },
           limits: publicLimits(effective, options.maxArtifactBytes, limits.metricRetentionDays),
           usage: { domains: domainCount, ...releaseUsage },
+          buckets: {
+            usage: bucketUsage,
+            limits: {
+              bytes: effective.bucketStorageBytesPerProject,
+              objects: effective.bucketObjectsPerProject,
+            },
+          },
         });
       }
       if (operation === "github-previews" && request.method === "GET") {
@@ -7605,6 +7679,8 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
       'domainsPerProject',
       'releasesPerProject',
       'releaseStorageBytesPerProject',
+      'bucketStorageBytesPerProject',
+      'bucketObjectsPerProject',
       'backupsPerProject',
       'requestsPerMonthPerOrganization',
       'transferBytesPerMonthPerOrganization',
@@ -7621,6 +7697,8 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   if (!existingQuotaTable) {
     internal.exec(quotaOverridesTable);
   } else if ([
+    "bucketStorageBytesPerProject",
+    "bucketObjectsPerProject",
     "requestsPerMonthPerOrganization",
     "transferBytesPerMonthPerOrganization",
     "requestsPerMinutePerProject",
@@ -10459,6 +10537,8 @@ function publicLimits(
     metricRetentionDays: metricRetentionDays ?? 30,
     releasesPerProject: limits.releasesPerProject,
     releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
+    bucketStorageBytesPerProject: limits.bucketStorageBytesPerProject,
+    bucketObjectsPerProject: limits.bucketObjectsPerProject,
     backupsPerProject: limits.backupsPerProject,
     requestsPerMonthPerOrganization: limits.requestsPerMonthPerOrganization,
     transferBytesPerMonthPerOrganization: limits.transferBytesPerMonthPerOrganization,
@@ -11155,6 +11235,10 @@ function dashboardPayload(
         ...releases,
         limit: effective.releasesPerProject,
         storageLimitBytes: effective.releaseStorageBytesPerProject,
+      },
+      buckets: {
+        storageLimitBytes: effective.bucketStorageBytesPerProject,
+        objectLimit: effective.bucketObjectsPerProject,
       },
       metrics,
     };
@@ -12131,6 +12215,16 @@ function parseMasterKey(value: string | Uint8Array): Uint8Array {
   return bytes;
 }
 
+function projectBucketSigningKey(masterKey: Uint8Array, projectId: string): string {
+  const cryptoName = "node:crypto";
+  const module = (globalThis as any).process.getBuiltinModule?.(cryptoName);
+  if (!module) throw new Error("Node crypto module is unavailable.");
+  return base64Url(module.createHmac("sha256", masterKey)
+    .update("clank-managed-bucket-v1\0", "utf8")
+    .update(projectId, "utf8")
+    .digest());
+}
+
 function encryptSecret(value: string, key: Uint8Array): string {
   const cryptoName = "node:crypto";
   const requireName = "node:module";
@@ -12203,6 +12297,7 @@ async function spawnRelease(
       HOST: "0.0.0.0",
       CLANK_DATABASE_PATH: containerDatabase,
       CLANK_DATABASE: containerDatabase,
+      CLANK_BUCKET_ROOT: "/data/buckets",
       PROACT_DATABASE_PATH: containerDatabase,
       PROACT_DATABASE: containerDatabase,
     };
@@ -12393,6 +12488,91 @@ async function projectDataDirectory(projectsRoot: string, projectId: string): Pr
   const root = path.join(projectsRoot, projectId, "data");
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   return root;
+}
+
+interface ProjectBucketUsageSnapshot {
+  readonly available: boolean;
+  readonly source: "local_catalog" | "application";
+  readonly objects: number | null;
+  readonly bytes: number | null;
+  readonly reservedObjects: number | null;
+  readonly reservedBytes: number | null;
+  readonly sampledAt: number | null;
+}
+
+async function inspectProjectBucketUsage(
+  projectsRoot: string,
+  project: ProjectRow,
+): Promise<ProjectBucketUsageSnapshot> {
+  const unavailable = Object.freeze({
+    available: false,
+    source: "application" as const,
+    objects: null,
+    bytes: null,
+    reservedObjects: null,
+    reservedBytes: null,
+    sampledAt: null,
+  });
+  // Provider volumes are deliberately outside the control-plane trust boundary.
+  // Their users see the same live inventory through the authenticated app URL.
+  if (project.placement !== "local") return unavailable;
+  const fsName = "node:fs/promises";
+  const pathName = "node:path";
+  const sqliteName = "node:sqlite";
+  const [fs, path, sqlite] = await Promise.all([
+    import(fsName) as unknown as Promise<{
+      lstat(path: string): Promise<{
+        mtimeMs: number;
+        isFile(): boolean;
+        isSymbolicLink(): boolean;
+      }>;
+    }>,
+    import(pathName) as unknown as Promise<{ join(...segments: string[]): string }>,
+    import(sqliteName) as unknown as Promise<{
+      DatabaseSync: new(path: string, options: { readOnly: boolean }) => {
+        exec(sql: string): void;
+        prepare(sql: string): { get(...values: unknown[]): Record<string, unknown> | undefined };
+        close(): void;
+      };
+    }>,
+  ]);
+  const catalog = path.join(projectsRoot, project.id, "data", "buckets", "catalog.sqlite");
+  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  try {
+    const stats = await fs.lstat(catalog);
+    if (!stats.isFile() || stats.isSymbolicLink()) return unavailable;
+    database = new sqlite.DatabaseSync(catalog, { readOnly: true });
+    database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF; PRAGMA busy_timeout = 1000;");
+    const schema = database.prepare(`SELECT count(*) AS count FROM sqlite_schema
+      WHERE type = 'table' AND name IN ('clank_bucket_objects', 'clank_bucket_reservations')`).get();
+    if (Number(schema?.count ?? 0) !== 2) return unavailable;
+    const row = database.prepare(`SELECT
+      (SELECT count(*) FROM clank_bucket_objects) AS objects,
+      (SELECT coalesce(sum(size), 0) FROM clank_bucket_objects) AS bytes,
+      (SELECT coalesce(sum(CASE WHEN replaces_size IS NULL THEN 1 ELSE 0 END), 0)
+        FROM clank_bucket_reservations) AS reserved_objects,
+      (SELECT coalesce(sum(size - coalesce(replaces_size, 0)), 0)
+        FROM clank_bucket_reservations) AS reserved_bytes`).get();
+    return Object.freeze({
+      available: true,
+      source: "local_catalog",
+      objects: safeUsageInteger(row?.objects),
+      bytes: safeUsageInteger(row?.bytes),
+      reservedObjects: safeUsageInteger(row?.reserved_objects),
+      reservedBytes: safeUsageInteger(row?.reserved_bytes),
+      sampledAt: Math.max(0, Math.trunc(stats.mtimeMs)),
+    });
+  } catch {
+    return unavailable;
+  } finally {
+    database?.close();
+  }
+}
+
+function safeUsageInteger(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new TypeError("Bucket catalog usage is invalid.");
+  return parsed;
 }
 
 function releaseStorageUsage(
@@ -13251,6 +13431,7 @@ const PLATFORM_PROJECT_SECTIONS = new Set([
   "deployments",
   "previews",
   "backups",
+  "storage",
   "logs",
   "jobs",
   "settings",
@@ -14354,11 +14535,18 @@ function providerDesiredPayload(value: unknown): {
 function providerRuntimeEnvironment(
   config: DeploymentBundle["config"],
   secrets: Record<string, string>,
+  buckets: { signingKey: string; prefix: string; publicOrigin: string; maxBytes: number; maxObjects: number },
 ): Record<string, string> {
   return {
     ...config.env,
     ...secrets,
     NODE_ENV: "production",
+    CLANK_BUCKET_ROOT: "/data/buckets",
+    CLANK_BUCKET_SIGNING_KEY: buckets.signingKey,
+    CLANK_BUCKET_PREFIX: buckets.prefix,
+    CLANK_BUCKET_MAX_BYTES: String(buckets.maxBytes),
+    CLANK_BUCKET_MAX_OBJECTS: String(buckets.maxObjects),
+    CLANK_PUBLIC_ORIGIN: buckets.publicOrigin,
     ALLOWED_HOSTS: "",
     CLANK_MANAGED_INGRESS: "1",
     TRUST_PROXY: "1",

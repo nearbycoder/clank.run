@@ -251,6 +251,9 @@ Before release, verify:
 - malformed paths and oversized bodies return 4xx, not 500;
 - internal exceptions do not appear in production responses;
 - static traversal, dotfile, and symlink escape attempts fail;
+- bucket writes cannot select an owner, bypass CSRF/origin checks, overcommit active-plus-reserved
+  quotas, replay a committed capability, finalize at a wrong offset/length/digest/type, or publish a
+  new generation before provider integrity succeeds; private/public cache behavior matches policy;
 - CSP is present on HTML;
 - cookies are `HttpOnly`, `Secure`, `SameSite`, and host-only in production;
 - the complete app works in two independent browser contexts.

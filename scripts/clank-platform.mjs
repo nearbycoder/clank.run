@@ -145,6 +145,14 @@ const platform = await openPlatform({
       process.env.CLANK_MAX_RELEASE_STORAGE_BYTES_PER_PROJECT,
       20 * 1024 * 1024 * 1024,
     ),
+    bucketStorageBytesPerProject: number(
+      process.env.CLANK_MAX_BUCKET_STORAGE_BYTES_PER_PROJECT,
+      5 * 1024 * 1024 * 1024,
+    ),
+    bucketObjectsPerProject: number(
+      process.env.CLANK_MAX_BUCKET_OBJECTS_PER_PROJECT,
+      100_000,
+    ),
     requestsPerMonthPerOrganization: number(
       process.env.CLANK_MAX_REQUESTS_PER_MONTH_PER_ORGANIZATION,
       5_000_000,

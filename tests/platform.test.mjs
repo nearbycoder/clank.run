@@ -13,6 +13,9 @@ import {
   defineDatabase,
   DeploymentCoordinatorError,
   deploymentDigest,
+  defineBucket,
+  openBucketManager,
+  openLocalObjectStore,
   openDeploymentOrchestrator,
   openProviderDeploymentAgent,
   openPlatform,
@@ -3508,6 +3511,8 @@ test("browser project management enforces organization and custom-domain quotas 
       projectsPerAccount: 2,
       projectsPerOrganization: 1,
       domainsPerProject: 1,
+      bucketStorageBytesPerProject: 1024,
+      bucketObjectsPerProject: 7,
       metricRetentionDays: 7,
     },
     ingress: {
@@ -3547,6 +3552,34 @@ test("browser project management enforces organization and custom-domain quotas 
       csrf: owner.csrfToken,
       body: { name: "Only Site", slug: "only-site", organizationId },
     }), 201);
+    const bucketRoot = join(root, "platform", "projects", created.project.id, "data", "buckets");
+    const bucketManager = await openBucketManager({
+      definitions: [defineBucket({
+        name: "attachments",
+        ownership: "app",
+        allowedContentTypes: ["text/plain"],
+        maxObjectBytes: 128,
+        maxBytes: 1024,
+      })],
+      store: await openLocalObjectStore({ directory: join(bucketRoot, "objects"), maxObjectBytes: 128 }),
+      databasePath: join(bucketRoot, "catalog.sqlite"),
+      stagingDirectory: join(bucketRoot, "staging"),
+      signingKey: "quota-test-bucket-signing-key-0001",
+      maxBytes: 1024,
+      maxObjects: 7,
+    });
+    await bucketManager.bucket("attachments").put("proof.txt", new TextEncoder().encode("proof"), {
+      contentType: "text/plain",
+    });
+    bucketManager.close();
+    const detail = await payload(platform, jsonRequest(`/api/projects/${created.project.id}`, {
+      cookie: owner.cookie,
+    }));
+    assert.deepEqual(detail.buckets.limits, { bytes: 1024, objects: 7 });
+    assert.equal(detail.buckets.usage.available, true);
+    assert.equal(detail.buckets.usage.source, "local_catalog");
+    assert.equal(detail.buckets.usage.objects, 1);
+    assert.equal(detail.buckets.usage.bytes, 5);
     const overLimit = await platform.handle(jsonRequest("/api/projects", {
       method: "POST",
       token: owner.accessToken,
@@ -6768,7 +6801,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /--bg:var\(--clank-canvas\);--panel:var\(--clank-surface\)/);
     assert.match(signedInHtml, /class="icon-sprite"[^>]*><defs>\s*<symbol id="nav-icon-overview"/);
     assert.match(signedInHtml, /\.nav-icon\{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex:0 0 18px;/);
-    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 15);
+    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 16);
     assert.doesNotMatch(signedInHtml, /<span class="nav-icon">[^<]/);
     assert.match(signedInHtml, /id="nav-usage" href="\/usage"/);
     assert.match(signedInHtml, /class="table mobile-card-table usage-table"/);
@@ -6783,6 +6816,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /data-project-tab="deployments"/);
     assert.match(signedInHtml, /data-project-tab="previews"/);
     assert.match(signedInHtml, /data-project-tab="jobs"/);
+    assert.match(signedInHtml, /data-project-tab="storage"/);
     assert.match(signedInHtml, /aria-controls="sidebar"/);
     assert.match(signedInHtml, /id="sidebar-scrim"[^>]+aria-label="Close navigation"/);
     assert.match(signedInHtml, /class="table mobile-card-table release-table"/);
@@ -6835,6 +6869,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       "/projects/my-todo/deployments",
       "/projects/my-todo/previews",
       "/projects/my-todo/backups",
+      "/projects/my-todo/storage",
       "/projects/my-todo/logs",
       "/projects/my-todo/jobs",
       "/projects/my-todo/settings",

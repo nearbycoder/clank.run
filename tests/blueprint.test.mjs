@@ -89,6 +89,20 @@ const todoist = {
       capabilities: ["delayed", "retry"],
     },
   },
+  buckets: {
+    attachments: {
+      description: "Private task attachments.",
+      ownership: "user",
+      visibility: "private",
+      browserAccess: "authenticated",
+      allowedContentTypes: ["image/*", "application/pdf"],
+      maxObjectBytes: 1048576,
+      maxBytes: 10485760,
+      perOwnerMaxBytes: 5242880,
+      resumable: true,
+      maxChunkBytes: 262144,
+    },
+  },
   deployment: {
     database: "sqlite",
     scale: "single",
@@ -714,7 +728,7 @@ test("plan, explain, and generate CLI commands create a buildable app without bl
     assert.equal(savedPlan.digest, parsedPlan.digest);
 
     const repeated = await run(["generate", target, `--blueprint=${source}`]);
-    assert.match(repeated.stdout, /0 files written, 18 unchanged/);
+    assert.match(repeated.stdout, /0 files written, 19 unchanged/);
     await run(["build", "src", "dist"], target);
     assert.match(await readFile(join(target, "dist", "backend.js"), "utf8"), /by_priority/);
   } finally {

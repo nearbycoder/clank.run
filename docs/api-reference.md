@@ -355,6 +355,21 @@ types.
 - `openPlatform({ backups: { objects: { namespace, store } } })`: gives every project an isolated
   authenticated backup catalog and binds the repository identity/root in the control database.
 
+## Managed buckets
+
+- `defineBucket(input)`: freezes visibility, ownership, browser access, MIME, image, cache,
+  per-object, per-owner, and total quota policy.
+- `openBucketManager(options)`: opens the SQLite catalog over any `ObjectStore`, with project-wide
+  caps, signed capabilities, resumable uploads, verified generations, listing, and cleanup.
+- `createBucketClient(name, options)`: authenticated browser listing, metadata, resumable upload,
+  deletion, and private read intents without object-provider credentials.
+- `createBucketMcpTools(manager, options)`: current owner-scoped read/write tools for each declared
+  bucket and image variant. `openBackend({ buckets })` installs these automatically.
+- `inspectBucketImage(bytes, contentType?)`: signature and dimension inspection for PNG, JPEG,
+  GIF, WebP, and AVIF.
+- Types: `BucketDefinition`, `BucketManager`, `BucketRuntime`, `BucketObject`, `BucketUsage`,
+  `BucketClient`, `BucketUploadIntent`, `BucketReadIntent`, and `BucketImageTransformer`.
+
 ## Remote deployment coordination
 
 - `createDeploymentCoordinatorHandler(orchestrator, options)`: optional versioned HTTP boundary for
