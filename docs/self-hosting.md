@@ -92,6 +92,8 @@ configured worker/scheduler processes for each active project.
 | `CLANK_METRICS_RETENTION_DAYS` | `30` | Ingress metric retention, 1–365 days |
 | `CLANK_MAX_RELEASES_PER_PROJECT` | `50` | Retained runtime-artifact count per site |
 | `CLANK_MAX_RELEASE_STORAGE_BYTES_PER_PROJECT` | `21474836480` | Uncompressed release files plus pre-deploy snapshots retained per site |
+| `CLANK_MAX_BUCKET_STORAGE_BYTES_PER_PROJECT` | `5368709120` | Active and reserved managed-bucket bytes across one site |
+| `CLANK_MAX_BUCKET_OBJECTS_PER_PROJECT` | `100000` | Active and reserved managed-bucket objects across one site |
 | `CLANK_MAX_REQUESTS_PER_MONTH_PER_ORGANIZATION` | `5000000` | Admitted managed-ingress requests per workspace UTC month |
 | `CLANK_MAX_TRANSFER_BYTES_PER_MONTH_PER_ORGANIZATION` | `107374182400` | Known request plus declared-response bytes per workspace UTC month |
 | `CLANK_MAX_REQUESTS_PER_MINUTE_PER_PROJECT` | `3000` | Admitted managed-ingress requests per project UTC minute |

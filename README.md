@@ -88,6 +88,8 @@ The generated app is already a working product—not an empty component. It incl
 - live updates across tabs and browsers;
 - Tailwind-compatible styling;
 - an authenticated, app-specific MCP server;
+- declarative managed file/image buckets with signed resumable uploads, owner isolation, quotas,
+  local/S3 storage, and matching MCP tools;
 - typed UI action references with generated UI↔MCP parity checks;
 - deterministic synthetic fixtures and an application-owned contract test;
 - an immutable initial migration and deterministic deployment contract; and
@@ -235,7 +237,7 @@ inspectable surface instead of hiding behavior in generated component code.
 | Live sync | Auth-partitioned Fetch RPC and cache, EventSource streams, session revocation, automatic invalidation, SSR seeding, multi-tab synchronization, and bounded presence/cursor/signal rooms |
 | SSR | Async string rendering, full-document templates, safe state serialization, CSP nonces, context and keyed lists, marker-based DOM-preserving hydration |
 | Server | Fetch router, security headers, safe CORS, bounded Node HTTP adapter, Host checks, symlink-aware static files, response helpers |
-| Object storage | Atomic owner-only local objects plus zero-dependency S3-compatible storage with SigV4, bounded retries, deadlines, verified SHA-256, and chunked encrypted recovery |
+| Object storage | Declarative app buckets with per-user isolation, atomic quotas, metadata listing, signed resumable browser access, public/private cache policy, verified images and MCP tools over atomic local or zero-dependency S3-compatible objects |
 | Styling | Native `class`, reactive `classList`, style objects, CSS custom properties, and an atomic production Tailwind CLI pipeline |
 | Deploy | Browser console, workspaces and RBAC, optional provider-neutral hosted plans and billing, activity feeds, ingress and provider resource metrics, transparent monthly usage and traffic limits, custom DNS/TLS onboarding, deterministic artifacts, empty-by-default previews with production-bound sanitized data policies, optional off-host release and backup objects, encrypted secrets, immutable migrations, encrypted local and generation-bound provider backup/restore, storage-backed readiness, health-gated releases, redacted local/provider logs, audit, rollback |
 | Hosting safety | Explicit trusted/isolated profiles, isolated production default, constrained Docker runner, bounded artifacts, resource ceilings, and fail-closed runner configuration |
@@ -310,6 +312,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Organizations, RBAC, invitations, and scoped tokens](https://docs.clank.run/docs/organizations)
 - [Service drivers for files, email, jobs, and webhooks](https://docs.clank.run/docs/services)
 - [Atomic local and S3-compatible object storage](https://docs.clank.run/docs/object-storage)
+- [Managed application buckets](https://docs.clank.run/docs/buckets)
 - [Typed durable queues, worker processes, and cron](https://docs.clank.run/docs/jobs-and-cron)
 - [Structured logs, traces, metrics, and health](https://docs.clank.run/docs/observability)
 - [Durable distributed deployment and agent fencing](https://docs.clank.run/docs/distributed-deployment)

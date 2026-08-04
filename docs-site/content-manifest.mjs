@@ -44,6 +44,7 @@ export const groups = [
       ["jobs-and-cron", "docs/jobs-and-cron.md"],
       ["services", "docs/services.md"],
       ["object-storage", "docs/object-storage.md"],
+      ["buckets", "docs/buckets.md"],
       ["observability", "docs/observability.md"],
       ["product-analytics", "docs/product-analytics.md"],
       ["data-plane", "docs/data-plane.md"]

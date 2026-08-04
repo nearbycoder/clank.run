@@ -4,6 +4,21 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.17.0 - 2026-08-03
+
+- Added first-class managed application buckets through `@clank.run/framework/buckets` and
+  blueprint `buckets`. The dependency-free runtime composes with local or S3-compatible object
+  storage and provides transactional project/per-owner quotas, isolated metadata listing,
+  immutable generation replacement, signed private/public delivery, CSRF-gated browser uploads,
+  offset-checked resumable chunks, content and SHA-256 verification, raster signature/dimension
+  policy, declared provider-pluggable image variants, and automatic owner-scoped MCP tools.
+- Generated applications now receive zero-setup local bucket storage and production environment
+  composition. The control plane injects a per-project root, stable derived signing key, logical
+  namespace, public origin, and administrator-overridable bucket byte/object ceilings for local and
+  provider placement. Bucket policies participate in backend manifests, MCP contract revisions,
+  discovery, account/workspace limit administration, local project cleanup, and complete human/agent
+  documentation.
+
 ## 0.16.0 - 2026-08-02
 
 - Added the opt-in, dependency-free `Task<Success, Failure, Requirements>` runtime. Typed expected

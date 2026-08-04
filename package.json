@@ -1,6 +1,6 @@
 {
   "name": "@clank.run/framework",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, deployment, and a complete headless UI library.",
   "homepage": "https://docs.clank.run",
   "bugs": {
@@ -36,6 +36,7 @@
     "./webauthn": { "types": "./dist/webauthn.d.ts", "import": "./dist/webauthn.js" },
     "./services": { "types": "./dist/services.d.ts", "import": "./dist/services.js" },
     "./object-storage": { "types": "./dist/object-storage.d.ts", "import": "./dist/object-storage.js" },
+    "./buckets": { "types": "./dist/buckets.d.ts", "import": "./dist/buckets.js" },
     "./observability": { "types": "./dist/observability.d.ts", "import": "./dist/observability.js" },
     "./recovery": { "types": "./dist/recovery.d.ts", "import": "./dist/recovery.js" },
     "./orchestration": { "types": "./dist/orchestration.d.ts", "import": "./dist/orchestration.js" },
