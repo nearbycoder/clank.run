@@ -6904,13 +6904,18 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInProjectHtml, /<title>Project · Clank<\/title>/);
     assert.match(signedInProjectHtml, /id="project-navigation">/);
     assert.match(signedInProjectHtml, /<section id="overview-page" hidden>/);
-    assert.match(signedInProjectHtml, /<section id="project-page" aria-busy="true">/);
+    assert.match(signedInProjectHtml, /<section id="project-page" aria-busy="true" data-loading="initial">/);
     assert.match(signedInProjectHtml, /<div class="project-loading" id="project-loading"><\/div>/);
     assert.match(signedInProjectHtml, /<div class="project-resolved">/);
     assert.match(
       signedInProjectHtml,
-      /#project-page\[aria-busy="true"\] \.project-resolved\{visibility:hidden;pointer-events:none\}/,
+      /#project-page\[data-loading="initial"\] \.project-resolved\{visibility:hidden;pointer-events:none\}/,
     );
+    assert.match(signedInProjectHtml, /if\(state\.currentProject\)loadProject\(true\)/);
+    assert.match(signedInProjectHtml, /async function loadProject\(silent\)/);
+    assert.match(signedInProjectHtml, /dataset\.loading=hasCurrentData\?"refresh":"initial"/);
+    assert.match(signedInProjectHtml, /if\(silent!==true\|\|!hasCurrentData\)toast\(error\.message,true\)/);
+    assert.match(signedInProjectHtml, /state\.currentProject\?loadProject\(false\)/);
     assert.match(signedInProjectHtml, /prepareRoute\(route\);if\(!state\.dashboard\)\{await loadDashboard/);
     assert.match(signedInProjectHtml, /const generation=\+\+state\.routeGeneration/);
     assert.match(signedInProjectHtml, /generation!==state\.routeGeneration\|\|!state\.dashboard/);
