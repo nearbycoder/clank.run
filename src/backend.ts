@@ -35,6 +35,7 @@ import {
   createMcpServer,
   McpToolError,
   MCP_PROTOCOL_VERSION,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
   type McpTool,
 } from "./mcp.ts";
 import { createProjectOAuth } from "./oauth.ts";
@@ -2036,6 +2037,8 @@ export async function openBackend<
       mcp: {
         transport: "streamable-http",
         protocolVersion: MCP_PROTOCOL_VERSION,
+        supportedProtocolVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
+        stateless: true,
         serverVersion: mcpManifest!.server.version,
         endpoint: `${origin}${mcpPath}`,
         authentication: oauth ? "oauth2" : "none",
@@ -2080,7 +2083,7 @@ export async function openBackend<
         endpoint: mcpPath,
       },
       capabilities: {
-        tools: { listChanged: mcp!.supportsToolListChanged },
+        tools: {},
         resources: { subscribe: false, listChanged: false },
       },
       authentication: {

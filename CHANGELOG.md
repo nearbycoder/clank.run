@@ -4,6 +4,20 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.18.0 - 2026-08-09
+
+- Upgraded every generated application MCP endpoint to the stateless `2026-07-28` protocol while
+  retaining dual-era compatibility through `2025-11-25`. Modern requests now implement required
+  `server/discover`, per-request protocol/client metadata, result types and server identity,
+  zero-TTL private discovery, and strict `Mcp-Method`, `Mcp-Name`, and schema-declared
+  `Mcp-Param-*` header/body validation. They mint no process-local session state and remain valid
+  across cold starts, replicas, and rolling deployments.
+- Hardened application OAuth for the current MCP authorization profile with RFC 9207 issuer
+  parameters on successful and error redirects, advertised issuer-response support, and explicit
+  native/web dynamic-client classification. Existing PKCE, exact redirect, resource-bound token,
+  rotating refresh-token, protected-resource metadata, and legacy registration behavior remain
+  compatible.
+
 ## 0.17.0 - 2026-08-03
 
 - Added first-class managed application buckets through `@clank.run/framework/buckets` and

@@ -474,6 +474,7 @@ async function verifyAgentProtocol(origin, session) {
   assert.equal(approval.status, 303);
   const callback = new URL(approval.headers.get("location"));
   assert.equal(callback.searchParams.get("state"), "packaged-conformance-state");
+  assert.equal(callback.searchParams.get("iss"), origin);
   const code = callback.searchParams.get("code");
   assert.ok(code);
 
@@ -493,31 +494,38 @@ async function verifyAgentProtocol(origin, session) {
   assert.equal(tokenResponse.ok, true, JSON.stringify(tokens));
 
   let id = 0;
-  let mcpSession;
   const mcp = async (method, params = {}) => {
+    const requestParams = {
+      ...params,
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { name: "clank-conformance", version: "1.0.0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    };
+    const name = method === "resources/read" ? requestParams.uri : method === "tools/call" ? requestParams.name : undefined;
     const response = await fetch(resource, {
       method: "POST",
       headers: {
         authorization: `Bearer ${tokens.access_token}`,
         "content-type": "application/json",
-        "mcp-protocol-version": "2025-11-25",
-        ...(mcpSession ? { "mcp-session-id": mcpSession } : {}),
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": method,
+        ...(typeof name === "string" ? { "mcp-name": name } : {}),
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params: requestParams }),
     });
-    if (method === "initialize") mcpSession = response.headers.get("mcp-session-id");
+    assert.equal(response.headers.get("mcp-session-id"), null);
     const payload = await response.json();
     assert.equal(response.ok, true, JSON.stringify(payload));
     assert.equal(payload.error, undefined, JSON.stringify(payload));
     return payload.result;
   };
-  const initialized = await mcp("initialize", {
-    protocolVersion: "2025-11-25",
-    capabilities: {},
-    clientInfo: { name: "clank-conformance", version: "1.0.0" },
-  });
-  assert.ok(initialized.serverInfo.version.includes("+clank."));
-  assert.ok(mcpSession);
+  const initialized = await mcp("server/discover");
+  assert.ok(initialized._meta["io.modelcontextprotocol/serverInfo"].version.includes("+clank."));
+  assert.equal(initialized.supportedVersions[0], "2026-07-28");
+  assert.equal(initialized.resultType, "complete");
   const tools = await mcp("tools/list");
   assert.ok(tools.tools.some((tool) => tool.name === "tasks.list"));
   assert.ok(tools.tools.some((tool) =>

@@ -51,6 +51,40 @@ function mcpRequest(payload, token, headers = {}) {
   });
 }
 
+function modernMcpRequest(payload, token, headers = {}) {
+  const method = payload.method;
+  const params = {
+    ...(payload.params ?? {}),
+    _meta: {
+      ...payload.params?._meta,
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": {
+        name: "clank-modern-test",
+        version: "1.0.0",
+      },
+      "io.modelcontextprotocol/clientCapabilities": {},
+    },
+  };
+  const name = method === "resources/read"
+    ? params.uri
+    : method === "tools/call" || method === "prompts/get"
+      ? params.name
+      : undefined;
+  return new Request(resource, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": method,
+      ...(typeof name === "string" ? { "mcp-name": name } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...headers,
+    },
+    body: JSON.stringify({ ...payload, params }),
+  });
+}
+
 async function pkce(verifier) {
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
   return Buffer.from(bytes).toString("base64url");
@@ -270,6 +304,7 @@ async function approveAuthorization(runtime, session, client, scopes = "agent:re
   const callback = new URL(approval.headers.get("location"));
   assert.equal(callback.origin, "http://127.0.0.1:43123");
   assert.equal(callback.searchParams.get("state"), "opaque-client-state");
+  assert.equal(callback.searchParams.get("iss"), origin);
   const code = callback.searchParams.get("code");
   assert.ok(code);
 
@@ -560,6 +595,230 @@ test("MCP contract revisions change for action and metadata changes but remain d
   equivalentWorkflowMetadata.close();
 });
 
+test("MCP 2026-07-28 discovers and invokes tools without process-local sessions", async () => {
+  const invoked = [];
+  const options = {
+    name: "stateless-app",
+    title: "Stateless app",
+    instructions: "Use the typed application actions.",
+    tools: [testTool("todos.echo", {
+      invoke: ({ value }) => {
+        invoked.push(value);
+        return { value };
+      },
+    })],
+  };
+  const firstInstance = createMcpServer(options);
+  const secondInstance = createMcpServer(options);
+
+  const discovered = await firstInstance.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: "discover",
+    method: "server/discover",
+    params: {},
+  }));
+  assert.equal(discovered.status, 200);
+  assert.equal(discovered.headers.get("mcp-session-id"), null);
+  const discovery = (await discovered.json()).result;
+  assert.equal(discovery.resultType, "complete");
+  assert.equal(discovery.supportedVersions[0], "2026-07-28");
+  assert.ok(discovery.supportedVersions.includes("2025-11-25"));
+  assert.deepEqual(discovery.capabilities.tools, {});
+  assert.equal(discovery.ttlMs, 0);
+  assert.equal(discovery.cacheScope, "private");
+  assert.equal(discovery._meta["io.modelcontextprotocol/serverInfo"].name, "stateless-app");
+
+  const listed = await firstInstance.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/list",
+    params: {},
+  }));
+  const listResult = (await listed.json()).result;
+  assert.equal(listResult.resultType, "complete");
+  assert.deepEqual(listResult.tools.map((tool) => tool.name), ["todos.echo"]);
+  assert.equal(listResult._meta["clank/contractRevision"], firstInstance.revision);
+  assert.equal(listResult._meta["io.modelcontextprotocol/serverInfo"].name, "stateless-app");
+
+  const called = await secondInstance.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "todos.echo", arguments: { value: "cross-instance" } },
+  }, undefined, {
+    "mcp-session-id": "legacy-session-is-ignored",
+    "last-event-id": "also-ignored",
+  }));
+  assert.equal(called.status, 200);
+  assert.equal(called.headers.get("mcp-session-id"), null);
+  const callResult = (await called.json()).result;
+  assert.equal(callResult.resultType, "complete");
+  assert.deepEqual(callResult.structuredContent, { value: "cross-instance" });
+  assert.deepEqual(invoked, ["cross-instance"]);
+
+  for (const method of ["GET", "DELETE"]) {
+    const response = await firstInstance.handle(new Request(resource, {
+      method,
+      headers: { "mcp-protocol-version": "2026-07-28" },
+    }));
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "POST");
+  }
+  const extensionNotification = await firstInstance.handle(new Request(resource, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "mcp-protocol-version": "2026-07-28",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/example" }),
+  }));
+  assert.equal(extensionNotification.status, 202);
+  firstInstance.close();
+  secondInstance.close();
+});
+
+test("MCP 2026-07-28 rejects header smuggling and unsupported revisions before tool execution", async () => {
+  let calls = 0;
+  const server = createMcpServer({
+    name: "header-validation",
+    tools: [testTool("safe.echo", { invoke: () => { calls++; return { ok: true }; } })],
+  });
+  const base = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "safe.echo", arguments: { value: "test" } },
+  };
+  const cases = [
+    { headers: { "mcp-method": "tools/list" }, message: /Mcp-Method/u },
+    { headers: { "mcp-name": "unsafe.echo" }, message: /Mcp-Name/u },
+    { headers: { "mcp-protocol-version": "2025-11-25" }, message: /MCP-Protocol-Version/u },
+  ];
+  for (const entry of cases) {
+    const response = await server.handle(modernMcpRequest(base, undefined, entry.headers));
+    assert.equal(response.status, 400);
+    const payload = await response.json();
+    assert.equal(payload.error.code, -32020);
+    assert.match(payload.error.message, entry.message);
+  }
+  assert.equal(calls, 0);
+
+  const unsupportedBody = JSON.parse(await modernMcpRequest(base).text());
+  unsupportedBody.params._meta["io.modelcontextprotocol/protocolVersion"] = "2099-01-01";
+  const matchingUnsupported = await server.handle(new Request(resource, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2099-01-01",
+      "mcp-method": "tools/call",
+      "mcp-name": "safe.echo",
+    },
+    body: JSON.stringify(unsupportedBody),
+  }));
+  assert.equal(matchingUnsupported.status, 400);
+  const matchingPayload = await matchingUnsupported.json();
+  assert.equal(matchingPayload.error.code, -32022);
+  assert.equal(matchingPayload.error.data.requested, "2099-01-01");
+  assert.ok(matchingPayload.error.data.supported.includes("2026-07-28"));
+  assert.equal(calls, 0);
+
+  const missingMeta = await server.handle(new Request(resource, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": "tools/list",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+  }));
+  assert.equal(missingMeta.status, 400);
+  assert.equal((await missingMeta.json()).error.code, -32602);
+
+  const removedPing = await server.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "ping",
+    params: {},
+  }));
+  assert.equal(removedPing.status, 404);
+  assert.equal((await removedPing.json()).error.code, -32601);
+  server.close();
+});
+
+test("MCP 2026-07-28 validates schema-declared parameter headers", async () => {
+  const received = [];
+  const server = createMcpServer({
+    name: "parameter-headers",
+    tools: [{
+      name: "search",
+      description: "Search in a selected region.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          region: { type: "string", "x-mcp-header": "Region" },
+          enabled: { type: "boolean", "x-mcp-header": "Enabled" },
+          limit: { type: "integer", "x-mcp-header": "Limit" },
+        },
+        required: ["region", "enabled", "limit"],
+      },
+      invoke: (input) => { received.push(input); return input; },
+    }],
+  });
+  const request = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "search", arguments: { region: "north", enabled: true, limit: 42 } },
+  };
+  const missing = await server.handle(modernMcpRequest(request));
+  assert.equal(missing.status, 400);
+  assert.equal((await missing.json()).error.code, -32020);
+  assert.equal(received.length, 0);
+
+  const mismatch = await server.handle(modernMcpRequest(request, undefined, {
+    "mcp-param-region": "south",
+    "mcp-param-enabled": "true",
+    "mcp-param-limit": "42.0",
+  }));
+  assert.equal(mismatch.status, 400);
+  assert.equal((await mismatch.json()).error.code, -32020);
+  assert.equal(received.length, 0);
+
+  const called = await server.handle(modernMcpRequest(request, undefined, {
+    "mcp-param-region": "north",
+    "mcp-param-enabled": "true",
+    "mcp-param-limit": "42.0",
+  }));
+  assert.equal(called.status, 200);
+  assert.deepEqual(received, [{ region: "north", enabled: true, limit: 42 }]);
+  server.close();
+
+  assert.throws(() => createMcpServer({
+    name: "invalid-parameter-header",
+    tools: [testTool("bad", {
+      inputSchema: {
+        type: "object",
+        properties: { value: { type: "number", "x-mcp-header": "Value" } },
+      },
+    })],
+  }), /invalid x-mcp-header/u);
+  assert.throws(() => createMcpServer({
+    name: "unreachable-parameter-header",
+    tools: [testTool("bad", {
+      inputSchema: {
+        type: "object",
+        properties: {
+          value: {
+            oneOf: [{ type: "string", "x-mcp-header": "Value" }],
+          },
+        },
+      },
+    })],
+  }), /invalid x-mcp-header/u);
+});
+
 test("MCP sessions invalidate cached tools across deployments and stream list change notifications", async () => {
   const oldServer = createMcpServer({
     name: "changing-app",
@@ -710,7 +969,7 @@ test("backend functions become deterministic MCP tools with public discovery", a
   const serverCardPayload = await serverCard.json();
   assert.equal(serverCardPayload.tools[0], "dynamic");
   assert.equal(serverCardPayload.contractRevision, runtime.contractRevision);
-  assert.equal(serverCardPayload.capabilities.tools.listChanged, true);
+  assert.deepEqual(serverCardPayload.capabilities.tools, {});
   assert.match(serverCardPayload.serverInfo.version, /\+clank\.[a-f0-9]{16}$/u);
 
   const protectedMetadata = await runtime.handle(new Request(
@@ -725,6 +984,7 @@ test("backend functions become deterministic MCP tools with public discovery", a
   const authorization = await authorizationMetadata.json();
   assert.equal(authorization.code_challenge_methods_supported[0], "S256");
   assert.ok(authorization.grant_types_supported.includes("refresh_token"));
+  assert.equal(authorization.authorization_response_iss_parameter_supported, true);
 
   const unauthorized = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
@@ -746,7 +1006,28 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
   const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
   const session = await registerUser(runtime);
   const client = await registerClient(runtime);
+  assert.equal(client.application_type, "native");
   const tokens = await authorize(runtime, session, client);
+
+  const statelessDiscovery = await runtime.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: "discover",
+    method: "server/discover",
+    params: {},
+  }, tokens.access_token));
+  assert.equal(statelessDiscovery.status, 200);
+  assert.equal(statelessDiscovery.headers.get("mcp-session-id"), null);
+  assert.equal((await statelessDiscovery.json()).result.supportedVersions[0], "2026-07-28");
+  const statelessTools = await runtime.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: "list",
+    method: "tools/list",
+    params: {},
+  }, tokens.access_token));
+  assert.deepEqual(
+    (await statelessTools.json()).result.tools.map((tool) => tool.name),
+    ["todos.add", "todos.list", "todos.removeAll"],
+  );
 
   const initialized = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
@@ -1183,6 +1464,20 @@ test("OAuth client registration rejects redirects that could exfiltrate authoriz
   }, { origin: undefined }));
   assert.equal(inconsistent.status, 400);
   assert.equal((await inconsistent.json()).error, "invalid_client_metadata");
+  const webLoopback = await runtime.handle(jsonRequest("/__clank/oauth/register", {
+    client_name: "Misclassified web client",
+    application_type: "web",
+    redirect_uris: ["http://127.0.0.1:43123/callback"],
+  }, { origin: undefined }));
+  assert.equal(webLoopback.status, 400);
+  assert.equal((await webLoopback.json()).error, "invalid_client_metadata");
+  const remoteWeb = await runtime.handle(jsonRequest("/__clank/oauth/register", {
+    client_name: "Web client",
+    application_type: "web",
+    redirect_uris: ["https://client.test/callback"],
+  }, { origin: undefined }));
+  assert.equal(remoteWeb.status, 201);
+  assert.equal((await remoteWeb.json()).application_type, "web");
 
   let chunksRead = 0;
   const oversizedBody = new ReadableStream({

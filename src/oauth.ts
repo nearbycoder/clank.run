@@ -113,6 +113,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
       token_endpoint_auth_methods_supported: ["none"],
       code_challenge_methods_supported: ["S256"],
       scopes_supported: [...AGENT_SCOPES],
+      authorization_response_iss_parameter_supported: true,
       service_documentation: `${origin}/.well-known/clank`,
       clank_agent_grants_endpoint: `${origin}${grantsPath}`,
       clank_agent_access_url: `${origin}${grantManagementPath}`,
@@ -260,7 +261,8 @@ async function registerClient(
   }
   if (!isRecord(raw)) return oauthProblem(400, "invalid_client_metadata", "Client metadata must be a JSON object.");
   try {
-    const redirectUris = validateRedirectUris(raw.redirect_uris);
+    const applicationType = registrationApplicationType(raw.application_type, raw.redirect_uris);
+    const redirectUris = validateRedirectUris(raw.redirect_uris, applicationType);
     const clientName = boundedPlainText(
       raw.client_name === undefined ? "MCP client" : raw.client_name,
       "client_name",
@@ -309,6 +311,7 @@ async function registerClient(
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
+      application_type: applicationType,
     }, {
       status: 201,
       headers: oauthHeaders(),
@@ -379,7 +382,7 @@ async function authorize<Profile extends object>(
       throw new OAuthRequestError("invalid_request", "The authorization request could not be verified.", 403);
     }
     if (input.decision !== "approve") {
-      return authorizationRedirect(parameters, { error: "access_denied" });
+      return authorizationRedirect(parameters, { error: "access_denied" }, new URL(request.url).origin);
     }
     const rawCode = `clank_code_${randomToken(32)}`;
     const codeHash = await digest(rawCode);
@@ -398,10 +401,14 @@ async function authorize<Profile extends object>(
         now + options.codeLifetimeMs,
         now,
       );
-    return authorizationRedirect(parameters, { code: rawCode });
+    return authorizationRedirect(parameters, { code: rawCode }, new URL(request.url).origin);
   } catch (error) {
     if (error instanceof OAuthRedirectError) {
-      return authorizationRedirect(error.parameters, { error: error.oauthCode });
+      return authorizationRedirect(
+        error.parameters,
+        { error: error.oauthCode },
+        new URL(request.url).origin,
+      );
     }
     return request.method === "GET"
       ? authorizationHtml(errorPage(error), error instanceof OAuthRequestError ? error.status : 400)
@@ -960,11 +967,13 @@ function normalizeScopes(input: unknown): string[] {
 function authorizationRedirect(
   parameters: AuthorizationParameters,
   result: { code?: string; error?: string },
+  issuer: string,
 ): Response {
   const target = new URL(parameters.redirectUri);
   if (result.code) target.searchParams.set("code", result.code);
   if (result.error) target.searchParams.set("error", result.error);
   if (parameters.state) target.searchParams.set("state", parameters.state);
+  target.searchParams.set("iss", issuer);
   return Response.redirect(target, 303);
 }
 
@@ -1272,11 +1281,37 @@ function authorizationRequestBinding(parameters: AuthorizationParameters): strin
   ]);
 }
 
-function validateRedirectUris(value: unknown): string[] {
+function registrationApplicationType(
+  value: unknown,
+  redirectUris: unknown,
+): "native" | "web" {
+  if (value !== undefined && value !== "native" && value !== "web") {
+    throw new OAuthRequestError("invalid_client_metadata", "application_type must be native or web.");
+  }
+  if (value === "native" || value === "web") return value;
+  if (Array.isArray(redirectUris) && redirectUris.every((entry) => {
+    if (typeof entry !== "string") return false;
+    try {
+      const url = new URL(entry);
+      return url.protocol === "http:" && isLoopbackHost(url.hostname);
+    } catch {
+      return false;
+    }
+  })) return "native";
+  return "web";
+}
+
+function validateRedirectUris(value: unknown, applicationType: "native" | "web"): string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 10) {
     throw new OAuthRequestError("invalid_client_metadata", "redirect_uris must contain between 1 and 10 entries.");
   }
   const values = value.map((entry) => validateRedirectUri(requiredString(entry, "redirect_uri", 2_048)));
+  if (applicationType === "web" && values.some((entry) => new URL(entry).protocol !== "https:")) {
+    throw new OAuthRequestError(
+      "invalid_client_metadata",
+      "Web clients must use HTTPS redirect URIs; loopback HTTP redirects require application_type native.",
+    );
+  }
   if (new Set(values).size !== values.length) {
     throw new OAuthRequestError("invalid_client_metadata", "redirect_uris cannot contain duplicates.");
   }
@@ -1290,11 +1325,15 @@ function validateRedirectUri(value: string): string {
   if (url.hash || url.username || url.password) {
     throw new OAuthRequestError("invalid_request", "Redirect URIs cannot contain fragments or user information.");
   }
-  const loopback = url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "localhost";
+  const loopback = isLoopbackHost(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     throw new OAuthRequestError("invalid_request", "Redirect URIs must use HTTPS or an HTTP loopback address.");
   }
   return url.href;
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "localhost";
 }
 
 function validateRegistrationSet(value: unknown, allowed: string[], name: string): void {
