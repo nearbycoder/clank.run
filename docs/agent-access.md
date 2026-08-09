@@ -44,9 +44,10 @@ open the inbox directly. Each grant shows:
 the complete family. Both operations require the user's browser session and its CSRF proof.
 
 Changes apply on the next MCP HTTP request because Clank authenticates the bearer and reads its
-current scopes for every request, including requests carrying an existing MCP session ID. Reducing
-a grant therefore immediately hides mutation tools and rejects mutation calls. Revocation rejects
-existing access tokens and prevents another refresh.
+current scopes for every request. That includes stateless `2026-07-28` requests and legacy
+requests carrying an MCP session ID. Reducing a grant therefore immediately hides mutation tools
+and rejects mutation calls. Revocation rejects existing access tokens and prevents another
+refresh.
 
 A grant cannot be expanded from the inbox. To restore write access, the MCP client must start a new
 OAuth flow and the user must approve `agent:write` on a fresh consent screen.

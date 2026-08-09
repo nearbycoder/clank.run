@@ -1,5 +1,5 @@
-export declare const MCP_PROTOCOL_VERSION = "2025-11-25";
-export declare const MCP_SUPPORTED_PROTOCOL_VERSIONS: readonly ["2025-11-25", "2025-06-18", "2025-03-26"];
+export declare const MCP_PROTOCOL_VERSION = "2026-07-28";
+export declare const MCP_SUPPORTED_PROTOCOL_VERSIONS: readonly ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"];
 export type McpScope = "agent:read" | "agent:write";
 export interface McpAuthentication<Context = unknown> {
     readonly context: Context;

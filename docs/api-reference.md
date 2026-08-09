@@ -543,10 +543,12 @@ types.
   authenticated `clank://actions` resource; framework workflow graphs use this channel.
 - `McpServer.revision`: deterministic identity of server metadata, contract metadata, and the
   complete visible tool contract.
-- `McpServer.notifyToolsChanged()`: sends `notifications/tools/list_changed` to initialized
-  stateful clients; `close()` terminates bounded sessions and streams.
-- `MCP_PROTOCOL_VERSION`: current stable protocol revision (`2025-11-25`).
-- `MCP_SUPPORTED_PROTOCOL_VERSIONS`: compatible stable revisions accepted by the transport.
+- `McpServer.notifyToolsChanged()`: sends `notifications/tools/list_changed` to initialized legacy
+  clients; `close()` terminates compatibility sessions and streams. Stateless `2026-07-28`
+  clients use zero-TTL discovery instead.
+- `MCP_PROTOCOL_VERSION`: current stable protocol revision (`2026-07-28`).
+- `MCP_SUPPORTED_PROTOCOL_VERSIONS`: current stateless revision plus compatible legacy revisions
+  accepted by the dual-era transport.
 - `McpToolError`: public, redacted application-level tool failure.
 - Types: `McpServer`, `McpServerOptions`, `McpTool`, `McpToolAnnotations`,
   `McpAuthentication`, and `McpScope`.

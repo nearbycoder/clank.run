@@ -153,8 +153,8 @@ Each signed-in user can review their active clients at:
 https://my-app.apps.clank.run/__clank/oauth/access
 ```
 
-Making a grant read-only or revoking it changes the authority checked on the next request; a
-client does not retain its old write scope merely because it already initialized an MCP session.
+Making a grant read-only or revoking it changes the authority checked on the next request; every
+stateless MCP request revalidates its resource-bound token and current scopes.
 The inbox and its JSON API are stored in this app's isolated database. See [Agent access inbox and
 scoped grants](agent-access.md).
 
@@ -192,14 +192,15 @@ missing required actions fail with a structured `clank-agent-action-parity/1` re
 apps run this assertion from `npm test`.
 
 Clank fingerprints every agent-visible name, schema, description, scope, and annotation. A
-contract change produces a new revision. Discovery responses require revalidation, tool lists
-have a zero freshness lifetime, and a deployment invalidates existing MCP sessions so compliant
-clients initialize again and rediscover the current tools. An unknown stale tool also returns a
-structured refresh hint.
+contract change produces a new revision. Discovery responses require revalidation and tool lists
+have a zero freshness lifetime. MCP `2026-07-28` requests carry their complete protocol and client
+context on every POST, so rolling deploys and replica changes do not depend on process-local
+session state. An unknown stale tool also returns a structured refresh hint.
 
 This prevents the MCP action list from silently remaining on an older release while the UI moves
-ahead. A client connected before session-aware revisions were introduced may need one manual
-reconnect; later deployments refresh automatically.
+ahead. Legacy clients through `2025-11-25` still use bounded compatibility sessions and
+rediscover after a deployment invalidates one; current clients simply make the next stateless
+request.
 
 Apps that register durable workflow graphs also publish a `workflows` section in
 `GET /__clank/manifest`: input/output schemas, step job paths, dependency edges, descriptions, and

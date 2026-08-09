@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import {
   For,
   MCP_PROTOCOL_VERSION,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
   McpToolError,
   createApp,
   createMcpServer,
@@ -783,6 +784,8 @@ const app = createApp({
     mcp: {
       transport: "streamable-http",
       protocolVersion: MCP_PROTOCOL_VERSION,
+      supportedProtocolVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
+      stateless: true,
       serverVersion: docsMcpManifest.server.version,
       endpoint: `${canonicalOrigin}/__clank/mcp`,
       authentication: "none",
@@ -814,7 +817,7 @@ const app = createApp({
     documentationUrl: `${canonicalOrigin}/.well-known/clank`,
     transport: { type: "streamable-http", endpoint: "/__clank/mcp" },
     capabilities: {
-      tools: { listChanged: docsMcp.supportsToolListChanged },
+      tools: {},
       resources: { subscribe: false, listChanged: false },
     },
     authentication: { required: false, schemes: [] },
