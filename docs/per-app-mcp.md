@@ -102,9 +102,9 @@ Clank derives the agent contract directly from that function tree:
 
 | Backend function | MCP tool | Permission | Behavior |
 | --- | --- | --- | --- |
-| Query `todos.list` | `todos.list` | `agent:read` | Read-only and idempotent |
-| Mutation `todos.add` | `todos.add` | `agent:write` | Validated additive write |
-| Mutation `todos.remove` | `todos.remove` | `agent:write` | Validated destructive write |
+| Query `todos.list` | `todos_list` | `agent:read` | Read-only and idempotent |
+| Mutation `todos.add` | `todos_add` | `agent:write` | Validated additive write |
+| Mutation `todos.remove` | `todos_remove` | `agent:write` | Validated destructive write |
 
 The `args` validators become JSON Schema tool inputs. `description` explains the operation to
 people and agents. The optional `agent` metadata describes whether a mutation is destructive,
@@ -122,9 +122,12 @@ await client.mutate(client.api.todos.add, {
 });
 ```
 
-An MCP client sees and invokes `todos.list` and `todos.add`; it does not automate those browser
-controls. Both paths reach the same handler and therefore share runtime validation, `.owned()`
-user isolation, transaction rollback, optimistic concurrency, and live-update notifications.
+An MCP client sees and invokes `todos_list` and `todos_add`; it does not automate those browser
+controls. Clank publishes strict-client-compatible names containing only letters, numbers, and
+underscores, capped at 64 characters. The tool's `clank/actionPath` metadata still identifies
+`todos.list` or `todos.add`. Both paths reach the same handler and therefore share runtime
+validation, `.owned()` user isolation, transaction rollback, optimistic concurrency, and live-
+update notifications.
 
 ## Connect an agent
 

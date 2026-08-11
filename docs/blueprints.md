@@ -398,7 +398,8 @@ and generated verification contract.
 
 An entity action name has exactly two segments: `<entity>.<action>`. The local action segment is
 preserved, so `tasks.complete` becomes the browser RPC action and the MCP tool named
-`tasks.complete`; it is not silently renamed to `tasks.toggle`.
+`tasks_complete`; it is not semantically renamed to `tasks.toggle`. MCP metadata retains the
+original `tasks.complete` action path.
 
 Safe generated behaviors are:
 

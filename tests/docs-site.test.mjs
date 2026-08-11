@@ -235,6 +235,10 @@ test("documentation site serves every human and agent contract securely", async 
   assert.equal(toolList._meta["clank/contractRevision"], discovery.contractRevision);
   assert.deepEqual(
     toolList.tools.map((tool) => tool.name),
+    ["docs_list", "docs_read", "docs_search"],
+  );
+  assert.deepEqual(
+    toolList.tools.map((tool) => tool._meta["clank/actionPath"]),
     ["docs.list", "docs.read", "docs.search"],
   );
   assert.ok(toolList.tools.every((tool) =>
@@ -242,17 +246,17 @@ test("documentation site serves every human and agent contract securely", async 
     && tool.annotations.destructiveHint === false
     && tool.annotations.openWorldHint === false));
 
-  const listed = await mcp("tools/call", { name: "docs.list", arguments: {} });
+  const listed = await mcp("tools/call", { name: "docs_list", arguments: {} });
   assert.equal(listed.isError, false);
   assert.equal(listed.structuredContent.documents.length, manifest.docs.length);
   const searched = await mcp("tools/call", {
-    name: "docs.search",
+    name: "docs_search",
     arguments: { query: "authenticated MCP", limit: 5 },
   });
   assert.equal(searched.isError, false);
   assert.ok(searched.structuredContent.results.some((entry) => entry.slug === "agent-protocol"));
   const read = await mcp("tools/call", {
-    name: "docs.read",
+    name: "docs_read",
     arguments: { slug: "agent-protocol" },
   });
   assert.equal(read.isError, false);

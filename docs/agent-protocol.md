@@ -88,9 +88,14 @@ export const backend = defineBackend({ schema, auth }).functions(
 );
 ```
 
-Clank derives MCP tool names from function paths: `todos.list`, `todos.add`, and `todos.remove`.
-The normal runtime schemas become JSON Schema 2020-12 tool contracts. Query results and mutation
-results include the committed Clank database revision.
+Clank derives portable MCP tool names from function paths: `todos.list`, `todos.add`, and
+`todos.remove` publish as `todos_list`, `todos_add`, and `todos_remove`. Public names contain only
+ASCII letters, numbers, and underscores and never exceed 64 characters, satisfying strict model
+providers such as Anthropic. Overlong names and paths that would collide after replacing `.` or
+`-` receive a stable digest suffix. Each descriptor's `_meta["clank/actionPath"]` and the Clank MCP
+manifest retain the exact original function path. The normal runtime schemas become JSON Schema
+2020-12 tool contracts. Query results and mutation results include the committed Clank database
+revision.
 
 The backend function tree is the single source of truth for both interfaces. Browser code calls
 the same typed query and mutation references that MCP exposes. A UI operation that changes server

@@ -539,6 +539,9 @@ types.
 ## MCP
 
 - `createMcpServer(options)`: zero-dependency MCP Streamable HTTP server for custom typed tools.
+- `portableMcpToolNames(names)`: deterministically converts logical dotted or hyphenated action
+  paths into unique ASCII letter/number/underscore identifiers capped at 64 characters. Ordinary
+  separators become `_`; overlong or colliding names receive a stable digest suffix.
 - `McpServerOptions.metadata`: optional bounded immutable contract data published inside the
   authenticated `clank://actions` resource; framework workflow graphs use this channel.
 - `McpServer.revision`: deterministic identity of server metadata, contract metadata, and the
@@ -550,6 +553,8 @@ types.
 - `MCP_SUPPORTED_PROTOCOL_VERSIONS`: current stateless revision plus compatible legacy revisions
   accepted by the dual-era transport.
 - `McpToolError`: public, redacted application-level tool failure.
+- `McpTool.actionPath`: optional original logical path published as `clank/actionPath` metadata when
+  the public tool name is normalized.
 - Types: `McpServer`, `McpServerOptions`, `McpTool`, `McpToolAnnotations`,
   `McpAuthentication`, and `McpScope`.
 - `defineBackend()` functions accept `description` and `agent` metadata.

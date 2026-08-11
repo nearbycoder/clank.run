@@ -70,7 +70,7 @@ The request is `clank-compose-request/1`:
   "currentBlueprint": null,
   "history": [],
   "constraints": {
-    "frameworkVersion": "0.18.3",
+    "frameworkVersion": "0.18.4",
     "approvalRequired": true,
     "dataOnlyBlueprint": true,
     "neverIncludeSecrets": true
