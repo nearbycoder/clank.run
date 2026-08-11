@@ -202,7 +202,9 @@ the same-origin sign-in form directly on the OAuth page and advance to consent a
 Applications that require MFA or custom bot protection link to their full sign-in experience and
 then recheck the session. In both cases credentials go only to the application's normal auth
 endpoint. The agent never receives the password, browser cookie, CSRF token, or application
-session.
+session. Application sessions default to `SameSite=Lax`, so a top-level authorization navigation
+from a hosted client recognizes an existing login; the cookie is still withheld from cross-site
+POST requests, and every application mutation retains exact Origin and session-bound CSRF checks.
 
 ### Connect from Codex
 
@@ -277,6 +279,13 @@ Clank retains the initialization, bounded session, GET stream, and list-change b
 clients speaking revisions through `2025-11-25`. Those compatibility sessions are never used by
 `2026-07-28` requests and do not affect stateless routing.
 
+OAuth-protected application MCP endpoints answer credential-free browser CORS preflights and
+expose the transport, challenge, protocol, session, and contract-revision headers needed by hosted
+clients such as browser inspectors. CORS never enables cookies: the client must send the explicit,
+resource-bound bearer token it received through OAuth. Public applications keep cross-origin
+browser access disabled unless `agent.browserCors: true` is explicitly selected, preventing a web
+page from silently driving an unauthenticated mutation surface.
+
 Every `tools/list` response is deterministic and carries:
 
 - `ttlMs: 0`, so clients supporting MCP list TTLs treat it as immediately stale;
@@ -312,8 +321,10 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
 
 ## Security properties
 
-- The HTTP `Origin` header is checked when present to prevent DNS-rebinding and browser-origin
-  attacks.
+- Ordinary application and public MCP requests check the HTTP `Origin` header to prevent
+  DNS-rebinding and browser-origin attacks. OAuth-protected MCP transport may be called
+  cross-origin without credentials; authorization depends on an explicit resource-bound bearer
+  token rather than ambient browser cookies.
 - Modern request headers are compared with the JSON-RPC body before authorization or dispatch,
   preventing a gateway and application from routing and executing different actions.
 - Request and response bodies are bounded before execution.

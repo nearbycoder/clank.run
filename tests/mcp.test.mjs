@@ -325,6 +325,135 @@ async function authorize(runtime, session, client, scopes = "agent:read agent:wr
   return { ...(await token.json()), ...approved };
 }
 
+test("OAuth-protected MCP supports credential-free remote browser clients", async () => {
+  const runtime = await openBackend(authenticatedBackend(), {
+    path: ":memory:",
+    agent: { name: "browser-private-todo", title: "Browser Private Todo" },
+  });
+  const browserOrigin = "https://app.mcpjam.com";
+  try {
+    const mcpPreflight = await runtime.handle(new Request(resource, {
+      method: "OPTIONS",
+      headers: {
+        origin: browserOrigin,
+        "sec-fetch-site": "cross-site",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization, content-type, mcp-protocol-version, mcp-method, mcp-param-region",
+      },
+    }));
+    assert.equal(mcpPreflight.status, 204);
+    assert.equal(mcpPreflight.headers.get("access-control-allow-origin"), "*");
+    assert.match(mcpPreflight.headers.get("access-control-allow-methods"), /POST/u);
+    assert.match(mcpPreflight.headers.get("access-control-allow-headers"), /authorization/u);
+    assert.match(mcpPreflight.headers.get("access-control-allow-headers"), /mcp-param-region/u);
+    assert.equal(mcpPreflight.headers.get("access-control-allow-credentials"), null);
+
+    const unsafePreflight = await runtime.handle(new Request(resource, {
+      method: "OPTIONS",
+      headers: {
+        origin: browserOrigin,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "x-clank-internal-authority",
+      },
+    }));
+    assert.equal(unsafePreflight.status, 400);
+    assert.equal(unsafePreflight.headers.get("access-control-allow-origin"), "*");
+
+    const challenged = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "remote-browser", version: "1.0.0" },
+      },
+    }, undefined, {
+      origin: browserOrigin,
+      "sec-fetch-site": "cross-site",
+    }));
+    assert.equal(challenged.status, 401);
+    assert.equal(challenged.headers.get("access-control-allow-origin"), "*");
+    assert.match(challenged.headers.get("access-control-expose-headers"), /www-authenticate/u);
+    assert.match(challenged.headers.get("www-authenticate"), /resource_metadata=/u);
+
+    for (const path of ["/__clank/oauth/register", "/__clank/oauth/token"]) {
+      const oauthPreflight = await runtime.handle(new Request(`${origin}${path}`, {
+        method: "OPTIONS",
+        headers: {
+          origin: browserOrigin,
+          "sec-fetch-site": "cross-site",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type",
+        },
+      }));
+      assert.equal(oauthPreflight.status, 204);
+      assert.equal(oauthPreflight.headers.get("access-control-allow-origin"), "*");
+      assert.equal(oauthPreflight.headers.get("access-control-allow-credentials"), null);
+    }
+
+    const registered = await runtime.handle(jsonRequest("/__clank/oauth/register", {
+      client_name: "Browser hosted client",
+      application_type: "web",
+      redirect_uris: ["https://app.mcpjam.com/oauth/callback"],
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+    }, {
+      origin: browserOrigin,
+      "sec-fetch-site": "cross-site",
+    }));
+    assert.equal(registered.status, 201);
+    assert.equal(registered.headers.get("access-control-allow-origin"), "*");
+  } finally {
+    runtime.close();
+  }
+});
+
+test("public MCP keeps cross-origin browser mutations opt-in", async () => {
+  const definition = defineBackend({
+    schema: defineDatabase({ values: defineTable({ value: s.string() }) }),
+  }).functions(({ mutation }) => ({
+    add: mutation({
+      description: "Add a value.",
+      args: { value: s.string() },
+      handler: ({ db }, { value }) => db.table("values").insert({ value }),
+    }),
+  }));
+  const request = () => mcpRequest({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "remote-public-browser", version: "1.0.0" },
+    },
+  }, undefined, {
+    origin: "https://app.mcpjam.com",
+    "sec-fetch-site": "cross-site",
+  });
+
+  const protectedRuntime = await openBackend(definition, { path: ":memory:" });
+  try {
+    assert.equal((await protectedRuntime.handle(request())).status, 403);
+  } finally {
+    protectedRuntime.close();
+  }
+
+  const optedInRuntime = await openBackend(definition, {
+    path: ":memory:",
+    agent: { browserCors: true },
+  });
+  try {
+    const response = await optedInRuntime.handle(request());
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("access-control-allow-origin"), "*");
+  } finally {
+    optedInRuntime.close();
+  }
+});
+
 test("OAuth sign-in form returns to consent without a separate application tab", async () => {
   const runtime = await openBackend(authenticatedBackend(), {
     path: ":memory:",
@@ -1132,13 +1261,17 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
   assert.equal(revokedFamily.status, 401);
   const replacement = await authorize(runtime, session, client);
 
-  const crossOrigin = await runtime.handle(mcpRequest({
+  const crossOrigin = await runtime.handle(modernMcpRequest({
     jsonrpc: "2.0",
     id: 6,
     method: "tools/list",
     params: {},
-  }, replacement.access_token, { origin: "https://evil.test" }));
-  assert.equal(crossOrigin.status, 403);
+  }, replacement.access_token, {
+    origin: "https://hosted-client.test",
+    "sec-fetch-site": "cross-site",
+  }));
+  assert.equal(crossOrigin.status, 200);
+  assert.equal(crossOrigin.headers.get("access-control-allow-origin"), "*");
 
   runtime.auth.disableUser(session.user.id);
   const disabled = await runtime.handle(mcpRequest({

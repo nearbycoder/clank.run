@@ -220,7 +220,7 @@ export function defineAuth<const ProfileShape extends SchemaShape>(
     touchIntervalMs: positiveDuration(options.touchIntervalMs ?? 5 * 60 * 1_000, "touchIntervalMs"),
     cookie: {
       secure: options.cookie?.secure ?? "auto",
-      sameSite: options.cookie?.sameSite ?? "Strict",
+      sameSite: options.cookie?.sameSite ?? "Lax",
       ...(options.cookie?.name === undefined ? {} : { name: validateCookieName(options.cookie.name) }),
     },
     password,

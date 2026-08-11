@@ -61,6 +61,12 @@ export interface McpServerOptions<Context = unknown> {
   };
   allowedOrigins?: readonly string[];
   requireOrigin?: boolean;
+  /**
+   * Allow credential-free browser clients to call this MCP transport from
+   * another origin. Authentication still requires an explicit bearer token;
+   * cookies are never enabled by this option.
+   */
+  browserCors?: boolean;
   maxRequestBytes?: number;
   maxResponseBytes?: number;
   authenticate?: (request: Request) => Promise<McpAuthentication<Context> | null>;
@@ -303,6 +309,13 @@ export function createMcpServer<Context = unknown>(
 
   const stamp = (response: Response): Response => {
     response.headers.set("x-clank-contract-revision", revision);
+    if (options.browserCors) {
+      response.headers.set("access-control-allow-origin", "*");
+      response.headers.set(
+        "access-control-expose-headers",
+        "mcp-protocol-version, mcp-session-id, www-authenticate, x-clank-contract-revision",
+      );
+    }
     return response;
   };
 
@@ -392,7 +405,10 @@ export function createMcpServer<Context = unknown>(
     },
     async handle(request) {
       if (closed) return stamp(rpcHttpError(503, null, -32603, "MCP server is closed."));
-      if (!requestOriginAllowed(request, {
+      if (options.browserCors && request.method === "OPTIONS") {
+        return stamp(browserCorsPreflight(request));
+      }
+      if (!options.browserCors && !requestOriginAllowed(request, {
         allowedOrigins: options.allowedOrigins,
         requireOrigin: options.requireOrigin,
       })) {
@@ -1062,6 +1078,54 @@ function defaultAuthorizationError(status: 401 | 403, error: string, description
       "cache-control": "no-store",
       "www-authenticate": `Bearer error="${error}"`,
       "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function browserCorsPreflight(request: Request): Response {
+  const requestedMethod = request.headers.get("access-control-request-method")?.toUpperCase();
+  if (requestedMethod && !["GET", "POST", "DELETE"].includes(requestedMethod)) {
+    return new Response(null, {
+      status: 405,
+      headers: {
+        allow: "GET, POST, DELETE, OPTIONS",
+        "cache-control": "no-store",
+      },
+    });
+  }
+  const requestedHeaders = request.headers.get("access-control-request-headers") ?? "";
+  if (requestedHeaders.length > 2_048) {
+    return rpcHttpError(400, null, -32600, "CORS request headers are too large.");
+  }
+  const headers = requestedHeaders
+    .split(",")
+    .map((header) => header.trim().toLowerCase())
+    .filter(Boolean);
+  if (headers.some((header) => !/^[!#$%&'*+.^_`|~0-9a-z-]+$/u.test(header))) {
+    return rpcHttpError(400, null, -32600, "CORS request headers are invalid.");
+  }
+  const alwaysAllowed = [
+    "accept",
+    "authorization",
+    "content-type",
+    "last-event-id",
+    "mcp-method",
+    "mcp-name",
+    "mcp-protocol-version",
+    "mcp-session-id",
+  ];
+  if (headers.some((header) => !alwaysAllowed.includes(header) && !/^mcp-param-[a-z0-9-]{1,128}$/u.test(header))) {
+    return rpcHttpError(400, null, -32600, "CORS request headers are not supported.");
+  }
+  const allowedHeaders = [...new Set([...alwaysAllowed, ...headers])];
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-headers": allowedHeaders.join(", "),
+      "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+      "access-control-max-age": "600",
+      "cache-control": "no-store",
+      vary: "Access-Control-Request-Headers",
     },
   });
 }

@@ -153,7 +153,8 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
         return publicJson(authorizationServerMetadata(request));
       }
       if (url.pathname === `${oauthPrefix}/register`) {
-        return registerClient(request, internal, maxClients);
+        if (request.method === "OPTIONS") return oauthMachinePreflight();
+        return oauthMachineResponse(await registerClient(request, internal, maxClients));
       }
       if (url.pathname === `${oauthPrefix}/authorize`) {
         return authorize(request, internal, options.auth, {
@@ -165,12 +166,13 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
         });
       }
       if (url.pathname === `${oauthPrefix}/token`) {
-        return exchangeToken(request, internal, {
+        if (request.method === "OPTIONS") return oauthMachinePreflight();
+        return oauthMachineResponse(await exchangeToken(request, internal, {
           resource: resourceFor(request),
           accessTokenLifetimeMs,
           refreshTokenLifetimeMs,
           maxUserGrants,
-        });
+        }));
       }
       if (url.pathname === grantManagementPath) {
         return manageAgentAccess(request, internal, options.auth, {
@@ -1505,6 +1507,22 @@ function oauthHeaders(extra?: HeadersInit): Headers {
   headers.set("pragma", "no-cache");
   headers.set("x-content-type-options", "nosniff");
   return headers;
+}
+
+function oauthMachineResponse(response: Response): Response {
+  response.headers.set("access-control-allow-origin", "*");
+  return response;
+}
+
+function oauthMachinePreflight(): Response {
+  return oauthMachineResponse(new Response(null, {
+    status: 204,
+    headers: oauthHeaders({
+      "access-control-allow-headers": "accept, authorization, content-type",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-max-age": "600",
+    }),
+  }));
 }
 
 function methodNotAllowed(allow: string): Response {
