@@ -142,6 +142,12 @@ MCP client's registered callback. The client receives a short-lived token restri
 application and exact MCP resource. Nothing needs to be copied back, and the person connecting
 does not need the Clank deployment CLI or access to the deployment account.
 
+Hosted browser clients can connect directly. Authenticated app MCP endpoints include the
+credential-free CORS preflight and response headers needed by browser transports, while the
+application session uses `SameSite=Lax` so a top-level authorization launch can recognize an
+existing login. Passwords are accepted only by a same-origin Clank page, and MCP calls never use
+the browser cookie: they require the explicit resource-bound bearer token.
+
 The agent never receives the user's password, browser session cookie, or CSRF token. A read grant
 can list and call queries. A write grant can also call mutations. Normal application checks still
 apply, including required login, verified email, roles, record ownership, argument validation,

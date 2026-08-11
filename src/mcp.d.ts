@@ -38,6 +38,12 @@ export interface McpServerOptions<Context = unknown> {
     };
     allowedOrigins?: readonly string[];
     requireOrigin?: boolean;
+    /**
+     * Allow credential-free browser clients to call this MCP transport from
+     * another origin. Authentication still requires an explicit bearer token;
+     * cookies are never enabled by this option.
+     */
+    browserCors?: boolean;
     maxRequestBytes?: number;
     maxResponseBytes?: number;
     authenticate?: (request: Request) => Promise<McpAuthentication<Context> | null>;

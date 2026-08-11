@@ -118,6 +118,11 @@ test("auth defaults to an eight-character password minimum", () => {
   );
 });
 
+test("auth defaults to OAuth-compatible Lax sessions and preserves explicit Strict policy", () => {
+  assert.equal(defineAuth().cookie.sameSite, "Lax");
+  assert.equal(defineAuth({ cookie: { sameSite: "Strict" } }).cookie.sameSite, "Strict");
+});
+
 test("auth issues hardened cookies, hashes credentials, and protects state-changing requests", async () => {
   const fixture = await createFixture();
   try {
@@ -126,7 +131,7 @@ test("auth issues hardened cookies, hashes credentials, and protects state-chang
     assert.match(setCookie, /^__Host-clank-id=/);
     assert.match(setCookie, /; Path=\//);
     assert.match(setCookie, /; HttpOnly/);
-    assert.match(setCookie, /; SameSite=Strict/);
+    assert.match(setCookie, /; SameSite=Lax/);
     assert.match(setCookie, /; Secure/);
 
     const rawToken = alice.cookie.slice(alice.cookie.indexOf("=") + 1);

@@ -4,6 +4,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.18.1 - 2026-08-10
+
+- Fixed remote browser MCP authorization by making application sessions available to secure
+  cross-site top-level OAuth navigations and adding narrowly scoped, credential-free CORS support
+  for MCP preflight, dynamic client registration, and token requests. Protected MCP endpoints still
+  require resource-bound bearer tokens, password submission remains same-origin only, and public
+  MCP servers remain cross-origin restricted unless explicitly enabled.
+
 ## 0.18.0 - 2026-08-09
 
 - Upgraded every generated application MCP endpoint to the stateless `2026-07-28` protocol while

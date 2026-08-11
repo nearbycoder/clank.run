@@ -1,6 +1,6 @@
 # Advanced authentication
 
-Clank's advanced authentication features extend the framework's default email/password flow with verification, recovery, MFA, passkeys, bot protection, and distributed rate limits. Authentication uses the application SQLite database. Passwords use bounded scrypt work, session and one-time tokens are stored only as SHA-256 digests, browser sessions use `HttpOnly` and `SameSite=Strict` cookies, and every state-changing browser request requires an origin check plus a session-bound CSRF token.
+Clank's advanced authentication features extend the framework's default email/password flow with verification, recovery, MFA, passkeys, bot protection, and distributed rate limits. Authentication uses the application SQLite database. Passwords use bounded scrypt work, session and one-time tokens are stored only as SHA-256 digests, browser sessions use `HttpOnly` and `SameSite=Lax` cookies by default, and every state-changing browser request requires an origin check plus a session-bound CSRF token. `Lax` lets a top-level MCP OAuth navigation recognize an existing application login without sending the session on a cross-site mutation; applications that never act as an authorization server can opt into `cookie.sameSite: "Strict"`.
 
 ```ts
 import { defineAuth } from "@clank.run/framework/auth";

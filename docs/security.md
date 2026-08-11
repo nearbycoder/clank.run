@@ -31,7 +31,7 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 ### Authentication and data
 
 - Passwords use versioned scrypt hashes with random salts and optional server-only peppering.
-- Session cookies are `HttpOnly`, `SameSite=Strict` by default, `Secure` on HTTPS, and use the `__Host-` prefix when possible.
+- Session cookies are `HttpOnly`, `SameSite=Lax` by default, `Secure` on HTTPS, and use the `__Host-` prefix when possible. `Lax` preserves top-level MCP OAuth authorization handoffs while origin validation and session-bound CSRF tokens continue to protect every state-changing request; `cookie.sameSite: "Strict"` remains available for applications that do not need cross-site authorization entry.
 - Only SHA-256 token hashes are stored in SQLite; raw session tokens exist only in cookies and the immediate response construction path.
 - Authenticated mutations require a constant-time CSRF-token comparison.
 - Login errors do not reveal whether an account exists or is disabled.

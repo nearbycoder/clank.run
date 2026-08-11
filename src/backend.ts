@@ -1655,6 +1655,12 @@ export interface OpenBackendOptions extends SQLiteOptions {
     instructions?: string;
     mcpPath?: string;
     oauthPrefix?: string;
+    /**
+     * Permit credential-free cross-origin browser access to the MCP transport.
+     * Defaults to true for OAuth-protected applications and false for public
+     * applications whose mutations do not require bearer authorization.
+     */
+    browserCors?: boolean;
     /** Maximum simultaneously active OAuth grants for one application user. Defaults to 100. */
     maxUserGrants?: number;
   };
@@ -2013,6 +2019,7 @@ export async function openBackend<
           : {}),
         tools: [...mcpTools, ...bucketMcpTools],
         allowedOrigins: options.allowedOrigins,
+        browserCors: agentOptions.browserCors ?? Boolean(oauth),
         maxRequestBytes,
         maxResponseBytes,
         ...(oauth
