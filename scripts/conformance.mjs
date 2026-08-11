@@ -527,20 +527,21 @@ async function verifyAgentProtocol(origin, session) {
   assert.equal(initialized.supportedVersions[0], "2026-07-28");
   assert.equal(initialized.resultType, "complete");
   const tools = await mcp("tools/list");
-  assert.ok(tools.tools.some((tool) => tool.name === "tasks.list"));
   assert.ok(tools.tools.some((tool) =>
-    tool.name === "tasks.delete" && tool.annotations.destructiveHint === true));
+    tool.name === "tasks_list" && tool._meta["clank/actionPath"] === "tasks.list"));
+  assert.ok(tools.tools.some((tool) =>
+    tool.name === "tasks_delete" && tool.annotations.destructiveHint === true));
 
   const created = await mcp("tools/call", {
-    name: "tasks.create",
+    name: "tasks_create",
     arguments: { title: "Agent protocol round trip" },
   });
   assert.equal(created.isError, false);
-  const listed = await mcp("tools/call", { name: "tasks.list", arguments: {} });
+  const listed = await mcp("tools/call", { name: "tasks_list", arguments: {} });
   const task = listed.structuredContent.value.find((entry) => entry.title === "Agent protocol round trip");
   assert.ok(task);
   const removed = await mcp("tools/call", {
-    name: "tasks.delete",
+    name: "tasks_delete",
     arguments: { id: task._id, version: task._version },
   });
   assert.equal(removed.isError, false);
