@@ -4,6 +4,15 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.18.4 - 2026-08-10
+
+- Normalized generated and custom MCP tool names to the strict cross-provider identifier contract:
+  ASCII letters, numbers, and underscores with a 64-character ceiling. Dotted or hyphenated action
+  paths such as `dailyLog.getDay` now publish as `dailyLog_getDay`; overlong or normalization-
+  colliding names receive stable digest suffixes. Tool metadata retains the exact original Clank
+  action path, invocation routes through the portable name, and the changed contract revision makes
+  connected clients refresh stale catalogs automatically.
+
 ## 0.18.3 - 2026-08-10
 
 - Fixed hosted MCP sign-in behind proxies that normalize or remove browser Fetch Metadata. The

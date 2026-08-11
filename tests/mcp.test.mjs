@@ -8,6 +8,7 @@ import {
   defineTable,
   createMcpServer,
   openBackend,
+  portableMcpToolNames,
   s,
 } from "../dist/index.js";
 
@@ -815,6 +816,43 @@ test("MCP contract revisions change for action and metadata changes but remain d
   equivalentWorkflowMetadata.close();
 });
 
+test("MCP tool names use portable underscore identifiers with bounded collision suffixes", async () => {
+  const logicalNames = [
+    "dailyLog.getDailyUpdate",
+    "dailyLog-getDailyUpdate",
+    "dailyLog_getDailyUpdate",
+    `dailyLog.${"readRecentUpdates".repeat(6)}`,
+  ];
+  const portable = portableMcpToolNames(logicalNames);
+  assert.equal(portable.length, logicalNames.length);
+  assert.equal(new Set(portable).size, logicalNames.length);
+  assert.ok(portable.every((name) => /^[A-Za-z0-9_]{1,64}$/u.test(name)));
+  assert.ok(portable.every((name) => !name.includes("-") && !name.includes(".")));
+
+  const ordinary = portableMcpToolNames([
+    "dailyLog.getDailyUpdate",
+    "dailyLog.getDay",
+    "dailyLog.listRecent",
+  ]);
+  assert.deepEqual(ordinary, [
+    "dailyLog_getDailyUpdate",
+    "dailyLog_getDay",
+    "dailyLog_listRecent",
+  ]);
+
+  const server = createMcpServer({
+    name: "portable-tools",
+    tools: logicalNames.map((name) => testTool(name)),
+  });
+  const descriptors = server.manifest().tools;
+  assert.deepEqual(
+    new Set(descriptors.map((tool) => tool.actionPath)),
+    new Set(logicalNames),
+  );
+  assert.ok(descriptors.every((tool) => /^[A-Za-z0-9_]{1,64}$/u.test(tool.name)));
+  server.close();
+});
+
 test("MCP 2026-07-28 discovers and invokes tools without process-local sessions", async () => {
   const invoked = [];
   const options = {
@@ -856,7 +894,8 @@ test("MCP 2026-07-28 discovers and invokes tools without process-local sessions"
   }));
   const listResult = (await listed.json()).result;
   assert.equal(listResult.resultType, "complete");
-  assert.deepEqual(listResult.tools.map((tool) => tool.name), ["todos.echo"]);
+  assert.deepEqual(listResult.tools.map((tool) => tool.name), ["todos_echo"]);
+  assert.equal(listResult.tools[0]._meta["clank/actionPath"], "todos.echo");
   assert.equal(listResult._meta["clank/contractRevision"], firstInstance.revision);
   assert.equal(listResult._meta["io.modelcontextprotocol/serverInfo"].name, "stateless-app");
 
@@ -864,7 +903,7 @@ test("MCP 2026-07-28 discovers and invokes tools without process-local sessions"
     jsonrpc: "2.0",
     id: 2,
     method: "tools/call",
-    params: { name: "todos.echo", arguments: { value: "cross-instance" } },
+    params: { name: "todos_echo", arguments: { value: "cross-instance" } },
   }, undefined, {
     "mcp-session-id": "legacy-session-is-ignored",
     "last-event-id": "also-ignored",
@@ -907,11 +946,11 @@ test("MCP 2026-07-28 rejects header smuggling and unsupported revisions before t
     jsonrpc: "2.0",
     id: 1,
     method: "tools/call",
-    params: { name: "safe.echo", arguments: { value: "test" } },
+    params: { name: "safe_echo", arguments: { value: "test" } },
   };
   const cases = [
     { headers: { "mcp-method": "tools/list" }, message: /Mcp-Method/u },
-    { headers: { "mcp-name": "unsafe.echo" }, message: /Mcp-Name/u },
+    { headers: { "mcp-name": "unsafe_echo" }, message: /Mcp-Name/u },
     { headers: { "mcp-protocol-version": "2025-11-25" }, message: /MCP-Protocol-Version/u },
   ];
   for (const entry of cases) {
@@ -932,7 +971,7 @@ test("MCP 2026-07-28 rejects header smuggling and unsupported revisions before t
       accept: "application/json, text/event-stream",
       "mcp-protocol-version": "2099-01-01",
       "mcp-method": "tools/call",
-      "mcp-name": "safe.echo",
+      "mcp-name": "safe_echo",
     },
     body: JSON.stringify(unsupportedBody),
   }));
@@ -1104,10 +1143,10 @@ test("MCP sessions invalidate cached tools across deployments and stream list ch
   assert.equal(oldListPayload.result.cacheScope, "private");
   assert.equal(oldListPayload.result._meta["clank/contractRevision"], oldServer.revision);
   assert.deepEqual(oldListPayload.result.tools.map((tool) => tool.name), [
-    "todos.add",
-    "todos.list",
-    "todos.remove",
-    "todos.setDone",
+    "todos_add",
+    "todos_list",
+    "todos_remove",
+    "todos_setDone",
   ]);
 
   const newServer = createMcpServer({
@@ -1152,13 +1191,13 @@ test("MCP sessions invalidate cached tools across deployments and stream list ch
     params: {},
   }, undefined, { "mcp-session-id": newSession }));
   assert.deepEqual((await refreshed.json()).result.tools.map((tool) => tool.name), [
-    "cards.add",
-    "cards.list",
-    "cards.move",
-    "cards.remove",
-    "columns.add",
-    "columns.list",
-    "columns.rename",
+    "cards_add",
+    "cards_list",
+    "cards_move",
+    "cards_remove",
+    "columns_add",
+    "columns_list",
+    "columns_rename",
   ]);
 
   oldServer.close();
@@ -1246,7 +1285,7 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
   }, tokens.access_token));
   assert.deepEqual(
     (await statelessTools.json()).result.tools.map((tool) => tool.name),
-    ["todos.add", "todos.list", "todos.removeAll"],
+    ["todos_add", "todos_list", "todos_removeAll"],
   );
 
   const initialized = await runtime.handle(mcpRequest({
@@ -1280,22 +1319,25 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
     params: {},
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   const tools = (await listed.json()).result.tools;
-  assert.deepEqual(tools.map((tool) => tool.name), ["todos.add", "todos.list", "todos.removeAll"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["todos_add", "todos_list", "todos_removeAll"]);
   const backendManifest = await runtime.handle(new Request(`${origin}/__clank/manifest`));
   const backendFunctions = (await backendManifest.json()).functions
     .filter((fn) => fn.agent)
     .map((fn) => fn.name)
     .sort();
-  assert.deepEqual(tools.map((tool) => tool.name), backendFunctions);
-  assert.equal(tools.find((tool) => tool.name === "todos.add").annotations.destructiveHint, false);
-  assert.equal(tools.find((tool) => tool.name === "todos.removeAll").annotations.destructiveHint, true);
-  assert.equal(tools.find((tool) => tool.name === "todos.list").annotations.readOnlyHint, true);
+  assert.deepEqual(
+    tools.map((tool) => tool._meta["clank/actionPath"]),
+    backendFunctions,
+  );
+  assert.equal(tools.find((tool) => tool.name === "todos_add").annotations.destructiveHint, false);
+  assert.equal(tools.find((tool) => tool.name === "todos_removeAll").annotations.destructiveHint, true);
+  assert.equal(tools.find((tool) => tool.name === "todos_list").annotations.readOnlyHint, true);
 
   const added = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 4,
     method: "tools/call",
-    params: { name: "todos.add", arguments: { title: "Created by an agent" } },
+    params: { name: "todos_add", arguments: { title: "Created by an agent" } },
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   assert.equal(added.status, 200);
   assert.equal((await added.json()).result.isError, false);
@@ -1304,7 +1346,7 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
     jsonrpc: "2.0",
     id: 5,
     method: "tools/call",
-    params: { name: "todos.list", arguments: {} },
+    params: { name: "todos_list", arguments: {} },
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   const listPayload = await listedTodos.json();
   assert.equal(listPayload.result.structuredContent.value[0].title, "Created by an agent");
@@ -1406,12 +1448,12 @@ test("read-only OAuth grants hide and reject mutation tools", async () => {
     method: "tools/list",
     params: {},
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
-  assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["todos.list"]);
+  assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["todos_list"]);
   const write = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
-    params: { name: "todos.add", arguments: { title: "No" } },
+    params: { name: "todos_add", arguments: { title: "No" } },
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   assert.equal(write.status, 403);
   assert.equal((await write.json()).error, "insufficient_scope");
@@ -1527,12 +1569,12 @@ test("agent access inbox isolates, reduces, and revokes active OAuth grants imme
     method: "tools/list",
     params: {},
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
-  assert.deepEqual((await tools.json()).result.tools.map((tool) => tool.name), ["todos.list"]);
+  assert.deepEqual((await tools.json()).result.tools.map((tool) => tool.name), ["todos_list"]);
   const write = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
-    params: { name: "todos.add", arguments: { title: "Must remain blocked" } },
+    params: { name: "todos_add", arguments: { title: "Must remain blocked" } },
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   assert.equal(write.status, 403);
   assert.equal((await write.json()).error, "insufficient_scope");
@@ -1785,12 +1827,12 @@ test("projects without browser auth expose the same typed actions as a public MC
     params: {},
   }, undefined, { "mcp-session-id": mcpSession }));
   assert.equal(listed.status, 200);
-  assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["notes.add", "notes.list"]);
+  assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["notes_add", "notes_list"]);
   const added = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
-    params: { name: "notes.add", arguments: { title: "Public MCP" } },
+    params: { name: "notes_add", arguments: { title: "Public MCP" } },
   }, undefined, { "mcp-session-id": mcpSession }));
   assert.equal((await added.json()).result.isError, false);
   assert.equal(runtime.query("notes.list", {}).value[0].title, "Public MCP");

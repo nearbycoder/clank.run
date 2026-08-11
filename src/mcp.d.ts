@@ -14,6 +14,8 @@ export interface McpToolAnnotations {
 }
 export interface McpTool<Context = unknown> {
     readonly name: string;
+    /** Original application action path when the public MCP name is normalized for client portability. */
+    readonly actionPath?: string;
     readonly title?: string;
     readonly description: string;
     readonly inputSchema: Record<string, unknown>;
@@ -23,7 +25,8 @@ export interface McpTool<Context = unknown> {
     invoke(input: unknown, context: Context, request: Request): unknown | Promise<unknown>;
 }
 export interface McpServerOptions<Context = unknown> {
-    name: string;
+        name: string;
+        actionPath?: string;
     version?: string;
     title?: string;
     description?: string;
@@ -50,6 +53,8 @@ export interface McpServerOptions<Context = unknown> {
     unauthorized?: (request: Request, requiredScope: McpScope) => Response;
     forbidden?: (request: Request, requiredScope: McpScope) => Response;
 }
+/** Converts logical action paths into strict-client-compatible MCP tool names. */
+export declare function portableMcpToolNames(names: readonly string[]): readonly string[];
 export interface McpServer<Context = unknown> {
     readonly tools: ReadonlyMap<string, McpTool<Context>>;
     readonly revision: string;

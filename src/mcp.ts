@@ -30,6 +30,8 @@ export interface McpToolAnnotations {
 
 export interface McpTool<Context = unknown> {
   readonly name: string;
+  /** Original application action path when the public MCP name is normalized for client portability. */
+  readonly actionPath?: string;
   readonly title?: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
@@ -92,6 +94,7 @@ export interface McpServer<Context = unknown> {
     metadata?: Readonly<Record<string, unknown>>;
     tools: Array<{
       name: string;
+      actionPath?: string;
       title?: string;
       description: string;
       inputSchema: Record<string, unknown>;
@@ -180,11 +183,13 @@ export function createMcpServer<Context = unknown>(
     : 0;
   const registry = new Map<string, McpTool<Context>>();
   const headerBindings = new Map<string, readonly McpHeaderBinding[]>();
-  for (const tool of options.tools) {
+  const portableNames = portableMcpToolNames(options.tools.map((tool) => tool.name));
+  for (const [index, tool] of options.tools.entries()) {
     if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(tool.name)) {
       throw new TypeError(`Invalid MCP tool name: ${tool.name}`);
     }
-    if (registry.has(tool.name)) throw new TypeError(`Duplicate MCP tool: ${tool.name}`);
+    const publicName = portableNames[index]!;
+    if (registry.has(publicName)) throw new TypeError(`Duplicate MCP tool: ${tool.name}`);
     if (!tool.inputSchema || tool.inputSchema.type !== "object") {
       throw new TypeError(`MCP tool ${tool.name} must use an object input schema.`);
     }
@@ -197,8 +202,13 @@ export function createMcpServer<Context = unknown>(
       throw new TypeError(`MCP tool ${tool.name} has an invalid required scope.`);
     }
     if (typeof tool.invoke !== "function") throw new TypeError(`MCP tool ${tool.name} requires an invoke function.`);
-    headerBindings.set(tool.name, mcpHeaderBindings(tool.inputSchema, tool.name));
-    registry.set(tool.name, Object.freeze({ ...tool }));
+    const registered = Object.freeze({
+      ...tool,
+      name: publicName,
+      ...(tool.actionPath || tool.name !== publicName ? { actionPath: tool.actionPath ?? tool.name } : {}),
+    });
+    headerBindings.set(publicName, mcpHeaderBindings(tool.inputSchema, publicName));
+    registry.set(publicName, registered);
   }
 
   const visibleTools = (scopes?: ReadonlySet<string>) => [...registry.values()]
@@ -217,6 +227,7 @@ export function createMcpServer<Context = unknown>(
     metadata,
     tools: visibleTools().map((tool) => ({
       name: tool.name,
+      actionPath: tool.actionPath,
       title: tool.title,
       description: tool.description,
       inputSchema: tool.inputSchema,
@@ -243,6 +254,7 @@ export function createMcpServer<Context = unknown>(
     ...(metadata ? { metadata } : {}),
     tools: visibleTools(scopes).map((tool) => ({
       name: tool.name,
+      ...(tool.actionPath ? { actionPath: tool.actionPath } : {}),
       ...(tool.title ? { title: tool.title } : {}),
       description: tool.description,
       inputSchema: tool.inputSchema,
@@ -759,7 +771,35 @@ function mcpToolDescriptor<Context>(tool: McpTool<Context>): Record<string, unkn
     inputSchema: withJsonSchemaDialect(tool.inputSchema),
     ...(tool.outputSchema ? { outputSchema: withJsonSchemaDialect(tool.outputSchema) } : {}),
     ...(tool.annotations ? { annotations: tool.annotations } : {}),
+    ...(tool.actionPath ? { _meta: { "clank/actionPath": tool.actionPath } } : {}),
   };
+}
+
+/**
+ * Converts logical action paths into names accepted by strict MCP/model clients.
+ * Readable names use underscores; overlong or colliding names receive a stable
+ * contract-derived suffix while remaining within Anthropic's 64-character limit.
+ */
+export function portableMcpToolNames(names: readonly string[]): readonly string[] {
+  const readable = names.map((name) => name.replace(/[.-]/gu, "_"));
+  const counts = new Map<string, number>();
+  for (const name of readable) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const output = names.map((source, index) => {
+    const candidate = readable[index]!;
+    if (candidate.length <= 64 && counts.get(candidate) === 1) return candidate;
+    const suffix = contractRevision({ tool: source }).slice("mcp-".length, "mcp-".length + 16);
+    return `${candidate.slice(0, 47)}_${suffix}`;
+  });
+  const unique = new Set(output);
+  if (unique.size !== output.length) {
+    throw new TypeError("MCP tool names collide after portable normalization.");
+  }
+  for (const name of output) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/u.test(name)) {
+      throw new TypeError(`Invalid portable MCP tool name: ${name}`);
+    }
+  }
+  return Object.freeze(output);
 }
 
 function withJsonSchemaDialect(schema: Record<string, unknown>): Record<string, unknown> {

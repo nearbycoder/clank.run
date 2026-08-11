@@ -127,7 +127,9 @@ Define trusted server functions once. Clank infers their TypeScript clients, val
 inputs and outputs, updates subscribed browser queries after commits, and publishes the eligible
 functions as MCP tools. The MCP contract revision changes whenever a tool name, schema,
 description, scope, or annotation changes, so clients can refresh without serving a stale action
-model.
+model. Logical paths such as `dailyLog.getDay` publish as portable `dailyLog_getDay` tool names;
+generated names use only ASCII letters, numbers, and underscores and stay within 64 characters.
+The original action path remains available in tool metadata.
 
 Each deployed app owns its authentication boundary, data, OAuth issuer, and MCP endpoint:
 
