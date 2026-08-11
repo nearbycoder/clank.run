@@ -1,6 +1,6 @@
 {
   "name": "@clank.run/framework",
-  "version": "0.18.4",
+  "version": "0.19.0",
   "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, deployment, and a complete headless UI library.",
   "homepage": "https://docs.clank.run",
   "bugs": {
@@ -31,6 +31,7 @@
     "./ai": { "types": "./dist/ai.d.ts", "import": "./dist/ai.js" },
     "./agent-contract": { "types": "./dist/agent-contract.d.ts", "import": "./dist/agent-contract.js" },
     "./mcp": { "types": "./dist/mcp.d.ts", "import": "./dist/mcp.js" },
+    "./mcp-app": { "types": "./dist/mcp-app.d.ts", "import": "./dist/mcp-app.js" },
     "./blueprint": { "types": "./dist/blueprint.d.ts", "import": "./dist/blueprint.js" },
     "./blueprint-registry": { "types": "./dist/blueprint-registry.d.ts", "import": "./dist/blueprint-registry.js" },
     "./webauthn": { "types": "./dist/webauthn.d.ts", "import": "./dist/webauthn.js" },
@@ -167,6 +168,7 @@
     "dev": "node --disable-warning=ExperimentalWarning scripts/dev.mjs",
     "dev:fullstack": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/fullstack/server.js",
     "dev:auth": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/auth-todo/server.js",
+    "dev:mcp-app": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/mcp-app/server.js",
     "dev:platform": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/clank-platform.mjs",
     "test": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning docs-site/build.mjs && node --disable-warning=ExperimentalWarning design-site/build.mjs && node --disable-warning=ExperimentalWarning --test",
     "security:audit": "node --disable-warning=ExperimentalWarning scripts/security-audit.mjs",

@@ -11,6 +11,7 @@ export * from "./governance.ts";
 export * from "./lifecycle.ts";
 export * from "./tooling.ts";
 export * from "./mcp.ts";
+export * from "./mcp-app.ts";
 export * from "./blueprint.ts";
 export * from "./blueprint-registry.ts";
 export * from "./webauthn.ts";

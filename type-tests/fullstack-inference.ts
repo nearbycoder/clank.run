@@ -1,6 +1,8 @@
 import {
   createApi,
+  createMcpAppDocument,
   createSyncClient,
+  defineMcpApp,
   defineBackend,
   defineDatabase,
   defineJobs,
@@ -11,6 +13,23 @@ import {
   type DocumentFor,
   type JobRuntime,
 } from "../dist/index.js";
+
+const todoMcpApp = defineMcpApp({
+  uri: "ui://todos/board",
+  name: "todo_board",
+  html: createMcpAppDocument({
+    title: "Todos",
+    body: "<main id=app></main>",
+  }),
+  permissions: { clipboardWrite: {} },
+});
+
+defineMcpApp({
+  // @ts-expect-error MCP App resources require the ui:// scheme.
+  uri: "https://example.com/todos",
+  name: "invalid",
+  html: "<!doctype html><html></html>",
+});
 
 const schema = defineDatabase({
   todos: defineTable({
@@ -62,12 +81,14 @@ export const backend = defineBackend({ schema }).functions(({ query, mutation })
   todos: {
     list: query({
       args: { done: s.optional(s.boolean()) },
+      agent: { app: todoMcpApp },
       handler: ({ db }, { done }) => done === undefined
         ? db.table("todos").collect()
         : db.table("todos").query().where("done", done).collect(),
     }),
     history: query({
       args: { id: s.id("todos") },
+      agent: { app: { resource: todoMcpApp, visibility: ["app"] } },
       handler: ({ db }, { id }) => db.table("todos").history(id, { limit: 10 }),
     }),
     add: mutation({

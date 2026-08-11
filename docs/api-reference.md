@@ -539,6 +539,17 @@ types.
 ## MCP
 
 - `createMcpServer(options)`: zero-dependency MCP Streamable HTTP server for custom typed tools.
+- `defineMcpApp(definition)`: validate and freeze one `ui://` HTML resource, CSP declaration,
+  permission request, dedicated domain, and border preference.
+- `createMcpAppDocument(options)`: build a complete HTML5 resource with Clank's dependency-free
+  iframe bridge inlined; no CDN or separate view bundle is required.
+- `createMcpAppClient(options, environment?)`: connect a view to its host over JSON-RPC
+  `postMessage`, then call tools, read resources, receive tool results and host context, request
+  display modes, and handle teardown.
+- `applyMcpAppTheme(context, root?)`: apply negotiated light/dark state and safe MCP host CSS
+  variables to a view.
+- `mcpAppClientScript()`: standalone source used by `createMcpAppDocument()` and available for
+  custom HTML generation.
 - `portableMcpToolNames(names)`: deterministically converts logical dotted or hyphenated action
   paths into unique ASCII letter/number/underscore identifiers capped at 64 characters. Ordinary
   separators become `_`; overlong or colliding names receive a stable digest suffix.
@@ -550,13 +561,19 @@ types.
   clients; `close()` terminates compatibility sessions and streams. Stateless `2026-07-28`
   clients use zero-TTL discovery instead.
 - `MCP_PROTOCOL_VERSION`: current stable protocol revision (`2026-07-28`).
+- `MCP_APPS_PROTOCOL_VERSION`: stable MCP Apps extension revision (`2026-01-26`).
+- `MCP_APP_MIME_TYPE`: exact HTML view MIME type (`text/html;profile=mcp-app`).
+- `MCP_APPS_EXTENSION_ID`: negotiated UI extension identifier
+  (`io.modelcontextprotocol/ui`).
 - `MCP_SUPPORTED_PROTOCOL_VERSIONS`: current stateless revision plus compatible legacy revisions
   accepted by the dual-era transport.
 - `McpToolError`: public, redacted application-level tool failure.
 - `McpTool.actionPath`: optional original logical path published as `clank/actionPath` metadata when
   the public tool name is normalized.
 - Types: `McpServer`, `McpServerOptions`, `McpTool`, `McpToolAnnotations`,
-  `McpAuthentication`, and `McpScope`.
+  `McpAuthentication`, `McpScope`, `McpAppDefinition`, `McpToolApp`, `McpAppCsp`,
+  `McpAppPermissions`, `McpAppClient`, `McpAppHostContext`, `McpAppHostCapabilities`,
+  `McpAppContentModalities`, and `McpAppDocumentOptions`.
 - `defineBackend()` functions accept `description` and `agent` metadata.
 - `openBackend()` exposes eligible functions at `/__clank/mcp` by default and installs OAuth
   discovery automatically when the backend uses Clank auth. `BackendRuntime.contractRevision`
@@ -578,8 +595,9 @@ types.
 - Types: `AgentActionTarget`, `AgentActionControl`, `AgentBackendManifest`,
   `AgentActionParityOptions`, `AgentActionParityReport`, and `VerifyAgentActionParityOptions`.
 
-See [Agent protocol](agent-protocol.md) for connection, OAuth, scope, discovery, and security
-details, and [Agent access](agent-access.md) for grant inspection, reduction, and revocation.
+See [Interactive MCP Apps](mcp-apps.md) for embedded views, [Agent protocol](agent-protocol.md) for
+connection, OAuth, scope, discovery, and security details, and [Agent access](agent-access.md) for
+grant inspection, reduction, and revocation.
 
 ## Router
 

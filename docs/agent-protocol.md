@@ -133,12 +133,18 @@ The optional `agent` contract supports:
 - `destructive`: whether a mutation can remove or irreversibly change data;
 - `idempotent`: whether repeating the exact call has no additional effect;
 - `openWorld`: whether the action can communicate outside this application;
+- `app`: an immutable MCP Apps view, or a `{ resource, visibility }` binding for app-only actions;
 - `enabled: false`, or `agent: false`, to omit an internal function.
 
 Queries are always marked read-only and idempotent. Mutations default to destructive as a
 conservative safety hint; mark additive or reversible writes with `destructive: false`.
 Annotations help the MCP client decide when to ask for confirmation, but server authorization
 never trusts an annotation.
+
+When `app` is present and the host negotiates `io.modelcontextprotocol/ui`, `tools/list` adds
+`_meta.ui`, and `resources/read` serves the matching `ui://` document with the exact
+`text/html;profile=mcp-app` MIME type. Plain clients receive the same meaningful text and
+structured result without UI metadata. See [Interactive MCP Apps](mcp-apps.md).
 
 ## Application identity
 

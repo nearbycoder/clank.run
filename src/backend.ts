@@ -33,10 +33,16 @@ import {
 } from "./sqlite-internal.ts";
 import {
   createMcpServer,
+  defineMcpApp,
   McpToolError,
   MCP_PROTOCOL_VERSION,
   MCP_SUPPORTED_PROTOCOL_VERSIONS,
+  MCP_APPS_PROTOCOL_VERSION,
+  MCP_APP_MIME_TYPE,
+  MCP_APPS_EXTENSION_ID,
   type McpTool,
+  type McpAppDefinition,
+  type McpAppVisibility,
 } from "./mcp.ts";
 import { createProjectOAuth } from "./oauth.ts";
 import {
@@ -1219,6 +1225,14 @@ export interface BackendAgentOptions {
   idempotent?: boolean;
   /** Whether the action can communicate with systems outside this application. */
   openWorld?: boolean;
+  /**
+   * Render this action's structured result as an MCP App. Reuse one
+   * defineMcpApp() value across actions to share a view.
+   */
+  app?: McpAppDefinition | {
+    readonly resource: McpAppDefinition;
+    readonly visibility?: readonly McpAppVisibility[];
+  };
 }
 
 interface BackendFunctionOptions<Output> {
@@ -1927,6 +1941,25 @@ export async function openBackend<
         maxUserGrants,
       })
     : undefined;
+  const backendAppBindings = new Map<string, {
+    resource: Readonly<McpAppDefinition>;
+    tool: { resourceUri: `ui://${string}`; visibility?: readonly McpAppVisibility[] };
+  }>();
+  const backendApps = new Map<string, Readonly<McpAppDefinition>>();
+  if (agentOptions) {
+    for (const [path, fn] of registry) {
+      if (fn.agent === false || fn.agent.enabled === false || fn.agent.app === undefined) continue;
+      const binding = backendMcpAppBinding(fn.agent.app, path);
+      const existing = backendApps.get(binding.resource.uri);
+      if (existing && existing !== binding.resource) {
+        throw new TypeError(
+          `Backend functions reference different MCP app definitions for ${binding.resource.uri}. Reuse one defineMcpApp() value.`,
+        );
+      }
+      backendApps.set(binding.resource.uri, binding.resource);
+      backendAppBindings.set(path, binding);
+    }
+  }
   const mcpTools: McpTool<AuthRequest<any> | null>[] = agentOptions
     ? [...registry]
       .filter(([, fn]) => fn.agent !== false && fn.agent.enabled !== false)
@@ -1962,6 +1995,7 @@ export async function openBackend<
             idempotentHint: fn.kind === "query" ? true : agent.idempotent ?? false,
             openWorldHint: agent.openWorld ?? false,
           },
+          ...(backendAppBindings.has(path) ? { app: backendAppBindings.get(path)!.tool } : {}),
           async invoke(input, auth) {
             try {
               return fn.kind === "query"
@@ -2018,6 +2052,7 @@ export async function openBackend<
             } }
           : {}),
         tools: [...mcpTools, ...bucketMcpTools],
+        apps: [...backendApps.values()],
         allowedOrigins: options.allowedOrigins,
         browserCors: agentOptions.browserCors ?? Boolean(oauth),
         maxRequestBytes,
@@ -2049,6 +2084,15 @@ export async function openBackend<
         serverVersion: mcpManifest!.server.version,
         endpoint: `${origin}${mcpPath}`,
         authentication: oauth ? "oauth2" : "none",
+        ...(mcpManifest!.apps.length > 0 ? {
+          extensions: {
+            [MCP_APPS_EXTENSION_ID]: {
+              protocolVersion: MCP_APPS_PROTOCOL_VERSION,
+              mimeTypes: [MCP_APP_MIME_TYPE],
+              resources: mcpManifest!.apps.map((app) => app.uri),
+            },
+          },
+        } : {}),
         ...(oauth ? { accessManagement: `${origin}${oauth.grantManagementPath}` } : {}),
       },
       documentation: {
@@ -2058,6 +2102,9 @@ export async function openBackend<
           : {}),
         ...(agentWorkflowContract.length > 0
           ? { workflows: "Read clank://actions metadata.workflows for durable graph schemas and dependencies." }
+          : {}),
+        ...(mcpManifest!.apps.length > 0
+          ? { apps: "MCP Apps hosts render tool results from the declared ui:// resources." }
           : {}),
       },
     }, {
@@ -2331,6 +2378,32 @@ function validateBackendAgentMetadata(
   backendAgentText(description, "agent.description", 16 * 1024);
   if (options.version !== undefined) backendAgentText(options.version, "agent.version", 128);
   if (options.instructions !== undefined) backendAgentText(options.instructions, "agent.instructions", 16 * 1024);
+}
+
+function backendMcpAppBinding(
+  value: NonNullable<BackendAgentOptions["app"]>,
+  path: string,
+): {
+  resource: Readonly<McpAppDefinition>;
+  tool: { resourceUri: `ui://${string}`; visibility?: readonly McpAppVisibility[] };
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`Backend function ${path} agent app must be an MCP app definition or binding.`);
+  }
+  const wrapped = !Object.hasOwn(value, "uri") && Object.hasOwn(value, "resource");
+  const resource = defineMcpApp(wrapped
+    ? (value as { resource: McpAppDefinition }).resource
+    : value as McpAppDefinition);
+  const visibility = wrapped
+    ? (value as { visibility?: readonly McpAppVisibility[] }).visibility
+    : undefined;
+  return {
+    resource,
+    tool: {
+      resourceUri: resource.uri,
+      ...(visibility === undefined ? {} : { visibility: Object.freeze([...visibility]) }),
+    },
+  };
 }
 
 function backendAgentText(value: string, name: string, maxLength: number): void {

@@ -25,9 +25,10 @@ const platformDirectory = join(root, "platform");
 const cliHome = join(root, "cli-home");
 const password = "correct horse battery staple";
 let platformProcess;
+let mcpAppProcess;
 
 try {
-  console.log("1/9 Packing Clank...");
+  console.log("1/10 Packing Clank...");
   await mkdir(packageDirectory, { recursive: true });
   const packed = await command("npm", [
     "pack",
@@ -39,7 +40,7 @@ try {
   assert.equal(packResult.length, 1);
   const tarball = join(packageDirectory, packResult[0].filename);
 
-  console.log("2/9 Installing the packed release into a clean tool consumer...");
+  console.log("2/10 Installing the packed release into a clean tool consumer...");
   await mkdir(toolsDirectory, { recursive: true });
   await writeFile(join(toolsDirectory, "package.json"), JSON.stringify({
     private: true,
@@ -59,7 +60,63 @@ try {
     publishedPackageDirectory("scripts", "clank-platform.mjs"),
   );
 
-  console.log("3/9 Generating and installing an authenticated app from its AI blueprint...");
+  console.log("3/10 Negotiating a UI resource from the packed MCP App example...");
+  const mcpAppPort = await freePort();
+  const mcpAppUrl = `http://127.0.0.1:${mcpAppPort}`;
+  const packagedMcpApp = join(toolsDirectory, "packaged-mcp-app.mjs");
+  await writeFile(packagedMcpApp, `
+import { createApp, createMcpServer, defineMcpApp, serve } from ${JSON.stringify(publishedPackageName)};
+import { createMcpAppDocument } from ${JSON.stringify(`${publishedPackageName}/mcp-app`)};
+
+const view = defineMcpApp({
+  uri: "ui://clank-example/status",
+  name: "clank_status",
+  title: "Clank service status",
+  prefersBorder: true,
+  html: createMcpAppDocument({
+    title: "Clank status",
+    body: "<main><h1>Clank status</h1></main>",
+    script: "globalThis.ClankMcpApp.createMcpAppClient({name:'packaged-view'});",
+  }),
+});
+const mcp = createMcpServer({
+  name: "clank-packaged-mcp-app",
+  browserCors: true,
+  apps: [view],
+  tools: [{
+    name: "system.status",
+    description: "Read the packaged conformance status.",
+    inputSchema: { type: "object", additionalProperties: false },
+    outputSchema: {
+      type: "object",
+      properties: { ok: { type: "boolean" } },
+      required: ["ok"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+    app: { resourceUri: view.uri, visibility: ["model", "app"] },
+    invoke: () => ({ ok: true }),
+  }],
+});
+const app = createApp().route("*", "/mcp", ({ request }) => mcp.handle(request));
+const server = await serve(app, { hostname: "127.0.0.1", port: Number(process.env.PORT) });
+console.log(\`Clank MCP App example: \${server.url}/mcp\`);
+`);
+  mcpAppProcess = spawn(process.execPath, [
+    "--disable-warning=ExperimentalWarning",
+    packagedMcpApp,
+  ], {
+    cwd: toolsDirectory,
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(mcpAppPort) },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const mcpAppOutput = capture(mcpAppProcess);
+  await mcpAppOutput.waitFor("Clank MCP App example:");
+  await verifyPackagedMcpApp(mcpAppUrl);
+  await stop(mcpAppProcess);
+  mcpAppProcess = undefined;
+
+  console.log("4/10 Generating and installing an authenticated app from its AI blueprint...");
   const blueprint = join(
     toolsDirectory,
     publishedPackageDirectory("examples", "blueprint-todo", "clank.app.ts"),
@@ -83,7 +140,7 @@ try {
   );
   await clank(applicationCli, ["build", "src", "dist"], { cwd: applicationDirectory });
 
-  console.log("4/9 Starting the packaged control plane and authorizing the packaged CLI...");
+  console.log("5/10 Starting the packaged control plane and authorizing the packaged CLI...");
   const platformPort = await freePort();
   const appPort = await freePort();
   const platformUrl = `http://127.0.0.1:${platformPort}`;
@@ -129,13 +186,13 @@ try {
   await successfulExit(login, loginOutput);
   assert.match(loginOutput.stdout, /Authenticated with/);
 
-  console.log("5/9 Deploying the generated app through the packaged CLI...");
+  console.log("6/10 Deploying the generated app through the packaged CLI...");
   const firstDeploy = await clank(applicationCli, ["deploy"], { cwd: applicationDirectory });
   const firstRelease = captureValue(firstDeploy.stdout, /Deployed release (\S+)/);
   const applicationUrl = captureValue(firstDeploy.stdout, /URL: (https?:\/\/\S+)/);
   await waitFor(async () => (await fetch(`${applicationUrl}/healthz`)).ok);
 
-  console.log("6/9 Verifying browser auth, agent OAuth, isolation, and live synchronization...");
+  console.log("7/10 Verifying browser auth, agent OAuth, isolation, and live synchronization...");
   const firstBrowser = await auth(applicationUrl, "register", {
     email: "person@conformance.test",
     password,
@@ -173,7 +230,7 @@ try {
   await live.close();
   liveAbort.abort();
 
-  console.log("7/9 Applying an immutable migration in a second release...");
+  console.log("8/10 Applying an immutable migration in a second release...");
   await writeFile(join(applicationDirectory, "migrations", "0002_conformance_markers.sql"), `
 CREATE TABLE conformance_markers (
   id INTEGER PRIMARY KEY,
@@ -214,7 +271,7 @@ CREATE TABLE conformance_markers (
   );
   database.close();
 
-  console.log("8/9 Forcing a failed health activation and verifying the prior release survives...");
+  console.log("9/10 Forcing a failed health activation and verifying the prior release survives...");
   const configPath = join(applicationDirectory, "clank.deploy.json");
   const deployConfig = JSON.parse(await readFile(configPath, "utf8"));
   deployConfig.health.path = "/healthz-does-not-exist";
@@ -230,7 +287,7 @@ CREATE TABLE conformance_markers (
     ["Before migration", "After migration"],
   );
 
-  console.log("9/9 Restoring the first release and its pre-migration data...");
+  console.log("10/10 Restoring the first release and its pre-migration data...");
   deployConfig.health.path = "/healthz";
   deployConfig.health.timeoutMs = 15_000;
   await writeFile(configPath, `${JSON.stringify(deployConfig, null, 2)}\n`);
@@ -257,8 +314,9 @@ CREATE TABLE conformance_markers (
   );
   database.close();
 
-  console.log("Clank conformance passed: packed consumer, browser and agent auth, MCP actions, live sync, isolation, deploy, migration, failed activation, rollback, and data restore.");
+  console.log("Clank conformance passed: packed MCP Apps, browser and agent auth, MCP actions, live sync, isolation, deploy, migration, failed activation, rollback, and data restore.");
 } finally {
+  if (mcpAppProcess) await stop(mcpAppProcess);
   if (platformProcess) await stop(platformProcess);
   await rm(root, { recursive: true, force: true });
 }
@@ -547,6 +605,67 @@ async function verifyAgentProtocol(origin, session) {
   assert.equal(removed.isError, false);
 }
 
+async function verifyPackagedMcpApp(origin) {
+  const endpoint = `${origin}/mcp`;
+  const extensionId = "io.modelcontextprotocol/ui";
+  const mimeType = "text/html;profile=mcp-app";
+  let id = 0;
+  const mcp = async (method, params = {}, supportsApps = true) => {
+    const requestParams = {
+      ...params,
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { name: "clank-packaged-apps", version: "1.0.0" },
+        "io.modelcontextprotocol/clientCapabilities": supportsApps
+          ? { extensions: { [extensionId]: { mimeTypes: [mimeType] } } }
+          : {},
+      },
+    };
+    const name = method === "resources/read"
+      ? requestParams.uri
+      : method === "tools/call"
+        ? requestParams.name
+        : undefined;
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": method,
+        ...(typeof name === "string" ? { "mcp-name": name } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params: requestParams }),
+    });
+    const payload = await response.json();
+    assert.equal(response.ok, true, JSON.stringify(payload));
+    assert.equal(payload.error, undefined, JSON.stringify(payload));
+    return payload.result;
+  };
+
+  const tools = await mcp("tools/list");
+  assert.equal(tools.tools.length, 1);
+  assert.equal(tools.tools[0].name, "system_status");
+  assert.equal(tools.tools[0]._meta.ui.resourceUri, "ui://clank-example/status");
+  assert.deepEqual(tools.tools[0]._meta.ui.visibility, ["model", "app"]);
+
+  const plainTools = await mcp("tools/list", {}, false);
+  assert.equal(plainTools.tools[0]._meta?.ui, undefined);
+
+  const resources = await mcp("resources/list");
+  const resource = resources.resources.find((entry) => entry.uri === "ui://clank-example/status");
+  assert.equal(resource.mimeType, mimeType);
+  const read = await mcp("resources/read", { uri: resource.uri });
+  assert.equal(read.contents.length, 1);
+  assert.equal(read.contents[0].mimeType, mimeType);
+  assert.match(read.contents[0].text, /^<!doctype html>/u);
+  assert.match(read.contents[0].text, /globalThis\.ClankMcpApp/u);
+
+  const called = await mcp("tools/call", { name: "system_status", arguments: {} });
+  assert.equal(called.isError, false);
+  assert.equal(called.structuredContent.ok, true);
+}
+
 function sse(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -619,15 +738,17 @@ async function freePort() {
 }
 
 async function stop(child) {
-  if (child.exitCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
-  await Promise.race([
-    once(child, "exit"),
-    new Promise((resolvePromise) => setTimeout(resolvePromise, 5_000)),
-  ]);
-  if (child.exitCode === null) {
+  const deadline = Date.now() + 5_000;
+  while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) {
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  if (child.exitCode === null && child.signalCode === null) {
     child.kill("SIGKILL");
-    await once(child, "exit");
+    while (child.exitCode === null && child.signalCode === null) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    }
   }
 }
 

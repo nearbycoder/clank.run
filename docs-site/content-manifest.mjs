@@ -56,6 +56,7 @@ export const groups = [
     description: "Deterministic blueprints, authenticated application actions, and contracts that make applications legible to agents.",
     entries: [
       ["per-app-mcp", "docs/per-app-mcp.md"],
+      ["mcp-apps", "docs/mcp-apps.md"],
       ["agent-protocol", "docs/agent-protocol.md"],
       ["agent-access", "docs/agent-access.md"],
       ["conversational-build", "docs/conversational-build.md"],
