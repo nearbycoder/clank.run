@@ -4,6 +4,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.18.2 - 2026-08-10
+
+- Fixed hosted MCP authorization for sandbox-inherited browser popups. OAuth now performs one
+  same-site session recheck to recover legacy Strict cookies, authenticated session checks reissue
+  cookies under the current policy, and password login narrowly accepts a user-activated opaque
+  same-origin top-level form navigation. Cross-site, iframe, scripted, JSON, and unbounded-return
+  requests remain rejected.
+
 ## 0.18.1 - 2026-08-10
 
 - Fixed remote browser MCP authorization by making application sessions available to secure

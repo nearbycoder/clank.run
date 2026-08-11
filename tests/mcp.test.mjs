@@ -464,7 +464,7 @@ test("OAuth sign-in form returns to consent without a separate application tab",
       description: "Manage private todos.",
     },
   });
-  await registerUser(runtime);
+  const existingSession = await registerUser(runtime);
   const client = await registerClient(runtime);
   const requestParameters = {
     client_id: client.client_id,
@@ -477,7 +477,21 @@ test("OAuth sign-in form returns to consent without a separate application tab",
     resource,
   };
   const authorizeUrl = `/__clank/oauth/authorize?${new URLSearchParams(requestParameters)}`;
-  const signIn = await runtime.handle(new Request(`${origin}${authorizeUrl}`));
+  const firstEntry = await runtime.handle(new Request(`${origin}${authorizeUrl}`));
+  assert.equal(firstEntry.status, 200);
+  const firstEntryHtml = await firstEntry.text();
+  assert.match(firstEntryHtml, /Checking sign-in/u);
+  assert.match(firstEntryHtml, /http-equiv="refresh"/u);
+  assert.match(firstEntryHtml, /clank_login_recheck=1/u);
+
+  const recheckUrl = `${authorizeUrl}&clank_login_recheck=1`;
+  const recoveredSession = await runtime.handle(new Request(`${origin}${recheckUrl}`, {
+    headers: { cookie: existingSession.cookie },
+  }));
+  assert.equal(recoveredSession.status, 200);
+  assert.match(await recoveredSession.text(), /Connect Test MCP client/u);
+
+  const signIn = await runtime.handle(new Request(`${origin}${recheckUrl}`));
   assert.equal(signIn.status, 200);
   const signInHtml = await signIn.text();
   assert.match(signInHtml, /Sign in and continue/u);
@@ -495,11 +509,49 @@ test("OAuth sign-in form returns to consent without a separate application tab",
   assert.equal(crossOrigin.status, 403);
   assert.equal(crossOrigin.headers.get("set-cookie"), null);
 
+  const opaqueNavigation = {
+    origin: "null",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-dest": "document",
+    "sec-fetch-user": "?1",
+  };
+  for (const unsafeHeaders of [
+    { ...opaqueNavigation, "sec-fetch-site": "cross-site" },
+    { ...opaqueNavigation, "sec-fetch-mode": "cors" },
+    { ...opaqueNavigation, "sec-fetch-dest": "iframe" },
+    { ...opaqueNavigation, "sec-fetch-user": "?0" },
+  ]) {
+    const unsafe = await runtime.handle(formRequest("/__clank/auth/login", {
+      email: "agent@example.com",
+      password: "correct horse battery staple",
+      return_to: decodedReturnTo,
+    }, unsafeHeaders));
+    assert.equal(unsafe.status, 403);
+    assert.equal(unsafe.headers.get("set-cookie"), null);
+  }
+
+  const opaqueLogin = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+  }, opaqueNavigation));
+  assert.equal(opaqueLogin.status, 303);
+  assert.equal(opaqueLogin.headers.get("location"), `${origin}${authorizeUrl}`);
+  assert.match(opaqueLogin.headers.get("set-cookie"), /^__Host-clank-id=/);
+
+  const opaqueJson = await runtime.handle(jsonRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+  }, opaqueNavigation));
+  assert.equal(opaqueJson.status, 403);
+  assert.equal(opaqueJson.headers.get("set-cookie"), null);
+
   const openRedirect = await runtime.handle(formRequest("/__clank/auth/login", {
     email: "agent@example.com",
     password: "correct horse battery staple",
     return_to: "https://attacker.test/callback",
-  }, { origin }));
+  }, opaqueNavigation));
   assert.equal(openRedirect.status, 422);
   assert.equal(openRedirect.headers.get("set-cookie"), null);
 

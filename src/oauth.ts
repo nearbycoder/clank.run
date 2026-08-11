@@ -345,6 +345,11 @@ async function authorize<Profile extends object>(
     if (!auth.user) {
       if (request.method === "POST") throw new OAuthRequestError("access_denied", "Sign in before approving agent access.", 401);
       const authError = typeof input.auth_error === "string" ? input.auth_error : undefined;
+      if (input.clank_login_recheck !== "1" && authError === undefined) {
+        const target = new URL(request.url);
+        target.searchParams.set("clank_login_recheck", "1");
+        return authorizationHtml(sameSiteLoginRecheckPage(target.href));
+      }
       return authorizationHtml(signInPage(
         parameters,
         options.applicationName,
@@ -1092,10 +1097,20 @@ function errorPage(error: unknown): string {
   );
 }
 
-function pageShell(title: string, body: string): string {
+function sameSiteLoginRecheckPage(target: string): string {
+  const escapedTarget = escapeAttribute(target);
+  return pageShell(
+    "Checking sign-in",
+    `<p>Checking for an existing application session…</p>
+    <p class="meta"><a href="${escapedTarget}">Continue if this page does not advance</a></p>`,
+    `<meta http-equiv="refresh" content="0;url=${escapedTarget}">`,
+  );
+}
+
+function pageShell(title: string, body: string, head = ""): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>${title}</title><style>
+  ${head}<title>${title}</title><style>
   :root{color-scheme:light dark;font:16px/1.55 system-ui,sans-serif}
   body{margin:0;background:#080b12;color:#e8edf7;min-height:100vh;display:grid;place-items:center}
   main{width:min(38rem,calc(100% - 2rem));box-sizing:border-box;padding:2rem;border:1px solid #273249;border-radius:1rem;background:#101724}

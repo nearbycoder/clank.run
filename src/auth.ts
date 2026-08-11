@@ -375,6 +375,12 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     if (closed) throw new Error("Auth runtime is closed.");
   };
 
+  const requestSessionToken = (request: Request): string | undefined => {
+    const cookieHeader = request.headers.get("cookie");
+    return cookieValue(cookieHeader, cookieName(definition, request))
+      ?? (definition.cookie.name ? undefined : cookieValue(cookieHeader, legacyCookieName(definition, request)));
+  };
+
   const notifySession = (id: string) => {
     for (const listener of [...(sessionListeners.get(id) ?? [])]) {
       try { listener(); } catch (error) { reportError(error); }
@@ -538,9 +544,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
 
   const resolve = async (request: Request): Promise<AuthRequest<Profile>> => {
     ensureOpen();
-    const cookieHeader = request.headers.get("cookie");
-    const token = cookieValue(cookieHeader, cookieName(definition, request))
-      ?? (definition.cookie.name ? undefined : cookieValue(cookieHeader, legacyCookieName(definition, request)));
+    const token = requestSessionToken(request);
     if (!token) return anonymousAuth();
     const tokenHash = await digest(token);
     const row = sessionRow(internal, tokenHash);
@@ -655,7 +659,15 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
       try {
         if (request.method === "GET" && operation === "session") {
           const auth = await resolve(request);
-          return authJson({ ok: true, user: auth.user, session: auth.session, csrfToken: auth.csrfToken });
+          const response = authJson({ ok: true, user: auth.user, session: auth.session, csrfToken: auth.csrfToken });
+          const rawToken = requestSessionToken(request);
+          if (auth.session && rawToken) {
+            response.headers.append(
+              "set-cookie",
+              serializeSessionCookie(definition, request, rawToken, auth.session.expiresAt),
+            );
+          }
+          return response;
         }
         if (request.method === "GET" && operation === "passkeys") {
           if (!definition.passkeys.enabled) throw new AuthError("PASSKEYS_DISABLED", "Passkeys are disabled.", 404);
@@ -669,7 +681,10 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           });
         }
         if (request.method !== "POST") return authProblem(405, "METHOD_NOT_ALLOWED", "Method not allowed.", undefined, { allow: "GET, POST" });
-        if (!requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins })) {
+        if (
+          !requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins })
+          && !opaqueBrowserLoginNavigationAllowed(request, operation)
+        ) {
           throw new AuthError("ORIGIN_MISMATCH", "Cross-origin auth request rejected.", 403);
         }
         if (operation === "register") {
@@ -1939,6 +1954,20 @@ function authProblem(
   const headers = authHeaders(extraHeaders);
   if (retryAfter !== undefined) headers.set("retry-after", String(retryAfter));
   return Response.json({ ok: false, error: { code, message } }, { status, headers });
+}
+
+function opaqueBrowserLoginNavigationAllowed(request: Request, operation: string): boolean {
+  if (operation !== "login") return false;
+  const mediaType = request.headers.get("content-type")
+    ?.split(";", 1)[0]
+    ?.trim()
+    .toLowerCase();
+  return mediaType === "application/x-www-form-urlencoded"
+    && request.headers.get("origin") === "null"
+    && request.headers.get("sec-fetch-site") === "same-origin"
+    && request.headers.get("sec-fetch-mode") === "navigate"
+    && request.headers.get("sec-fetch-dest") === "document"
+    && request.headers.get("sec-fetch-user") === "?1";
 }
 
 function authHeaders(input?: HeadersInit): Headers {
