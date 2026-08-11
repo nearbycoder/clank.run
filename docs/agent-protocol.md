@@ -205,6 +205,10 @@ endpoint. The agent never receives the password, browser cookie, CSRF token, or 
 session. Application sessions default to `SameSite=Lax`, so a top-level authorization navigation
 from a hosted client recognizes an existing login; the cookie is still withheld from cross-site
 POST requests, and every application mutation retains exact Origin and session-bound CSRF checks.
+Session checks reissue existing cookies under the current policy, so sessions minted before the
+`Lax` default are upgraded after an authenticated application visit. Authorization also performs
+one same-site recheck before rendering login, allowing a legacy Strict cookie suppressed on the
+initial hosted-client launch to be recognized without looping or changing OAuth parameters.
 
 ### Connect from Codex
 
@@ -334,8 +338,10 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
   authorization request. The proof is stored only as a digest and consumed atomically, so opaque
   extension origins cannot break consent and cross-site forgery cannot replay it.
 - Signed-out password users can authenticate through a same-origin form that accepts only a
-  bounded relative return path. The existing Origin and Fetch Metadata checks, credential rate
-  limits, secure session cookie, and generic credential failures remain in force.
+  bounded relative return path. Sandboxed hosted clients may give that page an opaque origin;
+  Clank permits only a user-activated, same-origin, top-level form navigation and rejects
+  cross-site, iframe, scripted, JSON, or unbounded-return variants. Credential rate limits, secure
+  session cookies, and generic credential failures remain in force.
 - Redirect URIs must be exact registered HTTPS URLs or HTTP loopback URLs; fragments and embedded
   credentials are rejected. Dynamic registrations are classified as `native` or `web`, and web
   clients cannot register an HTTP loopback callback.
