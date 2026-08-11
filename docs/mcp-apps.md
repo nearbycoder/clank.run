@@ -12,7 +12,7 @@ It provides:
 - `defineMcpApp()` for validated immutable HTML resources;
 - `createMcpAppDocument()` for a standalone HTML5 view with the bridge runtime inlined;
 - `agent.app` for binding one shared view to backend queries and mutations;
-- negotiated `_meta.ui.resourceUri` and visibility metadata in `tools/list`;
+- durable `_meta.ui.resourceUri` metadata on model-visible tools plus negotiated app-only tools;
 - exact `text/html;profile=mcp-app` resources through `resources/list` and `resources/read`;
 - CSP, browser-permission, dedicated-domain, and border-preference declarations; and
 - `createMcpAppClient()` for tool calls, resource reads, host context, theming, display modes,
@@ -193,6 +193,12 @@ resources/read { uri: "ui://todos/board" }
 Changing the HTML, policy, resource metadata, binding, or visibility changes the deterministic MCP
 contract revision. Hosts therefore do not retain a stale view while backend actions move forward.
 
+The `resourceUri` link remains on every model-visible tool descriptor even when a capable host does
+not advertise the MCP Apps extension on each stateless request. This compatibility behavior lets
+Codex and other strict stateless clients attach the view to the tool result automatically; clients
+that do not understand MCP Apps safely ignore the unknown `_meta.ui` field. Capability negotiation
+still controls whether app-only actions are included in `tools/list` or accepted by `tools/call`.
+
 ## App-only actions
 
 An embedded view sometimes needs an implementation action that should not enter the model's tool
@@ -213,7 +219,8 @@ refresh: query({
 ```
 
 MCP Apps hosts can proxy this action for the view. Clients that did not negotiate the UI extension
-do not see app-only tools. Ordinary tools default to both model and app visibility.
+do not see app-only tools. Ordinary tools default to both model and app visibility, and retain their
+resource link so hosts with incomplete stateless capability signaling can still render the view.
 
 Visibility controls discovery and host presentation; it is not an authorization boundary. Keep
 sensitive operations behind normal Clank authentication and `agent:read` or `agent:write` scope

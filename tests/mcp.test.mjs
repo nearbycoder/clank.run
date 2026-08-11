@@ -862,7 +862,7 @@ test("MCP tool names use portable underscore identifiers with bounded collision 
   server.close();
 });
 
-test("MCP Apps expose negotiated tool metadata and auditable ui resources", async () => {
+test("MCP Apps preserve model-visible ui metadata and expose negotiated app-only tools", async () => {
   const board = defineMcpApp({
     uri: "ui://todos/board",
     name: "todo_board",
@@ -937,7 +937,10 @@ test("MCP Apps expose negotiated tool metadata and auditable ui resources", asyn
   const plainSession = await initialize({});
   const plainTools = await call(plainSession, "tools/list");
   assert.deepEqual(plainTools.tools.map((tool) => tool.name), ["todos_list"]);
-  assert.equal(plainTools.tools[0]._meta.ui, undefined);
+  assert.deepEqual(plainTools.tools[0]._meta.ui, {
+    resourceUri: board.uri,
+    visibility: ["model", "app"],
+  });
   const hiddenCall = await call(plainSession, "tools/call", {
     name: "todos_refresh",
     arguments: { value: "hidden" },
@@ -1481,6 +1484,17 @@ test("backend actions bind shared MCP Apps views without manual resource plumbin
     const content = (await read.json()).result.contents[0];
     assert.equal(content.text, dashboard.html);
     assert.equal(content._meta.ui.prefersBorder, false);
+
+    const statelessPlain = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/list",
+      params: {},
+    }));
+    assert.equal(statelessPlain.status, 200);
+    const statelessTools = (await statelessPlain.json()).result.tools;
+    assert.deepEqual(statelessTools.map((tool) => tool.name), ["reports_summary"]);
+    assert.equal(statelessTools[0]._meta.ui.resourceUri, dashboard.uri);
   } finally {
     runtime.close();
   }

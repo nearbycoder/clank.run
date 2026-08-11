@@ -4,6 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Preserved MCP Apps `_meta.ui.resourceUri` metadata on model-visible tools even when stateless
+  clients omit the per-request UI capability hint. Codex and other MCP hosts can now associate an
+  already-published `ui://` resource with its tool result instead of treating the resource as a
+  separately read attachment; app-only tools remain hidden and uncallable until UI support is
+  negotiated.
+
 ## 0.19.0 - 2026-08-10
 
 - Added first-class support for the stable MCP Apps `2026-01-26` extension. Backend queries and

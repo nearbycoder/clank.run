@@ -141,10 +141,12 @@ conservative safety hint; mark additive or reversible writes with `destructive: 
 Annotations help the MCP client decide when to ask for confirmation, but server authorization
 never trusts an annotation.
 
-When `app` is present and the host negotiates `io.modelcontextprotocol/ui`, `tools/list` adds
-`_meta.ui`, and `resources/read` serves the matching `ui://` document with the exact
-`text/html;profile=mcp-app` MIME type. Plain clients receive the same meaningful text and
-structured result without UI metadata. See [Interactive MCP Apps](mcp-apps.md).
+When `app` is present, model-visible tools retain `_meta.ui` so stateless hosts such as Codex can
+attach the matching `ui://` document even if they omit a per-request extension hint.
+`resources/read` serves that document with the exact `text/html;profile=mcp-app` MIME type.
+Clients without MCP Apps support safely ignore the metadata and receive the same meaningful text
+and structured result. Negotiation is still required to discover or call app-only tools. See
+[Interactive MCP Apps](mcp-apps.md).
 
 ## Application identity
 
