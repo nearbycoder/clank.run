@@ -498,6 +498,11 @@ test("OAuth sign-in form returns to consent without a separate application tab",
   assert.match(signInHtml, /action="\/__clank\/auth\/login"/u);
   assert.doesNotMatch(signInHtml, /I’m signed in — continue/u);
   const returnTo = hiddenInput(signInHtml, "return_to");
+  const loginProof = hiddenInput(signInHtml, "login_proof");
+  const loginProofCookie = signIn.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.match(loginProof, /^clank_login_[A-Za-z0-9_-]+$/u);
+  assert.match(loginProofCookie, /^__Host-clank-login-proof=/u);
+  assert.match(signIn.headers.get("set-cookie"), /SameSite=None/u);
   assert.equal(returnTo, authorizeUrl.replaceAll("&", "&amp;"));
   const decodedReturnTo = returnTo.replaceAll("&amp;", "&");
 
@@ -531,14 +536,48 @@ test("OAuth sign-in form returns to consent without a separate application tab",
     assert.equal(unsafe.headers.get("set-cookie"), null);
   }
 
+  const forgedProof = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+    login_proof: `clank_login_${"A".repeat(32)}`,
+  }, { cookie: loginProofCookie, origin: "null" }));
+  assert.equal(forgedProof.status, 403);
+
+  const wrongBrowser = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+    login_proof: loginProof,
+  }, { cookie: "__Host-clank-login-proof=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", origin: "null" }));
+  assert.equal(wrongBrowser.status, 403);
+
+  const changedReturn = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: `${decodedReturnTo}&auth_error=changed`,
+    login_proof: loginProof,
+  }, { cookie: loginProofCookie, origin: "null" }));
+  assert.equal(changedReturn.status, 403);
+
   const opaqueLogin = await runtime.handle(formRequest("/__clank/auth/login", {
     email: "agent@example.com",
     password: "correct horse battery staple",
     return_to: decodedReturnTo,
-  }, opaqueNavigation));
+    login_proof: loginProof,
+  }, { cookie: loginProofCookie, origin: "null" }));
   assert.equal(opaqueLogin.status, 303);
   assert.equal(opaqueLogin.headers.get("location"), `${origin}${authorizeUrl}`);
   assert.match(opaqueLogin.headers.get("set-cookie"), /^__Host-clank-id=/);
+
+  const replayedProof = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+    login_proof: loginProof,
+  }, { cookie: loginProofCookie, origin: "null" }));
+  assert.equal(replayedProof.status, 403);
+  assert.equal(replayedProof.headers.get("set-cookie"), null);
 
   const opaqueJson = await runtime.handle(jsonRequest("/__clank/auth/login", {
     email: "agent@example.com",

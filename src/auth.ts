@@ -333,6 +333,8 @@ export interface AuthRuntime<Profile extends object = DefaultAuthProfile> {
   disableUser(userId: AuthUserId, disabled?: boolean): void;
   revokeUserSessions(userId: AuthUserId): void;
   verifyCsrf(request: Request, auth: AuthRequest<Profile>): Promise<void>;
+  /** @internal Issues a browser-bound, one-time proof for an OAuth sign-in form. */
+  issueBrowserLoginProof(request: Request, returnTo: string): Promise<{ token: string; setCookie: string }>;
   isSessionActive(sessionId: string): boolean;
   refreshSession(sessionId: string): AuthRequest<Profile> | null;
   subscribeSession(sessionId: string, listener: () => void): () => void;
@@ -681,30 +683,33 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           });
         }
         if (request.method !== "POST") return authProblem(405, "METHOD_NOT_ALLOWED", "Method not allowed.", undefined, { allow: "GET, POST" });
-        if (
-          !requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins })
-          && !opaqueBrowserLoginNavigationAllowed(request, operation)
-        ) {
+        const browserForm = operation === "login"
+          && request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase()
+            === "application/x-www-form-urlencoded";
+        const browserInput = browserForm
+          ? await readAuthFormRequest(request, 16 * 1024)
+          : undefined;
+        const proposedBrowserReturn = browserInput
+          ? validateBrowserLoginReturn(browserInput.return_to, request)
+          : undefined;
+        const originAllowed = requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins });
+        const browserProofAllowed = !originAllowed
+          && browserInput
+          && proposedBrowserReturn
+          ? await consumeBrowserLoginProof(internal, request, proposedBrowserReturn, browserInput.login_proof)
+          : false;
+        if (!originAllowed && !browserProofAllowed) {
           throw new AuthError("ORIGIN_MISMATCH", "Cross-origin auth request rejected.", 403);
         }
+        browserLoginReturn = proposedBrowserReturn;
         if (operation === "register") {
           const result = await register(await readJsonRequest(request, 16 * 1024), request);
           return sessionResponse(definition, request, result.rawToken, result.auth, 201);
         }
         if (operation === "login") {
-          const browserForm = request.headers.get("content-type")
-            ?.split(";", 1)[0]
-            ?.trim()
-            .toLowerCase() === "application/x-www-form-urlencoded";
-          const input = browserForm
-            ? await readAuthFormRequest(request, 16 * 1024)
+          const input = browserInput
+            ? browserInput
             : await readJsonRequest(request, 16 * 1024);
-          if (browserForm) {
-            browserLoginReturn = validateBrowserLoginReturn(
-              (input as Record<string, unknown>).return_to,
-              request,
-            );
-          }
           const result = await login(input, request);
           if ("mfa" in result) return authJson({ ok: true, mfa: result.mfa }, { status: 202 });
           if (browserLoginReturn) {
@@ -1050,6 +1055,10 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
       if (!await timingSafeStringEqual(supplied, auth.csrfToken)) {
         throw new AuthError("INVALID_CSRF", "The request could not be verified.", 403);
       }
+    },
+    async issueBrowserLoginProof(request, returnTo) {
+      ensureOpen();
+      return issueBrowserLoginProof(internal, request, validateBrowserLoginReturn(returnTo, request));
     },
     isSessionActive(sessionId) {
       ensureOpen();
@@ -1465,6 +1474,14 @@ function createAuthTables(internal: SQLiteInternal): void {
     consumed_at INTEGER,
     created_at INTEGER NOT NULL
   )`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_auth_browser_login_proofs (
+    token_hash TEXT PRIMARY KEY,
+    browser_hash TEXT NOT NULL,
+    return_to_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    consumed_at INTEGER,
+    created_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
   internal.exec("DROP INDEX IF EXISTS proact_auth_sessions_user");
   internal.exec("DROP INDEX IF EXISTS proact_auth_sessions_expiry");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_auth_sessions_user ON clank_auth_sessions (user_id)");
@@ -1474,10 +1491,13 @@ function createAuthTables(internal: SQLiteInternal): void {
   internal.exec("CREATE INDEX IF NOT EXISTS clank_auth_mfa_expiry ON clank_auth_mfa_challenges (expires_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_auth_passkeys_user ON clank_auth_passkeys (user_id)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_auth_passkey_challenges_expiry ON clank_auth_passkey_challenges (expires_at)");
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_auth_browser_login_proofs_expiry ON clank_auth_browser_login_proofs (expires_at)");
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_auth_browser_login_proofs_browser ON clank_auth_browser_login_proofs (browser_hash, created_at)");
   internal.prepare("DELETE FROM clank_auth_sessions WHERE expires_at <= ? OR idle_expires_at <= ?").run(Date.now(), Date.now());
   internal.prepare("DELETE FROM clank_auth_tokens WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(Date.now());
   internal.prepare("DELETE FROM clank_auth_mfa_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(Date.now());
   internal.prepare("DELETE FROM clank_auth_passkey_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(Date.now());
+  internal.prepare("DELETE FROM clank_auth_browser_login_proofs WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(Date.now());
 }
 
 function sessionRow(internal: SQLiteInternal, tokenHash: string): Record<string, unknown> | undefined {
@@ -1956,18 +1976,92 @@ function authProblem(
   return Response.json({ ok: false, error: { code, message } }, { status, headers });
 }
 
-function opaqueBrowserLoginNavigationAllowed(request: Request, operation: string): boolean {
-  if (operation !== "login") return false;
-  const mediaType = request.headers.get("content-type")
-    ?.split(";", 1)[0]
-    ?.trim()
-    .toLowerCase();
-  return mediaType === "application/x-www-form-urlencoded"
-    && request.headers.get("origin") === "null"
-    && request.headers.get("sec-fetch-site") === "same-origin"
-    && request.headers.get("sec-fetch-mode") === "navigate"
-    && request.headers.get("sec-fetch-dest") === "document"
-    && request.headers.get("sec-fetch-user") === "?1";
+const BROWSER_LOGIN_PROOF_LIFETIME_MS = 5 * 60 * 1_000;
+const MAX_BROWSER_LOGIN_PROOFS = 5_000;
+const MAX_BROWSER_LOGIN_PROOFS_PER_BROWSER = 20;
+
+async function issueBrowserLoginProof(
+  internal: SQLiteInternal,
+  request: Request,
+  returnTo: URL,
+): Promise<{ token: string; setCookie: string }> {
+  const cookieName = browserLoginProofCookieName(request);
+  const suppliedBrowser = cookieValue(request.headers.get("cookie"), cookieName);
+  const browser = suppliedBrowser && /^[A-Za-z0-9_-]{32,128}$/u.test(suppliedBrowser)
+    ? suppliedBrowser
+    : await randomToken(24);
+  const token = `clank_login_${await randomToken(24)}`;
+  const tokenHash = await digest(token);
+  const browserHash = await digest(browser);
+  const returnToHash = await digest(browserLoginReturnBinding(returnTo));
+  const now = Date.now();
+  internal.transaction(() => {
+    internal.prepare("DELETE FROM clank_auth_browser_login_proofs WHERE expires_at <= ? OR consumed_at IS NOT NULL")
+      .run(now);
+    internal.prepare(`DELETE FROM clank_auth_browser_login_proofs WHERE token_hash IN (
+      SELECT token_hash FROM clank_auth_browser_login_proofs
+      WHERE browser_hash = ? ORDER BY created_at DESC LIMIT -1 OFFSET ?
+    )`).run(browserHash, MAX_BROWSER_LOGIN_PROOFS_PER_BROWSER - 1);
+    const count = Number(internal.prepare("SELECT COUNT(*) AS count FROM clank_auth_browser_login_proofs").get()?.count ?? 0);
+    if (count >= MAX_BROWSER_LOGIN_PROOFS) {
+      internal.prepare(`DELETE FROM clank_auth_browser_login_proofs WHERE token_hash IN (
+        SELECT token_hash FROM clank_auth_browser_login_proofs ORDER BY created_at ASC LIMIT ?
+      )`).run(count - MAX_BROWSER_LOGIN_PROOFS + 1);
+    }
+    internal.prepare(`INSERT INTO clank_auth_browser_login_proofs
+      (token_hash, browser_hash, return_to_hash, expires_at, consumed_at, created_at)
+      VALUES (?, ?, ?, ?, NULL, ?)`)
+      .run(tokenHash, browserHash, returnToHash, now + BROWSER_LOGIN_PROOF_LIFETIME_MS, now);
+  });
+  return {
+    token,
+    setCookie: serializeBrowserLoginProofCookie(request, browser, BROWSER_LOGIN_PROOF_LIFETIME_MS),
+  };
+}
+
+async function consumeBrowserLoginProof(
+  internal: SQLiteInternal,
+  request: Request,
+  returnTo: URL,
+  proof: unknown,
+): Promise<boolean> {
+  if (typeof proof !== "string" || !/^clank_login_[A-Za-z0-9_-]{32,128}$/u.test(proof)) return false;
+  const browser = cookieValue(request.headers.get("cookie"), browserLoginProofCookieName(request));
+  if (!browser || !/^[A-Za-z0-9_-]{32,128}$/u.test(browser)) return false;
+  const now = Date.now();
+  const result = internal.prepare(`UPDATE clank_auth_browser_login_proofs SET consumed_at = ?
+    WHERE token_hash = ? AND browser_hash = ? AND return_to_hash = ?
+      AND consumed_at IS NULL AND expires_at > ?`)
+    .run(
+      now,
+      await digest(proof),
+      await digest(browser),
+      await digest(browserLoginReturnBinding(returnTo)),
+      now,
+    );
+  return Number(result.changes) === 1;
+}
+
+function browserLoginReturnBinding(returnTo: URL): string {
+  return `${returnTo.pathname}${returnTo.search}`;
+}
+
+function browserLoginProofCookieName(request: Request): string {
+  return new URL(request.url).protocol === "https:"
+    ? "__Host-clank-login-proof"
+    : "clank-login-proof";
+}
+
+function serializeBrowserLoginProofCookie(request: Request, value: string, lifetimeMs: number): string {
+  const secure = new URL(request.url).protocol === "https:";
+  return [
+    `${browserLoginProofCookieName(request)}=${value}`,
+    "Path=/",
+    "HttpOnly",
+    `SameSite=${secure ? "None" : "Lax"}`,
+    `Max-Age=${Math.floor(lifetimeMs / 1_000)}`,
+    ...(secure ? ["Secure"] : []),
+  ].join("; ");
 }
 
 function authHeaders(input?: HeadersInit): Headers {

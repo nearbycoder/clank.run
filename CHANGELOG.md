@@ -4,6 +4,15 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.18.3 - 2026-08-10
+
+- Fixed hosted MCP sign-in behind proxies that normalize or remove browser Fetch Metadata. The
+  OAuth login page now issues a five-minute, one-time proof bound to both the exact authorization
+  return path and a private browser cookie. Cross-origin form login requires and atomically
+  consumes that proof, so MCPJam, Augment, and other sandboxed hosted clients work without trusting
+  fragile `Sec-Fetch-*` headers or weakening ordinary origin, JSON, redirect, expiry, and replay
+  protections.
+
 ## 0.18.2 - 2026-08-10
 
 - Fixed hosted MCP authorization for sandbox-inherited browser popups. OAuth now performs one

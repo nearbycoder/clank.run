@@ -338,10 +338,11 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
   authorization request. The proof is stored only as a digest and consumed atomically, so opaque
   extension origins cannot break consent and cross-site forgery cannot replay it.
 - Signed-out password users can authenticate through a same-origin form that accepts only a
-  bounded relative return path. Sandboxed hosted clients may give that page an opaque origin;
-  Clank permits only a user-activated, same-origin, top-level form navigation and rejects
-  cross-site, iframe, scripted, JSON, or unbounded-return variants. Credential rate limits, secure
-  session cookies, and generic credential failures remain in force.
+  bounded relative return path. A five-minute, one-time proof binds the exact authorization
+  request to a private browser cookie and is consumed atomically, allowing sandboxed hosted
+  clients to use opaque origins without trusting proxy-sensitive Fetch Metadata. Missing,
+  mismatched, expired, replayed, JSON, or unbounded-return requests fail closed. Credential rate
+  limits, secure session cookies, and generic credential failures remain in force.
 - Redirect URIs must be exact registered HTTPS URLs or HTTP loopback URLs; fragments and embedded
   credentials are rejected. Dynamic registrations are classified as `native` or `web`, and web
   clients cannot register an HTTP loopback callback.
