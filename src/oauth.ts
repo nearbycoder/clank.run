@@ -350,13 +350,20 @@ async function authorize<Profile extends object>(
         target.searchParams.set("clank_login_recheck", "1");
         return authorizationHtml(sameSiteLoginRecheckPage(target.href));
       }
+      const advancedLoginRequired = authRuntime.definition.mfa.required
+        || Boolean(authRuntime.definition.botProtection);
+      const retry = `${options.authorizePath}${authorizationRequestUrl(parameters)}`;
+      const loginProof = advancedLoginRequired
+        ? undefined
+        : await authRuntime.issueBrowserLoginProof(request, retry);
       return authorizationHtml(signInPage(
         parameters,
         options.applicationName,
         options.authorizePath,
-        authRuntime.definition.mfa.required || Boolean(authRuntime.definition.botProtection),
+        advancedLoginRequired,
+        loginProof?.token,
         authError,
-      ));
+      ), 200, undefined, loginProof?.setCookie);
     }
     if (authRuntime.definition.emailVerification.required) auth.requireVerified();
     if (request.method === "GET") {
@@ -989,6 +996,7 @@ function signInPage(
   applicationName: string,
   authorizePath: string,
   advancedLoginRequired: boolean,
+  loginProof?: string,
   authError?: string,
 ): string {
   const retry = `${authorizePath}${authorizationRequestUrl(parameters)}`;
@@ -1012,6 +1020,7 @@ function signInPage(
       : `<p>Sign in here to review and approve the requested permissions.</p>
         <form method="post" action="/__clank/auth/login">
           <input type="hidden" name="return_to" value="${escapeAttribute(retry)}">
+          <input type="hidden" name="login_proof" value="${escapeAttribute(loginProof ?? "")}">
           <label class="field">Email
             <input name="email" type="email" autocomplete="username" maxlength="254" required>
           </label>
@@ -1125,18 +1134,20 @@ function pageShell(title: string, body: string, head = ""): string {
   </style></head><body><main><h1>${title}</h1>${body}</main></body></html>`;
 }
 
-function authorizationHtml(value: string, status = 200, callbackOrigin?: string): Response {
+function authorizationHtml(value: string, status = 200, callbackOrigin?: string, setCookie?: string): Response {
   const formAction = callbackOrigin ? `'self' ${callbackOrigin}` : "'self'";
+  const headers = new Headers({
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+  });
+  if (setCookie) headers.append("set-cookie", setCookie);
   return new Response(value, {
     status,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
-      "referrer-policy": "no-referrer",
-      "x-content-type-options": "nosniff",
-      "x-frame-options": "DENY",
-    },
+    headers,
   });
 }
 

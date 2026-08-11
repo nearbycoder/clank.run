@@ -147,9 +147,11 @@ credential-free CORS preflight and response headers needed by browser transports
 application session uses `SameSite=Lax` so a top-level authorization launch can recognize an
 existing login. Authenticated session checks also upgrade cookies minted under the older Strict
 default, and the authorization page performs one same-site recheck so an existing Strict cookie
-can be recognized. Passwords are accepted only by a genuine same-origin Clank page; an opaque
-sandboxed popup must carry user-activated, same-origin, top-level navigation metadata. MCP calls
-never use the browser cookie: they require the explicit resource-bound bearer token.
+can be recognized. A sandboxed popup's password form carries a five-minute, one-time proof bound
+to its exact authorization return path and a private browser cookie. Clank atomically consumes the
+proof, so hosted proxies may normalize Fetch Metadata without turning opaque-origin login into a
+broad origin bypass. MCP calls never use the browser cookie: they require the explicit resource-
+bound bearer token.
 
 The agent never receives the user's password, browser session cookie, or CSRF token. A read grant
 can list and call queries. A write grant can also call mutations. Normal application checks still

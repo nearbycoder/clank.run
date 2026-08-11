@@ -108,13 +108,16 @@ required.
 
 When an MCP authorization page is signed out, ordinary password applications
 render a same-origin login form and return directly to consent after successful
-authentication. Form login uses the normal credential verifier and rate
-limits and accepts only a bounded relative return path. A sandboxed hosted MCP
-client can give this genuine same-origin page an opaque `Origin`. Clank accepts
-that case only for a user-activated, top-level, same-origin document navigation
-with a URL-encoded login form; cross-site, iframe, scripted, JSON, and arbitrary
-return requests remain rejected. MFA or bot-protected applications keep their
-full application sign-in flow because those policies require additional UI.
+authentication. Form login uses the normal credential verifier and rate limits
+and accepts only a bounded relative return path. The page also receives a random,
+five-minute login proof bound to that exact return path and a private `HttpOnly`,
+`Secure`, `SameSite=None` browser cookie. A cross-origin or opaque-origin form must
+present both values, and Clank consumes the stored proof digest atomically. This
+works through hosted-client sandboxes and proxies that normalize Fetch Metadata
+without trusting those headers alone. Forged, expired, replayed, JSON, unbounded-
+return, and browser-cookie-mismatched requests remain rejected. MFA or bot-
+protected applications keep their full application sign-in flow because those
+policies require additional UI.
 
 Successful `GET /__clank/auth/session` checks reissue the existing session token
 under the application's current cookie policy. This transparently upgrades a
