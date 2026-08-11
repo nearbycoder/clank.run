@@ -806,7 +806,7 @@ async function dispatch<Context>(
     }
     const clientTools = visible.filter((tool) => supportsMcpApps || mcpToolModelVisible(tool));
     return {
-      tools: clientTools.map((tool) => mcpToolDescriptor(tool, supportsMcpApps)),
+      tools: clientTools.map((tool) => mcpToolDescriptor(tool)),
       ttlMs: 0,
       cacheScope: "private",
       _meta: {
@@ -911,10 +911,10 @@ async function dispatch<Context>(
   throw new RpcDispatchError(-32601, "Method not found.", 404);
 }
 
-function mcpToolDescriptor<Context>(tool: McpTool<Context>, supportsMcpApps = false): Record<string, unknown> {
+function mcpToolDescriptor<Context>(tool: McpTool<Context>): Record<string, unknown> {
   const meta = {
     ...(tool.actionPath ? { "clank/actionPath": tool.actionPath } : {}),
-    ...(supportsMcpApps && tool.app ? { ui: tool.app } : {}),
+    ...(tool.app ? { ui: tool.app } : {}),
   };
   return {
     name: tool.name,

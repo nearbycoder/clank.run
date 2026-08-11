@@ -650,7 +650,10 @@ async function verifyPackagedMcpApp(origin) {
   assert.deepEqual(tools.tools[0]._meta.ui.visibility, ["model", "app"]);
 
   const plainTools = await mcp("tools/list", {}, false);
-  assert.equal(plainTools.tools[0]._meta?.ui, undefined);
+  assert.deepEqual(plainTools.tools[0]._meta.ui, {
+    resourceUri: "ui://clank-example/status",
+    visibility: ["model", "app"],
+  });
 
   const resources = await mcp("resources/list");
   const resource = resources.resources.find((entry) => entry.uri === "ui://clank-example/status");
