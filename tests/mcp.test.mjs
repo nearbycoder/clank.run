@@ -7,10 +7,19 @@ import {
   defineDatabase,
   defineTable,
   createMcpServer,
+  defineMcpApp,
+  MCP_APP_MIME_TYPE,
+  MCP_APPS_EXTENSION_ID,
   openBackend,
   portableMcpToolNames,
   s,
 } from "../dist/index.js";
+
+const mcpAppsCapabilities = {
+  extensions: {
+    [MCP_APPS_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+  },
+};
 
 const origin = "https://todo.test";
 const resource = `${origin}/__clank/mcp`;
@@ -853,6 +862,152 @@ test("MCP tool names use portable underscore identifiers with bounded collision 
   server.close();
 });
 
+test("MCP Apps expose negotiated tool metadata and auditable ui resources", async () => {
+  const board = defineMcpApp({
+    uri: "ui://todos/board",
+    name: "todo_board",
+    title: "Todo board",
+    description: "Interactive todo board.",
+    html: "<!doctype html><html><head><title>Todos</title></head><body><main id=app></main></body></html>",
+    csp: {
+      connectDomains: ["https://api.example.com", "ws://localhost:8787"],
+      resourceDomains: ["https://cdn.example.com"],
+      frameDomains: [],
+      baseUriDomains: [],
+    },
+    permissions: { clipboardWrite: {} },
+    domain: "todos.claudemcpcontent.com",
+    prefersBorder: true,
+  });
+  const server = createMcpServer({
+    name: "mcp-apps-test",
+    apps: [board],
+    tools: [
+      testTool("todos.list", {
+        app: { resourceUri: board.uri, visibility: ["model", "app"] },
+      }),
+      testTool("todos.refresh", {
+        app: { resourceUri: board.uri, visibility: ["app"] },
+      }),
+    ],
+  });
+
+  const initialize = async (capabilities) => {
+    const response = await server.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities,
+        clientInfo: { name: "mcp-apps-test", version: "1.0.0" },
+      },
+    }));
+    assert.equal(response.status, 200);
+    return response.headers.get("mcp-session-id");
+  };
+  const call = async (session, method, params = {}) => {
+    const response = await server.handle(mcpRequest({ jsonrpc: "2.0", id: 2, method, params }, undefined, {
+      "mcp-session-id": session,
+    }));
+    assert.equal(response.status, 200);
+    return (await response.json()).result;
+  };
+
+  const appSession = await initialize(mcpAppsCapabilities);
+  const listed = await call(appSession, "tools/list");
+  assert.deepEqual(listed.tools.map((tool) => tool.name), ["todos_list", "todos_refresh"]);
+  assert.deepEqual(listed.tools[0]._meta.ui, {
+    resourceUri: board.uri,
+    visibility: ["model", "app"],
+  });
+  assert.deepEqual(listed.tools[1]._meta.ui.visibility, ["app"]);
+
+  const resources = await call(appSession, "resources/list");
+  const listedApp = resources.resources.find((entry) => entry.uri === board.uri);
+  assert.equal(listedApp.mimeType, MCP_APP_MIME_TYPE);
+  assert.equal(listedApp._meta.ui.prefersBorder, true);
+  assert.deepEqual(listedApp._meta.ui.permissions, { clipboardWrite: {} });
+  const resource = await call(appSession, "resources/read", { uri: board.uri });
+  assert.equal(resource.contents.length, 1);
+  assert.equal(resource.contents[0].mimeType, MCP_APP_MIME_TYPE);
+  assert.equal(resource.contents[0].text, board.html);
+  assert.deepEqual(resource.contents[0]._meta.ui.csp, board.csp);
+
+  const plainSession = await initialize({});
+  const plainTools = await call(plainSession, "tools/list");
+  assert.deepEqual(plainTools.tools.map((tool) => tool.name), ["todos_list"]);
+  assert.equal(plainTools.tools[0]._meta.ui, undefined);
+  const hiddenCall = await call(plainSession, "tools/call", {
+    name: "todos_refresh",
+    arguments: { value: "hidden" },
+  });
+  assert.equal(hiddenCall, undefined);
+
+  assert.equal(server.apps.get(board.uri), board);
+  assert.equal(server.manifest().apps[0].mimeType, MCP_APP_MIME_TYPE);
+  assert.equal(server.manifest().tools[0].app.resourceUri, board.uri);
+  server.close();
+});
+
+test("MCP App declarations fail closed for unsafe or stale contracts", () => {
+  const html = "<!doctype html><html><body>Safe</body></html>";
+  assert.throws(() => defineMcpApp(null), /object/u);
+  assert.throws(() => defineMcpApp({ uri: "https://bad.test/view", name: "bad", html }), /ui:\/\//u);
+  assert.throws(() => defineMcpApp({ uri: "ui://bad/extra", name: "bad", html, unexpected: true }), /unsupported field/u);
+  assert.throws(() => defineMcpApp({ uri: "ui://bad/view", name: "bad", html: "<main>fragment</main>" }), /HTML5 document/u);
+  assert.throws(() => defineMcpApp({
+    uri: "ui://bad/csp",
+    name: "bad",
+    html,
+    csp: { connectDomains: ["https://good.test/path"] },
+  }), /invalid origin|secure origins/u);
+  for (const origin of [
+    "https://user@good.test",
+    "https://good.test:99999",
+    "http://example.test",
+    "wss://*.example.test/path",
+  ]) {
+    assert.throws(() => defineMcpApp({
+      uri: `ui://bad/csp-${encodeURIComponent(origin)}`,
+      name: "bad",
+      html,
+      csp: { connectDomains: [origin] },
+    }), /invalid origin|secure origins/u);
+  }
+  assert.throws(() => defineMcpApp({
+    uri: "ui://bad/permissions",
+    name: "bad",
+    html,
+    permissions: { camera: { unexpected: true } },
+  }), /empty object/u);
+  assert.throws(() => createMcpServer({
+    name: "missing-app",
+    tools: [testTool("todos.list", { app: { resourceUri: "ui://missing/view" } })],
+  }), /unknown app resource/u);
+  const app = defineMcpApp({ uri: "ui://safe/view", name: "safe", html });
+  assert.throws(() => createMcpServer({
+    name: "bad-visibility",
+    apps: [app],
+    tools: [testTool("todos.list", { app: { resourceUri: app.uri, visibility: [] } })],
+  }), /visibility/u);
+  assert.throws(() => createMcpServer({
+    name: "bad-app-metadata",
+    apps: [app],
+    tools: [testTool("todos.list", { app: { resourceUri: app.uri, extra: true } })],
+  }), /unsupported field/u);
+
+  const first = createMcpServer({ name: "revision-app", apps: [app], tools: [] });
+  const changed = createMcpServer({
+    name: "revision-app",
+    apps: [defineMcpApp({ ...app, html: "<!doctype html><html><body>Changed</body></html>" })],
+    tools: [],
+  });
+  assert.notEqual(first.revision, changed.revision);
+  first.close();
+  changed.close();
+});
+
 test("MCP 2026-07-28 discovers and invokes tools without process-local sessions", async () => {
   const invoked = [];
   const options = {
@@ -1259,6 +1414,76 @@ test("backend functions become deterministic MCP tools with public discovery", a
   }));
   assert.equal(unauthorizedNotification.status, 401);
   runtime.close();
+});
+
+test("backend actions bind shared MCP Apps views without manual resource plumbing", async () => {
+  const dashboard = defineMcpApp({
+    uri: "ui://reports/dashboard",
+    name: "report_dashboard",
+    html: "<!doctype html><html><body><main id=dashboard></main></body></html>",
+    prefersBorder: false,
+  });
+  const schema = defineDatabase({
+    reports: defineTable({ title: s.string() }),
+  });
+  const definition = defineBackend({ schema }).functions(({ query }) => ({
+    reports: {
+      summary: query({
+        args: {},
+        returns: s.object({ total: s.number() }),
+        agent: { app: dashboard },
+        handler: ({ db }) => ({ total: db.table("reports").collect().length }),
+      }),
+      refresh: query({
+        args: {},
+        agent: { app: { resource: dashboard, visibility: ["app"] } },
+        handler: () => ({ refreshed: true }),
+      }),
+    },
+  }));
+  const runtime = await openBackend(definition, { path: ":memory:" });
+  try {
+    const discovery = await runtime.handle(new Request(`${origin}/.well-known/clank`));
+    const discoveryPayload = await discovery.json();
+    const extension = discoveryPayload.mcp.extensions[MCP_APPS_EXTENSION_ID];
+    assert.equal(extension.protocolVersion, "2026-01-26");
+    assert.deepEqual(extension.mimeTypes, [MCP_APP_MIME_TYPE]);
+    assert.deepEqual(extension.resources, [dashboard.uri]);
+
+    const initialized = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: mcpAppsCapabilities,
+        clientInfo: { name: "backend-app-test", version: "1.0.0" },
+      },
+    }));
+    assert.equal(initialized.status, 200);
+    const session = initialized.headers.get("mcp-session-id");
+    const listed = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: {},
+    }, undefined, { "mcp-session-id": session }));
+    const tools = (await listed.json()).result.tools;
+    assert.equal(tools.find((tool) => tool.name === "reports_summary")._meta.ui.resourceUri, dashboard.uri);
+    assert.deepEqual(tools.find((tool) => tool.name === "reports_refresh")._meta.ui.visibility, ["app"]);
+
+    const read = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "resources/read",
+      params: { uri: dashboard.uri },
+    }, undefined, { "mcp-session-id": session }));
+    const content = (await read.json()).result.contents[0];
+    assert.equal(content.text, dashboard.html);
+    assert.equal(content._meta.ui.prefersBorder, false);
+  } finally {
+    runtime.close();
+  }
 });
 
 test("standard public-client OAuth works without the Clank CLI or control plane", async () => {

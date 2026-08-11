@@ -4,6 +4,23 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.19.0 - 2026-08-10
+
+- Added first-class support for the stable MCP Apps `2026-01-26` extension. Backend queries and
+  mutations can bind immutable `ui://` HTML resources through `defineMcpApp()` and one `agent.app`
+  declaration; negotiated clients receive exact `text/html;profile=mcp-app` resources, UI tool
+  metadata, visibility, CSP, permission, domain, and border preferences. Application HTML and tool
+  bindings participate in the deterministic MCP revision so UI resources cannot silently drift
+  behind their server actions.
+- Added the dependency-free `@clank.run/framework/mcp-app` browser runtime and document builder for
+  host initialization, tool calls, resource reads, links, downloads, messages, model context,
+  display modes, size changes, lifecycle events, and safe theme-token projection. The complete
+  guide, low-level example, discovery metadata, type inference coverage, MCPJam Apps conformance,
+  and packed-release conformance make the feature usable by humans and coding agents immediately.
+- Hardened MCP App declarations with strict object fields, bounded complete HTML documents, secure
+  CSP origin validation, explicit empty permission grants, trusted-parent message handling, request
+  timeouts, and a clear separation between UI visibility and authorization scope enforcement.
+
 ## 0.18.4 - 2026-08-10
 
 - Normalized generated and custom MCP tool names to the strict cross-provider identifier contract:

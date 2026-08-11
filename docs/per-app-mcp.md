@@ -4,6 +4,10 @@ Every Clank app with a backend is also its own MCP server. The same typed querie
 used by the browser become tools that an authenticated agent can discover and call directly. You
 do not maintain a second agent API, generate an OpenAPI client, or run a separate MCP process.
 
+Those tools can also render as interactive, sandboxed views in compatible hosts. Bind a validated
+`ui://` HTML resource with `agent: { app: view }`; Clank publishes the tool metadata and resource
+without changing its handler, auth, or data boundary. See [Interactive MCP Apps](mcp-apps.md).
+
 For a deployed project, connect to:
 
 ```text
@@ -251,6 +255,10 @@ After deployment:
   and honest destructive/idempotent annotations; and
 - call representative queries and mutations as two different users to prove owned data remains
   isolated.
+
+For UI-backed tools, also authenticate MCPJam before running its MCP Apps conformance suite. An
+anonymous protocol check correctly receives OAuth `401` before it can inspect `tools/list` or
+`resources/read`; this is not a malformed JSON-RPC response.
 
 Continue with [Agent protocol](agent-protocol.md) for the full MCP transport, discovery, OAuth,
 scope, freshness, and security contract. Read [Full-stack applications](full-stack.md) for backend

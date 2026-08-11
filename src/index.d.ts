@@ -13,6 +13,7 @@ export * from "./governance.js";
 export * from "./lifecycle.js";
 export * from "./tooling.js";
 export * from "./mcp.js";
+export * from "./mcp-app.js";
 export * from "./blueprint.js";
 export * from "./blueprint-registry.js";
 export * from "./webauthn.js";

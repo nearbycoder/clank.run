@@ -4,6 +4,7 @@ import { type AuthClient, type AuthDefinition, type AuthRequest, type AuthRuntim
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.js";
 import { type JobPublisher, type JobRuntime, type JobSystemDefinition, type OpenJobsOptions } from "./jobs.js";
 import type { BucketManager } from "./buckets.js";
+import type { McpAppDefinition, McpAppVisibility } from "./mcp.js";
 /** A nominal document ID. At runtime this is a compact random string. */
 export type Id<Table extends string> = DocumentId<Table>;
 export type DocumentFor<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> = TableValue<Schema["tables"][Name]> & {
@@ -210,6 +211,10 @@ export interface BackendAgentOptions {
     destructive?: boolean;
     idempotent?: boolean;
     openWorld?: boolean;
+    app?: McpAppDefinition | {
+        readonly resource: McpAppDefinition;
+        readonly visibility?: readonly McpAppVisibility[];
+    };
 }
 export type BackendContext<Kind extends "query" | "mutation", DB extends DatabaseSchema<any>, Auth extends AuthDefinition<any> | undefined, Access extends BackendAccess, Jobs extends JobSystemDefinition<DB, any> | undefined = undefined> = (Kind extends "query" ? QueryContext<DB> : MutationContext<DB, Jobs> & MutationJobsContext<DB, Jobs>) & (Auth extends AuthDefinition<any> ? {
     auth: AuthRequest<AuthProfileOf<Auth>>;

@@ -72,7 +72,7 @@ links and oversized files; omits common registry, cloud, SSH, and environment cr
 and writes mode 0600.
 
 ```sh
-clank workbench export . --name=todo --framework=0.18.4 \
+clank workbench export . --name=todo --framework=0.19.0 \
   --output=todo.clank-export.json
 ```
 
