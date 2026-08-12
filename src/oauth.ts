@@ -744,7 +744,7 @@ function tokenResponse(pair: PreparedTokenPair): Response {
   return Response.json({
     access_token: pair.accessToken,
     token_type: "Bearer",
-    expires_in: Math.floor((pair.accessExpiresAt - pair.createdAt) / 1_000),
+    expires_in: Math.max(1, Math.floor((pair.accessExpiresAt - Date.now()) / 1_000)),
     refresh_token: pair.refreshToken,
     scope: pair.scope,
   }, {
