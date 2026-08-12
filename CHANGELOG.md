@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.19.2 - 2026-08-12
+
 - Made OAuth refresh rotation resilient to MCP clients with concurrent or delayed credential
   persistence. Retries of the immediately previous refresh token now recover the exact same
   successor pair for a bounded 15-minute window from an AES-GCM envelope whose key is not stored;
