@@ -25,6 +25,13 @@ export interface ProjectOAuthOptions<Profile extends object = DefaultAuthProfile
   applicationName?: string;
   accessTokenLifetimeMs?: number;
   refreshTokenLifetimeMs?: number;
+  /**
+   * Allows a client retrying a just-rotated refresh token to recover the exact
+   * same successor token pair. The predecessor remains invalid, the recovery
+   * envelope is encrypted, and any replay after this window revokes the family.
+   * @default 15 minutes
+   */
+  refreshTokenRetryLifetimeMs?: number;
   authorizationCodeLifetimeMs?: number;
   maxClients?: number;
   maxUserGrants?: number;
@@ -74,6 +81,12 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
   const oauthPrefix = absolutePath(options.oauthPrefix ?? "/__clank/oauth", "oauthPrefix");
   const accessTokenLifetimeMs = positiveDuration(options.accessTokenLifetimeMs ?? 60 * 60 * 1_000, "accessTokenLifetimeMs");
   const refreshTokenLifetimeMs = positiveDuration(options.refreshTokenLifetimeMs ?? 30 * 24 * 60 * 60 * 1_000, "refreshTokenLifetimeMs");
+  const refreshTokenRetryLifetimeMs = boundedDuration(
+    options.refreshTokenRetryLifetimeMs ?? 15 * 60 * 1_000,
+    1_000,
+    60 * 60 * 1_000,
+    "refreshTokenRetryLifetimeMs",
+  );
   const authorizationCodeLifetimeMs = positiveDuration(options.authorizationCodeLifetimeMs ?? 5 * 60 * 1_000, "authorizationCodeLifetimeMs");
   const maxClients = positiveInteger(options.maxClients ?? 1_000, "maxClients");
   const maxUserGrants = boundedInteger(options.maxUserGrants ?? 100, 1, 1_000, "maxUserGrants");
@@ -171,6 +184,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
           resource: resourceFor(request),
           accessTokenLifetimeMs,
           refreshTokenLifetimeMs,
+          refreshTokenRetryLifetimeMs,
           maxUserGrants,
         }));
       }
@@ -437,6 +451,7 @@ async function exchangeToken(
     resource: string;
     accessTokenLifetimeMs: number;
     refreshTokenLifetimeMs: number;
+    refreshTokenRetryLifetimeMs: number;
     maxUserGrants: number;
   },
 ): Promise<Response> {
@@ -499,6 +514,14 @@ async function exchangeToken(
         JOIN clank_auth_users u ON u.id = t.user_id
         WHERE t.token_hash = ? AND t.kind = 'refresh'`).get(refreshHash);
       if (row?.consumed_at !== null && row?.consumed_at !== undefined) {
+        if (
+          Number(row.disabled) === 0
+          && String(row.client_id) === clientId
+          && String(row.resource) === resource
+        ) {
+          const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row);
+          if (recovered) return tokenResponse(recovered);
+        }
         internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
           .run(Date.now(), row.family_id);
         throw new OAuthRequestError("invalid_grant", "Refresh token reuse was detected.");
@@ -518,17 +541,28 @@ async function exchangeToken(
         options,
         String(row.family_id),
       );
-      internal.transaction(() => {
+      const retry = await prepareRefreshRetry(
+        rawRefresh,
+        refreshHash,
+        pair,
+        options.refreshTokenRetryLifetimeMs,
+      );
+      const rotated = internal.transaction(() => {
         const consumed = internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
           WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?`)
           .run(Date.now(), refreshHash, Date.now());
-        if (Number(consumed.changes) !== 1) {
-          internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
-            .run(Date.now(), row.family_id);
-          throw new OAuthRequestError("invalid_grant", "Refresh token reuse was detected.");
-        }
+        if (Number(consumed.changes) !== 1) return false;
         insertTokenPair(internal, pair);
+        insertRefreshRetry(internal, retry);
+        return true;
       });
+      if (!rotated) {
+        const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row);
+        if (recovered) return tokenResponse(recovered);
+        internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
+          .run(Date.now(), row.family_id);
+        throw new OAuthRequestError("invalid_grant", "Refresh token reuse was detected.");
+      }
       return tokenResponse(pair);
     }
     throw new OAuthRequestError("unsupported_grant_type", "Only authorization_code and refresh_token grants are supported.");
@@ -550,6 +584,15 @@ interface PreparedTokenPair {
   createdAt: number;
   accessExpiresAt: number;
   refreshExpiresAt: number;
+}
+
+interface PreparedRefreshRetry {
+  predecessorHash: string;
+  accessHash: string;
+  refreshHash: string;
+  envelope: string;
+  expiresAt: number;
+  createdAt: number;
 }
 
 async function prepareTokenPair(
@@ -605,6 +648,96 @@ function insertTokenPair(internal: SQLiteInternal, pair: PreparedTokenPair): voi
     pair.refreshExpiresAt,
     pair.createdAt,
   );
+}
+
+function insertRefreshRetry(internal: SQLiteInternal, retry: PreparedRefreshRetry): void {
+  internal.prepare(`INSERT INTO clank_oauth_refresh_retries
+    (predecessor_hash, access_hash, refresh_hash, response_envelope, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(
+      retry.predecessorHash,
+      retry.accessHash,
+      retry.refreshHash,
+      retry.envelope,
+      retry.expiresAt,
+      retry.createdAt,
+    );
+}
+
+async function prepareRefreshRetry(
+  rawRefresh: string,
+  predecessorHash: string,
+  pair: PreparedTokenPair,
+  lifetimeMs: number,
+): Promise<PreparedRefreshRetry> {
+  return {
+    predecessorHash,
+    accessHash: pair.accessHash,
+    refreshHash: pair.refreshHash,
+    envelope: await encryptRefreshRetry(rawRefresh, predecessorHash, pair),
+    expiresAt: pair.createdAt + lifetimeMs,
+    createdAt: pair.createdAt,
+  };
+}
+
+async function recoverRefreshRetry(
+  internal: SQLiteInternal,
+  rawRefresh: string,
+  predecessorHash: string,
+  predecessor: Record<string, unknown>,
+): Promise<PreparedTokenPair | null> {
+  const now = Date.now();
+  const retry = internal.prepare(`SELECT r.response_envelope, r.expires_at AS retry_expires_at,
+      access.token_hash AS access_hash, access.expires_at AS access_expires_at,
+      access.consumed_at AS access_consumed_at,
+      refresh.token_hash AS refresh_hash, refresh.expires_at AS refresh_expires_at,
+      refresh.consumed_at AS refresh_consumed_at, refresh.created_at AS successor_created_at,
+      refresh.client_id, refresh.user_id, refresh.scope, refresh.resource, refresh.family_id
+    FROM clank_oauth_refresh_retries r
+    JOIN clank_oauth_tokens access ON access.token_hash = r.access_hash AND access.kind = 'access'
+    JOIN clank_oauth_tokens refresh ON refresh.token_hash = r.refresh_hash AND refresh.kind = 'refresh'
+    WHERE r.predecessor_hash = ?`).get(predecessorHash);
+  if (
+    !retry
+    || Number(retry.retry_expires_at) <= now
+    || retry.access_consumed_at !== null
+    || retry.refresh_consumed_at !== null
+    || Number(retry.access_expires_at) <= now
+    || Number(retry.refresh_expires_at) <= now
+    || String(retry.client_id) !== String(predecessor.client_id)
+    || String(retry.user_id) !== String(predecessor.user_id)
+    || String(retry.scope) !== String(predecessor.scope)
+    || String(retry.resource) !== String(predecessor.resource)
+    || String(retry.family_id) !== String(predecessor.family_id)
+  ) return null;
+  try {
+    const pair = await decryptRefreshRetry(
+      rawRefresh,
+      predecessorHash,
+      String(retry.response_envelope),
+    );
+    const [accessHash, refreshHash] = await Promise.all([
+      digest(pair.accessToken),
+      digest(pair.refreshToken),
+    ]);
+    if (
+      !constantTimeEqual(pair.accessHash, String(retry.access_hash))
+      || !constantTimeEqual(pair.refreshHash, String(retry.refresh_hash))
+      || !constantTimeEqual(accessHash, pair.accessHash)
+      || !constantTimeEqual(refreshHash, pair.refreshHash)
+      || pair.clientId !== String(retry.client_id)
+      || pair.userId !== String(retry.user_id)
+      || pair.scope !== String(retry.scope)
+      || pair.resource !== String(retry.resource)
+      || pair.familyId !== String(retry.family_id)
+      || pair.createdAt !== Number(retry.successor_created_at)
+      || pair.accessExpiresAt !== Number(retry.access_expires_at)
+      || pair.refreshExpiresAt !== Number(retry.refresh_expires_at)
+    ) return null;
+    return pair;
+  } catch {
+    return null;
+  }
 }
 
 function tokenResponse(pair: PreparedTokenPair): Response {
@@ -1223,18 +1356,28 @@ function createOAuthTables(internal: SQLiteInternal): void {
     created_at INTEGER NOT NULL,
     last_used_at INTEGER
   ) WITHOUT ROWID`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_oauth_refresh_retries (
+    predecessor_hash TEXT PRIMARY KEY REFERENCES clank_oauth_tokens(token_hash) ON DELETE CASCADE,
+    access_hash TEXT NOT NULL REFERENCES clank_oauth_tokens(token_hash) ON DELETE CASCADE,
+    refresh_hash TEXT NOT NULL REFERENCES clank_oauth_tokens(token_hash) ON DELETE CASCADE,
+    response_envelope TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_codes_expiry ON clank_oauth_codes (expires_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_consents_expiry ON clank_oauth_consents (expires_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_consents_session ON clank_oauth_consents (session_id, created_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_tokens_expiry ON clank_oauth_tokens (expires_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_tokens_user ON clank_oauth_tokens (user_id)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_tokens_family ON clank_oauth_tokens (family_id)");
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_refresh_retries_expiry ON clank_oauth_refresh_retries (expires_at)");
 }
 
 function pruneOAuthState(internal: SQLiteInternal): void {
   const now = Date.now();
   internal.prepare("DELETE FROM clank_oauth_codes WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(now);
   internal.prepare("DELETE FROM clank_oauth_consents WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(now);
+  internal.prepare("DELETE FROM clank_oauth_refresh_retries WHERE expires_at <= ?").run(now);
   // Retain rotated refresh-token digests until their original expiry. Reuse can
   // then revoke the active family for the full lifetime of the old credential.
   internal.prepare("DELETE FROM clank_oauth_tokens WHERE expires_at <= ?").run(now);
@@ -1454,6 +1597,13 @@ function positiveDuration(value: number, name: string): number {
   return value;
 }
 
+function boundedDuration(value: number, minimum: number, maximum: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new TypeError(`${name} must be from ${minimum} through ${maximum} milliseconds.`);
+  }
+  return value;
+}
+
 function positiveInteger(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${name} must be a positive integer.`);
   return value;
@@ -1475,6 +1625,64 @@ async function digest(value: string): Promise<string> {
   return base64url(new Uint8Array(bytes));
 }
 
+async function encryptRefreshRetry(
+  rawRefresh: string,
+  predecessorHash: string,
+  pair: PreparedTokenPair,
+): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({
+    name: "AES-GCM",
+    iv,
+    additionalData: new TextEncoder().encode(`clank-refresh-retry-v1\0${predecessorHash}`),
+  }, await refreshRetryKey(rawRefresh), new TextEncoder().encode(JSON.stringify(pair)));
+  return `v1.${base64url(iv)}.${base64url(new Uint8Array(encrypted))}`;
+}
+
+async function decryptRefreshRetry(
+  rawRefresh: string,
+  predecessorHash: string,
+  envelope: string,
+): Promise<PreparedTokenPair> {
+  const parts = envelope.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1") throw new Error("Invalid refresh retry envelope.");
+  const decrypted = await crypto.subtle.decrypt({
+    name: "AES-GCM",
+    iv: fromBase64url(parts[1]!),
+    additionalData: new TextEncoder().encode(`clank-refresh-retry-v1\0${predecessorHash}`),
+  }, await refreshRetryKey(rawRefresh), fromBase64url(parts[2]!));
+  return preparedTokenPair(JSON.parse(new TextDecoder().decode(decrypted)));
+}
+
+async function refreshRetryKey(rawRefresh: string): Promise<CryptoKey> {
+  const material = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`clank-refresh-retry-key-v1\0${rawRefresh}`),
+  );
+  return crypto.subtle.importKey("raw", material, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+function preparedTokenPair(value: unknown): PreparedTokenPair {
+  if (!isRecord(value)) throw new Error("Invalid refresh retry payload.");
+  const strings = [
+    "accessToken",
+    "accessHash",
+    "refreshToken",
+    "refreshHash",
+    "userId",
+    "clientId",
+    "scope",
+    "resource",
+    "familyId",
+  ] as const;
+  const numbers = ["createdAt", "accessExpiresAt", "refreshExpiresAt"] as const;
+  if (
+    strings.some((key) => typeof value[key] !== "string")
+    || numbers.some((key) => !Number.isSafeInteger(value[key]))
+  ) throw new Error("Invalid refresh retry payload.");
+  return value as unknown as PreparedTokenPair;
+}
+
 async function pkceChallenge(verifier: string): Promise<string> {
   return digest(verifier);
 }
@@ -1483,6 +1691,13 @@ function base64url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+function fromBase64url(value: string): Uint8Array {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error("Invalid base64url value.");
+  const padding = "=".repeat((4 - value.length % 4) % 4);
+  const binary = atob(value.replaceAll("-", "+").replaceAll("_", "/") + padding);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
 function constantTimeEqual(left: string, right: string): boolean {

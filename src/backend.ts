@@ -1677,6 +1677,11 @@ export interface OpenBackendOptions extends SQLiteOptions {
     browserCors?: boolean;
     /** Maximum simultaneously active OAuth grants for one application user. Defaults to 100. */
     maxUserGrants?: number;
+    /**
+     * Idempotency window for a client retrying the immediately previous OAuth
+     * refresh token. Defaults to 15 minutes and is capped at one hour.
+     */
+    refreshTokenRetryLifetimeMs?: number;
   };
 }
 
@@ -1939,6 +1944,7 @@ export async function openBackend<
         oauthPrefix,
         applicationName: agentTitle,
         maxUserGrants,
+        refreshTokenRetryLifetimeMs: agentOptions.refreshTokenRetryLifetimeMs,
       })
     : undefined;
   const backendAppBindings = new Map<string, {
