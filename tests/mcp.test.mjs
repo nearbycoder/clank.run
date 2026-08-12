@@ -1515,7 +1515,10 @@ test("concurrent refresh retries converge on one rotated token pair", async () =
     const responses = await Promise.all([refresh(), refresh()]);
     assert.deepEqual(responses.map((response) => response.status), [200, 200]);
     const pairs = await Promise.all(responses.map((response) => response.json()));
-    assert.deepEqual(pairs[0], pairs[1]);
+    assert.equal(pairs[0].access_token, pairs[1].access_token);
+    assert.equal(pairs[0].refresh_token, pairs[1].refresh_token);
+    assert.equal(pairs[0].scope, pairs[1].scope);
+    assert.ok(Math.abs(pairs[0].expires_in - pairs[1].expires_in) <= 1);
     assert.notEqual(pairs[0].refresh_token, tokens.refresh_token);
 
     const authenticated = await runtime.handle(modernMcpRequest({
@@ -1526,6 +1529,38 @@ test("concurrent refresh retries converge on one rotated token pair", async () =
     }, pairs[0].access_token));
     assert.equal(authenticated.status, 200);
   } finally {
+    runtime.close();
+  }
+});
+
+test("delayed refresh retries report the successor access token's remaining lifetime", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  const originalNow = Date.now;
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    let now = originalNow();
+    Date.now = () => now;
+    const refresh = () => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource,
+    }));
+    const first = await refresh();
+    assert.equal(first.status, 200);
+    const firstPair = await first.json();
+
+    now += 12 * 60 * 1_000;
+    const retried = await refresh();
+    assert.equal(retried.status, 200);
+    const retriedPair = await retried.json();
+    assert.equal(retriedPair.access_token, firstPair.access_token);
+    assert.equal(retriedPair.refresh_token, firstPair.refresh_token);
+    assert.equal(retriedPair.expires_in, firstPair.expires_in - 12 * 60);
+  } finally {
+    Date.now = originalNow;
     runtime.close();
   }
 });
@@ -1654,7 +1689,10 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
     resource,
   }));
   assert.equal(refreshReplay.status, 200);
-  assert.deepEqual(await refreshReplay.json(), nextTokens);
+  const replayedTokens = await refreshReplay.json();
+  assert.equal(replayedTokens.access_token, nextTokens.access_token);
+  assert.equal(replayedTokens.refresh_token, nextTokens.refresh_token);
+  assert.equal(replayedTokens.scope, nextTokens.scope);
   const advanced = await runtime.handle(formRequest("/__clank/oauth/token", {
     grant_type: "refresh_token",
     client_id: client.client_id,
