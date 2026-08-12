@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.19.3 - 2026-08-12
+
 - Corrected delayed OAuth refresh retry responses to report the recovered access token's remaining
   lifetime rather than its original lifetime, preventing clients from caching it past server expiry.
 
