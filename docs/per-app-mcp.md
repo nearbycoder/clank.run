@@ -160,6 +160,28 @@ proof, so hosted proxies may normalize Fetch Metadata without turning opaque-ori
 broad origin bypass. MCP calls never use the browser cookie: they require the explicit resource-
 bound bearer token.
 
+Access tokens expire after one hour and the MCP client refreshes them without reopening the
+browser. Clank rotates the refresh token on every exchange. If two processes belonging to the
+same client retry the immediately previous token before they have persisted its replacement,
+Clank returns the exact same successor pair for up to 15 minutes. That response is stored only as
+an AES-GCM envelope keyed by the presented predecessor, so the database never contains recoverable
+plaintext credentials or their encryption key. Once the successor rotates again—or the retry
+window closes—reusing an older token is treated as a replay and revokes the complete grant.
+
+Applications that need a shorter handoff window can configure it when opening the backend:
+
+```ts
+await openBackend(backend, {
+  agent: {
+    refreshTokenRetryLifetimeMs: 2 * 60 * 1000,
+  },
+});
+```
+
+The window accepts one second through one hour; 15 minutes is the interoperability-focused
+default. It does not make a refresh token reusable: every accepted retry converges on the one
+already-issued successor instead of minting another branch.
+
 The agent never receives the user's password, browser session cookie, or CSRF token. A read grant
 can list and call queries. A write grant can also call mutations. Normal application checks still
 apply, including required login, verified email, roles, record ownership, argument validation,

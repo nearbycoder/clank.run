@@ -1500,6 +1500,36 @@ test("backend actions bind shared MCP Apps views without manual resource plumbin
   }
 });
 
+test("concurrent refresh retries converge on one rotated token pair", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    const refresh = () => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource,
+    }));
+    const responses = await Promise.all([refresh(), refresh()]);
+    assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+    const pairs = await Promise.all(responses.map((response) => response.json()));
+    assert.deepEqual(pairs[0], pairs[1]);
+    assert.notEqual(pairs[0].refresh_token, tokens.refresh_token);
+
+    const authenticated = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "retry-authenticated",
+      method: "tools/list",
+      params: {},
+    }, pairs[0].access_token));
+    assert.equal(authenticated.status, 200);
+  } finally {
+    runtime.close();
+  }
+});
+
 test("standard public-client OAuth works without the Clank CLI or control plane", async () => {
   const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
   const session = await registerUser(runtime);
@@ -1623,13 +1653,30 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
     refresh_token: tokens.refresh_token,
     resource,
   }));
-  assert.equal(refreshReplay.status, 400);
+  assert.equal(refreshReplay.status, 200);
+  assert.deepEqual(await refreshReplay.json(), nextTokens);
+  const advanced = await runtime.handle(formRequest("/__clank/oauth/token", {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    refresh_token: nextTokens.refresh_token,
+    resource,
+  }));
+  assert.equal(advanced.status, 200);
+  const advancedTokens = await advanced.json();
+  const staleReplay = await runtime.handle(formRequest("/__clank/oauth/token", {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    refresh_token: tokens.refresh_token,
+    resource,
+  }));
+  assert.equal(staleReplay.status, 400);
+  assert.equal((await staleReplay.json()).error_description, "Refresh token reuse was detected.");
   const revokedFamily = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 5,
     method: "tools/list",
     params: {},
-  }, nextTokens.access_token));
+  }, advancedTokens.access_token));
   assert.equal(revokedFamily.status, 401);
   const replacement = await authorize(runtime, session, client);
 
@@ -2024,6 +2071,20 @@ test("agent endpoint configuration fails closed before opening project resources
       agent: { maxUserGrants: 1_001 },
     }),
     /must not exceed 1000/,
+  );
+  await assert.rejects(
+    openBackend(authenticatedBackend(), {
+      path: ":memory:",
+      agent: { refreshTokenRetryLifetimeMs: 999 },
+    }),
+    /refreshTokenRetryLifetimeMs must be from 1000 through 3600000 milliseconds/,
+  );
+  await assert.rejects(
+    openBackend(authenticatedBackend(), {
+      path: ":memory:",
+      agent: { refreshTokenRetryLifetimeMs: 60 * 60 * 1_000 + 1 },
+    }),
+    /refreshTokenRetryLifetimeMs must be from 1000 through 3600000 milliseconds/,
   );
 });
 

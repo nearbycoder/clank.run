@@ -428,6 +428,11 @@ export interface OpenBackendOptions extends SQLiteOptions {
         browserCors?: boolean;
         /** Maximum simultaneously active OAuth grants for one application user. Defaults to 100. */
         maxUserGrants?: number;
+        /**
+         * Idempotency window for a client retrying the immediately previous OAuth
+         * refresh token. Defaults to 15 minutes and is capped at one hour.
+         */
+        refreshTokenRetryLifetimeMs?: number;
     };
 }
 export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>, options?: OpenBackendOptions): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>>;
