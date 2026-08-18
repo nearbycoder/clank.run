@@ -26,6 +26,8 @@ export interface ManagedIngress {
         status?: number;
         error?: string;
     }>>;
+    /** Returns the number of response streams currently using an upstream. */
+    activeRequests(upstream: string): number;
     /** Waits for requests already assigned to an upstream to finish before its process is stopped. */
     drain(upstream: string, timeoutMs?: number): Promise<boolean>;
 }
@@ -72,6 +74,8 @@ export declare function createManagedIngress(options: {
      * cookies, IP address, query string, or body content.
      */
     admitRequest?: IngressAdmissionPolicy;
+    /** Starts or otherwise prepares an inactive route before the request is proxied. */
+    prepareRoute?: (route: Readonly<IngressRoute>) => void | Promise<void>;
     onRequest?: (metric: IngressRequestMetric) => void | Promise<void>;
 }): ManagedIngress;
 export interface DomainChallenge {
