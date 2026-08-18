@@ -307,6 +307,17 @@ across deploys. A process-runner application has direct per-process attribution.
 installations, the listed child can be the Docker client wrapper, so container-runtime metrics
 remain the authoritative per-application source.
 
+For trusted local-process projects, use **Settings → Runtime lifecycle → On demand** to reclaim each idle application's resident process memory. The default idle window is 15 minutes. These optional service settings tune new-project defaults and the bounded sweeper:
+
+```text
+CLANK_DEFAULT_RUNTIME_POLICY=always_on
+CLANK_RUNTIME_IDLE_TIMEOUT_MS=900000
+CLANK_RUNTIME_SWEEP_INTERVAL_MS=30000
+CLANK_RUNTIME_DRAIN_TIMEOUT_MS=30000
+```
+
+Set the first value to `on_demand` only when new web-only projects should sleep by default. A value of `0` for `CLANK_RUNTIME_SWEEP_INTERVAL_MS` disables automatic sleeping without changing stored project policies. This is per-application scale-to-zero inside the running Clank service; it is separate from Railway Serverless, which sleeps the whole Railway service and cannot distinguish one hosted project from another.
+
 Railway does not overlap deployments that mount the same volume, even when a health check is
 configured. The production entry point therefore binds the control-plane listener without waiting
 for every project runtime to recover, starts those runtimes concurrently in the background, and
