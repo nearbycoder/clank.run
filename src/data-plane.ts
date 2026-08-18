@@ -27,6 +27,8 @@ export interface IngressRouteStore {
 export interface ManagedIngress {
   handle(request: Request): Promise<Response>;
   health(): Promise<Record<string, { ok: boolean; status?: number; error?: string }>>;
+  /** Returns the number of response streams currently using an upstream. */
+  activeRequests(upstream: string): number;
   /** Waits for requests already assigned to an upstream to finish before its process is stopped. */
   drain(upstream: string, timeoutMs?: number): Promise<boolean>;
 }
@@ -80,6 +82,8 @@ export function createManagedIngress(options: {
    * cookies, IP address, query string, or body content.
    */
   admitRequest?: IngressAdmissionPolicy;
+  /** Starts or otherwise prepares an inactive route before the request is proxied. */
+  prepareRoute?: (route: Readonly<IngressRoute>) => void | Promise<void>;
   onRequest?: (metric: IngressRequestMetric) => void | Promise<void>;
 }): ManagedIngress {
   const fetcher = options.fetch ?? globalThis.fetch;
@@ -94,6 +98,7 @@ export function createManagedIngress(options: {
     leases: Set<symbol>;
     waiters: Set<() => void>;
   }>();
+  const preparations = new Map<string, Promise<void>>();
   const routeSource = typeof options.routes === "function"
     ? options.routes
     : () => options.routes.routes();
@@ -151,14 +156,34 @@ export function createManagedIngress(options: {
     });
   };
 
+  const prepareRoute = async (route: IngressRoute): Promise<void> => {
+    if (!options.prepareRoute) return;
+    const key = `${route.projectId}\0${route.id}`;
+    let pending = preparations.get(key);
+    if (!pending) {
+      const preparedRoute = Object.freeze({
+        ...route,
+        hosts: Object.freeze([...route.hosts]),
+      });
+      pending = (async () => {
+        await options.prepareRoute?.(preparedRoute);
+      })();
+      preparations.set(key, pending);
+      void pending.finally(() => {
+        if (preparations.get(key) === pending) preparations.delete(key);
+      }).catch(() => undefined);
+    }
+    await pending;
+  };
+
   const ingress: ManagedIngress = {
     async handle(request) {
       const url = new URL(request.url);
       const host = domainName(url.hostname);
-      const route = (await loadRoutes()).find((entry) => entry.active && entry.hosts.includes(host));
+      let route = (await loadRoutes()).find((entry) => entry.hosts.includes(host));
       if (!route) return ingressProblem(404, "ROUTE_NOT_FOUND", "No application is assigned to this host.");
-      const targetIdentity = ingressRouteIdentity(route);
-      const release = retain(route.upstream);
+      const metricRoute = route;
+      let release = (): void => undefined;
       const finish = (response: Response, trackBody = false): Response => {
         if (!trackBody || !response.body) {
           release();
@@ -206,8 +231,8 @@ export function createManagedIngress(options: {
           ? 0
           : Number(response.headers.get("content-length"));
         const metric: IngressRequestMetric = {
-          projectId: route.projectId,
-          routeId: route.id,
+          projectId: metricRoute.projectId,
+          routeId: metricRoute.id,
           method: knownHttpMethod(request.method),
           statusCode: response.status,
           durationMs: Math.max(0, performance.now() - startedAt),
@@ -228,16 +253,6 @@ export function createManagedIngress(options: {
         }
         return response;
       };
-      let circuit = circuits.get(route.id);
-      if (circuit && circuit.target !== targetIdentity) {
-        circuits.delete(route.id);
-        circuit = undefined;
-      }
-      if (circuit && circuit.failures >= circuitFailures && Date.now() - circuit.openedAt < circuitResetMs) {
-        return finish(observed(ingressProblem(503, "UPSTREAM_UNAVAILABLE", "Application is temporarily unavailable.", {
-          "retry-after": String(Math.max(1, Math.ceil((circuitResetMs - (Date.now() - circuit.openedAt)) / 1_000))),
-        })));
-      }
       const declared = Number(request.headers.get("content-length"));
       if (Number.isFinite(declared) && declared > maxBodyBytes) {
         requestBytes = Math.max(0, declared);
@@ -286,6 +301,47 @@ export function createManagedIngress(options: {
           })));
         }
         admitted = true;
+      }
+      if (!route.active) {
+        if (!options.prepareRoute) {
+          return finish(observed(ingressProblem(404, "ROUTE_NOT_FOUND", "No application is assigned to this host.")));
+        }
+        try {
+          await prepareRoute(route);
+        } catch {
+          return finish(observed(ingressProblem(
+            503,
+            "APPLICATION_UNAVAILABLE",
+            "Application could not be started.",
+            { "retry-after": "1" },
+          )));
+        }
+        route = (await loadRoutes()).find((entry) => (
+          entry.id === metricRoute.id
+          && entry.projectId === metricRoute.projectId
+          && entry.hosts.includes(host)
+          && entry.active
+        ));
+        if (!route) {
+          return finish(observed(ingressProblem(
+            503,
+            "APPLICATION_UNAVAILABLE",
+            "Application is not ready.",
+            { "retry-after": "1" },
+          )));
+        }
+      }
+      const targetIdentity = ingressRouteIdentity(route);
+      release = retain(route.upstream);
+      let circuit = circuits.get(route.id);
+      if (circuit && circuit.target !== targetIdentity) {
+        circuits.delete(route.id);
+        circuit = undefined;
+      }
+      if (circuit && circuit.failures >= circuitFailures && Date.now() - circuit.openedAt < circuitResetMs) {
+        return finish(observed(ingressProblem(503, "UPSTREAM_UNAVAILABLE", "Application is temporarily unavailable.", {
+          "retry-after": String(Math.max(1, Math.ceil((circuitResetMs - (Date.now() - circuit.openedAt)) / 1_000))),
+        })));
       }
       // Assign the path after parsing the trusted origin. Passing a path such
       // as //attacker.example directly to new URL(path, base) would otherwise
@@ -365,6 +421,10 @@ export function createManagedIngress(options: {
         }
       }));
       return output;
+    },
+    activeRequests(input) {
+      const upstream = upstreamUrl(input, options.allowedUpstreamHosts);
+      return inFlight.get(upstream)?.leases.size ?? 0;
     },
     async drain(input, timeout = 2_000) {
       const upstream = upstreamUrl(input, options.allowedUpstreamHosts);
