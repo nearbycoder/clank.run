@@ -28,10 +28,20 @@ export interface ProjectOAuthOptions<Profile extends object = DefaultAuthProfile
   /**
    * Allows a client retrying a just-rotated refresh token to recover the exact
    * same successor token pair. The predecessor remains invalid, the recovery
-   * envelope is encrypted, and any replay after this window revokes the family.
+   * envelope is encrypted, and exact-response retries remain time-bounded. In
+   * adaptive rotation mode, a client that did not save the successor may later
+   * recover a new access token while that successor is still unspent.
    * @default 15 minutes
    */
   refreshTokenRetryLifetimeMs?: number;
+  /**
+   * Controls recovery when a public client fails to persist a rotated refresh
+   * token. Adaptive mode keeps the encrypted predecessor-to-successor handoff
+   * usable until the successor is spent or expires. Strict mode revokes the
+   * family when the retry window closes.
+   * @default "adaptive"
+   */
+  refreshTokenRotationMode?: "adaptive" | "strict";
   authorizationCodeLifetimeMs?: number;
   maxClients?: number;
   maxUserGrants?: number;
@@ -87,6 +97,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
     60 * 60 * 1_000,
     "refreshTokenRetryLifetimeMs",
   );
+  const refreshTokenRotationMode = refreshRotationMode(options.refreshTokenRotationMode ?? "adaptive");
   const authorizationCodeLifetimeMs = positiveDuration(options.authorizationCodeLifetimeMs ?? 5 * 60 * 1_000, "authorizationCodeLifetimeMs");
   const maxClients = positiveInteger(options.maxClients ?? 1_000, "maxClients");
   const maxUserGrants = boundedInteger(options.maxUserGrants ?? 100, 1, 1_000, "maxUserGrants");
@@ -185,6 +196,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
           accessTokenLifetimeMs,
           refreshTokenLifetimeMs,
           refreshTokenRetryLifetimeMs,
+          refreshTokenRotationMode,
           maxUserGrants,
         }));
       }
@@ -452,6 +464,7 @@ async function exchangeToken(
     accessTokenLifetimeMs: number;
     refreshTokenLifetimeMs: number;
     refreshTokenRetryLifetimeMs: number;
+    refreshTokenRotationMode: "adaptive" | "strict";
     maxUserGrants: number;
   },
 ): Promise<Response> {
@@ -519,7 +532,7 @@ async function exchangeToken(
           && String(row.client_id) === clientId
           && String(row.resource) === resource
         ) {
-          const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row);
+          const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row, options);
           if (recovered) return tokenResponse(recovered);
         }
         internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
@@ -545,19 +558,23 @@ async function exchangeToken(
         rawRefresh,
         refreshHash,
         pair,
-        options.refreshTokenRetryLifetimeMs,
       );
       const rotated = internal.transaction(() => {
         const consumed = internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
           WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?`)
           .run(Date.now(), refreshHash, Date.now());
         if (Number(consumed.changes) !== 1) return false;
+        // Once a successor is adopted, its predecessor no longer needs an
+        // interoperability handoff. A later predecessor replay still reaches
+        // the normal family-revocation path without retaining the envelope.
+        internal.prepare("DELETE FROM clank_oauth_refresh_retries WHERE refresh_hash = ?")
+          .run(refreshHash);
         insertTokenPair(internal, pair);
         insertRefreshRetry(internal, retry);
         return true;
       });
       if (!rotated) {
-        const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row);
+        const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row, options);
         if (recovered) return tokenResponse(recovered);
         internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
           .run(Date.now(), row.family_id);
@@ -626,17 +643,7 @@ function insertTokenPair(internal: SQLiteInternal, pair: PreparedTokenPair): voi
   const insert = internal.prepare(`INSERT INTO clank_oauth_tokens
     (token_hash, kind, family_id, client_id, user_id, scope, resource, expires_at, consumed_at, created_at, last_used_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)`);
-  insert.run(
-    pair.accessHash,
-    "access",
-    pair.familyId,
-    pair.clientId,
-    pair.userId,
-    pair.scope,
-    pair.resource,
-    pair.accessExpiresAt,
-    pair.createdAt,
-  );
+  insertAccessToken(insert, pair);
   insert.run(
     pair.refreshHash,
     "refresh",
@@ -646,6 +653,23 @@ function insertTokenPair(internal: SQLiteInternal, pair: PreparedTokenPair): voi
     pair.scope,
     pair.resource,
     pair.refreshExpiresAt,
+    pair.createdAt,
+  );
+}
+
+function insertAccessToken(
+  insert: ReturnType<SQLiteInternal["prepare"]>,
+  pair: PreparedTokenPair,
+): void {
+  insert.run(
+    pair.accessHash,
+    "access",
+    pair.familyId,
+    pair.clientId,
+    pair.userId,
+    pair.scope,
+    pair.resource,
+    pair.accessExpiresAt,
     pair.createdAt,
   );
 }
@@ -668,14 +692,17 @@ async function prepareRefreshRetry(
   rawRefresh: string,
   predecessorHash: string,
   pair: PreparedTokenPair,
-  lifetimeMs: number,
 ): Promise<PreparedRefreshRetry> {
   return {
     predecessorHash,
     accessHash: pair.accessHash,
     refreshHash: pair.refreshHash,
     envelope: await encryptRefreshRetry(rawRefresh, predecessorHash, pair),
-    expiresAt: pair.createdAt + lifetimeMs,
+    // Retain the encrypted handoff for the successor's lifetime. Exact
+    // idempotent retries are still bounded by refreshTokenRetryLifetimeMs;
+    // adaptive recovery needs the relationship to determine whether the
+    // successor was adopted before treating the predecessor as a replay.
+    expiresAt: pair.refreshExpiresAt,
     createdAt: pair.createdAt,
   };
 }
@@ -685,13 +712,20 @@ async function recoverRefreshRetry(
   rawRefresh: string,
   predecessorHash: string,
   predecessor: Record<string, unknown>,
+  options: {
+    accessTokenLifetimeMs: number;
+    refreshTokenRetryLifetimeMs: number;
+    refreshTokenRotationMode: "adaptive" | "strict";
+  },
+  allowRaceRetry = true,
 ): Promise<PreparedTokenPair | null> {
   const now = Date.now();
   const retry = internal.prepare(`SELECT r.response_envelope, r.expires_at AS retry_expires_at,
+      r.created_at AS retry_created_at,
       access.token_hash AS access_hash, access.expires_at AS access_expires_at,
-      access.consumed_at AS access_consumed_at,
+      access.consumed_at AS access_consumed_at, access.created_at AS access_created_at,
       refresh.token_hash AS refresh_hash, refresh.expires_at AS refresh_expires_at,
-      refresh.consumed_at AS refresh_consumed_at, refresh.created_at AS successor_created_at,
+      refresh.consumed_at AS refresh_consumed_at,
       refresh.client_id, refresh.user_id, refresh.scope, refresh.resource, refresh.family_id
     FROM clank_oauth_refresh_retries r
     JOIN clank_oauth_tokens access ON access.token_hash = r.access_hash AND access.kind = 'access'
@@ -700,9 +734,7 @@ async function recoverRefreshRetry(
   if (
     !retry
     || Number(retry.retry_expires_at) <= now
-    || retry.access_consumed_at !== null
     || retry.refresh_consumed_at !== null
-    || Number(retry.access_expires_at) <= now
     || Number(retry.refresh_expires_at) <= now
     || String(retry.client_id) !== String(predecessor.client_id)
     || String(retry.user_id) !== String(predecessor.user_id)
@@ -730,14 +762,68 @@ async function recoverRefreshRetry(
       || pair.scope !== String(retry.scope)
       || pair.resource !== String(retry.resource)
       || pair.familyId !== String(retry.family_id)
-      || pair.createdAt !== Number(retry.successor_created_at)
+      || pair.createdAt !== Number(retry.access_created_at)
       || pair.accessExpiresAt !== Number(retry.access_expires_at)
       || pair.refreshExpiresAt !== Number(retry.refresh_expires_at)
     ) return null;
-    return pair;
+    const insideRetryWindow = Number(retry.retry_created_at) + options.refreshTokenRetryLifetimeMs > now;
+    if (
+      insideRetryWindow
+      && retry.access_consumed_at === null
+      && Number(retry.access_expires_at) > now
+    ) return pair;
+    if (options.refreshTokenRotationMode === "strict") return null;
+
+    const recovered = await prepareRecoveredAccess(pair, options.accessTokenLifetimeMs);
+    const envelope = await encryptRefreshRetry(rawRefresh, predecessorHash, recovered);
+    const replaced = internal.transaction(() => {
+      const insert = internal.prepare(`INSERT INTO clank_oauth_tokens
+        (token_hash, kind, family_id, client_id, user_id, scope, resource, expires_at, consumed_at, created_at, last_used_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)`);
+      insertAccessToken(insert, recovered);
+      const updated = internal.prepare(`UPDATE clank_oauth_refresh_retries
+        SET access_hash = ?, response_envelope = ?, created_at = ?
+        WHERE predecessor_hash = ? AND access_hash = ? AND refresh_hash = ? AND expires_at > ?`)
+        .run(
+          recovered.accessHash,
+          envelope,
+          recovered.createdAt,
+          predecessorHash,
+          pair.accessHash,
+          pair.refreshHash,
+          now,
+        );
+      if (Number(updated.changes) !== 1) {
+        internal.prepare("DELETE FROM clank_oauth_tokens WHERE token_hash = ?").run(recovered.accessHash);
+        return false;
+      }
+      internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
+        WHERE token_hash = ? AND kind = 'access' AND consumed_at IS NULL`)
+        .run(now, pair.accessHash);
+      return true;
+    });
+    if (replaced) return recovered;
+    return allowRaceRetry
+      ? recoverRefreshRetry(internal, rawRefresh, predecessorHash, predecessor, options, false)
+      : null;
   } catch {
     return null;
   }
+}
+
+async function prepareRecoveredAccess(
+  predecessor: PreparedTokenPair,
+  accessTokenLifetimeMs: number,
+): Promise<PreparedTokenPair> {
+  const accessToken = `clank_at_${randomToken(32)}`;
+  const createdAt = Date.now();
+  return {
+    ...predecessor,
+    accessToken,
+    accessHash: await digest(accessToken),
+    createdAt,
+    accessExpiresAt: createdAt + accessTokenLifetimeMs,
+  };
 }
 
 function tokenResponse(pair: PreparedTokenPair): Response {
@@ -1600,6 +1686,13 @@ function positiveDuration(value: number, name: string): number {
 function boundedDuration(value: number, minimum: number, maximum: number, name: string): number {
   if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
     throw new TypeError(`${name} must be from ${minimum} through ${maximum} milliseconds.`);
+  }
+  return value;
+}
+
+function refreshRotationMode(value: string): "adaptive" | "strict" {
+  if (value !== "adaptive" && value !== "strict") {
+    throw new TypeError('refreshTokenRotationMode must be "adaptive" or "strict".');
   }
   return value;
 }

@@ -165,8 +165,15 @@ browser. Clank rotates the refresh token on every exchange. If two processes bel
 same client retry the immediately previous token before they have persisted its replacement,
 Clank returns the exact same successor pair for up to 15 minutes. That response is stored only as
 an AES-GCM envelope keyed by the presented predecessor, so the database never contains recoverable
-plaintext credentials or their encryption key. Once the successor rotates again—or the retry
-window closes—reusing an older token is treated as a replay and revokes the complete grant.
+plaintext credentials or their encryption key.
+
+Adaptive rotation is enabled by default for public-client interoperability. Some MCP clients keep
+the original refresh token even after the server returns its rotated successor. Once the one-hour
+access token expires, Clank can issue a fresh access token through the encrypted handoff while the
+successor refresh token remains unspent. It returns that same successor again and never creates a
+second refresh-token branch. As soon as the client uses the successor, any later predecessor replay
+revokes the complete grant. The handoff also expires with the successor, so recovery cannot extend
+the successor's 30-day refresh lifetime.
 
 Applications that need a shorter handoff window can configure it when opening the backend:
 
@@ -179,8 +186,18 @@ await openBackend(backend, {
 ```
 
 The window accepts one second through one hour; 15 minutes is the interoperability-focused
-default. It does not make a refresh token reusable: every accepted retry converges on the one
-already-issued successor instead of minting another branch.
+default for returning the exact same response. It does not create another refresh-token branch.
+
+Security-sensitive applications can require strict rotation. In strict mode, a predecessor used
+after the exact-response window revokes the family immediately:
+
+```ts
+await openBackend(backend, {
+  agent: {
+    refreshTokenRotationMode: "strict",
+  },
+});
+```
 
 The agent never receives the user's password, browser session cookie, or CSRF token. A read grant
 can list and call queries. A write grant can also call mutations. Normal application checks still

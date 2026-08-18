@@ -1565,6 +1565,113 @@ test("delayed refresh retries report the successor access token's remaining life
   }
 });
 
+test("adaptive refresh recovery keeps clients connected when they fail to persist rotation", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  const originalNow = Date.now;
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    let now = originalNow();
+    Date.now = () => now;
+    const refreshOriginal = () => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource,
+    }));
+
+    const firstResponse = await refreshOriginal();
+    assert.equal(firstResponse.status, 200);
+    const first = await firstResponse.json();
+
+    now += 61 * 60 * 1_000;
+    const concurrentRecovery = await Promise.all([refreshOriginal(), refreshOriginal()]);
+    assert.deepEqual(concurrentRecovery.map((response) => response.status), [200, 200]);
+    const [recovered, concurrentRetry] = await Promise.all(
+      concurrentRecovery.map((response) => response.json()),
+    );
+    assert.notEqual(recovered.access_token, first.access_token);
+    assert.equal(recovered.refresh_token, first.refresh_token);
+    assert.equal(recovered.expires_in, 60 * 60);
+    assert.equal(concurrentRetry.access_token, recovered.access_token);
+    assert.equal(concurrentRetry.refresh_token, recovered.refresh_token);
+
+    const immediateRetryResponse = await refreshOriginal();
+    assert.equal(immediateRetryResponse.status, 200);
+    const immediateRetry = await immediateRetryResponse.json();
+    assert.equal(immediateRetry.access_token, recovered.access_token);
+    assert.equal(immediateRetry.refresh_token, recovered.refresh_token);
+
+    now += 61 * 60 * 1_000;
+    const recoveredAgainResponse = await refreshOriginal();
+    assert.equal(recoveredAgainResponse.status, 200);
+    const recoveredAgain = await recoveredAgainResponse.json();
+    assert.notEqual(recoveredAgain.access_token, recovered.access_token);
+    assert.equal(recoveredAgain.refresh_token, first.refresh_token);
+
+    const authenticated = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "adaptive-recovery-authenticated",
+      method: "tools/list",
+      params: {},
+    }, recoveredAgain.access_token));
+    assert.equal(authenticated.status, 200);
+
+    const adoptedResponse = await runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: first.refresh_token,
+      resource,
+    }));
+    assert.equal(adoptedResponse.status, 200);
+    const adopted = await adoptedResponse.json();
+
+    const staleReplay = await refreshOriginal();
+    assert.equal(staleReplay.status, 400);
+    assert.equal((await staleReplay.json()).error_description, "Refresh token reuse was detected.");
+    const revoked = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "adaptive-recovery-revoked",
+      method: "tools/list",
+      params: {},
+    }, adopted.access_token));
+    assert.equal(revoked.status, 401);
+  } finally {
+    Date.now = originalNow;
+    runtime.close();
+  }
+});
+
+test("strict refresh rotation revokes predecessors after the retry window", async () => {
+  const runtime = await openBackend(authenticatedBackend(), {
+    path: ":memory:",
+    agent: { refreshTokenRotationMode: "strict" },
+  });
+  const originalNow = Date.now;
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    let now = originalNow();
+    Date.now = () => now;
+    const refresh = () => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource,
+    }));
+    assert.equal((await refresh()).status, 200);
+    now += 61 * 60 * 1_000;
+    const stale = await refresh();
+    assert.equal(stale.status, 400);
+    assert.equal((await stale.json()).error_description, "Refresh token reuse was detected.");
+  } finally {
+    Date.now = originalNow;
+    runtime.close();
+  }
+});
+
 test("standard public-client OAuth works without the Clank CLI or control plane", async () => {
   const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
   const session = await registerUser(runtime);
@@ -2123,6 +2230,13 @@ test("agent endpoint configuration fails closed before opening project resources
       agent: { refreshTokenRetryLifetimeMs: 60 * 60 * 1_000 + 1 },
     }),
     /refreshTokenRetryLifetimeMs must be from 1000 through 3600000 milliseconds/,
+  );
+  await assert.rejects(
+    openBackend(authenticatedBackend(), {
+      path: ":memory:",
+      agent: { refreshTokenRotationMode: "forever" },
+    }),
+    /refreshTokenRotationMode must be "adaptive" or "strict"/,
   );
 });
 
