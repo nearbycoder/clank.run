@@ -237,9 +237,21 @@ export interface ClankPlatformOptions {
         /** Maximum time spent on one domain before its claim is released. Defaults to 10 seconds. */
         domainRecheckTimeoutMs?: number;
     };
+    /** Optional per-project local runtime sleeping. Existing projects remain always-on until changed. */
+    scaleToZero?: {
+        /** Policy assigned to newly created projects. Defaults to "always_on". */
+        defaultPolicy?: PlatformRuntimePolicy;
+        /** Idle time assigned to newly created projects. Defaults to 15 minutes. */
+        idleTimeoutMs?: number;
+        /** How often idle local runtimes are checked. Defaults to 30 seconds; false disables automatic sleeping. */
+        sweepIntervalMs?: number | false;
+        /** Maximum time to drain active responses before leaving a runtime online. Defaults to 30 seconds. */
+        drainTimeoutMs?: number;
+    };
     /** Receives unexpected failures for private operator logging. */
     onError?: (error: unknown) => void;
 }
+export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
 export interface PlatformRuntime {
     readonly handle: (request: Request) => Promise<Response>;
     readonly publicUrl: string;

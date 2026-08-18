@@ -328,6 +328,9 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `PATCH /api/organizations/:id/members/:userId` — change a member role with last-owner and owner-only protections.
 - `DELETE /api/organizations/:id/members/:userId` — leave or administratively remove membership and revoke workspace-scoped credentials.
 - `GET /api/projects/:id` — project status, usage, current organization role, and whether the principal may delete the project or operate jobs.
+- `PUT /api/projects/:id/runtime` — set `{ "policy": "always_on" | "on_demand" | "suspended", "idleTimeoutMs": number }`; requires deploy permission.
+- `POST /api/projects/:id/runtime/sleep` — drain and stop an online local on-demand runtime without deleting its release or data.
+- `POST /api/projects/:id/runtime/wake` — start a deployed local runtime immediately; normal admitted application traffic also wakes on-demand runtimes.
 - `DELETE /api/projects/:id` — owner/admin-only permanent deletion with `{ "confirmation": "delete-site <slug>", "acknowledgeDataLoss": true }`.
 - `GET /api/projects/:id/metrics?range=15m|1h|24h|7d|30d` — bounded current/previous summaries, comparisons, and complete downsampled points.
 - `GET /api/projects/:id/domains` — ownership, routing, observed DNS, TLS state, project limit, and reconciliation status.
@@ -350,3 +353,15 @@ At larger multi-region scale, put a managed SaaS-domain edge in front and adapt 
 - `GET /_clank/tls/ask?token=…&domain=…` — private Caddy permission lookup; not a customer API.
 
 Browser mutations require same-origin session authentication and CSRF. CLI calls use bearer tokens, whose organization role and project scope are re-evaluated on every request.
+
+## Runtime sleeping
+
+The project **Settings** page controls one durable runtime policy:
+
+- **Always on** starts the active release during control-plane recovery and restarts it after an unexpected exit.
+- **On demand** drains and stops an idle web process after the configured timeout. The first admitted request performs one deduplicated cold start, revalidates the route, and then continues to the application.
+- **Suspended** drains and stops the process and rejects automatic wake-up until an administrator changes the policy.
+
+Sleeping removes only the web process and its process memory. Releases, the isolated SQLite database, buckets, secrets, domains, and backups stay in place. Request-size and workspace admission checks run before a cold start, so rejected traffic cannot consume runtime capacity. Active response streams are drained before shutdown; if they do not finish within the configured bound, Clank leaves the process online and retries later.
+
+Projects with a worker or scheduler are never automatically slept because their work does not depend on inbound HTTP. Provider-hosted runtimes also remain always-on until the provider implements the equivalent remote lifecycle contract. Existing projects migrate to **Always on**, making rollout opt-in and backward compatible.

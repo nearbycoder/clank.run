@@ -1283,6 +1283,109 @@ test("code-only deployments keep serving until a healthy candidate takes traffic
   }
 });
 
+test("on-demand project runtimes sleep, wake on admitted traffic, and stay asleep across restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-sleep-"));
+  const options = {
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4580,
+    appPortEnd: 4582,
+    ingress: {
+      enabled: true,
+      baseDomain: "apps.example.test",
+      domainRecheckIntervalMs: false,
+    },
+    scaleToZero: {
+      idleTimeoutMs: 1_000,
+      sweepIntervalMs: 1_000,
+      drainTimeoutMs: 1_000,
+    },
+    backups: { intervalMs: false },
+  };
+  let platform = await openPlatform(options);
+  try {
+    const owner = await authorizeCli(platform, "sleeping@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Sleeping app", slug: "sleeping-app" },
+    }), 201);
+    const projectId = created.project.id;
+    assert.equal(created.project.runtimePolicy, "always_on");
+    const artifact = await appArtifact(
+      join(root, "source"),
+      "awake-response",
+      [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]],
+    );
+    const deployed = await deploy(platform, projectId, owner.accessToken, artifact, "sleep-release-0001");
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+
+    const policy = await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { policy: "on_demand", idleTimeoutMs: 1_000 },
+    }));
+    assert.equal(policy.project.runtimePolicy, "on_demand");
+
+    let detail;
+    const sleepDeadline = Date.now() + 5_000;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      detail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+        token: owner.accessToken,
+      }));
+    } while (detail.runtime.state !== "sleeping" && Date.now() < sleepDeadline);
+    assert.equal(detail.runtime.state, "sleeping");
+    assert.equal(detail.runtime.sleepEligible, true);
+
+    const cold = await platform.handle(new Request("https://sleeping-app.apps.example.test/"));
+    assert.equal(cold.status, 200);
+    assert.equal(await cold.text(), "awake-response");
+    detail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(detail.runtime.state, "online");
+
+    const slept = await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime/sleep`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: {},
+    }));
+    assert.equal(slept.slept, true);
+    await platform.close();
+
+    platform = await openPlatform({ ...options, signup: false });
+    detail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(detail.runtime.state, "sleeping");
+    const restartedCold = await platform.handle(new Request("https://sleeping-app.apps.example.test/"));
+    assert.equal(restartedCold.status, 200);
+    assert.equal(await restartedCold.text(), "awake-response");
+
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { policy: "suspended", idleTimeoutMs: 1_000 },
+    }));
+    const suspended = await platform.handle(new Request("https://sleeping-app.apps.example.test/"));
+    assert.equal(suspended.status, 503);
+    assert.equal((await suspended.json()).error.code, "APPLICATION_UNAVAILABLE");
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { policy: "always_on", idleTimeoutMs: 1_000 },
+    }));
+    const alwaysOn = await platform.handle(new Request("https://sleeping-app.apps.example.test/"));
+    assert.equal(alwaysOn.status, 200);
+    assert.equal(await alwaysOn.text(), "awake-response");
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("deployments supervise independent worker and scheduler processes beside the responsive web process", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-jobs-"));
   const platform = await openPlatform({
@@ -1333,6 +1436,22 @@ test("deployments supervise independent worker and scheduler processes beside th
       await fetch(deployed.body.release.directUrl).then((response) => response.text()),
       "jobs-release",
     );
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { policy: "on_demand", idleTimeoutMs: 1_000 },
+    }));
+    const runtimeDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(runtimeDetail.runtime.sleepEligible, false);
+    assert.match(runtimeDetail.runtime.sleepBlockedReason, /worker|scheduler/i);
+    const refusedSleep = await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime/sleep`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: {},
+    }), 409);
+    assert.equal(refusedSleep.error.code, "RUNTIME_REQUIRES_CONTINUITY");
 
     const databasePath = join(root, "platform", "projects", projectId, "data", "app.sqlite");
     await waitFor(() => {
@@ -5765,8 +5884,18 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     const developerDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
       token: developer.accessToken,
     }));
-    assert.deepEqual(ownerDetail.access, { role: "owner", canDelete: true, canOperateJobs: true });
-    assert.deepEqual(developerDetail.access, { role: "developer", canDelete: false, canOperateJobs: true });
+    assert.deepEqual(ownerDetail.access, {
+      role: "owner",
+      canDelete: true,
+      canOperateJobs: true,
+      canManageRuntime: true,
+    });
+    assert.deepEqual(developerDetail.access, {
+      role: "developer",
+      canDelete: false,
+      canOperateJobs: true,
+      canManageRuntime: true,
+    });
 
     const developerDenied = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
       method: "DELETE",
@@ -5800,7 +5929,12 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     const adminDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
       token: developer.accessToken,
     }));
-    assert.deepEqual(adminDetail.access, { role: "admin", canDelete: true, canOperateJobs: true });
+    assert.deepEqual(adminDetail.access, {
+      role: "admin",
+      canDelete: true,
+      canOperateJobs: true,
+      canManageRuntime: true,
+    });
     const missingCsrf = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
       method: "DELETE",
       cookie: owner.cookie,

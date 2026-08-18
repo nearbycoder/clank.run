@@ -50,6 +50,7 @@ const ingressEnabled = environment("CLANK_INGRESS", "PROACT_INGRESS") === "1" ||
 const domainRecheckInterval = process.env.CLANK_DOMAIN_RECHECK_INTERVAL_MS;
 const backupInterval = process.env.CLANK_BACKUP_INTERVAL_MS;
 const previewCleanupInterval = process.env.CLANK_PREVIEW_CLEANUP_INTERVAL_MS;
+const runtimeSweepInterval = process.env.CLANK_RUNTIME_SWEEP_INTERVAL_MS;
 const invitationDelivery = resolveInvitationDelivery(process.env);
 const billing = await resolvePlatformBilling(process.env);
 const runnerArtifactStorage = resolveRunnerArtifactStorage(process.env);
@@ -199,6 +200,14 @@ const platform = await openPlatform({
   ...(invitationDelivery ? { invitations: invitationDelivery } : {}),
   ...(billing ? { billing } : {}),
   ...(ingress ? { ingress } : {}),
+  scaleToZero: {
+    defaultPolicy: process.env.CLANK_DEFAULT_RUNTIME_POLICY ?? "always_on",
+    idleTimeoutMs: number(process.env.CLANK_RUNTIME_IDLE_TIMEOUT_MS, 15 * 60_000),
+    sweepIntervalMs: runtimeSweepInterval === "0"
+      ? false
+      : number(runtimeSweepInterval, 30_000),
+    drainTimeoutMs: number(process.env.CLANK_RUNTIME_DRAIN_TIMEOUT_MS, 30_000),
+  },
   onError: (error) => console.error("[platform]", error),
 });
 
@@ -223,6 +232,7 @@ if (platform.hostingProfile === "trusted") {
   console.warn("Trusted hosting profile: deployed applications share the control-plane Unix trust boundary.");
 }
 console.log(`Managed ingress: ${ingressEnabled ? "enabled" : "disabled"}`);
+console.log(`Idle runtime sleeping: ${ingressEnabled && runtimeSweepInterval !== "0" ? "enabled" : "disabled"}`);
 console.log(`Remote runner coordinator: ${runnerCoordinatorEnabled ? "enabled" : "disabled"}`);
 console.log(`One-time runner enrollment: ${runnerCoordinatorEnabled ? "enabled" : "disabled"}`);
 console.log(`Legacy shared runner enrollment: ${process.env.CLANK_RUNNER_REGISTRATION_TOKEN ? "enabled" : "disabled"}`);
