@@ -433,6 +433,12 @@ export interface OpenBackendOptions extends SQLiteOptions {
          * refresh token. Defaults to 15 minutes and is capped at one hour.
          */
         refreshTokenRetryLifetimeMs?: number;
+        /**
+         * Recover clients that do not persist rotated refresh tokens while the
+         * unspent successor remains valid. Defaults to "adaptive"; use "strict"
+         * to revoke as soon as the idempotency window closes.
+         */
+        refreshTokenRotationMode?: "adaptive" | "strict";
     };
 }
 export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>, options?: OpenBackendOptions): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>>;

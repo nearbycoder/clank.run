@@ -240,7 +240,9 @@ Before release, verify:
 - unauthenticated MCP requests receive an OAuth resource challenge;
 - read-only agent grants cannot discover or invoke mutations;
 - OAuth codes are single-use, PKCE-bound, and reject redirect or resource mismatches;
-- replaying a rotated refresh token revokes its token family;
+- replaying a rotated refresh token after its successor is adopted revokes its token family;
+- the default adaptive handoff can only recover the same unspent successor, is encrypted with the
+  predecessor credential, and cannot outlive that successor; strict rotation remains opt-in;
 - MCP bearer tokens cannot authenticate ordinary browser or backend RPC endpoints;
 - internal-only backend functions use `agent: false`;
 - destructive mutations are explicitly annotated for agent clients;

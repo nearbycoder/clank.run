@@ -1682,6 +1682,12 @@ export interface OpenBackendOptions extends SQLiteOptions {
      * refresh token. Defaults to 15 minutes and is capped at one hour.
      */
     refreshTokenRetryLifetimeMs?: number;
+    /**
+     * Recover clients that do not persist rotated refresh tokens while the
+     * unspent successor remains valid. Defaults to "adaptive"; use "strict"
+     * to revoke as soon as the idempotency window closes.
+     */
+    refreshTokenRotationMode?: "adaptive" | "strict";
   };
 }
 
@@ -1945,6 +1951,7 @@ export async function openBackend<
         applicationName: agentTitle,
         maxUserGrants,
         refreshTokenRetryLifetimeMs: agentOptions.refreshTokenRetryLifetimeMs,
+        refreshTokenRotationMode: agentOptions.refreshTokenRotationMode,
       })
     : undefined;
   const backendAppBindings = new Map<string, {
