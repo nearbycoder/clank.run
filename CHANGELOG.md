@@ -4,6 +4,14 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.19.5 - 2026-08-18
+
+- Fixed recurring MCP OAuth disconnects for clients with replicated credential storage. Adaptive
+  refresh rotation now follows a bounded, encrypted predecessor chain so a lagging replica can
+  converge on the one current successor without branching token authority or revoking a newer
+  replica. Missing or overlong adaptive handoffs fail without collateral grant revocation; strict
+  mode retains replay-driven family revocation for security-sensitive applications.
+
 ## 0.19.4 - 2026-08-18
 
 - Added adaptive OAuth refresh recovery for MCP clients that fail to persist a rotated successor.
