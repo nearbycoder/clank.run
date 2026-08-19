@@ -36,9 +36,10 @@ export interface ProjectOAuthOptions<Profile extends object = DefaultAuthProfile
   refreshTokenRetryLifetimeMs?: number;
   /**
    * Controls recovery when a public client fails to persist a rotated refresh
-   * token. Adaptive mode keeps the encrypted predecessor-to-successor handoff
-   * usable until the successor is spent or expires. Strict mode revokes the
-   * family when the retry window closes.
+   * token. Adaptive mode retains a bounded encrypted predecessor chain so
+   * lagging replicas can converge on the single current successor without
+   * creating another refresh-token branch. Strict mode revokes the family
+   * when the retry window closes.
    * @default "adaptive"
    */
   refreshTokenRotationMode?: "adaptive" | "strict";
@@ -535,8 +536,10 @@ async function exchangeToken(
           const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row, options);
           if (recovered) return tokenResponse(recovered);
         }
-        internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
-          .run(Date.now(), row.family_id);
+        if (options.refreshTokenRotationMode === "strict") {
+          internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
+            .run(Date.now(), row.family_id);
+        }
         throw new OAuthRequestError("invalid_grant", "Refresh token reuse was detected.");
       }
       if (
@@ -564,11 +567,13 @@ async function exchangeToken(
           WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?`)
           .run(Date.now(), refreshHash, Date.now());
         if (Number(consumed.changes) !== 1) return false;
-        // Once a successor is adopted, its predecessor no longer needs an
-        // interoperability handoff. A later predecessor replay still reaches
-        // the normal family-revocation path without retaining the envelope.
-        internal.prepare("DELETE FROM clank_oauth_refresh_retries WHERE refresh_hash = ?")
-          .run(refreshHash);
+        // Adaptive clients can have more than one credential replica. Retain
+        // the encrypted predecessor link so a lagging replica can walk to the
+        // one current successor. Strict mode deliberately removes that link.
+        if (options.refreshTokenRotationMode === "strict") {
+          internal.prepare("DELETE FROM clank_oauth_refresh_retries WHERE refresh_hash = ?")
+            .run(refreshHash);
+        }
         insertTokenPair(internal, pair);
         insertRefreshRetry(internal, retry);
         return true;
@@ -576,8 +581,10 @@ async function exchangeToken(
       if (!rotated) {
         const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row, options);
         if (recovered) return tokenResponse(recovered);
-        internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
-          .run(Date.now(), row.family_id);
+        if (options.refreshTokenRotationMode === "strict") {
+          internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
+            .run(Date.now(), row.family_id);
+        }
         throw new OAuthRequestError("invalid_grant", "Refresh token reuse was detected.");
       }
       return tokenResponse(pair);
@@ -720,7 +727,7 @@ async function recoverRefreshRetry(
   allowRaceRetry = true,
 ): Promise<PreparedTokenPair | null> {
   const now = Date.now();
-  const retry = internal.prepare(`SELECT r.response_envelope, r.expires_at AS retry_expires_at,
+  const findRetry = internal.prepare(`SELECT r.response_envelope, r.expires_at AS retry_expires_at,
       r.created_at AS retry_created_at,
       access.token_hash AS access_hash, access.expires_at AS access_expires_at,
       access.consumed_at AS access_consumed_at, access.created_at AS access_created_at,
@@ -730,86 +737,108 @@ async function recoverRefreshRetry(
     FROM clank_oauth_refresh_retries r
     JOIN clank_oauth_tokens access ON access.token_hash = r.access_hash AND access.kind = 'access'
     JOIN clank_oauth_tokens refresh ON refresh.token_hash = r.refresh_hash AND refresh.kind = 'refresh'
-    WHERE r.predecessor_hash = ?`).get(predecessorHash);
-  if (
-    !retry
-    || Number(retry.retry_expires_at) <= now
-    || retry.refresh_consumed_at !== null
-    || Number(retry.refresh_expires_at) <= now
-    || String(retry.client_id) !== String(predecessor.client_id)
-    || String(retry.user_id) !== String(predecessor.user_id)
-    || String(retry.scope) !== String(predecessor.scope)
-    || String(retry.resource) !== String(predecessor.resource)
-    || String(retry.family_id) !== String(predecessor.family_id)
-  ) return null;
+    WHERE r.predecessor_hash = ?`);
+  let currentRawRefresh = rawRefresh;
+  let currentPredecessorHash = predecessorHash;
   try {
-    const pair = await decryptRefreshRetry(
-      rawRefresh,
-      predecessorHash,
-      String(retry.response_envelope),
-    );
-    const [accessHash, refreshHash] = await Promise.all([
-      digest(pair.accessToken),
-      digest(pair.refreshToken),
-    ]);
-    if (
-      !constantTimeEqual(pair.accessHash, String(retry.access_hash))
-      || !constantTimeEqual(pair.refreshHash, String(retry.refresh_hash))
-      || !constantTimeEqual(accessHash, pair.accessHash)
-      || !constantTimeEqual(refreshHash, pair.refreshHash)
-      || pair.clientId !== String(retry.client_id)
-      || pair.userId !== String(retry.user_id)
-      || pair.scope !== String(retry.scope)
-      || pair.resource !== String(retry.resource)
-      || pair.familyId !== String(retry.family_id)
-      || pair.createdAt !== Number(retry.access_created_at)
-      || pair.accessExpiresAt !== Number(retry.access_expires_at)
-      || pair.refreshExpiresAt !== Number(retry.refresh_expires_at)
-    ) return null;
-    const insideRetryWindow = Number(retry.retry_created_at) + options.refreshTokenRetryLifetimeMs > now;
-    if (
-      insideRetryWindow
-      && retry.access_consumed_at === null
-      && Number(retry.access_expires_at) > now
-    ) return pair;
-    if (options.refreshTokenRotationMode === "strict") return null;
-
-    const recovered = await prepareRecoveredAccess(pair, options.accessTokenLifetimeMs);
-    const envelope = await encryptRefreshRetry(rawRefresh, predecessorHash, recovered);
-    const replaced = internal.transaction(() => {
-      const insert = internal.prepare(`INSERT INTO clank_oauth_tokens
-        (token_hash, kind, family_id, client_id, user_id, scope, resource, expires_at, consumed_at, created_at, last_used_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)`);
-      insertAccessToken(insert, recovered);
-      const updated = internal.prepare(`UPDATE clank_oauth_refresh_retries
-        SET access_hash = ?, response_envelope = ?, created_at = ?
-        WHERE predecessor_hash = ? AND access_hash = ? AND refresh_hash = ? AND expires_at > ?`)
-        .run(
-          recovered.accessHash,
-          envelope,
-          recovered.createdAt,
-          predecessorHash,
-          pair.accessHash,
-          pair.refreshHash,
-          now,
-        );
-      if (Number(updated.changes) !== 1) {
-        internal.prepare("DELETE FROM clank_oauth_tokens WHERE token_hash = ?").run(recovered.accessHash);
-        return false;
+    for (let hop = 0; hop < MAX_ADAPTIVE_REFRESH_HANDOFF_HOPS; hop++) {
+      const retry = findRetry.get(currentPredecessorHash);
+      if (
+        !retry
+        || Number(retry.retry_expires_at) <= now
+        || Number(retry.refresh_expires_at) <= now
+        || String(retry.client_id) !== String(predecessor.client_id)
+        || String(retry.user_id) !== String(predecessor.user_id)
+        || String(retry.scope) !== String(predecessor.scope)
+        || String(retry.resource) !== String(predecessor.resource)
+        || String(retry.family_id) !== String(predecessor.family_id)
+      ) return null;
+      const pair = await decryptRefreshRetry(
+        currentRawRefresh,
+        currentPredecessorHash,
+        String(retry.response_envelope),
+      );
+      const [accessHash, refreshHash] = await Promise.all([
+        digest(pair.accessToken),
+        digest(pair.refreshToken),
+      ]);
+      if (
+        !constantTimeEqual(pair.accessHash, String(retry.access_hash))
+        || !constantTimeEqual(pair.refreshHash, String(retry.refresh_hash))
+        || !constantTimeEqual(accessHash, pair.accessHash)
+        || !constantTimeEqual(refreshHash, pair.refreshHash)
+        || pair.clientId !== String(retry.client_id)
+        || pair.userId !== String(retry.user_id)
+        || pair.scope !== String(retry.scope)
+        || pair.resource !== String(retry.resource)
+        || pair.familyId !== String(retry.family_id)
+        || pair.createdAt !== Number(retry.access_created_at)
+        || pair.accessExpiresAt !== Number(retry.access_expires_at)
+        || pair.refreshExpiresAt !== Number(retry.refresh_expires_at)
+      ) return null;
+      if (retry.refresh_consumed_at !== null) {
+        if (options.refreshTokenRotationMode === "strict") return null;
+        currentRawRefresh = pair.refreshToken;
+        currentPredecessorHash = pair.refreshHash;
+        continue;
       }
-      internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
-        WHERE token_hash = ? AND kind = 'access' AND consumed_at IS NULL`)
-        .run(now, pair.accessHash);
-      return true;
-    });
-    if (replaced) return recovered;
-    return allowRaceRetry
-      ? recoverRefreshRetry(internal, rawRefresh, predecessorHash, predecessor, options, false)
-      : null;
+      const insideRetryWindow = Number(retry.retry_created_at) + options.refreshTokenRetryLifetimeMs > now;
+      if (
+        insideRetryWindow
+        && retry.access_consumed_at === null
+        && Number(retry.access_expires_at) > now
+      ) return pair;
+      if (options.refreshTokenRotationMode === "strict") return null;
+
+      const recovered = await prepareRecoveredAccess(pair, options.accessTokenLifetimeMs);
+      const envelope = await encryptRefreshRetry(
+        currentRawRefresh,
+        currentPredecessorHash,
+        recovered,
+      );
+      const replaced = internal.transaction(() => {
+        const insert = internal.prepare(`INSERT INTO clank_oauth_tokens
+          (token_hash, kind, family_id, client_id, user_id, scope, resource, expires_at, consumed_at, created_at, last_used_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)`);
+        insertAccessToken(insert, recovered);
+        const updated = internal.prepare(`UPDATE clank_oauth_refresh_retries
+          SET access_hash = ?, response_envelope = ?, created_at = ?
+          WHERE predecessor_hash = ? AND access_hash = ? AND refresh_hash = ? AND expires_at > ?
+            AND EXISTS (SELECT 1 FROM clank_oauth_tokens current
+              WHERE current.token_hash = ? AND current.kind = 'refresh'
+                AND current.consumed_at IS NULL AND current.expires_at > ?)`)
+          .run(
+            recovered.accessHash,
+            envelope,
+            recovered.createdAt,
+            currentPredecessorHash,
+            pair.accessHash,
+            pair.refreshHash,
+            now,
+            pair.refreshHash,
+            now,
+          );
+        if (Number(updated.changes) !== 1) {
+          internal.prepare("DELETE FROM clank_oauth_tokens WHERE token_hash = ?").run(recovered.accessHash);
+          return false;
+        }
+        internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
+          WHERE token_hash = ? AND kind = 'access' AND consumed_at IS NULL`)
+          .run(now, pair.accessHash);
+        return true;
+      });
+      if (replaced) return recovered;
+      return allowRaceRetry
+        ? recoverRefreshRetry(internal, rawRefresh, predecessorHash, predecessor, options, false)
+        : null;
+    }
+    return null;
   } catch {
     return null;
   }
 }
+
+const MAX_ADAPTIVE_REFRESH_HANDOFF_HOPS = 64;
 
 async function prepareRecoveredAccess(
   predecessor: PreparedTokenPair,
