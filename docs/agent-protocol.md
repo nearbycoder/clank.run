@@ -365,9 +365,10 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
   origin; wildcard form destinations are never allowed.
 - Access tokens are stored only as SHA-256 digests, expire after one hour, and are bound to the
   exact MCP resource.
-- Refresh tokens rotate and expire after 30 days. The encrypted adaptive handoff recovers clients
-  that fail to persist an unspent successor; once that successor is used, predecessor reuse revokes
-  the entire token family. Applications can opt into strict post-window revocation.
+- Refresh tokens rotate and expire after 30 days. The encrypted adaptive handoff chain lets lagging
+  client replicas converge on one unspent successor without branching or revoking a newer replica.
+  It is bounded to 64 links and each link expires with its immediate successor. Applications can
+  opt into strict post-window family revocation without multi-generation handoffs.
 - OAuth client registration is bounded and never fetches caller-controlled metadata URLs, avoiding
   an authorization-server SSRF surface.
 - Disabling an account immediately invalidates its agent tokens.

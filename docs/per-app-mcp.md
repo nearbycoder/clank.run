@@ -167,13 +167,18 @@ Clank returns the exact same successor pair for up to 15 minutes. That response 
 an AES-GCM envelope keyed by the presented predecessor, so the database never contains recoverable
 plaintext credentials or their encryption key.
 
-Adaptive rotation is enabled by default for public-client interoperability. Some MCP clients keep
-the original refresh token even after the server returns its rotated successor. Once the one-hour
-access token expires, Clank can issue a fresh access token through the encrypted handoff while the
-successor refresh token remains unspent. It returns that same successor again and never creates a
-second refresh-token branch. As soon as the client uses the successor, any later predecessor replay
-revokes the complete grant. The handoff also expires with the successor, so recovery cannot extend
-the successor's 30-day refresh lifetime.
+Adaptive rotation is enabled by default for public-client interoperability. Some MCP clients have
+multiple credential replicas and can later submit an older refresh token even after another replica
+adopts its successor. Clank retains a bounded chain of AES-GCM handoffs, walks at most 64 links, and
+returns the one current unspent successor without creating a second refresh-token branch. Each link
+is encrypted with its predecessor credential, contains no plaintext credential or server-held key,
+and expires with its immediate successor. An invalid, expired, corrupted, or overlong adaptive
+chain is rejected without revoking a newer replica's grant. Recovery never extends the current
+successor's 30-day refresh lifetime.
+
+This compatibility behavior cannot distinguish a legitimate lagging replica from someone holding
+a copied predecessor bearer token. Use strict rotation when replay-driven family revocation is more
+important than interoperability with replicated public clients.
 
 Applications that need a shorter handoff window can configure it when opening the backend:
 
@@ -189,7 +194,8 @@ The window accepts one second through one hour; 15 minutes is the interoperabili
 default for returning the exact same response. It does not create another refresh-token branch.
 
 Security-sensitive applications can require strict rotation. In strict mode, a predecessor used
-after the exact-response window revokes the family immediately:
+after the exact-response window revokes the family immediately and no multi-generation chain is
+retained:
 
 ```ts
 await openBackend(backend, {

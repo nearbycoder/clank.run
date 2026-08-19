@@ -1628,15 +1628,33 @@ test("adaptive refresh recovery keeps clients connected when they fail to persis
     const adopted = await adoptedResponse.json();
 
     const staleReplay = await refreshOriginal();
-    assert.equal(staleReplay.status, 400);
-    assert.equal((await staleReplay.json()).error_description, "Refresh token reuse was detected.");
-    const revoked = await runtime.handle(modernMcpRequest({
+    assert.equal(staleReplay.status, 200);
+    const converged = await staleReplay.json();
+    assert.equal(converged.access_token, adopted.access_token);
+    assert.equal(converged.refresh_token, adopted.refresh_token);
+
+    now += 61 * 60 * 1_000;
+    const advancedResponse = await runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: adopted.refresh_token,
+      resource,
+    }));
+    assert.equal(advancedResponse.status, 200);
+    const advanced = await advancedResponse.json();
+    const laggingReplicaResponse = await refreshOriginal();
+    assert.equal(laggingReplicaResponse.status, 200);
+    const laggingReplica = await laggingReplicaResponse.json();
+    assert.equal(laggingReplica.access_token, advanced.access_token);
+    assert.equal(laggingReplica.refresh_token, advanced.refresh_token);
+
+    const active = await runtime.handle(modernMcpRequest({
       jsonrpc: "2.0",
-      id: "adaptive-recovery-revoked",
+      id: "adaptive-chain-recovery-active",
       method: "tools/list",
       params: {},
-    }, adopted.access_token));
-    assert.equal(revoked.status, 401);
+    }, advanced.access_token));
+    assert.equal(active.status, 200);
   } finally {
     Date.now = originalNow;
     runtime.close();
@@ -1668,6 +1686,82 @@ test("strict refresh rotation revokes predecessors after the retry window", asyn
     assert.equal((await stale.json()).error_description, "Refresh token reuse was detected.");
   } finally {
     Date.now = originalNow;
+    runtime.close();
+  }
+});
+
+test("adaptive refresh rejection does not revoke a newer replica when a legacy handoff is missing", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    const exchange = (refreshToken) => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: refreshToken,
+      resource,
+    }));
+    const firstResponse = await exchange(tokens.refresh_token);
+    assert.equal(firstResponse.status, 200);
+    const first = await firstResponse.json();
+    const currentResponse = await exchange(first.refresh_token);
+    assert.equal(currentResponse.status, 200);
+    const current = await currentResponse.json();
+
+    const predecessorHash = Buffer.from(await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(tokens.refresh_token),
+    )).toString("base64url");
+    runtime.database[Symbol.for("clank.sqlite.internal")]
+      .prepare("DELETE FROM clank_oauth_refresh_retries WHERE predecessor_hash = ?")
+      .run(predecessorHash);
+
+    const stale = await exchange(tokens.refresh_token);
+    assert.equal(stale.status, 400);
+    assert.equal((await stale.json()).error, "invalid_grant");
+    const stillActive = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "legacy-handoff-missing-current-active",
+      method: "tools/list",
+      params: {},
+    }, current.access_token));
+    assert.equal(stillActive.status, 200);
+  } finally {
+    runtime.close();
+  }
+});
+
+test("adaptive refresh handoff traversal is bounded without revoking the current grant", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    const exchange = (refreshToken) => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: refreshToken,
+      resource,
+    }));
+    let current = tokens;
+    for (let generation = 0; generation < 65; generation++) {
+      const response = await exchange(current.refresh_token);
+      assert.equal(response.status, 200);
+      current = await response.json();
+    }
+
+    const overlong = await exchange(tokens.refresh_token);
+    assert.equal(overlong.status, 400);
+    assert.equal((await overlong.json()).error, "invalid_grant");
+    const stillActive = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "bounded-handoff-current-active",
+      method: "tools/list",
+      params: {},
+    }, current.access_token));
+    assert.equal(stillActive.status, 200);
+  } finally {
     runtime.close();
   }
 });
@@ -1814,15 +1908,17 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
     refresh_token: tokens.refresh_token,
     resource,
   }));
-  assert.equal(staleReplay.status, 400);
-  assert.equal((await staleReplay.json()).error_description, "Refresh token reuse was detected.");
-  const revokedFamily = await runtime.handle(mcpRequest({
+  assert.equal(staleReplay.status, 200);
+  const convergedTokens = await staleReplay.json();
+  assert.equal(convergedTokens.access_token, advancedTokens.access_token);
+  assert.equal(convergedTokens.refresh_token, advancedTokens.refresh_token);
+  const activeFamily = await runtime.handle(modernMcpRequest({
     jsonrpc: "2.0",
     id: 5,
     method: "tools/list",
     params: {},
   }, advancedTokens.access_token));
-  assert.equal(revokedFamily.status, 401);
+  assert.equal(activeFamily.status, 200);
   const replacement = await authorize(runtime, session, client);
 
   const crossOrigin = await runtime.handle(modernMcpRequest({
