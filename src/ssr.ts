@@ -1,4 +1,4 @@
-import { isSignal } from "./core.ts";
+import { createRoot, isSignal, type Cleanup } from "./core.ts";
 import { agentActionPath, type AgentActionTarget } from "./agent-contract.ts";
 import {
   Fragment,
@@ -123,8 +123,18 @@ async function renderPortal(portal: PortalBlock, context: SSRContext): Promise<s
 async function renderVNode(vnode: VNode, context: SSRContext): Promise<string> {
   if (vnode.type === Fragment) return renderValue(vnode.props.children as Renderable[], context);
   if (typeof vnode.type === "function") {
-    const evaluation = evaluateComponent(vnode, context.contexts);
-    return renderValue(evaluation.output, { ...context, contexts: evaluation.contexts });
+    let dispose: Cleanup = () => {};
+    try {
+      const evaluation = createRoot((cleanup) => {
+        dispose = cleanup;
+        return evaluateComponent(vnode, context.contexts);
+      });
+      // Keep component-owned values alive through async children, then release
+      // subscriptions/resources so completed requests cannot accumulate them.
+      return await renderValue(evaluation.output, { ...context, contexts: evaluation.contexts });
+    } finally {
+      dispose();
+    }
   }
   return renderElement(vnode, context);
 }

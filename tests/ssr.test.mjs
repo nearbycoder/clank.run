@@ -5,7 +5,10 @@ import {
   Portal,
   createCheckbox,
   createContext,
+  computed,
+  effect,
   h,
+  onCleanup,
   onMount,
   provideContext,
   renderDocument,
@@ -14,6 +17,58 @@ import {
   useContext,
   useId,
 } from "../dist/index.js";
+
+test("completed SSR components release subscriptions across repeated requests", async () => {
+  const source = signal(1);
+  let runs = 0;
+  function Page() {
+    const doubled = computed(() => source.value * 2);
+    effect(() => { doubled.value; runs++; });
+    return h("p", {}, doubled);
+  }
+  for (let index = 0; index < 100; index++) {
+    assert.match(await renderToString(h(Page)), />2<!--/);
+  }
+  assert.equal(runs, 100);
+  source.value = 2;
+  assert.equal(runs, 100, "finished requests must not remain subscribed to shared server state");
+  assert.match(await renderToString(h(Page)), />4<!--/);
+  assert.equal(runs, 101);
+});
+
+test("SSR owns component cleanup through async rendering and isolates concurrent requests", async () => {
+  const source = signal(1);
+  const pending = new Map();
+  const cleaned = [];
+  function Page({ id }) {
+    const doubled = computed(() => source.value * 2);
+    onCleanup(() => cleaned.push(id));
+    return new Promise((resolve) => pending.set(id, () => resolve(h("p", {}, doubled))));
+  }
+  const first = renderToString(h(Page, { id: "first" }));
+  const second = renderToString(h(Page, { id: "second" }));
+  assert.deepEqual(cleaned, []);
+  pending.get("first")();
+  assert.match(await first, />2<!--/);
+  assert.deepEqual(cleaned, ["first"]);
+  source.value = 3;
+  pending.get("second")();
+  assert.match(await second, />6<!--/);
+  assert.deepEqual(cleaned, ["first", "second"]);
+});
+
+test("SSR releases component resources after evaluation and child-render failures", async () => {
+  for (const duringEvaluation of [true, false]) {
+    let cleaned = 0;
+    function Page() {
+      onCleanup(() => { cleaned++; });
+      if (duringEvaluation) throw new Error("render failed");
+      return Promise.reject(new Error("render failed"));
+    }
+    await assert.rejects(renderToString(h(Page)), /render failed/);
+    assert.equal(cleaned, 1);
+  }
+});
 
 test("SSR escapes content, resolves reactive attributes, and emits hydration markers", async () => {
   const title = signal("<unsafe>");
