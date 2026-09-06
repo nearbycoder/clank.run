@@ -1,3 +1,4 @@
+import type { Tracer } from "./observability.ts";
 import { batch, signal, type Cleanup, type ReactiveSignal } from "./core.ts";
 import {
   ValidationError,
@@ -1652,6 +1653,7 @@ export interface QueryDiagnostic {
 }
 
 export interface OpenBackendOptions extends SQLiteOptions {
+  tracer?: Tracer;
   /** Enable local query metadata inspection; arguments, identities, and values are excluded. */
   diagnostics?: boolean;
   database?: SQLiteDatabase<any>;
@@ -1755,6 +1757,7 @@ export async function openBackend<
   const jobsRuntime = definition.jobs
     ? openJobs(definition.jobs, {
         ...options.jobs,
+        tracer: options.jobs?.tracer ?? options.tracer,
         database,
         onError(error, job) {
           options.jobs?.onError?.(error, job);
@@ -1829,7 +1832,7 @@ export async function openBackend<
     while (cache.size > maxCacheEntries) cache.delete(cache.keys().next().value!);
   };
 
-  const invokeQuery = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
+  const invokeQueryBody = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
     ensureOpen();
     const fn = functionAt(registry, path, "query");
     authorize(fn, auth);
@@ -1861,7 +1864,7 @@ export async function openBackend<
     return { value, version: tracked.version };
   };
 
-  const invokeMutation = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
+  const invokeMutationBody = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
     ensureOpen();
     const fn = functionAt(registry, path, "mutation");
     authorize(fn, auth);
@@ -1876,6 +1879,18 @@ export async function openBackend<
     );
     return { value, version: database.version };
   };
+
+  const traceOperation = <Value>(name: string, operation: () => Value): Value => {
+    if (!options.tracer) return operation();
+    const span = options.tracer.startSpan(name.slice(0, 200));
+    try { const result = options.tracer.withSpan(span, operation); span.setStatus("ok"); return result; }
+    catch (error) { span.setStatus("error"); throw error; }
+    finally { span.end(); }
+  };
+  const invokeQuery = (path: string, input: unknown, auth: AuthRequest<any> | null) =>
+    traceOperation(`query ${path}`, () => invokeQueryBody(path, input, auth));
+  const invokeMutation = (path: string, input: unknown, auth: AuthRequest<any> | null) =>
+    traceOperation(`mutation ${path}`, () => invokeMutationBody(path, input, auth));
 
   const notify = (key: string) => {
     const subscription = subscribers.get(key);

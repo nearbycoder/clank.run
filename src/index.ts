@@ -43,3 +43,5 @@ export * from "./ssr.ts";
 export * from "./node.ts";
 
 export * from "./devtools.ts";
+
+export * from "./trace-timeline.ts";

@@ -17,6 +17,7 @@ export interface SpanEvent {
 }
 
 export interface SpanData {
+  requestId?: string;
   traceId: string;
   spanId: string;
   parentSpanId?: string;
@@ -239,6 +240,7 @@ export function createObservability(options: ObservabilityOptions): Observabilit
           const data: SpanData = {
             traceId,
             spanId: context.spanId,
+            ...(context.requestId ? { requestId: context.requestId } : {}),
             ...(parent ? { parentSpanId: parent.spanId } : {}),
             name: bounded(name, "span name", 1, 200),
             kind: spanOptions.kind ?? "internal",
