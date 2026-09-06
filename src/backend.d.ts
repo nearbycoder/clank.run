@@ -1,3 +1,4 @@
+import type { AgentActivityOptions, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
 import type { Tracer } from "./observability.js";
 import { type Cleanup, type ReactiveSignal } from "./core.js";
 import { type InferSchema, type InferSchemaShape, type DocumentId, type Schema, type SchemaShape } from "./ai.js";
@@ -397,9 +398,11 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     caller(request: Request): Promise<BackendCaller<AuthProfileOf<Auth>>>;
     handle(request: Request): Promise<Response>;
     inspectQueries(): readonly QueryDiagnostic[];
+    inspectAgentActivity(filter?: AgentActivityFilter): AgentActivitySnapshot;
     close(): void;
 }
 export interface OpenBackendOptions extends SQLiteOptions {
+    agentActivity?: AgentActivityOptions;
     tracer?: Tracer;
     diagnostics?: boolean;
     database?: SQLiteDatabase<any>;

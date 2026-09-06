@@ -87,7 +87,18 @@ export interface McpTool<Context = unknown> {
   invoke(input: unknown, context: Context, request: Request): unknown | Promise<unknown>;
 }
 
+export interface McpToolActivity {
+  readonly tool: string;
+  readonly requiredScope: McpScope;
+  readonly scopes: readonly string[];
+  readonly outcome: "ok" | "error" | "denied";
+  readonly startedAt: number;
+  readonly durationMs: number;
+}
+
 export interface McpServerOptions<Context = unknown> {
+  /** Metadata-only completion hook; observer failures cannot change tool outcomes. */
+  onToolActivity?: (event: McpToolActivity, request: Request) => void;
   name: string;
   version?: string;
   title?: string;
@@ -423,6 +434,7 @@ export function createMcpServer<Context = unknown>(
     return session;
   };
 
+  const grantedScopes = new WeakMap<Request, readonly string[]>();
   const authenticate = async (
     request: Request,
     requiredScope: McpScope,
@@ -433,6 +445,7 @@ export function createMcpServer<Context = unknown>(
       return options.unauthorized?.(request, requiredScope)
         ?? defaultAuthorizationError(401, "invalid_token", "Authentication is required.");
     }
+    if (options.onToolActivity) grantedScopes.set(request, [...authenticated.scopes].filter(scope => scope === "agent:read" || scope === "agent:write"));
     if (!authenticated.scopes.has(requiredScope)) {
       return options.forbidden?.(request, requiredScope)
         ?? defaultAuthorizationError(403, "insufficient_scope", `Scope ${requiredScope} is required.`);
@@ -652,8 +665,19 @@ export function createMcpServer<Context = unknown>(
         return stamp(rpcHttpError(400, id, -32600, "Initialize must not include MCP-Session-Id."));
       }
       const requiredScope = requiredScopeFor(message, registry);
+      const activityTool = message.method === "tools/call" && isRecord(message.params) && typeof message.params.name === "string" ? registry.get(message.params.name) : undefined;
+      const activityStarted = options.onToolActivity ? Date.now() : 0;
+      const activityClock = options.onToolActivity ? performance.now() : 0;
+      let activityEmitted = false;
+      const emitActivity = (outcome: McpToolActivity["outcome"]) => {
+        if (!activityTool || !options.onToolActivity || activityEmitted) return;
+        activityEmitted = true;
+        try { options.onToolActivity(Object.freeze({ tool: activityTool.name, requiredScope,
+          scopes: Object.freeze([...(grantedScopes.get(request) ?? [])]), outcome, startedAt: activityStarted,
+          durationMs: performance.now() - activityClock }), request); } catch { /* Observers cannot change tool outcomes. */ }
+      };
       const authenticated = await authenticate(request, requiredScope);
-      if (authenticated instanceof Response) return stamp(authenticated);
+      if (authenticated instanceof Response) { emitActivity("denied"); return stamp(authenticated); }
       if (!modern && sessionOptions && message.method !== "initialize" && !suppliedSessionId) {
         return stamp(rpcHttpError(
           400,
@@ -708,6 +732,7 @@ export function createMcpServer<Context = unknown>(
           modern,
           supportsMcpApps,
         );
+        emitActivity(isRecord(result) && result.isError === true ? "error" : "ok");
         let created: McpSession | undefined;
         if (!modern && message.method === "initialize" && sessionOptions) {
           created = createSession(requestedProtocol, supportsMcpApps) ?? undefined;
@@ -722,6 +747,7 @@ export function createMcpServer<Context = unknown>(
           ? { "mcp-session-id": created.id }
           : undefined));
       } catch (error) {
+        emitActivity("error");
         if (error instanceof RpcDispatchError) {
           return stamp(rpcHttpError(error.status, id, error.rpcCode, error.message, error.data));
         }

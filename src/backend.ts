@@ -1,3 +1,4 @@
+import { openAgentActivity, type AgentActivityOptions, type AgentActivityFilter, type AgentActivitySnapshot } from "./agent-activity.ts";
 import type { Tracer } from "./observability.ts";
 import { batch, signal, type Cleanup, type ReactiveSignal } from "./core.ts";
 import {
@@ -1639,6 +1640,7 @@ export interface BackendRuntime<
   caller(request: Request): Promise<BackendCaller<AuthProfileOf<Auth>>>;
   handle(request: Request): Promise<Response>;
   inspectQueries(): readonly QueryDiagnostic[];
+  inspectAgentActivity(filter?: AgentActivityFilter): AgentActivitySnapshot;
   close(): void;
 }
 
@@ -1653,6 +1655,7 @@ export interface QueryDiagnostic {
 }
 
 export interface OpenBackendOptions extends SQLiteOptions {
+  agentActivity?: AgentActivityOptions;
   tracer?: Tracer;
   /** Enable local query metadata inspection; arguments, identities, and values are excluded. */
   diagnostics?: boolean;
@@ -1766,7 +1769,10 @@ export async function openBackend<
       })
     : undefined;
   let authRuntime: AuthRuntime<AuthProfileOf<Auth>> | undefined;
+  let activity: ReturnType<typeof openAgentActivity> | undefined;
+  const activityRevisions = new WeakMap<Request, { beforeRevision: number; afterRevision: number }>();
   try {
+    activity = options.agentActivity ? openAgentActivity(database, options.agentActivity) : undefined;
     authRuntime = definition.auth
       ? await openAuth(definition.auth, database, {
           onError: options.onError,
@@ -2057,7 +2063,8 @@ export async function openBackend<
             openWorldHint: agent.openWorld ?? false,
           },
           ...(backendAppBindings.has(path) ? { app: backendAppBindings.get(path)!.tool } : {}),
-          async invoke(input, auth) {
+          async invoke(input, auth, request) {
+            const beforeRevision = activity ? database.version : 0;
             try {
               return fn.kind === "query"
                 ? invokeQuery(path, input, auth)
@@ -2087,6 +2094,7 @@ export async function openBackend<
               else reportError(error);
               throw new McpToolError("BACKEND_ERROR", "The backend operation failed.");
             }
+            finally { if (activity) activityRevisions.set(request, { beforeRevision, afterRevision: database.version }); }
           },
         } satisfies McpTool<AuthRequest<any> | null>;
       })
@@ -2113,6 +2121,9 @@ export async function openBackend<
             } }
           : {}),
         tools: [...mcpTools, ...bucketMcpTools],
+        ...(activity ? { onToolActivity: (event, request) => {
+          try { activity!.record(event, activityRevisions.get(request)); } catch (error) { reportError(error); }
+        } } : {}),
         apps: [...backendApps.values()],
         allowedOrigins: options.allowedOrigins,
         browserCors: agentOptions.browserCors ?? Boolean(oauth),
@@ -2227,6 +2238,10 @@ export async function openBackend<
     jobs: jobsRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["jobs"],
     buckets: options.buckets,
     get version() { return database.version; },
+    inspectAgentActivity(filter) {
+      ensureOpen();
+      return activity?.snapshot(filter) ?? Object.freeze({ protocol: "clank-agent-activity/1", retainedLimit: 0, events: Object.freeze([]) });
+    },
     inspectQueries() {
       const cached = new Map<string, number>();
       const subscribed = new Map<string, number>();
