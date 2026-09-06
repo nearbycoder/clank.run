@@ -45,3 +45,5 @@ export * from "./ssr.js";
 export * from "./node.js";
 
 export * from "./devtools.js";
+
+export * from "./trace-timeline.js";

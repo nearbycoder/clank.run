@@ -1,3 +1,4 @@
+import type { Tracer } from "./observability.js";
 import { type Cleanup, type ReactiveSignal } from "./core.js";
 import { type InferSchema, type InferSchemaShape, type DocumentId, type Schema, type SchemaShape } from "./ai.js";
 import { type AuthClient, type AuthDefinition, type AuthRequest, type AuthRuntime, type AuthState, type AuthUser, type DefaultAuthProfile } from "./auth.js";
@@ -399,6 +400,7 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     close(): void;
 }
 export interface OpenBackendOptions extends SQLiteOptions {
+    tracer?: Tracer;
     diagnostics?: boolean;
     database?: SQLiteDatabase<any>;
     prefix?: string;

@@ -1,3 +1,4 @@
+import { parseTraceparent, formatTraceparent, type Tracer, type TraceContext } from "./observability.ts";
 import { s, type InferSchema, type InferSchemaShape, type Schema, type SchemaShape } from "./ai.ts";
 import {
   type DatabaseSchema,
@@ -671,6 +672,8 @@ export interface RunJobProcessOptions {
 }
 
 export interface OpenJobsOptions {
+  /** Propagate request traces through durable jobs and across worker processes. */
+  tracer?: Tracer;
   now?: () => number;
   random?: () => number;
   onError?: (error: unknown, job?: StoredJob) => void;
@@ -712,6 +715,7 @@ interface JobRow extends Record<string, unknown> {
   queue: string;
   state: JobState;
   payload: string;
+  trace_context: string | null;
   result: string | null;
   error: string | null;
   owner_id: string | null;
@@ -758,6 +762,7 @@ interface WorkflowRow extends Record<string, unknown> {
   id: string;
   name: string;
   definition_hash: string;
+  trace_context: string | null;
   state: WorkflowState;
   input: string;
   output: string | null;
@@ -820,6 +825,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     input: unknown,
     enqueueOptions: EnqueueOptions = {},
     cron?: { name: string; scheduledAt: number },
+    inheritedTrace?: string | null,
   ): JobHandle => {
     ensureOpen();
     const name = jobPath(job);
@@ -845,8 +851,8 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     const result = internal.prepare(`INSERT OR IGNORE INTO clank_jobs (
       id, name, queue, state, payload, owner_id, priority, group_key,
       attempts, max_attempts, timeout_ms, run_at, idempotency_key,
-      scheduled_at, cron_name, created_at, updated_at, cancel_requested
-    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
+      scheduled_at, cron_name, created_at, updated_at, cancel_requested, trace_context
+    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`).run(
       id,
       name,
       queue,
@@ -862,6 +868,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       cron?.name ?? null,
       queuedAt,
       queuedAt,
+      inheritedTrace ?? serializeJobTrace(options.tracer),
     );
     if (Number(result.changes) === 1) {
       event(internal, id, "enqueued", queuedAt, {
@@ -902,8 +909,8 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       const id = workflowId();
       const inserted = internal.prepare(`INSERT OR IGNORE INTO clank_workflow_runs (
         id, name, definition_hash, state, input, output, error, owner_id, idempotency_key,
-        created_at, updated_at, completed_at, cancel_requested
-      ) VALUES (?, ?, ?, 'running', ?, NULL, NULL, ?, ?, ?, ?, NULL, 0)`).run(
+        created_at, updated_at, completed_at, cancel_requested, trace_context
+      ) VALUES (?, ?, ?, 'running', ?, NULL, NULL, ?, ?, ?, ?, NULL, 0, ?)`).run(
         id,
         name,
         workflowDefinitionRevision(workflow),
@@ -912,6 +919,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         idempotencyKey,
         startedAt,
         startedAt,
+        serializeJobTrace(options.tracer),
       );
       if (Number(inserted.changes) !== 1) {
         if (idempotencyKey === null) throw new Error("Could not allocate a unique workflow ID.");
@@ -1127,6 +1135,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
           step.job,
           parsedArgs,
           { idempotencyKey: `workflow:${row.id}:${stepName}` },
+          undefined, row.trace_context,
         );
         internal.prepare(`UPDATE clank_workflow_steps SET state = 'queued', job_id = ?,
           updated_at = ? WHERE workflow_id = ? AND step_name = ? AND state = 'blocked'`).run(
@@ -1401,9 +1410,15 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       signal: controller.signal,
       jobs: scopedPublisher,
     });
+    const span = options.tracer?.startSpan(`job ${claimed.row.name}`.slice(0, 200), {
+      kind: "consumer", parent: parseJobTrace(claimed.row.trace_context),
+      attributes: { "clank.job.id": claimed.row.id, "clank.job.name": claimed.row.name, "clank.job.attempt": Number(claimed.row.attempts) },
+    });
+    span?.setStatus("error");
     try {
+      const execute = () => definition.handler(context, input);
       const output = await Promise.race([
-        Promise.resolve(definition.handler(context, input)),
+        Promise.resolve(span ? options.tracer!.withSpan(span, execute) : execute()),
         aborted(controller.signal),
       ]);
       if (stale) return;
@@ -1423,6 +1438,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         workerId,
       );
       if (Number(settled.changes) === 1) {
+        span?.setStatus("ok");
         event(internal, claimed.row.id, "succeeded", completedAt, {
           workerId,
           attempt: Number(claimed.row.attempts),
@@ -1457,6 +1473,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     } finally {
       clearInterval(heartbeat);
       clearTimeout(timeout);
+      span?.end();
     }
   };
 
@@ -1810,6 +1827,9 @@ function ensureJobSchema(internal: SQLiteInternal): void {
     lease_until INTEGER,
     cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0, 1))
   )`);
+  if (!internal.prepare("PRAGMA table_info(clank_jobs)").all().some((column) => column.name === "trace_context")) {
+    internal.exec("ALTER TABLE clank_jobs ADD COLUMN trace_context TEXT");
+  }
   internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_jobs_idempotency
     ON clank_jobs (name, idempotency_key) WHERE idempotency_key IS NOT NULL`);
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_jobs_claim
@@ -1863,6 +1883,9 @@ function ensureJobSchema(internal: SQLiteInternal): void {
     completed_at INTEGER,
     cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0, 1))
   )`);
+  if (!internal.prepare("PRAGMA table_info(clank_workflow_runs)").all().some((column) => column.name === "trace_context")) {
+    internal.exec("ALTER TABLE clank_workflow_runs ADD COLUMN trace_context TEXT");
+  }
   internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_workflow_runs_idempotency
     ON clank_workflow_runs (name, coalesce(owner_id, ''), idempotency_key)
     WHERE idempotency_key IS NOT NULL`);
@@ -3125,4 +3148,21 @@ function environmentList(raw: unknown, label: string): readonly string[] | undef
   const values = raw.split(",").map((value) => identifier(value, `${label} queue`, 128));
   if (values.length > 64) throw new TypeError(`${label} cannot contain more than 64 queues.`);
   return Object.freeze([...new Set(values)]);
+}
+
+function serializeJobTrace(tracer: Tracer | undefined): string | null {
+  const context = tracer?.current();
+  if (!context) return null;
+  const parent = formatTraceparent(context);
+  if (!parseTraceparent(parent)) return null;
+  return JSON.stringify({ parent, ...(context.requestId && /^[A-Za-z0-9._-]{1,128}$/.test(context.requestId) ? { requestId: context.requestId } : {}) });
+}
+function parseJobTrace(value: string | null): TraceContext | undefined {
+  if (!value || value.length > 512) return undefined;
+  try {
+    const record = JSON.parse(value);
+    const context = typeof record.parent === "string" ? parseTraceparent(record.parent) : undefined;
+    if (context && typeof record.requestId === "string" && /^[A-Za-z0-9._-]{1,128}$/.test(record.requestId)) context.requestId = record.requestId;
+    return context;
+  } catch { return undefined; }
 }

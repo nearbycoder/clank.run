@@ -121,3 +121,43 @@ observability.health.register("email", checkMail, { critical: false });
 ```
 
 Checks run concurrently with individual timeouts. Responses use `no-store` and return `503` when a critical dependency fails.
+
+## Request-to-job timelines
+
+Pass the same tracer to HTTP instrumentation and the backend. Backend queries and mutations
+create metadata-only spans. Enqueued jobs persist the current trace context in the same durable
+row as their work; a worker can restore it after a process restart. Each attempt gets its own
+consumer span, linked to the original mutation. Retrying or deduplicating a job preserves its
+original parent. Workflow runs retain their starting context for later dependent steps.
+
+```ts
+import { createObservability, openBackend } from "@clank.run/framework";
+import { createTraceTimeline } from "@clank.run/framework/trace-timeline";
+import { createDevtools, serveDevtools } from "@clank.run/framework/devtools";
+
+const timeline = createTraceTimeline({ maxSpans: 500 });
+const telemetry = createObservability({ serviceName: "my-app", exporter: timeline });
+const backend = await openBackend(definition, { path: "dev.sqlite", tracer: telemetry.tracer });
+const inspector = createDevtools({ timeline: () => timeline.snapshot() });
+const panel = await serveDevtools(inspector);
+// Install telemetry.middleware() on your app, or wrap its handler with telemetry.instrument().
+```
+
+A separate worker uses its own `createObservability()` instance and passes that tracer to
+`openBackend()` or `openJobs()`. With an OTLP exporter, the web and worker spans meet in the
+configured collector using the persisted trace ID. The local in-memory timeline shows only spans
+exported to that instance; it is not a cross-process collector. `snapshot(traceId)` filters one
+trace, and the DevTools panel displays operation, request ID, parent span, timing, job ID, and
+attempt. Job IDs are trace attributes, never metric labels.
+
+The timeline excludes raw URL paths, arbitrary custom span names, all unrecognized attributes,
+arguments, results, and exception details. HTTP spans are labelled “HTTP request”; framework
+query/mutation/job names remain visible. It retains at most 500 spans by default (configurable
+1–5,000), labels truncated history, and renders escaped HTML. It is a local operator tool with no
+public application endpoint or implied per-user access control. Use static operation names and
+opaque request IDs; the framework's ordinary OTLP exporter retains its existing richer metadata.
+
+Sampling still applies. Legacy jobs with no context start an independent trace; malformed persisted
+contexts are ignored. Cancellation, timeout, failure, and lost-lease attempts are not reported as
+successful spans. Job completion spans measure the attempt through settlement, not time spent
+waiting in the queue. Stop the inspector, backend, and telemetry when shutting down.
