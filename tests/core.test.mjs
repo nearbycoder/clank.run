@@ -47,6 +47,59 @@ test("batch coalesces effects and transactions roll back atomically", () => {
   assert.deepEqual(totals, [3, 30, 30]);
 });
 
+test("one write settles direct and diamond dependencies before running effects", () => {
+  for (const directFirst of [true, false]) {
+    createRoot(() => {
+      const source = signal(1);
+      const left = computed(() => source.value * 2);
+      const right = computed(() => source.value * 3);
+      const total = computed(() => left.value + right.value);
+      const seen = [];
+      effect(() => {
+        seen.push(directFirst
+          ? [source.value, total.value]
+          : [total.value, source.value]);
+      });
+      source.value = 2;
+      source.value = 3;
+      assert.deepEqual(seen, directFirst
+        ? [[1, 5], [2, 10], [3, 15]]
+        : [[5, 1], [10, 2], [15, 3]]);
+    });
+  }
+});
+
+test("wide computed fan-out runs a shared effect once per write", () => {
+  createRoot(() => {
+    const source = signal(0);
+    const branches = Array.from({ length: 100 }, (_, index) => computed(() => source.value + index));
+    let runs = 0;
+    let total;
+    effect(() => {
+      runs++;
+      total = branches.reduce((sum, branch) => sum + branch.value, 0);
+    });
+    source.value = 1;
+    assert.equal(total, 5050);
+    assert.equal(runs, 2);
+  });
+});
+
+test("failed effect flushes retain pending work and restore notification batching", () => {
+  const source = signal(0);
+  const seen = [];
+  const stopFailure = effect(() => {
+    if (source.value === 1) throw new Error("effect failed");
+  });
+  const stop = effect(() => { seen.push(source.value); });
+  assert.throws(() => { source.value = 1; }, /effect failed/);
+  stopFailure();
+  batch(() => {});
+  source.value = 2;
+  assert.deepEqual(seen, [0, 1, 2]);
+  stop();
+});
+
 test("untrack reads without creating dependencies", () => {
   const tracked = signal(1);
   const ignored = signal(2);

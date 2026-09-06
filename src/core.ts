@@ -42,7 +42,11 @@ function detach(observer: Observer): void {
 }
 
 function notify(source: Source): void {
-  for (const observer of [...source.observers]) observer.schedule();
+  // Invalidate the whole dependency graph before effects read it. Flushing
+  // while visiting observers repeats shared effects and exposes stale siblings.
+  batch(() => {
+    for (const observer of [...source.observers]) observer.schedule();
+  });
 }
 
 function flushEffects(): void {
