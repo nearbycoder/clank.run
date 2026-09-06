@@ -25,6 +25,7 @@
       "import": "./dist/index.js"
     },
     "./trace-timeline": { "types": "./dist/trace-timeline.d.ts", "import": "./dist/trace-timeline.js" },
+    "./preview-fixtures": { "types": "./dist/preview-fixtures.d.ts", "import": "./dist/preview-fixtures.js" },
     "./devtools": { "types": "./dist/devtools.d.ts", "import": "./dist/devtools.js" },
     "./core": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },
     "./task": { "types": "./dist/task.d.ts", "import": "./dist/task.js" },

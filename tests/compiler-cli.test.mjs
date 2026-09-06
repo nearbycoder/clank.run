@@ -1796,6 +1796,14 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
         : undefined,
     });
     response.setHeader("content-type", "application/json");
+    if (request.method === "POST" && request.url === "/api/projects/project_preview_parent/previews/preview_cli_test/fixture") {
+      assert.equal(request.headers["content-type"], "application/vnd.clank.preview-fixture+sqlite");
+      assert.equal(request.headers["x-clank-content-sha256"], createHash("sha256").update(body).digest("hex"));
+      assert.equal(request.headers["x-clank-fixture-confirmation"], "seed-preview feature-auth");
+      assert.equal(body.subarray(0, 16).toString(), "SQLite format 3\0");
+      response.end(JSON.stringify({ ok: true, data: { mode: "fixture", bytes: body.byteLength } }));
+      return;
+    }
     if (
       request.method === "POST"
       && request.url === "/api/projects/project_preview_parent/previews"
@@ -1946,6 +1954,19 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
       confirmation: "delete-preview feature-auth",
       acknowledgeDataLoss: true,
     });
+    const fixtureFile = join(target, "transport-fixture.sqlite");
+    await writeFile(fixtureFile, Buffer.from("SQLite format 3\0fixture-transport"));
+    const fixtureDeploy = await runCliResult(["preview", "deploy", "feature-auth", "--fixture", fixtureFile, "--json"], target, environment);
+    assert.equal(fixtureDeploy.code, 0, fixtureDeploy.stderr);
+    assert.equal(JSON.parse(fixtureDeploy.stdout).data.mode, "fixture");
+    assert.equal(observed.at(-1).url, "/api/projects/project_preview_parent/previews/preview_cli_test/fixture");
+    const countBeforeInvalid = observed.length;
+    const incompatibleModes = await runCliResult(["preview", "deploy", "feature-auth", "--fixture", fixtureFile, "--data=sanitized", "--json"], target, environment);
+    assert.notEqual(incompatibleModes.code, 0);
+    assert.match(incompatibleModes.stderr, /either --fixture/);
+    assert.equal(observed.length, countBeforeInvalid);
+    const linkAfter = JSON.parse(await readFile(join(target, ".clank", "project.json"), "utf8"));
+    assert.equal(linkAfter.projectId, "project_preview_parent");
     assert.ok(observed.every((request) =>
       request.authorization === "Bearer clnk_preview_test_token"));
   } finally {

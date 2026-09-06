@@ -275,3 +275,53 @@ claim policy, or response bounds.
 Use stable, low-cardinality names such as `pull-482` or `branch-auth-refresh`. Always run the remove
 command when a pull request closes; TTL cleanup is the safety net for interrupted workflows. Do not
 put secrets, email addresses, commit messages, or untrusted free-form text in a preview name.
+
+## Synthetic fixture previews
+
+Use a known application state for a pull request without reading production data. Build a new
+SQLite fixture from the existing `clank-fixture/1` document and the application's actual backend
+schema, then pass the resulting file to the preview deploy command:
+
+```ts
+import { createPreviewFixture } from "@clank.run/framework/preview-fixtures";
+import { readFile } from "node:fs/promises";
+import { backend } from "./dist/backend.js";
+
+const fixture = JSON.parse(await readFile("fixtures/default.json", "utf8"));
+await createPreviewFixture(backend, fixture, {
+  outputPath: ".clank/demo.sqlite",
+  password: process.env.CLANK_FIXTURE_PASSWORD!,
+  migrations: "migrations",
+});
+```
+
+```sh
+clank preview deploy pull-482 --fixture=.clank/demo.sqlite --ttl=24 --json
+```
+
+Create `.clank/` first. The helper writes an owner-readable file exclusively and refuses to
+replace an existing file. It creates a fresh temporary database, applies migrations, registers
+at most 20 synthetic `example.invalid` users, validates records against the real table schemas,
+resolves fixture references, and preserves owned-table isolation. Use a separate password of at
+least 12 characters for these disposable accounts; it is not written into the fixture JSON or
+CLI output. Registration follows the application's auth policy, so disabled signup or custom
+verification requirements may need an application-specific fixture setup.
+
+Fixture records are repeatable logical data, not byte-identical databases: IDs, salts, and
+creation timestamps are newly generated. The helper does not execute application mutations or
+external job workers. Run application contract tests separately to verify business rules.
+Never use production identities, passwords, or an existing production database as a fixture.
+
+The CLI builds and deploys first, uploads at most 32 MiB with its checksum, and leaves the local
+project link pointing to production. Seeding replaces only the explicitly named preview's data;
+it cannot target production or another pull request's preview. The platform validates SQLite
+integrity and the fixture manifest before replacement. Local previews apply migrations, stop,
+take a safety snapshot, and health-check the restored runtime; provider previews use the existing
+generation-bound encrypted restore path. Incompatible fixtures fail without replacing healthy
+local preview data. The dashboard labels the resulting data state **Fixture**, and audits record
+only counts, size, and digest.
+
+`--fixture` and `--data=sanitized` are mutually exclusive. Use fixtures for predictable synthetic
+journeys and the existing production-reviewed sanitizer for realistic data distributions. Neither
+mode copies production secrets into a preview automatically. Keep generated fixture databases
+and their credentials outside version control and remove them after the preview is no longer needed.

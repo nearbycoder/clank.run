@@ -175,7 +175,7 @@ const COMMANDS = Object.freeze({
     summary: "Build, package, migrate, and atomically deploy in one command.",
   },
   preview: {
-    usage: "clank preview <deploy|list|remove|github> [name] [directory] [--ttl <hours>] [--data <empty|sanitized>] [--json]",
+    usage: "clank preview <deploy|list|remove|github> [name] [directory] [--ttl <hours>] [--data <empty|sanitized>] [--fixture <database.sqlite>] [--json]",
     summary: "Deploy isolated previews with empty or policy-sanitized data, manually or through GitHub OIDC.",
   },
   status: {
@@ -237,6 +237,7 @@ const VALUE_OPTIONS = Object.freeze({
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "placement", "output"],
   preview: [
+    "fixture",
     "ttl",
     "data",
     "confirm",
@@ -2133,6 +2134,18 @@ async function previewCommand(args) {
     if (!["empty", "sanitized"].includes(dataMode)) {
       throw new CliError("--data must be empty or sanitized.");
     }
+    const fixturePath = option(args, "fixture");
+    let fixtureBytes;
+    let fixtureDigest;
+    if (fixturePath !== undefined) {
+      if (dataMode !== "empty") throw new CliError("Choose either --fixture or --data=sanitized.");
+      const file = resolve(root, fixturePath);
+      const info = await lstat(file);
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 32 * 1024 * 1024) throw new CliError("Fixture must be a regular SQLite file of at most 32 MiB.");
+      fixtureBytes = await readFile(file);
+      if (fixtureBytes.byteLength > 32 * 1024 * 1024 || fixtureBytes.subarray(0, 16).toString() !== "SQLite format 3\0") throw new CliError("Fixture is not a bounded SQLite database.");
+      fixtureDigest = await deploymentDigest(fixtureBytes);
+    }
     const created = await platformRequest(
       profile.server,
       `/api/projects/${encodeURIComponent(link.projectId)}/previews`,
@@ -2193,6 +2206,16 @@ async function previewCommand(args) {
         },
       );
       data = branched.data;
+    }
+    if (fixtureBytes) {
+      if (!json) console.log("Seeding the isolated preview from the synthetic fixture…");
+      const seeded = await fetchPlatformJson(`${profile.server}/api/projects/${encodeURIComponent(link.projectId)}/previews/${encodeURIComponent(preview.id)}/fixture`, {
+        method: "POST", headers: { authorization: `Bearer ${profile.token}`,
+          "content-type": "application/vnd.clank.preview-fixture+sqlite", "x-clank-content-sha256": fixtureDigest,
+          "x-clank-fixture-confirmation": `seed-preview ${preview.previewName}` }, body: fixtureBytes,
+      }, PLATFORM_DEPLOY_TIMEOUT_MS);
+      if (!seeded.response.ok) throw ApiError.from(seeded.payload, seeded.response.status);
+      data = seeded.payload.data;
     }
     const result = {
       protocol: "clank-preview-result/1",

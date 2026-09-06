@@ -1186,6 +1186,67 @@ test("platform upgrades legacy quota storage and prunes usage at startup", async
   }
 });
 
+test("preview fixtures replace only the named preview and reject invalid or incompatible databases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-preview-seeding-"));
+  const dataDirectory = join(root, "platform");
+  const platform = await openPlatform({ dataDirectory, publicUrl: "http://127.0.0.1:4200", signup: true,
+    appPortStart: 4960, appPortEnd: 4965, backups: { intervalMs: false } });
+  try {
+    const owner = await authorizeCli(platform, "fixture-owner@example.com");
+    const other = await authorizeCli(platform, "fixture-other@example.com");
+    const parent = (await payload(platform, jsonRequest("/api/projects", { method: "POST", token: owner.accessToken,
+      body: { name: "Fixture parent", slug: "fixture-parent" } }), 201)).project;
+    const preview = (await payload(platform, jsonRequest(`/api/projects/${parent.id}/previews`, {
+      method: "POST", token: owner.accessToken, body: { name: "seeded" } }), 201)).preview;
+    const migrations = [["0001_items.sql", "CREATE TABLE items(value TEXT NOT NULL);\n"]];
+    const artifact = await appArtifact(join(root, "app"), "healthy", migrations);
+    assert.equal((await deploy(platform, parent.id, owner.accessToken, artifact, "fixture-parent-release")).response.status, 201);
+    assert.equal((await deploy(platform, preview.id, owner.accessToken, artifact, "fixture-preview-release")).response.status, 201);
+    const fixtureFile = join(root, "fixture.sqlite");
+    const db = new DatabaseSync(fixtureFile);
+    db.exec(`CREATE TABLE clank_preview_fixture(protocol TEXT, users INTEGER, records INTEGER);
+      INSERT INTO clank_preview_fixture VALUES ('clank-preview-fixture/1', 0, 0);`);
+    db.close();
+    let bytes = await readFile(fixtureFile);
+    const seed = async (target = preview.id, token = owner.accessToken, digest) => platform.handle(new Request(
+      `http://127.0.0.1:4200/api/projects/${parent.id}/previews/${target}/fixture`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/vnd.clank.preview-fixture+sqlite",
+          "x-clank-fixture-confirmation": "seed-preview seeded", "x-clank-content-sha256": digest ?? await deploymentDigest(bytes) }, body: bytes,
+      }));
+    assert.equal((await seed(preview.id, owner.accessToken, "wrong")).status, 422);
+    assert.ok([403, 404].includes((await seed(preview.id, other.accessToken)).status));
+    assert.equal((await seed(parent.id)).status, 404, "a production project cannot be the fixture target");
+    for (const [suffix, method] of [["/data", "POST"], ["", "DELETE"]]) {
+      const response = await platform.handle(jsonRequest(`/api/projects/${parent.id}/previews/${parent.id}${suffix}`, {
+        method, token: owner.accessToken, body: { mode: "sanitized", confirmation: "irrelevant", acknowledgeDataLoss: true },
+      }));
+      assert.equal(response.status, 404, "parent-as-preview is rejected before acquiring nested locks");
+    }
+    const applied = await seed();
+    assert.equal(applied.status, 200, await applied.clone().text());
+    assert.equal((await applied.json()).data.mode, "fixture");
+    const previewFile = join(dataDirectory, "projects", preview.id, "data", "app.sqlite");
+    const seeded = new DatabaseSync(previewFile);
+    seeded.exec("INSERT INTO items VALUES ('preview-only edit')");
+    seeded.close();
+    const original = new DatabaseSync(join(dataDirectory, "projects", parent.id, "data", "app.sqlite"));
+    assert.equal(original.prepare("SELECT count(*) AS n FROM items").get().n, 0);
+    original.close();
+    const previews = await payload(platform, jsonRequest(`/api/projects/${parent.id}/previews`, { token: owner.accessToken }));
+    assert.equal(previews.previews[0].dataBranch.mode, "fixture");
+    const incompatible = new DatabaseSync(fixtureFile);
+    incompatible.exec("CREATE TABLE items(incompatible INTEGER)");
+    incompatible.close();
+    bytes = await readFile(fixtureFile);
+    assert.equal((await seed()).status, 422, "incompatible migrations cannot replace a healthy preview");
+    const retained = new DatabaseSync(previewFile);
+    assert.equal(retained.prepare("SELECT value FROM items").get().value, "preview-only edit");
+    retained.close();
+    bytes = new TextEncoder().encode("not a database");
+    assert.equal((await seed()).status, 422);
+  } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("deployment comparisons isolate activation windows, traffic confidence, and project access", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-release-comparison-"));
   const platform = await openPlatform({ dataDirectory: join(root, "platform"),
