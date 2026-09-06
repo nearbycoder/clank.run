@@ -3442,6 +3442,75 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
   };
 
+  const restorePreviewFixture = async (principal: TokenPrincipal, parent: ProjectRow, preview: ProjectRow, bytes: Uint8Array, digest: string) => {
+    const release = preview.activeReleaseId ? releaseById(storage.internal, preview.activeReleaseId) : null;
+    if (!release || !preview.databasePath) throw new PlatformError(409, "PREVIEW_DATA_TARGET_UNAVAILABLE", "Deploy the preview before seeding fixtures.");
+    const temporary = await releaseBackupPath(paths.projects, preview.id, `fixture-upload-${await randomId(8)}`);
+    const verified = await releaseBackupPath(paths.projects, preview.id, `fixture-verified-${await randomId(8)}`);
+    let safety: string | null = null;
+    const fsName = "node:fs/promises", sqliteName = "node:sqlite", pathName = "node:path";
+    const [fs, sqlite, path] = await Promise.all([import(fsName), import(sqliteName), import(pathName)]);
+    try {
+      await fs.writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+      await backupSQLite(temporary, verified);
+      const database = new sqlite.DatabaseSync(verified, { readOnly: true });
+      let manifest: Record<string, unknown>;
+      try {
+        const entries = database.prepare("SELECT protocol, users, records FROM clank_preview_fixture LIMIT 2").all();
+        if (entries.length !== 1 || entries[0].protocol !== "clank-preview-fixture/1"
+          || !Number.isSafeInteger(entries[0].users) || entries[0].users < 0 || entries[0].users > 20
+          || !Number.isSafeInteger(entries[0].records) || entries[0].records < 0 || entries[0].records > 10_000) throw new Error("Invalid fixture manifest.");
+        manifest = entries[0];
+      } finally { database.close(); }
+      if (preview.placement === "provider") {
+        const effective = projectQuotas(storage.internal, preview, quotaDefaults);
+        const manager = await projectBackupManager(paths.projects, preview, masterKey,
+          { ...backupPolicy, maxBackups: effective.backupsPerProject }, backupObjects);
+        let backup: BackupManifest;
+        try { backup = await manager.createFromSnapshot({ bytes: await fs.readFile(verified), source: path.basename(preview.databasePath), reason: "synthetic preview fixture" }); }
+        finally { manager.close(); }
+        backupScheduler.recordBackup(preview.id, backup);
+        await queueProviderRestore(principal, preview, release, backup.id);
+      } else {
+        const migrationDirectory = await safeReleasePath(release.directory, release.config.database.migrations);
+        await applyMigrations({ path: verified, directory: migrationDirectory, allowUnsafe: release.config.database.allowUnsafeMigrations });
+        const dataRoot = await projectDataDirectory(paths.projects, preview.id);
+        const target = await safeProjectDataPath(dataRoot, preview.databasePath);
+        safety = await releaseBackupPath(paths.projects, preview.id, `fixture-safety-${await randomId(8)}`);
+        cancelRestart(preview.id);
+        await stopProject(preview.id);
+        let copied = false;
+        try {
+          await backupSQLite(target, safety);
+          copied = true;
+          await restoreSQLiteBackup(verified, target);
+          await startRelease(preview, release, decryptProjectSecrets(storage.internal, preview.id, masterKey));
+        } catch (error) {
+          await stopProject(preview.id);
+          if (copied) await restoreSQLiteBackup(safety, target);
+          await startRelease(preview, release, decryptProjectSecrets(storage.internal, preview.id, masterKey));
+          throw error;
+        }
+      }
+      const createdAt = Date.now();
+      storage.internal.prepare("DELETE FROM clank_platform_preview_data_branches WHERE preview_project_id = ?").run(preview.id);
+      storage.internal.prepare(`INSERT INTO clank_platform_preview_fixtures(preview_project_id, digest, bytes, created_at)
+        VALUES (?, ?, ?, ?) ON CONFLICT(preview_project_id) DO UPDATE SET digest = excluded.digest,
+          bytes = excluded.bytes, created_at = excluded.created_at`).run(preview.id, digest, bytes.byteLength, createdAt);
+      audit(storage.internal, principal.userId, principal.tokenId, preview.id, "preview.fixture.seed", {
+        parentProjectId: parent.id, previewName: preview.previewName, digest, bytes: bytes.byteLength,
+        users: manifest.users, records: manifest.records,
+      });
+      return { mode: "fixture", digest, bytes: bytes.byteLength, users: manifest.users, records: manifest.records, createdAt };
+    } catch (error) {
+      if (error instanceof PlatformError) throw error;
+      throw new PlatformError(422, "PREVIEW_FIXTURE_FAILED", "Fixture validation, migration, or activation failed. Check the fixture against the preview release.");
+    } finally {
+      await removeSensitiveSQLiteFiles(temporary); await removeSensitiveSQLiteFiles(verified);
+      if (safety) await removeSensitiveSQLiteFiles(safety);
+    }
+  };
+
   const branchSanitizedPreviewData = async (
     principal: TokenPrincipal,
     parent: ProjectRow,
@@ -6750,13 +6819,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               mode, report, created_at
             FROM clank_platform_preview_data_branches WHERE preview_project_id = ?`)
             .get(preview.id);
+          const fixture = storage.internal.prepare("SELECT digest, bytes, created_at FROM clank_platform_preview_fixtures WHERE preview_project_id = ?").get(preview.id);
           return {
             ...projectPayload(preview),
             url: appUrlTemplate.replaceAll("{slug}", preview.slug)
               .replaceAll("{port}", String(active.get(preview.id)?.port ?? preview.port)),
             runtimeStatus: projectRuntimeState(storage.internal, active, preview, release, Boolean(ingress)),
             activeRelease: release ? publicRelease(release) : null,
-            dataBranch: branch ? {
+            dataBranch: fixture && (!branch || Number(fixture.created_at) > Number(branch.created_at))
+              ? { mode: "fixture", digest: fixture.digest, bytes: Number(fixture.bytes), createdAt: Number(fixture.created_at) }
+              : branch ? {
               mode: String(branch.mode),
               sourceReleaseId: String(branch.source_release_id),
               targetReleaseId: String(branch.target_release_id),
@@ -6949,8 +7021,28 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           },
         }, result.created ? 201 : 200);
       }
+      const fixtureMatch = /^previews\/([A-Za-z0-9_-]{8,128})\/fixture$/.exec(operation);
+      if (fixtureMatch && request.method === "POST") {
+        if (fixtureMatch[1] === project.id) throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
+        if (project.parentProjectId) throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Use the production project's preview endpoint.");
+        if (request.headers.get("content-type") !== "application/vnd.clank.preview-fixture+sqlite") throw new PlatformError(415, "INVALID_FIXTURE_TYPE", "Upload a Clank preview fixture database.");
+        const bytes = await readRequestBytes(request, Math.min(32 * 1024 * 1024, backupPolicy.maxDatabaseBytes));
+        const digest = await deploymentRuntimeDigest(bytes);
+        if (request.headers.get("x-clank-content-sha256") !== digest) throw new PlatformError(422, "FIXTURE_DIGEST_MISMATCH", "Fixture checksum did not match.");
+        const result = await withProjectLock(project.id, () => withProjectLock(fixtureMatch[1]!, async () => {
+          const parent = projectById(storage.internal, project.id);
+          const preview = projectById(storage.internal, fixtureMatch[1]!);
+          if (!parent || parent.parentProjectId || !preview || preview.parentProjectId !== parent.id || !preview.previewName
+            || (preview.previewExpiresAt ?? 0) <= Date.now()
+            || (principal.previewName !== null && principal.previewName !== preview.previewName)) throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
+          if (request.headers.get("x-clank-fixture-confirmation") !== `seed-preview ${preview.previewName}`) throw new PlatformError(400, "CONFIRMATION_REQUIRED", "Confirm replacement of this preview's data.");
+          return restorePreviewFixture(principal, parent, preview, bytes, digest);
+        }));
+        return api({ ok: true, data: result });
+      }
       const previewDataMatch = /^previews\/([A-Za-z0-9_-]{8,128})\/data$/.exec(operation);
       if (previewDataMatch && request.method === "POST") {
+        if (previewDataMatch[1] === project.id) throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
         if (project.parentProjectId) {
           throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Use the production project's preview endpoint.");
         }
@@ -6989,6 +7081,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       const previewDeleteMatch = /^previews\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
       if (previewDeleteMatch && request.method === "DELETE") {
+        if (previewDeleteMatch[1] === project.id) throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
         if (project.parentProjectId) {
           throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Use the production project's preview endpoint.");
         }
@@ -8371,6 +8464,10 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_github_preview_repository
     ON clank_platform_github_preview_bindings (repository_id, project_id)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_preview_fixtures (
+    preview_project_id TEXT PRIMARY KEY REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    digest TEXT NOT NULL, bytes INTEGER NOT NULL, created_at INTEGER NOT NULL
+  )`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_preview_data_branches (
     preview_project_id TEXT PRIMARY KEY REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
     parent_project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
@@ -14313,6 +14410,7 @@ function recordPreviewDataBranch(
 ): void {
   const now = Date.now();
   internal.transaction((changes) => {
+    internal.prepare("DELETE FROM clank_platform_preview_fixtures WHERE preview_project_id = ?").run(preview.id);
     internal.prepare(`INSERT INTO clank_platform_preview_data_branches
       (preview_project_id, parent_project_id, source_release_id, target_release_id,
         mode, report, created_by, created_at)

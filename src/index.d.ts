@@ -47,3 +47,4 @@ export * from "./node.js";
 export * from "./devtools.js";
 
 export * from "./trace-timeline.js";
+export * from "./preview-fixtures.js";
