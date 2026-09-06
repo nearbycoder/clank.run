@@ -4,6 +4,15 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.19.6 - 2026-09-06
+
+- Coalesce shared reactive dependency invalidation before effects run, eliminating duplicate executions and partially updated computed values from a single signal write.
+- Dispose server-rendered component scopes after asynchronous output settles, releasing subscriptions and cleanup callbacks on success and failure.
+- Revalidate unchanged static GET/HEAD responses with weak ETags and bodyless `304` responses, avoiding repeated file streams and asset transfers.
+- Release unused HEAD response bodies and response readers after backpressured or early client disconnects, while preserving responses to rejected request bodies.
+- Load managed-ingress custom domains in one query per routing snapshot and skip provider fleet reads on local-only installations, preserving immediate routing and fencing updates.
+- Correct deployment-token setup guidance for workflows that prune inactive releases before publishing.
+
 ## 0.19.5 - 2026-08-18
 
 - Fixed recurring MCP OAuth disconnects for clients with replicated credential storage. Adaptive
