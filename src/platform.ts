@@ -9091,12 +9091,27 @@ async function ingressRoutes(
 ) {
   const projects = internal.prepare(`SELECT * FROM clank_platform_projects
     WHERE active_release_id IS NOT NULL ORDER BY id`).all();
-  const nodes = new Map(orchestrator.listNodes().map((node) => [node.id, node]));
-  return Promise.all(projects.map(async (row) => {
+  if (projects.length === 0) return [];
+  // Load verified host assignments once per fresh route snapshot, rather than
+  // running one query per project on every ingress request.
+  const hostsByProject = new Map<string, string[]>();
+  for (const row of internal.prepare(`SELECT d.project_id, d.hostname
+    FROM clank_platform_domains d
+    JOIN clank_platform_projects p ON p.id = d.project_id
+    WHERE p.active_release_id IS NOT NULL
+      AND d.status = 'verified' AND d.routing_status = 'ready'
+    ORDER BY d.project_id, d.hostname`).all()) {
+    const projectId = String(row.project_id);
+    const hosts = hostsByProject.get(projectId) ?? [];
+    hosts.push(String(row.hostname));
+    hostsByProject.set(projectId, hosts);
+  }
+  const nodes = new Map(projects.some((row) => row.placement === "provider")
+    ? orchestrator.listNodes().map((node) => [node.id, node] as const)
+    : []);
+  return projects.map((row) => {
     const project = projectRow(row);
-    const hosts = internal.prepare(`SELECT hostname FROM clank_platform_domains
-      WHERE project_id = ? AND status = 'verified' AND routing_status = 'ready' ORDER BY hostname`).all(project.id)
-      .map((row) => String(row.hostname));
+    const hosts = hostsByProject.get(project.id) ?? [];
     if (baseDomain) hosts.unshift(`${project.slug}.${baseDomain}`);
     if (project.placement === "provider") {
       const desired = orchestrator.desired(project.id);
@@ -9148,7 +9163,7 @@ async function ingressRoutes(
         && active.has(project.id)
         && !runtimeTransitions.has(project.id),
     };
-  }));
+  });
 }
 
 function projectRuntimeOnline(

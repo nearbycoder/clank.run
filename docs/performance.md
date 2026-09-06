@@ -51,6 +51,16 @@ running effects, so an effect reached through several computed branches runs onc
 values. Wrap related writes in `batch()` so each dependent effect executes once after the final
 write. `transaction()` provides the same coalescing plus rollback on failure.
 
+## Hosted request routing
+
+Managed ingress reads a fresh routing snapshot for each request. Verified custom domains are
+loaded in one query for all deployed projects, and installations with only local applications
+skip provider fleet reads. Domain revocations, reassignments, process replacement, and provider
+generation checks remain live; routing does not wait for a cache timeout.
+
+The platform regression suite counts domain queries across multiple deployed applications and
+checks immediate host reassignment and revocation alongside the rollout and provider tests.
+
 ## Measuring identity
 
 The renderer regression suite asserts identity, not merely final HTML. It stores references to list elements and text nodes, edits and reorders immutable records, and verifies that the same objects remain mounted. This prevents a visually correct remount from being mistaken for a fine-grained update.

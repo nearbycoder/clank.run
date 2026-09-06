@@ -1186,6 +1186,74 @@ test("platform upgrades legacy quota storage and prunes usage at startup", async
   }
 });
 
+test("ingress batches domain reads across projects and observes routing changes immediately", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-route-queries-"));
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4930,
+    appPortEnd: 4935,
+    ingress: { enabled: true, baseDomain: "apps.example.test", domainRecheckIntervalMs: false },
+    backups: { intervalMs: false },
+  });
+  const writable = new DatabaseSync(join(root, "platform", "control.sqlite"));
+  try {
+    const owner = await authorizeCli(platform, "route-queries@example.com");
+    const projectIds = [];
+    for (let index = 0; index < 3; index++) {
+      const created = await payload(platform, jsonRequest("/api/projects", {
+        method: "POST", token: owner.accessToken,
+        body: { name: `Route ${index}`, slug: `route-${index}` },
+      }), 201);
+      projectIds.push(created.project.id);
+      const artifact = await appArtifact(join(root, `app-${index}`), `app-${index}`, []);
+      const result = await deploy(platform, created.project.id, owner.accessToken, artifact, `route-query-release-${index}`);
+      assert.equal(result.response.status, 201, JSON.stringify(result.body));
+      writable.prepare(`INSERT INTO clank_platform_domains
+        (id, project_id, hostname, record_name, record_value, status, routing_status, expires_at, created_at)
+        VALUES (?, ?, ?, 'test', 'test', 'verified', 'ready', ?, ?)`)
+        .run(`domain_${index}`, created.project.id, `route-${index}.customer.test`, Date.now() + 60_000, Date.now());
+    }
+    const reads = [];
+    const prototype = Object.getPrototypeOf(writable.prepare("SELECT 1"));
+    const all = prototype.all;
+    const spy = t.mock.method(prototype, "all", function (...args) {
+      reads.push(this.sourceSQL);
+      return all.apply(this, args);
+    });
+    try {
+      for (let index = 0; index < 3; index++) {
+        reads.length = 0;
+        const response = await platform.handle(new Request(`https://route-${index}.customer.test/`));
+        assert.equal(response.status, 200);
+        assert.equal(await response.text(), `app-${index}`);
+        assert.equal(reads.filter((sql) => /FROM clank_platform_domains\b/.test(sql)).length, 1,
+          "domain reads must stay constant as the project count grows");
+        assert.equal(reads.filter((sql) => /FROM clank_deployment_nodes\b/.test(sql)).length, 0,
+          "local projects must not load the provider fleet");
+      }
+      writable.prepare("UPDATE clank_platform_domains SET routing_status = 'error' WHERE id = 'domain_0'").run();
+      assert.equal((await platform.handle(new Request("https://route-0.customer.test/"))).status, 404);
+      writable.prepare("UPDATE clank_platform_domains SET status = 'pending' WHERE id = 'domain_1'").run();
+      assert.equal((await platform.handle(new Request("https://route-1.customer.test/"))).status, 404);
+      // Verified custom hosts and canonical hosts remain bound to their own project.
+      for (let index = 0; index < 3; index++) {
+        const response = await platform.handle(new Request(`https://route-${index}.apps.example.test/`));
+        assert.equal(await response.text(), `app-${index}`);
+      }
+      writable.prepare("UPDATE clank_platform_domains SET project_id = ? WHERE id = 'domain_2'").run(projectIds[0]);
+      assert.equal(await platform.handle(new Request("https://route-2.customer.test/")).then((response) => response.text()), "app-0");
+    } finally {
+      spy.mock.restore();
+    }
+  } finally {
+    writable.close();
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("code-only deployments keep serving until a healthy candidate takes traffic", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-rolling-"));
   const platform = await openPlatform({
