@@ -1637,10 +1637,23 @@ export interface BackendRuntime<
   subscribe(path: string, input: unknown, listener: (value: unknown, version: number) => void): Cleanup;
   caller(request: Request): Promise<BackendCaller<AuthProfileOf<Auth>>>;
   handle(request: Request): Promise<Response>;
+  inspectQueries(): readonly QueryDiagnostic[];
   close(): void;
 }
 
+export interface QueryDiagnostic {
+  readonly path: string;
+  readonly runs: number;
+  readonly cacheHits: number;
+  readonly durationMs: number;
+  readonly lastInvalidation: string | null;
+  readonly cachedEntries: number;
+  readonly subscriptions: number;
+}
+
 export interface OpenBackendOptions extends SQLiteOptions {
+  /** Enable local query metadata inspection; arguments, identities, and values are excluded. */
+  diagnostics?: boolean;
   database?: SQLiteDatabase<any>;
   prefix?: string;
   verifyOrigin?: boolean;
@@ -1762,6 +1775,17 @@ export async function openBackend<
     if (!options.database) database.close();
     throw error;
   }
+  const queryDiagnostics = new Map<string, { runs: number; cacheHits: number; durationMs: number; lastInvalidation: string | null }>();
+  const queryDiagnostic = (path: string) => {
+    if (!options.diagnostics) return undefined;
+    let entry = queryDiagnostics.get(path);
+    if (!entry) {
+      if (queryDiagnostics.size >= 500) queryDiagnostics.delete(queryDiagnostics.keys().next().value!);
+      entry = { runs: 0, cacheHits: 0, durationMs: 0, lastInvalidation: null };
+      queryDiagnostics.set(path, entry);
+    }
+    return entry;
+  };
   const cache = new Map<string, CacheEntry>();
   const subscribers = new Map<string, SubscriberEntry>();
   const liveDisconnects = new Set<Cleanup>();
@@ -1817,11 +1841,17 @@ export async function openBackend<
     database.version;
     const cached = cache.get(key);
     if (cached && !cached.dirty) {
+      const diagnostic = queryDiagnostic(path);
+      if (diagnostic) diagnostic.cacheHits++;
       cache.delete(key);
       cache.set(key, cached);
       return { value: cached.value, version: cached.version };
     }
-    const tracked = database.tracked((db) => fn.handler(handlerContext(db, auth, "query") as any, args), scopeFor(auth));
+    const diagnostic = queryDiagnostic(path);
+    const diagnosticStarted = diagnostic ? performance.now() : 0;
+    let tracked;
+    try { tracked = database.tracked((db) => fn.handler(handlerContext(db, auth, "query") as any, args), scopeFor(auth)); }
+    finally { if (diagnostic) { diagnostic.runs++; diagnostic.durationMs = performance.now() - diagnosticStarted; } }
     assertSynchronous(tracked.value, "query");
     const value = finalizeBackendOutput(fn, tracked.value, maxResponseBytes);
     const dependencies = auth?.user
@@ -1875,6 +1905,9 @@ export async function openBackend<
     for (const [key, entry] of cache) {
       if (entry.dependencies.some((dependency) => changeAffects(dependency, change))) {
         entry.dirty = true;
+        const diagnostic = queryDiagnostic(entry.path);
+        if (diagnostic) diagnostic.lastInvalidation = change.all ? "revision history reset"
+          : [...new Set(change.records.map((record) => record.table))].slice(0, 20).join(", ").slice(0, 256);
         invalidated.add(key);
       }
     }
@@ -2179,6 +2212,17 @@ export async function openBackend<
     jobs: jobsRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["jobs"],
     buckets: options.buckets,
     get version() { return database.version; },
+    inspectQueries() {
+      const cached = new Map<string, number>();
+      const subscribed = new Map<string, number>();
+      if (options.diagnostics) {
+        for (const entry of cache.values()) cached.set(entry.path, (cached.get(entry.path) ?? 0) + 1);
+        for (const entry of subscribers.values()) subscribed.set(entry.path, (subscribed.get(entry.path) ?? 0) + entry.listeners.size);
+      }
+      return Object.freeze([...queryDiagnostics].map(([path, entry]) => Object.freeze({ path, ...entry,
+        cachedEntries: cached.get(path) ?? 0, subscriptions: subscribed.get(path) ?? 0,
+      })));
+    },
     contractRevision: mcp?.revision ?? null,
     query(pathOrReference: string | FunctionReference<"query", any, any>, input: unknown = {}) {
       return callerFor(anonymous).query(pathOrReference as any, input);
@@ -2349,6 +2393,7 @@ export async function openBackend<
       stopChanges();
       subscribers.clear();
       cache.clear();
+      queryDiagnostics.clear();
       mcp?.close();
       jobsRuntime?.close();
       authRuntime?.close();

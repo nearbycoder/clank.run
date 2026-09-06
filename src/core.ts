@@ -30,10 +30,50 @@ let flushing = false;
 const pendingEffects = new Set<ReactiveEffect>();
 const transactionStack: Array<Map<ReactiveSignal<unknown>, unknown>> = [];
 
+export interface ReactiveDiagnostic {
+  readonly type: "dependency" | "invalidate" | "run" | "dispose";
+  readonly id: number;
+  readonly sourceId?: number;
+  readonly kind: "signal" | "computed" | "effect";
+  readonly name?: string;
+  readonly durationMs?: number;
+  readonly dependencies?: number;
+}
+const diagnosticListeners = new Set<(event: ReactiveDiagnostic) => void>();
+let diagnosticIds = new WeakMap<object, number>();
+let nextDiagnosticId = 0;
+let reportingDiagnostic = false;
+function diagnosticId(value: object): number {
+  let id = diagnosticIds.get(value);
+  if (id === undefined) { id = ++nextDiagnosticId; diagnosticIds.set(value, id); }
+  return id;
+}
+function diagnostic(type: ReactiveDiagnostic["type"], target: Source | Observer, source?: Source, durationMs?: number): void {
+  if (!diagnosticListeners.size || reportingDiagnostic) return;
+  const event = Object.freeze({ type, id: diagnosticId(target),
+    kind: target instanceof ReactiveSignal ? "signal" as const : target instanceof Computed ? "computed" as const : "effect" as const,
+    ...(source ? { sourceId: diagnosticId(source) } : {}),
+    ...("name" in target && typeof target.name === "string" ? { name: target.name.slice(0, 128) } : {}),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...("dependencies" in target ? { dependencies: target.dependencies.size } : {}) });
+  reportingDiagnostic = true;
+  const previousTracking = tracking;
+  tracking = false;
+  try { for (const listener of diagnosticListeners) { try { listener(event); } catch { /* Inspection cannot break an update. */ } } }
+  finally { tracking = previousTracking; reportingDiagnostic = false; }
+}
+/** Opt-in metadata only. Start before mounting; detach to remove instrumentation overhead. */
+export function observeReactivity(listener: (event: ReactiveDiagnostic) => void): Cleanup {
+  diagnosticListeners.add(listener);
+  return () => { diagnosticListeners.delete(listener); if (!diagnosticListeners.size) diagnosticIds = new WeakMap(); };
+}
+
 function track(source: Source): void {
   if (!tracking || activeObserver === null || !activeObserver.active) return;
+  const newDependency = diagnosticListeners.size > 0 && !activeObserver.dependencies.has(source);
   source.observers.add(activeObserver);
   activeObserver.dependencies.add(source);
+  if (newDependency) diagnostic("dependency", activeObserver, source);
 }
 
 function detach(observer: Observer): void {
@@ -42,6 +82,7 @@ function detach(observer: Observer): void {
 }
 
 function notify(source: Source): void {
+  diagnostic("invalidate", source);
   // Invalidate the whole dependency graph before effects read it. Flushing
   // while visiting observers repeats shared effects and exposes stale siblings.
   batch(() => {
@@ -210,6 +251,7 @@ export class Computed<T> implements Source, Observer {
   private evaluate(): void {
     if (this.#evaluating) throw new Error(`Circular computed${this.name ? ` \"${this.name}\"` : ""}.`);
     this.#evaluating = true;
+    const diagnosticStarted = diagnosticListeners.size ? performance.now() : 0;
     detach(this);
     const previous = activeObserver;
     activeObserver = this;
@@ -219,10 +261,12 @@ export class Computed<T> implements Source, Observer {
     } finally {
       activeObserver = previous;
       this.#evaluating = false;
+      if (diagnosticListeners.size) diagnostic("run", this, undefined, performance.now() - diagnosticStarted);
     }
   }
 
   dispose(): void {
+    diagnostic("dispose", this);
     this.active = false;
     detach(this);
     this.observers.clear();
@@ -256,6 +300,7 @@ class ReactiveEffect implements Observer {
   run(): void {
     if (!this.active || this.#running) return;
     this.#running = true;
+    const diagnosticStarted = diagnosticListeners.size ? performance.now() : 0;
     pendingEffects.delete(this);
     const previous = activeObserver;
     try {
@@ -269,11 +314,13 @@ class ReactiveEffect implements Observer {
     } finally {
       activeObserver = previous;
       this.#running = false;
+      if (diagnosticListeners.size) diagnostic("run", this, undefined, performance.now() - diagnosticStarted);
     }
   }
 
   dispose(): void {
     if (!this.active) return;
+    diagnostic("dispose", this);
     this.active = false;
     pendingEffects.delete(this);
     detach(this);

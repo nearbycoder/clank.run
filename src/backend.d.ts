@@ -395,9 +395,11 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     subscribe(path: string, input: unknown, listener: (value: unknown, version: number) => void): Cleanup;
     caller(request: Request): Promise<BackendCaller<AuthProfileOf<Auth>>>;
     handle(request: Request): Promise<Response>;
+    inspectQueries(): readonly QueryDiagnostic[];
     close(): void;
 }
 export interface OpenBackendOptions extends SQLiteOptions {
+    diagnostics?: boolean;
     database?: SQLiteDatabase<any>;
     prefix?: string;
     verifyOrigin?: boolean;
@@ -445,3 +447,13 @@ export declare function openBackend<Schema extends DatabaseSchema<any>, Function
 export declare function functionKey(path: string, args: unknown): string;
 export declare function stableStringify(value: unknown): string;
 export {};
+
+export interface QueryDiagnostic {
+    readonly path: string;
+    readonly runs: number;
+    readonly cacheHits: number;
+    readonly durationMs: number;
+    readonly lastInvalidation: string | null;
+    readonly cachedEntries: number;
+    readonly subscriptions: number;
+}
