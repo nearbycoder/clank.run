@@ -90,12 +90,15 @@ test("local DevTools serves escaped metadata on loopback and denies cross-origin
     const html = await response.text();
     assert.match(html, /Clank DevTools/);
     assert.match(html, /&lt;script&gt;/);
-    assert.doesNotMatch(html, /<script>|not exported/);
+    assert.doesNotMatch(html, /<script>|not exported/i);
     assert.equal((await fetch(server.url, { headers: { origin: "https://evil.example" } })).status, 403);
     assert.equal((await fetch(server.url, { headers: { "sec-fetch-site": "cross-site" } })).status, 403);
     assert.equal((await fetch(server.url, { method: "POST" })).status, 405);
     assert.equal((await fetch(server.url + "/unknown")).status, 404);
     assert.equal(await fetch(server.url, { method: "HEAD" }).then(response => response.text()), "");
     assert.match(renderDevtools({ ...inspector.snapshot(), truncated: true }), /partial view/);
+    const malformed = { ...inspector.snapshot(), active: { length: '<SCRIPT>alert(1)</SCRIPT>' },
+      queries: [{ ...inspector.snapshot().queries[0], subscriptions: '<img src=x onerror=alert(1)>' }] };
+    assert.doesNotMatch(renderDevtools(malformed), /<script|<img/i);
   } finally { await server.close(); inspector.dispose(); }
 });
