@@ -160,6 +160,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "performance": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/performance-budgets.mjs",
     "build": "node --disable-warning=ExperimentalWarning scripts/build.mjs",
     "build:design": "node --disable-warning=ExperimentalWarning design-site/build.mjs",
     "build:docs": "node --disable-warning=ExperimentalWarning docs-site/build.mjs",

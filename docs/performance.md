@@ -71,6 +71,27 @@ Run the performance invariants with:
 npm test -- tests/dom.test.mjs
 ```
 
+## CI performance budgets
+
+`npm run performance` builds the framework and prints a JSON budget report. The same budget
+checks run in `npm test` and the complete release gate on both supported Node versions.
+Budgets fail CI for excess work or bytes, including missing or non-finite measurements:
+
+| Measurement | Maximum |
+| --- | --- |
+| Effect executions for 1,000 writes through 100 computed branches | 1,000 |
+| Obsolete effect executions after 100 completed SSR requests | 0 |
+| Gzipped core / DOM / router / forms module bytes | 4,500 / 12,000 / 3,500 / 5,500 |
+
+The byte limits cover each compiled module separately, not its transitive imports or a complete
+application bundle. Compression uses gzip level 9. Wall-clock timings are reported for local
+comparison but do not fail CI on shared runners. The existing real ingress test separately
+enforces one domain query and zero fleet queries for a local-only installation.
+
+Change a budget in `scripts/performance-budgets.mjs` only with a reviewed explanation of the
+additional work or payload. To reproduce ingress and HTTP transfer regressions alongside these
+budgets, run `npm test -- tests/platform.test.mjs tests/node.test.mjs`.
+
 ## Regression evidence
 
 The performance pass covers reactive propagation, keyed DOM updates, SSR lifecycle, HTTP
