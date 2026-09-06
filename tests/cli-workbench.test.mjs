@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { deflateSync } from "node:zlib";
 
 const cli = resolve("scripts/clank.mjs");
@@ -99,3 +100,29 @@ function crc32(...chunks) {
   for (const bytes of chunks) for (const byte of bytes) { value ^= byte; for (let bit = 0; bit < 8; bit += 1) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0); }
   return (value ^ 0xffffffff) >>> 0;
 }
+
+
+test("workbench CLI runs disposable restore and migration checks and fails unsuccessful reports", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-rehearsal-"));
+  try {
+    const source = join(root, "source.sqlite");
+    const db = new DatabaseSync(source);
+    db.exec("CREATE TABLE items(value TEXT); INSERT INTO items VALUES ('original')");
+    db.close();
+    const original = await readFile(source);
+    const directory = join(root, "migrations");
+    await mkdir(directory);
+    await writeFile(join(directory, "0001_add.sql"), "ALTER TABLE items ADD COLUMN added TEXT");
+    const module = join(root, "rehearsal.mjs");
+    await writeFile(module, `export default { source: { databasePath: ${JSON.stringify(source)} }, migrations: { directory: ${JSON.stringify(directory)} }, boot: () => ({ handle: () => new Response('healthy'), close() {} }) };`);
+    const restored = JSON.parse((await run(["workbench", "restore", module, "--json"])).stdout);
+    assert.equal(restored.kind, "restore");
+    assert.equal(restored.ok, true);
+    const migrated = JSON.parse((await run(["workbench", "migrate", module, "--json"])).stdout);
+    assert.equal(migrated.kind, "migration");
+    assert.deepEqual(migrated.appliedMigrations, ["0001"]);
+    assert.deepEqual(await readFile(source), original);
+    await writeFile(module, `export default { source: { databasePath: ${JSON.stringify(source)} }, boot: () => ({ handle: () => new Response('unhealthy', { status: 500 }), close() {} }) };`);
+    await assert.rejects(run(["workbench", "restore", module, "--json"]), /CLI exited 1/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

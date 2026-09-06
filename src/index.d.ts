@@ -48,3 +48,4 @@ export * from "./devtools.js";
 
 export * from "./trace-timeline.js";
 export * from "./preview-fixtures.js";
+export * from "./rehearsal.js";
