@@ -112,3 +112,38 @@ required.
 The hosted control plane consumes the same `clank` theme preset exposed by Design Studio. Its
 canvas, surfaces, text, borders, accent, danger, radius, and shadow map from stable `--clank-*`
 tokens during SSR. Applications can use any of ten presets or define a validated custom theme.
+
+## Local DevTools
+
+Start inspection before mounting components or handling the development requests you want to
+observe. It records signal invalidations, dependency edges, computation durations, and disposal.
+Names are developer-supplied labels; do not put user data in signal or computed names.
+
+```ts
+import { createDevtools, serveDevtools } from "@clank.run/framework/devtools";
+
+const backend = await openBackend(definition, { path: "dev.sqlite", diagnostics: true });
+const inspector = createDevtools({ queries: () => backend.inspectQueries() });
+const panel = await serveDevtools(inspector);
+console.log(panel.url);
+// On shutdown: await panel.close(); inspector.dispose(); backend.close();
+```
+
+The panel binds only to `127.0.0.1`, uses no external assets or scripts, rejects cross-origin
+requests, and offers an explicit refresh link. It is a local developer tool, not a production
+operator endpoint. Query diagnostics are opt-in and grouped by declared query path, with run and
+cache-hit counts, last execution time, current subscription counts, and the table names that
+caused invalidation. Arguments, documents, results, authentication identifiers, and exceptions
+are not included. Neither inspection callback failures nor reads add application dependencies.
+
+For browser reactivity, use `createDevtools()` before mounting the application, then
+`mountDevtools(container, inspector)`. Its refresh button renders a snapshot; call the returned
+cleanup and `inspector.dispose()` when finished. `renderDevtools(inspector.snapshot())` also
+returns escaped HTML for an existing authorized workbench.
+
+The default history holds 500 events and up to 500 observed active computations. `maxEvents`
+accepts 1–5,000; query diagnostics retain at most 500 paths. Truncation is visible, and computations
+created before inspection may be absent until they next run. `clear()` clears event history;
+`dispose()` removes the observer and releases all retained metadata. Inspection never retains
+signal values, source objects, or application callbacks. With no observer attached, the kernel
+skips event allocation and timing; CI continues to enforce the browser module and work budgets.

@@ -43,3 +43,5 @@ export * from "./durable-objects.js";
 export * from "./platform.js";
 export * from "./ssr.js";
 export * from "./node.js";
+
+export * from "./devtools.js";

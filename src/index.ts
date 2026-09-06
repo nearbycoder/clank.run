@@ -41,3 +41,5 @@ export * from "./durable-objects.ts";
 export * from "./platform.ts";
 export * from "./ssr.ts";
 export * from "./node.ts";
+
+export * from "./devtools.ts";
