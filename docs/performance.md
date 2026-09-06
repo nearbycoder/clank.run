@@ -46,7 +46,10 @@ Without `by`, object identity is the key. Primitive values use value plus index 
 
 ## Batching
 
-Signal writes are synchronous. Wrap related writes in `batch()` so each dependent effect executes once after the final write. `transaction()` provides the same coalescing plus rollback on failure.
+Signal writes are synchronous. A single write invalidates all dependent computed values before
+running effects, so an effect reached through several computed branches runs once with settled
+values. Wrap related writes in `batch()` so each dependent effect executes once after the final
+write. `transaction()` provides the same coalescing plus rollback on failure.
 
 ## Measuring identity
 
