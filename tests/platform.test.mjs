@@ -1186,6 +1186,66 @@ test("platform upgrades legacy quota storage and prunes usage at startup", async
   }
 });
 
+test("deployment comparisons isolate activation windows, traffic confidence, and project access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-release-comparison-"));
+  const platform = await openPlatform({ dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200", signup: true, appPortStart: 4940, appPortEnd: 4945,
+    backups: { intervalMs: false } });
+  const control = new DatabaseSync(join(root, "platform", "control.sqlite"));
+  try {
+    const owner = await authorizeCli(platform, "comparison@example.com");
+    const stranger = await authorizeCli(platform, "comparison-stranger@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", { method: "POST",
+      token: owner.accessToken, body: { name: "Compare", slug: "compare" } }), 201);
+    const id = created.project.id;
+    const read = async () => (await payload(platform, jsonRequest(`/api/projects/${id}/releases`, { token: owner.accessToken }))).comparison;
+    assert.equal((await read()).status, "no-baseline");
+    for (let index = 0; index < 2; index++) {
+      const artifact = await appArtifact(join(root, `release-${index}`), String(index), []);
+      const result = await deploy(platform, id, owner.accessToken, artifact, `comparison-release-${index}`);
+      assert.equal(result.response.status, 201, JSON.stringify(result.body));
+    }
+    const activations = control.prepare("SELECT * FROM clank_platform_activations WHERE project_id = ? ORDER BY id").all(id);
+    assert.equal(activations.length, 2);
+    assert.ok(activations.every(row => row.deployment_duration_ms >= 0));
+    assert.equal((await read()).status, "collecting");
+    const now = Math.floor(Date.now() / 60000) * 60000;
+    const currentAt = now - 10 * 60000 + 1000;
+    control.prepare("UPDATE clank_platform_activations SET activated_at = ? WHERE id = ?").run(now - 40 * 60000, activations[0].id);
+    control.prepare("UPDATE clank_platform_activations SET activated_at = ? WHERE id = ?").run(currentAt, activations[1].id);
+    let report = await read();
+    assert.equal(report.status, "low-traffic");
+    assert.equal(report.change, null);
+    assert.equal(report.durationMs, 9 * 60000);
+    assert.equal(report.before.end, now - 10 * 60000);
+    assert.equal(report.after.start, now - 9 * 60000);
+    const insert = control.prepare(`INSERT INTO clank_platform_metrics
+      (project_id, bucket_started_at, request_count, error_count, duration_sum_ms,
+       latency_le_50, latency_le_100, latency_le_250, latency_le_500,
+       latency_le_1000, latency_le_2500, latency_le_5000, latency_inf)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    insert.run(id, report.before.start, 100, 1, 5000, 100, 100, 100, 100, 100, 100, 100, 100);
+    insert.run(id, report.after.start, 100, 2, 10000, 0, 100, 100, 100, 100, 100, 100, 100);
+    // Mixed activation minute must never enter either release window.
+    insert.run(id, report.before.end, 9000, 9000, 9000000, 0, 0, 0, 0, 9000, 9000, 9000, 9000);
+    report = await read();
+    assert.equal(report.status, "available");
+    assert.equal(report.before.summary.requests, 100);
+    assert.equal(report.after.summary.requests, 100);
+    assert.equal(report.before.summary.errorRate, 0.01);
+    assert.equal(report.after.summary.errorRate, 0.02);
+    assert.equal(report.before.summary.p95LatencyMs, 50);
+    assert.equal(report.after.summary.p95LatencyMs, 100);
+    assert.ok(report.change);
+    const denied = await platform.handle(jsonRequest(`/api/projects/${id}/releases`, { token: stranger.accessToken }));
+    assert.ok([403, 404].includes(denied.status));
+    // A nearby preceding activation shortens both windows equally.
+    control.prepare("UPDATE clank_platform_activations SET activated_at = ? WHERE id = ?")
+      .run(currentAt - 2 * 60000, activations[0].id);
+    assert.equal((await read()).durationMs, 60000);
+  } finally { control.close(); await platform.close(); await rm(root, { recursive: true, force: true }); }
+});
+
 test("ingress batches domain reads across projects and observes routing changes immediately", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-route-queries-"));
   const platform = await openPlatform({
