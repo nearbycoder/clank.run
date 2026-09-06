@@ -316,3 +316,81 @@ test("Node adapter cancels a streamed Fetch response when the client disconnects
     await server.close();
   }
 });
+
+test("Node adapter cancels unused HEAD response bodies", async () => {
+  let cancelled = false;
+  const body = new ReadableStream({
+    cancel() { cancelled = true; },
+  });
+  const server = await serve(() => new Response(body), { port: 0 });
+  try {
+    const response = await fetch(server.url, { method: "HEAD" });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "");
+    assert.equal(cancelled, true, "HEAD must release an application's unused response stream");
+    assert.equal(body.locked, false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("Node adapter releases the reader when a backpressured client disconnects", async () => {
+  let cancelled = false;
+  const chunk = new Uint8Array(1024 * 1024);
+  const body = new ReadableStream({
+    pull(controller) { controller.enqueue(chunk); },
+    cancel() { cancelled = true; },
+  });
+  const server = await serve(() => new Response(body), { port: 0 });
+  try {
+    await new Promise((resolve, reject) => {
+      const request = httpRequest(server.url, (response) => {
+        response.pause();
+        setTimeout(() => { response.destroy(); resolve(); }, 50);
+      });
+      request.once("error", reject);
+      request.end();
+    });
+    const deadline = Date.now() + 2_000;
+    while ((!cancelled || body.locked) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(cancelled, true);
+    assert.equal(body.locked, false, "a closed socket must release the pending drain wait and response reader");
+  } finally {
+    await server.close();
+  }
+});
+
+test("Node adapter cancels responses returned after the client has already disconnected", async () => {
+  let complete;
+  let started;
+  const waiting = new Promise((resolve) => { complete = resolve; });
+  const received = new Promise((resolve) => { started = resolve; });
+  let cancelled = false;
+  const body = new ReadableStream({ cancel() { cancelled = true; } });
+  const server = await serve(async (request) => {
+    started(request);
+    await waiting;
+    return new Response(body);
+  }, { port: 0 });
+  const client = httpRequest(server.url);
+  client.on("error", () => {});
+  try {
+    client.end();
+    const request = await received;
+    client.destroy();
+    if (!request.signal.aborted) {
+      await new Promise((resolve) => request.signal.addEventListener("abort", resolve, { once: true }));
+    }
+    complete();
+    const deadline = Date.now() + 2_000;
+    while (!cancelled && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(cancelled, true);
+    assert.equal(body.locked, false);
+  } finally {
+    complete();
+    client.destroy();
+    await server.close();
+  }
+});
