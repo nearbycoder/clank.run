@@ -1,4 +1,5 @@
 import { openAgentActivity, type AgentActivityOptions, type AgentActivityFilter, type AgentActivitySnapshot } from "./agent-activity.ts";
+import { openMutationReceipts, type MutationReceiptOptions } from "./mutation-receipts.ts";
 import type { Tracer } from "./observability.ts";
 import { batch, signal, type Cleanup, type ReactiveSignal } from "./core.ts";
 import {
@@ -1445,6 +1446,9 @@ export interface SyncClient {
     reference: Reference,
     ...args: InputTuple<InputOf<Reference>>
   ): Promise<OutputOf<Reference>>;
+  mutateOnce<Reference extends FunctionReference<"mutation", any, any>>(
+    reference: Reference, args: InputOf<Reference>, receipt: { key: string; userId: string },
+  ): Promise<OutputOf<Reference>>;
   live<Reference extends FunctionReference<"query", any, any>>(
     reference: Reference,
     ...args: InputTuple<InputOf<Reference>>
@@ -1483,7 +1487,7 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
   const EventSourceConstructor = options.eventSource ?? (globalThis as unknown as { EventSource?: new(url: string) => EventSourceLike }).EventSource;
   const seeds = new Map<string, { value: unknown; version: number }>();
 
-  const call = async (kind: "query" | "mutation", reference: FunctionReference<any, any, any>, args: unknown) => {
+  const call = async (kind: "query" | "mutation", reference: FunctionReference<any, any, any>, args: unknown, receipt?: { key: string; userId: string }) => {
     if (!fetcher) throw new Error("fetch is not available in this runtime.");
     const response = await fetcher(`${base}/__clank/${kind}/${encodeURIComponent(functionPath(reference))}`, {
       method: "POST",
@@ -1491,6 +1495,7 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
       headers: {
         "content-type": "application/json",
         ...(kind === "mutation" ? options.auth?.csrfHeader() ?? {} : {}),
+        ...(receipt ? { "x-clank-mutation-key": receipt.key, "x-clank-offline-user": receipt.userId } : {}),
       },
       body: JSON.stringify(args ?? {}),
     });
@@ -1512,6 +1517,7 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
   return {
     query(reference, ...args) { return call("query", reference, args[0] ?? {}) as Promise<any>; },
     mutate(reference, ...args) { return call("mutation", reference, args[0] ?? {}) as Promise<any>; },
+    mutateOnce(reference, args, receipt) { return call("mutation", reference, args, receipt) as Promise<any>; },
     live(reference, ...args) {
       if (!EventSourceConstructor) throw new Error("EventSource is not available in this runtime.");
       const input = args[0] ?? {};
@@ -1656,6 +1662,8 @@ export interface QueryDiagnostic {
 
 export interface OpenBackendOptions extends SQLiteOptions {
   agentActivity?: AgentActivityOptions;
+  /** Opt in to transactional, authenticated offline mutation receipts. */
+  offlineMutations?: MutationReceiptOptions;
   tracer?: Tracer;
   /** Enable local query metadata inspection; arguments, identities, and values are excluded. */
   diagnostics?: boolean;
@@ -1771,8 +1779,10 @@ export async function openBackend<
   let authRuntime: AuthRuntime<AuthProfileOf<Auth>> | undefined;
   let activity: ReturnType<typeof openAgentActivity> | undefined;
   const activityRevisions = new WeakMap<Request, { beforeRevision: number; afterRevision: number }>();
+  let mutationReceipt: ReturnType<typeof openMutationReceipts> | undefined;
   try {
     activity = options.agentActivity ? openAgentActivity(database, options.agentActivity) : undefined;
+    mutationReceipt = options.offlineMutations ? openMutationReceipts(database, options.offlineMutations) : undefined;
     authRuntime = definition.auth
       ? await openAuth(definition.auth, database, {
           onError: options.onError,
@@ -1870,16 +1880,19 @@ export async function openBackend<
     return { value, version: tracked.version };
   };
 
-  const invokeMutationBody = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
+  const invokeMutationBody = (path: string, input: unknown, auth: AuthRequest<any> | null, key?: string): { value: unknown; version: number } => {
     ensureOpen();
     const fn = functionAt(registry, path, "mutation");
     authorize(fn, auth);
     const args = fn.args.parse(input ?? {});
     const value = database.transaction(
       (db) => {
-        const output = fn.handler(handlerContext(db, auth, "mutation") as any, args);
-        assertSynchronous(output, "mutation");
-        return finalizeBackendOutput(fn, output, maxResponseBytes);
+        const execute = () => {
+          const output = fn.handler(handlerContext(db, auth, "mutation") as any, args);
+          assertSynchronous(output, "mutation");
+          return finalizeBackendOutput(fn, output, maxResponseBytes);
+        };
+        return key ? mutationReceipt!(key, auth!.user!.id, path, stableStringify(args), execute) : execute();
       },
       scopeFor(auth),
     );
@@ -1895,8 +1908,8 @@ export async function openBackend<
   };
   const invokeQuery = (path: string, input: unknown, auth: AuthRequest<any> | null) =>
     traceOperation(`query ${path}`, () => invokeQueryBody(path, input, auth));
-  const invokeMutation = (path: string, input: unknown, auth: AuthRequest<any> | null) =>
-    traceOperation(`mutation ${path}`, () => invokeMutationBody(path, input, auth));
+  const invokeMutation = (path: string, input: unknown, auth: AuthRequest<any> | null, key?: string) =>
+    traceOperation(`mutation ${path}`, () => invokeMutationBody(path, input, auth, key));
 
   const notify = (key: string) => {
     const subscription = subscribers.get(key);
@@ -2344,7 +2357,12 @@ export async function openBackend<
         }
         if (request.method === "POST" && operation === "mutation") {
           if (authRuntime && auth?.session) await authRuntime.verifyCsrf(request, auth);
-          const result = invokeMutation(path, await readJsonRequest(request, maxRequestBytes), auth);
+          const key = request.headers.get("x-clank-mutation-key") ?? undefined;
+          if (key !== undefined) {
+            if (!mutationReceipt) throw new RequestInputError(400, "OFFLINE_DISABLED", "Offline mutations are not enabled.");
+            if (!auth?.user || request.headers.get("x-clank-offline-user") !== auth.user.id) throw new RequestInputError(403, "OFFLINE_ACCOUNT_CHANGED", "Queued mutation belongs to another account.");
+          }
+          const result = invokeMutation(path, await readJsonRequest(request, maxRequestBytes), auth, key);
           return Response.json({ ok: true, ...result }, { headers: { "cache-control": "no-store" } });
         }
         if (request.method === "GET" && operation === "live") {

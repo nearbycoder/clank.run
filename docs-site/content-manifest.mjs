@@ -35,6 +35,7 @@ export const groups = [
     description: "Server rendering, live SQLite data, authentication, migrations, services, and observability.",
     entries: [
       ["full-stack", "docs/full-stack.md"],
+      ["offline", "docs/offline.md"],
       ["database", "docs/database.md"],
       ["migrations", "docs/migrations.md"],
       ["auth", "docs/auth.md"],
