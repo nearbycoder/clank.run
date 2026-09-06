@@ -1,3 +1,4 @@
+import { rehearseRecovery, rehearseMigrations } from "../dist/rehearsal.js";
 import { lstat, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +19,15 @@ export async function runWorkbench(args) {
   const option = (name) => args.find((item) => item.startsWith(`--${name}=`))?.slice(name.length + 3);
   let result;
   switch (subcommand) {
+    case "restore":
+    case "migrate": {
+      const [modulePath] = values;
+      required(modulePath, "Usage: clank workbench <restore|migrate> <rehearsal.mjs> [--json]");
+      const module = await importLocal(modulePath);
+      const configuration = typeof module.default === "function" ? await module.default() : module.default;
+      result = subcommand === "restore" ? await rehearseRecovery(configuration) : await rehearseMigrations(configuration);
+      break;
+    }
     case "policy": {
       const [file, action] = values;
       required(file && action, "Usage: clank workbench policy <policy.json> <action> --principal=<id> --kind=<user|agent|service> [--roles=a,b] [--resource=<resource>]");
@@ -141,6 +151,8 @@ function help() {
   console.log(`Clank workbench
 
 Usage:
+  clank workbench restore <rehearsal.mjs>        Restore and verify a disposable app copy
+  clank workbench migrate <rehearsal.mjs>        Rehearse migrations on a disposable database
   clank workbench policy <policy.json> <action>   Evaluate user/agent authorization
   clank workbench flag <policy.json> <key>        Evaluate a typed feature flag
   clank workbench revision <ledger.json>          Replay and inspect an app revision
@@ -157,7 +169,7 @@ Usage:
   clank workbench contract <module> <export>       Generate action contract tests
   clank workbench visual <baseline> <current>      Compare PNG or decoded RGBA baselines
 
-All commands support --json. Inputs are bounded data files; no package hooks run.`);
+All commands support --json. Module-based commands execute the explicitly selected local module; no package hooks run.`);
 }
 
 async function jsonFile(path) { const target = resolve(path); const stats = await lstat(target); if (!stats.isFile() || stats.isSymbolicLink() || stats.size > MAX_JSON_BYTES) throw new Error(`JSON input is not a bounded regular file: ${path}`); try { return JSON.parse(await readFile(target, "utf8")); } catch { throw new Error(`JSON input is invalid: ${path}`); } }

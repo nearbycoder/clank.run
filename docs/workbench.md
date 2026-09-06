@@ -147,3 +147,59 @@ created before inspection may be absent until they next run. `clear()` clears ev
 `dispose()` removes the observer and releases all retained metadata. Inspection never retains
 signal values, source objects, or application callbacks. With no observer attached, the kernel
 skips event allocation and timing; CI continues to enforce the browser module and work budgets.
+
+
+## Restore and migration rehearsals
+
+A rehearsal restores an encrypted backup or snapshots an existing SQLite database into a private
+temporary directory. It can apply proposed migrations, boot the application against that copy,
+and run HTTP checks over a random loopback port. The source database is never opened for writes.
+
+```ts
+// rehearsal.mjs — import your own application factory here.
+import { createApplication } from "./server-factory.mjs";
+
+export default {
+  source: { databasePath: "./snapshots/application.sqlite" },
+  migrations: { directory: "./migrations" },
+  boot: ({ databasePath, signal }) => createApplication({
+    databasePath, signal, backgroundWorkers: false, externalServices: false,
+  }),
+  checks: [
+    { name: "health", path: "/healthz", status: 200 },
+    { name: "homepage", path: "/", status: 200, includes: "Welcome" },
+  ],
+};
+```
+
+The factory is application-specific: it must return `{ handle(request), close() }`, use the
+supplied database path, disable real mail/payment/network integrations and job consumers, and
+release its resources in `close()`. These options are illustrative factory inputs, not automatic
+framework switches. Rehearsals execute trusted local code; they are not an operating-system
+sandbox. Honor the abort signal and keep shutdown bounded. Synchronous application code and
+SQLite work cannot be forcibly interrupted by a JavaScript timer.
+
+```sh
+clank workbench restore ./rehearsal.mjs --json
+clank workbench migrate ./rehearsal.mjs --json
+```
+
+Both commands exit nonzero for an unsuccessful report. Restore requires a boot factory; migration
+can omit it for database-only inspection. For encrypted backups, supply
+`source: { manager, backupId }`, where `manager` is an open backup manager; its verified read path
+checks integrity and decrypts before rehearsal. Programmatic callers can import
+`rehearseRecovery` and `rehearseMigrations` from `@clank.run/framework/rehearsal`.
+
+Reports contain restoration, migration, boot, check, and total durations; applied migration IDs;
+per-table before/after row counts; schema/data change flags; named check results; and a failure
+phase. Row contents, SQL text, response bodies, and exception messages are excluded. Data changes
+are compared using temporary keyed hashes, which are also excluded. Check failures indicate that
+the supplied application expectations did not pass; successful checks do not prove compatibility
+with every older application version or production workload.
+
+The default database limit is 32 MiB (configurable to 512 MiB), with at most 500 tables, 200 columns
+per table, and 100,000 rows. Up to 20 HTTP checks may read 64 KiB each. The default asynchronous
+deadline is 30 seconds, configurable from 100 ms to five minutes. Temporary files are removed and
+the application is closed on success or failure. Migration SQL cannot attach external databases,
+run filesystem/extension functions, or use PRAGMA/VACUUM, even with `allowUnsafe`; ordinary
+migration validation still applies unless explicitly disabled.

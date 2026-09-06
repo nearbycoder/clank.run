@@ -46,3 +46,4 @@ export * from "./devtools.ts";
 
 export * from "./trace-timeline.ts";
 export * from "./preview-fixtures.ts";
+export * from "./rehearsal.ts";

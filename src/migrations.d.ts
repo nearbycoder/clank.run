@@ -22,6 +22,7 @@ export interface ApplyMigrationsOptions extends LoadMigrationsOptions {
     path: string;
     directory: string;
     allowUnsafe?: boolean;
+    restrictToDatabase?: boolean;
 }
 /** Loads ordered, immutable SQL migrations and calculates their SHA-256 checksums. */
 export declare function loadMigrations(directory: string, options?: LoadMigrationsOptions): Promise<Migration[]>;
