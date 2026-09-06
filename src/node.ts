@@ -144,7 +144,10 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
       const pathName = "node:path";
       const fs = await import(fileSystemName) as unknown as {
         realpath(path: string): Promise<string>;
-        stat(path: string): Promise<{ isDirectory(): boolean; isFile(): boolean; size: number }>;
+        stat(path: string): Promise<{
+          isDirectory(): boolean; isFile(): boolean;
+          size: number; mtimeMs: number; ctimeMs: number; ino: number;
+        }>;
       };
       const fsSyncName = "node:fs";
       const streamName = "node:stream";
@@ -179,13 +182,26 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
           stats = await fs.stat(resolved);
         }
         if (!stats.isFile()) return new Response("Not found", { status: 404 });
+        // A weak metadata validator avoids reading/hashing the file body. Read
+        // fresh metadata after containment checks, including for revalidation.
+        const etag = `W/"${[stats.size, stats.mtimeMs, stats.ctimeMs, stats.ino].map((value) => value.toString(16)).join("-")}"`;
+        const headers = {
+          "content-type": MIME_TYPES[path.extname(resolved).toLowerCase()] ?? "application/octet-stream",
+          "cache-control": options.cacheControl ?? "no-cache",
+          etag,
+          "x-content-type-options": "nosniff",
+        };
+        const condition = request.headers.get("if-none-match");
+        if (condition !== null && (condition.trim() === "*" || condition.split(",").some((value) => (
+          value.trim().replace(/^W\//, "") === etag.slice(2)
+        )))) {
+          return new Response(null, { status: 304, headers });
+        }
         const body = request.method === "HEAD" ? null : Readable.toWeb(createReadStream(resolved));
         return new Response(body as BodyInit | null, {
           headers: {
-            "content-type": MIME_TYPES[path.extname(resolved).toLowerCase()] ?? "application/octet-stream",
-            "cache-control": options.cacheControl ?? "no-cache",
+            ...headers,
             "content-length": String(stats.size),
-            "x-content-type-options": "nosniff",
           },
         });
       } catch {
