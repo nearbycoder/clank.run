@@ -108,6 +108,7 @@ import {
   trustedClientAddress,
 } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
+import { ensureDeploymentComparisons, recordDeploymentActivation, deploymentComparisonWindows } from "./platform-comparisons.ts";
 import type { ObjectStore } from "./object-storage.ts";
 import {
   createGithubActionsOidcVerifier,
@@ -1974,6 +1975,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     );
     const activatedAt = Date.now();
     storage.internal.transaction((changes) => {
+      recordDeploymentActivation(storage.internal, project.id, release.id, activatedAt);
       storage.internal.prepare(
         "UPDATE clank_platform_releases SET status = 'active', activated_at = ?, failure = NULL WHERE id = ?",
       ).run(activatedAt, release.id);
@@ -3992,6 +3994,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       const activatedAt = Date.now();
       storage.internal.transaction((changes) => {
+        recordDeploymentActivation(storage.internal, project.id, releaseId, activatedAt);
         storage.internal.prepare(
           "UPDATE clank_platform_releases SET status = 'active', activated_at = ?, failure = NULL WHERE id = ?",
         ).run(activatedAt, releaseId);
@@ -4273,6 +4276,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       await startRelease(project, target, decryptProjectSecrets(storage.internal, project.id, masterKey));
       const now = Date.now();
       storage.internal.transaction((changes) => {
+        recordDeploymentActivation(storage.internal, project.id, target.id, now);
         storage.internal.prepare("UPDATE clank_platform_releases SET status = 'inactive' WHERE id = ?").run(current.id);
         storage.internal.prepare("UPDATE clank_platform_releases SET status = 'active', activated_at = ? WHERE id = ?")
           .run(now, target.id);
@@ -7054,6 +7058,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               },
             };
           }),
+          comparison: projectDeploymentComparison(storage.internal, project),
           usage: releaseStorageUsage(storage.internal, project.id),
           limits: {
             releases: effective.releasesPerProject,
@@ -8590,6 +8595,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   internal.exec("DROP INDEX IF EXISTS proact_platform_releases_project");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_releases_project ON clank_platform_releases (project_id, created_at)");
+  ensureDeploymentComparisons(internal);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_secrets (
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
@@ -9453,6 +9459,28 @@ function metricRange(input: string): MetricRange {
   if (input === "7d") return { name: "7d", durationMs: 7 * 24 * 60 * 60_000, intervalMs: 60 * 60_000 };
   if (input === "30d") return { name: "30d", durationMs: 30 * 24 * 60 * 60_000, intervalMs: 6 * 60 * 60_000 };
   return { name: "24h", durationMs: 24 * 60 * 60_000, intervalMs: 15 * 60_000 };
+}
+
+function projectDeploymentComparison(internal: SQLiteInternal, project: ProjectRow): Record<string, unknown> {
+  const [current, previous] = internal.prepare(`SELECT release_id, activated_at, deployment_duration_ms
+    FROM clank_platform_activations WHERE project_id = ? ORDER BY id DESC LIMIT 2`).all(project.id);
+  const base = { protocol: "clank-deployment-comparison/1", minimumRequests: 100,
+    currentReleaseId: current?.release_id ?? null, previousReleaseId: previous?.release_id ?? null,
+    deploymentDurationMs: current?.deployment_duration_ms ?? null,
+    previousDeploymentDurationMs: previous?.deployment_duration_ms ?? null };
+  if (!current || !previous || current.release_id !== project.activeReleaseId) {
+    return { ...base, status: "no-baseline", message: "Two recorded activations are needed for a comparison." };
+  }
+  const windows = deploymentComparisonWindows(Number(current.activated_at), Number(previous.activated_at), Date.now());
+  if (!windows.durationMs) return { ...base, status: "collecting", message: "Waiting for complete traffic minutes on both sides of activation." };
+  const before = summarizeMetricRows(projectMetricRows(internal, project.id, 60_000, windows.before.start, windows.before.end), windows.durationMs);
+  const after = summarizeMetricRows(projectMetricRows(internal, project.id, 60_000, windows.after.start, windows.after.end), windows.durationMs);
+  const lowTraffic = Number(before.requests) < 100 || Number(after.requests) < 100;
+  return { ...base, ...windows, before: { ...windows.before, summary: before }, after: { ...windows.after, summary: after },
+    status: lowTraffic ? "low-traffic" : "available",
+    message: lowTraffic ? "Fewer than 100 requests in at least one window; changes are descriptive only."
+      : "Observed traffic before and after activation; workload differences may affect results.",
+    change: lowTraffic ? null : metricSummaryChange(after, before) };
 }
 
 function metricSeries(internal: SQLiteInternal, projectId: string, requestedRange: string): Record<string, unknown> {

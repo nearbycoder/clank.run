@@ -365,3 +365,21 @@ The project **Settings** page controls one durable runtime policy:
 Sleeping removes only the web process and its process memory. Releases, the isolated SQLite database, buckets, secrets, domains, and backups stay in place. Request-size and workspace admission checks run before a cold start, so rejected traffic cannot consume runtime capacity. Active response streams are drained before shutdown; if they do not finish within the configured bound, Clank leaves the process online and retries later.
 
 Projects with a worker or scheduler are never automatically slept because their work does not depend on inbound HTTP. Provider-hosted runtimes also remain always-on until the provider implements the equivalent remote lifecycle contract. Existing projects migrate to **Always on**, making rollout opt-in and backward compatible.
+
+## Deployment comparisons
+
+The Deployments view compares the latest two recorded activations using equal windows of up to
+15 complete minutes. It excludes the activation minute, the incomplete current minute, and any
+traffic before the preceding activation. It shows request counts, histogram-estimated P95
+latency to response headers, server error rates, and the exact window timestamps.
+
+Fewer than 100 requests in either window is explicitly labelled low traffic; the API returns
+`change: null` in that case. These are descriptive observations, not proof that a release caused
+an improvement or regression. Missing history and windows still collecting data have separate
+states. The response is included as `comparison` in the existing authorized
+`GET /api/projects/:id/releases` endpoint.
+
+Fresh deployments record time from accepted release creation through healthy activation. Later
+reactivations and rollbacks show no deployment duration instead of counting the release's age.
+The platform retains the latest 100 activation records per project. Upgrades seed only the
+currently active release because legacy release timestamps cannot reconstruct rollback history.
