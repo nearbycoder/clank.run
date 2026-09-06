@@ -56,7 +56,17 @@ export interface McpTool<Context = unknown> {
     readonly requiredScope?: McpScope;
     invoke(input: unknown, context: Context, request: Request): unknown | Promise<unknown>;
 }
+export interface McpToolActivity {
+  readonly tool: string;
+  readonly requiredScope: McpScope;
+  readonly scopes: readonly string[];
+  readonly outcome: "ok" | "error" | "denied";
+  readonly startedAt: number;
+  readonly durationMs: number;
+}
+
 export interface McpServerOptions<Context = unknown> {
+    onToolActivity?: (event: McpToolActivity, request: Request) => void;
     name: string;
     version?: string;
     title?: string;

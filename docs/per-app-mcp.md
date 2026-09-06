@@ -308,3 +308,40 @@ anonymous protocol check correctly receives OAuth `401` before it can inspect `t
 Continue with [Agent protocol](agent-protocol.md) for the full MCP transport, discovery, OAuth,
 scope, freshness, and security contract. Read [Full-stack applications](full-stack.md) for backend
 implementation details and [Authentication](auth.md) for application identity and authorization.
+
+## Agent activity explorer
+
+Enable bounded, persistent activity metadata on the application backend and add it to a local
+DevTools panel:
+
+```ts
+const backend = await openBackend(definition, {
+  path: "app.sqlite",
+  agentActivity: { maxEntries: 1000, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+});
+const inspector = createDevtools({ agentActivity: () => backend.inspectAgentActivity() });
+const panel = await serveDevtools(inspector);
+```
+
+Each recognized tool attempt records its declared name, required scope, granted read/write scopes,
+completion outcome (`ok`, `error`, or `denied`), start time, and duration. Backend function calls
+also record database revisions observed before and after execution. Those ranges can be compared
+with document history; concurrent writers may contribute changes inside them, so they are not an
+exclusive attribution of every revision to that tool. Bucket tools and authorization denials have
+no backend revision range. Anonymous/public calls show no granted OAuth scopes.
+
+`backend.inspectAgentActivity({ tool, outcome, scope, since })` filters retained events, newest
+first. `renderAgentActivity(snapshot)` provides escaped HTML for an existing authorized operator
+view. The backend inspection method is trusted server code, never an automatically exposed RPC or
+MCP tool. The built-in DevTools server binds to loopback only. Do not mount an unguarded inspector
+in the public application.
+
+Retention defaults to 1,000 calls/seven days, configurable up to 10,000 calls/30 days. Pruning runs
+on record and inspection. Records survive backend restarts in the application SQLite database.
+Arguments, outputs, error messages, cookies, bearer tokens, request URLs, and principal identities
+are excluded. Unknown tools and requests rejected before tool authorization are not retained.
+
+Standalone MCP servers can set `onToolActivity(event, request)` for their own metadata sink.
+The backend's sink reports storage failures through `onError`, while tool results remain intact.
+This explorer is an operational history, not a tamper-proof or transactionally complete audit log;
+a process crash or storage failure after a tool commits can leave a missing event.

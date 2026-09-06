@@ -1,3 +1,5 @@
+export { renderAgentActivity } from "./agent-activity.js";
+export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
 /// <reference path="./jsx.d.ts" />
 
 export * from "./core.js";
