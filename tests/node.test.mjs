@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile, utimes } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -205,6 +205,82 @@ test("Node adapter enforces Host/body limits and static files contain symlinks a
     assert.equal((await files.handle(new Request("http://test/assets/.env"))).status, 404);
     assert.equal((await files.handle(new Request("http://test/assets/leak.txt"))).status, 404);
     assert.equal((await files.handle(new Request("http://test/assets/%2e%2e/secret.txt"))).status, 404);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("static files revalidate unchanged bodies with weak ETags over GET and HEAD", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-static-validators-"));
+  const file = join(root, "index.html");
+  const content = "x".repeat(1024 * 1024);
+  await writeFile(file, content);
+  const files = staticFiles(root, { cacheControl: "public, max-age=0, must-revalidate" });
+  const server = await serve(files, { port: 0 });
+  try {
+    const first = await fetch(server.url);
+    assert.equal(first.status, 200);
+    assert.equal(await first.text(), content);
+    const etag = first.headers.get("etag");
+    assert.match(etag, /^W\/".+"$/);
+    for (const method of ["GET", "HEAD"]) {
+      for (const condition of [etag, etag.slice(2), `"other,tag", ${etag}`, "*"]) {
+        const response = await fetch(server.url, { method, headers: { "if-none-match": condition } });
+        assert.equal(response.status, 304);
+        assert.equal(response.headers.get("etag"), etag);
+        assert.equal(response.headers.get("cache-control"), "public, max-age=0, must-revalidate");
+        assert.equal(response.headers.get("content-length"), null);
+        assert.equal(await response.text(), "");
+      }
+    }
+    const head = await fetch(server.url, { method: "HEAD" });
+    assert.equal(head.status, 200);
+    assert.equal(head.headers.get("etag"), etag);
+    assert.equal(head.headers.get("content-length"), String(content.length));
+    assert.equal(await head.text(), "");
+    const miss = await fetch(server.url, { headers: { "if-none-match": '"stale"' } });
+    assert.equal(miss.status, 200);
+    assert.equal(await miss.text(), content);
+    await writeFile(file, "updated");
+    const changed = await fetch(server.url, { headers: { "if-none-match": etag } });
+    assert.equal(changed.status, 200);
+    assert.notEqual(changed.headers.get("etag"), etag);
+    assert.equal(await changed.text(), "updated");
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("static validators refresh metadata and never bypass file containment", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "clank-static-validator-paths-"));
+  const file = join(directory, "asset.txt");
+  await writeFile(file, "first");
+  const oldTime = new Date("2020-01-01T00:00:00Z");
+  await utimes(file, oldTime, oldTime);
+  const files = staticFiles(directory);
+  const request = (path, etag) => new Request(`http://test/${path}`, {
+    headers: { "if-none-match": etag },
+  });
+  try {
+    const first = await files.handle(new Request("http://test/asset.txt"));
+    const etag = first.headers.get("etag");
+    assert.equal(await first.text(), "first");
+    // Same-size replacements can preserve mtime. ctime/inode still invalidate.
+    await rm(file);
+    await writeFile(file, "other");
+    await utimes(file, oldTime, oldTime);
+    const replacement = await files.handle(request("asset.txt", etag));
+    assert.equal(replacement.status, 200);
+    assert.notEqual(replacement.headers.get("etag"), etag);
+    assert.equal(await replacement.text(), "other");
+    await rm(file);
+    assert.equal((await files.handle(request("asset.txt", "*"))).status, 404);
+    await symlink(import.meta.filename, file);
+    assert.equal((await files.handle(request("asset.txt", etag))).status, 404);
+    await writeFile(join(directory, ".secret"), "private");
+    assert.equal((await files.handle(request(".secret", "*"))).status, 404);
+    assert.equal((await files.handle(request("%2e%2e/outside.txt", "*"))).status, 404);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

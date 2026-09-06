@@ -751,5 +751,5 @@ alarm-process, authorization, backup, and placement guarantees.
 ## Node
 
 - `serve(app, options?)`: bounded Fetch-standard Node HTTP server with streaming, timeouts, Host allowlists, proxy controls, and redacted errors.
-- `staticFiles(root, options?)`: traversal/symlink-aware static GET/HEAD handler with dotfile policy.
+- `staticFiles(root, options?)`: traversal/symlink-aware static GET/HEAD handler with dotfile policy and weak ETag revalidation through `If-None-Match`.
 - Types: `FetchApplication`, `ServeOptions`, `ServerHandle`, `StaticFilesOptions`.

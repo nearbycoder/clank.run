@@ -98,6 +98,10 @@ await server.close();
 `serve()` translates Node HTTP messages to Fetch objects, streams response bodies for SSE, propagates aborts, preserves multiple cookies, caps bodies and headers, configures timeouts, validates Host headers, and can trust forwarded protocol/client IP only when explicitly enabled. Loopback listeners accept loopback hosts by default; public deployments should set `allowedHosts`.
 
 `staticFiles()` supports GET/HEAD, index files, MIME types, cache headers, dotfile denial, traversal rejection, and post-symlink containment checks.
+Responses include a weak metadata `ETag`. Send it in `If-None-Match` to revalidate an asset:
+unchanged files return a bodyless `304`, avoiding a file stream and repeat transfer. Validators
+are checked against fresh file metadata after path validation. The default remains `no-cache`,
+so browsers revalidate on reuse; `cacheControl` still controls your caching policy.
 
 ```ts
 await serve(app, {
