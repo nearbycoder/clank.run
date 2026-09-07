@@ -1,3 +1,4 @@
+import { createLiveReplayStore, applyLiveSplice, type LiveResumeOptions } from "./live-resume.ts";
 import type { DatabaseQueryDiagnostic } from "./query-advisor.ts";
 import { openAgentActivity, type AgentActivityOptions, type AgentActivityFilter, type AgentActivitySnapshot } from "./agent-activity.ts";
 import { openMutationReceipts, type MutationReceiptOptions } from "./mutation-receipts.ts";
@@ -1496,6 +1497,9 @@ interface EventSourceLike {
 }
 
 export interface SyncClientOptions {
+  /** Negotiate bounded splice updates; unsupported servers keep sending snapshots. */
+  liveResume?: boolean;
+  maxLiveBytes?: number;
   url?: string;
   fetch?: typeof fetch;
   eventSource?: new(url: string, options?: { withCredentials?: boolean }) => EventSourceLike;
@@ -1556,26 +1560,40 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
       const loading = signal(seeded === undefined);
       const version = signal(seeded?.version ?? 0);
       const url = `${base}/__clank/live/${encodeURIComponent(functionPath(reference))}?args=${encodeURIComponent(stableStringify(input))}`;
-      const source = new EventSourceConstructor(url, { withCredentials: false });
-      source.onmessage = (event) => {
+      let lastEventId: string | null = null;
+      let source: EventSourceLike;
+      let snapshotOnly = !options.liveResume;
+      let disposed = false;
+      const connect = () => {
+        source = new EventSourceConstructor(url + (snapshotOnly ? "" : "&resume=splice-v1"), { withCredentials: false });
+        source.onmessage = receive;
+        source.onerror = (reason) => { if (!disposed) error.value = reason; };
+      };
+      const receive: NonNullable<EventSourceLike["onmessage"]> = (event) => {
+        if (disposed) return;
         try {
-          const payload = JSON.parse(event.data) as { value: unknown; version: number };
+          const payload = JSON.parse(event.data) as { value: unknown; version: number; kind?: string; baseId?: string; splice?: any };
           if (!Number.isSafeInteger(payload.version) || payload.version < 0) {
             throw new TypeError("Live query returned an invalid revision.");
           }
           if (payload.version < version.peek()) return;
+          if (payload.kind !== undefined && payload.kind !== "splice-v1") throw new TypeError("Unsupported live update format.");
+          if (payload.kind === "splice-v1" && (!lastEventId || payload.baseId !== lastEventId)) throw new TypeError("Live resume base is unavailable.");
+          const value = payload.kind === "splice-v1" ? applyLiveSplice(data.peek(), payload.splice, options.maxLiveBytes ?? 1024 * 1024) : payload.value;
+          lastEventId = event.lastEventId ?? null;
           batch(() => {
-            data.value = payload.value;
+            data.value = value;
             version.value = payload.version;
             error.value = undefined;
             loading.value = false;
           });
         } catch (reason) {
           batch(() => { error.value = reason; loading.value = false; });
+          if (!snapshotOnly) { snapshotOnly = true; lastEventId = null; source.close(); connect(); }
         }
       };
-      source.onerror = (reason) => { error.value = reason; };
-      return { data, error, loading, version, dispose: () => source.close() };
+      connect();
+      return { data, error, loading, version, dispose: () => { disposed = true; source.close(); } };
     },
     seed(reference, args, value, seedVersion = 0) {
       seeds.set(functionKey(functionPath(reference), args), { value, version: seedVersion });
@@ -1690,6 +1708,8 @@ export interface QueryDiagnostic {
 }
 
 export interface OpenBackendOptions extends SQLiteOptions {
+  /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
+  liveResume?: LiveResumeOptions;
   agentActivity?: AgentActivityOptions;
   /** Opt in to transactional, authenticated offline mutation receipts. */
   offlineMutations?: MutationReceiptOptions;
@@ -1823,6 +1843,7 @@ export async function openBackend<
     if (!options.database) database.close();
     throw error;
   }
+  const replayStore = options.liveResume ? createLiveReplayStore(options.liveResume) : undefined;
   const queryDiagnostics = new Map<string, { runs: number; cacheHits: number; durationMs: number; lastInvalidation: string | null }>();
   const queryDiagnostic = (path: string) => {
     if (!options.diagnostics) return undefined;
@@ -1954,6 +1975,7 @@ export async function openBackend<
   };
 
   const stopChanges = database.subscribe((change) => {
+    if (change.all || change.records.some(record => record.table === "__auth")) replayStore?.clear();
     if (authRuntime) {
       if (change.all) {
         authRuntime.notifyAllUserChanges();
@@ -2414,6 +2436,12 @@ export async function openBackend<
           authorize(fn, auth);
           invokeQuery(path, input, auth);
           liveConnections++;
+          let previousEventId = request.headers.get("last-event-id");
+          const resumeScope = cacheKey(path, fn.args.parse(input ?? {}), auth);
+          const encodeResume = replayStore && url.searchParams.get("resume") === "splice-v1" ? (value: unknown, version: number) => {
+            const encoded = replayStore.encode(resumeScope, previousEventId, value, version);
+            previousEventId = encoded.id; return encoded;
+          } : undefined;
           let closeLive: Cleanup | undefined;
           const live = liveResponse(
             caller,
@@ -2429,6 +2457,7 @@ export async function openBackend<
               liveConnections--;
               if (closeLive) liveDisconnects.delete(closeLive);
             },
+            encodeResume,
           );
           closeLive = live.close;
           if (!live.closed()) liveDisconnects.add(closeLive);
@@ -2472,6 +2501,7 @@ export async function openBackend<
       subscribers.clear();
       cache.clear();
       queryDiagnostics.clear();
+      replayStore?.clear();
       mcp?.close();
       jobsRuntime?.close();
       authRuntime?.close();
@@ -2573,6 +2603,7 @@ function liveResponse(
   auth: AuthRequest<any> | null,
   reportError: (error: unknown) => void,
   onClose: () => void,
+  encodeResume?: (value: unknown, version: number) => { id: string; payload: unknown },
 ): { response: Response; close: Cleanup; closed(): boolean } {
   const encoder = new TextEncoder();
   let dispose: Cleanup = () => {};
@@ -2604,7 +2635,8 @@ function liveResponse(
         const subscribed = caller.subscribe(path, input, (value, version) => {
           if (!active) return;
           try {
-            const chunk = encoder.encode(`id: ${version}\ndata: ${JSON.stringify({ value, version })}\n\n`);
+            const encoded = encodeResume?.(value, version) ?? { id: String(version), payload: { value, version } };
+            const chunk = encoder.encode(`id: ${encoded.id}\ndata: ${JSON.stringify(encoded.payload)}\n\n`);
             if (chunk.byteLength > maxPayloadBytes) {
               throw new RangeError(`Live query payload exceeds ${maxPayloadBytes} bytes.`);
             }

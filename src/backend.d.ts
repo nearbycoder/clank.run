@@ -1,3 +1,4 @@
+import { createLiveReplayStore, applyLiveSplice, type LiveResumeOptions } from "./live-resume.js";
 import type { DatabaseQueryDiagnostic } from "./query-advisor.js";
 import type { AgentActivityOptions, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
 import type { MutationReceiptOptions } from "./mutation-receipts.js";
@@ -324,6 +325,9 @@ interface EventSourceLike {
     close(): void;
 }
 export interface SyncClientOptions {
+  /** Negotiate bounded splice updates; unsupported servers keep sending snapshots. */
+  liveResume?: boolean;
+  maxLiveBytes?: number;
     url?: string;
     fetch?: typeof fetch;
     eventSource?: new (url: string, options?: {
@@ -408,6 +412,8 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     close(): void;
 }
 export interface OpenBackendOptions extends SQLiteOptions {
+  /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
+  liveResume?: LiveResumeOptions;
     agentActivity?: AgentActivityOptions;
     offlineMutations?: MutationReceiptOptions;
     tracer?: Tracer;
