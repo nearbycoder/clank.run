@@ -395,7 +395,13 @@ consumed version. No running consumer is reported for stopped apps or an unconfi
 generation. The provider comparison uses its frozen encrypted environment; external services
 outside Clank's runtime inventory are not automatically discovered.
 
-The API uses `GET/POST /api/projects/:id/secrets/rotations` and
-`POST /api/projects/:id/secrets/rotations/:rotationId/{validate|activate|rollback}`. Stage accepts
+The API exposes these routes:
+
+```text
+GET/POST /api/projects/:id/secrets/rotations
+POST /api/projects/:id/secrets/rotations/:rotationId/{validate|activate|rollback}
+```
+
+Stage accepts
 `{ name, value }`; lifecycle actions accept `{}`. Existing project authorization, browser CSRF,
 and audit behavior apply to every operation.
