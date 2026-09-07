@@ -1892,7 +1892,7 @@ export async function openBackend<
           assertSynchronous(output, "mutation");
           return finalizeBackendOutput(fn, output, maxResponseBytes);
         };
-        return key ? mutationReceipt!(key, auth!.user!.id, path, stableStringify(args), execute) : execute();
+        return key !== undefined ? mutationReceipt!(key, auth!.user!.id, path, stableStringify(args), execute) : execute();
       },
       scopeFor(auth),
     );

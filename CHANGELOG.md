@@ -4,6 +4,20 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.20.0 - 2026-09-06
+
+- Enforce deterministic reactive-work and browser-module size budgets in CI, with timing diagnostics.
+- Compare consecutive deployment activations using matched traffic windows, request latency, error rates, and activation duration, with explicit low-traffic and collection states.
+- Add loopback-only DevTools for reactive dependency activity, computation lifetime, and opt-in backend query/cache diagnostics.
+- Carry request trace context through backend operations, durable jobs, retries, and workflow steps; inspect bounded, metadata-only request/job timelines.
+- Build validated synthetic fixture databases and seed isolated preview environments through the CLI and platform, preserving parent application data and recovery safety.
+- Rehearse encrypted-backup recovery and database migrations on disposable copies, including application health checks, timing, table changes, and cleanup.
+- Persist bounded agent tool activity with granted scopes, outcomes, timing, observed revisions, filters, and a local explorer.
+- Queue browser mutations durably with account-bound transactional replay receipts, pending/retry states, expiry checks, and explicit conflict reconciliation.
+- Add persistent user-owned notifications, read state, category preferences, accessible browser controls, and optional durable email delivery with stable provider idempotency keys.
+- Ship approval-queue, customer-portal, and booking application recipes with authenticated UI/MCP contracts, ownership and transition rules, fixtures, migrations, and deployment configuration.
+- Run generated-application contracts in independent Node test contexts and build composed applications before their tests, closing a verification gap in the CLI harness.
+
 ## 0.19.6 - 2026-09-06
 
 - Coalesce shared reactive dependency invalidation before effects run, eliminating duplicate executions and partially updated computed values from a single signal write.

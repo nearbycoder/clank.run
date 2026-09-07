@@ -72,6 +72,7 @@ test("offline mutations survive lost responses and restart, enforce account bind
     assert.equal((await client.query(api.list)).find(row => row._id === latest._id).title, "Merged edit");
     const old = `${Date.now() - 8 * 86400000}.${crypto.randomUUID()}`;
     await assert.rejects(client.mutateOnce(api.add, { title: "expired" }, { key: old, userId: alice.userId }), error => error.code === "MUTATION_KEY_EXPIRED");
+    await assert.rejects(client.mutateOnce(api.add, { title: "empty key" }, { key: "", userId: alice.userId }), error => error.code === "INVALID_MUTATION_KEY");
     await assert.rejects(client.mutateOnce(api.fail, {}, { key: `${Date.now()}.${crypto.randomUUID()}`, userId: alice.userId }));
     assert.equal((await client.query(api.list)).length, 2);
     queue.dispose();
