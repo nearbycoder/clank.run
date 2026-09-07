@@ -18,6 +18,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 - Add configurable keyboard shortcuts with conflict detection, optional local persistence, input-aware dispatch, scopes, and settings controls.
 
+- Add resumable onboarding tours with highlighted targets, async preparation, retry, pause, skip, versioned progress, and cleanup.
+
 - Add spreadsheet-safe CSV exports with explicit column selection, UTF-8 downloads, bounded construction, and cancellable streaming responses.
 - Add an account-owned recycle bin with original-ID restoration, expiration sweeps, guarded permanent history deletion, and browser recovery controls.
 
