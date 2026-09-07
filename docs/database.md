@@ -293,3 +293,37 @@ The default window is 30 days, configurable from one second to 90 days. Recovery
 while the native revision is retained: global `historyRetentionRevisions` and per-document history
 limits may expire snapshots sooner. Configure retention consistently on every connection that
 writes the same database. Expiry and permanent purge do not erase independent backup archives.
+
+## Record history and comparison panel
+
+`@clank.run/framework/record-history` adds account-owned history browsing and restore controls to
+the native revision journal. Enable only the tables whose complete historical content the owner
+may inspect; the service does not redact fields from past versions.
+
+```ts
+import { openRecordHistory, createRecordHistoryClient, mountRecordHistory } from "@clank.run/framework/record-history";
+const history = await openRecordHistory({ path, schema, auth, tables: ["notes"],
+  validateRestore(document, { table, db }) { enforceCurrentBusinessRules(table, document, db); },
+});
+// Route /__clank/history/* to history.handle(request).
+const client = createRecordHistoryClient({ auth: authClient });
+const dispose = mountRecordHistory(panel, client, "notes", note._id);
+```
+
+The panel shows timestamps, operations, and document versions, loads older snapshots in pages of
+25, compares a selected version with the current content, and explicitly restores the selection.
+Restore creates a new revision instead of rewriting history and requires the current version the
+caller observed (or null for a deleted record). A concurrent edit causes a conflict. The optional
+synchronous validator runs inside that same transaction for business rules that schema validation
+alone cannot express; normal mutation handlers are not automatically replayed.
+
+`compareRecordVersions(before, after, maximum)` returns added, removed, or changed fields with JSON
+Pointer paths, before/after values, and an explicit truncation flag. It distinguishes missing fields
+from null, compares objects independent of key order, treats arrays as whole values, and collapses
+objects below depth 16. Each input is bounded to 64 KiB and the default change limit is 100 (maximum
+1,000). The panel renders comparison data as text and excludes framework metadata fields from the
+content diff. Its inline comparison size limit does not prevent restoring a larger retained record.
+
+History availability follows the existing global and per-document revision retention settings.
+Missing or expired snapshots cannot be restored; another account receives no history. Close the
+service and dispose the panel when the host route is removed.
