@@ -215,3 +215,44 @@ This produces smaller contracts, clearer error ownership, and simpler generated 
 - Do not place secrets in initial values, labels, agent metadata, or form manifests.
 - File uploads require an explicit upload transport. `createAgentSurface().input()` refuses file inputs.
 - Form cancellation is cooperative. Pass the provided `AbortSignal` into Fetch or other cancellable work.
+
+## CSV import with validation and preview
+
+`@clank.run/framework/csv-import` provides a strict parser, typed mapping planner, and browser
+import controls without an upload service. All parsing and previewing can happen locally.
+
+```ts
+import { mountCsvImporter } from "@clank.run/framework/csv-import";
+const dispose = mountCsvImporter(panel, {
+  fields: [{ name: "name", type: "text", required: true },
+    { name: "quantity", type: "integer", required: true }],
+  uniqueBy: ["name"],
+  commit: async (records, { idempotencyKey, signal }) => {
+    await api.importRows({ records, idempotencyKey }, { signal });
+  },
+});
+```
+
+The panel accepts pasted CSV or a local file, lets users map source headers to target fields,
+previews the first 20 typed records or validation issues, and enables import only for a valid,
+nonempty plan. A failed write can retry with the same operation key. Dispose aborts the signal;
+it cannot undo a server transaction that already committed.
+
+For headless use, call `parseCsv(text)`, then `planCsvImport(text, { columns, uniqueBy, existing,
+duplicates })`. A column declares `source`, `target`, `type`, and optional `required`. Supported
+types are text, finite numbers, safe integers, booleans (`true`, `false`, `1`, `0`), and real ISO
+calendar dates. Surrounding whitespace is trimmed and optional empty cells become null.
+Duplicates within the file or against the supplied existing records can fail or be skipped.
+Existing-key evidence is only a preview: enforce uniqueness again inside the server transaction.
+
+`commitCsvImport(plan, commit, signal)` accepts only a validated plan created in the same runtime,
+blocks concurrent/repeated successful commits, and invokes one host callback. The host must
+revalidate authorization and schema, write atomically, and persist the supplied idempotency key
+with its writes so a lost response cannot duplicate an import. This module never guesses a
+business table or silently makes multiple partial writes.
+
+Limits: 5 MiB input, 100 columns, 65,536 characters per cell, 10,000 data rows by default (maximum
+50,000), and 1,000 reported validation issues. Quoted delimiters, escaped quotes, multiline fields,
+UTF-8 BOMs, CRLF/LF, and explicit comma/semicolon/tab delimiters are supported. Duplicate/empty
+headers, malformed quotes, and mismatched row widths are rejected. Errors identify record and
+target column without echoing cell values; a record number counts quoted multiline data as one row.
