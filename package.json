@@ -33,6 +33,8 @@
     "./command-palette": { "types": "./dist/command-palette.d.ts", "import": "./dist/command-palette.js" },
 
     "./shortcuts": { "types": "./dist/shortcuts.d.ts", "import": "./dist/shortcuts.js" },
+
+    "./tours": { "types": "./dist/tours.d.ts", "import": "./dist/tours.js" },
     "./csv-export": { "types": "./dist/csv-export.d.ts", "import": "./dist/csv-export.js" },
     "./recycle-bin": { "types": "./dist/recycle-bin.d.ts", "import": "./dist/recycle-bin.js" },
 
