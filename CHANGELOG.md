@@ -2,41 +2,25 @@
 
 Clank follows semantic versioning. Entries describe user-visible framework, CLI, protocol, storage, security, and deployment changes.
 
-## Unreleased
+## 0.22.0 - 2026-09-07
 
 - Add private bookmarks and folders with safe URLs, favorites, search, conflict-checked editing, and atomic folder removal.
-
 - Add personal activity timelines with trusted event recording, bounded retention, stable pagination, unread filters, and cursor-bounded clearing.
-
 - Add shared feedback boards with explicit membership, unique votes, proposal editing, moderated status, and searchable controls.
-
 - Add personal availability calendars with overlap-safe windows, conflict-checked edits, and bounded slot previews with booking buffers.
-
 - Add saved dashboard layouts with owned defaults, widget visibility/order/width/collapse controls, responsive sizing, and preserved widget instances.
-
 - Add personal labels with colors, bounded resource assignments, conflict-checked editing, and browser controls.
-
 - Add owned ordered checklists with atomic completion, item editing, reordering, reset, and conflict-aware controls.
-
 - Add personal reminders with local-time scheduling, due filters, snooze, completion, and version-fenced editing.
-
 - Add recoverable device-local autosaved drafts with transactional revision checks, expiry, bounded JSON snapshots, and recovery controls.
-
 - Add bounded local undo/redo history with named edits, explicit coalescing, atomic transactions, snapshot recovery, and controls.
-
 - Add searchable command palettes with ranked accent-insensitive matching, keyboard navigation, focus restoration, and cancellable async execution.
-
 - Add configurable keyboard shortcuts with conflict detection, optional local persistence, input-aware dispatch, scopes, and settings controls.
-
 - Add resumable onboarding tours with highlighted targets, async preparation, retry, pause, skip, versioned progress, and cleanup.
-
 - Add spreadsheet-safe CSV exports with explicit column selection, UTF-8 downloads, bounded construction, and cancellable streaming responses.
 - Add an account-owned recycle bin with original-ID restoration, expiration sweeps, guarded permanent history deletion, and browser recovery controls.
-
 - Add account-owned record history panels with paginated snapshots, structural comparisons, business-rule validation, and version-fenced restore controls.
-
 - Add shared threaded comments with resource roles, safe edit/delete controls, reply limits, resolution, retry keys, and persistent permission revocation.
-
 - Add account-owned saved views with validated filters, stable sorting, visible columns, optimistic revisions, default selection, and browser management controls.
 - Add bounded local full-text search with accent folding, title-aware ranking, prefix completion, highlighted snippets, snapshot restore, and keyboard-accessible search controls.
 - Add CSV import with strict bounded parsing, column mapping, typed validation, duplicate handling, preview controls, and idempotent host transaction keys.
