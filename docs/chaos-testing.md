@@ -64,3 +64,56 @@ Before public beta and at least quarterly:
 - Use synthetic accounts and credentials.
 - Treat an unexpected successful stale write, cross-tenant read, unauthenticated restore, plaintext backup, or secret log entry as a release blocker.
 - Keep drills deterministic in CI; reserve network partitions, process kills, storage faults, and regional failures for staging.
+
+## Application resilience rehearsals
+
+`clank workbench resilience rehearsal.mjs --json` runs configured application scenarios on fresh
+disposable copies, using `rehearseResilience()` from `@clank.run/framework/resilience`. Each
+scenario must prove baseline behavior, exercise an actual injected fault, and verify recovery:
+
+```ts
+export default {
+  source: { databasePath: "./fixtures/app.sqlite" },
+  boot: async ({ databasePath, signal, fetchDependency }) =>
+    bootFixtureApp({ databasePath, signal, fetch: fetchDependency }),
+  dependencies: {
+    "https://partner.example.invalid": () => new Response("fixture response"),
+  },
+  scenarios: [{
+    name: "Offline read recovers",
+    fault: "offline",
+    async exercise({ request }) {
+      await assert.rejects(request("/healthz"));
+    },
+    async verify({ request }) {
+      assert.equal((await request("/healthz")).status, 200);
+    },
+  }],
+};
+```
+
+Import assertions and the application's fixture boot factory in the module. The factory returns
+`handle(request)` and `close()`; worker scenarios additionally require `crashWorker()` and
+`restartWorker()`. A real worker adapter should kill only its own disposable process and reconnect
+it to the supplied copied database. The runner never selects or kills a production process.
+
+Supported faults are `offline` (request rejected before execution), `lost-response` (application
+executes but the client loses its response), `dependency-unavailable` (injected dependency returns
+503), `interrupted-upload` (body stream fails partway through), and `worker-restart`. Upload fault
+bodies are limited to 64 KiB. Lost-response checks should retry with the same application
+idempotency key and verify that only one business operation committed.
+
+`verify()` runs with phase `baseline` and again with phase `recovered`; it must make at least one
+application request each time. Assertions should inspect business data, not just health.
+`exercise()` must actually trigger its declared fault. Missing adapters, unused faults, failed
+assertions, deadlines, and cleanup failures produce a failing report and nonzero CLI exit.
+Reports include phase, injected-fault count, request count, and duration without request bodies,
+headers, assertion messages, or dependency values.
+
+Each case restores its own copy using the recovery rehearsal lifecycle. Requests are restricted
+to that app's local paths. Dependency transport accepts only explicitly declared synthetic
+`https://name.example.invalid` handlers and has no network fallback. Wire all application service
+clients to the injected transport; a boot factory that independently uses global fetch or
+external credentials is outside this boundary. Use synthetic fixtures and honor the provided
+AbortSignal in adapters. These checks complement browser journeys and infrastructure drills;
+they do not simulate a regional network partition or validate an arbitrary production deployment.
