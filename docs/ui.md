@@ -1077,3 +1077,12 @@ exports a versioned snapshot, and `restore(snapshot)` validates every document b
 index. Snapshots contain document content: keep them in the correct account's storage and remove
 them on logout. The search panel debounces input, announces results, supports arrow-key navigation
 and Escape, and clears pending work on disposal. It does not independently synchronize server data.
+
+
+## Searchable command palette
+
+Mount `mountCommandPalette(element, commands)` from `@clank.run/framework/command-palette`. Each command has a stable `id`, a visible `title`, optional `category` and `keywords`, an optional `enabled()` predicate, and `run({ signal })`. The mount adds a Commands button and a native modal dialog; the returned controller supports `open`, `close`, `setCommands`, and `dispose`.
+
+Search is accent-insensitive AND matching across titles, categories, and keywords. Exact titles and title prefixes rank first, with registration order breaking ties. At most 500 commands, 20 keywords per command, and 20 visible matches keep rendering bounded. `searchCommands(commands, query, limit?)` exposes the same search for custom controls. Disabled commands and predicates that throw are excluded; the predicate is checked again before execution. Permissions must still be enforced by the host action/server.
+
+Arrow keys, Home/End, and Enter select and run commands; Escape or Close returns focus to the opener. Commands cannot run twice while pending. Errors keep the dialog open for retry and can be reported through `onError`. Closing aborts the action signal and ignores late UI updates; the host command must honor that signal for cancellable work. Cancellation cannot reverse a mutation that already completed. Visible labels are rendered as text. The palette installs no global key binding; connect `controller.open()` to the shortcut manager or your own button as appropriate.
