@@ -8005,3 +8005,48 @@ async function waitFor(check, timeout = 5_000) {
   }
   assert.fail("Timed out waiting for condition.");
 }
+
+test("secret rotations validate candidates, fence activation/rollback, track running consumers and survive restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-secret-rotations-"));
+  const dataDirectory = join(root, "platform");
+  const options = { dataDirectory, publicUrl: "http://127.0.0.1:4200", signup: true,
+    appPortStart: 59280, appPortEnd: 59285, backups: { intervalMs: false },
+    validateSecret: async ({ value }) => value.startsWith("valid-") };
+  let platform = await openPlatform(options);
+  try {
+    const owner = await authorizeCli(platform, "rotation-owner@example.invalid");
+    const other = await authorizeCli(platform, "rotation-other@example.invalid");
+    const created = await payload(platform, jsonRequest("/api/projects", { method: "POST", token: owner.accessToken, body: { name: "Rotation app", slug: "rotation-app" } }), 201);
+    const project = created.project.id, path = `/api/projects/${project}/secrets`, token = owner.accessToken;
+    const call = (suffix, method = "GET", body, expected = 200) => payload(platform, jsonRequest(path + suffix, { method, body, token }), expected);
+    await call("", "PUT", { values: { PARTNER_KEY: "valid-old-fixture-key" } });
+    const artifact = await appArtifact(join(root, "app"), "rotation-app", [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]]);
+    const deployed = await deploy(platform, project, token, artifact, "rotation-initial");
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    const initial = await call("/rotations"); assert.equal(initial.consumer.kind, "local"); assert.equal(initial.consumed[0].current, true);
+    const staged = (await call("/rotations", "POST", { name: "PARTNER_KEY", value: "valid-new-fixture-key" }, 201)).rotation;
+    await call(`/rotations/${staged.id}/activate`, "POST", {}, 409);
+    const validated = (await call(`/rotations/${staged.id}/validate`, "POST", {})).rotation;
+    assert.equal(validated.state, "validated"); assert.equal(validated.validation, "provider-check");
+    await platform.close(); platform = await openPlatform(options);
+    await call(`/rotations/${staged.id}/activate`, "POST", {});
+    const activated = await call("/rotations"); assert.equal(activated.consumed[0].current, false);
+    assert.notEqual(activated.current[0].revision, initial.current[0].revision);
+    await call(`/rotations/${staged.id}/rollback`, "POST", {});
+    assert.equal((await call("/rotations")).consumed[0].current, true);
+    const stale = (await call("/rotations", "POST", { name: "PARTNER_KEY", value: "valid-stale-fixture-key" }, 201)).rotation;
+    await call(`/rotations/${stale.id}/validate`, "POST", {});
+    await call("", "PUT", { values: { PARTNER_KEY: "valid-concurrent-fixture-key" } });
+    await call(`/rotations/${stale.id}/activate`, "POST", {}, 409);
+    const bad = (await call("/rotations", "POST", { name: "PARTNER_KEY", value: "invalid-fixture-key" }, 201)).rotation;
+    assert.equal((await call(`/rotations/${bad.id}/validate`, "POST", {})).rotation.state, "failed");
+    await call(`/rotations/${bad.id}/activate`, "POST", {}, 409);
+    const denied = await platform.handle(jsonRequest(path + "/rotations", { token: other.accessToken })); assert.ok([403, 404].includes(denied.status));
+    const audit = await payload(platform, jsonRequest(`/api/projects/${project}/audit`, { token }));
+    assert.doesNotMatch(JSON.stringify(audit), /valid-old-fixture-key|valid-new-fixture-key|invalid-fixture-key/);
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    assert.doesNotMatch(JSON.stringify(control.prepare("SELECT * FROM clank_platform_secret_rotations").all()), /valid-new-fixture-key|valid-old-fixture-key/); control.close();
+    await call("/PARTNER_KEY", "DELETE"); assert.equal((await call("/rotations")).rotations.length, 0);
+    await call(`/rotations/${staged.id}/rollback`, "POST", {}, 409);
+  } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
+});

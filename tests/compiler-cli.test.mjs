@@ -2572,3 +2572,28 @@ test("workflow recipes scaffold deployable apps with passing ownership, business
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("secret rotation CLI stages from environment and exposes metadata-only lifecycle commands", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-secret-cli-")), home = join(root, "home"), target = join(root, "app");
+  const id = "12345678-1234-1234-1234-123456789abc", calls = [];
+  const server = createHttpServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    calls.push({ method: request.method, url: request.url, body: body ? JSON.parse(body) : null });
+    response.writeHead(request.method === "POST" && request.url.endsWith("/rotations") ? 201 : 200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true, rotation: { id, name: "PARTNER_KEY", state: "validated", validation: "provider-check" }, rotations: [] }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const platform = `http://127.0.0.1:${server.address().port}/`;
+  try {
+    await mkdir(home); await mkdir(join(target, ".clank"), { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({ version: 1, current: platform, profiles: { [platform]: { token: "clnk_rotation_test_token", expiresAt: Date.now() + 60000 } } }));
+    await writeFile(join(target, ".clank", "project.json"), JSON.stringify({ version: 1, server: platform, projectId: "project_rotation_test" }));
+    const env = { ...process.env, CLANK_HOME: home, ROTATION_FIXTURE_VALUE: "fixture-private-candidate" };
+    const stage = await runCliResult(["secrets", "stage", "PARTNER_KEY", "--from-env=ROTATION_FIXTURE_VALUE"], target, env);
+    assert.doesNotMatch(stage.stdout, /fixture-private-candidate/); assert.equal(calls[0].body.value, "fixture-private-candidate");
+    for (const action of ["validate", "activate", "rollback"]) await runCliResult(["secrets", action, id], target, env);
+    await runCliResult(["secrets", "rotations"], target, env);
+    assert.deepEqual(calls.slice(1, 4).map(call => call.url.split("/").at(-1)), ["validate", "activate", "rollback"]);
+    assert.equal(calls.at(-1).method, "GET");
+  } finally { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); }
+});

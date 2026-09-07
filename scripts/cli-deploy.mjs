@@ -202,7 +202,7 @@ const COMMANDS = Object.freeze({
     summary: "Create, verify, list, or restore encrypted backups.",
   },
   secrets: {
-    usage: "clank secrets <list|set|delete>",
+    usage: "clank secrets <list|set|delete|rotations|stage|validate|activate|rollback>",
     summary: "Manage write-only runtime secrets.",
   },
   migrate: {
@@ -575,6 +575,11 @@ Platform:
   clank backup restore <backup-id> --confirm="restore-backup <slug> <id>"
   clank secrets list
   clank secrets set NAME               Read a secret value from stdin
+  clank secrets rotations              Inspect versions and running consumers
+  clank secrets stage NAME             Stage a value from stdin
+  clank secrets validate <rotation-id>  Validate the candidate
+  clank secrets activate <rotation-id>  Activate for the next launch
+  clank secrets rollback <rotation-id>  Restore the previous secret
   clank secrets delete NAME
   clank migrate plan [directory]       Inspect local SQLite migration state
   clank migrate apply [directory]      Apply local migrations
@@ -3039,6 +3044,22 @@ async function secrets(args) {
   const subcommand = args.shift();
   const { profile, link } = await linkedContext(process.cwd());
   const path = `/api/projects/${link.projectId}/secrets`;
+  if (subcommand === "rotations") {
+    const payload = await platformRequest(profile.server, `${path}/rotations`, { token: profile.token });
+    console.log(JSON.stringify(payload, null, 2)); return;
+  }
+  if (subcommand === "stage") {
+    const name = positionals(args)[0]; if (!name) throw new CliError("Usage: clank secrets stage NAME (value is read from stdin)");
+    const value = option(args, "from-env") ? process.env[option(args, "from-env")] : await readStandardInput();
+    if (value === undefined) throw new CliError("Secret value was not provided.");
+    const result = await platformRequest(profile.server, `${path}/rotations`, { method: "POST", token: profile.token, body: { name, value: value.replace(/\r?\n$/, "") } });
+    console.log(JSON.stringify(result, null, 2)); return;
+  }
+  if (["validate", "activate", "rollback"].includes(subcommand)) {
+    const id = positionals(args)[0]; if (!id || !/^[a-f0-9-]{36}$/.test(id)) throw new CliError(`Usage: clank secrets ${subcommand} <rotation-id>`);
+    const result = await platformRequest(profile.server, `${path}/rotations/${id}/${subcommand}`, { method: "POST", token: profile.token, body: {} });
+    console.log(JSON.stringify(result, null, 2)); return;
+  }
   if (subcommand === "list") {
     const payload = await platformRequest(profile.server, path, { token: profile.token });
     for (const secret of payload.secrets) console.log(`${secret.name}  ${new Date(secret.updatedAt).toISOString()}`);
@@ -3069,7 +3090,7 @@ async function secrets(args) {
     console.log(`Deleted ${name}.`);
     return;
   }
-  throw new CliError("Usage: clank secrets <list|set|delete>");
+  throw new CliError("Usage: clank secrets <list|set|delete|rotations|stage|validate|activate|rollback>");
 }
 
 async function migrate(args) {
