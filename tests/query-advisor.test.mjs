@@ -53,7 +53,7 @@ test('backend and local DevTools expose SQL advice and escape custom diagnostic 
   const snapshot=inspector.snapshot();assert.equal(snapshot.queryAdvice.length,1);
   assert.match(renderDevtools(snapshot),/Database query advisor/);
   const malicious={...snapshot,queryAdvice:[{query:{...snapshot.queryAdvice[0].query,sql:'<script>bad</script>'},findings:['<img>']}]};
-  assert.doesNotMatch(renderDevtools(malicious),/<script>|<img>/);
+  assert.doesNotMatch(renderDevtools(malicious),/<script\b|<img\b/iu);
   inspector.dispose();assert.equal(inspector.snapshot().queryAdvice,undefined);
  } finally { inspector.dispose();backend.close(); }
 });
