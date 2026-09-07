@@ -284,3 +284,51 @@ Run it with `npm run dev:auth`.
 
 For durable browser edits, see [Offline mutations](offline.md): account-bound queues, transactional
 receipts, pending/retry state, and explicit optimistic-conflict reconciliation.
+## Persistent notification center
+
+`openNotificationCenter` provides user-owned notifications, read/unread state, per-category
+in-app/email preferences, ordinary authenticated RPC/MCP operations, and optional durable email.
+It shares the application's SQLite auth database through a separate connection:
+
+```ts
+import { openNotificationCenter } from "@clank.run/framework/notifications";
+const notifications = await openNotificationCenter({
+  path: "app.sqlite", auth: authDefinition, categories: ["updates", "billing"],
+  sendEmail: async ({ to, subject, text, idempotencyKey, signal }) => {
+    await emailProvider.send({ to, subject, text, idempotencyKey, signal });
+  },
+});
+// Route /__clank/notifications/* to notifications.handle(request).
+// Other application routes continue through the main backend/server.
+const emailWorker = notifications.startEmailWorker();
+notifications.publish({ userId, key: "export:123:ready", category: "updates",
+  title: "Export ready", body: "Your report is available.", url: "/exports/123" });
+```
+
+`publish` is trusted server code, never an exposed mutation. The recipient must be an active
+application account. The notification and optional email job commit together. Per-account keys
+deduplicate while the notification is retained; default retention keeps the latest 1,000 per
+account, configurable to 10,000. The list returns the newest 100, with a separate total unread
+count and mark-all-read operation. Old retained keys may be reused after their notification is
+pruned; use your event source's own idempotency policy when a longer guarantee is needed.
+
+```ts
+import { createNotificationClient, mountNotificationCenter } from "@clank.run/framework/notifications";
+const client = createNotificationClient({ auth: authClient });
+const unmount = mountNotificationCenter(document.querySelector("#notifications"), client);
+```
+
+The mounted center has explicit refresh, accessible read/unread controls, category preferences,
+and visible loading/save failures. The client also exposes `list`, `unreadCount`, `markRead`,
+`markAllRead`, `preferences`, and `setPreference` for custom interfaces. Only safe local paths are
+accepted as notification links. Custom prefixes use the same full prefix in the server's `prefix`
+and client's `url`. Auth cookies/CSRF and user ownership enforce account isolation.
+
+In-app delivery defaults on; email defaults off. Delivery rechecks category preferences, account
+status, and the auth system's verified-email state immediately before sending. Opt-outs and
+unverified/disabled recipients are skipped. Your mail provider receives a stable notification
+idempotency key: use it to deduplicate if a worker loses its lease or crashes after delivery.
+Worker retries are durable and may invoke the callback again. A missing provider sends no email.
+For tests or an external scheduler, `workEmailOnce()` handles one queued attempt. The email
+worker is opt-in and must be stopped with `await emailWorker.close()` before `notifications.close()`.
+Unmount the browser center on logout so another account does not see its previous DOM contents.

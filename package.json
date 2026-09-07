@@ -28,6 +28,7 @@
     "./offline": { "types": "./dist/offline.d.ts", "import": "./dist/offline.js" },
     "./preview-fixtures": { "types": "./dist/preview-fixtures.d.ts", "import": "./dist/preview-fixtures.js" },
     "./agent-activity": { "types": "./dist/agent-activity.d.ts", "import": "./dist/agent-activity.js" },
+    "./notifications": { "types": "./dist/notifications.d.ts", "import": "./dist/notifications.js" },
     "./rehearsal": { "types": "./dist/rehearsal.d.ts", "import": "./dist/rehearsal.js" },
     "./devtools": { "types": "./dist/devtools.d.ts", "import": "./dist/devtools.js" },
     "./core": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },

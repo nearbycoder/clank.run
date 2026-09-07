@@ -2,6 +2,7 @@ export { renderAgentActivity } from "./agent-activity.js";
 export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
 export * from "./offline.js";
 export type { MutationReceiptOptions } from "./mutation-receipts.js";
+export * from "./notifications.js";
 /// <reference path="./jsx.d.ts" />
 
 export * from "./core.js";
