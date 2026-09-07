@@ -1047,6 +1047,7 @@ sensitivity. `setDefault(id)` atomically clears the previous default; `setDefaul
 The host can apply the default returned by `list()` at startup. The controls expose save-current,
 apply, rename, default, delete, refresh, empty, busy, and retry states. Dispose removes the panel
 and ignores late responses. The default limit is 50 views per account (configurable to 200).
+
 ## Local full-text search
 
 `@clank.run/framework/local-search` runs in the browser or server with no network connection,
