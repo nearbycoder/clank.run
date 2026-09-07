@@ -21,6 +21,7 @@
   "types": "./dist/index.d.ts",
   "exports": {
     "./contract-compatibility": { "types": "./dist/contract-compatibility.d.ts", "import": "./dist/contract-compatibility.js" },
+    "./virtual-collections": { "types": "./dist/virtual-collections.d.ts", "import": "./dist/virtual-collections.js" },
     "./application-performance": { "types": "./dist/application-performance.d.ts", "import": "./dist/application-performance.js" },
     "./query-advisor": { "types": "./dist/query-advisor.d.ts", "import": "./dist/query-advisor.js" },
     ".": {
