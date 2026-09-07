@@ -21,6 +21,7 @@
   "types": "./dist/index.d.ts",
   "exports": {
     "./application-performance": { "types": "./dist/application-performance.d.ts", "import": "./dist/application-performance.js" },
+    "./query-advisor": { "types": "./dist/query-advisor.d.ts", "import": "./dist/query-advisor.js" },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"

@@ -1,3 +1,4 @@
+import type { DatabaseQueryDiagnostic } from "./query-advisor.ts";
 import { openAgentActivity, type AgentActivityOptions, type AgentActivityFilter, type AgentActivitySnapshot } from "./agent-activity.ts";
 import { openMutationReceipts, type MutationReceiptOptions } from "./mutation-receipts.ts";
 import type { Tracer } from "./observability.ts";
@@ -371,6 +372,8 @@ interface DatabaseSyncConstructor {
 }
 
 export interface SQLiteOptions {
+  /** Opt-in metadata-only SQL plans and execution statistics, bounded to 500 shapes. */
+  queryDiagnostics?: boolean;
   path?: string;
   wal?: boolean;
   busyTimeout?: number;
@@ -388,6 +391,7 @@ export interface SQLiteOptions {
 export interface SQLiteDatabase<Schema extends DatabaseSchema<any>> {
   readonly schema: Schema;
   readonly version: number;
+  inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
   read<Value>(handler: (db: ReadDatabase<Schema>) => Value, scope?: DatabaseScope): Value;
   tracked<Value>(handler: (db: ReadDatabase<Schema>) => Value, scope?: DatabaseScope): TrackedResult<Value>;
   transaction<Value>(handler: (db: WriteDatabase<Schema>) => Value, scope?: DatabaseScope): Value;
@@ -610,6 +614,26 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     }
   };
 
+  const sqlDiagnostics = new Map<string, DatabaseQueryDiagnostic>();
+  const observeQuery = <Value>(name: string, sql: string, parameters: unknown[], candidateFields: string[], operation: () => Value[]): Value[] => {
+    if (!options.queryDiagnostics) return operation();
+    const started = performance.now();
+    const rows = operation();
+    const durationMs = performance.now() - started;
+    try {
+      const old = sqlDiagnostics.get(sql);
+      const plan = old?.plan ?? Object.freeze(native.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...parameters).map((row) => String(row.detail).slice(0, 1000)));
+      const fields = [...new Set(candidateFields)].slice(0, 8);
+      const candidate = fields.map(fieldExpression);
+      if (schema.tables[name]!.ownership === "user") candidate.unshift("_owner_id");
+      const needsIndex = plan.some((step) => /^SCAN /u.test(step) || step.includes("TEMP B-TREE"));
+      const suggestedIndex = needsIndex && fields.length ? `CREATE INDEX ${quoteIdentifier(`clank_${name}_advisor`)} ON ${tableIdentifier(name)} (${candidate.join(", ")});` : null;
+      if (!old && sqlDiagnostics.size >= 500) sqlDiagnostics.delete(sqlDiagnostics.keys().next().value!);
+      sqlDiagnostics.set(sql, Object.freeze({ table: name, sql, runs: (old?.runs ?? 0) + 1, rows: (old?.rows ?? 0) + rows.length, totalMs: (old?.totalMs ?? 0) + durationMs, maximumMs: Math.max(old?.maximumMs ?? 0, durationMs), plan, suggestedIndex }));
+    } catch { /* Diagnostic failures must not change successful query behavior. */ }
+    return rows;
+  };
+
   const executeQuery = <Name extends TableName<Schema>>(
     name: Name,
     conditions: QueryCondition[],
@@ -642,7 +666,8 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       : " ORDER BY _creation_time ASC, _id ASC";
     const limitSql = count === undefined ? "" : ` LIMIT ${validateLimit(count)}`;
     const sql = `SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)}${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""}${orderSql}${limitSql}`;
-    return prepared(sql).all(...parameters).map((row) => decodeDocument<Schema, Name>(schema, name, row));
+    const fields = [...conditions.filter((condition) => condition.comparison === "eq").map((condition) => condition.field), ...conditions.filter((condition) => condition.comparison !== "eq" && condition.comparison !== "neq").map((condition) => condition.field), ...(order ? [order.field] : [])];
+    return observeQuery(name, sql, parameters, fields, () => prepared(sql).all(...parameters)).map((row) => decodeDocument<Schema, Name>(schema, name, row));
   };
 
   const getDocument = <Name extends TableName<Schema>>(name: Name, id: Id<Name>, ownerId?: string | null): DocumentFor<Schema, Name> | null => {
@@ -650,8 +675,9 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     const definition = tableDefinition(schema, name);
     if (definition.ownership === "user" && ownerId === null) throw new Error(`Owned table ${name} requires an authenticated user.`);
     const scoped = definition.ownership === "user" && ownerId !== undefined;
-    const row = prepared(`SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)} WHERE _id = ?${scoped ? " AND _owner_id = ?" : ""}`)
-      .get(...(scoped ? [id, ownerId] : [id]));
+    const sql = `SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)} WHERE _id = ?${scoped ? " AND _owner_id = ?" : ""}`;
+    const parameters = scoped ? [id, ownerId] : [id];
+    const row = observeQuery(name, sql, parameters, [], () => { const row = prepared(sql).get(...parameters); return row ? [row] : []; })[0];
     return row ? decodeDocument(schema, name, row) : null;
   };
 
@@ -1097,6 +1123,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
 
   const database: SQLiteDatabase<Schema> = {
     schema,
+    inspectDatabaseQueries() { ensureOpen(); return Object.freeze([...sqlDiagnostics.values()]); },
     get version() {
       synchronizeChanges(undefined, true);
       return version;
@@ -1123,6 +1150,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       if (poller) clearInterval(poller);
       listeners.clear();
       statements.clear();
+      sqlDiagnostics.clear();
       native.close();
     },
     [SQLITE_INTERNAL]: {
@@ -1646,6 +1674,7 @@ export interface BackendRuntime<
   caller(request: Request): Promise<BackendCaller<AuthProfileOf<Auth>>>;
   handle(request: Request): Promise<Response>;
   inspectQueries(): readonly QueryDiagnostic[];
+  inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
   inspectAgentActivity(filter?: AgentActivityFilter): AgentActivitySnapshot;
   close(): void;
 }
@@ -2255,6 +2284,7 @@ export async function openBackend<
       ensureOpen();
       return activity?.snapshot(filter) ?? Object.freeze({ protocol: "clank-agent-activity/1", retainedLimit: 0, events: Object.freeze([]) });
     },
+    inspectDatabaseQueries() { ensureOpen(); return database.inspectDatabaseQueries(); },
     inspectQueries() {
       const cached = new Map<string, number>();
       const subscribed = new Map<string, number>();
