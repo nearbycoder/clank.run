@@ -113,3 +113,33 @@ live synchronization, durable jobs, provider fencing, rollout health gates, migr
 and rollback through the packaged-release conformance journey. CI runs the supported Node 22.16
 and Node 24 versions. Reproduce timing measurements on the deployment workload before drawing
 capacity conclusions from these narrower invariants.
+
+## Complete application load budgets
+
+`clank workbench performance page.har budgets.json --baseline=before.har --json`
+checks an actual browser navigation, including transitive modules, CSS, images, fonts, and other
+HTTP requests initiated through the page's load event. Export a HAR from a fresh browser context
+with cache disabled, after load completes. Use the same URL, fixture, viewport, and browser for
+the baseline and candidate. Disable service workers. HAR files can contain credentials: keep the
+raw captures private; the report excludes headers, cookies, bodies, URL credentials and queries.
+Resource paths remain visible, so use synthetic fixture URLs.
+
+The budget file declares four nonnegative integer maxima:
+
+```json
+{ "requests": 30, "bodyBytes": 300000, "javascriptBytes": 100000, "cssBytes": 30000 }
+```
+
+Body bytes are the HAR's encoded response body sizes, including compression actually served;
+they exclude HTTP headers. JavaScript and CSS are classified by response MIME type. Every request
+counts, including repeats and redirects. Query variants aggregate under the same origin/path.
+Resources and baseline byte deltas identify new, larger, and removed payloads. A script fetched
+indirectly counts exactly like a top-level script. This measures observed loading, not unused
+code or a static dependency graph; exercise lazy routes separately.
+
+The command exits nonzero for exceeded budgets, unknown measurements, detected cache hits,
+failed responses, or a missing HTML document. Multiple-page captures require `--page=<id>`;
+the same ID selects both captures. Requests initiated after load are excluded, while requests
+started before load count in full. The capture must finish those responses before export.
+The report cannot detect requests omitted by the capture tool; keep network recording enabled
+throughout navigation. Add this command to an application's CI after its browser capture step.

@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add complete application-load budgets from cold-navigation HAR captures, with resource deltas, transitive asset accounting, and failing CI checks for incomplete evidence.
+
 ## 0.20.0 - 2026-09-06
 
 - Enforce deterministic reactive-work and browser-module size budgets in CI, with timing diagnostics.

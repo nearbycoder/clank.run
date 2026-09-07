@@ -1,3 +1,4 @@
+import { assessApplicationPerformance } from "../dist/application-performance.js";
 import { rehearseRecovery, rehearseMigrations } from "../dist/rehearsal.js";
 import { lstat, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -19,6 +20,12 @@ export async function runWorkbench(args) {
   const option = (name) => args.find((item) => item.startsWith(`--${name}=`))?.slice(name.length + 3);
   let result;
   switch (subcommand) {
+    case "performance": {
+      const [capture, budgets] = values;
+      required(capture && budgets, "Usage: clank workbench performance <page.har> <budgets.json> [--baseline=<page.har>] [--page=<id>] [--json]");
+      result = assessApplicationPerformance(await jsonFile(capture), await jsonFile(budgets), { pageId: option("page"), ...(option("baseline") ? { baseline: await jsonFile(option("baseline")) } : {}) });
+      break;
+    }
     case "restore":
     case "migrate": {
       const [modulePath] = values;
@@ -151,6 +158,7 @@ function help() {
   console.log(`Clank workbench
 
 Usage:
+  clank workbench performance <page.har> <budgets.json>  Enforce complete page-load budgets
   clank workbench restore <rehearsal.mjs>        Restore and verify a disposable app copy
   clank workbench migrate <rehearsal.mjs>        Rehearse migrations on a disposable database
   clank workbench policy <policy.json> <action>   Evaluate user/agent authorization

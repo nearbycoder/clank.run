@@ -126,3 +126,20 @@ test("workbench CLI runs disposable restore and migration checks and fails unsuc
     await assert.rejects(run(["workbench", "restore", module, "--json"]), /CLI exited 1/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test("application performance CLI emits resource evidence and fails exceeded budgets", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-app-budget-"));
+  try {
+    const capture = join(root, "page.har");
+    const budgets = join(root, "budgets.json");
+    const startedDateTime = "2026-09-06T12:00:00.000Z";
+    await writeFile(capture, JSON.stringify({ log: { pages: [{ id: "page", startedDateTime, pageTimings: { onLoad: 100 } }], entries: [{ pageref: "page", startedDateTime, request: { url: "https://example.invalid/" }, response: { status: 200, bodySize: 100, content: { mimeType: "text/html" } } }] } }));
+    await writeFile(budgets, JSON.stringify({ requests: 1, bodyBytes: 100, javascriptBytes: 0, cssBytes: 0 }));
+    const result = JSON.parse((await run(["workbench", "performance", capture, budgets, "--json"])).stdout);
+    assert.equal(result.ok, true);
+    assert.equal(result.measurements.bodyBytes, 100);
+    await writeFile(budgets, JSON.stringify({ requests: 1, bodyBytes: 99, javascriptBytes: 0, cssBytes: 0 }));
+    await assert.rejects(run(["workbench", "performance", capture, budgets, "--json"]), /CLI exited 1/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
