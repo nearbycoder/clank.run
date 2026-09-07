@@ -5,6 +5,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 ## Unreleased
 
 - Add account-owned saved views with validated filters, stable sorting, visible columns, optimistic revisions, default selection, and browser management controls.
+- Add bounded local full-text search with accent folding, title-aware ranking, prefix completion, highlighted snippets, snapshot restore, and keyboard-accessible search controls.
 
 ## 0.21.0 - 2026-09-06
 
