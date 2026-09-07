@@ -203,3 +203,26 @@ deadline is 30 seconds, configurable from 100 ms to five minutes. Temporary file
 the application is closed on success or failure. Migration SQL cannot attach external databases,
 run filesystem/extension functions, or use PRAGMA/VACUUM, even with `allowUnsafe`; ordinary
 migration validation still applies unless explicitly disabled.
+
+## Database query advisor
+
+Opt in when opening the database or backend with `queryDiagnostics: true`, then connect
+`createDevtools({ queries: () => backend.inspectQueries(), databaseQueries: () => backend.inspectDatabaseQueries() })`.
+For an externally supplied database, enable `queryDiagnostics` on that database's `openSQLite`
+call. Use the existing loopback-only DevTools server; do not expose diagnostics through public RPC.
+
+`inspectDatabaseQueries()` groups up to 500 observed application query shapes, including point
+lookups, with actual SQLite plans, execution count, returned-row count, cumulative time, and
+maximum time. `adviseQueries()` from `@clank.run/framework/query-advisor` highlights slow runs,
+repeated shapes, scans, and temporary sorts. Timing covers SQL execution, not document decoding
+or the whole backend handler. Cached backend results perform no SQL and add no SQL runs.
+Bound arguments, owner identities, document IDs, and returned values are never retained.
+Diagnostics are process-local, reset on close, and disabled by default.
+
+Candidate indexes use equality fields, range fields, explicit ordering, and ownership scope.
+They are reviewable SQL, never automatically applied. Choose a unique migration index name,
+rehearse it on representative data, and compare plans and write costs. Plans are sampled on first
+observation of a shape; reopen after schema changes to refresh them. A scan can be the optimal
+plan, and repetition alone does not prove an N+1 bug. Counts describe returned rows, not rows
+visited internally by SQLite. Startup validation, history reads, and internal metadata queries
+are outside this application-query report.

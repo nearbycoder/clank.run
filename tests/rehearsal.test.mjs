@@ -74,7 +74,7 @@ test("migration rehearsal reports schema and data changes without modifying sour
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("rehearsals fail health checks and deadlines, clean up late boot, and reject escaping check URLs", async () => {
+test("rehearsals fail health checks and deadlines, clean up late boot, and reject escaping check URLs", async (context) => {
   const { root, databasePath } = await fixture();
   let closed = 0;
   const boot = () => ({ handle: () => new Response("unhealthy", { status: 500 }), close() { closed++; } });
@@ -82,11 +82,23 @@ test("rehearsals fail health checks and deadlines, clean up late boot, and rejec
     const failed = await rehearseRecovery({ source: { databasePath }, boot });
     assert.equal(failed.failurePhase, "checks");
     assert.equal(closed, 1);
-    const timeout = await rehearseRecovery({ source: { databasePath }, timeoutMs: 100,
-      async boot() { await new Promise(resolve => setTimeout(resolve, 130)); return boot(); } });
+    // Advance the deadline only after boot starts: shared CI load must not make
+    // the real SQLite restore accidentally consume this test's boot budget.
+    context.mock.timers.enable({ apis: ["setTimeout"] });
+    let releaseBoot, startedBoot, finishClose;
+    const bootStarted = new Promise(resolve => { startedBoot = resolve; });
+    const lateClosed = new Promise(resolve => { finishClose = resolve; });
+    const pendingBoot = new Promise(resolve => { releaseBoot = resolve; });
+    const rehearsal = rehearseRecovery({ source: { databasePath }, timeoutMs: 100,
+      boot() { startedBoot(); return pendingBoot; } });
+    await bootStarted;
+    context.mock.timers.tick(101);
+    const timeout = await rehearsal;
     assert.equal(timeout.ok, false);
     assert.equal(timeout.failurePhase, "boot");
-    await new Promise(resolve => setTimeout(resolve, 60));
+    releaseBoot({ ...boot(), close() { closed++; finishClose(); } });
+    await lateClosed;
+    context.mock.timers.reset();
     assert.equal(closed, 2);
     await assert.rejects(rehearseRecovery({ source: { databasePath }, boot, checks: [{ name: "escape", path: "//outside.test" }] }), /Invalid rehearsal checks/);
     const escaped = await rehearseRecovery({ source: { databasePath }, boot, checks: [{ name: "escape", path: "/\\outside.test" }] });

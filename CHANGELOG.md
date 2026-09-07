@@ -5,6 +5,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 ## Unreleased
 
 - Add complete application-load budgets from cold-navigation HAR captures, with resource deltas, transitive asset accounting, and failing CI checks for incomplete evidence.
+- Add opt-in SQLite query plans, bounded execution summaries, repeated-query and slow-query advice, and reviewable index candidates in local DevTools.
 
 ## 0.20.0 - 2026-09-06
 

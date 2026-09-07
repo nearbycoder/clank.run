@@ -1,3 +1,4 @@
+import type { DatabaseQueryDiagnostic } from "./query-advisor.js";
 import type { AgentActivityOptions, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
 import type { MutationReceiptOptions } from "./mutation-receipts.js";
 import type { Tracer } from "./observability.js";
@@ -162,6 +163,8 @@ interface DatabaseSyncLike {
     enableLoadExtension?(allow: boolean): void;
 }
 export interface SQLiteOptions {
+  /** Opt-in metadata-only SQL plans and execution statistics, bounded to 500 shapes. */
+  queryDiagnostics?: boolean;
     path?: string;
     wal?: boolean;
     busyTimeout?: number;
@@ -400,6 +403,7 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     caller(request: Request): Promise<BackendCaller<AuthProfileOf<Auth>>>;
     handle(request: Request): Promise<Response>;
     inspectQueries(): readonly QueryDiagnostic[];
+  inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
     inspectAgentActivity(filter?: AgentActivityFilter): AgentActivitySnapshot;
     close(): void;
 }
