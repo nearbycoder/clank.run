@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add spreadsheet-safe CSV exports with explicit column selection, UTF-8 downloads, bounded construction, and cancellable streaming responses.
+
 - Add account-owned saved views with validated filters, stable sorting, visible columns, optimistic revisions, default selection, and browser management controls.
 - Add bounded local full-text search with accent folding, title-aware ranking, prefix completion, highlighted snippets, snapshot restore, and keyboard-accessible search controls.
 - Add CSV import with strict bounded parsing, column mapping, typed validation, duplicate handling, preview controls, and idempotent host transaction keys.
