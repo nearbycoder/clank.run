@@ -25,6 +25,8 @@
     "./checklists": { "types": "./dist/checklists.d.ts", "import": "./dist/checklists.js" },
 
     "./reminders": { "types": "./dist/reminders.d.ts", "import": "./dist/reminders.js" },
+
+    "./drafts": { "types": "./dist/drafts.d.ts", "import": "./dist/drafts.js" },
     "./csv-export": { "types": "./dist/csv-export.d.ts", "import": "./dist/csv-export.js" },
     "./recycle-bin": { "types": "./dist/recycle-bin.d.ts", "import": "./dist/recycle-bin.js" },
 
