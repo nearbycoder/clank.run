@@ -27,6 +27,8 @@
     "./reminders": { "types": "./dist/reminders.d.ts", "import": "./dist/reminders.js" },
 
     "./drafts": { "types": "./dist/drafts.d.ts", "import": "./dist/drafts.js" },
+
+    "./undo-history": { "types": "./dist/undo-history.d.ts", "import": "./dist/undo-history.js" },
     "./csv-export": { "types": "./dist/csv-export.d.ts", "import": "./dist/csv-export.js" },
     "./recycle-bin": { "types": "./dist/recycle-bin.d.ts", "import": "./dist/recycle-bin.js" },
 
