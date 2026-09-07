@@ -451,3 +451,8 @@ Production migrations always run inside the deployment transaction.
 Use `clank token create` to issue a short-lived project token containing only the CI job's required permissions, and isolate it with a dedicated `CLANK_HOME`. Membership and token scope are re-evaluated on every request; removing the member or revoking the token stops future access.
 
 Successful commands exit `0`; input, auth, build, upload, migration, or health failures exit non-zero. Commands that document `--json` emit structured failures to standard error with a stable code and message. Failed server revocation prevents `logout` from silently deleting the only local token reference. `--local` is for platform recovery.
+
+Workflow templates are also available through `clank create --template=approval-queue`,
+`--template=customer-portal`, and `--template=booking`. Each includes tested backend rules,
+authenticated UI/MCP flows, fixtures, and a deployment contract; see
+[Runnable workflow recipes](application-recipes.md#runnable-workflow-recipes).

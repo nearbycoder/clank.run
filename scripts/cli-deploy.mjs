@@ -72,6 +72,9 @@ const PROJECT_TEMPLATES = Object.freeze([
       "deployment",
     ]),
   }),
+  Object.freeze({ id: "approval-queue", title: "Approval queue", summary: "Authenticated workflow with typed UI, MCP actions, fixtures, and business-rule tests.", recommended: false, features: Object.freeze(["authentication", "ssr", "hydration", "live-sync", "mcp-oauth", "ui-mcp-parity", "deterministic-fixture", "app-contract-tests", "migrations", "deployment"]) }),
+  Object.freeze({ id: "customer-portal", title: "Customer portal", summary: "Authenticated workflow with typed UI, MCP actions, fixtures, and business-rule tests.", recommended: false, features: Object.freeze(["authentication", "ssr", "hydration", "live-sync", "mcp-oauth", "ui-mcp-parity", "deterministic-fixture", "app-contract-tests", "migrations", "deployment"]) }),
+  Object.freeze({ id: "booking", title: "Booking", summary: "Authenticated workflow with typed UI, MCP actions, fixtures, and business-rule tests.", recommended: false, features: Object.freeze(["authentication", "ssr", "hydration", "live-sync", "mcp-oauth", "ui-mcp-parity", "deterministic-fixture", "app-contract-tests", "migrations", "deployment"]) }),
 ]);
 const COMMANDS = Object.freeze({
   templates: {
@@ -79,7 +82,7 @@ const COMMANDS = Object.freeze({
     summary: "List built-in app starters and their exact capabilities.",
   },
   create: {
-    usage: "clank create <directory> [--template <auth-todo|minimal>] [--name <name>] [--framework <version|local|spec>] [--json]",
+    usage: "clank create <directory> [--template <auth-todo|minimal|approval-queue|customer-portal|booking>] [--name <name>] [--framework <version|local|spec>] [--json]",
     summary: "Create a deploy-ready full-stack app from a built-in template.",
   },
   compose: {

@@ -85,12 +85,14 @@ async function linkFramework(target) {
 }
 
 function runNodeTests(cwd, testPath = "tests/app.contract.mjs") {
+  // A generated app is an independent test process, not a worker of this test runner.
+  const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [
       "--disable-warning=ExperimentalWarning",
       "--test",
       testPath,
-    ], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    ], { cwd, env: environment, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -254,6 +256,7 @@ test("compose freezes an exact review before transactionally applying generated 
     const sessionPath = join(target, ".clank", "compose-sessions", `${review.reviewId}.json`);
     assert.equal((await lstat(sessionPath)).mode & 0o777, 0o600);
     assert.equal(JSON.parse(await readFile(sessionPath, "utf8")).planDigest, review.planDigest);
+    await runCli(["build", "src", "dist"], target);
     await linkFramework(target);
     await runNodeTests(target);
   } finally {
@@ -1492,7 +1495,7 @@ test("template discovery and create expose safe agent-readable contracts", async
     assert.equal(catalog.defaultTemplate, "auth-todo");
     assert.deepEqual(
       catalog.templates.map((entry) => entry.id),
-      ["auth-todo", "minimal"],
+      ["auth-todo", "minimal", "approval-queue", "customer-portal", "booking"],
     );
     assert.equal(catalog.templates[0].recommended, true);
     assert.equal(catalog.templates[0].features.includes("mcp-oauth"), true);
@@ -2551,4 +2554,21 @@ test("development server resolves documented trailing-slash example URLs", async
       await once(child, "exit");
     }
   }
+});
+
+
+test("workflow recipes scaffold deployable apps with passing ownership, business-rule, UI, and MCP contracts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-workflow-recipes-"));
+  try {
+    for (const name of ["approval-queue", "customer-portal", "booking"]) {
+      const target = join(root, name);
+      await runCli(["create", target, `--template=${name}`, "--framework=local"], repository);
+      await runCli(["build", "src", "dist"], target);
+      await linkFramework(target);
+      const contracts = await runNodeTests(target);
+      assert.match(contracts.stdout, /pass 2/);
+      const doctor = JSON.parse((await runCliOutput(["doctor", target, "--json"])).stdout);
+      assert.equal(doctor.ok, true, JSON.stringify(doctor));
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

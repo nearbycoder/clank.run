@@ -191,3 +191,38 @@ For each generated application:
 - check browser console and page errors;
 - for full-stack apps, test two users and two simultaneous tabs;
 - test deployment health failure and migration rollback before production.
+
+## Runnable workflow recipes
+
+Three built-in templates provide a complete starting application, including authentication,
+readable backend rules, typed live UI, automatic MCP/OAuth contracts, synthetic accounts,
+application-owned tests, migrations, and deployment configuration:
+
+```sh
+clank create approvals --template=approval-queue
+clank create portal --template=customer-portal
+clank create appointments --template=booking
+```
+
+| Recipe | Included workflow | Enforced boundary |
+| --- | --- | --- |
+| Approval queue | Submit a request; reviewers approve/reject with a note | Members see their submissions; reviewers/admins see the queue; nobody decides their own request; decisions are final |
+| Customer portal | Create a private service request; staff respond; customer closes/reopens | Customers see and change their own requests; only staff/admins write responses |
+| Booking | Reserve and cancel a 30-minute consultation | One shared resource, UTC half-hour starts within 90 days, no overlapping bookings, own-account cancellation |
+
+These templates use plain CSS and have no Tailwind dependency. After creation, run `npm install`,
+`npm test`, `npm run doctor`, and `npm run deploy:check`; start the UI with `npm run dev`. The
+application tests cover two-account isolation, transition rules, optimistic conflicts, UI/MCP
+parity, OAuth read/write scope enforcement, migrations, reopen, and multiple database runtimes.
+
+Approval and portal operators are provisioned through trusted server code with
+`runtime.auth.setRole(userId, "reviewer")` or `runtime.auth.setRole(userId, "staff")`. New signups
+remain members; no recipe exposes an endpoint to grant roles. Privileged operators are scoped to
+this application, not a multi-organization tenancy model. Shared workflow rows have explicit
+owner IDs and deliberate server-side visibility checks; preserve them when extending queries.
+Lists show the newest 100 visible records.
+
+Booking uses UTC explicitly and checks availability inside the same serialized transaction that
+creates the reservation. Cancellation releases that time slot. The recipes are small, editable
+starting points: customer billing/uploads, booking payments/reminders, and additional approval
+stages are extension points rather than implemented integrations.
