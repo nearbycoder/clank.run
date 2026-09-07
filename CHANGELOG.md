@@ -8,6 +8,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 - Add personal activity timelines with trusted event recording, bounded retention, stable pagination, unread filters, and cursor-bounded clearing.
 
+- Add shared feedback boards with explicit membership, unique votes, proposal editing, moderated status, and searchable controls.
+
 - Add personal labels with colors, bounded resource assignments, conflict-checked editing, and browser controls.
 
 - Add owned ordered checklists with atomic completion, item editing, reordering, reset, and conflict-aware controls.
