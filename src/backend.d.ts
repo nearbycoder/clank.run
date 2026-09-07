@@ -63,6 +63,8 @@ export interface WriteTable<Schema extends DatabaseSchema<any>, Name extends Tab
     delete(id: Id<Name>, options?: DocumentWriteOptions): boolean;
     /** Restore a historical snapshot as a new, conflict-checked document version. */
     restore(id: Id<Name>, cursor: DocumentRevisionCursor, options?: DocumentRestoreOptions): DocumentFor<Schema, Name>;
+    /** Permanently purge retained snapshots only if the record is still deleted at this cursor. */
+    purgeDeleted(id: Id<Name>, cursor: DocumentRevisionCursor): boolean;
 }
 export interface DocumentWriteOptions {
     /** Reject the write unless the stored document has this exact version. */

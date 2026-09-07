@@ -204,6 +204,8 @@ export interface WriteTable<Schema extends DatabaseSchema<any>, Name extends Tab
     options?: DocumentWriteOptions,
   ): DocumentFor<Schema, Name> | null;
   delete(id: Id<Name>, options?: DocumentWriteOptions): boolean;
+  /** Permanently purge retained snapshots only if the record is still deleted at this cursor. */
+  purgeDeleted(id: Id<Name>, cursor: DocumentRevisionCursor): boolean;
   /** Restore a historical snapshot as a new, conflict-checked document version. */
   restore(
     id: Id<Name>,
@@ -934,6 +936,19 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             recordedAt: Date.now(),
           });
           return changed;
+        },
+        purgeDeleted(id, cursorInput) {
+          const cursor = documentRevisionCursor(cursorInput, "purge cursor");
+          const latest = getHistory(name, id, { limit: 1 }, ownerId)[0];
+          if (!latest) return false;
+          if (getDocument(name, id, ownerId) || latest.operation !== "delete" || latest.cursor.revision !== cursor.revision || latest.cursor.sequence !== cursor.sequence) {
+            throw new Error("The deleted record changed. Refresh before purging its history.");
+          }
+          const storedOwner = definition.ownership === "user" ? (latest.document as any)._ownerId : undefined;
+          prepared(`DELETE FROM clank_document_revisions WHERE table_name = ? AND document_id = ?${storedOwner === undefined ? "" : " AND owner_id = ?"}`)
+            .run(name, id, ...(storedOwner === undefined ? [] : [storedOwner]));
+          recordChange(changes, name, id, storedOwner);
+          return true;
         },
         restore(id, cursorInput, restoreOptions = {}) {
           const cursor = documentRevisionCursor(cursorInput, "restore cursor");

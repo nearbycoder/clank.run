@@ -256,3 +256,40 @@ The client validates the base ID, splice bounds, JSON result, and reconstructed 
 stream and reconnects once in snapshot-only mode. Old revisions remain ignored. Reordering most
 of a result may make a full snapshot smaller; the server compares encoded sizes before choosing.
 No public query semantics or authorization rules change.
+
+## Recycle bin for owned records
+
+`@clank.run/framework/recycle-bin` exposes deleted records from Clank's existing revision store.
+Restoring a record retains its original ID, creation time, and owner and creates a new version.
+Only explicitly selected `.owned()` tables are available through the service.
+
+```ts
+import { openRecycleBin, createRecycleBinClient, mountRecycleBin } from "@clank.run/framework/recycle-bin";
+const trash = await openRecycleBin({ path, schema, auth,
+  tables: { notes: { labelField: "title" } }, retentionMs: 30 * 86400000,
+  validateRestore(document, { table, db }) { enforceCurrentBusinessRules(table, document, db); },
+});
+// Route /__clank/trash/* to trash.handle(request).
+const client = createRecycleBinClient({ auth: authClient });
+await client.trash("notes", note._id, note._version);
+const dispose = mountRecycleBin(panel, client, "notes");
+```
+
+Deletion rejects stale record versions. Lists return only the latest still-deleted snapshots for
+the current account, with cursor pagination and expiry timestamps. Restore requires that exact
+deleted cursor and refuses to overwrite a live or newer record. Schema and ownership are always
+enforced. Use the synchronous `validateRestore` hook for cross-record business rules; it executes
+inside the restore transaction and can reject recovery without changing data. Generic restoration
+does not automatically rerun an application's normal mutation handlers.
+
+The panel supports refresh, older pages, restore, and permanent deletion with an explicit history
+removal acknowledgement. Permanent deletion calls `WriteTable.purgeDeleted(id, cursor)` and removes
+all retained versions only while the current record is still deleted at the observed cursor. It
+also invalidates live history queries. Other accounts cannot inspect or purge those versions.
+
+Call `trash.purgeExpired(100)` from an existing maintenance loop to remove expired deleted history;
+each sweep is bounded and rechecks that a record has not been restored. Close the service at shutdown.
+The default window is 30 days, configurable from one second to 90 days. Recovery is available only
+while the native revision is retained: global `historyRetentionRevisions` and per-document history
+limits may expire snapshots sooner. Configure retention consistently on every connection that
+writes the same database. Expiry and permanent purge do not erase independent backup archives.
