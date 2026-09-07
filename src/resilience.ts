@@ -57,7 +57,7 @@ export async function rehearseResilience(options:ResilienceOptions):Promise<Resi
         const beforeRecovery=requests;await within(scenario.verify({signal,phase:"recovered",request}));if(requests===beforeRecovery)throw new Error("Recovery verification made no application request.");
         verified=true;phase="complete";return new Response("Recovery verified");
       }catch{return new Response("Scenario failed",{status:500});}
-      finally{activeFault=false;if(workerStopped)try{await app.restartWorker!();}catch{verified=false;phase="cleanup";}}
+      finally{activeFault=false;if(workerStopped&&!signal.aborted)try{await within(app.restartWorker!());}catch{verified=false;phase="cleanup";}}
     };
     return{handle(request){if(new URL(request.url).pathname==="/__clank_resilience_run"){run??=execute();return run.then(response=>response.clone());}return app.handle(request);},async close(){disposed=true;await app.close();}};
   }});

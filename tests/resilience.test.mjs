@@ -37,3 +37,9 @@ test('an unresponsive exercise is bounded by the rehearsal deadline and still cl
  try{const result=await rehearseResilience({source:{databasePath:app.databasePath},timeoutMs:1000,boot:async()=>({handle:()=>new Response('ok'),close(){closed++}}),scenarios:[{name:'Hung exercise',fault:'offline',verify:async ctx=>{await ctx.request('/healthz')},exercise:async()=>new Promise(()=>{})}]});assert.equal(result.ok,false);assert.equal(result.scenarios[0].phase,'fault');assert.equal(closed,1);
  }finally{await rm(app.root,{recursive:true,force:true})}
 });
+
+ test('a timed out worker restart is not retried after cancellation',async()=>{
+ const app=await fixture();let closed=0,restarts=0;
+ try{const result=await rehearseResilience({source:{databasePath:app.databasePath},timeoutMs:1000,boot:async()=>({handle:()=>new Response('ok'),crashWorker:async()=>{},restartWorker:async()=>{restarts++;return new Promise(()=>{})},close(){closed++}}),scenarios:[{name:'Hung worker restart',fault:'worker-restart',verify:async ctx=>{await ctx.request('/healthz')},exercise:async ctx=>{await ctx.request('/healthz')}}]});assert.equal(result.ok,false);assert.equal(result.scenarios[0].phase,'recovery');assert.equal(closed,1);assert.equal(restarts,1);
+ }finally{await rm(app.root,{recursive:true,force:true})}
+ });
