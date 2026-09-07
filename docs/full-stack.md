@@ -281,3 +281,6 @@ The auth-first version is under [`examples/auth-todo`](../examples/auth-todo):
 - [`view.tsx`](../examples/auth-todo/view.tsx): shared Tailwind and agent-semantic UI.
 
 Run it with `npm run dev:auth`.
+
+For durable browser edits, see [Offline mutations](offline.md): account-bound queues, transactional
+receipts, pending/retry state, and explicit optimistic-conflict reconciliation.

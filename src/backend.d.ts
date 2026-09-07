@@ -1,4 +1,5 @@
 import type { AgentActivityOptions, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
+import type { MutationReceiptOptions } from "./mutation-receipts.js";
 import type { Tracer } from "./observability.js";
 import { type Cleanup, type ReactiveSignal } from "./core.js";
 import { type InferSchema, type InferSchemaShape, type DocumentId, type Schema, type SchemaShape } from "./ai.js";
@@ -307,6 +308,7 @@ export interface LiveQuery<Value> {
 export interface SyncClient {
     query<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): Promise<OutputOf<Reference>>;
     mutate<Reference extends FunctionReference<"mutation", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): Promise<OutputOf<Reference>>;
+    mutateOnce<Reference extends FunctionReference<"mutation", any, any>>(reference: Reference, args: InputOf<Reference>, receipt: { key: string; userId: string }): Promise<OutputOf<Reference>>;
     live<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): LiveQuery<OutputOf<Reference>>;
     seed<Reference extends FunctionReference<"query", any, any>>(reference: Reference, args: InputOf<Reference>, value: OutputOf<Reference>, version?: number): void;
 }
@@ -403,6 +405,7 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
 }
 export interface OpenBackendOptions extends SQLiteOptions {
     agentActivity?: AgentActivityOptions;
+    offlineMutations?: MutationReceiptOptions;
     tracer?: Tracer;
     diagnostics?: boolean;
     database?: SQLiteDatabase<any>;
