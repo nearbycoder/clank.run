@@ -1,0 +1,22 @@
+{
+  "protocol": "clank-fixture/1",
+  "name": "default",
+  "description": "Booking synthetic accounts; create records through tested actions.",
+  "users": {
+    "primary": {
+      "email": "primary@example.invalid",
+      "role": "member",
+      "profile": {
+        "name": "Primary"
+      }
+    },
+    "reviewer": {
+      "email": "reviewer@example.invalid",
+      "role": "staff",
+      "profile": {
+        "name": "Reviewer"
+      }
+    }
+  },
+  "records": {}
+}
