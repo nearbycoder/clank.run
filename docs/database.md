@@ -230,3 +230,29 @@ Application code must still:
 - keep database files outside public static roots;
 - run scheduled off-host backups;
 - use an external database when requiring multi-host writes or continuous zero-downtime schema changes.
+
+## Resuming live queries with smaller updates
+
+Enable `liveResume: {}` on `openBackend()` and `liveResume: true` on `createSyncClient()` or
+`createClient()` to negotiate `splice-v1` SSE updates. Unmodified clients and servers keep the
+existing full-snapshot behavior. The client retains its last event ID; on reconnect, the server
+uses a matching retained snapshot to send only the changed JSON span when that is smaller than
+the full result. Ordinary connected updates benefit from the same mechanism.
+
+Replay entries are scoped to the exact session and parsed query arguments. Authentication changes
+or a change-journal reset clear retained snapshots. Missing, expired, evicted, cross-query, or
+cross-session IDs yield a complete current snapshot. State is process-local: reconnecting to
+another replica or a restarted process also falls back safely. No database history or credential
+is sent in the event ID. Event IDs become opaque for negotiated clients; the payload still carries
+the numeric committed revision.
+
+The default replay cache retains at most 100 snapshots, eight MiB of serialized data plus scope
+accounting, and 60 seconds of history. Configure `maxEntries`, `maxBytes`, and `maxAgeMs` inside
+`liveResume` to adjust those limits. This is a serialized-data budget, not an exact heap-size
+measurement. A result too large for retention is still sent as a normal full snapshot.
+
+The client validates the base ID, splice bounds, JSON result, and reconstructed payload size
+(default one MiB; configurable with `maxLiveBytes`). If a delta cannot be applied, it closes that
+stream and reconnects once in snapshot-only mode. Old revisions remain ignored. Reordering most
+of a result may make a full snapshot smaller; the server compares encoded sizes before choosing.
+No public query semantics or authorization rules change.
