@@ -332,3 +332,36 @@ Worker retries are durable and may invoke the callback again. A missing provider
 For tests or an external scheduler, `workEmailOnce()` handles one queued attempt. The email
 worker is opt-in and must be stopped with `await emailWorker.close()` before `notifications.close()`.
 Unmount the browser center on logout so another account does not see its previous DOM contents.
+
+## Shared threaded comments
+
+`@clank.run/framework/comments` provides persistent resource discussions using the app's existing
+SQLite/auth database. Access is explicit: resources have reader, commenter, and moderator members.
+
+```ts
+import { openComments, createCommentClient, mountComments } from "@clank.run/framework/comments";
+const comments = await openComments({ path, auth });
+// Trusted server code grants access after checking the application's sharing policy.
+comments.setAccess("project:123", memberId, "commenter");
+// Route /__clank/comments/* to comments.handle(request).
+const dispose = mountComments(panel, createCommentClient({ auth: authClient }), "project:123");
+```
+
+Readers can list/open threads. Commenters can post and manage their own comments; moderators can
+edit/remove text and resolve any thread. Membership changes are persisted and invalidate cached
+queries. `setAccess(resource, userId, null)` revokes access. Keep comment membership synchronized
+with the host resource's sharing rules; knowledge of a resource ID never grants access by itself.
+Only trusted server code can change membership, and disabled/nonexistent accounts cannot be added.
+
+The controls support root threads, nested replies, inline editing, removed-text placeholders,
+resolution/reopening, older pages, and a draft that survives failed posting. Use a stable `key` with
+`client.add` when retrying outside the panel; reusing it with different text or a different parent
+fails. Edits, removal, and resolution require the observed comment version. Text is rendered with
+DOM text nodes, and author identifiers are displayed without exposing account email addresses.
+
+Each body is limited to 2,000 characters, threads to four reply levels and 50 comments, resources
+to 1,000 total comments, and an account to 2,000 resource memberships. Resolved threads reject new
+replies until reopened. Root threads paginate in pages of 20; a thread loads its bounded replies
+in one request. Removing text preserves reply structure and is not an erasure of historical
+revisions or backup copies. The service requires no mail, notification, or collaboration provider.
+Close the service and dispose its panel when finished.
