@@ -6,6 +6,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 - Add a persistent release error inbox with source-map frame locations, trace links, per-release counts, bounded retention, and recurrence tracking after resolution.
 - Add opt-in SSE resume with bounded session/query-scoped JSON splices and full-snapshot fallback after cache misses, authorization changes, or invalid client bases.
+- Add encrypted staged secret rotation to the platform and CLI, with bounded validation, conflict-checked activation/rollback, audit metadata, and running-consumer version inspection.
 
 - Add conservative API/MCP compatibility reports and a CI workbench gate for action removal, input/output schema changes, authentication, agent exposure, and required scopes.
 - Add fixed-height virtualized lists and grids with keyed row retention, scroll anchoring, keyboard navigation, accessible positions, and explicit cleanup.

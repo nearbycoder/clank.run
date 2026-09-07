@@ -1,3 +1,4 @@
+import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.js";
 import type { ObjectStore } from "./object-storage.js";
 import type { BackupObjectRepositoryOptions } from "./recovery.js";
 import type { EmailAddress, EmailService } from "./services.js";
@@ -127,6 +128,8 @@ export interface PlatformBillingOptions {
     pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
+  /** Optional trusted credential probe. Without it, rotation validation checks format/encryption only. */
+  validateSecret?: SecretRotationOptions["validate"];
     dataDirectory: string;
     publicUrl: string;
     /** Recover active application processes before returning, or concurrently after startup. Defaults to "blocking". */

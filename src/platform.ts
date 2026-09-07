@@ -1,3 +1,4 @@
+import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
 import {
   AuthError,
   defineAuth,
@@ -354,6 +355,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 }>);
 
 export interface ClankPlatformOptions {
+  /** Optional trusted credential probe. Without it, rotation validation checks format/encryption only. */
+  validateSecret?: SecretRotationOptions["validate"];
   dataDirectory: string;
   publicUrl: string;
   /** Recover active application processes before returning, or concurrently after startup. Defaults to "blocking". */
@@ -1009,6 +1012,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       ? "disabled"
       : "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
+  const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
@@ -1214,6 +1218,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     : null;
   const leaseOwner = `control-${(globalThis as any).process?.pid ?? 0}-${crypto.randomUUID()}`;
   const active = new Map<string, ActiveProcess>();
+  const consumedSecrets = new WeakMap<ActiveProcess, readonly SecretRevision[]>();
   const starting = new Set<ActiveProcess>();
   const runtimeTransitions = new Set<string>();
   const runtimeActivity = new Map<string, number>();
@@ -1727,6 +1732,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     secrets: Record<string, string>,
     port: number,
   ): Promise<ActiveProcess> => {
+    const secretRevisions = secretRotations.revisions(project.id, secrets);
     const { dataRoot, environment } = await releaseLaunchContext(project, release, secrets, port);
     await assertPortAvailable(port);
     const child = await spawnRelease(
@@ -1773,6 +1779,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       if (closed) throw new Error("Platform closed while the application was starting.");
       await launchBackgroundProcesses(running, release, dataRoot, port, environment, secrets);
+      consumedSecrets.set(running, secretRevisions);
       return running;
     } catch (error) {
       await stopRunning(running);
@@ -7805,6 +7812,36 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         return api({ ok: true, logs, runtime });
       }
+      if (operation === "secrets/rotations" && request.method === "GET") {
+        const current = secretRotations.revisions(project.id);
+        const running = active.get(project.id);
+        let consumed = running ? consumedSecrets.get(running) ?? [] : [];
+        let consumer = running ? { kind: "local", releaseId: running.releaseId } : null;
+        const desired = orchestrator?.desired(project.id);
+        if (!running && desired?.observedState === "running" && desired.observedGeneration === desired.generation && desired.observedReleaseId === desired.desiredReleaseId && desired.desiredReleaseId) {
+          const generation = providerGeneration(storage.internal, project.id, desired.generation, desired.desiredReleaseId);
+          if (generation) { consumed = secretRotations.revisions(project.id, decryptProviderEnvironment(generation.encryptedEnvironment, masterKey)); consumer = { kind: "provider", releaseId: desired.desiredReleaseId }; }
+        }
+        return api({ ok: true, rotations: secretRotations.list(project.id), current, consumer, consumed: consumed.map(secret => ({ ...secret, current: secret.revision !== null && current.some(item => item.name === secret.name && item.revision === secret.revision) })), validationMode: options.validateSecret ? "provider-check" : "format-and-encryption" });
+      }
+      if (operation === "secrets/rotations" && request.method === "POST") {
+        const input = plainObject(await readJsonRequest(request, 128 * 1024)); exact(input, ["name", "value"]);
+        const name = boundedString(input.name, "name", 1, 128); validateSecretName(name);
+        const value = boundedString(input.value, "value", 0, 64 * 1024);
+        const rotation = secretRotations.stage(project.id, name, value);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "secrets.stage", { name, rotationId: rotation.id });
+        return api({ ok: true, rotation }, 201);
+      }
+      const rotationOperation = /^secrets\/rotations\/([a-f0-9-]{36})\/(validate|activate|rollback)$/.exec(operation);
+      if (rotationOperation && request.method === "POST") {
+        const input = plainObject(await readJsonRequest(request, 1024)); exact(input, []);
+        const id = rotationOperation[1]!, action = rotationOperation[2]!;
+        try {
+          const rotation = action === "validate" ? await secretRotations.validate(project.id, id) : action === "activate" ? secretRotations.activate(project.id, id) : secretRotations.rollback(project.id, id);
+          audit(storage.internal, principal.userId, principal.tokenId, project.id, `secrets.${action}`, { name: rotation.name, rotationId: id, validation: rotation.validation });
+          return api({ ok: true, rotation });
+        } catch { throw new PlatformError(409, "SECRET_ROTATION_CONFLICT", "Rotation is unavailable, stale, or not in the required state. Refresh its status before retrying."); }
+      }
       if (operation === "secrets" && request.method === "GET") {
         const rows = storage.internal.prepare(
           "SELECT name, updated_at FROM clank_platform_secrets WHERE project_id = ? ORDER BY name",
@@ -7841,8 +7878,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw new PlatformError(400, "INVALID_SECRET_NAME", "Secret name is not valid URL encoding.");
         }
         validateSecretName(name);
-        storage.internal.prepare("DELETE FROM clank_platform_secrets WHERE project_id = ? AND name = ?")
-          .run(project.id, name);
+        storage.internal.transaction((changes) => {
+          storage.internal.prepare("DELETE FROM clank_platform_secrets WHERE project_id = ? AND name = ?").run(project.id, name);
+          storage.internal.prepare("DELETE FROM clank_platform_secret_rotations WHERE project_id=? AND name=?").run(project.id, name);
+          changes.record("__platform", project.id);
+        });
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "secrets.delete", { name });
         return api({ ok: true });
       }
