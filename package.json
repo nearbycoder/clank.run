@@ -21,6 +21,7 @@
   "types": "./dist/index.d.ts",
   "exports": {
     "./csv-export": { "types": "./dist/csv-export.d.ts", "import": "./dist/csv-export.js" },
+    "./recycle-bin": { "types": "./dist/recycle-bin.d.ts", "import": "./dist/recycle-bin.js" },
     "./saved-views": { "types": "./dist/saved-views.d.ts", "import": "./dist/saved-views.js" },
     "./local-search": { "types": "./dist/local-search.d.ts", "import": "./dist/local-search.js" },
     "./csv-import": { "types": "./dist/csv-import.d.ts", "import": "./dist/csv-import.js" },
