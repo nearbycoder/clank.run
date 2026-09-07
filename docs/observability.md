@@ -170,7 +170,7 @@ identity and, when available, the request's trace ID:
 
 ```ts
 const inbox = await openErrorInbox(database);
-inbox.capture(error, { release: "0.21.0", code: "TICKET_SAVE_FAILED", traceId });
+inbox.capture(error, { release: "0.22.0", code: "TICKET_SAVE_FAILED", traceId });
 const inspector = createDevtools({ errorInbox: () => inbox.snapshot() });
 ```
 
