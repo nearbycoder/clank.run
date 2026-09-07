@@ -161,3 +161,42 @@ Sampling still applies. Legacy jobs with no context start an independent trace; 
 contexts are ignored. Cancellation, timeout, failure, and lost-lease attempts are not reported as
 successful spans. Job completion spans measure the attempt through settlement, not time spent
 waiting in the queue. Stop the inspector, backend, and telemetry when shutting down.
+
+## Release error inbox
+
+`openErrorInbox(database)` from `@clank.run/framework/error-inbox` persists bounded operator-only
+error metadata in SQLite. Capture failures from application error hooks with an explicit release
+identity and, when available, the request's trace ID:
+
+```ts
+const inbox = await openErrorInbox(database);
+inbox.capture(error, { release: "0.21.0", code: "TICKET_SAVE_FAILED", traceId });
+const inspector = createDevtools({ errorInbox: () => inbox.snapshot() });
+```
+
+The loopback DevTools view groups occurrences, counts them by release, and displays recent frame
+locations and trace IDs. Integrate the snapshot with an existing trace timeline using those IDs.
+`inbox.resolve(fingerprint, release)` records the intended fixing release. An occurrence captured
+after resolution changes the group to `regressed`; this includes older instances that are still
+running, so inspect the occurrence's actual release. Silence alone is not proof of a fix—compare
+traffic and observation windows.
+
+Register a matching version-3 source map with
+`inbox.registerSourceMap(release, generatedFile, sourceMap)` before capture. Mapping uses Node's
+built-in source-map reader; maps are bound to a release and normalized filename and remain in
+memory, so reload them after restart. Generated and original locations are one-based. Only the
+last source directory and filename are retained; maps sharing that suffix must not be registered
+for the same release. The report marks unmapped frames explicitly. Grouping hashes the declared
+error code and first three normalized source locations, so moving source lines can create a new
+group. Source contents are discarded from registered maps.
+
+Capture stores at most eight frames, release ID, timestamp, code, and an optional validated trace
+ID. Messages, raw stacks, URL queries, source contents, request data, and absolute deployment
+roots are excluded. Use stable application error codes; never put user data in release/code/file
+names. The default retention is 1,000 occurrences over seven days, with configurable bounds of
+10,000 events and 90 days. Counts and first/last-seen times describe the retained window.
+
+The API is for trusted server/operator use. Mount it only behind operator authorization or the
+existing loopback DevTools server; no public ingestion or unauthenticated production route is
+created. Call capture outside an existing database transaction, and keep diagnostics failures
+separate from the application's error response.

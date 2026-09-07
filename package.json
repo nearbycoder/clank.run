@@ -20,6 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./error-inbox": { "types": "./dist/error-inbox.d.ts", "import": "./dist/error-inbox.js" },
     "./contract-compatibility": { "types": "./dist/contract-compatibility.d.ts", "import": "./dist/contract-compatibility.js" },
     "./virtual-collections": { "types": "./dist/virtual-collections.d.ts", "import": "./dist/virtual-collections.js" },
     "./webhook-outbox": { "types": "./dist/webhook-outbox.d.ts", "import": "./dist/webhook-outbox.js" },

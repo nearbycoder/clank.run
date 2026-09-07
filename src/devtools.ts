@@ -1,3 +1,4 @@
+import { renderErrorInbox, type ErrorInboxSnapshot } from "./error-inbox.ts";
 import { adviseQueries, type DatabaseQueryDiagnostic, type QueryAdvice } from "./query-advisor.ts";
 import { renderAgentActivity, type AgentActivitySnapshot } from "./agent-activity.ts";
 import { renderTraceTimeline, type TraceTimelineSnapshot } from "./trace-timeline.ts";
@@ -6,6 +7,7 @@ import type { QueryDiagnostic } from "./backend.ts";
 
 export interface DevtoolsSnapshot {
   readonly protocol: "clank-devtools/1";
+  readonly errorInbox?: ErrorInboxSnapshot;
   readonly timeline?: TraceTimelineSnapshot;
   readonly agentActivity?: AgentActivitySnapshot;
   readonly events: readonly ReactiveDiagnostic[];
@@ -21,7 +23,7 @@ export interface ClankDevtools {
 }
 
 /** Metadata-only, bounded inspection. Create before mounting the code being inspected. */
-export function createDevtools(options: { maxEvents?: number; queries?: () => readonly QueryDiagnostic[]; databaseQueries?: () => readonly DatabaseQueryDiagnostic[]; agentActivity?: () => AgentActivitySnapshot; timeline?: () => TraceTimelineSnapshot } = {}): ClankDevtools {
+export function createDevtools(options: { maxEvents?: number; errorInbox?: () => ErrorInboxSnapshot; queries?: () => readonly QueryDiagnostic[]; databaseQueries?: () => readonly DatabaseQueryDiagnostic[]; agentActivity?: () => AgentActivitySnapshot; timeline?: () => TraceTimelineSnapshot } = {}): ClankDevtools {
   const maximum = options.maxEvents ?? 500;
   if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 5_000) throw new TypeError("DevTools maxEvents must be 1–5000.");
   const events: ReactiveDiagnostic[] = [];
@@ -49,6 +51,7 @@ export function createDevtools(options: { maxEvents?: number; queries?: () => re
         active: Object.freeze([...active.values()]), queries: Object.freeze(queries), truncated,
         ...(!disposed && options.databaseQueries ? { queryAdvice: adviseQueries(options.databaseQueries()) } : {}),
         ...(!disposed && options.agentActivity ? { agentActivity: options.agentActivity() } : {}),
+        ...(!disposed && options.errorInbox ? { errorInbox: options.errorInbox() } : {}),
         ...(!disposed && options.timeline ? { timeline: options.timeline() } : {}) });
     },
     clear() { events.length = 0; truncated = false; },
@@ -65,7 +68,7 @@ export function renderDevtools(snapshot: DevtoolsSnapshot): string {
   return `<section aria-label="Clank DevTools"><h1>Clank DevTools</h1><p>Local metadata · ${escape(snapshot.active.length)} observed active computations · ${escape(snapshot.queries.reduce((sum, query) => sum + count(query.subscriptions), 0))} query subscriptions</p>${snapshot.truncated ? "<p role=\"status\">History or active entries exceeded the inspection limit. This is a partial view.</p>" : ""}
     <h2>Queries</h2><div class="scroll"><table><thead><tr><th>Query</th><th>Runs</th><th>Cache hits</th><th>Last run (ms)</th><th>Subscriptions</th><th>Last invalidation</th></tr></thead><tbody>${rows(snapshot.queries.map((query) => [query.path, query.runs, query.cacheHits, query.durationMs.toFixed(2), query.subscriptions, query.lastInvalidation ?? "None"]))}</tbody></table></div>
     ${snapshot.queryAdvice ? `<h2>Database query advisor</h2><p>Bound values and returned data are excluded. Index suggestions require review.</p>${snapshot.queryAdvice.map(({ query, findings }) => `<article aria-label="${escape(query.table)} query" style="border-top:1px solid #444;padding:16px 0;overflow-wrap:anywhere"><h3>${escape(query.table)}</h3><p>${escape(query.runs)} runs · ${escape(query.rows)} returned rows · ${escape(query.totalMs.toFixed(2))} ms total · ${escape(query.maximumMs.toFixed(2))} ms maximum</p><p>${escape(query.plan.join("; "))}</p><ul>${findings.map((finding) => `<li>${escape(finding)}</li>`).join("")}</ul><details><summary>SQL shape and candidate index</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${escape(query.sql)}</pre>${query.suggestedIndex ? `<pre style="white-space:pre-wrap;overflow-wrap:anywhere">${escape(query.suggestedIndex)}</pre>` : "<p>No candidate index suggested.</p>"}</details></article>`).join("")}` : ""}
-    <h2>Reactive activity</h2><p>Observed since inspection started. Signal values and query data are excluded.</p><div class="scroll"><table><thead><tr><th>Event</th><th>Computation</th><th>Source</th><th>Dependencies</th><th>Duration (ms)</th></tr></thead><tbody>${rows([...snapshot.events].reverse().map((event) => [event.type, `${event.name ?? event.kind} #${event.id}`, event.sourceId === undefined ? "—" : `#${event.sourceId}`, event.dependencies ?? "—", event.durationMs?.toFixed(2) ?? "—"]))}</tbody></table></div>${snapshot.timeline ? renderTraceTimeline(snapshot.timeline) : ""}${snapshot.agentActivity ? renderAgentActivity(snapshot.agentActivity) : ""}</section>`;
+    <h2>Reactive activity</h2><p>Observed since inspection started. Signal values and query data are excluded.</p><div class="scroll"><table><thead><tr><th>Event</th><th>Computation</th><th>Source</th><th>Dependencies</th><th>Duration (ms)</th></tr></thead><tbody>${rows([...snapshot.events].reverse().map((event) => [event.type, `${event.name ?? event.kind} #${event.id}`, event.sourceId === undefined ? "—" : `#${event.sourceId}`, event.dependencies ?? "—", event.durationMs?.toFixed(2) ?? "—"]))}</tbody></table></div>${snapshot.errorInbox ? renderErrorInbox(snapshot.errorInbox) : ""}${snapshot.timeline ? renderTraceTimeline(snapshot.timeline) : ""}${snapshot.agentActivity ? renderAgentActivity(snapshot.agentActivity) : ""}</section>`;
 }
 
 /** Mount a browser-local inspector. The returned cleanup releases its listener and elements. */

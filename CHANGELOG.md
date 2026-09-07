@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add a persistent release error inbox with source-map frame locations, trace links, per-release counts, bounded retention, and recurrence tracking after resolution.
+
 - Add conservative API/MCP compatibility reports and a CI workbench gate for action removal, input/output schema changes, authentication, agent exposure, and required scopes.
 - Add fixed-height virtualized lists and grids with keyed row retention, scroll anchoring, keyboard navigation, accessible positions, and explicit cleanup.
 - Add a durable authenticated webhook outbox with signed deliveries, bounded attempt history, owner-scoped inspection, controlled replay, and per-attempt signing-key resolution.
