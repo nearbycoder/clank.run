@@ -374,3 +374,12 @@ Close the service and dispose its panel when finished.
 The panel creates, renames, recolors, assigns, unassigns, and explicitly confirms deletion of a label and all of its assignments. Names remain visible beside color swatches. Assignments are personal metadata, not permission to read the referenced resource; the host still authorizes the record itself. Resource IDs should be stable and include their type. Labels are private to their creator even when the record is shared.
 
 Programmatic clients expose `list(resource?)`, `save({ name, color, id?, expectedVersion? })`, `assign(resource, labelId, selected)`, and `remove(id, expectedVersion)`. Edits and deletes require the observed version, assignments are idempotent, and deletions remove links in the same transaction. Names are normalized and unique ignoring case; colors must be six-digit hex. Limits are 100 labels, 20 per resource, and 5,000 links per account. No automatic record-deletion hook is implied: unassign labels when a host resource is removed. Existing database backup and history retention policies apply.
+
+
+## Ordered checklists
+
+`@clank.run/framework/checklists` provides private reusable checklists in the existing SQLite database. Route `/__clank/checklists/*` to `openChecklists({ path, auth }).handle`. Pass your CSRF provider to `createChecklistClient({ auth })`, then mount `mountChecklists(element, client)` and call its disposer on navigation.
+
+The panel creates and renames lists, adds/edits/removes items, moves them with keyboard-accessible up/down buttons, toggles completion, displays progress, resets completion for reuse, and confirms whole-list deletion. Each list stores its ordered items as one atomic document: concurrent completion, text changes, and reorders cannot silently overwrite one another. Refresh after a conflict to review the current list.
+
+Clients expose `list()`, `save({ title, items, id?, expectedVersion?, key? })`, and `remove(id, expectedVersion)`. Each item has a stable `id`, nonempty `text`, and boolean `done`; duplicate IDs are rejected. An update or delete requires the observed list version. For creation retries, retain the same key until the result is known; a previously used key returns the existing list. A default random key is generated per call. Limits are 100 lists per account and 100 items per list, with 100-character titles and 200-character item text. Data survives restarts and remains isolated by the existing account ownership rules. This module creates no reminder or external notification service.
