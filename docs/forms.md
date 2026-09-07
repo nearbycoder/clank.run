@@ -256,3 +256,37 @@ Limits: 5 MiB input, 100 columns, 65,536 characters per cell, 10,000 data rows b
 UTF-8 BOMs, CRLF/LF, and explicit comma/semicolon/tab delimiters are supported. Duplicate/empty
 headers, malformed quotes, and mismatched row widths are rejected. Errors identify record and
 target column without echoing cell values; a record number counts quoted multiline data as one row.
+
+## CSV export and downloads
+
+`@clank.run/framework/csv-export` exports authorized application records with explicit columns,
+UTF-8 encoding, CRLF records, and spreadsheet formula protection. It needs no export service.
+
+```ts
+import { mountCsvExporter, csvExportResponse } from "@clank.run/framework/csv-export";
+const columns = [{ field: "name", label: "Name" }, { field: "quantity", label: "Quantity" }];
+const dispose = mountCsvExporter(panel, {
+  columns, records: () => visibleAuthorizedRows, filename: "inventory.csv",
+});
+// A server route can stream a separately authorized async record iterator:
+return csvExportResponse(authorizedRecords(), columns, { filename: "inventory.csv" });
+```
+
+The browser control lets users choose columns and explicitly download a complete file. It validates
+all cells and limits before producing a download, reports success/failure, and revokes temporary
+object URLs on cleanup. `exportCsv(records, columns, options)` provides the same buffered operation.
+
+Fields use literal own-property names. Missing/null cells are empty; strings, finite numbers,
+booleans, and valid Date objects are supported. Every cell is quoted and embedded quotes are doubled.
+Strings that could start spreadsheet formulas receive a leading apostrophe, including whitespace
+before `=`, `+`, `-`, or `@`, and leading tabs/newlines. This also protects column labels. Numeric
+negative values retain their numeric spelling. Formula protection intentionally changes dangerous
+text values; callers should retain originals in their database.
+
+Defaults are a UTF-8 BOM, comma delimiter, 10,000 rows, and 5 MiB. Options support semicolon/tab,
+`bom: false`, and explicit bounded row/byte limits. Cells cannot exceed 65,536 characters.
+`streamCsvExport` consumes an async iterator only when the reader requests another row and calls
+its return method on cancellation or failure. A late invalid row errors the stream, so use buffered
+export when partial output must never be visible. Attachment responses are private/non-cacheable
+and reject path-like or header-injecting filenames. Always apply ownership and field authorization
+before passing records; column selection is not an access-control boundary.
