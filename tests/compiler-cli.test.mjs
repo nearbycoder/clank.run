@@ -256,6 +256,7 @@ test("compose freezes an exact review before transactionally applying generated 
     const sessionPath = join(target, ".clank", "compose-sessions", `${review.reviewId}.json`);
     assert.equal((await lstat(sessionPath)).mode & 0o777, 0o600);
     assert.equal(JSON.parse(await readFile(sessionPath, "utf8")).planDigest, review.planDigest);
+    await runCli(["build", "src", "dist"], target);
     await linkFramework(target);
     await runNodeTests(target);
   } finally {
