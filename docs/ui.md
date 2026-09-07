@@ -969,3 +969,44 @@ Before shipping a component built from the headless catalog:
 8. Compile Tailwind classes in production and preserve visible focus and reduced-motion behavior.
 9. Inspect `manifest()` output after meaningful states, including sensitive and error states.
 10. Keep authorization in server actions and MCP tools; headless UI and agent metadata never replace it.
+
+## Virtualized lists and tables
+
+Use `@clank.run/framework/virtual-collections` for large fixed-height collections. The headless
+`createVirtualCollection()` computes visible rows; `mountVirtualCollection()` mounts a list or an
+accessible table-like grid with bounded DOM, stable keyed row identity, scroll anchoring, and
+Arrow/Home/End/Page keyboard navigation. Grid renderers supply cells with `role="gridcell"`.
+Give the container a height and each row a consistent height; variable-height content belongs in
+an ordinary collection until it can be measured reliably.
+
+```ts
+import { mountVirtualCollection } from "@clank.run/framework/virtual-collections";
+
+const view = mountVirtualCollection(container, {
+  items: tickets,
+  key: ticket => ticket.id,
+  rowHeight: 48,
+  label: "Tickets",
+  render(ticket) {
+    const element = document.createElement("span");
+    element.textContent = ticket.title;
+    return { element, update(next) { element.textContent = next.title; } };
+  },
+});
+view.model.setItems(nextTickets); // Call from an effect when the source is reactive.
+// On unmount: stop the source effect, then view.dispose().
+```
+
+Retained rows receive `update(value, index)` after immutable replacements or reordering. An
+optional row `dispose()` releases subscriptions when a row leaves the window. The focused row
+stays mounted even outside the viewport; this adds at most one row to the visible range plus
+overscan. Keyboard navigation on rows scrolls the target into view, while inputs and other nested
+controls keep their own keyboard behavior. Collection positions and total counts remain exposed
+to assistive technology. Browser find-in-page only sees mounted content; provide application
+search or an unvirtualized/export view when users need the entire dataset.
+
+Keys must be unique nonempty strings or safe integers. Invalid updates preserve the previous
+collection. The controller supports up to 100,000 rows and a total height of 16 million pixels;
+paginate larger results. A row height of 16–1000 pixels and overscan of 0–50 keep allocation
+bounded. The mounted view uses ResizeObserver with a window-resize fallback, and disposal removes
+listeners, observers, row resources, and its own viewport without changing the parent container.

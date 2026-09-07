@@ -5,6 +5,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 ## Unreleased
 
 - Add conservative API/MCP compatibility reports and a CI workbench gate for action removal, input/output schema changes, authentication, agent exposure, and required scopes.
+- Add fixed-height virtualized lists and grids with keyed row retention, scroll anchoring, keyboard navigation, accessible positions, and explicit cleanup.
 
 - Add complete application-load budgets from cold-navigation HAR captures, with resource deltas, transitive asset accounting, and failing CI checks for incomplete evidence.
 - Add opt-in SQLite query plans, bounded execution summaries, repeated-query and slow-query advice, and reviewable index candidates in local DevTools.
