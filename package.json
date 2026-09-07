@@ -27,6 +27,8 @@
     "./feedback": { "types": "./dist/feedback.d.ts", "import": "./dist/feedback.js" },
 
     "./availability": { "types": "./dist/availability.d.ts", "import": "./dist/availability.js" },
+
+    "./dashboard-layouts": { "types": "./dist/dashboard-layouts.d.ts", "import": "./dist/dashboard-layouts.js" },
     "./labels": { "types": "./dist/labels.d.ts", "import": "./dist/labels.js" },
 
     "./checklists": { "types": "./dist/checklists.d.ts", "import": "./dist/checklists.js" },

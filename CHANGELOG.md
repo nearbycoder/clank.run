@@ -12,6 +12,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 - Add personal availability calendars with overlap-safe windows, conflict-checked edits, and bounded slot previews with booking buffers.
 
+- Add saved dashboard layouts with owned defaults, widget visibility/order/width/collapse controls, responsive sizing, and preserved widget instances.
+
 - Add personal labels with colors, bounded resource assignments, conflict-checked editing, and browser controls.
 
 - Add owned ordered checklists with atomic completion, item editing, reordering, reset, and conflict-aware controls.

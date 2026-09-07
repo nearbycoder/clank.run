@@ -158,8 +158,8 @@ for (const file of files) {
 for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", "dist/index.d.ts"]) {
   if (!files.some((file) => file.path === expected)) fail(`Published package is missing ${expected}.`);
 }
-// Three reviewed workflow recipes add 14 scaffold files each to the previous 250-file allowance.
-if ((packResult?.entryCount ?? 0) > 326) fail("Published package unexpectedly exceeds 326 files.");
+// Twenty optional feature entry points add 40 runtime/declaration files to the reviewed 288-file baseline.
+if ((packResult?.entryCount ?? 0) > 328) fail("Published package unexpectedly exceeds 328 files.");
 if ((packResult?.unpackedSize ?? 0) > 5 * 1024 * 1024) fail("Published package unexpectedly exceeds 5 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
