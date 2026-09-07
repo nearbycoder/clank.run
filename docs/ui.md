@@ -1047,3 +1047,33 @@ sensitivity. `setDefault(id)` atomically clears the previous default; `setDefaul
 The host can apply the default returned by `list()` at startup. The controls expose save-current,
 apply, rename, default, delete, refresh, empty, busy, and retry states. Dispose removes the panel
 and ignores late responses. The default limit is 50 views per account (configurable to 200).
+
+## Local full-text search
+
+`@clank.run/framework/local-search` runs in the browser or server with no network connection,
+external index, or runtime dependency. Feed it only records the current user is authorized to read.
+
+```ts
+import { createLocalSearchIndex, mountLocalSearch } from "@clank.run/framework/local-search";
+const index = createLocalSearchIndex({ maxDocuments: 10000, maxBytes: 16 * 1024 * 1024 });
+index.replace(records.map(row => ({ id: row.id, title: row.title, body: row.description })));
+const dispose = mountLocalSearch(panel, index, id => openRecord(id));
+// Mutations can update individual documents without rebuilding the index.
+index.upsert({ id: "record-1", title: "Updated title", body: "Updated content" });
+index.remove("record-2");
+```
+
+Search combines up to 12 distinct words with AND semantics. Unicode words are case-insensitive
+and accent-folded while highlights retain the original spelling. Exact title matches receive
+extra weight; the final word supports prefix completion, disabled with `{ prefix: false }`.
+`search(query, { offset, limit })` returns ranked hits, a total, and `truncated`. Prefix expansion
+stops at 50 terms and sets `truncated` rather than claiming exhaustive results. IDs break score
+ties deterministically. Each hit includes text/match segments for its title and a short snippet;
+render segments as text, never inject their contents as HTML.
+
+The default limits are 10,000 documents and 16 MiB of charged text/index storage. Individual bodies
+are limited to 32,768 characters; a replacement that exceeds capacity fails atomically. `serialize()`
+exports a versioned snapshot, and `restore(snapshot)` validates every document before replacing the
+index. Snapshots contain document content: keep them in the correct account's storage and remove
+them on logout. The search panel debounces input, announces results, supports arrow-key navigation
+and Escape, and clears pending work on disposal. It does not independently synchronize server data.
