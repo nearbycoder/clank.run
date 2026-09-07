@@ -20,6 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./bookmarks": { "types": "./dist/bookmarks.d.ts", "import": "./dist/bookmarks.js" },
     "./labels": { "types": "./dist/labels.d.ts", "import": "./dist/labels.js" },
 
     "./checklists": { "types": "./dist/checklists.d.ts", "import": "./dist/checklists.js" },

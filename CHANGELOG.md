@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add private bookmarks and folders with safe URLs, favorites, search, conflict-checked editing, and atomic folder removal.
+
 - Add personal labels with colors, bounded resource assignments, conflict-checked editing, and browser controls.
 
 - Add owned ordered checklists with atomic completion, item editing, reordering, reset, and conflict-aware controls.
