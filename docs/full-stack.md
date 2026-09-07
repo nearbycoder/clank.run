@@ -383,3 +383,14 @@ Programmatic clients expose `list(resource?)`, `save({ name, color, id?, expecte
 The panel creates and renames lists, adds/edits/removes items, moves them with keyboard-accessible up/down buttons, toggles completion, displays progress, resets completion for reuse, and confirms whole-list deletion. Each list stores its ordered items as one atomic document: concurrent completion, text changes, and reorders cannot silently overwrite one another. Refresh after a conflict to review the current list.
 
 Clients expose `list()`, `save({ title, items, id?, expectedVersion?, key? })`, and `remove(id, expectedVersion)`. Each item has a stable `id`, nonempty `text`, and boolean `done`; duplicate IDs are rejected. An update or delete requires the observed list version. For creation retries, retain the same key until the result is known; a previously used key returns the existing list. A default random key is generated per call. Limits are 100 lists per account and 100 items per list, with 100-character titles and 200-character item text. Data survives restarts and remains isolated by the existing account ownership rules. This module creates no reminder or external notification service.
+
+
+## Personal reminders
+
+`@clank.run/framework/reminders` stores private reminders in your existing database. Route `/__clank/reminders/*` to `openReminders({ path, auth }).handle`, create `createReminderClient({ auth })` with your CSRF provider, and mount `mountReminders(element, client)`. Dispose the panel to clear its minute timer.
+
+The panel schedules and edits a title and local date/time, shows active/due/completed/all filters, snoozes by 10 minutes, one hour, or one day, completes/reopens reminders, and confirms deletion. Due counts update every minute while the page is visible. This is an in-app reminder list: it does not promise delivery while the app is closed, background alarms, email, or push notifications.
+
+Clients expose `list`, `save({ title, dueAt, id?, expectedVersion?, key? })`, `complete(id, completed, version)`, `snooze(id, minutes, version)`, and `remove(id, version)`. Store `dueAt` as an epoch millisecond; `parseReminderTime` converts a local `YYYY-MM-DDTHH:mm` minute and rejects impossible dates and daylight-saving gaps. For repeated fall-back minutes the browser's native earlier occurrence is used. The displayed time follows the current device zone. Snooze uses server time, accepts 1–10,080 minutes, and requires reopening completed reminders first. Edits require the observed version. Creation retries can reuse an explicit key; otherwise each call receives a new key.
+
+Each account can retain 200 reminders. Titles are limited to 160 characters and supported timestamps end at 2100-01-01 UTC. `dueReminders(rows, now?)` computes an ordered due subset locally without mutation. Refresh retrieves changes from other devices; the panel does not silently overwrite an in-progress edit with a live subscription.

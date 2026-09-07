@@ -8,6 +8,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 - Add owned ordered checklists with atomic completion, item editing, reordering, reset, and conflict-aware controls.
 
+- Add personal reminders with local-time scheduling, due filters, snooze, completion, and version-fenced editing.
+
 - Add spreadsheet-safe CSV exports with explicit column selection, UTF-8 downloads, bounded construction, and cancellable streaming responses.
 - Add an account-owned recycle bin with original-ID restoration, expiration sweeps, guarded permanent history deletion, and browser recovery controls.
 
