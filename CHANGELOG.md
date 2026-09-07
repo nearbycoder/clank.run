@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add personal labels with colors, bounded resource assignments, conflict-checked editing, and browser controls.
+
 - Add spreadsheet-safe CSV exports with explicit column selection, UTF-8 downloads, bounded construction, and cancellable streaming responses.
 - Add an account-owned recycle bin with original-ID restoration, expiration sweeps, guarded permanent history deletion, and browser recovery controls.
 

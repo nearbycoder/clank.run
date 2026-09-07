@@ -20,6 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./labels": { "types": "./dist/labels.d.ts", "import": "./dist/labels.js" },
     "./csv-export": { "types": "./dist/csv-export.d.ts", "import": "./dist/csv-export.js" },
     "./recycle-bin": { "types": "./dist/recycle-bin.d.ts", "import": "./dist/recycle-bin.js" },
 

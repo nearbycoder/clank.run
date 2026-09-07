@@ -365,3 +365,12 @@ replies until reopened. Root threads paginate in pages of 20; a thread loads its
 in one request. Removing text preserves reply structure and is not an erasure of historical
 revisions or backup copies. The service requires no mail, notification, or collaboration provider.
 Close the service and dispose its panel when finished.
+
+
+## Personal labels
+
+`@clank.run/framework/labels` adds private labels to any app resource without another service. Open `openLabels({ path, auth })` against your SQLite file and route `/__clank/labels/*` to its `handle`. Create `createLabelClient({ auth })` with the same CSRF provider as other Clank clients, then call `mountLabels(element, client, "notes:123")`. Its disposer removes the controls.
+
+The panel creates, renames, recolors, assigns, unassigns, and explicitly confirms deletion of a label and all of its assignments. Names remain visible beside color swatches. Assignments are personal metadata, not permission to read the referenced resource; the host still authorizes the record itself. Resource IDs should be stable and include their type. Labels are private to their creator even when the record is shared.
+
+Programmatic clients expose `list(resource?)`, `save({ name, color, id?, expectedVersion? })`, `assign(resource, labelId, selected)`, and `remove(id, expectedVersion)`. Edits and deletes require the observed version, assignments are idempotent, and deletions remove links in the same transaction. Names are normalized and unique ignoring case; colors must be six-digit hex. Limits are 100 labels, 20 per resource, and 5,000 links per account. No automatic record-deletion hook is implied: unassign labels when a host resource is removed. Existing database backup and history retention policies apply.
