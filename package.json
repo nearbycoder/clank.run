@@ -23,6 +23,8 @@
     "./bookmarks": { "types": "./dist/bookmarks.d.ts", "import": "./dist/bookmarks.js" },
 
     "./activity": { "types": "./dist/activity.d.ts", "import": "./dist/activity.js" },
+
+    "./feedback": { "types": "./dist/feedback.d.ts", "import": "./dist/feedback.js" },
     "./labels": { "types": "./dist/labels.d.ts", "import": "./dist/labels.js" },
 
     "./checklists": { "types": "./dist/checklists.d.ts", "import": "./dist/checklists.js" },
