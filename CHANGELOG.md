@@ -10,6 +10,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 - Add personal reminders with local-time scheduling, due filters, snooze, completion, and version-fenced editing.
 
+- Add recoverable device-local autosaved drafts with transactional revision checks, expiry, bounded JSON snapshots, and recovery controls.
+
 - Add spreadsheet-safe CSV exports with explicit column selection, UTF-8 downloads, bounded construction, and cancellable streaming responses.
 - Add an account-owned recycle bin with original-ID restoration, expiration sweeps, guarded permanent history deletion, and browser recovery controls.
 

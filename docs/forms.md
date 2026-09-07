@@ -290,3 +290,27 @@ its return method on cancellation or failure. A late invalid row errors the stre
 export when partial output must never be visible. Attachment responses are private/non-cacheable
 and reject path-like or header-injecting filenames. Always apply ownership and field authorization
 before passing records; column selection is not an access-control boundary.
+
+
+## Recoverable editor drafts
+
+`@clank.run/framework/drafts` provides device-local recovery without an additional service:
+
+```ts
+const store = await openDraftStore("my-app-drafts");
+const session = await mountDraftRecovery(panel, {
+  store, key: `${account.id}:article:${article.id}`,
+  read: () => ({ title: titleInput.value, body: bodyInput.value }),
+  write: draft => { titleInput.value = draft.title; bodyInput.value = draft.body; },
+});
+editor.addEventListener("input", () => session.changed());
+// After the host successfully saves the actual record:
+await session.discard();
+// Before navigation, explicitly await session.flush(); then dispose and close.
+```
+
+Existing drafts require explicit recovery or discard before autosaving. The host chooses the fields through `read`/`write`; do not include passwords, payment data, or other fields that should not persist on a shared device. Keys should include the account and resource, but this is browser storage, not server authorization or encryption. Clear appropriate drafts at sign-out if the device policy requires it.
+
+IndexedDB read/write transactions prevent concurrent tabs from silently overwriting the same revision. Conflicts stop autosaving until explicit recovery; generic storage failures retain dirty editor state for `flush()` retry. Saves debounce by 500 ms, serialized operations preserve edit order, and disposing cancels future timers. Async work already committed cannot be undone by disposal. Do not rely on unload handlers to finish asynchronous writes; flush at a controlled navigation boundary.
+
+Snapshots accept finite plain JSON values, reject getters, cycles and sparse arrays, and are bounded to 64 KiB, 10,000 nodes, and depth 20. Each database holds at most 200 drafts. Default expiry is seven days, configurable from one second to 30 days; `store.prune()` removes expired entries. Loading an expired draft also removes it. Browser quota failures are surfaced rather than claiming a successful save. Close stores on shutdown; call the mount/session disposer when removing the editor.
