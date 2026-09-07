@@ -157,3 +157,18 @@ test("compatibility CLI gates removed actions before deployment", async () => {
     await assert.rejects(run(["workbench", "compatibility", before, after, "--json"]), /CLI exited 1/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("resilience CLI executes a disposable fault and reports verified recovery", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-resilience-cli-"));
+  try {
+    const databasePath = join(root, "app.sqlite"), modulePath = join(root, "rehearsal.mjs");
+    const database = new DatabaseSync(databasePath); database.exec("CREATE TABLE fixture(id INTEGER)"); database.close();
+    await writeFile(modulePath, `import assert from 'node:assert/strict'; export default {
+      source: {databasePath: ${JSON.stringify(databasePath)}},
+      boot: async () => ({handle: () => new Response('ok'), close() {}}),
+      scenarios: [{name:'Offline read',fault:'offline',verify:async context=>assert.equal((await context.request('/healthz')).status,200),exercise:async context=>assert.rejects(context.request('/healthz'))}]
+    };`);
+    const result = JSON.parse((await run(["workbench", "resilience", modulePath, "--json"])).stdout);
+    assert.equal(result.ok, true); assert.equal(result.scenarios[0].injected, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

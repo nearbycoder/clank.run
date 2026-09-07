@@ -126,7 +126,7 @@ const COMMANDS = Object.freeze({
     summary: "Replay agent-authored semantic acceptance journeys in an isolated real browser.",
   },
   workbench: {
-    usage: "clank workbench <compatibility|performance|policy|flag|revision|parity|schema|capacity|upgrade|provenance|promotion|rollout|export|sanitize|provider|contract|visual> [arguments] [--json]",
+    usage: "clank workbench <resilience|compatibility|performance|policy|flag|revision|parity|schema|capacity|upgrade|provenance|promotion|rollout|export|sanitize|provider|contract|visual> [arguments] [--json]",
     summary: "Inspect, test, govern, promote, and port applications through data-only developer tools.",
   },
   doctor: {

@@ -1,3 +1,4 @@
+import { rehearseResilience } from "../dist/resilience.js";
 import { compareContracts } from "../dist/contract-compatibility.js";
 import { assessApplicationPerformance } from "../dist/application-performance.js";
 import { rehearseRecovery, rehearseMigrations } from "../dist/rehearsal.js";
@@ -33,13 +34,14 @@ export async function runWorkbench(args) {
       result = assessApplicationPerformance(await jsonFile(capture), await jsonFile(budgets), { pageId: option("page"), ...(option("baseline") ? { baseline: await jsonFile(option("baseline")) } : {}) });
       break;
     }
+    case "resilience":
     case "restore":
     case "migrate": {
       const [modulePath] = values;
-      required(modulePath, "Usage: clank workbench <restore|migrate> <rehearsal.mjs> [--json]");
+      required(modulePath, "Usage: clank workbench <resilience|restore|migrate> <rehearsal.mjs> [--json]");
       const module = await importLocal(modulePath);
       const configuration = typeof module.default === "function" ? await module.default() : module.default;
-      result = subcommand === "restore" ? await rehearseRecovery(configuration) : await rehearseMigrations(configuration);
+      result = subcommand === "resilience" ? await rehearseResilience(configuration) : subcommand === "restore" ? await rehearseRecovery(configuration) : await rehearseMigrations(configuration);
       break;
     }
     case "policy": {
@@ -165,6 +167,7 @@ function help() {
   console.log(`Clank workbench
 
 Usage:
+  clank workbench resilience <rehearsal.mjs>      Exercise faults and verify recovery
   clank workbench compatibility <production.json> <candidate.json>  Check API/MCP compatibility
   clank workbench performance <page.har> <budgets.json>  Enforce complete page-load budgets
   clank workbench restore <rehearsal.mjs>        Restore and verify a disposable app copy
