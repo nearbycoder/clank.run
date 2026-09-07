@@ -1010,3 +1010,40 @@ collection. The controller supports up to 100,000 rows and a total height of 16 
 paginate larger results. A row height of 16–1000 pixels and overscan of 0–50 keep allocation
 bounded. The mounted view uses ResizeObserver with a window-resize fallback, and disposal removes
 listeners, observers, row resources, and its own viewport without changing the parent container.
+
+## Saved filter and table views
+
+`@clank.run/framework/saved-views` provides account-owned saved filters, sort order, and visible
+columns. It uses the app's existing SQLite authentication database and ordinary authenticated
+RPC/MCP access; it needs no search or preferences service.
+
+```ts
+import { openSavedViews, createSavedViewsClient, mountSavedViews,
+  applySavedView } from "@clank.run/framework/saved-views";
+
+const views = await openSavedViews({
+  path: "./data/app.sqlite", auth, fields: ["status", "score"], maxViews: 50,
+});
+// Route /__clank/views/* to views.handle(request), then call views.close() at shutdown.
+const client = createSavedViewsClient({ auth: authClient });
+const dispose = mountSavedViews(panel, client, {
+  current: () => tableState,
+  apply: definition => {
+    tableState = definition;
+    renderRows(applySavedView(records, definition), definition.columns);
+  },
+});
+```
+
+A definition contains `filters`, `sort`, and `columns`. Filters combine with AND and support
+`eq`, `neq`, case-insensitive `contains`, numeric `gt`/`lt`, and `empty`. Field names are literal
+own-property keys, never object paths. Up to 30 filters, five unique sort fields, and 40 unique
+columns are accepted. Sorting is stable and missing values always appear last. Applying a view
+does not mutate records or change authorization; filter only data the current user may already see.
+
+`client.save({ name, definition })` creates a view. Updates and `remove(id, expectedRevision)`
+require the latest revision and reject stale writes. Names are unique per account without case
+sensitivity. `setDefault(id)` atomically clears the previous default; `setDefault(null)` clears it.
+The host can apply the default returned by `list()` at startup. The controls expose save-current,
+apply, rename, default, delete, refresh, empty, busy, and retry states. Dispose removes the panel
+and ignores late responses. The default limit is 50 views per account (configurable to 200).

@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add account-owned saved views with validated filters, stable sorting, visible columns, optimistic revisions, default selection, and browser management controls.
+
 ## 0.21.0 - 2026-09-06
 
 - Add a persistent release error inbox with source-map frame locations, trace links, per-release counts, bounded retention, and recurrence tracking after resolution.
