@@ -143,3 +143,17 @@ test("application performance CLI emits resource evidence and fails exceeded bud
     await assert.rejects(run(["workbench", "performance", capture, budgets, "--json"]), /CLI exited 1/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test("compatibility CLI gates removed actions before deployment", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-compatibility-"));
+  try {
+    const before = join(root, "before.json"), after = join(root, "after.json");
+    const manifest = { protocol: "clank-live/1", functions: [{ name: "read", kind: "query", access: "public", agent: true, args: { type: "object" }, returns: { type: "string" } }] };
+    await writeFile(before, JSON.stringify(manifest));
+    await writeFile(after, JSON.stringify(manifest));
+    assert.equal(JSON.parse((await run(["workbench", "compatibility", before, after, "--json"])).stdout).ok, true);
+    await writeFile(after, JSON.stringify({ ...manifest, functions: [] }));
+    await assert.rejects(run(["workbench", "compatibility", before, after, "--json"]), /CLI exited 1/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -1,3 +1,4 @@
+import { compareContracts } from "../dist/contract-compatibility.js";
 import { assessApplicationPerformance } from "../dist/application-performance.js";
 import { rehearseRecovery, rehearseMigrations } from "../dist/rehearsal.js";
 import { lstat, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
@@ -20,6 +21,12 @@ export async function runWorkbench(args) {
   const option = (name) => args.find((item) => item.startsWith(`--${name}=`))?.slice(name.length + 3);
   let result;
   switch (subcommand) {
+    case "compatibility": {
+      const [baseline, candidate] = values;
+      required(baseline && candidate, "Usage: clank workbench compatibility <production.json> <candidate.json> [--json]");
+      result = compareContracts(await jsonFile(baseline), await jsonFile(candidate));
+      break;
+    }
     case "performance": {
       const [capture, budgets] = values;
       required(capture && budgets, "Usage: clank workbench performance <page.har> <budgets.json> [--baseline=<page.har>] [--page=<id>] [--json]");
@@ -158,6 +165,7 @@ function help() {
   console.log(`Clank workbench
 
 Usage:
+  clank workbench compatibility <production.json> <candidate.json>  Check API/MCP compatibility
   clank workbench performance <page.har> <budgets.json>  Enforce complete page-load budgets
   clank workbench restore <rehearsal.mjs>        Restore and verify a disposable app copy
   clank workbench migrate <rehearsal.mjs>        Rehearse migrations on a disposable database

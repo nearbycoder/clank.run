@@ -226,3 +226,30 @@ observation of a shape; reopen after schema changes to refresh them. A scan can 
 plan, and repetition alone does not prove an N+1 bug. Counts describe returned rows, not rows
 visited internally by SQLite. Startup validation, history reads, and internal metadata queries
 are outside this application-query report.
+## API and MCP compatibility gate
+
+Save production's `/__clank/manifest` and the candidate application's corresponding manifest
+under the same configuration, then run this before the deployment step in CI:
+
+```sh
+clank workbench compatibility production.json candidate.json --json
+```
+
+`compareContracts()` from `@clank.run/framework/contract-compatibility` exposes the same report.
+Compare two backend manifests or two complete MCP manifests (`server.manifest()`); never compare
+a scope-filtered or partial catalog against a complete one. A paginated tools catalog must first
+be combined. Missing MCP scope metadata produces a blocking review finding.
+
+The checker flags removed/renamed actions, query/mutation changes, newly required authentication,
+removed agent exposure, changed tool/action bindings, and scope changes. Schema checks require
+old inputs to remain accepted and new outputs to satisfy the old response contract. Optional
+input additions and narrower output types can pass; new required inputs and lost response
+fields cannot. Nested objects, arrays, numeric/length limits, enums, and additional properties
+are compared. Added actions are informational.
+
+This is a conservative structural gate, not proof of identical business behavior. Changed unions,
+references, patterns, defaults, and unsupported schema keywords require review instead of silently
+passing. Findings marked `breaking` or `review` make the command exit nonzero. Resolve deliberate
+changes by versioning the affected API or approving an updated baseline through code review.
+Metadata such as descriptions does not trigger compatibility failures. Runtime authorization and
+end-to-end application contracts remain necessary; a matching schema cannot establish either.
