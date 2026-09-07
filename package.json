@@ -22,6 +22,7 @@
   "exports": {
     "./saved-views": { "types": "./dist/saved-views.d.ts", "import": "./dist/saved-views.js" },
     "./local-search": { "types": "./dist/local-search.d.ts", "import": "./dist/local-search.js" },
+    "./csv-import": { "types": "./dist/csv-import.d.ts", "import": "./dist/csv-import.js" },
     "./error-inbox": { "types": "./dist/error-inbox.d.ts", "import": "./dist/error-inbox.js" },
     "./live-resume": { "types": "./dist/live-resume.d.ts", "import": "./dist/live-resume.js" },
     "./resilience": { "types": "./dist/resilience.d.ts", "import": "./dist/resilience.js" },
