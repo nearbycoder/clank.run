@@ -428,6 +428,8 @@ export interface ClankPlatformOptions {
   };
   /** Defaults to "bootstrap": only the first platform account may self-register. */
   signup?: boolean | "bootstrap";
+  /** Bounded password-hashing admission. Hash strength remains at the framework defaults. */
+  authentication?: { concurrency?: number; maxQueue?: number };
   masterKey?: string | Uint8Array;
   maxArtifactBytes?: number;
   /** Operator-only escape hatch for configs that request unrestricted SQLite SQL. */
@@ -702,6 +704,10 @@ const MAX_ACTIVE_RUNNER_ENROLLMENTS = 50;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
+  const authentication = {
+    concurrency: integerInRange(options.authentication?.concurrency ?? 2, "authentication.concurrency", 1, 16),
+    maxQueue: integerInRange(options.authentication?.maxQueue ?? 16, "authentication.maxQueue", 1, 128),
+  };
   // The platform is a dedicated control-plane process. A private umask keeps
   // SQLite journals, backups, logs, and generated launchers owner-readable only.
   (globalThis as any).process.umask?.(0o077);
@@ -1011,7 +1017,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     : signupMode === false
       ? "disabled"
       : "bootstrap";
-  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
+  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication);
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
@@ -7983,7 +7989,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
 }
 
-async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promise<PlatformDatabase> {
+async function openPlatformDatabase(path: string, masterKey: Uint8Array,
+  authentication: { concurrency: number; maxQueue: number }): Promise<PlatformDatabase> {
   const schema = defineDatabase({});
   const database = await openSQLite(schema, { path });
   const internal = database[SQLITE_INTERNAL];
@@ -8014,6 +8021,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   // valid invitation authorize one account even when public signup is closed.
   const authDefinition = defineAuth({
     signup: true,
+    password: authentication,
     rateLimit: { store: rateLimits },
   });
   const auth = await openAuth(authDefinition, database);
@@ -9669,9 +9677,14 @@ function projectMetricRows(
   intervalMs: number,
   start: number,
   end: number,
+  summaryOnly = false,
 ): Record<string, unknown>[] {
   return internal.prepare(`SELECT
-      bucket_started_at - (bucket_started_at % ?) AS point_at,
+      ${summaryOnly ? `count(DISTINCT CASE WHEN request_count > 0 THEN
+        bucket_started_at - (bucket_started_at % ?) END) AS active_intervals,
+      coalesce(max(request_count), 0) AS peak_requests,
+      max(bucket_started_at) AS last_request_at,` :
+        "bucket_started_at - (bucket_started_at % ?) AS point_at,"}
       sum(request_count) AS request_count,
       sum(error_count) AS error_count,
       sum(status_2xx) AS status_2xx,
@@ -9700,7 +9713,21 @@ function projectMetricRows(
       sum(method_other) AS method_other
     FROM clank_platform_metrics
     WHERE project_id = ? AND bucket_started_at >= ? AND bucket_started_at < ?
-    GROUP BY point_at ORDER BY point_at`).all(intervalMs, projectId, start, end);
+    ${summaryOnly ? "" : "GROUP BY point_at ORDER BY point_at"}`).all(intervalMs, projectId, start, end);
+}
+
+// Dashboards need one current-period aggregate, not chart points and a previous-period series.
+// Keep interval counts and minute extremes identical to the detailed metrics endpoint.
+function projectMetricSummary(internal: SQLiteInternal, projectId: string): Record<string, unknown> {
+  const range = metricRange("24h"), now = Date.now();
+  const rows = projectMetricRows(internal, projectId, range.intervalMs, now - range.durationMs, now + 1, true);
+  const row = rows[0]!;
+  return {
+    ...summarizeMetricRows(rows, range.durationMs),
+    activeIntervals: Number(row.active_intervals),
+    peakRequestsPerMinute: Number(row.peak_requests),
+    lastRequestAt: row.last_request_at == null ? null : Number(row.last_request_at),
+  };
 }
 
 function fillMetricPoints(
@@ -11750,7 +11777,7 @@ function dashboardPayload(
       sum(CASE WHEN status = 'verified' AND routing_status = 'ready' THEN 1 ELSE 0 END) AS ready
       FROM clank_platform_domains WHERE project_id = ?`).get(project.id);
     const releases = releaseStorageUsage(internal, project.id);
-    const metrics = metricSeries(internal, project.id, "24h").summary as Record<string, number>;
+    const metrics = projectMetricSummary(internal, project.id) as Record<string, number>;
     return {
       ...projectPayload(project),
       url: appUrlTemplate.replaceAll("{slug}", project.slug)

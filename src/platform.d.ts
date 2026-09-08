@@ -201,6 +201,8 @@ export interface ClankPlatformOptions {
     };
     /** Defaults to "bootstrap": only the first platform account may self-register. */
     signup?: boolean | "bootstrap";
+    /** Bounded password-hashing admission. Hash strength remains at the framework defaults. */
+    authentication?: { concurrency?: number; maxQueue?: number };
     masterKey?: string | Uint8Array;
     maxArtifactBytes?: number;
     /** Operator-only escape hatch for configs that request unrestricted SQLite SQL. */

@@ -4,6 +4,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Aggregate dashboard metric summaries in one current-period query while preserving chart-summary semantics, and expose bounded platform authentication concurrency and queue settings without changing password-hash strength.
+- Allow explicit, bounded runtime capacity settings for live connections and password-hash admission in deployment environments; application options take precedence and existing defaults remain unchanged.
+
 - Preserve live-query dependency tracking after result-cache eviction, so connected clients keep receiving selective updates under cache pressure.
 
 - Keep platform project listing and dashboard queries scoped to indexed ownership and workspace membership as tenant counts grow.

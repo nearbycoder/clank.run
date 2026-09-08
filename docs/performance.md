@@ -133,6 +133,11 @@ processes are different capacity measures. Repeat representative workloads on an
 deployment with production-equivalent resources and external generators before setting launch
 capacity. Include password-login bursts, populated metric histories, and configured quotas.
 
+Dashboard overviews aggregate only the current 24-hour metric summary in one query per project.
+They retain the detailed metrics endpoint's interval counts, minute peaks, request counts and
+latency histograms without building unused chart points or reading a discarded previous period.
+The detailed metrics view still includes those charts and comparisons.
+
 ## Complete application load budgets
 
 `clank workbench performance page.har budgets.json --baseline=before.har --json`

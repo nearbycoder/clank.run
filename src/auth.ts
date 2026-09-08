@@ -206,8 +206,8 @@ export function defineAuth<const ProfileShape extends SchemaShape>(
     blockSize: options.password?.blockSize ?? 8,
     parallelization: options.password?.parallelization ?? 1,
     maxMemory: options.password?.maxMemory ?? 256 * 1024 * 1024,
-    concurrency: options.password?.concurrency ?? 2,
-    maxQueue: options.password?.maxQueue ?? 16,
+    concurrency: options.password?.concurrency ?? authCapacityEnvironment("CLANK_AUTH_CONCURRENCY", 2, 16),
+    maxQueue: options.password?.maxQueue ?? authCapacityEnvironment("CLANK_AUTH_MAX_QUEUE", 16, 128),
     ...(options.password?.pepper === undefined ? {} : { pepper: options.password.pepper }),
   };
   validatePasswordOptions(password);
@@ -1677,6 +1677,15 @@ function validatePassword(input: unknown, options: AuthDefinition["password"]): 
     throw new AuthError("PASSWORD_TOO_LONG", `Password must not exceed ${options.maxBytes} UTF-8 bytes.`, 422);
   }
   return input;
+}
+
+function authCapacityEnvironment(name: string, fallback: number, maximum: number): number {
+  const value = (globalThis as any).process?.env?.[name];
+  if (value === undefined) return fallback;
+  if (!/^[1-9][0-9]*$/.test(value) || Number(value) > maximum) {
+    throw new TypeError(`${name} must be an integer from 1 to ${maximum}.`);
+  }
+  return Number(value);
 }
 
 function validatePasswordOptions(options: AuthDefinition["password"]): void {

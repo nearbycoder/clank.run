@@ -127,6 +127,10 @@ const platform = await openPlatform({
       }
     : {}),
   signup,
+  authentication: {
+    concurrency: number(process.env.CLANK_AUTH_CONCURRENCY, 2),
+    maxQueue: number(process.env.CLANK_AUTH_MAX_QUEUE, 16),
+  },
   masterKey: environment("CLANK_PLATFORM_MASTER_KEY", "PROACT_PLATFORM_MASTER_KEY"),
   appHostname: environment("CLANK_APP_HOST", "PROACT_APP_HOST"),
   appUrlTemplate: environment("CLANK_APP_URL_TEMPLATE", "PROACT_APP_URL_TEMPLATE"),
