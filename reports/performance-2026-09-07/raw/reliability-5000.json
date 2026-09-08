@@ -1,0 +1,37 @@
+{
+  "protocol": "clank-load-reliability/1",
+  "users": 5000,
+  "connections": 5000,
+  "liveLimit": 6000,
+  "scenarios": [
+    {
+      "name": "Live connection admission and idle residency",
+      "accepted": 5000,
+      "rejected": 0,
+      "connectMs": 6652.176721,
+      "emptyRss": 198778880,
+      "metrics": {
+        "rss": 382803968,
+        "peakRss": 382803968,
+        "heapUsed": 130625072,
+        "cpuPercent": 30.15782416788107,
+        "eventLoopP99Ms": 21.970943,
+        "eventLoopMaxMs": 27.066367,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 5000,
+            "cacheHits": 5000,
+            "durationMs": 0.05590900000061083,
+            "lastInvalidation": null,
+            "cachedEntries": 1000,
+            "subscriptions": 5000
+          }
+        ],
+        "errors": []
+      }
+    }
+  ],
+  "ok": false,
+  "failure": "Error: Recovery deadline exceeded\n    at until (file:///tmp/clank-launch-load/scripts/load/reliability.mjs:93:66)\n    at runNextTicks (node:internal/process/task_queues:65:5)\n    at listOnTimeout (node:internal/timers:644:9)\n    at process.processTimers (node:internal/timers:618:7)\n    at async file:///tmp/clank-launch-load/scripts/load/reliability.mjs:123:7\n    at async Promise.all (index 1)\n    at async file:///tmp/clank-launch-load/scripts/load/reliability.mjs:119:5"
+}

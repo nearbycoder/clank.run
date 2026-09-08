@@ -2,6 +2,12 @@
 
 Clank follows semantic versioning. Entries describe user-visible framework, CLI, protocol, storage, security, and deployment changes.
 
+## Unreleased
+
+- Preserve live-query dependency tracking after result-cache eviction, so connected clients keep receiving selective updates under cache pressure.
+
+- Keep platform project listing and dashboard queries scoped to indexed ownership and workspace membership as tenant counts grow.
+
 ## 0.22.0 - 2026-09-07
 
 - Add private bookmarks and folders with safe URLs, favorites, search, conflict-checked editing, and atomic folder removal.

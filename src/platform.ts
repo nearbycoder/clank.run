@@ -6384,12 +6384,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? storage.internal.prepare(`SELECT p.* FROM clank_platform_projects p
               JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
               WHERE p.id = ? AND m.user_id = ?`).all(principal.projectId, principal.userId)
-          : storage.internal.prepare(`SELECT DISTINCT p.* FROM clank_platform_projects p
-              LEFT JOIN clank_platform_memberships m
-                ON m.organization_id = p.organization_id AND m.user_id = ?
-              WHERE p.parent_project_id IS NULL
-                AND (m.user_id IS NOT NULL OR p.owner_id = ?) ORDER BY p.created_at`)
-              .all(principal.userId, principal.userId);
+          : visibleRootProjectRows(storage.internal, principal.userId);
         const usageRows = storage.internal.prepare(`SELECT organization_id, count(*) AS count
           FROM clank_platform_projects WHERE organization_id IN (
             SELECT organization_id FROM clank_platform_memberships WHERE user_id = ?
@@ -8106,6 +8101,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_organizations_creator ON clank_platform_organizations (created_by, created_at)");
   const quotaOverridesTable = `CREATE TABLE clank_platform_quota_overrides (
     scope_type TEXT NOT NULL CHECK (scope_type IN ('account', 'workspace')),
     scope_id TEXT NOT NULL,
@@ -8478,6 +8474,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     });
   }
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_projects_org ON clank_platform_projects (organization_id, created_at)");
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_projects_owner ON clank_platform_projects (owner_id, created_at)");
   internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_platform_projects_preview_name
     ON clank_platform_projects (parent_project_id, preview_name)
     WHERE parent_project_id IS NOT NULL`);
@@ -9184,6 +9181,20 @@ function accessibleProject(
     throw new PlatformError(403, "ROLE_DENIED", `The ${role} role cannot perform ${permission} operations.`);
   }
   return { project, role };
+}
+
+// Enumerate only owned/member project IDs before reading project payloads. A LEFT JOIN
+// with an ownership OR scans every tenant's projects even when this account has only a few.
+// UNION preserves the owner fallback and removes duplicates for owner-members.
+function visibleRootProjectRows(internal: SQLiteInternal, userId: string) {
+  return internal.prepare(`SELECT p.* FROM clank_platform_projects p
+    WHERE p.parent_project_id IS NULL AND p.id IN (
+      SELECT owned.id FROM clank_platform_projects owned WHERE owned.owner_id = ?
+      UNION
+      SELECT member.id FROM clank_platform_memberships m
+        JOIN clank_platform_projects member ON member.organization_id = m.organization_id
+        WHERE m.user_id = ?
+    ) ORDER BY p.created_at`).all(userId, userId);
 }
 
 function projectPayload(project: ProjectRow): Record<string, unknown> {
@@ -11730,11 +11741,7 @@ function dashboardPayload(
     ? internal.prepare(`SELECT p.* FROM clank_platform_projects p
         JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
         WHERE p.id = ? AND m.user_id = ?`).all(principal.projectId, principal.userId)
-    : internal.prepare(`SELECT DISTINCT p.* FROM clank_platform_projects p
-        LEFT JOIN clank_platform_memberships m
-          ON m.organization_id = p.organization_id AND m.user_id = ?
-        WHERE p.parent_project_id IS NULL
-          AND (m.user_id IS NOT NULL OR p.owner_id = ?) ORDER BY p.created_at`).all(principal.userId, principal.userId);
+    : visibleRootProjectRows(internal, principal.userId);
   const projects = projectRows.map((source) => {
     const project = projectRow(source);
     const effective = projectQuotas(internal, project, defaults);
