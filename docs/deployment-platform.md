@@ -110,7 +110,9 @@ Rules:
 - Symbolic links, special files, parent traversal, `.env*`, private-key names, and VCS metadata are rejected.
 - `build.command` is executed locally without a shell.
 - `env` is public artifact configuration; credentials belong in platform secrets.
-- `PORT`, `HOST`, `NODE_OPTIONS`, and `CLANK_*` variables are reserved.
+- `PORT`, `HOST`, `NODE_OPTIONS`, and `CLANK_*` variables are reserved, except the bounded
+  application capacity settings `CLANK_AUTH_CONCURRENCY` (1–16), `CLANK_AUTH_MAX_QUEUE` (1–128),
+  and `CLANK_MAX_LIVE_CONNECTIONS` (1–20,000). See [capacity sizing](self-hosting.md).
 - `database.path` is persistent project data outside release directories.
 - Changing `database.path` during deployment is rejected to prevent silently forking production data.
 - `database.previewData`, when present, is the active production release's bounded sanitization
