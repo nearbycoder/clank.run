@@ -10,6 +10,9 @@ import {
   text,
 } from "../vendor/index.js";
 import { SynthView } from "./view.js";
+import { readFile } from "node:fs/promises";
+
+const { version: frameworkVersion } = JSON.parse(await readFile(new URL("../vendor/package.json", import.meta.url), "utf8")) as { version: string };
 
 const environment = (globalThis as unknown as { process?: { env?: Record<string, string | undefined> } }).process?.env;
 const canonicalOrigin = (environment?.SYNTH_ORIGIN ?? "https://synth.clank.run").replace(/\/+$/u, "");
@@ -26,12 +29,12 @@ function asset(request: Request): Response | Promise<Response> {
 
 async function page(): Promise<Response> {
   const nonce = crypto.randomUUID().replaceAll("-", "");
-  const document = await renderDocument(<div id="synth-root"><SynthView frameworkVersion="0.15.0" /></div>, {
+  const document = await renderDocument(<div id="synth-root"><SynthView frameworkVersion={frameworkVersion} /></div>, {
     title: "Clank Synth · Audio Lab",
     nonce,
     bodyClass: "synth-body",
     stylesheets: ["/assets/styles.css"],
-    state: { frameworkVersion: "0.15.0" },
+    state: { frameworkVersion },
     head: <>
       <meta name="description" content="A playable 16-step Web Audio groovebox built with Clank." />
       <meta name="theme-color" content="#080a0d" />
@@ -62,9 +65,9 @@ async function page(): Promise<Response> {
 
 const app = createApp({ onError(error) { console.error("Clank Synth request failed.", error instanceof Error ? error.message : "Unknown error"); } })
   .use(securityHeaders({ contentSecurityPolicy: false }))
-  .get("/healthz", () => json({ ok: true, service: "clank-synth", frameworkVersion: "0.15.0", instruments: 6, steps: 16 }, { headers: { "cache-control": "no-store" } }))
+  .get("/healthz", () => json({ ok: true, service: "clank-synth", frameworkVersion, instruments: 6, steps: 16 }, { headers: { "cache-control": "no-store" } }))
   .get("/.well-known/clank", () => json({ protocol: "clank-agent/2", name: "clank-synth", title: "Clank Synth", description: "A playable 16-step audio groovebox.", documentation: { home: canonicalOrigin, source: "https://github.com/nearbycoder/clank.run/tree/main/synth-site" }, capabilities: { browserAudio: true, persistence: "localStorage" } }, { headers: { "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } }))
-  .get("/api/info", () => json({ protocol: "clank-synth/1", frameworkVersion: "0.15.0", instruments: 6, steps: 16, presets: ["Neon Pulse", "Night Drive", "Arcade Bloom", "Half Time"] }, { headers: { "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } }))
+  .get("/api/info", () => json({ protocol: "clank-synth/1", frameworkVersion, instruments: 6, steps: 16, presets: ["Neon Pulse", "Night Drive", "Arcade Bloom", "Half Time"] }, { headers: { "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } }))
   .route("HEAD", "/favicon.ico", ({ request }) => asset(new Request(new URL("/brand/favicon.ico", request.url), { headers: request.headers })))
   .get("/favicon.ico", ({ request }) => asset(new Request(new URL("/brand/favicon.ico", request.url), { headers: request.headers })))
   .route("*", "/brand/*", ({ request }) => appFiles.handle(request))
