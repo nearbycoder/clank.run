@@ -1,0 +1,67 @@
+{
+  "protocol": "clank-load/1",
+  "startedAt": "2026-09-08T00:06:08.551Z",
+  "kind": "platform",
+  "users": 10,
+  "seconds": 1,
+  "rates": [
+    25
+  ],
+  "settings": {
+    "mode": "mixed",
+    "authConcurrency": 2,
+    "ingressRpm": 3000,
+    "cacheEntries": 1000,
+    "liveLimit": 1000,
+    "metricBuckets": 0
+  },
+  "machine": {
+    "node": "v24.20.0",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "memoryBytes": 117764759552
+  },
+  "topology": "One isolated Node server process and a separate generator process on the same host; loopback HTTP; local SQLite",
+  "recordsPerUser": 3,
+  "samples": [
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 25,
+      "duration": 1,
+      "mode": "mixed",
+      "offered": 25,
+      "completed": 25,
+      "dropped": 0,
+      "valid": 25,
+      "status": {
+        "200": 25
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 108785,
+      "elapsedSeconds": 0.9987107569999998,
+      "successfulRps": 25.03227268232979,
+      "latencyMs": {
+        "p50": 2.7046619999996437,
+        "p95": 5.18855799999983,
+        "p99": 5.883437999999842,
+        "max": 5.883437999999842
+      },
+      "serviceP95Ms": 3.588768000000073,
+      "generatorScheduleP99Ms": 2.133383999999751,
+      "acceptable": true,
+      "metrics": {
+        "rss": 103645184,
+        "peakRss": 103645184,
+        "heapUsed": 15259712,
+        "cpuPercent": 6.178745653296045,
+        "eventLoopP99Ms": 11.223039,
+        "eventLoopMaxMs": 11.436031,
+        "errors": []
+      }
+    }
+  ],
+  "finishedAt": "2026-09-08T00:06:12.055Z"
+}

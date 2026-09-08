@@ -114,6 +114,25 @@ and rollback through the packaged-release conformance journey. CI runs the suppo
 and Node 24 versions. Reproduce timing measurements on the deployment workload before drawing
 capacity conclusions from these narrower invariants.
 
+## Reproducible load and reliability profiles
+
+The repository's `scripts/load/README.md` describes disposable HTTP A/B, authentication,
+managed ingress, live-connection, crash/replay, and large-list browser workloads. The generators
+create loopback servers and synthetic databases, record failed and dropped requests, and can
+compare a published package with a locally built revision. They do not target production.
+
+The September 2026 load pass found two regressions: evicted live-query results lost their
+invalidation dependencies, and platform project visibility queries scanned unrelated tenants.
+Live subscriptions now retain dependency metadata independently of cached result payloads;
+project lists and dashboards use indexed ownership and membership lookups. The regression tests
+are `tests/live-cache-eviction.test.mjs` and `tests/platform-tenant-lookups.test.mjs`.
+
+See the [methodology and raw results](https://github.com/nearbycoder/clank.run/tree/main/reports/performance-2026-09-07)
+for the tested limits. Request rates, account counts, open streams, and running application
+processes are different capacity measures. Repeat representative workloads on an isolated staging
+deployment with production-equivalent resources and external generators before setting launch
+capacity. Include password-login bursts, populated metric histories, and configured quotas.
+
 ## Complete application load budgets
 
 `clank workbench performance page.har budgets.json --baseline=before.har --json`

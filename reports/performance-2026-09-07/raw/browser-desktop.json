@@ -1,0 +1,118 @@
+{
+  "boundedRows": true,
+  "keyboardEnd": true,
+  "overflow": false,
+  "samples": [
+    {
+      "count": 1000,
+      "domElements": 3001,
+      "height": 36000,
+      "mode": "full",
+      "mountMs": 28.199999809265137,
+      "round": 1,
+      "rowsInDom": 1000
+    },
+    {
+      "count": 1000,
+      "domElements": 78,
+      "height": 480,
+      "mode": "virtual",
+      "mountMs": 1.5999994277954102,
+      "round": 1,
+      "rowsInDom": 19
+    },
+    {
+      "count": 1000,
+      "domElements": 78,
+      "height": 480,
+      "mode": "virtual",
+      "mountMs": 1,
+      "round": 2,
+      "rowsInDom": 19
+    },
+    {
+      "count": 1000,
+      "domElements": 3001,
+      "height": 36000,
+      "mode": "full",
+      "mountMs": 24.399999618530273,
+      "round": 2,
+      "rowsInDom": 1000
+    },
+    {
+      "count": 1000,
+      "domElements": 3001,
+      "height": 36000,
+      "mode": "full",
+      "mountMs": 21.899999618530273,
+      "round": 3,
+      "rowsInDom": 1000
+    },
+    {
+      "count": 1000,
+      "domElements": 78,
+      "height": 480,
+      "mode": "virtual",
+      "mountMs": 1.2000007629394531,
+      "round": 3,
+      "rowsInDom": 19
+    },
+    {
+      "count": 10000,
+      "domElements": 30001,
+      "height": 360000,
+      "mode": "full",
+      "mountMs": 209.89999961853027,
+      "round": 1,
+      "rowsInDom": 10000
+    },
+    {
+      "count": 10000,
+      "domElements": 78,
+      "height": 480,
+      "mode": "virtual",
+      "mountMs": 1.5999994277954102,
+      "round": 1,
+      "rowsInDom": 19
+    },
+    {
+      "count": 10000,
+      "domElements": 78,
+      "height": 480,
+      "mode": "virtual",
+      "mountMs": 1.4000005722045898,
+      "round": 2,
+      "rowsInDom": 19
+    },
+    {
+      "count": 10000,
+      "domElements": 30001,
+      "height": 360000,
+      "mode": "full",
+      "mountMs": 190.70000076293945,
+      "round": 2,
+      "rowsInDom": 10000
+    },
+    {
+      "count": 10000,
+      "domElements": 30001,
+      "height": 360000,
+      "mode": "full",
+      "mountMs": 171.89999961853027,
+      "round": 3,
+      "rowsInDom": 10000
+    },
+    {
+      "count": 10000,
+      "domElements": 78,
+      "height": 480,
+      "mode": "virtual",
+      "mountMs": 1.6000003814697266,
+      "round": 3,
+      "rowsInDom": 19
+    }
+  ],
+  "usable": true,
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+  "viewport": 1440
+}

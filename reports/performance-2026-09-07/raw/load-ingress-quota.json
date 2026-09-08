@@ -1,0 +1,62 @@
+{
+  "protocol": "clank-load/1",
+  "startedAt": "2026-09-07T23:44:33.305Z",
+  "kind": "ingress",
+  "users": 1000,
+  "seconds": 15,
+  "rates": [
+    1000
+  ],
+  "machine": {
+    "node": "v24.20.0",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "memoryBytes": 117764759552
+  },
+  "topology": "One isolated Node server process and a separate generator process on the same host; loopback HTTP; local SQLite",
+  "recordsPerUser": 3,
+  "samples": [
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 1000,
+      "duration": 15,
+      "mode": "mixed",
+      "offered": 15000,
+      "completed": 15000,
+      "dropped": 0,
+      "valid": 8950,
+      "status": {
+        "200": 8950,
+        "429": 6050
+      },
+      "failures": {},
+      "errorExamples": {
+        "429": "{\"ok\":false,\"error\":{\"code\":\"PROJECT_RATE_LIMIT_REACHED\",\"message\":\"This project has reached its request rate limit.\"}}"
+      },
+      "bytes": 809450,
+      "elapsedSeconds": 15.012618475,
+      "successfulRps": 596.165153660844,
+      "latencyMs": {
+        "p50": 2.064541999998255,
+        "p95": 4.479671999999482,
+        "p99": 8.707566000000043,
+        "max": 18.508750999999847
+      },
+      "serviceP95Ms": 3.930956000000151,
+      "generatorScheduleP99Ms": 1.2748529999989842,
+      "acceptable": false,
+      "metrics": {
+        "rss": 336826368,
+        "peakRss": 336826368,
+        "heapUsed": 72611184,
+        "cpuPercent": 58.14875219161786,
+        "eventLoopP99Ms": 12.115967,
+        "eventLoopMaxMs": 16.302079,
+        "errors": []
+      }
+    }
+  ],
+  "finishedAt": "2026-09-07T23:44:53.569Z"
+}

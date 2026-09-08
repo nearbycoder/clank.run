@@ -1670,6 +1670,8 @@ interface SubscriberEntry {
   path: string;
   args: unknown;
   auth: AuthRequest<any> | null;
+  // Live invalidation must survive eviction from the bounded result cache.
+  dependencies: readonly ReadDependency[];
   listeners: Set<(value: unknown, version: number) => void>;
 }
 
@@ -1908,6 +1910,8 @@ export async function openBackend<
   };
 
   const setCache = (key: string, entry: CacheEntry) => {
+    const subscription = subscribers.get(key);
+    if (subscription) subscription.dependencies = entry.dependencies;
     cache.delete(key);
     cache.set(key, entry);
     while (cache.size > maxCacheEntries) cache.delete(cache.keys().next().value!);
@@ -1925,6 +1929,8 @@ export async function openBackend<
     database.version;
     const cached = cache.get(key);
     if (cached && !cached.dirty) {
+      const subscription = subscribers.get(key);
+      if (subscription) subscription.dependencies = cached.dependencies;
       const diagnostic = queryDiagnostic(path);
       if (diagnostic) diagnostic.cacheHits++;
       cache.delete(key);
@@ -2011,6 +2017,14 @@ export async function openBackend<
         invalidated.add(key);
       }
     }
+    // Uncached live queries retain only dependency metadata, not their result payload.
+    // Recompute matching subscriptions without increasing maxCacheEntries or waking
+    // unrelated tenants merely because their result was evicted.
+    for (const [key, subscription] of subscribers) {
+      if (!cache.has(key) && subscription.dependencies.some(dependency => changeAffects(dependency, change))) {
+        invalidated.add(key);
+      }
+    }
     for (const key of invalidated) {
       const subscription = subscribers.get(key);
       if (subscription?.auth?.session && (
@@ -2055,7 +2069,7 @@ export async function openBackend<
       const key = cacheKey(path, args, auth);
       let entry = subscribers.get(key);
       if (!entry) {
-        entry = { path, args, auth, listeners: new Set() };
+        entry = { path, args, auth, dependencies: [], listeners: new Set() };
         subscribers.set(key, entry);
       }
       entry.listeners.add(listener);
