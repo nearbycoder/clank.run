@@ -4,6 +4,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.22.1 - 2026-09-07
+
 - Aggregate dashboard metric summaries in one current-period query while preserving chart-summary semantics, and expose bounded platform authentication concurrency and queue settings without changing password-hash strength.
 - Allow explicit, bounded runtime capacity settings for live connections and password-hash admission in deployment environments; application options take precedence and existing defaults remain unchanged.
 
