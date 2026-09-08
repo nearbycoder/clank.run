@@ -1,0 +1,109 @@
+{
+  "protocol": "clank-load/1",
+  "startedAt": "2026-09-08T00:38:19.515Z",
+  "kind": "platform",
+  "users": 100,
+  "seconds": 10,
+  "rates": [
+    100,
+    250,
+    500
+  ],
+  "settings": {
+    "mode": "mixed",
+    "authConcurrency": 2,
+    "ingressRpm": 3000,
+    "cacheEntries": 1000,
+    "liveLimit": 1000,
+    "metricBuckets": 1440
+  },
+  "machine": {
+    "node": "v24.20.0",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "memoryBytes": 117764759552
+  },
+  "topology": "External generator through Railway TLS and a token-protected streaming proxy to Node fixtures on a persistent volume; state retained between trials",
+  "recordsPerUser": 3,
+  "samples": [
+    {
+      "candidate": "baseline",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 100,
+      "duration": 10,
+      "mode": "mixed",
+      "offered": 1000,
+      "completed": 1000,
+      "dropped": 0,
+      "valid": 1000,
+      "status": {
+        "200": 1000
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 4605000,
+      "elapsedSeconds": 10.079632132999999,
+      "successfulRps": 99.20996984860898,
+      "latencyMs": {
+        "p50": 89.45081299999947,
+        "p95": 165.94933899999978,
+        "p99": 1368.042458,
+        "max": 1567.6066970000002
+      },
+      "serviceP95Ms": 165.7212500000005,
+      "generatorScheduleP99Ms": 1.9517919999998412,
+      "acceptable": false,
+      "metrics": {
+        "rss": 120238080,
+        "peakRss": 120238080,
+        "heapUsed": 27713384,
+        "cpuPercent": 41.22243199656733,
+        "eventLoopP99Ms": 16.760831,
+        "eventLoopMaxMs": 19.972095,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "baseline",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 250,
+      "duration": 10,
+      "mode": "mixed",
+      "offered": 2500,
+      "completed": 2500,
+      "dropped": 0,
+      "valid": 2433,
+      "status": {
+        "200": 2433,
+        "timeout": 67
+      },
+      "failures": {},
+      "errorExamples": {
+        "timeout": ""
+      },
+      "bytes": 11201231,
+      "elapsedSeconds": 10.091372168,
+      "successfulRps": 241.09704403877853,
+      "latencyMs": {
+        "p50": 93.63586600000053,
+        "p95": 2693.059958,
+        "p99": 5001.301437,
+        "max": 5002.578878999999
+      },
+      "serviceP95Ms": 2692.594525999999,
+      "generatorScheduleP99Ms": 2.024997999998959,
+      "acceptable": false,
+      "metrics": {
+        "rss": 126803968,
+        "peakRss": 126803968,
+        "heapUsed": 27004040,
+        "cpuPercent": 84.35078494938949,
+        "eventLoopP99Ms": 17.940479,
+        "eventLoopMaxMs": 21.151743,
+        "errors": []
+      }
+    }
+  ]
+}

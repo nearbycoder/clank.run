@@ -1,0 +1,124 @@
+[
+  {
+    "slug": "my-todo",
+    "oldVersion": "0.7.0",
+    "newVersion": "0.22.1",
+    "passed": true,
+    "checks": [
+      "health",
+      "SSR",
+      "framework assets",
+      "persisted synthetic rows",
+      "existing sessions",
+      "legacy password login",
+      "tenant isolation",
+      "mutation",
+      "live delivery"
+    ],
+    "browser": {
+      "rendered": true,
+      "hydrated": true,
+      "consoleErrors": 0
+    }
+  },
+  {
+    "slug": "test",
+    "oldVersion": "0.9.3",
+    "newVersion": "0.22.1",
+    "passed": true,
+    "checks": [
+      "health",
+      "SSR",
+      "framework assets",
+      "persisted synthetic rows",
+      "existing sessions",
+      "legacy password login",
+      "tenant isolation",
+      "mutation",
+      "live delivery"
+    ],
+    "browser": {
+      "rendered": true,
+      "hydrated": true,
+      "consoleErrors": 0
+    }
+  },
+  {
+    "slug": "agent-protocol-demo",
+    "oldVersion": "0.9.3",
+    "newVersion": "0.22.1",
+    "passed": true,
+    "checks": [
+      "health",
+      "SSR",
+      "framework assets",
+      "persisted synthetic rows",
+      "existing sessions",
+      "legacy password login",
+      "tenant isolation",
+      "mutation",
+      "live delivery"
+    ],
+    "browser": {
+      "rendered": true,
+      "hydrated": true,
+      "consoleErrors": 0
+    }
+  },
+  {
+    "slug": "daily-log",
+    "oldVersion": "0.19.5",
+    "newVersion": "0.22.1",
+    "passed": true,
+    "checks": [
+      "health",
+      "SSR",
+      "framework assets",
+      "persisted synthetic rows",
+      "existing sessions",
+      "legacy password login",
+      "tenant isolation",
+      "mutation",
+      "live delivery"
+    ],
+    "browser": {
+      "rendered": true,
+      "hydrated": true,
+      "consoleErrors": 0
+    }
+  },
+  {
+    "slug": "profile",
+    "oldVersion": "0.13.0",
+    "newVersion": "0.22.1",
+    "passed": true,
+    "checks": [
+      "health",
+      "SSR",
+      "framework assets"
+    ],
+    "browser": {
+      "rendered": true,
+      "hydrated": true,
+      "consoleErrors": 0
+    }
+  },
+  {
+    "slug": "synth",
+    "newVersion": "0.22.1",
+    "passed": true,
+    "checks": [
+      "existing Synth contract",
+      "SSR",
+      "health version",
+      "browser version",
+      "theme switching",
+      "sequencer interaction"
+    ],
+    "browser": {
+      "rendered": true,
+      "hydrated": true,
+      "consoleErrors": 0
+    }
+  }
+]
