@@ -31,11 +31,12 @@ const onError = error => { if (errors.length < 20) errors.push(String(error.mess
 if (platformKind) {
   const { openPlatform } = await moduleAt('platform');
   runtime = await openPlatform({ dataDirectory: config.root, publicUrl: 'http://127.0.0.1:33930', signup: true,
+    authentication: { concurrency: config.authConcurrency ?? 2, maxQueue: 32 },
     backups: { intervalMs: false }, ingress: { domainRecheckIntervalMs: false,
       ...(config.kind === 'ingress' ? { enabled: true, baseDomain: 'apps.example.test' } : {}) },
     ...(config.ingressRpm ? { limits: { requestsPerMinutePerProject: config.ingressRpm } } : {}), onError });
 } else {
-  const definition = defineBackend({ auth: defineAuth(config.authConcurrency ? { password: { concurrency: config.authConcurrency } } : {}), schema: defineDatabase({
+  const definition = defineBackend({ auth: defineAuth(config.authConcurrency ? { password: { concurrency: config.authConcurrency, maxQueue: config.authQueue ?? 16 } } : {}), schema: defineDatabase({
     items: defineTable({ title: s.string(), done: s.boolean(), count: s.number() }).owned(),
   }) }).functions(({ query, mutation }) => ({
     list: query({ args: {}, handler: ({ db }) => db.table('items').query().limit(20).collect() }),

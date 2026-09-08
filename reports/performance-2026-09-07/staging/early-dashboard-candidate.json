@@ -1,0 +1,157 @@
+{
+  "protocol": "clank-load/1",
+  "startedAt": "2026-09-08T00:44:24.125Z",
+  "kind": "platform",
+  "users": 100,
+  "seconds": 10,
+  "rates": [
+    100,
+    250,
+    500
+  ],
+  "settings": {
+    "mode": "mixed",
+    "authConcurrency": 2,
+    "ingressRpm": 3000,
+    "cacheEntries": 1000,
+    "liveLimit": 1000,
+    "metricBuckets": 1440
+  },
+  "machine": {
+    "node": "v24.20.0",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "memoryBytes": 117764759552
+  },
+  "topology": "External generator through Railway TLS and a token-protected streaming proxy to Node fixtures on a persistent volume; state retained between trials",
+  "recordsPerUser": 3,
+  "samples": [
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 100,
+      "duration": 10,
+      "mode": "mixed",
+      "offered": 1000,
+      "completed": 1000,
+      "dropped": 0,
+      "valid": 1000,
+      "status": {
+        "200": 1000
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 4605000,
+      "elapsedSeconds": 10.078587232,
+      "successfulRps": 99.22025547637786,
+      "latencyMs": {
+        "p50": 88.666651,
+        "p95": 156.6870859999999,
+        "p99": 1365.6983649999997,
+        "max": 1594.7477510000003
+      },
+      "serviceP95Ms": 156.1845200000007,
+      "generatorScheduleP99Ms": 1.575676000000385,
+      "acceptable": false,
+      "serverNode": "v22.23.2",
+      "serverProfile": null,
+      "metrics": {
+        "rss": 128831488,
+        "peakRss": 128831488,
+        "heapUsed": 22072688,
+        "cpuPercent": 24.163707991771144,
+        "eventLoopP99Ms": 14.090239,
+        "eventLoopMaxMs": 19.152895,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 250,
+      "duration": 10,
+      "mode": "mixed",
+      "offered": 2500,
+      "completed": 2500,
+      "dropped": 0,
+      "valid": 2442,
+      "status": {
+        "200": 2442,
+        "timeout": 58
+      },
+      "failures": {},
+      "errorExamples": {
+        "timeout": ""
+      },
+      "bytes": 11250906,
+      "elapsedSeconds": 10.091466616999998,
+      "successfulRps": 241.9866301580216,
+      "latencyMs": {
+        "p50": 90.06368400000065,
+        "p95": 1970.464059,
+        "p99": 5001.235670999999,
+        "max": 5003.870294
+      },
+      "serviceP95Ms": 1969.9877889999989,
+      "generatorScheduleP99Ms": 2.0825169999989157,
+      "acceptable": false,
+      "serverNode": "v22.23.2",
+      "serverProfile": null,
+      "metrics": {
+        "rss": 133787648,
+        "peakRss": 133787648,
+        "heapUsed": 23071904,
+        "cpuPercent": 47.61929053182904,
+        "eventLoopP99Ms": 13.762559,
+        "eventLoopMaxMs": 17.858559,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 500,
+      "duration": 10,
+      "mode": "mixed",
+      "offered": 5000,
+      "completed": 5000,
+      "dropped": 0,
+      "valid": 4509,
+      "status": {
+        "200": 4509,
+        "timeout": 491
+      },
+      "failures": {},
+      "errorExamples": {
+        "timeout": ""
+      },
+      "bytes": 20799820,
+      "elapsedSeconds": 10.090886797000003,
+      "successfulRps": 446.8388250416718,
+      "latencyMs": {
+        "p50": 90.2736530000002,
+        "p95": 5000.810126,
+        "p99": 5001.740845,
+        "max": 5004.836868000002
+      },
+      "serviceP95Ms": 5000.259956999998,
+      "generatorScheduleP99Ms": 1.9328249999998661,
+      "acceptable": false,
+      "serverNode": "v22.23.2",
+      "serverProfile": null,
+      "metrics": {
+        "rss": 132354048,
+        "peakRss": 132771840,
+        "heapUsed": 28289248,
+        "cpuPercent": 77.89089085215204,
+        "eventLoopP99Ms": 14.966783,
+        "eventLoopMaxMs": 17.121279,
+        "errors": []
+      }
+    }
+  ],
+  "finishedAt": "2026-09-08T00:44:57.249Z"
+}

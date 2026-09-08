@@ -1,8 +1,9 @@
-# Local capacity and reliability testing
+# Capacity and reliability testing
 
 Use Node 24 and build the selected framework revision first. These scripts create disposable
-SQLite databases and loopback-only servers; they do not accept an external target URL. They
-never load production accounts or credentials. Keep CPU-heavy test suites and browser timing
+SQLite databases and loopback-only servers by default. The explicit staging mode described below
+accepts only a separately provisioned synthetic Railway fixture. Neither mode loads production
+accounts or credentials. Keep CPU-heavy test suites and browser timing
 runs separate from server benchmarks.
 
 ## A/B HTTP workloads
@@ -88,3 +89,53 @@ large metrics/release histories. Loopback omits internet latency, TLS, edge thro
 contention, storage failures, and application-specific work. Before a public launch, repeat the
 chosen workload against an isolated staging deployment with production-equivalent resources and
 external generators, and check existing application/runtime quotas against that workload.
+
+## Isolated Railway staging
+
+The staging server is deliberately excluded from package exports and application deployment
+commands. Provision it only in a separate disposable Railway project with its own empty volume.
+It boots a 5,000-account application fixture and two 100-account platform fixtures with 432,000
+nonempty metric buckets each. Use the same Node major, region, and volume type as the deployment
+being assessed. The authenticated streaming proxy adds a network hop that production may not have.
+
+Prepare a deployment directory containing `dist`, `package.json`, `brand`, `LICENSE`, and
+`scripts/load`. Include the comparison revision at `baseline/{dist,package.json,brand,LICENSE}`.
+Use Node 22 or 24, set the start command to `node scripts/load/staging-server.mjs`, mount an empty
+volume at `/data`, configure `/healthz` as the readiness path, and set restart policy to `NEVER`.
+The fixture exits after two hours; explicitly remove its deployment after testing.
+
+Required environment: `CLANK_CAPACITY_ENABLED=synthetic-only`, `CLANK_CAPACITY_TOKEN` containing
+64 cryptographically random hexadecimal characters, `UV_THREADPOOL_SIZE=16`, and `PORT=8080`.
+Keep the token outside the deployment directory and source control. The access file (mode 0600)
+contains `{"url":"https://YOUR-FIXTURE.up.railway.app/","token":"YOUR-64-HEX-TOKEN"}`.
+All workload and control routes require the token; only the cheap health route is public.
+
+```sh
+node scripts/load/run.mjs --staging=/private/staging-access.json --kind=platform \
+  --users=100 --metricBuckets=1440 --baseline=baseline --rates=100,250,500 \
+  --seconds=15 --rounds=2 --output=/tmp/staging-dashboard.json
+node scripts/load/run.mjs --staging=/private/staging-access.json --kind=app \
+  --users=5000 --mode=login --rates=10,25,40 --seconds=10 --rounds=2 \
+  --output=/tmp/staging-login.json
+node scripts/load/reliability.mjs --staging=/private/staging-access.json \
+  --users=5000 --connections=5000 --liveLimit=6000 --readRate=500 \
+  --batches=900 --connectBatch=10 --output=/tmp/staging-live.json
+```
+
+Remote HTTP trials share at most 128 pooled business connections across a five-second warmup
+and the measured rates. A/B order alternates, but synthetic database state persists between
+remote rounds; this is different from the fresh databases used by local rounds. There are no
+hidden business-request retries. Only login tests assign distinct synthetic source addresses.
+Ordinary proxy traffic uses kernel-selected addresses and separate bounded business/live pools.
+Report server configuration from `serverProfile`, not CLI defaults that cannot reconfigure an
+already deployed fixture. Proxy RSS, pool counts, and the host's ephemeral-port range accompany
+runtime metrics. The tested Railway port range contained only 6,000 ports; long-lived streams
+need room for ordinary requests and connection churn as well as application admission slots.
+
+Reliability ramps in `--connectBatch` groups and warms the business pool before measured reads.
+It saves minute checkpoints and partial progress on failure. Its crash command kills only the
+named synthetic child and restarts it against the same synthetic volume. Session revocation is
+last and invalidates the first fixture account's saved session; re-seed a disposable fixture before
+repeating after a fully completed run. An interrupted report without a finish time is incomplete.
+A passed short trial does not establish a sustained capacity guarantee; retain failed and
+interrupted trials alongside successful ones.
