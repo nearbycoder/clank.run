@@ -225,13 +225,18 @@ export function parseDeploymentConfig(value: unknown): DeploymentConfig {
   const rawEnv = source.env === undefined ? {} : object(source.env, "env");
   const env = Object.create(null) as Record<string, string>;
   for (const [name, raw] of Object.entries(rawEnv)) {
+    const capacityMaximum = name === "CLANK_AUTH_CONCURRENCY" ? 16
+      : name === "CLANK_AUTH_MAX_QUEUE" ? 128 : name === "CLANK_MAX_LIVE_CONNECTIONS" ? 20_000 : null;
     if (!SAFE_ENV_NAME.test(name)
-      || name.startsWith("CLANK_")
+      || (name.startsWith("CLANK_") && capacityMaximum === null)
       || name.startsWith("PROACT_")
       || ["PORT", "NODE_OPTIONS", "PATH", "HOME", "HOST", "TRUST_PROXY", "NODE_ENV", "ALLOWED_HOSTS"].includes(name)) {
       throw new Error(`Environment name ${name} is reserved or invalid.`);
     }
     const value = string(raw, `env.${name}`);
+    if (capacityMaximum !== null && (!/^[1-9][0-9]*$/.test(value) || Number(value) > capacityMaximum)) {
+      throw new Error(`Environment ${name} must be an integer from 1 to ${capacityMaximum}.`);
+    }
     if (value.length > 16_384 || value.includes("\0")) throw new Error(`Environment value ${name} is too large or invalid.`);
     env[name] = value;
   }

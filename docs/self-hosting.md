@@ -33,6 +33,8 @@ configured worker/scheduler processes for each active project.
 | `CLANK_STRIPE_WEBHOOK_SECRET` | none | Verify exact raw Stripe webhook bodies |
 | `CLANK_STRIPE_API_VERSION` | account default | Optional operator-tested Stripe API-version pin |
 | `CLANK_HOSTING_PROFILE` | `isolated` in production; `trusted` otherwise | Declared application trust boundary |
+| `CLANK_AUTH_CONCURRENCY` | `2` | Concurrent platform password hashes, bounded to 1–16; hash strength is unchanged |
+| `CLANK_AUTH_MAX_QUEUE` | `16` | Waiting platform password operations, bounded to 1–128; overload returns `503 AUTH_BUSY` |
 | `CLANK_RUNNER` | selected by hosting profile | `process` or `docker` |
 | `CLANK_DOCKER_IMAGE` | Node image | Pin by digest in production |
 | `CLANK_APP_MEMORY` | `512m` | Container memory |
@@ -130,6 +132,29 @@ limited. The transfer ledger includes request bodies and only responses with a d
 edge. See [Usage accounting and traffic limits](usage-and-limits.md).
 
 ## Choose the hosting trust boundary
+
+For a larger trusted deployment, benchmark `CLANK_AUTH_CONCURRENCY=8` with
+`CLANK_AUTH_MAX_QUEUE=32` and `UV_THREADPOOL_SIZE=16` before adopting it. The libuv thread pool
+is configured when Node starts; raising the auth queue alone does not add throughput. Each
+default-cost password hash needs approximately 128 MiB, and CPU/memory bandwidth can limit
+scaling. Keep authentication admission bounded and measure peak login demand separately from
+already-authenticated request traffic. The programmatic equivalents are
+`openPlatform({ authentication: { concurrency: 8, maxQueue: 32 }, ... })`.
+
+Hosted applications can opt into the same authentication bounds and a higher live-connection
+limit through `clank.deploy.json`:
+
+```json
+{ "env": { "CLANK_AUTH_CONCURRENCY": "8", "CLANK_AUTH_MAX_QUEUE": "32",
+  "CLANK_MAX_LIVE_CONNECTIONS": "6000", "UV_THREADPOOL_SIZE": "16" } }
+```
+
+Merge this `env` fragment into the application's existing deployment configuration. These three
+bounded capacity names are the only application-configurable exceptions to the reserved `CLANK_`
+namespace. Live connections accept 1–20,000; the unchanged default is 1,000. Explicit
+`defineAuth({ password: ... })` and `openBackend(definition, { maxLiveConnections: ... })` options take
+precedence. Size the container's memory/CPU for the selected values and verify a representative
+load before adoption; an eight-hash burst alone can exceed a default 512 MiB application container.
 
 Clank makes the application-code boundary explicit before it opens storage or starts listening:
 

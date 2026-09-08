@@ -1797,7 +1797,7 @@ export async function openBackend<
   const maxResponseBytes = positiveIntegerOption(options.maxResponseBytes ?? 4 * 1024 * 1024, "maxResponseBytes");
   const maxLiveArgumentBytes = positiveIntegerOption(options.maxLiveArgumentBytes ?? 8 * 1024, "maxLiveArgumentBytes");
   const maxLivePayloadBytes = positiveIntegerOption(options.maxLivePayloadBytes ?? 4 * 1024 * 1024, "maxLivePayloadBytes");
-  const maxLiveConnections = positiveIntegerOption(options.maxLiveConnections ?? 1_000, "maxLiveConnections");
+  const maxLiveConnections = positiveIntegerOption(options.maxLiveConnections ?? liveConnectionEnvironment(), "maxLiveConnections");
   const maxCacheEntries = positiveIntegerOption(options.maxCacheEntries ?? 1_000, "maxCacheEntries");
   const prefix = `/${trimBoundarySlashes(options.prefix ?? "__clank")}`;
   const agentOptions = options.agent === false ? null : options.agent ?? {};
@@ -3143,6 +3143,15 @@ function nonNegativeInteger(value: number, name: string): number {
 function positiveIntegerOption(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`${name} must be a positive integer.`);
   return value;
+}
+
+function liveConnectionEnvironment(): number {
+  const value = (globalThis as any).process?.env?.CLANK_MAX_LIVE_CONNECTIONS;
+  if (value === undefined) return 1_000;
+  if (!/^[1-9][0-9]*$/.test(value) || Number(value) > 20_000) {
+    throw new TypeError("CLANK_MAX_LIVE_CONNECTIONS must be an integer from 1 to 20000.");
+  }
+  return Number(value);
 }
 
 function validatedExpectedVersion(value: number | undefined): number | undefined {
