@@ -152,8 +152,9 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(JSON.stringify(result));
     } catch (error) {
-      res.writeHead(500);
-      res.end(JSON.stringify({ error: String(error) }));
+      console.error('Synthetic control operation failed', error);
+      res.writeHead(500, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ error: 'Synthetic control operation failed' }));
     }
     return;
   }
