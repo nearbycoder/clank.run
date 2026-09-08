@@ -1,6 +1,6 @@
 {
   "name": "@clank.run/framework",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, deployment, and a complete headless UI library.",
   "homepage": "https://docs.clank.run",
   "bugs": {
@@ -20,153 +20,530 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    "./bookmarks": { "types": "./dist/bookmarks.d.ts", "import": "./dist/bookmarks.js" },
-
-    "./activity": { "types": "./dist/activity.d.ts", "import": "./dist/activity.js" },
-
-    "./feedback": { "types": "./dist/feedback.d.ts", "import": "./dist/feedback.js" },
-
-    "./availability": { "types": "./dist/availability.d.ts", "import": "./dist/availability.js" },
-
-    "./dashboard-layouts": { "types": "./dist/dashboard-layouts.d.ts", "import": "./dist/dashboard-layouts.js" },
-    "./labels": { "types": "./dist/labels.d.ts", "import": "./dist/labels.js" },
-
-    "./checklists": { "types": "./dist/checklists.d.ts", "import": "./dist/checklists.js" },
-
-    "./reminders": { "types": "./dist/reminders.d.ts", "import": "./dist/reminders.js" },
-
-    "./drafts": { "types": "./dist/drafts.d.ts", "import": "./dist/drafts.js" },
-
-    "./undo-history": { "types": "./dist/undo-history.d.ts", "import": "./dist/undo-history.js" },
-
-    "./command-palette": { "types": "./dist/command-palette.d.ts", "import": "./dist/command-palette.js" },
-
-    "./shortcuts": { "types": "./dist/shortcuts.d.ts", "import": "./dist/shortcuts.js" },
-
-    "./tours": { "types": "./dist/tours.d.ts", "import": "./dist/tours.js" },
-    "./csv-export": { "types": "./dist/csv-export.d.ts", "import": "./dist/csv-export.js" },
-    "./recycle-bin": { "types": "./dist/recycle-bin.d.ts", "import": "./dist/recycle-bin.js" },
-
-    "./record-history": { "types": "./dist/record-history.d.ts", "import": "./dist/record-history.js" },
-
-    "./comments": { "types": "./dist/comments.d.ts", "import": "./dist/comments.js" },
-    "./saved-views": { "types": "./dist/saved-views.d.ts", "import": "./dist/saved-views.js" },
-    "./local-search": { "types": "./dist/local-search.d.ts", "import": "./dist/local-search.js" },
-    "./csv-import": { "types": "./dist/csv-import.d.ts", "import": "./dist/csv-import.js" },
-    "./error-inbox": { "types": "./dist/error-inbox.d.ts", "import": "./dist/error-inbox.js" },
-    "./live-resume": { "types": "./dist/live-resume.d.ts", "import": "./dist/live-resume.js" },
-    "./resilience": { "types": "./dist/resilience.d.ts", "import": "./dist/resilience.js" },
-    "./contract-compatibility": { "types": "./dist/contract-compatibility.d.ts", "import": "./dist/contract-compatibility.js" },
-    "./virtual-collections": { "types": "./dist/virtual-collections.d.ts", "import": "./dist/virtual-collections.js" },
-    "./webhook-outbox": { "types": "./dist/webhook-outbox.d.ts", "import": "./dist/webhook-outbox.js" },
-    "./application-performance": { "types": "./dist/application-performance.d.ts", "import": "./dist/application-performance.js" },
-    "./query-advisor": { "types": "./dist/query-advisor.d.ts", "import": "./dist/query-advisor.js" },
+    "./bookmarks": {
+      "types": "./dist/bookmarks.d.ts",
+      "import": "./dist/bookmarks.js"
+    },
+    "./activity": {
+      "types": "./dist/activity.d.ts",
+      "import": "./dist/activity.js"
+    },
+    "./feedback": {
+      "types": "./dist/feedback.d.ts",
+      "import": "./dist/feedback.js"
+    },
+    "./availability": {
+      "types": "./dist/availability.d.ts",
+      "import": "./dist/availability.js"
+    },
+    "./dashboard-layouts": {
+      "types": "./dist/dashboard-layouts.d.ts",
+      "import": "./dist/dashboard-layouts.js"
+    },
+    "./labels": {
+      "types": "./dist/labels.d.ts",
+      "import": "./dist/labels.js"
+    },
+    "./checklists": {
+      "types": "./dist/checklists.d.ts",
+      "import": "./dist/checklists.js"
+    },
+    "./reminders": {
+      "types": "./dist/reminders.d.ts",
+      "import": "./dist/reminders.js"
+    },
+    "./drafts": {
+      "types": "./dist/drafts.d.ts",
+      "import": "./dist/drafts.js"
+    },
+    "./undo-history": {
+      "types": "./dist/undo-history.d.ts",
+      "import": "./dist/undo-history.js"
+    },
+    "./command-palette": {
+      "types": "./dist/command-palette.d.ts",
+      "import": "./dist/command-palette.js"
+    },
+    "./shortcuts": {
+      "types": "./dist/shortcuts.d.ts",
+      "import": "./dist/shortcuts.js"
+    },
+    "./tours": {
+      "types": "./dist/tours.d.ts",
+      "import": "./dist/tours.js"
+    },
+    "./csv-export": {
+      "types": "./dist/csv-export.d.ts",
+      "import": "./dist/csv-export.js"
+    },
+    "./recycle-bin": {
+      "types": "./dist/recycle-bin.d.ts",
+      "import": "./dist/recycle-bin.js"
+    },
+    "./record-history": {
+      "types": "./dist/record-history.d.ts",
+      "import": "./dist/record-history.js"
+    },
+    "./comments": {
+      "types": "./dist/comments.d.ts",
+      "import": "./dist/comments.js"
+    },
+    "./saved-views": {
+      "types": "./dist/saved-views.d.ts",
+      "import": "./dist/saved-views.js"
+    },
+    "./local-search": {
+      "types": "./dist/local-search.d.ts",
+      "import": "./dist/local-search.js"
+    },
+    "./csv-import": {
+      "types": "./dist/csv-import.d.ts",
+      "import": "./dist/csv-import.js"
+    },
+    "./error-inbox": {
+      "types": "./dist/error-inbox.d.ts",
+      "import": "./dist/error-inbox.js"
+    },
+    "./live-resume": {
+      "types": "./dist/live-resume.d.ts",
+      "import": "./dist/live-resume.js"
+    },
+    "./resilience": {
+      "types": "./dist/resilience.d.ts",
+      "import": "./dist/resilience.js"
+    },
+    "./contract-compatibility": {
+      "types": "./dist/contract-compatibility.d.ts",
+      "import": "./dist/contract-compatibility.js"
+    },
+    "./virtual-collections": {
+      "types": "./dist/virtual-collections.d.ts",
+      "import": "./dist/virtual-collections.js"
+    },
+    "./webhook-outbox": {
+      "types": "./dist/webhook-outbox.d.ts",
+      "import": "./dist/webhook-outbox.js"
+    },
+    "./application-performance": {
+      "types": "./dist/application-performance.d.ts",
+      "import": "./dist/application-performance.js"
+    },
+    "./query-advisor": {
+      "types": "./dist/query-advisor.d.ts",
+      "import": "./dist/query-advisor.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./trace-timeline": { "types": "./dist/trace-timeline.d.ts", "import": "./dist/trace-timeline.js" },
-    "./offline": { "types": "./dist/offline.d.ts", "import": "./dist/offline.js" },
-    "./preview-fixtures": { "types": "./dist/preview-fixtures.d.ts", "import": "./dist/preview-fixtures.js" },
-    "./agent-activity": { "types": "./dist/agent-activity.d.ts", "import": "./dist/agent-activity.js" },
-    "./notifications": { "types": "./dist/notifications.d.ts", "import": "./dist/notifications.js" },
-    "./rehearsal": { "types": "./dist/rehearsal.d.ts", "import": "./dist/rehearsal.js" },
-    "./devtools": { "types": "./dist/devtools.d.ts", "import": "./dist/devtools.js" },
-    "./core": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },
-    "./task": { "types": "./dist/task.d.ts", "import": "./dist/task.js" },
-    "./dom": { "types": "./dist/dom.d.ts", "import": "./dist/dom.js" },
-    "./router": { "types": "./dist/router.d.ts", "import": "./dist/router.js" },
-    "./ai": { "types": "./dist/ai.d.ts", "import": "./dist/ai.js" },
-    "./agent-contract": { "types": "./dist/agent-contract.d.ts", "import": "./dist/agent-contract.js" },
-    "./mcp": { "types": "./dist/mcp.d.ts", "import": "./dist/mcp.js" },
-    "./mcp-app": { "types": "./dist/mcp-app.d.ts", "import": "./dist/mcp-app.js" },
-    "./blueprint": { "types": "./dist/blueprint.d.ts", "import": "./dist/blueprint.js" },
-    "./blueprint-registry": { "types": "./dist/blueprint-registry.d.ts", "import": "./dist/blueprint-registry.js" },
-    "./webauthn": { "types": "./dist/webauthn.d.ts", "import": "./dist/webauthn.js" },
-    "./services": { "types": "./dist/services.d.ts", "import": "./dist/services.js" },
-    "./object-storage": { "types": "./dist/object-storage.d.ts", "import": "./dist/object-storage.js" },
-    "./buckets": { "types": "./dist/buckets.d.ts", "import": "./dist/buckets.js" },
-    "./observability": { "types": "./dist/observability.d.ts", "import": "./dist/observability.js" },
-    "./recovery": { "types": "./dist/recovery.d.ts", "import": "./dist/recovery.js" },
-    "./orchestration": { "types": "./dist/orchestration.d.ts", "import": "./dist/orchestration.js" },
-    "./runner": { "types": "./dist/runner.d.ts", "import": "./dist/runner.js" },
-    "./provider": { "types": "./dist/provider.d.ts", "import": "./dist/provider.js" },
-    "./runtime-placement": { "types": "./dist/runtime-placement.d.ts", "import": "./dist/runtime-placement.js" },
-    "./provider-data": { "types": "./dist/provider-data.d.ts", "import": "./dist/provider-data.js" },
-    "./provider-runtime": { "types": "./dist/provider-runtime.d.ts", "import": "./dist/provider-runtime.js" },
-    "./provider-docker": { "types": "./dist/provider-docker.d.ts", "import": "./dist/provider-docker.js" },
-    "./provider-service": { "types": "./dist/provider-service.d.ts", "import": "./dist/provider-service.js" },
-    "./data-plane": { "types": "./dist/data-plane.d.ts", "import": "./dist/data-plane.js" },
-    "./forms": { "types": "./dist/forms.d.ts", "import": "./dist/forms.js" },
-    "./ui": { "types": "./dist/ui.d.ts", "import": "./dist/ui.js" },
-    "./ui/foundation": { "types": "./dist/ui-foundation.d.ts", "import": "./dist/ui-foundation.js" },
-    "./ui/composition": { "types": "./dist/ui-composition.d.ts", "import": "./dist/ui-composition.js" },
-    "./ui/overlay": { "types": "./dist/ui-overlay.d.ts", "import": "./dist/ui-overlay.js" },
-    "./ui/popups": { "types": "./dist/ui-popups.d.ts", "import": "./dist/ui-popups.js" },
-    "./ui/controls": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/selection": { "types": "./dist/ui-selection.d.ts", "import": "./dist/ui-selection.js" },
-    "./ui/collections": { "types": "./dist/ui-collections.d.ts", "import": "./dist/ui-collections.js" },
-    "./ui/fields": { "types": "./dist/ui-fields.d.ts", "import": "./dist/ui-fields.js" },
-    "./ui/utilities": { "types": "./dist/ui-utilities.d.ts", "import": "./dist/ui-utilities.js" },
-    "./ui/catalog": { "types": "./dist/ui-catalog.d.ts", "import": "./dist/ui-catalog.js" },
-    "./ui/theme": { "types": "./dist/ui-theme.d.ts", "import": "./dist/ui-theme.js" },
-    "./ui/legacy": { "types": "./dist/ui-legacy.d.ts", "import": "./dist/ui-legacy.js" },
-    "./ui/accordion": { "types": "./dist/ui-collections.d.ts", "import": "./dist/ui-collections.js" },
-    "./ui/alert-dialog": { "types": "./dist/ui-popups.d.ts", "import": "./dist/ui-popups.js" },
-    "./ui/autocomplete": { "types": "./dist/ui-selection.d.ts", "import": "./dist/ui-selection.js" },
-    "./ui/avatar": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/bottom-sheet": { "types": "./dist/ui-popups.d.ts", "import": "./dist/ui-popups.js" },
-    "./ui/button": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/checkbox": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/checkbox-group": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/collapsible": { "types": "./dist/ui-popups.d.ts", "import": "./dist/ui-popups.js" },
-    "./ui/combobox": { "types": "./dist/ui-selection.d.ts", "import": "./dist/ui-selection.js" },
-    "./ui/context-menu": { "types": "./dist/ui-collections.d.ts", "import": "./dist/ui-collections.js" },
-    "./ui/dialog": { "types": "./dist/ui-popups.d.ts", "import": "./dist/ui-popups.js" },
-    "./ui/drawer": { "types": "./dist/ui-popups.d.ts", "import": "./dist/ui-popups.js" },
-    "./ui/field": { "types": "./dist/ui-fields.d.ts", "import": "./dist/ui-fields.js" },
-    "./ui/fieldset": { "types": "./dist/ui-fields.d.ts", "import": "./dist/ui-fields.js" },
-    "./ui/form": { "types": "./dist/ui-fields.d.ts", "import": "./dist/ui-fields.js" },
-    "./ui/input": { "types": "./dist/ui-fields.d.ts", "import": "./dist/ui-fields.js" },
-    "./ui/menu": { "types": "./dist/ui-collections.d.ts", "import": "./dist/ui-collections.js" },
-    "./ui/menubar": { "types": "./dist/ui-collections.d.ts", "import": "./dist/ui-collections.js" },
-    "./ui/meter": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/navigation-menu": { "types": "./dist/ui-collections.d.ts", "import": "./dist/ui-collections.js" },
-    "./ui/number-field": { "types": "./dist/ui-fields.d.ts", "import": "./dist/ui-fields.js" },
-    "./ui/otp-field": { "types": "./dist/ui-fields.d.ts", "import": "./dist/ui-fields.js" },
-    "./ui/pagination": { "types": "./dist/ui-legacy.d.ts", "import": "./dist/ui-legacy.js" },
-    "./ui/popover": { "types": "./dist/ui-popups.d.ts", "import": "./dist/ui-popups.js" },
-    "./ui/preview-card": { "types": "./dist/ui-popups.d.ts", "import": "./dist/ui-popups.js" },
-    "./ui/progress": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/radio": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/scroll-area": { "types": "./dist/ui-utilities.d.ts", "import": "./dist/ui-utilities.js" },
-    "./ui/select": { "types": "./dist/ui-selection.d.ts", "import": "./dist/ui-selection.js" },
-    "./ui/separator": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/slider": { "types": "./dist/ui-fields.d.ts", "import": "./dist/ui-fields.js" },
-    "./ui/switch": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/tabs": { "types": "./dist/ui-collections.d.ts", "import": "./dist/ui-collections.js" },
-    "./ui/toast": { "types": "./dist/ui-utilities.d.ts", "import": "./dist/ui-utilities.js" },
-    "./ui/toggle": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/toggle-group": { "types": "./dist/ui-controls.d.ts", "import": "./dist/ui-controls.js" },
-    "./ui/toolbar": { "types": "./dist/ui-collections.d.ts", "import": "./dist/ui-collections.js" },
-    "./ui/tooltip": { "types": "./dist/ui-popups.d.ts", "import": "./dist/ui-popups.js" },
-    "./server": { "types": "./dist/server.d.ts", "import": "./dist/server.js" },
-    "./auth": { "types": "./dist/auth.d.ts", "import": "./dist/auth.js" },
-    "./backend": { "types": "./dist/backend.d.ts", "import": "./dist/backend.js" },
-    "./deploy": { "types": "./dist/deploy.d.ts", "import": "./dist/deploy.js" },
-    "./migrations": { "types": "./dist/migrations.d.ts", "import": "./dist/migrations.js" },
-    "./jobs": { "types": "./dist/jobs.d.ts", "import": "./dist/jobs.js" },
-    "./durable-objects": { "types": "./dist/durable-objects.d.ts", "import": "./dist/durable-objects.js" },
-    "./journey": { "types": "./dist/journey.d.ts", "import": "./dist/journey.js" },
-    "./collaboration": { "types": "./dist/collaboration.d.ts", "import": "./dist/collaboration.js" },
-    "./analytics": { "types": "./dist/analytics.d.ts", "import": "./dist/analytics.js" },
-    "./governance": { "types": "./dist/governance.d.ts", "import": "./dist/governance.js" },
-    "./lifecycle": { "types": "./dist/lifecycle.d.ts", "import": "./dist/lifecycle.js" },
-    "./tooling": { "types": "./dist/tooling.d.ts", "import": "./dist/tooling.js" },
-    "./billing": { "types": "./dist/billing.d.ts", "import": "./dist/billing.js" },
-    "./platform": { "types": "./dist/platform.d.ts", "import": "./dist/platform.js" },
-    "./ssr": { "types": "./dist/ssr.d.ts", "import": "./dist/ssr.js" },
-    "./node": { "types": "./dist/node.d.ts", "import": "./dist/node.js" },
+    "./trace-timeline": {
+      "types": "./dist/trace-timeline.d.ts",
+      "import": "./dist/trace-timeline.js"
+    },
+    "./offline": {
+      "types": "./dist/offline.d.ts",
+      "import": "./dist/offline.js"
+    },
+    "./preview-fixtures": {
+      "types": "./dist/preview-fixtures.d.ts",
+      "import": "./dist/preview-fixtures.js"
+    },
+    "./agent-activity": {
+      "types": "./dist/agent-activity.d.ts",
+      "import": "./dist/agent-activity.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications.d.ts",
+      "import": "./dist/notifications.js"
+    },
+    "./rehearsal": {
+      "types": "./dist/rehearsal.d.ts",
+      "import": "./dist/rehearsal.js"
+    },
+    "./devtools": {
+      "types": "./dist/devtools.d.ts",
+      "import": "./dist/devtools.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./task": {
+      "types": "./dist/task.d.ts",
+      "import": "./dist/task.js"
+    },
+    "./dom": {
+      "types": "./dist/dom.d.ts",
+      "import": "./dist/dom.js"
+    },
+    "./router": {
+      "types": "./dist/router.d.ts",
+      "import": "./dist/router.js"
+    },
+    "./ai": {
+      "types": "./dist/ai.d.ts",
+      "import": "./dist/ai.js"
+    },
+    "./agent-contract": {
+      "types": "./dist/agent-contract.d.ts",
+      "import": "./dist/agent-contract.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    },
+    "./mcp-app": {
+      "types": "./dist/mcp-app.d.ts",
+      "import": "./dist/mcp-app.js"
+    },
+    "./blueprint": {
+      "types": "./dist/blueprint.d.ts",
+      "import": "./dist/blueprint.js"
+    },
+    "./blueprint-registry": {
+      "types": "./dist/blueprint-registry.d.ts",
+      "import": "./dist/blueprint-registry.js"
+    },
+    "./webauthn": {
+      "types": "./dist/webauthn.d.ts",
+      "import": "./dist/webauthn.js"
+    },
+    "./services": {
+      "types": "./dist/services.d.ts",
+      "import": "./dist/services.js"
+    },
+    "./object-storage": {
+      "types": "./dist/object-storage.d.ts",
+      "import": "./dist/object-storage.js"
+    },
+    "./buckets": {
+      "types": "./dist/buckets.d.ts",
+      "import": "./dist/buckets.js"
+    },
+    "./observability": {
+      "types": "./dist/observability.d.ts",
+      "import": "./dist/observability.js"
+    },
+    "./recovery": {
+      "types": "./dist/recovery.d.ts",
+      "import": "./dist/recovery.js"
+    },
+    "./orchestration": {
+      "types": "./dist/orchestration.d.ts",
+      "import": "./dist/orchestration.js"
+    },
+    "./runner": {
+      "types": "./dist/runner.d.ts",
+      "import": "./dist/runner.js"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.ts",
+      "import": "./dist/provider.js"
+    },
+    "./runtime-placement": {
+      "types": "./dist/runtime-placement.d.ts",
+      "import": "./dist/runtime-placement.js"
+    },
+    "./provider-data": {
+      "types": "./dist/provider-data.d.ts",
+      "import": "./dist/provider-data.js"
+    },
+    "./provider-runtime": {
+      "types": "./dist/provider-runtime.d.ts",
+      "import": "./dist/provider-runtime.js"
+    },
+    "./provider-docker": {
+      "types": "./dist/provider-docker.d.ts",
+      "import": "./dist/provider-docker.js"
+    },
+    "./provider-service": {
+      "types": "./dist/provider-service.d.ts",
+      "import": "./dist/provider-service.js"
+    },
+    "./data-plane": {
+      "types": "./dist/data-plane.d.ts",
+      "import": "./dist/data-plane.js"
+    },
+    "./forms": {
+      "types": "./dist/forms.d.ts",
+      "import": "./dist/forms.js"
+    },
+    "./ui": {
+      "types": "./dist/ui.d.ts",
+      "import": "./dist/ui.js"
+    },
+    "./ui/foundation": {
+      "types": "./dist/ui-foundation.d.ts",
+      "import": "./dist/ui-foundation.js"
+    },
+    "./ui/composition": {
+      "types": "./dist/ui-composition.d.ts",
+      "import": "./dist/ui-composition.js"
+    },
+    "./ui/overlay": {
+      "types": "./dist/ui-overlay.d.ts",
+      "import": "./dist/ui-overlay.js"
+    },
+    "./ui/popups": {
+      "types": "./dist/ui-popups.d.ts",
+      "import": "./dist/ui-popups.js"
+    },
+    "./ui/controls": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/selection": {
+      "types": "./dist/ui-selection.d.ts",
+      "import": "./dist/ui-selection.js"
+    },
+    "./ui/collections": {
+      "types": "./dist/ui-collections.d.ts",
+      "import": "./dist/ui-collections.js"
+    },
+    "./ui/fields": {
+      "types": "./dist/ui-fields.d.ts",
+      "import": "./dist/ui-fields.js"
+    },
+    "./ui/utilities": {
+      "types": "./dist/ui-utilities.d.ts",
+      "import": "./dist/ui-utilities.js"
+    },
+    "./ui/catalog": {
+      "types": "./dist/ui-catalog.d.ts",
+      "import": "./dist/ui-catalog.js"
+    },
+    "./ui/theme": {
+      "types": "./dist/ui-theme.d.ts",
+      "import": "./dist/ui-theme.js"
+    },
+    "./ui/legacy": {
+      "types": "./dist/ui-legacy.d.ts",
+      "import": "./dist/ui-legacy.js"
+    },
+    "./ui/accordion": {
+      "types": "./dist/ui-collections.d.ts",
+      "import": "./dist/ui-collections.js"
+    },
+    "./ui/alert-dialog": {
+      "types": "./dist/ui-popups.d.ts",
+      "import": "./dist/ui-popups.js"
+    },
+    "./ui/autocomplete": {
+      "types": "./dist/ui-selection.d.ts",
+      "import": "./dist/ui-selection.js"
+    },
+    "./ui/avatar": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/bottom-sheet": {
+      "types": "./dist/ui-popups.d.ts",
+      "import": "./dist/ui-popups.js"
+    },
+    "./ui/button": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/checkbox": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/checkbox-group": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/collapsible": {
+      "types": "./dist/ui-popups.d.ts",
+      "import": "./dist/ui-popups.js"
+    },
+    "./ui/combobox": {
+      "types": "./dist/ui-selection.d.ts",
+      "import": "./dist/ui-selection.js"
+    },
+    "./ui/context-menu": {
+      "types": "./dist/ui-collections.d.ts",
+      "import": "./dist/ui-collections.js"
+    },
+    "./ui/dialog": {
+      "types": "./dist/ui-popups.d.ts",
+      "import": "./dist/ui-popups.js"
+    },
+    "./ui/drawer": {
+      "types": "./dist/ui-popups.d.ts",
+      "import": "./dist/ui-popups.js"
+    },
+    "./ui/field": {
+      "types": "./dist/ui-fields.d.ts",
+      "import": "./dist/ui-fields.js"
+    },
+    "./ui/fieldset": {
+      "types": "./dist/ui-fields.d.ts",
+      "import": "./dist/ui-fields.js"
+    },
+    "./ui/form": {
+      "types": "./dist/ui-fields.d.ts",
+      "import": "./dist/ui-fields.js"
+    },
+    "./ui/input": {
+      "types": "./dist/ui-fields.d.ts",
+      "import": "./dist/ui-fields.js"
+    },
+    "./ui/menu": {
+      "types": "./dist/ui-collections.d.ts",
+      "import": "./dist/ui-collections.js"
+    },
+    "./ui/menubar": {
+      "types": "./dist/ui-collections.d.ts",
+      "import": "./dist/ui-collections.js"
+    },
+    "./ui/meter": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/navigation-menu": {
+      "types": "./dist/ui-collections.d.ts",
+      "import": "./dist/ui-collections.js"
+    },
+    "./ui/number-field": {
+      "types": "./dist/ui-fields.d.ts",
+      "import": "./dist/ui-fields.js"
+    },
+    "./ui/otp-field": {
+      "types": "./dist/ui-fields.d.ts",
+      "import": "./dist/ui-fields.js"
+    },
+    "./ui/pagination": {
+      "types": "./dist/ui-legacy.d.ts",
+      "import": "./dist/ui-legacy.js"
+    },
+    "./ui/popover": {
+      "types": "./dist/ui-popups.d.ts",
+      "import": "./dist/ui-popups.js"
+    },
+    "./ui/preview-card": {
+      "types": "./dist/ui-popups.d.ts",
+      "import": "./dist/ui-popups.js"
+    },
+    "./ui/progress": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/radio": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/scroll-area": {
+      "types": "./dist/ui-utilities.d.ts",
+      "import": "./dist/ui-utilities.js"
+    },
+    "./ui/select": {
+      "types": "./dist/ui-selection.d.ts",
+      "import": "./dist/ui-selection.js"
+    },
+    "./ui/separator": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/slider": {
+      "types": "./dist/ui-fields.d.ts",
+      "import": "./dist/ui-fields.js"
+    },
+    "./ui/switch": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/tabs": {
+      "types": "./dist/ui-collections.d.ts",
+      "import": "./dist/ui-collections.js"
+    },
+    "./ui/toast": {
+      "types": "./dist/ui-utilities.d.ts",
+      "import": "./dist/ui-utilities.js"
+    },
+    "./ui/toggle": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/toggle-group": {
+      "types": "./dist/ui-controls.d.ts",
+      "import": "./dist/ui-controls.js"
+    },
+    "./ui/toolbar": {
+      "types": "./dist/ui-collections.d.ts",
+      "import": "./dist/ui-collections.js"
+    },
+    "./ui/tooltip": {
+      "types": "./dist/ui-popups.d.ts",
+      "import": "./dist/ui-popups.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./auth": {
+      "types": "./dist/auth.d.ts",
+      "import": "./dist/auth.js"
+    },
+    "./backend": {
+      "types": "./dist/backend.d.ts",
+      "import": "./dist/backend.js"
+    },
+    "./deploy": {
+      "types": "./dist/deploy.d.ts",
+      "import": "./dist/deploy.js"
+    },
+    "./migrations": {
+      "types": "./dist/migrations.d.ts",
+      "import": "./dist/migrations.js"
+    },
+    "./jobs": {
+      "types": "./dist/jobs.d.ts",
+      "import": "./dist/jobs.js"
+    },
+    "./durable-objects": {
+      "types": "./dist/durable-objects.d.ts",
+      "import": "./dist/durable-objects.js"
+    },
+    "./journey": {
+      "types": "./dist/journey.d.ts",
+      "import": "./dist/journey.js"
+    },
+    "./collaboration": {
+      "types": "./dist/collaboration.d.ts",
+      "import": "./dist/collaboration.js"
+    },
+    "./analytics": {
+      "types": "./dist/analytics.d.ts",
+      "import": "./dist/analytics.js"
+    },
+    "./governance": {
+      "types": "./dist/governance.d.ts",
+      "import": "./dist/governance.js"
+    },
+    "./lifecycle": {
+      "types": "./dist/lifecycle.d.ts",
+      "import": "./dist/lifecycle.js"
+    },
+    "./tooling": {
+      "types": "./dist/tooling.d.ts",
+      "import": "./dist/tooling.js"
+    },
+    "./billing": {
+      "types": "./dist/billing.d.ts",
+      "import": "./dist/billing.js"
+    },
+    "./platform": {
+      "types": "./dist/platform.d.ts",
+      "import": "./dist/platform.js"
+    },
+    "./ssr": {
+      "types": "./dist/ssr.d.ts",
+      "import": "./dist/ssr.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    },
     "./compiler": {
       "types": "./scripts/compiler.d.mts",
       "import": "./scripts/compiler.mjs"
