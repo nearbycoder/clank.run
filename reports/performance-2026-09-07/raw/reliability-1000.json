@@ -1,0 +1,103 @@
+{
+  "protocol": "clank-load-reliability/1",
+  "users": 1000,
+  "connections": 1001,
+  "liveLimit": 1000,
+  "scenarios": [
+    {
+      "name": "Live connection admission and idle residency",
+      "accepted": 1000,
+      "rejected": 2,
+      "connectMs": 5493.677168,
+      "emptyRss": 124252160,
+      "metrics": {
+        "rss": 188444672,
+        "peakRss": 188444672,
+        "heapUsed": 53242224,
+        "cpuPercent": 9.974772490428832,
+        "eventLoopP99Ms": 21.757951,
+        "eventLoopMaxMs": 29.917183,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 1000,
+            "cacheHits": 1000,
+            "durationMs": 0.0575579999999718,
+            "lastInvalidation": null,
+            "cachedEntries": 1000,
+            "subscriptions": 1000
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "name": "Live update soak",
+      "seconds": 60,
+      "writes": 1200,
+      "deliveryP95Ms": 24.704303999998956,
+      "writeP95Ms": 24.56123900000057,
+      "prematureClosures": 0,
+      "metrics": {
+        "rss": 206712832,
+        "peakRss": 228290560,
+        "heapUsed": 39226168,
+        "cpuPercent": 4.578849010775518,
+        "eventLoopP99Ms": 15.515647,
+        "eventLoopMaxMs": 32.325631,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 2200,
+            "cacheHits": 1000,
+            "durationMs": 0.07529800000338582,
+            "lastInvalidation": "items",
+            "cachedEntries": 1000,
+            "subscriptions": 1000
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "name": "50 simultaneous retries commit exactly once",
+      "passed": true
+    },
+    {
+      "name": "Disconnected live subscriptions released",
+      "metrics": {
+        "rss": 207499264,
+        "peakRss": 207499264,
+        "heapUsed": 22113704,
+        "cpuPercent": 50.249045383859425,
+        "eventLoopP99Ms": 0.000511,
+        "eventLoopMaxMs": 0,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 2201,
+            "cacheHits": 1002,
+            "durationMs": 0.13412699999753386,
+            "lastInvalidation": "items",
+            "cachedEntries": 1000,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "name": "Crash, restart, and ambiguous-write replay",
+      "acknowledgedBeforeCrash": 9,
+      "replayed": 50,
+      "committed": 50,
+      "recoveryMs": 394.86796499999764,
+      "passed": true
+    },
+    {
+      "name": "Session revocation closes live stream and rejects reads",
+      "passed": true
+    }
+  ],
+  "ok": true
+}

@@ -1,6 +1,6 @@
 # Advanced authentication
 
-Clank's advanced authentication features extend the framework's default email/password flow with verification, recovery, MFA, passkeys, bot protection, and distributed rate limits. Authentication uses the application SQLite database. Passwords use bounded scrypt work, session and one-time tokens are stored only as SHA-256 digests, browser sessions use `HttpOnly` and `SameSite=Strict` cookies, and every state-changing browser request requires an origin check plus a session-bound CSRF token.
+Clank's advanced authentication features extend the framework's default email/password flow with verification, recovery, MFA, passkeys, bot protection, and distributed rate limits. Authentication uses the application SQLite database. Passwords use bounded scrypt work, session and one-time tokens are stored only as SHA-256 digests, browser sessions use `HttpOnly` and `SameSite=Lax` cookies by default, and every state-changing browser request requires an origin check plus a session-bound CSRF token. `Lax` lets a top-level MCP OAuth navigation recognize an existing application login without sending the session on a cross-site mutation; applications that never act as an authorization server can opt into `cookie.sameSite: "Strict"`.
 
 ```ts
 import { defineAuth } from "@clank.run/framework/auth";
@@ -108,10 +108,25 @@ required.
 
 When an MCP authorization page is signed out, ordinary password applications
 render a same-origin login form and return directly to consent after successful
-authentication. Form login uses the normal credential verifier and rate
-limits, retains strict Origin and Fetch Metadata checks, and accepts only a
-bounded relative return path. MFA or bot-protected applications keep their
-full application sign-in flow because those policies require additional UI.
+authentication. Form login uses the normal credential verifier and rate limits
+and accepts only a bounded relative return path. The page also receives a random,
+five-minute login proof bound to that exact return path and a private `HttpOnly`,
+`Secure`, `SameSite=None` browser cookie. A cross-origin or opaque-origin form must
+present both values, and Clank consumes the stored proof digest atomically. This
+works through hosted-client sandboxes and proxies that normalize Fetch Metadata
+without trusting those headers alone. Forged, expired, replayed, JSON, unbounded-
+return, and browser-cookie-mismatched requests remain rejected. MFA or bot-
+protected applications keep their full application sign-in flow because those
+policies require additional UI.
+
+Successful `GET /__clank/auth/session` checks reissue the existing session token
+under the application's current cookie policy. This transparently upgrades a
+session created by an older Clank version with `SameSite=Strict` to the default
+`SameSite=Lax` policy after the user visits the application, without changing
+the token or weakening an explicitly configured `Strict` policy. The OAuth
+entry page also performs one automatic same-site recheck before showing login.
+That second navigation lets a browser present a valid legacy Strict cookie even
+when the original authorization link was launched from another site.
 
 For an app deployed by Clank, open the canonical URL reported by `clank status`
 and reload it before retrying. Managed ingress configures the generated runtime

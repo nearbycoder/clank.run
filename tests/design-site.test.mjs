@@ -167,8 +167,9 @@ test("Design Studio serves every real component and theme contract securely", as
   assert.equal(initialized.serverInfo.name, "clank-design");
   assert.ok(session);
   const listed = await mcp("tools/list");
-  assert.deepEqual(listed.tools.map((tool) => tool.name), ["design.component", "design.components", "design.theme", "design.themes"]);
-  const called = await mcp("tools/call", { name: "design.theme", arguments: { id: "midnight" } });
+  assert.deepEqual(listed.tools.map((tool) => tool.name), ["design_component", "design_components", "design_theme", "design_themes"]);
+  assert.deepEqual(listed.tools.map((tool) => tool._meta["clank/actionPath"]), ["design.component", "design.components", "design.theme", "design.themes"]);
+  const called = await mcp("tools/call", { name: "design_theme", arguments: { id: "midnight" } });
   assert.equal(called.structuredContent.theme.id, "midnight");
   assert.equal(Object.keys(called.structuredContent.theme.tokens).length, 32);
 });

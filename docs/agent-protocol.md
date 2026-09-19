@@ -11,8 +11,8 @@ https://your-app.example.com/__clank/mcp
 ```
 
 Give that URL to any remote MCP client that supports Streamable HTTP and OAuth. Clank implements
-the stable `2025-11-25` protocol revision and accepts compatible `2025-06-18` and `2025-03-26`
-clients.
+the stateless `2026-07-28` protocol revision and remains dual-era compatible with `2025-11-25`,
+`2025-06-18`, and `2025-03-26` clients.
 
 ## Why MCP
 
@@ -88,9 +88,14 @@ export const backend = defineBackend({ schema, auth }).functions(
 );
 ```
 
-Clank derives MCP tool names from function paths: `todos.list`, `todos.add`, and `todos.remove`.
-The normal runtime schemas become JSON Schema 2020-12 tool contracts. Query results and mutation
-results include the committed Clank database revision.
+Clank derives portable MCP tool names from function paths: `todos.list`, `todos.add`, and
+`todos.remove` publish as `todos_list`, `todos_add`, and `todos_remove`. Public names contain only
+ASCII letters, numbers, and underscores and never exceed 64 characters, satisfying strict model
+providers such as Anthropic. Overlong names and paths that would collide after replacing `.` or
+`-` receive a stable digest suffix. Each descriptor's `_meta["clank/actionPath"]` and the Clank MCP
+manifest retain the exact original function path. The normal runtime schemas become JSON Schema
+2020-12 tool contracts. Query results and mutation results include the committed Clank database
+revision.
 
 The backend function tree is the single source of truth for both interfaces. Browser code calls
 the same typed query and mutation references that MCP exposes. A UI operation that changes server
@@ -128,12 +133,20 @@ The optional `agent` contract supports:
 - `destructive`: whether a mutation can remove or irreversibly change data;
 - `idempotent`: whether repeating the exact call has no additional effect;
 - `openWorld`: whether the action can communicate outside this application;
+- `app`: an immutable MCP Apps view, or a `{ resource, visibility }` binding for app-only actions;
 - `enabled: false`, or `agent: false`, to omit an internal function.
 
 Queries are always marked read-only and idempotent. Mutations default to destructive as a
 conservative safety hint; mark additive or reversible writes with `destructive: false`.
 Annotations help the MCP client decide when to ask for confirmation, but server authorization
 never trusts an annotation.
+
+When `app` is present, model-visible tools retain `_meta.ui` so stateless hosts such as Codex can
+attach the matching `ui://` document even if they omit a per-request extension hint.
+`resources/read` serves that document with the exact `text/html;profile=mcp-app` MIME type.
+Clients without MCP Apps support safely ignore the metadata and receive the same meaningful text
+and structured result. Negotiation is still required to discover or call app-only tools. See
+[Interactive MCP Apps](mcp-apps.md).
 
 ## Application identity
 
@@ -188,18 +201,27 @@ authorization-code flow:
 
 1. The MCP endpoint returns `401` with an RFC 9728 `resource_metadata` challenge.
 2. The client discovers Clank's authorization and token endpoints.
-3. Unknown public clients register through RFC 7591 dynamic client registration.
+3. Unknown public clients register through RFC 7591 dynamic client registration. This remains a
+   backwards-compatible registration path; Clank does not advertise Client ID Metadata Document
+   support or fetch caller-controlled metadata URLs.
 4. The client starts authorization with PKCE `S256` and the exact MCP resource indicator.
 5. The user signs into the application in the browser and approves the displayed scopes.
 6. Clank returns a short-lived, resource-bound bearer token and a rotating refresh token.
-7. The client sends the bearer token in the `Authorization` header on every MCP request.
+7. The client validates the authorization response issuer and sends the bearer token in the
+   `Authorization` header on every MCP request.
 
 If the authorization page opens while signed out, applications using ordinary password login show
 the same-origin sign-in form directly on the OAuth page and advance to consent automatically.
 Applications that require MFA or custom bot protection link to their full sign-in experience and
 then recheck the session. In both cases credentials go only to the application's normal auth
 endpoint. The agent never receives the password, browser cookie, CSRF token, or application
-session.
+session. Application sessions default to `SameSite=Lax`, so a top-level authorization navigation
+from a hosted client recognizes an existing login; the cookie is still withheld from cross-site
+POST requests, and every application mutation retains exact Origin and session-bound CSRF checks.
+Session checks reissue existing cookies under the current policy, so sessions minted before the
+`Lax` default are upgraded after an authenticated application visit. Authorization also performs
+one same-site recheck before rendering login, allowing a legacy Strict cookie suppressed on the
+initial hosted-client launch to be recognized without looping or changing OAuth parameters.
 
 ### Connect from Codex
 
@@ -232,7 +254,7 @@ ordinary `__clank/query`, `__clank/mutation`, browser-auth, or another domain's 
 Every authenticated app also publishes a server-rendered access inbox at
 `/__clank/oauth/access`. The signed-in application user can inspect active client grants, reduce
 read/write access to read-only, or revoke a complete refresh family. Enforcement happens on the
-next MCP request, including requests in an existing MCP session. The no-store
+next MCP request, including stateless requests and legacy requests carrying a session ID. The no-store
 `/__clank/oauth/grants` JSON contract supports the same management flow for same-origin
 application UI. See [Agent access inbox and scoped grants](agent-access.md).
 
@@ -240,7 +262,7 @@ application UI. See [Agent access inbox and scoped grants](agent-access.md).
 
 Clank uses two deliberately small scopes:
 
-- `agent:read`: initialize MCP, list and read tool documentation, and call queries;
+- `agent:read`: discover MCP, list and read tool documentation, and call queries;
 - `agent:write`: call mutations. A write grant also includes `agent:read`.
 
 A read-only token does not merely fail mutation calls: mutation tools are omitted from
@@ -256,18 +278,30 @@ add authority. Restoring write access requires a fresh authorization flow and ex
 
 ## Transport behavior
 
-Clank uses JSON responses plus bounded stateful sessions over MCP Streamable HTTP for protocol
-revisions through `2025-11-25`. It supports `initialize`, `ping`, `tools/list`, `tools/call`,
-`resources/list`, `resources/read`, standard notifications, session deletion, and an authenticated
-GET SSE stream for server notifications.
+Clank defaults to stateless MCP `2026-07-28` over Streamable HTTP. Every JSON-RPC request is an
+independent POST and carries its protocol version, client identity, and client capabilities in
+`params._meta`. There is no initialization handshake, process-local `MCP-Session-Id`, standalone
+GET event stream, DELETE termination request, or `Last-Event-ID` recovery. A request can land on
+any healthy replica before, during, or after a rolling deployment.
 
-Initialization returns a cryptographically random `MCP-Session-Id`. A compliant client sends it
-on every later request. A missing session gets an explicit reinitialize response rather than
-silently using a possibly stale contract. A rolling deployment activates a new process whose
-session registry cannot accept the old ID, so the next request receives `404`; MCP then requires
-the client to initialize again and rediscover tools. This prevents a long-lived client from
-silently retaining a prior release's action list. Within a live process, Clank advertises
-`tools.listChanged: true` and can send `notifications/tools/list_changed` over the session stream.
+Modern clients may call the required `server/discover` method to retrieve supported revisions,
+capabilities, server identity, instructions, and cache policy, or call `tools/list` directly.
+Every successful modern result includes `resultType: "complete"` and
+`_meta["io.modelcontextprotocol/serverInfo"]`. `Mcp-Method`, `Mcp-Name`, and any schema-declared
+`Mcp-Param-*` headers are checked against the body before a tool is selected or executed; a
+mismatch returns the standard `HeaderMismatch` error (`-32020`). Unknown protocol revisions return
+`UnsupportedProtocolVersionError` (`-32022`) with the supported revision list.
+
+Clank retains the initialization, bounded session, GET stream, and list-change behavior for
+clients speaking revisions through `2025-11-25`. Those compatibility sessions are never used by
+`2026-07-28` requests and do not affect stateless routing.
+
+OAuth-protected application MCP endpoints answer credential-free browser CORS preflights and
+expose the transport, challenge, protocol, session, and contract-revision headers needed by hosted
+clients such as browser inspectors. CORS never enables cookies: the client must send the explicit,
+resource-bound bearer token it received through OAuth. Public applications keep cross-origin
+browser access disabled unless `agent.browserCors: true` is explicitly selected, preventing a web
+page from silently driving an unauthenticated mutation surface.
 
 Every `tools/list` response is deterministic and carries:
 
@@ -276,10 +310,9 @@ Every `tools/list` response is deterministic and carries:
 - `_meta["clank/contractRevision"]` and the `X-Clank-Contract-Revision` response header.
 
 Unknown tool calls return a structured `TOOLS_CHANGED` hint directing the client to refresh
-`tools/list`. Session counts, streams per session, idle lifetime, heartbeat frequency, request
-bytes, response bytes, and authentication remain bounded. Clients first connected to a
-pre-session Clank release should reconnect once after upgrading; subsequent deployments
-invalidate their sessions automatically.
+`tools/list`. Request bytes, response bytes, tool schemas, and authentication remain bounded.
+Legacy session counts, streams per session, idle lifetime, and heartbeat frequency are bounded
+separately. Stateless clients need no reconnect when a request moves to a new replica.
 
 Tool results include both MCP text content and structured content:
 
@@ -305,8 +338,12 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
 
 ## Security properties
 
-- The HTTP `Origin` header is checked when present to prevent DNS-rebinding and browser-origin
-  attacks.
+- Ordinary application and public MCP requests check the HTTP `Origin` header to prevent
+  DNS-rebinding and browser-origin attacks. OAuth-protected MCP transport may be called
+  cross-origin without credentials; authorization depends on an explicit resource-bound bearer
+  token rather than ambient browser cookies.
+- Modern request headers are compared with the JSON-RPC body before authorization or dispatch,
+  preventing a gateway and application from routing and executing different actions.
 - Request and response bodies are bounded before execution.
 - Tool input and backend output use the same runtime schemas as the application.
 - Authorization codes are single-use, expire after five minutes, and require PKCE `S256`.
@@ -314,15 +351,24 @@ Unexpected exceptions are reported privately and become a generic `TOOL_FAILED` 
   authorization request. The proof is stored only as a digest and consumed atomically, so opaque
   extension origins cannot break consent and cross-site forgery cannot replay it.
 - Signed-out password users can authenticate through a same-origin form that accepts only a
-  bounded relative return path. The existing Origin and Fetch Metadata checks, credential rate
-  limits, secure session cookie, and generic credential failures remain in force.
+  bounded relative return path. A five-minute, one-time proof binds the exact authorization
+  request to a private browser cookie and is consumed atomically, allowing sandboxed hosted
+  clients to use opaque origins without trusting proxy-sensitive Fetch Metadata. Missing,
+  mismatched, expired, replayed, JSON, or unbounded-return requests fail closed. Credential rate
+  limits, secure session cookies, and generic credential failures remain in force.
 - Redirect URIs must be exact registered HTTPS URLs or HTTP loopback URLs; fragments and embedded
-  credentials are rejected.
+  credentials are rejected. Dynamic registrations are classified as `native` or `web`, and web
+  clients cannot register an HTTP loopback callback.
+- Authorization responses include an RFC 9207 `iss` value and advertise issuer-response support,
+  allowing clients to reject authorization-server mix-up.
 - Consent-page form navigation is restricted to the application and the exact validated callback
   origin; wildcard form destinations are never allowed.
 - Access tokens are stored only as SHA-256 digests, expire after one hour, and are bound to the
   exact MCP resource.
-- Refresh tokens rotate, expire after 30 days, and reuse revokes the entire token family.
+- Refresh tokens rotate and expire after 30 days. The encrypted adaptive handoff chain lets lagging
+  client replicas converge on one unspent successor without branching or revoking a newer replica.
+  It is bounded to 64 links and each link expires with its immediate successor. Applications can
+  opt into strict post-window family revocation without multi-generation handoffs.
 - OAuth client registration is bounded and never fetches caller-controlled metadata URLs, avoiding
   an authorization-server SSRF surface.
 - Disabling an account immediately invalidates its agent tokens.

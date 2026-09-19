@@ -93,3 +93,14 @@ export declare function resource<T, P = void>(loader: (parameter: P | undefined,
 /** Reduces an async iterable into a live signal, useful for model-token streams. */
 export declare function consumeStream<T>(iterable: AsyncIterable<T>, initial: T, reduce?: (current: T, chunk: T) => T): Promise<ReactiveSignal<T>>;
 export {};
+
+export interface ReactiveDiagnostic {
+    readonly type: "dependency" | "invalidate" | "run" | "dispose";
+    readonly id: number;
+    readonly sourceId?: number;
+    readonly kind: "signal" | "computed" | "effect";
+    readonly name?: string;
+    readonly durationMs?: number;
+    readonly dependencies?: number;
+}
+export declare function observeReactivity(listener: (event: ReactiveDiagnostic) => void): Cleanup;

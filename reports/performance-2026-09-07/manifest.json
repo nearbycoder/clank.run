@@ -1,0 +1,36 @@
+{
+  "baselineCommit": "22bf8d89fadd62bd7741a08b8640334b2cdf8d6c",
+  "candidate": "Backend cache-eviction and platform tenant-lookup fixes in the containing change; source hashes in README",
+  "groups": {
+    "published-0.20.0-versus-published-0.22.0": [
+      "load-ab-app.json",
+      "load-ab-platform.json",
+      "load-ab-ingress.json"
+    ],
+    "published-0.22.0": [
+      "load-ingress-quota.json",
+      "load-login.json",
+      "load-login-4.json",
+      "load-saturation-app.json",
+      "load-saturation-platform.json",
+      "load-burst-app.json",
+      "reliability-1000.json",
+      "reliability-3000.json",
+      "reliability-5000.json"
+    ],
+    "published-0.22.0-versus-candidate": [
+      "load-optimized-platform-1000.json",
+      "load-optimized-platform-5000.json",
+      "load-metrics-history.json"
+    ],
+    "candidate": [
+      "load-burst-platform.json",
+      "load-metrics-saturation.json",
+      "load-final-smoke.json",
+      "reliability-5000-fixed.json",
+      "reliability-5000-soak.json",
+      "browser-desktop.json",
+      "browser-phone-width.json"
+    ]
+  }
+}

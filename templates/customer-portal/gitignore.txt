@@ -1,0 +1,7 @@
+dist/
+.clank/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+.env.*

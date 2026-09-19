@@ -1,0 +1,365 @@
+{
+  "protocol": "clank-load/1",
+  "startedAt": "2026-09-08T01:23:18.512Z",
+  "kind": "app",
+  "users": 5000,
+  "seconds": 15,
+  "rates": [
+    100,
+    500,
+    1000
+  ],
+  "settings": {
+    "mode": "mixed",
+    "authConcurrency": 2,
+    "ingressRpm": 3000,
+    "cacheEntries": 1000,
+    "liveLimit": 1000,
+    "metricBuckets": 0
+  },
+  "machine": {
+    "node": "v24.20.0",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "memoryBytes": 117764759552
+  },
+  "topology": "External generator through Railway TLS and a token-protected streaming proxy to Node fixtures on a persistent volume; state retained between trials",
+  "recordsPerUser": 20,
+  "samples": [
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 100,
+      "duration": 15,
+      "mode": "mixed",
+      "offered": 1500,
+      "completed": 1500,
+      "dropped": 0,
+      "valid": 1500,
+      "status": {
+        "200": 1500
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 9392494,
+      "elapsedSeconds": 15.078229291,
+      "successfulRps": 99.48117720263949,
+      "latencyMs": {
+        "p50": 90.59470000000147,
+        "p95": 140.94617900000048,
+        "p99": 396.9886200000001,
+        "max": 660.6513320000013
+      },
+      "serviceP95Ms": 139.68543800000043,
+      "generatorScheduleP99Ms": 1.283795000000282,
+      "acceptable": true,
+      "serverNode": "v22.23.2",
+      "serverProfile": {
+        "kind": "app",
+        "users": 5000,
+        "liveLimit": 6000,
+        "authConcurrency": 8,
+        "authQueue": 32,
+        "dist": "dist",
+        "threadPoolSize": "16"
+      },
+      "metrics": {
+        "rss": 132894720,
+        "peakRss": 132894720,
+        "heapUsed": 32371440,
+        "cpuPercent": 13.426588839927398,
+        "eventLoopP99Ms": 32.358399,
+        "eventLoopMaxMs": 349.962239,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 1350,
+            "cacheHits": 450,
+            "durationMs": 0.13586900000518654,
+            "lastInvalidation": null,
+            "cachedEntries": 1000,
+            "subscriptions": 0
+          }
+        ],
+        "errors": [],
+        "proxy": {
+          "rss": 76255232,
+          "businessSockets": 0,
+          "freeBusinessSockets": 9,
+          "liveSockets": 0,
+          "portRange": "32768\t38768"
+        }
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 500,
+      "duration": 15,
+      "mode": "mixed",
+      "offered": 7500,
+      "completed": 7000,
+      "dropped": 500,
+      "valid": 6947,
+      "status": {
+        "200": 6947,
+        "timeout": 53
+      },
+      "failures": {},
+      "errorExamples": {
+        "timeout": ""
+      },
+      "bytes": 43575038,
+      "elapsedSeconds": 15.138118460000001,
+      "successfulRps": 458.9077578139126,
+      "latencyMs": {
+        "p50": 1011.5741430000016,
+        "p95": 2538.12299,
+        "p99": 4789.047920000001,
+        "max": 5002.546606
+      },
+      "serviceP95Ms": 2537.473138000001,
+      "generatorScheduleP99Ms": 1.5933380000024044,
+      "acceptable": false,
+      "serverNode": "v22.23.2",
+      "serverProfile": {
+        "kind": "app",
+        "users": 5000,
+        "liveLimit": 6000,
+        "authConcurrency": 8,
+        "authQueue": 32,
+        "dist": "dist",
+        "threadPoolSize": "16"
+      },
+      "metrics": {
+        "rss": 145272832,
+        "peakRss": 145272832,
+        "heapUsed": 34497752,
+        "cpuPercent": 34.87982828908522,
+        "eventLoopP99Ms": 241.041407,
+        "eventLoopMaxMs": 480.509951,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 7655,
+            "cacheHits": 450,
+            "durationMs": 0.07514999998966232,
+            "lastInvalidation": null,
+            "cachedEntries": 1000,
+            "subscriptions": 0
+          }
+        ],
+        "errors": [],
+        "proxy": {
+          "rss": 108498944,
+          "businessSockets": 0,
+          "freeBusinessSockets": 128,
+          "liveSockets": 0,
+          "portRange": "32768\t38768"
+        }
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 1000,
+      "duration": 15,
+      "mode": "mixed",
+      "offered": 15000,
+      "completed": 15000,
+      "dropped": 0,
+      "valid": 15000,
+      "status": {
+        "200": 15000
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 94057368,
+      "elapsedSeconds": 15.093130363999997,
+      "successfulRps": 993.8296190548959,
+      "latencyMs": {
+        "p50": 167.13485299999593,
+        "p95": 291.90800599999784,
+        "p99": 327.4292029999997,
+        "max": 618.7998799999987
+      },
+      "serviceP95Ms": 291.5272659999973,
+      "generatorScheduleP99Ms": 1.1697740000017802,
+      "acceptable": true,
+      "serverNode": "v22.23.2",
+      "serverProfile": {
+        "kind": "app",
+        "users": 5000,
+        "liveLimit": 6000,
+        "authConcurrency": 8,
+        "authQueue": 32,
+        "dist": "dist",
+        "threadPoolSize": "16"
+      },
+      "metrics": {
+        "rss": 145805312,
+        "peakRss": 147492864,
+        "heapUsed": 25385120,
+        "cpuPercent": 58.30437113247606,
+        "eventLoopP99Ms": 88.342527,
+        "eventLoopMaxMs": 141.033471,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 21149,
+            "cacheHits": 456,
+            "durationMs": 0.06461899999703746,
+            "lastInvalidation": null,
+            "cachedEntries": 1000,
+            "subscriptions": 0
+          }
+        ],
+        "errors": [],
+        "proxy": {
+          "rss": 108498944,
+          "businessSockets": 0,
+          "freeBusinessSockets": 115,
+          "liveSockets": 0,
+          "portRange": "32768\t38768"
+        }
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 2,
+      "rate": 100,
+      "duration": 15,
+      "mode": "mixed",
+      "offered": 1500,
+      "completed": 1500,
+      "dropped": 0,
+      "valid": 1500,
+      "status": {
+        "200": 1500
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 9392665,
+      "elapsedSeconds": 15.078917512999993,
+      "successfulRps": 99.4766367484141,
+      "latencyMs": {
+        "p50": 87.3741880000016,
+        "p95": 98.33248199999798,
+        "p99": 136.19328400000086,
+        "max": 272.0947670000023
+      },
+      "serviceP95Ms": 97.74255499999708,
+      "generatorScheduleP99Ms": 1.5637930000011693,
+      "acceptable": true,
+      "serverNode": "v22.23.2",
+      "serverProfile": {
+        "kind": "app",
+        "users": 5000,
+        "liveLimit": 6000,
+        "authConcurrency": 8,
+        "authQueue": 32,
+        "dist": "dist",
+        "threadPoolSize": "16"
+      },
+      "metrics": {
+        "rss": 146886656,
+        "peakRss": 147378176,
+        "heapUsed": 32935128,
+        "cpuPercent": 12.59786443022554,
+        "eventLoopP99Ms": 17.383423,
+        "eventLoopMaxMs": 61.964287,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 22499,
+            "cacheHits": 906,
+            "durationMs": 0.12436899999738671,
+            "lastInvalidation": null,
+            "cachedEntries": 1000,
+            "subscriptions": 0
+          }
+        ],
+        "errors": [],
+        "proxy": {
+          "rss": 110419968,
+          "businessSockets": 0,
+          "freeBusinessSockets": 3,
+          "liveSockets": 0,
+          "portRange": "32768\t38768"
+        }
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 2,
+      "rate": 500,
+      "duration": 15,
+      "mode": "mixed",
+      "offered": 7500,
+      "completed": 7500,
+      "dropped": 0,
+      "valid": 7500,
+      "status": {
+        "200": 7500
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 47018998,
+      "elapsedSeconds": 15.087969912,
+      "successfulRps": 497.084766455889,
+      "latencyMs": {
+        "p50": 88.51973400000134,
+        "p95": 112.36467500000435,
+        "p99": 219.07232200000726,
+        "max": 1346.3020709999983
+      },
+      "serviceP95Ms": 111.96656400000211,
+      "generatorScheduleP99Ms": 1.1855829999985872,
+      "acceptable": true,
+      "serverNode": "v22.23.2",
+      "serverProfile": {
+        "kind": "app",
+        "users": 5000,
+        "liveLimit": 6000,
+        "authConcurrency": 8,
+        "authQueue": 32,
+        "dist": "dist",
+        "threadPoolSize": "16"
+      },
+      "metrics": {
+        "rss": 148062208,
+        "peakRss": 148062208,
+        "heapUsed": 34548576,
+        "cpuPercent": 33.948715625583766,
+        "eventLoopP99Ms": 22.593535,
+        "eventLoopMaxMs": 85.458943,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 29249,
+            "cacheHits": 906,
+            "durationMs": 0.09660900000017136,
+            "lastInvalidation": null,
+            "cachedEntries": 1000,
+            "subscriptions": 0
+          }
+        ],
+        "errors": [],
+        "proxy": {
+          "rss": 111206400,
+          "businessSockets": 0,
+          "freeBusinessSockets": 34,
+          "liveSockets": 0,
+          "portRange": "32768\t38768"
+        }
+      }
+    }
+  ],
+  "interruptedByUser": true,
+  "completionStatus": "Incomplete: user requested testing stop during round 2; no successful soak rerun was completed."
+}

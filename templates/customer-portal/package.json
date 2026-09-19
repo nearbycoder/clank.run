@@ -1,0 +1,18 @@
+{
+  "name": "__PROJECT_NAME__",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "clank build src dist",
+    "dev": "clank dev",
+    "test": "npm run build && node --disable-warning=ExperimentalWarning --test tests/app.contract.mjs",
+    "test:watch": "npm run build && node --disable-warning=ExperimentalWarning --test --watch tests/app.contract.mjs",
+    "start": "node --disable-warning=ExperimentalWarning dist/server.js",
+    "doctor": "clank doctor",
+    "deploy:check": "clank deploy --dry-run",
+    "deploy": "clank deploy"
+  },
+  "dependencies": {
+    "@clank.run/framework": "__CLANK_DEPENDENCY__"
+  }
+}

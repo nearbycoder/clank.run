@@ -1,0 +1,671 @@
+{
+  "protocol": "clank-load/1",
+  "startedAt": "2026-09-07T23:30:06.293Z",
+  "kind": "platform",
+  "users": 1000,
+  "seconds": 8,
+  "rates": [
+    25,
+    100,
+    250
+  ],
+  "machine": {
+    "node": "v24.20.0",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "memoryBytes": 117764759552
+  },
+  "topology": "One isolated Node server process and a separate generator process on the same host; loopback HTTP; local SQLite",
+  "recordsPerUser": 3,
+  "samples": [
+    {
+      "candidate": "baseline",
+      "round": 1,
+      "rate": 25,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 200,
+      "completed": 200,
+      "dropped": 0,
+      "valid": 200,
+      "status": {
+        "200": 200
+      },
+      "failures": {},
+      "bytes": 855250,
+      "elapsedSeconds": 8.00021952,
+      "successfulRps": 24.999314018823323,
+      "latencyMs": {
+        "p50": 3.2331690000009985,
+        "p95": 4.525099000000409,
+        "p99": 5.204654000001028,
+        "max": 6.316876999999749
+      },
+      "serviceP95Ms": 3.726889999999912,
+      "generatorScheduleP99Ms": 1.3164710000000923,
+      "acceptable": true,
+      "metrics": {
+        "rss": 132993024,
+        "peakRss": 132993024,
+        "heapUsed": 18650208,
+        "cpuPercent": 6.670077795066302,
+        "eventLoopP99Ms": 11.436031,
+        "eventLoopMaxMs": 12.804095,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "baseline",
+      "round": 1,
+      "rate": 100,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 800,
+      "completed": 800,
+      "dropped": 0,
+      "valid": 800,
+      "status": {
+        "200": 800
+      },
+      "failures": {},
+      "bytes": 3425950,
+      "elapsedSeconds": 7.99966064,
+      "successfulRps": 100.00424217995327,
+      "latencyMs": {
+        "p50": 2.6002470000021276,
+        "p95": 4.3292380000002595,
+        "p99": 5.325687000000471,
+        "max": 6.370754999999917
+      },
+      "serviceP95Ms": 3.4844469999989087,
+      "generatorScheduleP99Ms": 1.818196000000171,
+      "acceptable": true,
+      "metrics": {
+        "rss": 151080960,
+        "peakRss": 151080960,
+        "heapUsed": 18931248,
+        "cpuPercent": 20.84059534118151,
+        "eventLoopP99Ms": 11.984895,
+        "eventLoopMaxMs": 13.492223,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "baseline",
+      "round": 1,
+      "rate": 250,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 2000,
+      "completed": 2000,
+      "dropped": 0,
+      "valid": 2000,
+      "status": {
+        "200": 2000
+      },
+      "failures": {},
+      "bytes": 8565700,
+      "elapsedSeconds": 8.000309273,
+      "successfulRps": 249.99033559236756,
+      "latencyMs": {
+        "p50": 1.902249999999185,
+        "p95": 3.0481029999973543,
+        "p99": 3.85905499999717,
+        "max": 5.814564999996946
+      },
+      "serviceP95Ms": 2.3691299999991315,
+      "generatorScheduleP99Ms": 1.073036999998294,
+      "acceptable": true,
+      "metrics": {
+        "rss": 185233408,
+        "peakRss": 185233408,
+        "heapUsed": 38519312,
+        "cpuPercent": 36.18665994310278,
+        "eventLoopP99Ms": 12.206079,
+        "eventLoopMaxMs": 13.860863,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "round": 1,
+      "rate": 25,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 200,
+      "completed": 200,
+      "dropped": 0,
+      "valid": 200,
+      "status": {
+        "200": 200
+      },
+      "failures": {},
+      "bytes": 855250,
+      "elapsedSeconds": 7.999849006999997,
+      "successfulRps": 25.00047186203099,
+      "latencyMs": {
+        "p50": 3.2335649999949965,
+        "p95": 5.1120929999997315,
+        "p99": 17.90865699999995,
+        "max": 25.946452999996836
+      },
+      "serviceP95Ms": 4.324272000001656,
+      "generatorScheduleP99Ms": 1.2949549999975716,
+      "acceptable": true,
+      "metrics": {
+        "rss": 148180992,
+        "peakRss": 148180992,
+        "heapUsed": 18689120,
+        "cpuPercent": 6.933880652272598,
+        "eventLoopP99Ms": 13.262847,
+        "eventLoopMaxMs": 30.261247,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "round": 1,
+      "rate": 100,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 800,
+      "completed": 800,
+      "dropped": 0,
+      "valid": 800,
+      "status": {
+        "200": 800
+      },
+      "failures": {},
+      "bytes": 3425950,
+      "elapsedSeconds": 8.000125282,
+      "successfulRps": 99.99843399952395,
+      "latencyMs": {
+        "p50": 2.6429800000041723,
+        "p95": 4.082660000000033,
+        "p99": 5.2365090000021155,
+        "max": 5.619034000003012
+      },
+      "serviceP95Ms": 3.3723900000040885,
+      "generatorScheduleP99Ms": 2.0433220000049914,
+      "acceptable": true,
+      "metrics": {
+        "rss": 168628224,
+        "peakRss": 168628224,
+        "heapUsed": 29855224,
+        "cpuPercent": 21.375184614426246,
+        "eventLoopP99Ms": 12.107775,
+        "eventLoopMaxMs": 13.426687,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "round": 1,
+      "rate": 250,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 2000,
+      "completed": 2000,
+      "dropped": 0,
+      "valid": 2000,
+      "status": {
+        "200": 2000
+      },
+      "failures": {},
+      "bytes": 8565700,
+      "elapsedSeconds": 8.001148135999996,
+      "successfulRps": 249.96412589854356,
+      "latencyMs": {
+        "p50": 2.0263730000006035,
+        "p95": 3.192818999996234,
+        "p99": 3.8214569999981904,
+        "max": 5.113524000000325
+      },
+      "serviceP95Ms": 2.6143430000010994,
+      "generatorScheduleP99Ms": 1.0631429999993998,
+      "acceptable": true,
+      "metrics": {
+        "rss": 199299072,
+        "peakRss": 199299072,
+        "heapUsed": 39458952,
+        "cpuPercent": 38.38588119683099,
+        "eventLoopP99Ms": 12.312575,
+        "eventLoopMaxMs": 13.524991,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "round": 2,
+      "rate": 25,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 200,
+      "completed": 200,
+      "dropped": 0,
+      "valid": 200,
+      "status": {
+        "200": 200
+      },
+      "failures": {},
+      "bytes": 855250,
+      "elapsedSeconds": 8.000407177000001,
+      "successfulRps": 24.998727636634634,
+      "latencyMs": {
+        "p50": 3.092956000000413,
+        "p95": 4.263324999999895,
+        "p99": 4.785424999994575,
+        "max": 5.275980999998865
+      },
+      "serviceP95Ms": 3.34019100000296,
+      "generatorScheduleP99Ms": 1.363045999998576,
+      "acceptable": true,
+      "metrics": {
+        "rss": 147275776,
+        "peakRss": 147275776,
+        "heapUsed": 18658744,
+        "cpuPercent": 6.656731701901644,
+        "eventLoopP99Ms": 11.542527,
+        "eventLoopMaxMs": 12.689407,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "round": 2,
+      "rate": 100,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 800,
+      "completed": 800,
+      "dropped": 0,
+      "valid": 800,
+      "status": {
+        "200": 800
+      },
+      "failures": {},
+      "bytes": 3425950,
+      "elapsedSeconds": 8.000086858000003,
+      "successfulRps": 99.99891428678782,
+      "latencyMs": {
+        "p50": 2.6510750000015832,
+        "p95": 4.213634000014281,
+        "p99": 4.88506800000323,
+        "max": 6.196960000001127
+      },
+      "serviceP95Ms": 3.388119999995979,
+      "generatorScheduleP99Ms": 1.8953680000049644,
+      "acceptable": true,
+      "metrics": {
+        "rss": 168771584,
+        "peakRss": 168771584,
+        "heapUsed": 23289384,
+        "cpuPercent": 21.5823245404155,
+        "eventLoopP99Ms": 12.050431,
+        "eventLoopMaxMs": 13.574143,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "round": 2,
+      "rate": 250,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 2000,
+      "completed": 2000,
+      "dropped": 0,
+      "valid": 2000,
+      "status": {
+        "200": 2000
+      },
+      "failures": {},
+      "bytes": 8565700,
+      "elapsedSeconds": 8.000171010000006,
+      "successfulRps": 249.9946560517334,
+      "latencyMs": {
+        "p50": 2.0295789999945555,
+        "p95": 3.1849220000003697,
+        "p99": 3.8573340000002645,
+        "max": 5.069226000006893
+      },
+      "serviceP95Ms": 2.516755999997258,
+      "generatorScheduleP99Ms": 1.0576969999965513,
+      "acceptable": true,
+      "metrics": {
+        "rss": 199704576,
+        "peakRss": 199704576,
+        "heapUsed": 27740784,
+        "cpuPercent": 39.560589069760795,
+        "eventLoopP99Ms": 12.066815,
+        "eventLoopMaxMs": 13.639679,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "baseline",
+      "round": 2,
+      "rate": 25,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 200,
+      "completed": 200,
+      "dropped": 0,
+      "valid": 200,
+      "status": {
+        "200": 200
+      },
+      "failures": {},
+      "bytes": 855250,
+      "elapsedSeconds": 8.000150591000013,
+      "successfulRps": 24.99952941198325,
+      "latencyMs": {
+        "p50": 3.315234000008786,
+        "p95": 4.705845000004047,
+        "p99": 5.580368000009912,
+        "max": 7.836023000010755
+      },
+      "serviceP95Ms": 3.8735060000035446,
+      "generatorScheduleP99Ms": 1.9277250000013737,
+      "acceptable": true,
+      "metrics": {
+        "rss": 133132288,
+        "peakRss": 133132288,
+        "heapUsed": 18670696,
+        "cpuPercent": 7.299427512721312,
+        "eventLoopP99Ms": 11.902975,
+        "eventLoopMaxMs": 14.671871,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "baseline",
+      "round": 2,
+      "rate": 100,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 800,
+      "completed": 800,
+      "dropped": 0,
+      "valid": 800,
+      "status": {
+        "200": 800
+      },
+      "failures": {},
+      "bytes": 3425950,
+      "elapsedSeconds": 8.000366227999999,
+      "successfulRps": 99.99542235955752,
+      "latencyMs": {
+        "p50": 2.5755839999910677,
+        "p95": 4.293017999996664,
+        "p99": 5.059482999989996,
+        "max": 6.587847999995574
+      },
+      "serviceP95Ms": 3.525395999997272,
+      "generatorScheduleP99Ms": 1.2415519999922253,
+      "acceptable": true,
+      "metrics": {
+        "rss": 151744512,
+        "peakRss": 151744512,
+        "heapUsed": 19482424,
+        "cpuPercent": 21.644171810468986,
+        "eventLoopP99Ms": 12.345343,
+        "eventLoopMaxMs": 14.458879,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "baseline",
+      "round": 2,
+      "rate": 250,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 2000,
+      "completed": 2000,
+      "dropped": 0,
+      "valid": 2000,
+      "status": {
+        "200": 2000
+      },
+      "failures": {},
+      "bytes": 8565700,
+      "elapsedSeconds": 8.00089927400001,
+      "successfulRps": 249.9719008461045,
+      "latencyMs": {
+        "p50": 2.115040999997291,
+        "p95": 3.315864000003785,
+        "p99": 4.0539520000020275,
+        "max": 5.916659000009531
+      },
+      "serviceP95Ms": 2.6435919999930775,
+      "generatorScheduleP99Ms": 1.0695820000109961,
+      "acceptable": true,
+      "metrics": {
+        "rss": 182689792,
+        "peakRss": 182689792,
+        "heapUsed": 38277456,
+        "cpuPercent": 40.83907340574717,
+        "eventLoopP99Ms": 12.705791,
+        "eventLoopMaxMs": 14.147583,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "baseline",
+      "round": 3,
+      "rate": 25,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 200,
+      "completed": 200,
+      "dropped": 0,
+      "valid": 200,
+      "status": {
+        "200": 200
+      },
+      "failures": {},
+      "bytes": 855250,
+      "elapsedSeconds": 7.999526026000007,
+      "successfulRps": 25.001481256509614,
+      "latencyMs": {
+        "p50": 3.2691070000000764,
+        "p95": 4.629029999996419,
+        "p99": 5.536690000008093,
+        "max": 6.66294100000232
+      },
+      "serviceP95Ms": 3.4554279999865685,
+      "generatorScheduleP99Ms": 2.0182150000036927,
+      "acceptable": true,
+      "metrics": {
+        "rss": 128303104,
+        "peakRss": 128303104,
+        "heapUsed": 18603120,
+        "cpuPercent": 7.161596719689157,
+        "eventLoopP99Ms": 12.001279,
+        "eventLoopMaxMs": 13.426687,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "baseline",
+      "round": 3,
+      "rate": 100,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 800,
+      "completed": 800,
+      "dropped": 0,
+      "valid": 800,
+      "status": {
+        "200": 800
+      },
+      "failures": {},
+      "bytes": 3425950,
+      "elapsedSeconds": 8.001098262999992,
+      "successfulRps": 99.98627359690018,
+      "latencyMs": {
+        "p50": 2.489356999998563,
+        "p95": 3.898314999998547,
+        "p99": 4.652227999991737,
+        "max": 5.190824999997858
+      },
+      "serviceP95Ms": 3.315021999995224,
+      "generatorScheduleP99Ms": 1.1276189999916824,
+      "acceptable": true,
+      "metrics": {
+        "rss": 148226048,
+        "peakRss": 148226048,
+        "heapUsed": 18953936,
+        "cpuPercent": 19.539946871233266,
+        "eventLoopP99Ms": 11.722751,
+        "eventLoopMaxMs": 13.074431,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "baseline",
+      "round": 3,
+      "rate": 250,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 2000,
+      "completed": 2000,
+      "dropped": 0,
+      "valid": 2000,
+      "status": {
+        "200": 2000
+      },
+      "failures": {},
+      "bytes": 8565700,
+      "elapsedSeconds": 8.001971247999988,
+      "successfulRps": 249.93841367524033,
+      "latencyMs": {
+        "p50": 2.17663899998297,
+        "p95": 3.1819830000022193,
+        "p99": 3.9230209999950603,
+        "max": 4.7977830000018
+      },
+      "serviceP95Ms": 2.502436000009766,
+      "generatorScheduleP99Ms": 1.0857689999975264,
+      "acceptable": true,
+      "metrics": {
+        "rss": 180801536,
+        "peakRss": 180801536,
+        "heapUsed": 38004264,
+        "cpuPercent": 41.769708895936866,
+        "eventLoopP99Ms": 12.247039,
+        "eventLoopMaxMs": 13.402111,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "round": 3,
+      "rate": 25,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 200,
+      "completed": 200,
+      "dropped": 0,
+      "valid": 200,
+      "status": {
+        "200": 200
+      },
+      "failures": {},
+      "bytes": 855250,
+      "elapsedSeconds": 8.000135932000005,
+      "successfulRps": 24.99957521971764,
+      "latencyMs": {
+        "p50": 3.3353970000171103,
+        "p95": 4.721013000002131,
+        "p99": 5.3739260000002105,
+        "max": 5.608032000018284
+      },
+      "serviceP95Ms": 3.710571000003256,
+      "generatorScheduleP99Ms": 2.153153999999631,
+      "acceptable": true,
+      "metrics": {
+        "rss": 148680704,
+        "peakRss": 148680704,
+        "heapUsed": 18699128,
+        "cpuPercent": 7.348016355254338,
+        "eventLoopP99Ms": 12.509183,
+        "eventLoopMaxMs": 13.713407,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "round": 3,
+      "rate": 100,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 800,
+      "completed": 800,
+      "dropped": 0,
+      "valid": 800,
+      "status": {
+        "200": 800
+      },
+      "failures": {},
+      "bytes": 3425950,
+      "elapsedSeconds": 7.999602511000004,
+      "successfulRps": 100.00496885938331,
+      "latencyMs": {
+        "p50": 2.5840960000059567,
+        "p95": 4.173566999990726,
+        "p99": 4.837673000001814,
+        "max": 5.474351999990176
+      },
+      "serviceP95Ms": 3.421369000017876,
+      "generatorScheduleP99Ms": 1.2366040000051726,
+      "acceptable": true,
+      "metrics": {
+        "rss": 170176512,
+        "peakRss": 170176512,
+        "heapUsed": 29887712,
+        "cpuPercent": 22.10722031113709,
+        "eventLoopP99Ms": 12.066815,
+        "eventLoopMaxMs": 13.721599,
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "round": 3,
+      "rate": 250,
+      "duration": 8,
+      "mode": "mixed",
+      "offered": 2000,
+      "completed": 2000,
+      "dropped": 0,
+      "valid": 2000,
+      "status": {
+        "200": 2000
+      },
+      "failures": {},
+      "bytes": 8565700,
+      "elapsedSeconds": 8.000407230000011,
+      "successfulRps": 249.98727471026461,
+      "latencyMs": {
+        "p50": 2.121805000002496,
+        "p95": 3.119881999999052,
+        "p99": 3.8601330000092275,
+        "max": 6.213980000000447
+      },
+      "serviceP95Ms": 2.4711069999902975,
+      "generatorScheduleP99Ms": 1.0578530000057071,
+      "acceptable": true,
+      "metrics": {
+        "rss": 199798784,
+        "peakRss": 199798784,
+        "heapUsed": 39956448,
+        "cpuPercent": 41.25957848411796,
+        "eventLoopP99Ms": 12.460031,
+        "eventLoopMaxMs": 13.295615,
+        "errors": []
+      }
+    }
+  ],
+  "finishedAt": "2026-09-07T23:32:45.607Z"
+}

@@ -1,3 +1,5 @@
+import { defineBucket } from "./buckets.ts";
+
 export type AppFieldType =
   | "string"
   | "text"
@@ -99,6 +101,35 @@ export interface AppServiceDefinition {
   capabilities?: readonly string[];
 }
 
+export interface AppBucketDefinition {
+  description?: string;
+  visibility?: "private" | "public";
+  ownership?: "app" | "user";
+  browserAccess?: "authenticated" | "public" | "server";
+  allowedContentTypes?: readonly string[];
+  maxObjectBytes?: number;
+  maxObjects?: number;
+  maxBytes?: number;
+  perOwnerMaxObjects?: number;
+  perOwnerMaxBytes?: number;
+  cacheControl?: string;
+  resumable?: boolean;
+  maxChunkBytes?: number;
+  image?: false | {
+    maxWidth?: number;
+    maxHeight?: number;
+    maxPixels?: number;
+    formats?: readonly ("png" | "jpeg" | "gif" | "webp" | "avif")[];
+    variants?: Record<string, {
+      width: number;
+      height: number;
+      fit?: "cover" | "contain";
+      format?: "original" | "png" | "jpeg" | "webp" | "avif";
+      quality?: number;
+    }>;
+  };
+}
+
 export interface AppDeploymentDefinition {
   database?: "sqlite" | "postgres";
   scale?: "single" | "horizontal";
@@ -180,6 +211,8 @@ export interface AppBlueprintInput {
   actions?: Record<string, AppActionDefinition>;
   migrations?: readonly AppMigrationDefinition[];
   services?: Record<string, AppServiceDefinition>;
+  /** Managed, isolated application object collections. */
+  buckets?: Record<string, AppBucketDefinition>;
   fixtures?: Record<string, AppFixtureDefinition>;
   admin?: false | AppAdminStudioDefinition;
   deployment?: AppDeploymentDefinition;
@@ -187,7 +220,7 @@ export interface AppBlueprintInput {
 
 export interface AppBlueprint extends Omit<
   AppBlueprintInput,
-  "protocol" | "slug" | "version" | "auth" | "relationships" | "actions" | "migrations" | "services" | "fixtures" | "admin" | "deployment"
+  "protocol" | "slug" | "version" | "auth" | "relationships" | "actions" | "migrations" | "services" | "buckets" | "fixtures" | "admin" | "deployment"
 > {
   protocol: "clank-app/1";
   slug: string;
@@ -201,6 +234,7 @@ export interface AppBlueprint extends Omit<
   actions: Record<string, AppActionDefinition>;
   migrations: readonly AppMigrationDefinition[];
   services: Record<string, AppServiceDefinition>;
+  buckets: Record<string, AppBucketDefinition>;
   fixtures: Record<string, AppFixture>;
   admin: false | {
     path: string;
@@ -226,6 +260,7 @@ export interface AppPlan {
     routes: number;
     actions: number;
     services: number;
+    buckets: number;
     migrations: number;
     fixtures: number;
   };
@@ -389,6 +424,10 @@ export function generateAppFiles(
       contents: servicesSource(app),
     },
     {
+      path: "src/buckets.ts",
+      contents: bucketsSource(app),
+    },
+    {
       path: "tests/app.contract.mjs",
       contents: generatedTestSource(app),
     },
@@ -460,6 +499,81 @@ ${drivers}
   const services = createServiceRegistry(drivers);
   assertServices(services);
   return services;
+}
+`;
+}
+
+function bucketsSource(app: AppBlueprint): string {
+  const definitions = Object.entries(app.buckets).map(([name, bucket]) => ({ name, ...bucket }));
+  if (definitions.length === 0) {
+    return `import type { BucketManager } from "@clank.run/framework/buckets";
+
+export const bucketDefinitions = [] as const;
+
+export async function openAppBuckets(
+  _environment: Record<string, string | undefined>,
+): Promise<BucketManager | undefined> {
+  return undefined;
+}
+`;
+  }
+  return `import {
+  defineBucket,
+  openBucketManager,
+  type BucketManager,
+} from "@clank.run/framework/buckets";
+import {
+  createS3ObjectStore,
+  openLocalObjectStore,
+} from "@clank.run/framework/object-storage";
+
+export const bucketDefinitions = Object.freeze(${sourceLiteral(definitions, 2)}.map(defineBucket));
+
+function required(environment: Record<string, string | undefined>, name: string): string {
+  const value = environment[name];
+  if (!value) throw new Error(\`\${name} is required when S3 bucket storage is enabled.\`);
+  return value;
+}
+
+function optionalLimit(environment: Record<string, string | undefined>, name: string): number | undefined {
+  const raw = environment[name];
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error(\`\${name} must be a positive integer.\`);
+  return value;
+}
+
+export async function openAppBuckets(
+  environment: Record<string, string | undefined>,
+): Promise<BucketManager> {
+  const root = (environment.CLANK_BUCKET_ROOT ?? ".clank/buckets").replace(/\\\/$/u, "");
+  const maxObjectBytes = Math.max(...bucketDefinitions.map((bucket) => bucket.maxObjectBytes));
+  const store = environment.CLANK_BUCKET_S3_ENDPOINT
+    ? createS3ObjectStore({
+        endpoint: environment.CLANK_BUCKET_S3_ENDPOINT,
+        region: required(environment, "CLANK_BUCKET_S3_REGION"),
+        bucket: required(environment, "CLANK_BUCKET_S3_BUCKET"),
+        accessKeyId: required(environment, "CLANK_BUCKET_S3_ACCESS_KEY_ID"),
+        secretAccessKey: required(environment, "CLANK_BUCKET_S3_SECRET_ACCESS_KEY"),
+        sessionToken: environment.CLANK_BUCKET_S3_SESSION_TOKEN,
+        prefix: environment.CLANK_BUCKET_PREFIX,
+        pathStyle: environment.CLANK_BUCKET_S3_PATH_STYLE === "1",
+        maxObjectBytes,
+      })
+    : await openLocalObjectStore({ directory: \`\${root}/objects\`, maxObjectBytes });
+  const signingKey = environment.CLANK_BUCKET_SIGNING_KEY
+    ?? (environment.CLANK_DEV === "1" ? "clank-local-development-bucket-key" : undefined);
+  if (!signingKey) throw new Error("CLANK_BUCKET_SIGNING_KEY is required outside local development.");
+  return openBucketManager({
+    definitions: bucketDefinitions,
+    store,
+    databasePath: \`\${root}/catalog.sqlite\`,
+    stagingDirectory: \`\${root}/staging\`,
+    signingKey,
+    publicOrigin: environment.CLANK_PUBLIC_ORIGIN,
+    maxObjects: optionalLimit(environment, "CLANK_BUCKET_MAX_OBJECTS"),
+    maxBytes: optionalLimit(environment, "CLANK_BUCKET_MAX_BYTES"),
+  });
 }
 `;
 }
@@ -808,6 +922,7 @@ export async function createAppPlan(
       routes: blueprint.routes.length + (blueprint.admin ? 1 : 0),
       actions: Object.keys(blueprint.actions).length,
       services: Object.keys(blueprint.services).length,
+      buckets: Object.keys(blueprint.buckets).length,
       migrations: blueprint.migrations.length + 1,
       fixtures: Object.keys(blueprint.fixtures).length,
     },
@@ -833,6 +948,10 @@ function projectReadme(app: AppBlueprint): string {
   const services = Object.keys(app.services).length
     ? Object.entries(app.services).map(([name, service]) =>
       `- \`${name}\` — ${service.kind}${service.required ? ", required" : ", optional"}; ${service.description}`).join("\n")
+    : "- None declared.";
+  const buckets = Object.keys(app.buckets).length
+    ? Object.entries(app.buckets).map(([name, bucket]) =>
+      `- \`${name}\` — ${bucket.visibility} ${bucket.ownership}-owned objects; ${bucket.allowedContentTypes?.join(", ") ?? "application/octet-stream"}; up to ${bucket.maxObjectBytes} bytes per object.`).join("\n")
     : "- None declared.";
   return `# ${app.name}
 
@@ -873,6 +992,14 @@ ${relationships}
 ### Services
 
 ${services}
+
+### Managed buckets
+
+${buckets}
+
+Each bucket gets a local development store, isolated catalog, quotas, signed browser uploads,
+and matching MCP tools. Deployments use the project-scoped bucket environment supplied by Clank;
+S3-compatible storage can be selected without changing application code.
 
 \`clank dev\` supplies explicit local-only service drivers. Required services fail production
 startup until \`src/services.ts\` is wired to real drivers, so email, jobs, files, or webhooks are
@@ -937,6 +1064,7 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 - \`src/server.tsx\`: routes, SSR, CSP, static files, and API wiring.
 - \`src/service-requirements.ts\`: normalized external capability contract.
 - \`src/services.ts\`: local development drivers and production provisioning boundary.
+- \`src/buckets.ts\`: managed object policies plus local/S3 storage composition.
 - \`fixtures/\`: deterministic, non-production example users and records owned by the blueprint.
 - \`tests/app.contract.mjs\`: application-owned backend, fixture, isolation, manifest, and SSR contract.
 - \`journeys/\`: data-only real-browser flows addressed by stable \`agentId\` values, not CSS selectors.
@@ -953,6 +1081,7 @@ This repository is a Clank application generated from \`clank.app.ts\`. Prefer s
 - When UI behavior changes, update the shared backend function name, schema, \`description\`, and \`agent\` metadata in the same change. The agent-enabled paths in \`GET /__clank/manifest\` and authenticated MCP \`tools/list\` must remain identical.
 - Give every backend function a precise \`description\`; mark additive writes with \`agent: { destructive: false }\`, destructive writes explicitly, and internal functions with \`agent: false\`.
 - Preserve the default MCP endpoint and OAuth flow unless the application has a documented integration reason to change them.
+- Keep bucket ownership, MIME, image, and quota policy in \`clank.app.ts\`; UI and MCP file operations must use the generated manager rather than provider credentials or untracked filesystem paths.
 - Preserve the admin studio role boundary and entity allowlist. Its controls must keep using the same typed backend actions and may never bypass backend role checks.
 - Never edit, rename, or remove an applied migration; add the next numbered migration.
 - Keep secrets out of source, \`clank.deploy.json\`, labels, logs, plans, and agent metadata. Use \`clank secrets set\`.
@@ -1263,6 +1392,14 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     };
   }
 
+  const buckets: Record<string, AppBucketDefinition> = {};
+  for (const [bucketName, bucketRaw] of Object.entries(record(input.buckets ?? {}, "buckets"))) {
+    const raw = object(bucketRaw, `buckets.${bucketName}`);
+    const definition = defineBucket({ name: bucketName, ...raw } as unknown as Parameters<typeof defineBucket>[0]);
+    const { protocol: _protocol, name: _name, ...configuration } = definition;
+    buckets[bucketName] = configuration;
+  }
+
   const fixtures = normalizeFixtures(input.fixtures, {
     slug,
     entities,
@@ -1293,6 +1430,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     actions,
     migrations,
     services,
+    buckets,
     fixtures,
     admin,
     deployment: {
@@ -2996,6 +3134,7 @@ import {
   staticFiles,
 } from "@clank.run/framework";
 import { backend } from "./backend.ts";
+import { openAppBuckets } from "./buckets.ts";
 import { openAppServices } from "./services.ts";
 import { AppView } from "./view.tsx";
 
@@ -3010,8 +3149,10 @@ const root = decodeURIComponent(new URL("./", import.meta.url).pathname);
 const frameworkRoot = decodeURIComponent(new URL("../node_modules/@clank.run/framework/dist/", import.meta.url).pathname);
 const databasePath = environment.CLANK_DATABASE_PATH ?? environment.CLANK_DATABASE ?? "app.sqlite";
 const services = await openAppServices(environment);
+const buckets = await openAppBuckets(environment);
 const runtime = await openBackend(backend, {
   path: databasePath,
+  buckets,
   agent: {
     name: ${sourceLiteral(app.slug)},
     title: ${sourceLiteral(app.name)},

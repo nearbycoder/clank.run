@@ -46,7 +46,7 @@ interface OutgoingResponse {
   write(chunk: Uint8Array): boolean;
   end(chunk?: string | Uint8Array): void;
   once(event: "close" | "drain", listener: () => void): void;
-  removeListener(event: "close", listener: () => void): void;
+  removeListener(event: "close" | "drain", listener: () => void): void;
 }
 
 interface NativeServer {
@@ -144,7 +144,10 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
       const pathName = "node:path";
       const fs = await import(fileSystemName) as unknown as {
         realpath(path: string): Promise<string>;
-        stat(path: string): Promise<{ isDirectory(): boolean; isFile(): boolean; size: number }>;
+        stat(path: string): Promise<{
+          isDirectory(): boolean; isFile(): boolean;
+          size: number; mtimeMs: number; ctimeMs: number; ino: number;
+        }>;
       };
       const fsSyncName = "node:fs";
       const streamName = "node:stream";
@@ -179,13 +182,26 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
           stats = await fs.stat(resolved);
         }
         if (!stats.isFile()) return new Response("Not found", { status: 404 });
+        // A weak metadata validator avoids reading/hashing the file body. Read
+        // fresh metadata after containment checks, including for revalidation.
+        const etag = `W/"${[stats.size, stats.mtimeMs, stats.ctimeMs, stats.ino].map((value) => value.toString(16)).join("-")}"`;
+        const headers = {
+          "content-type": MIME_TYPES[path.extname(resolved).toLowerCase()] ?? "application/octet-stream",
+          "cache-control": options.cacheControl ?? "no-cache",
+          etag,
+          "x-content-type-options": "nosniff",
+        };
+        const condition = request.headers.get("if-none-match");
+        if (condition !== null && (condition.trim() === "*" || condition.split(",").some((value) => (
+          value.trim().replace(/^W\//, "") === etag.slice(2)
+        )))) {
+          return new Response(null, { status: 304, headers });
+        }
         const body = request.method === "HEAD" ? null : Readable.toWeb(createReadStream(resolved));
         return new Response(body as BodyInit | null, {
           headers: {
-            "content-type": MIME_TYPES[path.extname(resolved).toLowerCase()] ?? "application/octet-stream",
-            "cache-control": options.cacheControl ?? "no-cache",
+            ...headers,
             "content-length": String(stats.size),
-            "x-content-type-options": "nosniff",
           },
         });
       } catch {
@@ -232,8 +248,14 @@ async function dispatch(
   }
   const method = incoming.method ?? "GET";
   const abort = new AbortController();
+  // Cancelling an unread upload can abort the request while its rejection
+  // response remains writable. Track the response connection separately.
+  let responseClosed = false;
   incoming.once("aborted", () => abort.abort(new Error("Request aborted.")));
-  outgoing.once("close", () => abort.abort(new Error("Connection closed.")));
+  outgoing.once("close", () => {
+    responseClosed = true;
+    abort.abort(new Error("Connection closed."));
+  });
   const body = method === "GET" || method === "HEAD"
     ? undefined
     : boundedRequestBody(incoming, options.maxBodySize ?? 1024 * 1024, headers.get("content-length"));
@@ -256,6 +278,10 @@ async function dispatch(
     throw new NodeRequestError(413, `Request body exceeds ${body.state.maximum} bytes.`);
   }
   if (request.body && !request.bodyUsed) await request.body.cancel().catch(() => undefined);
+  if (responseClosed) {
+    await response.body?.cancel("client disconnected").catch(() => undefined);
+    return;
+  }
   outgoing.statusCode = response.status;
   outgoing.statusMessage = response.statusText;
   const responseHeaders = response.headers as Headers & { getSetCookie?: () => string[] };
@@ -265,6 +291,7 @@ async function dispatch(
   });
   if (cookies.length) outgoing.setHeader("set-cookie", cookies);
   if (!response.body || method === "HEAD") {
+    await response.body?.cancel("HEAD response has no body").catch(() => undefined);
     outgoing.end();
     return;
   }
@@ -272,10 +299,21 @@ async function dispatch(
   const cancelResponse = () => { void reader.cancel("client disconnected").catch(() => undefined); };
   outgoing.once("close", cancelResponse);
   try {
-    while (true) {
+    while (!responseClosed) {
       const { done, value } = await reader.read();
-      if (done) break;
-      if (!outgoing.write(value)) await new Promise<void>((resolve) => outgoing.once("drain", resolve));
+      if (done || responseClosed) break;
+      if (!outgoing.write(value)) {
+        await new Promise<void>((resolve) => {
+          const resume = () => {
+            outgoing.removeListener("drain", resume);
+            outgoing.removeListener("close", resume);
+            resolve();
+          };
+          outgoing.once("drain", resume);
+          outgoing.once("close", resume);
+          if (responseClosed) resume();
+        });
+      }
     }
     outgoing.end();
   } finally {

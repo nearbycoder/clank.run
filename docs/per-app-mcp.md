@@ -4,6 +4,10 @@ Every Clank app with a backend is also its own MCP server. The same typed querie
 used by the browser become tools that an authenticated agent can discover and call directly. You
 do not maintain a second agent API, generate an OpenAPI client, or run a separate MCP process.
 
+Those tools can also render as interactive, sandboxed views in compatible hosts. Bind a validated
+`ui://` HTML resource with `agent: { app: view }`; Clank publishes the tool metadata and resource
+without changing its handler, auth, or data boundary. See [Interactive MCP Apps](mcp-apps.md).
+
 For a deployed project, connect to:
 
 ```text
@@ -102,9 +106,9 @@ Clank derives the agent contract directly from that function tree:
 
 | Backend function | MCP tool | Permission | Behavior |
 | --- | --- | --- | --- |
-| Query `todos.list` | `todos.list` | `agent:read` | Read-only and idempotent |
-| Mutation `todos.add` | `todos.add` | `agent:write` | Validated additive write |
-| Mutation `todos.remove` | `todos.remove` | `agent:write` | Validated destructive write |
+| Query `todos.list` | `todos_list` | `agent:read` | Read-only and idempotent |
+| Mutation `todos.add` | `todos_add` | `agent:write` | Validated additive write |
+| Mutation `todos.remove` | `todos_remove` | `agent:write` | Validated destructive write |
 
 The `args` validators become JSON Schema tool inputs. `description` explains the operation to
 people and agents. The optional `agent` metadata describes whether a mutation is destructive,
@@ -122,9 +126,12 @@ await client.mutate(client.api.todos.add, {
 });
 ```
 
-An MCP client sees and invokes `todos.list` and `todos.add`; it does not automate those browser
-controls. Both paths reach the same handler and therefore share runtime validation, `.owned()`
-user isolation, transaction rollback, optimistic concurrency, and live-update notifications.
+An MCP client sees and invokes `todos_list` and `todos_add`; it does not automate those browser
+controls. Clank publishes strict-client-compatible names containing only letters, numbers, and
+underscores, capped at 64 characters. The tool's `clank/actionPath` metadata still identifies
+`todos.list` or `todos.add`. Both paths reach the same handler and therefore share runtime
+validation, `.owned()` user isolation, transaction rollback, optimistic concurrency, and live-
+update notifications.
 
 ## Connect an agent
 
@@ -142,6 +149,62 @@ MCP client's registered callback. The client receives a short-lived token restri
 application and exact MCP resource. Nothing needs to be copied back, and the person connecting
 does not need the Clank deployment CLI or access to the deployment account.
 
+Hosted browser clients can connect directly. Authenticated app MCP endpoints include the
+credential-free CORS preflight and response headers needed by browser transports, while the
+application session uses `SameSite=Lax` so a top-level authorization launch can recognize an
+existing login. Authenticated session checks also upgrade cookies minted under the older Strict
+default, and the authorization page performs one same-site recheck so an existing Strict cookie
+can be recognized. A sandboxed popup's password form carries a five-minute, one-time proof bound
+to its exact authorization return path and a private browser cookie. Clank atomically consumes the
+proof, so hosted proxies may normalize Fetch Metadata without turning opaque-origin login into a
+broad origin bypass. MCP calls never use the browser cookie: they require the explicit resource-
+bound bearer token.
+
+Access tokens expire after one hour and the MCP client refreshes them without reopening the
+browser. Clank rotates the refresh token on every exchange. If two processes belonging to the
+same client retry the immediately previous token before they have persisted its replacement,
+Clank returns the exact same successor pair for up to 15 minutes. That response is stored only as
+an AES-GCM envelope keyed by the presented predecessor, so the database never contains recoverable
+plaintext credentials or their encryption key.
+
+Adaptive rotation is enabled by default for public-client interoperability. Some MCP clients have
+multiple credential replicas and can later submit an older refresh token even after another replica
+adopts its successor. Clank retains a bounded chain of AES-GCM handoffs, walks at most 64 links, and
+returns the one current unspent successor without creating a second refresh-token branch. Each link
+is encrypted with its predecessor credential, contains no plaintext credential or server-held key,
+and expires with its immediate successor. An invalid, expired, corrupted, or overlong adaptive
+chain is rejected without revoking a newer replica's grant. Recovery never extends the current
+successor's 30-day refresh lifetime.
+
+This compatibility behavior cannot distinguish a legitimate lagging replica from someone holding
+a copied predecessor bearer token. Use strict rotation when replay-driven family revocation is more
+important than interoperability with replicated public clients.
+
+Applications that need a shorter handoff window can configure it when opening the backend:
+
+```ts
+await openBackend(backend, {
+  agent: {
+    refreshTokenRetryLifetimeMs: 2 * 60 * 1000,
+  },
+});
+```
+
+The window accepts one second through one hour; 15 minutes is the interoperability-focused
+default for returning the exact same response. It does not create another refresh-token branch.
+
+Security-sensitive applications can require strict rotation. In strict mode, a predecessor used
+after the exact-response window revokes the family immediately and no multi-generation chain is
+retained:
+
+```ts
+await openBackend(backend, {
+  agent: {
+    refreshTokenRotationMode: "strict",
+  },
+});
+```
+
 The agent never receives the user's password, browser session cookie, or CSRF token. A read grant
 can list and call queries. A write grant can also call mutations. Normal application checks still
 apply, including required login, verified email, roles, record ownership, argument validation,
@@ -153,8 +216,8 @@ Each signed-in user can review their active clients at:
 https://my-app.apps.clank.run/__clank/oauth/access
 ```
 
-Making a grant read-only or revoking it changes the authority checked on the next request; a
-client does not retain its old write scope merely because it already initialized an MCP session.
+Making a grant read-only or revoking it changes the authority checked on the next request; every
+stateless MCP request revalidates its resource-bound token and current scopes.
 The inbox and its JSON API are stored in this app's isolated database. See [Agent access inbox and
 scoped grants](agent-access.md).
 
@@ -192,20 +255,28 @@ missing required actions fail with a structured `clank-agent-action-parity/1` re
 apps run this assertion from `npm test`.
 
 Clank fingerprints every agent-visible name, schema, description, scope, and annotation. A
-contract change produces a new revision. Discovery responses require revalidation, tool lists
-have a zero freshness lifetime, and a deployment invalidates existing MCP sessions so compliant
-clients initialize again and rediscover the current tools. An unknown stale tool also returns a
-structured refresh hint.
+contract change produces a new revision. Discovery responses require revalidation and tool lists
+have a zero freshness lifetime. MCP `2026-07-28` requests carry their complete protocol and client
+context on every POST, so rolling deploys and replica changes do not depend on process-local
+session state. An unknown stale tool also returns a structured refresh hint.
 
 This prevents the MCP action list from silently remaining on an older release while the UI moves
-ahead. A client connected before session-aware revisions were introduced may need one manual
-reconnect; later deployments refresh automatically.
+ahead. Legacy clients through `2025-11-25` still use bounded compatibility sessions and
+rediscover after a deployment invalidates one; current clients simply make the next stateless
+request.
 
 Apps that register durable workflow graphs also publish a `workflows` section in
 `GET /__clank/manifest`: input/output schemas, step job paths, dependency edges, descriptions, and
 side-effect metadata. The graph is documentation, not an authorization bypass. Make a workflow
 callable by wrapping `jobs.startWorkflow()` in an ordinary mutation; that mutation then supplies
 the MCP tool, authentication, roles, scopes, validation, confirmation policy, and audit boundary.
+
+Managed buckets follow the same freshness rule. Every declared bucket adds current
+`bucket_<name>_list`, `read`, `put`, and `delete` tools; image variants add `transform`. Bucket
+definitions are included in MCP metadata and the backend manifest, so changing MIME policy,
+ownership, quotas, or variants changes the contract revision and refreshes connected clients.
+OAuth supplies the owner identity—bucket tools never accept a user ID argument. See
+[Managed buckets](buckets.md).
 
 ## Verify an app's MCP surface
 
@@ -230,6 +301,47 @@ After deployment:
 - call representative queries and mutations as two different users to prove owned data remains
   isolated.
 
+For UI-backed tools, also authenticate MCPJam before running its MCP Apps conformance suite. An
+anonymous protocol check correctly receives OAuth `401` before it can inspect `tools/list` or
+`resources/read`; this is not a malformed JSON-RPC response.
+
 Continue with [Agent protocol](agent-protocol.md) for the full MCP transport, discovery, OAuth,
 scope, freshness, and security contract. Read [Full-stack applications](full-stack.md) for backend
 implementation details and [Authentication](auth.md) for application identity and authorization.
+
+## Agent activity explorer
+
+Enable bounded, persistent activity metadata on the application backend and add it to a local
+DevTools panel:
+
+```ts
+const backend = await openBackend(definition, {
+  path: "app.sqlite",
+  agentActivity: { maxEntries: 1000, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+});
+const inspector = createDevtools({ agentActivity: () => backend.inspectAgentActivity() });
+const panel = await serveDevtools(inspector);
+```
+
+Each recognized tool attempt records its declared name, required scope, granted read/write scopes,
+completion outcome (`ok`, `error`, or `denied`), start time, and duration. Backend function calls
+also record database revisions observed before and after execution. Those ranges can be compared
+with document history; concurrent writers may contribute changes inside them, so they are not an
+exclusive attribution of every revision to that tool. Bucket tools and authorization denials have
+no backend revision range. Anonymous/public calls show no granted OAuth scopes.
+
+`backend.inspectAgentActivity({ tool, outcome, scope, since })` filters retained events, newest
+first. `renderAgentActivity(snapshot)` provides escaped HTML for an existing authorized operator
+view. The backend inspection method is trusted server code, never an automatically exposed RPC or
+MCP tool. The built-in DevTools server binds to loopback only. Do not mount an unguarded inspector
+in the public application.
+
+Retention defaults to 1,000 calls/seven days, configurable up to 10,000 calls/30 days. Pruning runs
+on record and inspection. Records survive backend restarts in the application SQLite database.
+Arguments, outputs, error messages, cookies, bearer tokens, request URLs, and principal identities
+are excluded. Unknown tools and requests rejected before tool authorization are not retained.
+
+Standalone MCP servers can set `onToolActivity(event, request)` for their own metadata sink.
+The backend's sink reports storage failures through `onError`, while tool results remain intact.
+This explorer is an operational history, not a tamper-proof or transactionally complete audit log;
+a process crash or storage failure after a tool commits can leave a missing event.

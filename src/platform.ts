@@ -1,3 +1,4 @@
+import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
 import {
   AuthError,
   defineAuth,
@@ -25,6 +26,7 @@ import {
   planMigrations,
   restoreSQLiteBackup,
 } from "./migrations.ts";
+import { resolveEntitlements } from "./governance.ts";
 import {
   openBackupManager,
   type BackupManifest,
@@ -94,9 +96,11 @@ import {
   type DomainRoutingReport,
   type IngressAdmissionDecision,
   type IngressAdmissionRequest,
+  type IngressRoute,
   type IngressRequestMetric,
 } from "./data-plane.ts";
 import { platformConsolePage } from "./platform-console.ts";
+import { platformMarketingPage } from "./platform-marketing.ts";
 import {
   readRequestBytes,
   requestOriginAllowed,
@@ -105,6 +109,7 @@ import {
   trustedClientAddress,
 } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
+import { ensureDeploymentComparisons, recordDeploymentActivation, deploymentComparisonWindows } from "./platform-comparisons.ts";
 import type { ObjectStore } from "./object-storage.ts";
 import {
   createGithubActionsOidcVerifier,
@@ -153,6 +158,10 @@ export interface PlatformLimits {
   releasesPerProject?: number;
   /** Maximum retained release and pre-deploy snapshot bytes per project. Defaults to 20 GiB. */
   releaseStorageBytesPerProject?: number;
+  /** Maximum application bucket bytes across one project. Defaults to 5 GiB. */
+  bucketStorageBytesPerProject?: number;
+  /** Maximum application bucket objects across one project. Defaults to 100,000. */
+  bucketObjectsPerProject?: number;
   /** Maximum admitted requests per UTC month in one workspace. Defaults to 5,000,000. */
   requestsPerMonthPerOrganization?: number;
   /** Maximum known ingress plus declared-response bytes per UTC month in one workspace. Defaults to 100 GiB. */
@@ -212,6 +221,8 @@ export type PlatformQuotaKey =
   | "domainsPerProject"
   | "releasesPerProject"
   | "releaseStorageBytesPerProject"
+  | "bucketStorageBytesPerProject"
+  | "bucketObjectsPerProject"
   | "backupsPerProject"
   | "requestsPerMonthPerOrganization"
   | "transferBytesPerMonthPerOrganization"
@@ -272,6 +283,8 @@ const PLATFORM_QUOTA_KEYS = Object.freeze([
   "domainsPerProject",
   "releasesPerProject",
   "releaseStorageBytesPerProject",
+  "bucketStorageBytesPerProject",
+  "bucketObjectsPerProject",
   "backupsPerProject",
   "requestsPerMonthPerOrganization",
   "transferBytesPerMonthPerOrganization",
@@ -283,6 +296,8 @@ const WORKSPACE_QUOTA_KEYS = Object.freeze([
   "domainsPerProject",
   "releasesPerProject",
   "releaseStorageBytesPerProject",
+  "bucketStorageBytesPerProject",
+  "bucketObjectsPerProject",
   "backupsPerProject",
   "requestsPerMonthPerOrganization",
   "transferBytesPerMonthPerOrganization",
@@ -300,6 +315,18 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
     maximum: Number.MAX_SAFE_INTEGER,
     unit: "bytes",
     label: "Release storage per project",
+  },
+  bucketStorageBytesPerProject: {
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    unit: "bytes",
+    label: "Application bucket storage per project",
+  },
+  bucketObjectsPerProject: {
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+    unit: "objects",
+    label: "Application bucket objects per project",
   },
   backupsPerProject: { minimum: 1, maximum: 10_000, unit: "backups", label: "Retained backups per project" },
   requestsPerMonthPerOrganization: {
@@ -328,6 +355,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 }>);
 
 export interface ClankPlatformOptions {
+  /** Optional trusted credential probe. Without it, rotation validation checks format/encryption only. */
+  validateSecret?: SecretRotationOptions["validate"];
   dataDirectory: string;
   publicUrl: string;
   /** Recover active application processes before returning, or concurrently after startup. Defaults to "blocking". */
@@ -399,6 +428,8 @@ export interface ClankPlatformOptions {
   };
   /** Defaults to "bootstrap": only the first platform account may self-register. */
   signup?: boolean | "bootstrap";
+  /** Bounded password-hashing admission. Hash strength remains at the framework defaults. */
+  authentication?: { concurrency?: number; maxQueue?: number };
   masterKey?: string | Uint8Array;
   maxArtifactBytes?: number;
   /** Operator-only escape hatch for configs that request unrestricted SQLite SQL. */
@@ -438,9 +469,22 @@ export interface ClankPlatformOptions {
     /** Maximum time spent on one domain before its claim is released. Defaults to 10 seconds. */
     domainRecheckTimeoutMs?: number;
   };
+  /** Optional per-project local runtime sleeping. Existing projects remain always-on until changed. */
+  scaleToZero?: {
+    /** Policy assigned to newly created projects. Defaults to "always_on". */
+    defaultPolicy?: PlatformRuntimePolicy;
+    /** Idle time assigned to newly created projects. Defaults to 15 minutes. */
+    idleTimeoutMs?: number;
+    /** How often idle local runtimes are checked. Defaults to 30 seconds; false disables automatic sleeping. */
+    sweepIntervalMs?: number | false;
+    /** Maximum time to drain active responses before leaving a runtime online. Defaults to 30 seconds. */
+    drainTimeoutMs?: number;
+  };
   /** Receives unexpected failures for private operator logging. */
   onError?: (error: unknown) => void;
 }
+
+export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
 
 export interface PlatformRuntime {
   readonly handle: (request: Request) => Promise<Response>;
@@ -493,6 +537,9 @@ interface ProjectRow {
   parentProjectId: string | null;
   previewName: string | null;
   previewExpiresAt: number | null;
+  runtimePolicy: PlatformRuntimePolicy;
+  idleTimeoutMs: number;
+  lastRequestAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -657,6 +704,10 @@ const MAX_ACTIVE_RUNNER_ENROLLMENTS = 50;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
+  const authentication = {
+    concurrency: integerInRange(options.authentication?.concurrency ?? 2, "authentication.concurrency", 1, 16),
+    maxQueue: integerInRange(options.authentication?.maxQueue ?? 16, "authentication.maxQueue", 1, 128),
+  };
   // The platform is a dedicated control-plane process. A private umask keeps
   // SQLite journals, backups, logs, and generated launchers owner-readable only.
   (globalThis as any).process.umask?.(0o077);
@@ -689,6 +740,36 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     ? normalizeHostname(options.ingress.baseDomain)
     : undefined;
   const ingressEnabled = options.ingress?.enabled === true || Boolean(baseDomain);
+  const defaultRuntimePolicy = normalizeRuntimePolicy(
+    options.scaleToZero?.defaultPolicy ?? "always_on",
+  );
+  const defaultIdleTimeoutMs = integerInRange(
+    options.scaleToZero?.idleTimeoutMs ?? 15 * 60_000,
+    "scaleToZero.idleTimeoutMs",
+    1_000,
+    7 * 24 * 60 * 60_000,
+  );
+  const runtimeSweepIntervalMs = options.scaleToZero?.sweepIntervalMs === false
+    ? false
+    : integerInRange(
+        options.scaleToZero?.sweepIntervalMs ?? 30_000,
+        "scaleToZero.sweepIntervalMs",
+        1_000,
+        60 * 60_000,
+      );
+  const runtimeDrainTimeoutMs = integerInRange(
+    options.scaleToZero?.drainTimeoutMs ?? 30_000,
+    "scaleToZero.drainTimeoutMs",
+    100,
+    30_000,
+  );
+  if (!ingressEnabled && defaultRuntimePolicy !== "always_on") {
+    throw new PlatformError(
+      422,
+      "RUNTIME_POLICY_REQUIRES_INGRESS",
+      "On-demand and suspended runtime defaults require managed ingress.",
+    );
+  }
   const customDomainTarget = options.ingress?.customDomainTarget
     ? normalizeHostname(options.ingress.customDomainTarget)
     : baseDomain;
@@ -826,6 +907,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       1,
       Number.MAX_SAFE_INTEGER,
     ),
+    bucketStorageBytesPerProject: integerInRange(
+      options.limits?.bucketStorageBytesPerProject ?? 5 * 1024 * 1024 * 1024,
+      "limits.bucketStorageBytesPerProject",
+      1,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    bucketObjectsPerProject: integerInRange(
+      options.limits?.bucketObjectsPerProject ?? 100_000,
+      "limits.bucketObjectsPerProject",
+      1,
+      Number.MAX_SAFE_INTEGER,
+    ),
     requestsPerMonthPerOrganization: integerInRange(
       options.limits?.requestsPerMonthPerOrganization ?? DEFAULT_REQUESTS_PER_MONTH,
       "limits.requestsPerMonthPerOrganization",
@@ -858,6 +951,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     domainsPerProject: limits.domainsPerProject,
     releasesPerProject: limits.releasesPerProject,
     releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
+    bucketStorageBytesPerProject: limits.bucketStorageBytesPerProject,
+    bucketObjectsPerProject: limits.bucketObjectsPerProject,
     backupsPerProject: backupPolicy.maxBackups,
     requestsPerMonthPerOrganization: limits.requestsPerMonthPerOrganization,
     transferBytesPerMonthPerOrganization: limits.transferBytesPerMonthPerOrganization,
@@ -922,7 +1017,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     : signupMode === false
       ? "disabled"
       : "bootstrap";
-  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey);
+  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication);
+  const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
@@ -1128,7 +1224,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     : null;
   const leaseOwner = `control-${(globalThis as any).process?.pid ?? 0}-${crypto.randomUUID()}`;
   const active = new Map<string, ActiveProcess>();
+  const consumedSecrets = new WeakMap<ActiveProcess, readonly SecretRevision[]>();
   const starting = new Set<ActiveProcess>();
+  const runtimeTransitions = new Set<string>();
+  const runtimeActivity = new Map<string, number>();
+  const persistedRuntimeActivity = new Map<string, number>();
+  let prepareIngressRoute: ((route: Readonly<IngressRoute>) => Promise<void>) | undefined;
   const reservedRolloutPorts = new Set<number>();
   const unavailableApplicationPorts = (): ReadonlySet<number> => new Set([
     ...reservedAppPorts,
@@ -1275,7 +1376,17 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
   const recordIngressMetric = (metric: IngressRequestMetric): void => {
     recordMetric(storage.internal, metric);
-    if (metric.admitted) recordUsageResponse(storage.internal, metric);
+    if (metric.admitted) {
+      recordUsageResponse(storage.internal, metric);
+      runtimeActivity.set(metric.projectId, metric.recordedAt);
+      const persistedAt = persistedRuntimeActivity.get(metric.projectId) ?? 0;
+      if (metric.recordedAt - persistedAt >= 60_000) {
+        storage.internal.prepare(`UPDATE clank_platform_projects
+          SET last_request_at = ? WHERE id = ? AND (last_request_at IS NULL OR last_request_at < ?)`)
+          .run(metric.recordedAt, metric.projectId, metric.recordedAt);
+        persistedRuntimeActivity.set(metric.projectId, metric.recordedAt);
+      }
+    }
     if (metric.recordedAt - lastMetricPrune >= 60 * 60_000) {
       lastMetricPrune = metric.recordedAt;
       storage.internal.prepare("DELETE FROM clank_platform_metrics WHERE bucket_started_at < ?")
@@ -1290,6 +1401,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           active,
           masterKey,
           orchestrator,
+          runtimeTransitions,
         ),
         timeoutMs: options.ingress?.timeoutMs,
         maxBodyBytes: options.ingress?.maxBodyBytes,
@@ -1297,6 +1409,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? { allowedUpstreamHosts: providerPlacement.allowedProviderHosts }
           : {}),
         admitRequest: admitIngressRequest,
+        prepareRoute: async (route) => {
+          if (!prepareIngressRoute) throw new Error("Application runtime preparation is unavailable.");
+          await prepareIngressRoute(route);
+        },
         onRequest: recordIngressMetric,
       })
     : undefined;
@@ -1582,6 +1698,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   ): Promise<{ dataRoot: string; environment: Record<string, string> }> => {
     const dataRoot = await projectDataDirectory(paths.projects, project.id);
     const databaseHostPath = await safeProjectDataPath(dataRoot, release.config.database.path);
+    const effectiveQuotas = projectQuotas(storage.internal, project, quotaDefaults);
     return {
       dataRoot,
       environment: {
@@ -1591,6 +1708,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         PORT: String(port),
         CLANK_DATABASE_PATH: databaseHostPath,
         CLANK_DATABASE: databaseHostPath,
+        CLANK_BUCKET_ROOT: `${dataRoot}/buckets`,
+        CLANK_BUCKET_SIGNING_KEY: projectBucketSigningKey(masterKey, project.id),
+        CLANK_BUCKET_PREFIX: project.id,
+        CLANK_BUCKET_MAX_BYTES: String(effectiveQuotas.bucketStorageBytesPerProject),
+        CLANK_BUCKET_MAX_OBJECTS: String(effectiveQuotas.bucketObjectsPerProject),
+        CLANK_PUBLIC_ORIGIN: appUrlTemplate
+          .replaceAll("{slug}", project.slug)
+          .replaceAll("{port}", String(port)),
         PROACT_DATABASE_PATH: databaseHostPath,
         PROACT_DATABASE: databaseHostPath,
         // Managed applications are reachable only through the loopback-bound
@@ -1613,6 +1738,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     secrets: Record<string, string>,
     port: number,
   ): Promise<ActiveProcess> => {
+    const secretRevisions = secretRotations.revisions(project.id, secrets);
     const { dataRoot, environment } = await releaseLaunchContext(project, release, secrets, port);
     await assertPortAvailable(port);
     const child = await spawnRelease(
@@ -1659,6 +1785,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       if (closed) throw new Error("Platform closed while the application was starting.");
       await launchBackgroundProcesses(running, release, dataRoot, port, environment, secrets);
+      consumedSecrets.set(running, secretRevisions);
       return running;
     } catch (error) {
       await stopRunning(running);
@@ -1677,7 +1804,94 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     if (current) await stopRunning(current);
     const running = await launchRelease(project, release, secrets, project.port);
     active.set(project.id, running);
+    runtimeActivity.set(project.id, Date.now());
     return running;
+  };
+
+  const releaseRequiresContinuousRuntime = (release: ReleaseRow): boolean => Boolean(
+    release.config.jobs
+    && (release.config.jobs.workers > 0 || release.config.jobs.scheduler),
+  );
+
+  const quiesceProject = async (project: ProjectRow, reason: string): Promise<boolean> => {
+    const running = active.get(project.id);
+    if (!running || !ingress) return false;
+    runtimeTransitions.add(project.id);
+    try {
+      const drained = await ingress.drain(`http://127.0.0.1:${running.port}`, runtimeDrainTimeoutMs);
+      if (!drained) {
+        recordLog(project.id, running.releaseId, "platform", "Idle sleep skipped because active responses did not drain.");
+        return false;
+      }
+      cancelRestart(project.id);
+      await stopProject(project.id);
+      recordLog(project.id, running.releaseId, "platform", reason);
+      return true;
+    } finally {
+      runtimeTransitions.delete(project.id);
+    }
+  };
+
+  prepareIngressRoute = async (route) => {
+    await withProjectLock(route.projectId, async () => {
+      const project = projectById(storage.internal, route.projectId);
+      if (!project || project.placement !== "local" || !project.activeReleaseId) {
+        throw new PlatformError(503, "RUNTIME_UNAVAILABLE", "Application runtime is unavailable.", 1);
+      }
+      if (project.runtimePolicy === "suspended") {
+        throw new PlatformError(503, "RUNTIME_SUSPENDED", "Application runtime is suspended.", 1);
+      }
+      if (active.has(project.id)) return;
+      const release = releaseById(storage.internal, project.activeReleaseId);
+      if (!release) throw new PlatformError(503, "RUNTIME_UNAVAILABLE", "Application runtime is unavailable.", 1);
+      await startRelease(project, release, decryptProjectSecrets(storage.internal, project.id, masterKey));
+      recordLog(project.id, release.id, "platform", "Runtime woke for an admitted application request.");
+    });
+  };
+
+  let runtimeSweepTimer: ReturnType<typeof setTimeout> | undefined;
+  let runtimeSweepFlight: Promise<void> | undefined;
+  const sweepIdleRuntimes = async (): Promise<void> => {
+    if (closed || !ingress || runtimeSweepFlight) return runtimeSweepFlight;
+    const flight = (async () => {
+      const now = Date.now();
+      const candidates = storage.internal.prepare(`SELECT * FROM clank_platform_projects
+        WHERE placement = 'local' AND active_release_id IS NOT NULL AND runtime_policy = 'on_demand'
+        ORDER BY id`).all().map(projectRow);
+      for (const candidate of candidates) {
+        if (closed || !active.has(candidate.id)) continue;
+        await withProjectLock(candidate.id, async () => {
+          const project = projectById(storage.internal, candidate.id);
+          if (!project || project.runtimePolicy !== "on_demand" || !project.activeReleaseId) return;
+          const release = releaseById(storage.internal, project.activeReleaseId);
+          if (!release || releaseRequiresContinuousRuntime(release)) return;
+          const lastActivity = Math.max(
+            project.lastRequestAt ?? project.updatedAt,
+            runtimeActivity.get(project.id) ?? 0,
+          );
+          if (now - lastActivity < project.idleTimeoutMs) return;
+          await quiesceProject(project, `Runtime slept after ${project.idleTimeoutMs} ms without an application request.`);
+        }).catch((error) => {
+          if (!closed) {
+            try { options.onError?.(error); } catch { /* Operator reporting must not stop future sweeps. */ }
+          }
+        });
+      }
+    })();
+    runtimeSweepFlight = flight;
+    try {
+      await flight;
+    } finally {
+      if (runtimeSweepFlight === flight) runtimeSweepFlight = undefined;
+    }
+  };
+  const scheduleRuntimeSweep = (): void => {
+    if (runtimeSweepIntervalMs === false || !ingress || closed) return;
+    runtimeSweepTimer = setTimeout(() => {
+      runtimeSweepTimer = undefined;
+      void sweepIdleRuntimes().finally(scheduleRuntimeSweep);
+    }, runtimeSweepIntervalMs);
+    runtimeSweepTimer.unref?.();
   };
 
   const reserveRolloutPort = async (project: ProjectRow): Promise<number> => {
@@ -1774,6 +1988,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     );
     const activatedAt = Date.now();
     storage.internal.transaction((changes) => {
+      recordDeploymentActivation(storage.internal, project.id, release.id, activatedAt);
       storage.internal.prepare(
         "UPDATE clank_platform_releases SET status = 'active', activated_at = ?, failure = NULL WHERE id = ?",
       ).run(activatedAt, release.id);
@@ -2030,6 +2245,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const environment = providerRuntimeEnvironment(
       config,
       decryptProjectSecrets(storage.internal, project.id, masterKey),
+      {
+        signingKey: projectBucketSigningKey(masterKey, project.id),
+        prefix: project.id,
+        publicOrigin: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
+        maxBytes: projectQuotas(storage.internal, project, quotaDefaults).bucketStorageBytesPerProject,
+        maxObjects: projectQuotas(storage.internal, project, quotaDefaults).bucketObjectsPerProject,
+      },
     );
     const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
     const databaseMode = project.activeGeneration === null
@@ -2264,6 +2486,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const environment = providerRuntimeEnvironment(
       currentRelease.config,
       decryptProjectSecrets(storage.internal, project.id, masterKey),
+      {
+        signingKey: projectBucketSigningKey(masterKey, project.id),
+        prefix: project.id,
+        publicOrigin: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
+        maxBytes: projectQuotas(storage.internal, project, quotaDefaults).bucketStorageBytesPerProject,
+        maxObjects: projectQuotas(storage.internal, project, quotaDefaults).bucketObjectsPerProject,
+      },
     );
     const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
     storage.internal.prepare(`INSERT INTO clank_platform_provider_generations
@@ -2503,6 +2732,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const environment = providerRuntimeEnvironment(
       currentRelease.config,
       decryptProjectSecrets(storage.internal, project.id, masterKey),
+      {
+        signingKey: projectBucketSigningKey(masterKey, project.id),
+        prefix: project.id,
+        publicOrigin: appUrlTemplate.replaceAll("{slug}", project.slug).replaceAll("{port}", String(project.port)),
+        maxBytes: projectQuotas(storage.internal, project, quotaDefaults).bucketStorageBytesPerProject,
+        maxObjects: projectQuotas(storage.internal, project, quotaDefaults).bucketObjectsPerProject,
+      },
     );
     const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
     storage.internal.transaction((changes) => {
@@ -3219,6 +3455,75 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
   };
 
+  const restorePreviewFixture = async (principal: TokenPrincipal, parent: ProjectRow, preview: ProjectRow, bytes: Uint8Array, digest: string) => {
+    const release = preview.activeReleaseId ? releaseById(storage.internal, preview.activeReleaseId) : null;
+    if (!release || !preview.databasePath) throw new PlatformError(409, "PREVIEW_DATA_TARGET_UNAVAILABLE", "Deploy the preview before seeding fixtures.");
+    const temporary = await releaseBackupPath(paths.projects, preview.id, `fixture-upload-${await randomId(8)}`);
+    const verified = await releaseBackupPath(paths.projects, preview.id, `fixture-verified-${await randomId(8)}`);
+    let safety: string | null = null;
+    const fsName = "node:fs/promises", sqliteName = "node:sqlite", pathName = "node:path";
+    const [fs, sqlite, path] = await Promise.all([import(fsName), import(sqliteName), import(pathName)]);
+    try {
+      await fs.writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
+      await backupSQLite(temporary, verified);
+      const database = new sqlite.DatabaseSync(verified, { readOnly: true });
+      let manifest: Record<string, unknown>;
+      try {
+        const entries = database.prepare("SELECT protocol, users, records FROM clank_preview_fixture LIMIT 2").all();
+        if (entries.length !== 1 || entries[0].protocol !== "clank-preview-fixture/1"
+          || !Number.isSafeInteger(entries[0].users) || entries[0].users < 0 || entries[0].users > 20
+          || !Number.isSafeInteger(entries[0].records) || entries[0].records < 0 || entries[0].records > 10_000) throw new Error("Invalid fixture manifest.");
+        manifest = entries[0];
+      } finally { database.close(); }
+      if (preview.placement === "provider") {
+        const effective = projectQuotas(storage.internal, preview, quotaDefaults);
+        const manager = await projectBackupManager(paths.projects, preview, masterKey,
+          { ...backupPolicy, maxBackups: effective.backupsPerProject }, backupObjects);
+        let backup: BackupManifest;
+        try { backup = await manager.createFromSnapshot({ bytes: await fs.readFile(verified), source: path.basename(preview.databasePath), reason: "synthetic preview fixture" }); }
+        finally { manager.close(); }
+        backupScheduler.recordBackup(preview.id, backup);
+        await queueProviderRestore(principal, preview, release, backup.id);
+      } else {
+        const migrationDirectory = await safeReleasePath(release.directory, release.config.database.migrations);
+        await applyMigrations({ path: verified, directory: migrationDirectory, allowUnsafe: release.config.database.allowUnsafeMigrations });
+        const dataRoot = await projectDataDirectory(paths.projects, preview.id);
+        const target = await safeProjectDataPath(dataRoot, preview.databasePath);
+        safety = await releaseBackupPath(paths.projects, preview.id, `fixture-safety-${await randomId(8)}`);
+        cancelRestart(preview.id);
+        await stopProject(preview.id);
+        let copied = false;
+        try {
+          await backupSQLite(target, safety);
+          copied = true;
+          await restoreSQLiteBackup(verified, target);
+          await startRelease(preview, release, decryptProjectSecrets(storage.internal, preview.id, masterKey));
+        } catch (error) {
+          await stopProject(preview.id);
+          if (copied) await restoreSQLiteBackup(safety, target);
+          await startRelease(preview, release, decryptProjectSecrets(storage.internal, preview.id, masterKey));
+          throw error;
+        }
+      }
+      const createdAt = Date.now();
+      storage.internal.prepare("DELETE FROM clank_platform_preview_data_branches WHERE preview_project_id = ?").run(preview.id);
+      storage.internal.prepare(`INSERT INTO clank_platform_preview_fixtures(preview_project_id, digest, bytes, created_at)
+        VALUES (?, ?, ?, ?) ON CONFLICT(preview_project_id) DO UPDATE SET digest = excluded.digest,
+          bytes = excluded.bytes, created_at = excluded.created_at`).run(preview.id, digest, bytes.byteLength, createdAt);
+      audit(storage.internal, principal.userId, principal.tokenId, preview.id, "preview.fixture.seed", {
+        parentProjectId: parent.id, previewName: preview.previewName, digest, bytes: bytes.byteLength,
+        users: manifest.users, records: manifest.records,
+      });
+      return { mode: "fixture", digest, bytes: bytes.byteLength, users: manifest.users, records: manifest.records, createdAt };
+    } catch (error) {
+      if (error instanceof PlatformError) throw error;
+      throw new PlatformError(422, "PREVIEW_FIXTURE_FAILED", "Fixture validation, migration, or activation failed. Check the fixture against the preview release.");
+    } finally {
+      await removeSensitiveSQLiteFiles(temporary); await removeSensitiveSQLiteFiles(verified);
+      if (safety) await removeSensitiveSQLiteFiles(safety);
+    }
+  };
+
   const branchSanitizedPreviewData = async (
     principal: TokenPrincipal,
     parent: ProjectRow,
@@ -3486,6 +3791,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (!project || project.activeReleaseId !== releaseId) return;
         const release = releaseById(storage.internal, releaseId);
         if (!release) return;
+        if (
+          project.runtimePolicy === "suspended"
+          || (project.runtimePolicy === "on_demand" && !releaseRequiresContinuousRuntime(release))
+        ) {
+          cancelRestart(projectId);
+          return;
+        }
         try {
           await startRelease(project, release, decryptProjectSecrets(storage.internal, project.id, masterKey));
           storage.internal.prepare(
@@ -3764,6 +4076,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       const activatedAt = Date.now();
       storage.internal.transaction((changes) => {
+        recordDeploymentActivation(storage.internal, project.id, releaseId, activatedAt);
         storage.internal.prepare(
           "UPDATE clank_platform_releases SET status = 'active', activated_at = ?, failure = NULL WHERE id = ?",
         ).run(activatedAt, releaseId);
@@ -3812,6 +4125,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         digest,
         previousReleaseId,
       });
+      runtimeActivity.set(project.id, activatedAt);
+      if (project.runtimePolicy === "suspended") {
+        await quiesceProject(
+          { ...refreshedProject, activeReleaseId: releaseId, updatedAt: activatedAt },
+          "Runtime stayed suspended after its release passed deployment health checks.",
+        );
+      }
       backupScheduler.registerProject(project.id);
       return activatedResult;
     } catch (error) {
@@ -4038,6 +4358,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       await startRelease(project, target, decryptProjectSecrets(storage.internal, project.id, masterKey));
       const now = Date.now();
       storage.internal.transaction((changes) => {
+        recordDeploymentActivation(storage.internal, project.id, target.id, now);
         storage.internal.prepare("UPDATE clank_platform_releases SET status = 'inactive' WHERE id = ?").run(current.id);
         storage.internal.prepare("UPDATE clank_platform_releases SET status = 'active', activated_at = ? WHERE id = ?")
           .run(now, target.id);
@@ -4176,6 +4497,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const activeRelease = project.activeReleaseId
       ? releaseById(storage.internal, project.activeReleaseId)
       : null;
+    const wasRunning = active.has(project.id);
     const summary = projectDeletionSummary(storage.internal, project.id);
     cancelRestart(project.id);
     if (project.placement === "provider") {
@@ -4213,7 +4535,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       });
     } catch (error) {
       try { options.onError?.(error); } catch { /* Operator reporting must not alter recovery. */ }
-      if (project.placement === "local" && activeRelease) {
+      if (project.placement === "local" && activeRelease && wasRunning) {
         try {
           await startRelease(project, activeRelease, decryptProjectSecrets(storage.internal, project.id, masterKey));
         } catch (restartError) {
@@ -4265,6 +4587,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         "Site files were removed, but control metadata cleanup failed. Retry the deletion.",
       );
     }
+    runtimeActivity.delete(project.id);
+    persistedRuntimeActivity.delete(project.id);
+    runtimeTransitions.delete(project.id);
     return {
       id: project.id,
       organizationId: project.organizationId,
@@ -4559,6 +4884,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       if (consolePath) {
         const auth = await storage.auth.resolve(request);
+        if (consolePath === "/" && !auth.user) {
+          return platformMarketingPage(publicUrl);
+        }
         const impersonation = auth.user && auth.session
           ? resolvePlatformImpersonation(storage.internal, request, auth)
           : null;
@@ -5662,6 +5990,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           customDomainAddresses,
           Boolean(tlsAskToken),
           domainReconciliation,
+          Boolean(ingress),
           {
             enabled: providerPlacement !== null,
             default: providerPlacement?.default ?? "local",
@@ -6061,12 +6390,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? storage.internal.prepare(`SELECT p.* FROM clank_platform_projects p
               JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
               WHERE p.id = ? AND m.user_id = ?`).all(principal.projectId, principal.userId)
-          : storage.internal.prepare(`SELECT DISTINCT p.* FROM clank_platform_projects p
-              LEFT JOIN clank_platform_memberships m
-                ON m.organization_id = p.organization_id AND m.user_id = ?
-              WHERE p.parent_project_id IS NULL
-                AND (m.user_id IS NOT NULL OR p.owner_id = ?) ORDER BY p.created_at`)
-              .all(principal.userId, principal.userId);
+          : visibleRootProjectRows(storage.internal, principal.userId);
         const usageRows = storage.internal.prepare(`SELECT organization_id, count(*) AS count
           FROM clank_platform_projects WHERE organization_id IN (
             SELECT organization_id FROM clank_platform_memberships WHERE user_id = ?
@@ -6128,9 +6452,21 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             port = allocatePort(storage.internal, appPortStart, appPortEnd, unavailableApplicationPorts());
             storage.internal.prepare(`INSERT INTO clank_platform_projects
               (id, owner_id, organization_id, name, slug, port, active_release_id,
-               database_path, placement, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)`)
-              .run(id, principal.userId, organizationId, name, slug, port, placement, now, now);
+               database_path, placement, runtime_policy, idle_timeout_ms, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`)
+              .run(
+                id,
+                principal.userId,
+                organizationId,
+                name,
+                slug,
+                port,
+                placement,
+                placement === "provider" ? "always_on" : defaultRuntimePolicy,
+                defaultIdleTimeoutMs,
+                now,
+                now,
+              );
             changes.record("__platform", organizationId);
           });
         } catch (error) {
@@ -6167,7 +6503,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? "deploy"
         : operation === "rollback"
           ? "rollback"
-          : operation.startsWith("backups") && request.method !== "GET"
+        : operation === "runtime" || operation.startsWith("runtime/")
+          ? "deploy"
+        : operation.startsWith("backups") && request.method !== "GET"
             ? "rollback"
           : operation.startsWith("jobs") && request.method !== "GET"
             ? "jobs"
@@ -6203,6 +6541,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           "SELECT count(*) AS count FROM clank_platform_domains WHERE project_id = ?",
         ).get(project.id)?.count ?? 0);
         const releaseUsage = releaseStorageUsage(storage.internal, project.id);
+        const bucketUsage = await inspectProjectBucketUsage(paths.projects, project);
+        const runtimeOnline = projectRuntimeOnline(storage.internal, active, project);
+        const sleepEligible = Boolean(ingress)
+          && project.placement === "local"
+          && Boolean(release)
+          && !releaseRequiresContinuousRuntime(release!);
+        const runtimeStatus = runtimeOnline
+          ? "online"
+          : project.runtimePolicy === "suspended"
+            ? "suspended"
+            : project.runtimePolicy === "on_demand" && sleepEligible
+              ? "sleeping"
+              : release ? "degraded" : "not_deployed";
         return api({
           ok: true,
           project: {
@@ -6212,9 +6563,17 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             directUrl: project.placement === "local"
               ? `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`
               : null,
-            runtimeStatus: projectRuntimeOnline(storage.internal, active, project)
-              ? "online"
-              : release ? "degraded" : "not_deployed",
+            runtimeStatus,
+          },
+          runtime: {
+            policy: project.runtimePolicy,
+            state: runtimeStatus,
+            idleTimeoutMs: project.idleTimeoutMs,
+            lastRequestAt: project.lastRequestAt,
+            sleepEligible,
+            ...(release && releaseRequiresContinuousRuntime(release)
+              ? { sleepBlockedReason: "Background workers or a scheduler require a continuous runtime." }
+              : {}),
           },
           activeRelease: release ? publicRelease(release) : null,
           access: {
@@ -6222,10 +6581,97 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             canDelete: principal.projectId === null && (access.role === "owner" || access.role === "admin"),
             canOperateJobs: roleAllows(access.role, "jobs")
               && (!principal.projectId || principal.permissions.includes("jobs")),
+            canManageRuntime: roleAllows(access.role, "deploy")
+              && (!principal.projectId || principal.permissions.includes("deploy")),
           },
           limits: publicLimits(effective, options.maxArtifactBytes, limits.metricRetentionDays),
           usage: { domains: domainCount, ...releaseUsage },
+          buckets: {
+            usage: bucketUsage,
+            limits: {
+              bytes: effective.bucketStorageBytesPerProject,
+              objects: effective.bucketObjectsPerProject,
+            },
+          },
         });
+      }
+      if (operation === "runtime" && request.method === "PUT") {
+        const input = plainObject(await readJsonRequest(request, 8 * 1024));
+        exact(input, ["policy", "idleTimeoutMs"]);
+        const policy = normalizeRuntimePolicy(input.policy);
+        const idleTimeoutMs = input.idleTimeoutMs === undefined
+          ? project.idleTimeoutMs
+          : integerInRange(input.idleTimeoutMs, "idleTimeoutMs", 1_000, 7 * 24 * 60 * 60_000);
+        if ((!ingress || project.placement !== "local") && policy !== "always_on") {
+          throw new PlatformError(409, "RUNTIME_POLICY_UNAVAILABLE", "On-demand and suspended policies require a local runtime behind managed ingress.");
+        }
+        const changed = await withProjectLock(project.id, async () => {
+          const current = projectById(storage.internal, project.id);
+          if (!current) throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
+          const release = current.activeReleaseId ? releaseById(storage.internal, current.activeReleaseId) : null;
+          if (policy === "suspended" && active.has(current.id)) {
+            const stopped = await quiesceProject(current, "Runtime was suspended by a project administrator.");
+            if (!stopped) {
+              throw new PlatformError(409, "RUNTIME_DRAIN_TIMEOUT", "The runtime still has active responses. Try suspending it again.", 1);
+            }
+          }
+          if (policy === "always_on" && current.placement === "local" && release && !active.has(current.id)) {
+            await startRelease(current, release, decryptProjectSecrets(storage.internal, current.id, masterKey));
+            recordLog(current.id, release.id, "platform", "Runtime was started by a project administrator.");
+          }
+          const now = Date.now();
+          storage.internal.transaction((changes) => {
+            storage.internal.prepare(`UPDATE clank_platform_projects
+              SET runtime_policy = ?, idle_timeout_ms = ?, updated_at = ? WHERE id = ?`)
+              .run(policy, idleTimeoutMs, now, current.id);
+            changes.record("__platform", current.organizationId ?? current.id);
+          });
+          audit(storage.internal, principal.userId, principal.tokenId, current.id, "runtime.policy", {
+            previousPolicy: current.runtimePolicy,
+            policy,
+            previousIdleTimeoutMs: current.idleTimeoutMs,
+            idleTimeoutMs,
+          });
+          return projectById(storage.internal, current.id)!;
+        });
+        return api({ ok: true, project: projectPayload(changed) });
+      }
+      if (operation === "runtime/sleep" && request.method === "POST") {
+        exact(plainObject(await readJsonRequest(request, 1_024)), []);
+        const slept = await withProjectLock(project.id, async () => {
+          const current = projectById(storage.internal, project.id);
+          if (!current || !current.activeReleaseId) {
+            throw new PlatformError(409, "RUNTIME_NOT_DEPLOYED", "Deploy this project before managing its runtime.");
+          }
+          if (current.placement !== "local" || current.runtimePolicy !== "on_demand") {
+            throw new PlatformError(409, "RUNTIME_POLICY_UNAVAILABLE", "Manual sleep requires a local on-demand runtime.");
+          }
+          const release = releaseById(storage.internal, current.activeReleaseId);
+          if (!release || releaseRequiresContinuousRuntime(release)) {
+            throw new PlatformError(409, "RUNTIME_REQUIRES_CONTINUITY", "Background workers or a scheduler require a continuous runtime.");
+          }
+          return await quiesceProject(current, "Runtime was put to sleep by a project administrator.");
+        });
+        return api({ ok: true, slept });
+      }
+      if (operation === "runtime/wake" && request.method === "POST") {
+        exact(plainObject(await readJsonRequest(request, 1_024)), []);
+        const woke = await withProjectLock(project.id, async () => {
+          const current = projectById(storage.internal, project.id);
+          if (!current || !current.activeReleaseId) {
+            throw new PlatformError(409, "RUNTIME_NOT_DEPLOYED", "Deploy this project before managing its runtime.");
+          }
+          if (current.placement !== "local" || current.runtimePolicy === "suspended") {
+            throw new PlatformError(409, "RUNTIME_POLICY_UNAVAILABLE", "This runtime cannot be woken until its policy changes.");
+          }
+          if (active.has(current.id)) return false;
+          const release = releaseById(storage.internal, current.activeReleaseId);
+          if (!release) throw new PlatformError(409, "RUNTIME_NOT_DEPLOYED", "The active release is unavailable.");
+          await startRelease(current, release, decryptProjectSecrets(storage.internal, current.id, masterKey));
+          recordLog(current.id, release.id, "platform", "Runtime was woken by a project administrator.");
+          return true;
+        });
+        return api({ ok: true, woke });
       }
       if (operation === "github-previews" && request.method === "GET") {
         if (project.parentProjectId) {
@@ -6381,15 +6827,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               mode, report, created_at
             FROM clank_platform_preview_data_branches WHERE preview_project_id = ?`)
             .get(preview.id);
+          const fixture = storage.internal.prepare("SELECT digest, bytes, created_at FROM clank_platform_preview_fixtures WHERE preview_project_id = ?").get(preview.id);
           return {
             ...projectPayload(preview),
             url: appUrlTemplate.replaceAll("{slug}", preview.slug)
               .replaceAll("{port}", String(active.get(preview.id)?.port ?? preview.port)),
-            runtimeStatus: projectRuntimeOnline(storage.internal, active, preview)
-              ? "online"
-              : release ? "degraded" : "not_deployed",
+            runtimeStatus: projectRuntimeState(storage.internal, active, preview, release, Boolean(ingress)),
             activeRelease: release ? publicRelease(release) : null,
-            dataBranch: branch ? {
+            dataBranch: fixture && (!branch || Number(fixture.created_at) > Number(branch.created_at))
+              ? { mode: "fixture", digest: fixture.digest, bytes: Number(fixture.bytes), createdAt: Number(fixture.created_at) }
+              : branch ? {
               mode: String(branch.mode),
               sourceReleaseId: String(branch.source_release_id),
               targetReleaseId: String(branch.target_release_id),
@@ -6522,8 +6969,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               port = allocatePort(storage.internal, appPortStart, appPortEnd, unavailableApplicationPorts());
               storage.internal.prepare(`INSERT INTO clank_platform_projects
                 (id, owner_id, organization_id, name, slug, port, active_release_id, database_path,
-                  placement, parent_project_id, preview_name, preview_expires_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)`)
+                  placement, parent_project_id, preview_name, preview_expires_at,
+                  runtime_policy, idle_timeout_ms, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`)
                 .run(
                   id,
                   principal.userId,
@@ -6535,6 +6983,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                   current.id,
                   previewName,
                   expiresAt,
+                  current.placement === "provider" ? "always_on" : current.runtimePolicy,
+                  current.idleTimeoutMs,
                   now,
                   now,
                 );
@@ -6567,14 +7017,40 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             ...projectPayload(result.preview),
             url: appUrlTemplate.replaceAll("{slug}", result.preview.slug)
               .replaceAll("{port}", String(result.preview.port)),
-            runtimeStatus: projectRuntimeOnline(storage.internal, active, result.preview)
-              ? "online"
-              : result.preview.activeReleaseId ? "degraded" : "not_deployed",
+            runtimeStatus: projectRuntimeState(
+              storage.internal,
+              active,
+              result.preview,
+              result.preview.activeReleaseId
+                ? releaseById(storage.internal, result.preview.activeReleaseId)
+                : null,
+              Boolean(ingress),
+            ),
           },
         }, result.created ? 201 : 200);
       }
+      const fixtureMatch = /^previews\/([A-Za-z0-9_-]{8,128})\/fixture$/.exec(operation);
+      if (fixtureMatch && request.method === "POST") {
+        if (fixtureMatch[1] === project.id) throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
+        if (project.parentProjectId) throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Use the production project's preview endpoint.");
+        if (request.headers.get("content-type") !== "application/vnd.clank.preview-fixture+sqlite") throw new PlatformError(415, "INVALID_FIXTURE_TYPE", "Upload a Clank preview fixture database.");
+        const bytes = await readRequestBytes(request, Math.min(32 * 1024 * 1024, backupPolicy.maxDatabaseBytes));
+        const digest = await deploymentRuntimeDigest(bytes);
+        if (request.headers.get("x-clank-content-sha256") !== digest) throw new PlatformError(422, "FIXTURE_DIGEST_MISMATCH", "Fixture checksum did not match.");
+        const result = await withProjectLock(project.id, () => withProjectLock(fixtureMatch[1]!, async () => {
+          const parent = projectById(storage.internal, project.id);
+          const preview = projectById(storage.internal, fixtureMatch[1]!);
+          if (!parent || parent.parentProjectId || !preview || preview.parentProjectId !== parent.id || !preview.previewName
+            || (preview.previewExpiresAt ?? 0) <= Date.now()
+            || (principal.previewName !== null && principal.previewName !== preview.previewName)) throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
+          if (request.headers.get("x-clank-fixture-confirmation") !== `seed-preview ${preview.previewName}`) throw new PlatformError(400, "CONFIRMATION_REQUIRED", "Confirm replacement of this preview's data.");
+          return restorePreviewFixture(principal, parent, preview, bytes, digest);
+        }));
+        return api({ ok: true, data: result });
+      }
       const previewDataMatch = /^previews\/([A-Za-z0-9_-]{8,128})\/data$/.exec(operation);
       if (previewDataMatch && request.method === "POST") {
+        if (previewDataMatch[1] === project.id) throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
         if (project.parentProjectId) {
           throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Use the production project's preview endpoint.");
         }
@@ -6613,6 +7089,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       const previewDeleteMatch = /^previews\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
       if (previewDeleteMatch && request.method === "DELETE") {
+        if (previewDeleteMatch[1] === project.id) throw new PlatformError(404, "PREVIEW_NOT_FOUND", "Preview environment not found.");
         if (project.parentProjectId) {
           throw new PlatformError(409, "PREVIEW_PARENT_REQUIRED", "Use the production project's preview endpoint.");
         }
@@ -6682,6 +7159,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               },
             };
           }),
+          comparison: projectDeploymentComparison(storage.internal, project),
           usage: releaseStorageUsage(storage.internal, project.id),
           limits: {
             releases: effective.releasesPerProject,
@@ -7335,6 +7813,36 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         return api({ ok: true, logs, runtime });
       }
+      if (operation === "secrets/rotations" && request.method === "GET") {
+        const current = secretRotations.revisions(project.id);
+        const running = active.get(project.id);
+        let consumed = running ? consumedSecrets.get(running) ?? [] : [];
+        let consumer = running ? { kind: "local", releaseId: running.releaseId } : null;
+        const desired = orchestrator?.desired(project.id);
+        if (!running && desired?.observedState === "running" && desired.observedGeneration === desired.generation && desired.observedReleaseId === desired.desiredReleaseId && desired.desiredReleaseId) {
+          const generation = providerGeneration(storage.internal, project.id, desired.generation, desired.desiredReleaseId);
+          if (generation) { consumed = secretRotations.revisions(project.id, decryptProviderEnvironment(generation.encryptedEnvironment, masterKey)); consumer = { kind: "provider", releaseId: desired.desiredReleaseId }; }
+        }
+        return api({ ok: true, rotations: secretRotations.list(project.id), current, consumer, consumed: consumed.map(secret => ({ ...secret, current: secret.revision !== null && current.some(item => item.name === secret.name && item.revision === secret.revision) })), validationMode: options.validateSecret ? "provider-check" : "format-and-encryption" });
+      }
+      if (operation === "secrets/rotations" && request.method === "POST") {
+        const input = plainObject(await readJsonRequest(request, 128 * 1024)); exact(input, ["name", "value"]);
+        const name = boundedString(input.name, "name", 1, 128); validateSecretName(name);
+        const value = boundedString(input.value, "value", 0, 64 * 1024);
+        const rotation = secretRotations.stage(project.id, name, value);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "secrets.stage", { name, rotationId: rotation.id });
+        return api({ ok: true, rotation }, 201);
+      }
+      const rotationOperation = /^secrets\/rotations\/([a-f0-9-]{36})\/(validate|activate|rollback)$/.exec(operation);
+      if (rotationOperation && request.method === "POST") {
+        const input = plainObject(await readJsonRequest(request, 1024)); exact(input, []);
+        const id = rotationOperation[1]!, action = rotationOperation[2]!;
+        try {
+          const rotation = action === "validate" ? await secretRotations.validate(project.id, id) : action === "activate" ? secretRotations.activate(project.id, id) : secretRotations.rollback(project.id, id);
+          audit(storage.internal, principal.userId, principal.tokenId, project.id, `secrets.${action}`, { name: rotation.name, rotationId: id, validation: rotation.validation });
+          return api({ ok: true, rotation });
+        } catch { throw new PlatformError(409, "SECRET_ROTATION_CONFLICT", "Rotation is unavailable, stale, or not in the required state. Refresh its status before retrying."); }
+      }
       if (operation === "secrets" && request.method === "GET") {
         const rows = storage.internal.prepare(
           "SELECT name, updated_at FROM clank_platform_secrets WHERE project_id = ? ORDER BY name",
@@ -7371,8 +7879,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw new PlatformError(400, "INVALID_SECRET_NAME", "Secret name is not valid URL encoding.");
         }
         validateSecretName(name);
-        storage.internal.prepare("DELETE FROM clank_platform_secrets WHERE project_id = ? AND name = ?")
-          .run(project.id, name);
+        storage.internal.transaction((changes) => {
+          storage.internal.prepare("DELETE FROM clank_platform_secrets WHERE project_id = ? AND name = ?").run(project.id, name);
+          storage.internal.prepare("DELETE FROM clank_platform_secret_rotations WHERE project_id=? AND name=?").run(project.id, name);
+          changes.record("__platform", project.id);
+        });
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "secrets.delete", { name });
         return api({ ok: true });
       }
@@ -7424,6 +7935,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const startupRecovery = Promise.all(projects.map(async (project) => {
     const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
     if (!release) return;
+    if (project.runtimePolicy === "suspended") return;
+    if (ingress && project.runtimePolicy === "on_demand" && !releaseRequiresContinuousRuntime(release)) return;
     try {
       await startRelease(project, release, decryptProjectSecrets(storage.internal, project.id, masterKey));
     } catch (error) {
@@ -7437,6 +7950,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   else void startupRecovery.catch((error) => options.onError?.(error));
   scheduleDomainReconciliation();
   schedulePreviewCleanup();
+  scheduleRuntimeSweep();
   backupScheduler.start();
   invitationDeliveries.start();
 
@@ -7449,6 +7963,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     async close() {
       if (closed) return;
       closed = true;
+      if (runtimeSweepTimer) clearTimeout(runtimeSweepTimer);
+      runtimeSweepTimer = undefined;
+      await runtimeSweepFlight?.catch(() => undefined);
       if (domainRecheckTimer) clearTimeout(domainRecheckTimer);
       domainRecheckTimer = undefined;
       await domainRecheckFlight?.catch(() => undefined);
@@ -7472,7 +7989,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
 }
 
-async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promise<PlatformDatabase> {
+async function openPlatformDatabase(path: string, masterKey: Uint8Array,
+  authentication: { concurrency: number; maxQueue: number }): Promise<PlatformDatabase> {
   const schema = defineDatabase({});
   const database = await openSQLite(schema, { path });
   const internal = database[SQLITE_INTERNAL];
@@ -7503,6 +8021,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   // valid invitation authorize one account even when public signup is closed.
   const authDefinition = defineAuth({
     signup: true,
+    password: authentication,
     rateLimit: { store: rateLimits },
   });
   const auth = await openAuth(authDefinition, database);
@@ -7590,6 +8109,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_organizations_creator ON clank_platform_organizations (created_by, created_at)");
   const quotaOverridesTable = `CREATE TABLE clank_platform_quota_overrides (
     scope_type TEXT NOT NULL CHECK (scope_type IN ('account', 'workspace')),
     scope_id TEXT NOT NULL,
@@ -7600,6 +8120,8 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
       'domainsPerProject',
       'releasesPerProject',
       'releaseStorageBytesPerProject',
+      'bucketStorageBytesPerProject',
+      'bucketObjectsPerProject',
       'backupsPerProject',
       'requestsPerMonthPerOrganization',
       'transferBytesPerMonthPerOrganization',
@@ -7616,6 +8138,8 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   if (!existingQuotaTable) {
     internal.exec(quotaOverridesTable);
   } else if ([
+    "bucketStorageBytesPerProject",
+    "bucketObjectsPerProject",
     "requestsPerMonthPerOrganization",
     "transferBytesPerMonthPerOrganization",
     "requestsPerMinutePerProject",
@@ -7817,6 +8341,10 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     parent_project_id TEXT REFERENCES clank_platform_projects(id) ON DELETE RESTRICT,
     preview_name TEXT,
     preview_expires_at INTEGER,
+    runtime_policy TEXT NOT NULL DEFAULT 'always_on'
+      CHECK (runtime_policy IN ('always_on', 'on_demand', 'suspended')),
+    idle_timeout_ms INTEGER NOT NULL DEFAULT 900000,
+    last_request_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`);
@@ -7844,6 +8372,15 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   if (!projectColumns.some((column) => column.name === "provider_node_id")) {
     internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN provider_node_id TEXT");
+  }
+  if (!projectColumns.some((column) => column.name === "runtime_policy")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN runtime_policy TEXT NOT NULL DEFAULT 'always_on'");
+  }
+  if (!projectColumns.some((column) => column.name === "idle_timeout_ms")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN idle_timeout_ms INTEGER NOT NULL DEFAULT 900000");
+  }
+  if (!projectColumns.some((column) => column.name === "last_request_at")) {
+    internal.exec("ALTER TABLE clank_platform_projects ADD COLUMN last_request_at INTEGER");
   }
   const providerGenerationsTable = `CREATE TABLE IF NOT EXISTS clank_platform_provider_generations (
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
@@ -7945,6 +8482,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
     });
   }
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_projects_org ON clank_platform_projects (organization_id, created_at)");
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_projects_owner ON clank_platform_projects (owner_id, created_at)");
   internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_platform_projects_preview_name
     ON clank_platform_projects (parent_project_id, preview_name)
     WHERE parent_project_id IS NOT NULL`);
@@ -7971,6 +8509,10 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_platform_github_preview_repository
     ON clank_platform_github_preview_bindings (repository_id, project_id)`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_preview_fixtures (
+    preview_project_id TEXT PRIMARY KEY REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    digest TEXT NOT NULL, bytes INTEGER NOT NULL, created_at INTEGER NOT NULL
+  )`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_preview_data_branches (
     preview_project_id TEXT PRIMARY KEY REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
     parent_project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
@@ -8195,6 +8737,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array): Promis
   }
   internal.exec("DROP INDEX IF EXISTS proact_platform_releases_project");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_releases_project ON clank_platform_releases (project_id, created_at)");
+  ensureDeploymentComparisons(internal);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_secrets (
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
@@ -8543,6 +9086,13 @@ function projectRow(row: Record<string, unknown>): ProjectRow {
     previewExpiresAt: row.preview_expires_at === null || row.preview_expires_at === undefined
       ? null
       : Number(row.preview_expires_at),
+    runtimePolicy: row.runtime_policy === undefined
+      ? "always_on"
+      : normalizeRuntimePolicy(row.runtime_policy),
+    idleTimeoutMs: row.idle_timeout_ms === undefined ? 15 * 60_000 : Number(row.idle_timeout_ms),
+    lastRequestAt: row.last_request_at === null || row.last_request_at === undefined
+      ? null
+      : Number(row.last_request_at),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
   };
@@ -8641,6 +9191,20 @@ function accessibleProject(
   return { project, role };
 }
 
+// Enumerate only owned/member project IDs before reading project payloads. A LEFT JOIN
+// with an ownership OR scans every tenant's projects even when this account has only a few.
+// UNION preserves the owner fallback and removes duplicates for owner-members.
+function visibleRootProjectRows(internal: SQLiteInternal, userId: string) {
+  return internal.prepare(`SELECT p.* FROM clank_platform_projects p
+    WHERE p.parent_project_id IS NULL AND p.id IN (
+      SELECT owned.id FROM clank_platform_projects owned WHERE owned.owner_id = ?
+      UNION
+      SELECT member.id FROM clank_platform_memberships m
+        JOIN clank_platform_projects member ON member.organization_id = m.organization_id
+        WHERE m.user_id = ?
+    ) ORDER BY p.created_at`).all(userId, userId);
+}
+
 function projectPayload(project: ProjectRow): Record<string, unknown> {
   return {
     id: project.id,
@@ -8657,6 +9221,9 @@ function projectPayload(project: ProjectRow): Record<string, unknown> {
     parentProjectId: project.parentProjectId,
     previewName: project.previewName,
     previewExpiresAt: project.previewExpiresAt,
+    runtimePolicy: project.runtimePolicy,
+    idleTimeoutMs: project.idleTimeoutMs,
+    lastRequestAt: project.lastRequestAt,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };
@@ -8682,15 +9249,31 @@ async function ingressRoutes(
   active: ReadonlyMap<string, ActiveProcess>,
   masterKey: Uint8Array,
   orchestrator: DeploymentOrchestrator,
+  runtimeTransitions: ReadonlySet<string> = new Set(),
 ) {
   const projects = internal.prepare(`SELECT * FROM clank_platform_projects
     WHERE active_release_id IS NOT NULL ORDER BY id`).all();
-  const nodes = new Map(orchestrator.listNodes().map((node) => [node.id, node]));
-  return Promise.all(projects.map(async (row) => {
+  if (projects.length === 0) return [];
+  // Load verified host assignments once per fresh route snapshot, rather than
+  // running one query per project on every ingress request.
+  const hostsByProject = new Map<string, string[]>();
+  for (const row of internal.prepare(`SELECT d.project_id, d.hostname
+    FROM clank_platform_domains d
+    JOIN clank_platform_projects p ON p.id = d.project_id
+    WHERE p.active_release_id IS NOT NULL
+      AND d.status = 'verified' AND d.routing_status = 'ready'
+    ORDER BY d.project_id, d.hostname`).all()) {
+    const projectId = String(row.project_id);
+    const hosts = hostsByProject.get(projectId) ?? [];
+    hosts.push(String(row.hostname));
+    hostsByProject.set(projectId, hosts);
+  }
+  const nodes = new Map(projects.some((row) => row.placement === "provider")
+    ? orchestrator.listNodes().map((node) => [node.id, node] as const)
+    : []);
+  return projects.map((row) => {
     const project = projectRow(row);
-    const hosts = internal.prepare(`SELECT hostname FROM clank_platform_domains
-      WHERE project_id = ? AND status = 'verified' AND routing_status = 'ready' ORDER BY hostname`).all(project.id)
-      .map((row) => String(row.hostname));
+    const hosts = hostsByProject.get(project.id) ?? [];
     if (baseDomain) hosts.unshift(`${project.slug}.${baseDomain}`);
     if (project.placement === "provider") {
       const desired = orchestrator.desired(project.id);
@@ -8717,7 +9300,7 @@ async function ingressRoutes(
       return {
         id: `route_${project.id}`,
         projectId: project.id,
-        hosts,
+        hosts: ready ? hosts : [],
         upstream: project.providerOrigin ?? "http://127.0.0.1:1",
         active: hosts.length > 0 && ready,
         ...(ready
@@ -8737,9 +9320,12 @@ async function ingressRoutes(
       projectId: project.id,
       hosts,
       upstream: `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`,
-      active: hosts.length > 0 && active.has(project.id),
+      active: hosts.length > 0
+        && project.runtimePolicy !== "suspended"
+        && active.has(project.id)
+        && !runtimeTransitions.has(project.id),
     };
-  }));
+  });
 }
 
 function projectRuntimeOnline(
@@ -8782,6 +9368,24 @@ function projectRuntimeOnline(
     && placement.observed_state === "running"
     && Number(placement.observed_generation) === project.activeGeneration,
   );
+}
+
+function projectRuntimeState(
+  internal: SQLiteInternal,
+  active: ReadonlyMap<string, ActiveProcess>,
+  project: ProjectRow,
+  release: ReleaseRow | null,
+  sleepEnabled: boolean,
+): "online" | "sleeping" | "suspended" | "degraded" | "not_deployed" {
+  if (projectRuntimeOnline(internal, active, project)) return "online";
+  if (!release) return "not_deployed";
+  if (project.runtimePolicy === "suspended") return "suspended";
+  const jobs = release.config.jobs;
+  const continuous = Boolean(jobs && (jobs.workers > 0 || jobs.scheduler));
+  if (sleepEnabled && project.placement === "local" && project.runtimePolicy === "on_demand" && !continuous) {
+    return "sleeping";
+  }
+  return "degraded";
 }
 
 function admitProjectUsage(
@@ -9013,6 +9617,28 @@ function metricRange(input: string): MetricRange {
   return { name: "24h", durationMs: 24 * 60 * 60_000, intervalMs: 15 * 60_000 };
 }
 
+function projectDeploymentComparison(internal: SQLiteInternal, project: ProjectRow): Record<string, unknown> {
+  const [current, previous] = internal.prepare(`SELECT release_id, activated_at, deployment_duration_ms
+    FROM clank_platform_activations WHERE project_id = ? ORDER BY id DESC LIMIT 2`).all(project.id);
+  const base = { protocol: "clank-deployment-comparison/1", minimumRequests: 100,
+    currentReleaseId: current?.release_id ?? null, previousReleaseId: previous?.release_id ?? null,
+    deploymentDurationMs: current?.deployment_duration_ms ?? null,
+    previousDeploymentDurationMs: previous?.deployment_duration_ms ?? null };
+  if (!current || !previous || current.release_id !== project.activeReleaseId) {
+    return { ...base, status: "no-baseline", message: "Two recorded activations are needed for a comparison." };
+  }
+  const windows = deploymentComparisonWindows(Number(current.activated_at), Number(previous.activated_at), Date.now());
+  if (!windows.durationMs) return { ...base, status: "collecting", message: "Waiting for complete traffic minutes on both sides of activation." };
+  const before = summarizeMetricRows(projectMetricRows(internal, project.id, 60_000, windows.before.start, windows.before.end), windows.durationMs);
+  const after = summarizeMetricRows(projectMetricRows(internal, project.id, 60_000, windows.after.start, windows.after.end), windows.durationMs);
+  const lowTraffic = Number(before.requests) < 100 || Number(after.requests) < 100;
+  return { ...base, ...windows, before: { ...windows.before, summary: before }, after: { ...windows.after, summary: after },
+    status: lowTraffic ? "low-traffic" : "available",
+    message: lowTraffic ? "Fewer than 100 requests in at least one window; changes are descriptive only."
+      : "Observed traffic before and after activation; workload differences may affect results.",
+    change: lowTraffic ? null : metricSummaryChange(after, before) };
+}
+
 function metricSeries(internal: SQLiteInternal, projectId: string, requestedRange: string): Record<string, unknown> {
   const range = metricRange(requestedRange);
   const now = Date.now();
@@ -9051,9 +9677,14 @@ function projectMetricRows(
   intervalMs: number,
   start: number,
   end: number,
+  summaryOnly = false,
 ): Record<string, unknown>[] {
   return internal.prepare(`SELECT
-      bucket_started_at - (bucket_started_at % ?) AS point_at,
+      ${summaryOnly ? `count(DISTINCT CASE WHEN request_count > 0 THEN
+        bucket_started_at - (bucket_started_at % ?) END) AS active_intervals,
+      coalesce(max(request_count), 0) AS peak_requests,
+      max(bucket_started_at) AS last_request_at,` :
+        "bucket_started_at - (bucket_started_at % ?) AS point_at,"}
       sum(request_count) AS request_count,
       sum(error_count) AS error_count,
       sum(status_2xx) AS status_2xx,
@@ -9082,7 +9713,21 @@ function projectMetricRows(
       sum(method_other) AS method_other
     FROM clank_platform_metrics
     WHERE project_id = ? AND bucket_started_at >= ? AND bucket_started_at < ?
-    GROUP BY point_at ORDER BY point_at`).all(intervalMs, projectId, start, end);
+    ${summaryOnly ? "" : "GROUP BY point_at ORDER BY point_at"}`).all(intervalMs, projectId, start, end);
+}
+
+// Dashboards need one current-period aggregate, not chart points and a previous-period series.
+// Keep interval counts and minute extremes identical to the detailed metrics endpoint.
+function projectMetricSummary(internal: SQLiteInternal, projectId: string): Record<string, unknown> {
+  const range = metricRange("24h"), now = Date.now();
+  const rows = projectMetricRows(internal, projectId, range.intervalMs, now - range.durationMs, now + 1, true);
+  const row = rows[0]!;
+  return {
+    ...summarizeMetricRows(rows, range.durationMs),
+    activeIntervals: Number(row.active_intervals),
+    peakRequestsPerMinute: Number(row.peak_requests),
+    lastRequestAt: row.last_request_at == null ? null : Number(row.last_request_at),
+  };
 }
 
 function fillMetricPoints(
@@ -10398,12 +11043,12 @@ function accountQuotas(
   accountId: string,
   defaults: PlatformQuotaValues,
 ): PlatformQuotaValues {
-  return {
-    ...defaults,
-    ...billingEntitlementQuotas(internal, accountId),
+  return resolveEntitlements(
+    defaults,
+    billingEntitlementQuotas(internal, accountId),
     // Explicit operator overrides always win over commercial plan capacity.
-    ...quotaOverrides(internal, "account", accountId),
-  };
+    quotaOverrides(internal, "account", accountId),
+  );
 }
 
 function workspaceQuotas(
@@ -10415,10 +11060,10 @@ function workspaceQuotas(
     "SELECT created_by FROM clank_platform_organizations WHERE id = ?",
   ).get(workspaceId);
   if (!workspace) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "Workspace not found.");
-  return {
-    ...accountQuotas(internal, String(workspace.created_by), defaults),
-    ...quotaOverrides(internal, "workspace", workspaceId),
-  };
+  return resolveEntitlements(
+    accountQuotas(internal, String(workspace.created_by), defaults),
+    quotaOverrides(internal, "workspace", workspaceId),
+  );
 }
 
 function projectQuotas(
@@ -10454,6 +11099,8 @@ function publicLimits(
     metricRetentionDays: metricRetentionDays ?? 30,
     releasesPerProject: limits.releasesPerProject,
     releaseStorageBytesPerProject: limits.releaseStorageBytesPerProject,
+    bucketStorageBytesPerProject: limits.bucketStorageBytesPerProject,
+    bucketObjectsPerProject: limits.bucketObjectsPerProject,
     backupsPerProject: limits.backupsPerProject,
     requestsPerMonthPerOrganization: limits.requestsPerMonthPerOrganization,
     transferBytesPerMonthPerOrganization: limits.transferBytesPerMonthPerOrganization,
@@ -11087,6 +11734,7 @@ function dashboardPayload(
     lastChecked: number;
     lastFailed: number;
   }>,
+  sleepEnabled: boolean,
   providerPlacement: Readonly<{
     enabled: boolean;
     default: PlatformProjectPlacement;
@@ -11120,11 +11768,7 @@ function dashboardPayload(
     ? internal.prepare(`SELECT p.* FROM clank_platform_projects p
         JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
         WHERE p.id = ? AND m.user_id = ?`).all(principal.projectId, principal.userId)
-    : internal.prepare(`SELECT DISTINCT p.* FROM clank_platform_projects p
-        LEFT JOIN clank_platform_memberships m
-          ON m.organization_id = p.organization_id AND m.user_id = ?
-        WHERE p.parent_project_id IS NULL
-          AND (m.user_id IS NOT NULL OR p.owner_id = ?) ORDER BY p.created_at`).all(principal.userId, principal.userId);
+    : visibleRootProjectRows(internal, principal.userId);
   const projects = projectRows.map((source) => {
     const project = projectRow(source);
     const effective = projectQuotas(internal, project, defaults);
@@ -11133,7 +11777,7 @@ function dashboardPayload(
       sum(CASE WHEN status = 'verified' AND routing_status = 'ready' THEN 1 ELSE 0 END) AS ready
       FROM clank_platform_domains WHERE project_id = ?`).get(project.id);
     const releases = releaseStorageUsage(internal, project.id);
-    const metrics = metricSeries(internal, project.id, "24h").summary as Record<string, number>;
+    const metrics = projectMetricSummary(internal, project.id) as Record<string, number>;
     return {
       ...projectPayload(project),
       url: appUrlTemplate.replaceAll("{slug}", project.slug)
@@ -11141,15 +11785,17 @@ function dashboardPayload(
       directUrl: project.placement === "local"
         ? `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`
         : null,
-      runtimeStatus: projectRuntimeOnline(internal, active, project)
-        ? "online"
-        : release ? "degraded" : "not_deployed",
+      runtimeStatus: projectRuntimeState(internal, active, project, release, sleepEnabled),
       activeRelease: release ? publicRelease(release) : null,
       domains: { count: Number(domainUsage?.count ?? 0), ready: Number(domainUsage?.ready ?? 0), limit: effective.domainsPerProject },
       releases: {
         ...releases,
         limit: effective.releasesPerProject,
         storageLimitBytes: effective.releaseStorageBytesPerProject,
+      },
+      buckets: {
+        storageLimitBytes: effective.bucketStorageBytesPerProject,
+        objectLimit: effective.bucketObjectsPerProject,
       },
       metrics,
     };
@@ -12126,6 +12772,16 @@ function parseMasterKey(value: string | Uint8Array): Uint8Array {
   return bytes;
 }
 
+function projectBucketSigningKey(masterKey: Uint8Array, projectId: string): string {
+  const cryptoName = "node:crypto";
+  const module = (globalThis as any).process.getBuiltinModule?.(cryptoName);
+  if (!module) throw new Error("Node crypto module is unavailable.");
+  return base64Url(module.createHmac("sha256", masterKey)
+    .update("clank-managed-bucket-v1\0", "utf8")
+    .update(projectId, "utf8")
+    .digest());
+}
+
 function encryptSecret(value: string, key: Uint8Array): string {
   const cryptoName = "node:crypto";
   const requireName = "node:module";
@@ -12198,6 +12854,7 @@ async function spawnRelease(
       HOST: "0.0.0.0",
       CLANK_DATABASE_PATH: containerDatabase,
       CLANK_DATABASE: containerDatabase,
+      CLANK_BUCKET_ROOT: "/data/buckets",
       PROACT_DATABASE_PATH: containerDatabase,
       PROACT_DATABASE: containerDatabase,
     };
@@ -12388,6 +13045,91 @@ async function projectDataDirectory(projectsRoot: string, projectId: string): Pr
   const root = path.join(projectsRoot, projectId, "data");
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   return root;
+}
+
+interface ProjectBucketUsageSnapshot {
+  readonly available: boolean;
+  readonly source: "local_catalog" | "application";
+  readonly objects: number | null;
+  readonly bytes: number | null;
+  readonly reservedObjects: number | null;
+  readonly reservedBytes: number | null;
+  readonly sampledAt: number | null;
+}
+
+async function inspectProjectBucketUsage(
+  projectsRoot: string,
+  project: ProjectRow,
+): Promise<ProjectBucketUsageSnapshot> {
+  const unavailable = Object.freeze({
+    available: false,
+    source: "application" as const,
+    objects: null,
+    bytes: null,
+    reservedObjects: null,
+    reservedBytes: null,
+    sampledAt: null,
+  });
+  // Provider volumes are deliberately outside the control-plane trust boundary.
+  // Their users see the same live inventory through the authenticated app URL.
+  if (project.placement !== "local") return unavailable;
+  const fsName = "node:fs/promises";
+  const pathName = "node:path";
+  const sqliteName = "node:sqlite";
+  const [fs, path, sqlite] = await Promise.all([
+    import(fsName) as unknown as Promise<{
+      lstat(path: string): Promise<{
+        mtimeMs: number;
+        isFile(): boolean;
+        isSymbolicLink(): boolean;
+      }>;
+    }>,
+    import(pathName) as unknown as Promise<{ join(...segments: string[]): string }>,
+    import(sqliteName) as unknown as Promise<{
+      DatabaseSync: new(path: string, options: { readOnly: boolean }) => {
+        exec(sql: string): void;
+        prepare(sql: string): { get(...values: unknown[]): Record<string, unknown> | undefined };
+        close(): void;
+      };
+    }>,
+  ]);
+  const catalog = path.join(projectsRoot, project.id, "data", "buckets", "catalog.sqlite");
+  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  try {
+    const stats = await fs.lstat(catalog);
+    if (!stats.isFile() || stats.isSymbolicLink()) return unavailable;
+    database = new sqlite.DatabaseSync(catalog, { readOnly: true });
+    database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF; PRAGMA busy_timeout = 1000;");
+    const schema = database.prepare(`SELECT count(*) AS count FROM sqlite_schema
+      WHERE type = 'table' AND name IN ('clank_bucket_objects', 'clank_bucket_reservations')`).get();
+    if (Number(schema?.count ?? 0) !== 2) return unavailable;
+    const row = database.prepare(`SELECT
+      (SELECT count(*) FROM clank_bucket_objects) AS objects,
+      (SELECT coalesce(sum(size), 0) FROM clank_bucket_objects) AS bytes,
+      (SELECT coalesce(sum(CASE WHEN replaces_size IS NULL THEN 1 ELSE 0 END), 0)
+        FROM clank_bucket_reservations) AS reserved_objects,
+      (SELECT coalesce(sum(size - coalesce(replaces_size, 0)), 0)
+        FROM clank_bucket_reservations) AS reserved_bytes`).get();
+    return Object.freeze({
+      available: true,
+      source: "local_catalog",
+      objects: safeUsageInteger(row?.objects),
+      bytes: safeUsageInteger(row?.bytes),
+      reservedObjects: safeUsageInteger(row?.reserved_objects),
+      reservedBytes: safeUsageInteger(row?.reserved_bytes),
+      sampledAt: Math.max(0, Math.trunc(stats.mtimeMs)),
+    });
+  } catch {
+    return unavailable;
+  } finally {
+    database?.close();
+  }
+}
+
+function safeUsageInteger(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new TypeError("Bucket catalog usage is invalid.");
+  return parsed;
 }
 
 function releaseStorageUsage(
@@ -13246,6 +13988,7 @@ const PLATFORM_PROJECT_SECTIONS = new Set([
   "deployments",
   "previews",
   "backups",
+  "storage",
   "logs",
   "jobs",
   "settings",
@@ -13741,6 +14484,7 @@ function recordPreviewDataBranch(
 ): void {
   const now = Date.now();
   internal.transaction((changes) => {
+    internal.prepare("DELETE FROM clank_platform_preview_fixtures WHERE preview_project_id = ?").run(preview.id);
     internal.prepare(`INSERT INTO clank_platform_preview_data_branches
       (preview_project_id, parent_project_id, source_release_id, target_release_id,
         mode, report, created_by, created_at)
@@ -14308,6 +15052,15 @@ function projectPlacement(
   return placement;
 }
 
+function normalizeRuntimePolicy(input: unknown): PlatformRuntimePolicy {
+  if (input === "always_on" || input === "on_demand" || input === "suspended") return input;
+  throw new PlatformError(
+    422,
+    "INVALID_RUNTIME_POLICY",
+    'Runtime policy must be "always_on", "on_demand", or "suspended".',
+  );
+}
+
 function providerDesiredPayload(value: unknown): {
   releaseId: string | null;
   state: "running" | "stopped";
@@ -14349,11 +15102,18 @@ function providerDesiredPayload(value: unknown): {
 function providerRuntimeEnvironment(
   config: DeploymentBundle["config"],
   secrets: Record<string, string>,
+  buckets: { signingKey: string; prefix: string; publicOrigin: string; maxBytes: number; maxObjects: number },
 ): Record<string, string> {
   return {
     ...config.env,
     ...secrets,
     NODE_ENV: "production",
+    CLANK_BUCKET_ROOT: "/data/buckets",
+    CLANK_BUCKET_SIGNING_KEY: buckets.signingKey,
+    CLANK_BUCKET_PREFIX: buckets.prefix,
+    CLANK_BUCKET_MAX_BYTES: String(buckets.maxBytes),
+    CLANK_BUCKET_MAX_OBJECTS: String(buckets.maxObjects),
+    CLANK_PUBLIC_ORIGIN: buckets.publicOrigin,
     ALLOWED_HOSTS: "",
     CLANK_MANAGED_INGRESS: "1",
     TRUST_PROXY: "1",

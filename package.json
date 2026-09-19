@@ -1,6 +1,6 @@
 {
   "name": "@clank.run/framework",
-  "version": "0.14.0",
+  "version": "0.22.1",
   "description": "AI-first, zero-dependency full-stack TypeScript framework with SSR, live data, auth, deployment, and a complete headless UI library.",
   "homepage": "https://docs.clank.run",
   "bugs": {
@@ -20,21 +20,72 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./bookmarks": { "types": "./dist/bookmarks.d.ts", "import": "./dist/bookmarks.js" },
+
+    "./activity": { "types": "./dist/activity.d.ts", "import": "./dist/activity.js" },
+
+    "./feedback": { "types": "./dist/feedback.d.ts", "import": "./dist/feedback.js" },
+
+    "./availability": { "types": "./dist/availability.d.ts", "import": "./dist/availability.js" },
+
+    "./dashboard-layouts": { "types": "./dist/dashboard-layouts.d.ts", "import": "./dist/dashboard-layouts.js" },
+    "./labels": { "types": "./dist/labels.d.ts", "import": "./dist/labels.js" },
+
+    "./checklists": { "types": "./dist/checklists.d.ts", "import": "./dist/checklists.js" },
+
+    "./reminders": { "types": "./dist/reminders.d.ts", "import": "./dist/reminders.js" },
+
+    "./drafts": { "types": "./dist/drafts.d.ts", "import": "./dist/drafts.js" },
+
+    "./undo-history": { "types": "./dist/undo-history.d.ts", "import": "./dist/undo-history.js" },
+
+    "./command-palette": { "types": "./dist/command-palette.d.ts", "import": "./dist/command-palette.js" },
+
+    "./shortcuts": { "types": "./dist/shortcuts.d.ts", "import": "./dist/shortcuts.js" },
+
+    "./tours": { "types": "./dist/tours.d.ts", "import": "./dist/tours.js" },
+    "./csv-export": { "types": "./dist/csv-export.d.ts", "import": "./dist/csv-export.js" },
+    "./recycle-bin": { "types": "./dist/recycle-bin.d.ts", "import": "./dist/recycle-bin.js" },
+
+    "./record-history": { "types": "./dist/record-history.d.ts", "import": "./dist/record-history.js" },
+
+    "./comments": { "types": "./dist/comments.d.ts", "import": "./dist/comments.js" },
+    "./saved-views": { "types": "./dist/saved-views.d.ts", "import": "./dist/saved-views.js" },
+    "./local-search": { "types": "./dist/local-search.d.ts", "import": "./dist/local-search.js" },
+    "./csv-import": { "types": "./dist/csv-import.d.ts", "import": "./dist/csv-import.js" },
+    "./error-inbox": { "types": "./dist/error-inbox.d.ts", "import": "./dist/error-inbox.js" },
+    "./live-resume": { "types": "./dist/live-resume.d.ts", "import": "./dist/live-resume.js" },
+    "./resilience": { "types": "./dist/resilience.d.ts", "import": "./dist/resilience.js" },
+    "./contract-compatibility": { "types": "./dist/contract-compatibility.d.ts", "import": "./dist/contract-compatibility.js" },
+    "./virtual-collections": { "types": "./dist/virtual-collections.d.ts", "import": "./dist/virtual-collections.js" },
+    "./webhook-outbox": { "types": "./dist/webhook-outbox.d.ts", "import": "./dist/webhook-outbox.js" },
+    "./application-performance": { "types": "./dist/application-performance.d.ts", "import": "./dist/application-performance.js" },
+    "./query-advisor": { "types": "./dist/query-advisor.d.ts", "import": "./dist/query-advisor.js" },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./trace-timeline": { "types": "./dist/trace-timeline.d.ts", "import": "./dist/trace-timeline.js" },
+    "./offline": { "types": "./dist/offline.d.ts", "import": "./dist/offline.js" },
+    "./preview-fixtures": { "types": "./dist/preview-fixtures.d.ts", "import": "./dist/preview-fixtures.js" },
+    "./agent-activity": { "types": "./dist/agent-activity.d.ts", "import": "./dist/agent-activity.js" },
+    "./notifications": { "types": "./dist/notifications.d.ts", "import": "./dist/notifications.js" },
+    "./rehearsal": { "types": "./dist/rehearsal.d.ts", "import": "./dist/rehearsal.js" },
+    "./devtools": { "types": "./dist/devtools.d.ts", "import": "./dist/devtools.js" },
     "./core": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },
+    "./task": { "types": "./dist/task.d.ts", "import": "./dist/task.js" },
     "./dom": { "types": "./dist/dom.d.ts", "import": "./dist/dom.js" },
     "./router": { "types": "./dist/router.d.ts", "import": "./dist/router.js" },
     "./ai": { "types": "./dist/ai.d.ts", "import": "./dist/ai.js" },
     "./agent-contract": { "types": "./dist/agent-contract.d.ts", "import": "./dist/agent-contract.js" },
     "./mcp": { "types": "./dist/mcp.d.ts", "import": "./dist/mcp.js" },
+    "./mcp-app": { "types": "./dist/mcp-app.d.ts", "import": "./dist/mcp-app.js" },
     "./blueprint": { "types": "./dist/blueprint.d.ts", "import": "./dist/blueprint.js" },
     "./blueprint-registry": { "types": "./dist/blueprint-registry.d.ts", "import": "./dist/blueprint-registry.js" },
     "./webauthn": { "types": "./dist/webauthn.d.ts", "import": "./dist/webauthn.js" },
     "./services": { "types": "./dist/services.d.ts", "import": "./dist/services.js" },
     "./object-storage": { "types": "./dist/object-storage.d.ts", "import": "./dist/object-storage.js" },
+    "./buckets": { "types": "./dist/buckets.d.ts", "import": "./dist/buckets.js" },
     "./observability": { "types": "./dist/observability.d.ts", "import": "./dist/observability.js" },
     "./recovery": { "types": "./dist/recovery.d.ts", "import": "./dist/recovery.js" },
     "./orchestration": { "types": "./dist/orchestration.d.ts", "import": "./dist/orchestration.js" },
@@ -109,6 +160,9 @@
     "./journey": { "types": "./dist/journey.d.ts", "import": "./dist/journey.js" },
     "./collaboration": { "types": "./dist/collaboration.d.ts", "import": "./dist/collaboration.js" },
     "./analytics": { "types": "./dist/analytics.d.ts", "import": "./dist/analytics.js" },
+    "./governance": { "types": "./dist/governance.d.ts", "import": "./dist/governance.js" },
+    "./lifecycle": { "types": "./dist/lifecycle.d.ts", "import": "./dist/lifecycle.js" },
+    "./tooling": { "types": "./dist/tooling.d.ts", "import": "./dist/tooling.js" },
     "./billing": { "types": "./dist/billing.d.ts", "import": "./dist/billing.js" },
     "./platform": { "types": "./dist/platform.d.ts", "import": "./dist/platform.js" },
     "./ssr": { "types": "./dist/ssr.d.ts", "import": "./dist/ssr.js" },
@@ -139,6 +193,7 @@
     "scripts/cli-deploy.mjs",
     "scripts/cli-compose.mjs",
     "scripts/cli-journey.mjs",
+    "scripts/cli-workbench.mjs",
     "scripts/clank-platform.mjs",
     "scripts/clank-runner.mjs",
     "scripts/clank-provider.mjs",
@@ -153,6 +208,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "performance": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/performance-budgets.mjs",
     "build": "node --disable-warning=ExperimentalWarning scripts/build.mjs",
     "build:design": "node --disable-warning=ExperimentalWarning design-site/build.mjs",
     "build:docs": "node --disable-warning=ExperimentalWarning docs-site/build.mjs",
@@ -161,6 +217,7 @@
     "dev": "node --disable-warning=ExperimentalWarning scripts/dev.mjs",
     "dev:fullstack": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/fullstack/server.js",
     "dev:auth": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/auth-todo/server.js",
+    "dev:mcp-app": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning examples/mcp-app/server.js",
     "dev:platform": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/clank-platform.mjs",
     "test": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning docs-site/build.mjs && node --disable-warning=ExperimentalWarning design-site/build.mjs && node --disable-warning=ExperimentalWarning --test",
     "security:audit": "node --disable-warning=ExperimentalWarning scripts/security-audit.mjs",

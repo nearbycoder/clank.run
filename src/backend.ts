@@ -1,3 +1,8 @@
+import { createLiveReplayStore, applyLiveSplice, type LiveResumeOptions } from "./live-resume.ts";
+import type { DatabaseQueryDiagnostic } from "./query-advisor.ts";
+import { openAgentActivity, type AgentActivityOptions, type AgentActivityFilter, type AgentActivitySnapshot } from "./agent-activity.ts";
+import { openMutationReceipts, type MutationReceiptOptions } from "./mutation-receipts.ts";
+import type { Tracer } from "./observability.ts";
 import { batch, signal, type Cleanup, type ReactiveSignal } from "./core.ts";
 import {
   ValidationError,
@@ -33,9 +38,16 @@ import {
 } from "./sqlite-internal.ts";
 import {
   createMcpServer,
+  defineMcpApp,
   McpToolError,
   MCP_PROTOCOL_VERSION,
+  MCP_SUPPORTED_PROTOCOL_VERSIONS,
+  MCP_APPS_PROTOCOL_VERSION,
+  MCP_APP_MIME_TYPE,
+  MCP_APPS_EXTENSION_ID,
   type McpTool,
+  type McpAppDefinition,
+  type McpAppVisibility,
 } from "./mcp.ts";
 import { createProjectOAuth } from "./oauth.ts";
 import {
@@ -47,6 +59,10 @@ import {
   type JobRuntime,
   type JobSystemDefinition,
 } from "./jobs.ts";
+import {
+  createBucketMcpTools,
+  type BucketManager,
+} from "./buckets.ts";
 
 /** A nominal document ID. At runtime this is a compact random string. */
 export type Id<Table extends string> = DocumentId<Table>;
@@ -188,6 +204,8 @@ export interface WriteTable<Schema extends DatabaseSchema<any>, Name extends Tab
     options?: DocumentWriteOptions,
   ): DocumentFor<Schema, Name> | null;
   delete(id: Id<Name>, options?: DocumentWriteOptions): boolean;
+  /** Permanently purge retained snapshots only if the record is still deleted at this cursor. */
+  purgeDeleted(id: Id<Name>, cursor: DocumentRevisionCursor): boolean;
   /** Restore a historical snapshot as a new, conflict-checked document version. */
   restore(
     id: Id<Name>,
@@ -357,6 +375,8 @@ interface DatabaseSyncConstructor {
 }
 
 export interface SQLiteOptions {
+  /** Opt-in metadata-only SQL plans and execution statistics, bounded to 500 shapes. */
+  queryDiagnostics?: boolean;
   path?: string;
   wal?: boolean;
   busyTimeout?: number;
@@ -374,6 +394,7 @@ export interface SQLiteOptions {
 export interface SQLiteDatabase<Schema extends DatabaseSchema<any>> {
   readonly schema: Schema;
   readonly version: number;
+  inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
   read<Value>(handler: (db: ReadDatabase<Schema>) => Value, scope?: DatabaseScope): Value;
   tracked<Value>(handler: (db: ReadDatabase<Schema>) => Value, scope?: DatabaseScope): TrackedResult<Value>;
   transaction<Value>(handler: (db: WriteDatabase<Schema>) => Value, scope?: DatabaseScope): Value;
@@ -596,6 +617,26 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     }
   };
 
+  const sqlDiagnostics = new Map<string, DatabaseQueryDiagnostic>();
+  const observeQuery = <Value>(name: string, sql: string, parameters: unknown[], candidateFields: string[], operation: () => Value[]): Value[] => {
+    if (!options.queryDiagnostics) return operation();
+    const started = performance.now();
+    const rows = operation();
+    const durationMs = performance.now() - started;
+    try {
+      const old = sqlDiagnostics.get(sql);
+      const plan = old?.plan ?? Object.freeze(native.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...parameters).map((row) => String(row.detail).slice(0, 1000)));
+      const fields = [...new Set(candidateFields)].slice(0, 8);
+      const candidate = fields.map(fieldExpression);
+      if (schema.tables[name]!.ownership === "user") candidate.unshift("_owner_id");
+      const needsIndex = plan.some((step) => /^SCAN /u.test(step) || step.includes("TEMP B-TREE"));
+      const suggestedIndex = needsIndex && fields.length ? `CREATE INDEX ${quoteIdentifier(`clank_${name}_advisor`)} ON ${tableIdentifier(name)} (${candidate.join(", ")});` : null;
+      if (!old && sqlDiagnostics.size >= 500) sqlDiagnostics.delete(sqlDiagnostics.keys().next().value!);
+      sqlDiagnostics.set(sql, Object.freeze({ table: name, sql, runs: (old?.runs ?? 0) + 1, rows: (old?.rows ?? 0) + rows.length, totalMs: (old?.totalMs ?? 0) + durationMs, maximumMs: Math.max(old?.maximumMs ?? 0, durationMs), plan, suggestedIndex }));
+    } catch { /* Diagnostic failures must not change successful query behavior. */ }
+    return rows;
+  };
+
   const executeQuery = <Name extends TableName<Schema>>(
     name: Name,
     conditions: QueryCondition[],
@@ -628,7 +669,8 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       : " ORDER BY _creation_time ASC, _id ASC";
     const limitSql = count === undefined ? "" : ` LIMIT ${validateLimit(count)}`;
     const sql = `SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)}${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""}${orderSql}${limitSql}`;
-    return prepared(sql).all(...parameters).map((row) => decodeDocument<Schema, Name>(schema, name, row));
+    const fields = [...conditions.filter((condition) => condition.comparison === "eq").map((condition) => condition.field), ...conditions.filter((condition) => condition.comparison !== "eq" && condition.comparison !== "neq").map((condition) => condition.field), ...(order ? [order.field] : [])];
+    return observeQuery(name, sql, parameters, fields, () => prepared(sql).all(...parameters)).map((row) => decodeDocument<Schema, Name>(schema, name, row));
   };
 
   const getDocument = <Name extends TableName<Schema>>(name: Name, id: Id<Name>, ownerId?: string | null): DocumentFor<Schema, Name> | null => {
@@ -636,8 +678,9 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     const definition = tableDefinition(schema, name);
     if (definition.ownership === "user" && ownerId === null) throw new Error(`Owned table ${name} requires an authenticated user.`);
     const scoped = definition.ownership === "user" && ownerId !== undefined;
-    const row = prepared(`SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)} WHERE _id = ?${scoped ? " AND _owner_id = ?" : ""}`)
-      .get(...(scoped ? [id, ownerId] : [id]));
+    const sql = `SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)} WHERE _id = ?${scoped ? " AND _owner_id = ?" : ""}`;
+    const parameters = scoped ? [id, ownerId] : [id];
+    const row = observeQuery(name, sql, parameters, [], () => { const row = prepared(sql).get(...parameters); return row ? [row] : []; })[0];
     return row ? decodeDocument(schema, name, row) : null;
   };
 
@@ -894,6 +937,19 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           });
           return changed;
         },
+        purgeDeleted(id, cursorInput) {
+          const cursor = documentRevisionCursor(cursorInput, "purge cursor");
+          const latest = getHistory(name, id, { limit: 1 }, ownerId)[0];
+          if (!latest) return false;
+          if (getDocument(name, id, ownerId) || latest.operation !== "delete" || latest.cursor.revision !== cursor.revision || latest.cursor.sequence !== cursor.sequence) {
+            throw new Error("The deleted record changed. Refresh before purging its history.");
+          }
+          const storedOwner = definition.ownership === "user" ? (latest.document as any)._ownerId : undefined;
+          prepared(`DELETE FROM clank_document_revisions WHERE table_name = ? AND document_id = ?${storedOwner === undefined ? "" : " AND owner_id = ?"}`)
+            .run(name, id, ...(storedOwner === undefined ? [] : [storedOwner]));
+          recordChange(changes, name, id, storedOwner);
+          return true;
+        },
         restore(id, cursorInput, restoreOptions = {}) {
           const cursor = documentRevisionCursor(cursorInput, "restore cursor");
           const expected = validatedRestoreVersion(restoreOptions.ifVersion);
@@ -1083,6 +1139,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
 
   const database: SQLiteDatabase<Schema> = {
     schema,
+    inspectDatabaseQueries() { ensureOpen(); return Object.freeze([...sqlDiagnostics.values()]); },
     get version() {
       synchronizeChanges(undefined, true);
       return version;
@@ -1109,6 +1166,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       if (poller) clearInterval(poller);
       listeners.clear();
       statements.clear();
+      sqlDiagnostics.clear();
       native.close();
     },
     [SQLITE_INTERNAL]: {
@@ -1214,6 +1272,14 @@ export interface BackendAgentOptions {
   idempotent?: boolean;
   /** Whether the action can communicate with systems outside this application. */
   openWorld?: boolean;
+  /**
+   * Render this action's structured result as an MCP App. Reuse one
+   * defineMcpApp() value across actions to share a view.
+   */
+  app?: McpAppDefinition | {
+    readonly resource: McpAppDefinition;
+    readonly visibility?: readonly McpAppVisibility[];
+  };
 }
 
 interface BackendFunctionOptions<Output> {
@@ -1424,6 +1490,9 @@ export interface SyncClient {
     reference: Reference,
     ...args: InputTuple<InputOf<Reference>>
   ): Promise<OutputOf<Reference>>;
+  mutateOnce<Reference extends FunctionReference<"mutation", any, any>>(
+    reference: Reference, args: InputOf<Reference>, receipt: { key: string; userId: string },
+  ): Promise<OutputOf<Reference>>;
   live<Reference extends FunctionReference<"query", any, any>>(
     reference: Reference,
     ...args: InputTuple<InputOf<Reference>>
@@ -1443,6 +1512,9 @@ interface EventSourceLike {
 }
 
 export interface SyncClientOptions {
+  /** Negotiate bounded splice updates; unsupported servers keep sending snapshots. */
+  liveResume?: boolean;
+  maxLiveBytes?: number;
   url?: string;
   fetch?: typeof fetch;
   eventSource?: new(url: string, options?: { withCredentials?: boolean }) => EventSourceLike;
@@ -1462,7 +1534,7 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
   const EventSourceConstructor = options.eventSource ?? (globalThis as unknown as { EventSource?: new(url: string) => EventSourceLike }).EventSource;
   const seeds = new Map<string, { value: unknown; version: number }>();
 
-  const call = async (kind: "query" | "mutation", reference: FunctionReference<any, any, any>, args: unknown) => {
+  const call = async (kind: "query" | "mutation", reference: FunctionReference<any, any, any>, args: unknown, receipt?: { key: string; userId: string }) => {
     if (!fetcher) throw new Error("fetch is not available in this runtime.");
     const response = await fetcher(`${base}/__clank/${kind}/${encodeURIComponent(functionPath(reference))}`, {
       method: "POST",
@@ -1470,6 +1542,7 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
       headers: {
         "content-type": "application/json",
         ...(kind === "mutation" ? options.auth?.csrfHeader() ?? {} : {}),
+        ...(receipt ? { "x-clank-mutation-key": receipt.key, "x-clank-offline-user": receipt.userId } : {}),
       },
       body: JSON.stringify(args ?? {}),
     });
@@ -1491,6 +1564,7 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
   return {
     query(reference, ...args) { return call("query", reference, args[0] ?? {}) as Promise<any>; },
     mutate(reference, ...args) { return call("mutation", reference, args[0] ?? {}) as Promise<any>; },
+    mutateOnce(reference, args, receipt) { return call("mutation", reference, args, receipt) as Promise<any>; },
     live(reference, ...args) {
       if (!EventSourceConstructor) throw new Error("EventSource is not available in this runtime.");
       const input = args[0] ?? {};
@@ -1501,26 +1575,40 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
       const loading = signal(seeded === undefined);
       const version = signal(seeded?.version ?? 0);
       const url = `${base}/__clank/live/${encodeURIComponent(functionPath(reference))}?args=${encodeURIComponent(stableStringify(input))}`;
-      const source = new EventSourceConstructor(url, { withCredentials: false });
-      source.onmessage = (event) => {
+      let lastEventId: string | null = null;
+      let source: EventSourceLike;
+      let snapshotOnly = !options.liveResume;
+      let disposed = false;
+      const connect = () => {
+        source = new EventSourceConstructor(url + (snapshotOnly ? "" : "&resume=splice-v1"), { withCredentials: false });
+        source.onmessage = receive;
+        source.onerror = (reason) => { if (!disposed) error.value = reason; };
+      };
+      const receive: NonNullable<EventSourceLike["onmessage"]> = (event) => {
+        if (disposed) return;
         try {
-          const payload = JSON.parse(event.data) as { value: unknown; version: number };
+          const payload = JSON.parse(event.data) as { value: unknown; version: number; kind?: string; baseId?: string; splice?: any };
           if (!Number.isSafeInteger(payload.version) || payload.version < 0) {
             throw new TypeError("Live query returned an invalid revision.");
           }
           if (payload.version < version.peek()) return;
+          if (payload.kind !== undefined && payload.kind !== "splice-v1") throw new TypeError("Unsupported live update format.");
+          if (payload.kind === "splice-v1" && (!lastEventId || payload.baseId !== lastEventId)) throw new TypeError("Live resume base is unavailable.");
+          const value = payload.kind === "splice-v1" ? applyLiveSplice(data.peek(), payload.splice, options.maxLiveBytes ?? 1024 * 1024) : payload.value;
+          lastEventId = event.lastEventId ?? null;
           batch(() => {
-            data.value = payload.value;
+            data.value = value;
             version.value = payload.version;
             error.value = undefined;
             loading.value = false;
           });
         } catch (reason) {
           batch(() => { error.value = reason; loading.value = false; });
+          if (!snapshotOnly) { snapshotOnly = true; lastEventId = null; source.close(); connect(); }
         }
       };
-      source.onerror = (reason) => { error.value = reason; };
-      return { data, error, loading, version, dispose: () => source.close() };
+      connect();
+      return { data, error, loading, version, dispose: () => { disposed = true; source.close(); } };
     },
     seed(reference, args, value, seedVersion = 0) {
       seeds.set(functionKey(functionPath(reference), args), { value, version: seedVersion });
@@ -1582,6 +1670,8 @@ interface SubscriberEntry {
   path: string;
   args: unknown;
   auth: AuthRequest<any> | null;
+  // Live invalidation must survive eviction from the bounded result cache.
+  dependencies: readonly ReadDependency[];
   listeners: Set<(value: unknown, version: number) => void>;
 }
 
@@ -1605,6 +1695,8 @@ export interface BackendRuntime<
   readonly database: SQLiteDatabase<Schema>;
   readonly auth: Auth extends AuthDefinition<infer Profile> ? AuthRuntime<Profile> : undefined;
   readonly jobs: Jobs extends JobSystemDefinition<Schema, any> ? JobRuntime<Jobs> : undefined;
+  /** First-class application buckets, when configured for this backend. */
+  readonly buckets: BucketManager | undefined;
   readonly version: number;
   /** Deterministic revision of the MCP-visible backend action contract. */
   readonly contractRevision: string | null;
@@ -1616,10 +1708,31 @@ export interface BackendRuntime<
   subscribe(path: string, input: unknown, listener: (value: unknown, version: number) => void): Cleanup;
   caller(request: Request): Promise<BackendCaller<AuthProfileOf<Auth>>>;
   handle(request: Request): Promise<Response>;
+  inspectQueries(): readonly QueryDiagnostic[];
+  inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
+  inspectAgentActivity(filter?: AgentActivityFilter): AgentActivitySnapshot;
   close(): void;
 }
 
+export interface QueryDiagnostic {
+  readonly path: string;
+  readonly runs: number;
+  readonly cacheHits: number;
+  readonly durationMs: number;
+  readonly lastInvalidation: string | null;
+  readonly cachedEntries: number;
+  readonly subscriptions: number;
+}
+
 export interface OpenBackendOptions extends SQLiteOptions {
+  /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
+  liveResume?: LiveResumeOptions;
+  agentActivity?: AgentActivityOptions;
+  /** Opt in to transactional, authenticated offline mutation receipts. */
+  offlineMutations?: MutationReceiptOptions;
+  tracer?: Tracer;
+  /** Enable local query metadata inspection; arguments, identities, and values are excluded. */
+  diagnostics?: boolean;
   database?: SQLiteDatabase<any>;
   prefix?: string;
   verifyOrigin?: boolean;
@@ -1634,6 +1747,8 @@ export interface OpenBackendOptions extends SQLiteOptions {
   onError?: (error: unknown) => void;
   /** Queue limits, retention, clock hooks, and job-specific error reporting. */
   jobs?: Omit<OpenJobsOptions, "database">;
+  /** Managed application files, images, quotas, signed uploads, and MCP file tools. */
+  buckets?: BucketManager;
   /**
    * Every backend function is exposed as an MCP tool by default. Set false to
    * disable the protocol, or customize its public identity and endpoint paths.
@@ -1646,8 +1761,25 @@ export interface OpenBackendOptions extends SQLiteOptions {
     instructions?: string;
     mcpPath?: string;
     oauthPrefix?: string;
+    /**
+     * Permit credential-free cross-origin browser access to the MCP transport.
+     * Defaults to true for OAuth-protected applications and false for public
+     * applications whose mutations do not require bearer authorization.
+     */
+    browserCors?: boolean;
     /** Maximum simultaneously active OAuth grants for one application user. Defaults to 100. */
     maxUserGrants?: number;
+    /**
+     * Idempotency window for a client retrying the immediately previous OAuth
+     * refresh token. Defaults to 15 minutes and is capped at one hour.
+     */
+    refreshTokenRetryLifetimeMs?: number;
+    /**
+     * Recover clients that do not persist rotated refresh tokens while the
+     * unspent successor remains valid. Defaults to "adaptive"; use "strict"
+     * to revoke as soon as the idempotency window closes.
+     */
+    refreshTokenRotationMode?: "adaptive" | "strict";
   };
 }
 
@@ -1665,7 +1797,7 @@ export async function openBackend<
   const maxResponseBytes = positiveIntegerOption(options.maxResponseBytes ?? 4 * 1024 * 1024, "maxResponseBytes");
   const maxLiveArgumentBytes = positiveIntegerOption(options.maxLiveArgumentBytes ?? 8 * 1024, "maxLiveArgumentBytes");
   const maxLivePayloadBytes = positiveIntegerOption(options.maxLivePayloadBytes ?? 4 * 1024 * 1024, "maxLivePayloadBytes");
-  const maxLiveConnections = positiveIntegerOption(options.maxLiveConnections ?? 1_000, "maxLiveConnections");
+  const maxLiveConnections = positiveIntegerOption(options.maxLiveConnections ?? liveConnectionEnvironment(), "maxLiveConnections");
   const maxCacheEntries = positiveIntegerOption(options.maxCacheEntries ?? 1_000, "maxCacheEntries");
   const prefix = `/${trimBoundarySlashes(options.prefix ?? "__clank")}`;
   const agentOptions = options.agent === false ? null : options.agent ?? {};
@@ -1702,6 +1834,7 @@ export async function openBackend<
   const jobsRuntime = definition.jobs
     ? openJobs(definition.jobs, {
         ...options.jobs,
+        tracer: options.jobs?.tracer ?? options.tracer,
         database,
         onError(error, job) {
           options.jobs?.onError?.(error, job);
@@ -1710,7 +1843,12 @@ export async function openBackend<
       })
     : undefined;
   let authRuntime: AuthRuntime<AuthProfileOf<Auth>> | undefined;
+  let activity: ReturnType<typeof openAgentActivity> | undefined;
+  const activityRevisions = new WeakMap<Request, { beforeRevision: number; afterRevision: number }>();
+  let mutationReceipt: ReturnType<typeof openMutationReceipts> | undefined;
   try {
+    activity = options.agentActivity ? openAgentActivity(database, options.agentActivity) : undefined;
+    mutationReceipt = options.offlineMutations ? openMutationReceipts(database, options.offlineMutations) : undefined;
     authRuntime = definition.auth
       ? await openAuth(definition.auth, database, {
           onError: options.onError,
@@ -1722,6 +1860,18 @@ export async function openBackend<
     if (!options.database) database.close();
     throw error;
   }
+  const replayStore = options.liveResume ? createLiveReplayStore(options.liveResume) : undefined;
+  const queryDiagnostics = new Map<string, { runs: number; cacheHits: number; durationMs: number; lastInvalidation: string | null }>();
+  const queryDiagnostic = (path: string) => {
+    if (!options.diagnostics) return undefined;
+    let entry = queryDiagnostics.get(path);
+    if (!entry) {
+      if (queryDiagnostics.size >= 500) queryDiagnostics.delete(queryDiagnostics.keys().next().value!);
+      entry = { runs: 0, cacheHits: 0, durationMs: 0, lastInvalidation: null };
+      queryDiagnostics.set(path, entry);
+    }
+    return entry;
+  };
   const cache = new Map<string, CacheEntry>();
   const subscribers = new Map<string, SubscriberEntry>();
   const liveDisconnects = new Set<Cleanup>();
@@ -1760,12 +1910,14 @@ export async function openBackend<
   };
 
   const setCache = (key: string, entry: CacheEntry) => {
+    const subscription = subscribers.get(key);
+    if (subscription) subscription.dependencies = entry.dependencies;
     cache.delete(key);
     cache.set(key, entry);
     while (cache.size > maxCacheEntries) cache.delete(cache.keys().next().value!);
   };
 
-  const invokeQuery = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
+  const invokeQueryBody = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
     ensureOpen();
     const fn = functionAt(registry, path, "query");
     authorize(fn, auth);
@@ -1777,11 +1929,19 @@ export async function openBackend<
     database.version;
     const cached = cache.get(key);
     if (cached && !cached.dirty) {
+      const subscription = subscribers.get(key);
+      if (subscription) subscription.dependencies = cached.dependencies;
+      const diagnostic = queryDiagnostic(path);
+      if (diagnostic) diagnostic.cacheHits++;
       cache.delete(key);
       cache.set(key, cached);
       return { value: cached.value, version: cached.version };
     }
-    const tracked = database.tracked((db) => fn.handler(handlerContext(db, auth, "query") as any, args), scopeFor(auth));
+    const diagnostic = queryDiagnostic(path);
+    const diagnosticStarted = diagnostic ? performance.now() : 0;
+    let tracked;
+    try { tracked = database.tracked((db) => fn.handler(handlerContext(db, auth, "query") as any, args), scopeFor(auth)); }
+    finally { if (diagnostic) { diagnostic.runs++; diagnostic.durationMs = performance.now() - diagnosticStarted; } }
     assertSynchronous(tracked.value, "query");
     const value = finalizeBackendOutput(fn, tracked.value, maxResponseBytes);
     const dependencies = auth?.user
@@ -1791,21 +1951,36 @@ export async function openBackend<
     return { value, version: tracked.version };
   };
 
-  const invokeMutation = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
+  const invokeMutationBody = (path: string, input: unknown, auth: AuthRequest<any> | null, key?: string): { value: unknown; version: number } => {
     ensureOpen();
     const fn = functionAt(registry, path, "mutation");
     authorize(fn, auth);
     const args = fn.args.parse(input ?? {});
     const value = database.transaction(
       (db) => {
-        const output = fn.handler(handlerContext(db, auth, "mutation") as any, args);
-        assertSynchronous(output, "mutation");
-        return finalizeBackendOutput(fn, output, maxResponseBytes);
+        const execute = () => {
+          const output = fn.handler(handlerContext(db, auth, "mutation") as any, args);
+          assertSynchronous(output, "mutation");
+          return finalizeBackendOutput(fn, output, maxResponseBytes);
+        };
+        return key !== undefined ? mutationReceipt!(key, auth!.user!.id, path, stableStringify(args), execute) : execute();
       },
       scopeFor(auth),
     );
     return { value, version: database.version };
   };
+
+  const traceOperation = <Value>(name: string, operation: () => Value): Value => {
+    if (!options.tracer) return operation();
+    const span = options.tracer.startSpan(name.slice(0, 200));
+    try { const result = options.tracer.withSpan(span, operation); span.setStatus("ok"); return result; }
+    catch (error) { span.setStatus("error"); throw error; }
+    finally { span.end(); }
+  };
+  const invokeQuery = (path: string, input: unknown, auth: AuthRequest<any> | null) =>
+    traceOperation(`query ${path}`, () => invokeQueryBody(path, input, auth));
+  const invokeMutation = (path: string, input: unknown, auth: AuthRequest<any> | null, key?: string) =>
+    traceOperation(`mutation ${path}`, () => invokeMutationBody(path, input, auth, key));
 
   const notify = (key: string) => {
     const subscription = subscribers.get(key);
@@ -1821,6 +1996,7 @@ export async function openBackend<
   };
 
   const stopChanges = database.subscribe((change) => {
+    if (change.all || change.records.some(record => record.table === "__auth")) replayStore?.clear();
     if (authRuntime) {
       if (change.all) {
         authRuntime.notifyAllUserChanges();
@@ -1835,6 +2011,17 @@ export async function openBackend<
     for (const [key, entry] of cache) {
       if (entry.dependencies.some((dependency) => changeAffects(dependency, change))) {
         entry.dirty = true;
+        const diagnostic = queryDiagnostic(entry.path);
+        if (diagnostic) diagnostic.lastInvalidation = change.all ? "revision history reset"
+          : [...new Set(change.records.map((record) => record.table))].slice(0, 20).join(", ").slice(0, 256);
+        invalidated.add(key);
+      }
+    }
+    // Uncached live queries retain only dependency metadata, not their result payload.
+    // Recompute matching subscriptions without increasing maxCacheEntries or waking
+    // unrelated tenants merely because their result was evicted.
+    for (const [key, subscription] of subscribers) {
+      if (!cache.has(key) && subscription.dependencies.some(dependency => changeAffects(dependency, change))) {
         invalidated.add(key);
       }
     }
@@ -1882,7 +2069,7 @@ export async function openBackend<
       const key = cacheKey(path, args, auth);
       let entry = subscribers.get(key);
       if (!entry) {
-        entry = { path, args, auth, listeners: new Set() };
+        entry = { path, args, auth, dependencies: [], listeners: new Set() };
         subscribers.set(key, entry);
       }
       entry.listeners.add(listener);
@@ -1910,8 +2097,29 @@ export async function openBackend<
         oauthPrefix,
         applicationName: agentTitle,
         maxUserGrants,
+        refreshTokenRetryLifetimeMs: agentOptions.refreshTokenRetryLifetimeMs,
+        refreshTokenRotationMode: agentOptions.refreshTokenRotationMode,
       })
     : undefined;
+  const backendAppBindings = new Map<string, {
+    resource: Readonly<McpAppDefinition>;
+    tool: { resourceUri: `ui://${string}`; visibility?: readonly McpAppVisibility[] };
+  }>();
+  const backendApps = new Map<string, Readonly<McpAppDefinition>>();
+  if (agentOptions) {
+    for (const [path, fn] of registry) {
+      if (fn.agent === false || fn.agent.enabled === false || fn.agent.app === undefined) continue;
+      const binding = backendMcpAppBinding(fn.agent.app, path);
+      const existing = backendApps.get(binding.resource.uri);
+      if (existing && existing !== binding.resource) {
+        throw new TypeError(
+          `Backend functions reference different MCP app definitions for ${binding.resource.uri}. Reuse one defineMcpApp() value.`,
+        );
+      }
+      backendApps.set(binding.resource.uri, binding.resource);
+      backendAppBindings.set(path, binding);
+    }
+  }
   const mcpTools: McpTool<AuthRequest<any> | null>[] = agentOptions
     ? [...registry]
       .filter(([, fn]) => fn.agent !== false && fn.agent.enabled !== false)
@@ -1947,7 +2155,9 @@ export async function openBackend<
             idempotentHint: fn.kind === "query" ? true : agent.idempotent ?? false,
             openWorldHint: agent.openWorld ?? false,
           },
-          async invoke(input, auth) {
+          ...(backendAppBindings.has(path) ? { app: backendAppBindings.get(path)!.tool } : {}),
+          async invoke(input, auth, request) {
+            const beforeRevision = activity ? database.version : 0;
             try {
               return fn.kind === "query"
                 ? invokeQuery(path, input, auth)
@@ -1977,8 +2187,15 @@ export async function openBackend<
               else reportError(error);
               throw new McpToolError("BACKEND_ERROR", "The backend operation failed.");
             }
+            finally { if (activity) activityRevisions.set(request, { beforeRevision, afterRevision: database.version }); }
           },
         } satisfies McpTool<AuthRequest<any> | null>;
+      })
+    : [];
+  const bucketMcpTools = agentOptions && options.buckets
+    ? createBucketMcpTools<AuthRequest<any> | null>(options.buckets, {
+        identity: (auth) => ({ userId: auth?.user?.id }),
+        maxInlineBytes: Math.min(maxRequestBytes, 1024 * 1024),
       })
     : [];
   const workflowContract = definition.jobs ? workflowManifest(definition.jobs) : [];
@@ -1990,9 +2207,19 @@ export async function openBackend<
         version: agentOptions.version ?? "1.0.0",
         description: agentDescription,
         instructions: agentOptions.instructions,
-        ...(agentWorkflowContract.length > 0 ? { metadata: { workflows: agentWorkflowContract } } : {}),
-        tools: mcpTools,
+        ...(agentWorkflowContract.length > 0 || options.buckets
+          ? { metadata: {
+              ...(agentWorkflowContract.length > 0 ? { workflows: agentWorkflowContract } : {}),
+              ...(options.buckets ? { buckets: options.buckets.manifest() } : {}),
+            } }
+          : {}),
+        tools: [...mcpTools, ...bucketMcpTools],
+        ...(activity ? { onToolActivity: (event, request) => {
+          try { activity!.record(event, activityRevisions.get(request)); } catch (error) { reportError(error); }
+        } } : {}),
+        apps: [...backendApps.values()],
         allowedOrigins: options.allowedOrigins,
+        browserCors: agentOptions.browserCors ?? Boolean(oauth),
         maxRequestBytes,
         maxResponseBytes,
         ...(oauth
@@ -2017,15 +2244,32 @@ export async function openBackend<
       mcp: {
         transport: "streamable-http",
         protocolVersion: MCP_PROTOCOL_VERSION,
+        supportedProtocolVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
+        stateless: true,
         serverVersion: mcpManifest!.server.version,
         endpoint: `${origin}${mcpPath}`,
         authentication: oauth ? "oauth2" : "none",
+        ...(mcpManifest!.apps.length > 0 ? {
+          extensions: {
+            [MCP_APPS_EXTENSION_ID]: {
+              protocolVersion: MCP_APPS_PROTOCOL_VERSION,
+              mimeTypes: [MCP_APP_MIME_TYPE],
+              resources: mcpManifest!.apps.map((app) => app.uri),
+            },
+          },
+        } : {}),
         ...(oauth ? { accessManagement: `${origin}${oauth.grantManagementPath}` } : {}),
       },
       documentation: {
         actions: "Connect with MCP and call tools/list or read clank://actions.",
+        ...(options.buckets
+          ? { buckets: "Bucket tools expose owner-isolated file listing, reads, uploads, deletes, and declared image variants." }
+          : {}),
         ...(agentWorkflowContract.length > 0
           ? { workflows: "Read clank://actions metadata.workflows for durable graph schemas and dependencies." }
+          : {}),
+        ...(mcpManifest!.apps.length > 0
+          ? { apps: "MCP Apps hosts render tool results from the declared ui:// resources." }
           : {}),
       },
     }, {
@@ -2058,7 +2302,7 @@ export async function openBackend<
         endpoint: mcpPath,
       },
       capabilities: {
-        tools: { listChanged: mcp!.supportsToolListChanged },
+        tools: {},
         resources: { subscribe: false, listChanged: false },
       },
       authentication: {
@@ -2085,7 +2329,24 @@ export async function openBackend<
     database,
     auth: authRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["auth"],
     jobs: jobsRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["jobs"],
+    buckets: options.buckets,
     get version() { return database.version; },
+    inspectAgentActivity(filter) {
+      ensureOpen();
+      return activity?.snapshot(filter) ?? Object.freeze({ protocol: "clank-agent-activity/1", retainedLimit: 0, events: Object.freeze([]) });
+    },
+    inspectDatabaseQueries() { ensureOpen(); return database.inspectDatabaseQueries(); },
+    inspectQueries() {
+      const cached = new Map<string, number>();
+      const subscribed = new Map<string, number>();
+      if (options.diagnostics) {
+        for (const entry of cache.values()) cached.set(entry.path, (cached.get(entry.path) ?? 0) + 1);
+        for (const entry of subscribers.values()) subscribed.set(entry.path, (subscribed.get(entry.path) ?? 0) + entry.listeners.size);
+      }
+      return Object.freeze([...queryDiagnostics].map(([path, entry]) => Object.freeze({ path, ...entry,
+        cachedEntries: cached.get(path) ?? 0, subscriptions: subscribed.get(path) ?? 0,
+      })));
+    },
     contractRevision: mcp?.revision ?? null,
     query(pathOrReference: string | FunctionReference<"query", any, any>, input: unknown = {}) {
       return callerFor(anonymous).query(pathOrReference as any, input);
@@ -2111,6 +2372,21 @@ export async function openBackend<
       }
       if (mcp && request.method === "GET" && url.pathname === "/.well-known/mcp/server-card.json") {
         return mcpServerCard(request);
+      }
+      if (options.buckets && (url.pathname === options.buckets.basePath || url.pathname.startsWith(`${options.buckets.basePath}/`))) {
+        const capabilityRequest = url.pathname.includes("/cap/") || url.pathname.includes("/public/");
+        if (!capabilityRequest && options.verifyOrigin !== false
+          && !requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins })) {
+          return problem(403, "ORIGIN_MISMATCH", "Cross-origin bucket request rejected.");
+        }
+        const auth = authRuntime ? await authRuntime.resolve(request) : null;
+        return options.buckets.handle(request, {
+          authenticated: Boolean(auth?.user),
+          userId: auth?.user?.id,
+          verifyWrite: authRuntime && auth?.session
+            ? () => authRuntime!.verifyCsrf(request, auth)
+            : undefined,
+        });
       }
       if (!url.pathname.startsWith(`${prefix}/`) && url.pathname !== prefix) return problem(404, "NOT_FOUND", "Backend endpoint not found.");
       if (authRuntime && (url.pathname === `${prefix}/auth` || url.pathname.startsWith(`${prefix}/auth/`))) {
@@ -2147,6 +2423,7 @@ export async function openBackend<
             })),
             jobs: definition.jobs ? jobManifest(definition.jobs) : [],
             workflows: workflowContract,
+            buckets: options.buckets?.manifest() ?? [],
           }, {
             headers: {
               "cache-control": "no-store",
@@ -2161,7 +2438,12 @@ export async function openBackend<
         }
         if (request.method === "POST" && operation === "mutation") {
           if (authRuntime && auth?.session) await authRuntime.verifyCsrf(request, auth);
-          const result = invokeMutation(path, await readJsonRequest(request, maxRequestBytes), auth);
+          const key = request.headers.get("x-clank-mutation-key") ?? undefined;
+          if (key !== undefined) {
+            if (!mutationReceipt) throw new RequestInputError(400, "OFFLINE_DISABLED", "Offline mutations are not enabled.");
+            if (!auth?.user || request.headers.get("x-clank-offline-user") !== auth.user.id) throw new RequestInputError(403, "OFFLINE_ACCOUNT_CHANGED", "Queued mutation belongs to another account.");
+          }
+          const result = invokeMutation(path, await readJsonRequest(request, maxRequestBytes), auth, key);
           return Response.json({ ok: true, ...result }, { headers: { "cache-control": "no-store" } });
         }
         if (request.method === "GET" && operation === "live") {
@@ -2183,6 +2465,12 @@ export async function openBackend<
           authorize(fn, auth);
           invokeQuery(path, input, auth);
           liveConnections++;
+          let previousEventId = request.headers.get("last-event-id");
+          const resumeScope = cacheKey(path, fn.args.parse(input ?? {}), auth);
+          const encodeResume = replayStore && url.searchParams.get("resume") === "splice-v1" ? (value: unknown, version: number) => {
+            const encoded = replayStore.encode(resumeScope, previousEventId, value, version);
+            previousEventId = encoded.id; return encoded;
+          } : undefined;
           let closeLive: Cleanup | undefined;
           const live = liveResponse(
             caller,
@@ -2198,6 +2486,7 @@ export async function openBackend<
               liveConnections--;
               if (closeLive) liveDisconnects.delete(closeLive);
             },
+            encodeResume,
           );
           closeLive = live.close;
           if (!live.closed()) liveDisconnects.add(closeLive);
@@ -2240,9 +2529,12 @@ export async function openBackend<
       stopChanges();
       subscribers.clear();
       cache.clear();
+      queryDiagnostics.clear();
+      replayStore?.clear();
       mcp?.close();
       jobsRuntime?.close();
       authRuntime?.close();
+      options.buckets?.close();
       database.close();
     },
   };
@@ -2283,6 +2575,32 @@ function validateBackendAgentMetadata(
   if (options.instructions !== undefined) backendAgentText(options.instructions, "agent.instructions", 16 * 1024);
 }
 
+function backendMcpAppBinding(
+  value: NonNullable<BackendAgentOptions["app"]>,
+  path: string,
+): {
+  resource: Readonly<McpAppDefinition>;
+  tool: { resourceUri: `ui://${string}`; visibility?: readonly McpAppVisibility[] };
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`Backend function ${path} agent app must be an MCP app definition or binding.`);
+  }
+  const wrapped = !Object.hasOwn(value, "uri") && Object.hasOwn(value, "resource");
+  const resource = defineMcpApp(wrapped
+    ? (value as { resource: McpAppDefinition }).resource
+    : value as McpAppDefinition);
+  const visibility = wrapped
+    ? (value as { visibility?: readonly McpAppVisibility[] }).visibility
+    : undefined;
+  return {
+    resource,
+    tool: {
+      resourceUri: resource.uri,
+      ...(visibility === undefined ? {} : { visibility: Object.freeze([...visibility]) }),
+    },
+  };
+}
+
 function backendAgentText(value: string, name: string, maxLength: number): void {
   if (
     typeof value !== "string"
@@ -2314,6 +2632,7 @@ function liveResponse(
   auth: AuthRequest<any> | null,
   reportError: (error: unknown) => void,
   onClose: () => void,
+  encodeResume?: (value: unknown, version: number) => { id: string; payload: unknown },
 ): { response: Response; close: Cleanup; closed(): boolean } {
   const encoder = new TextEncoder();
   let dispose: Cleanup = () => {};
@@ -2345,7 +2664,8 @@ function liveResponse(
         const subscribed = caller.subscribe(path, input, (value, version) => {
           if (!active) return;
           try {
-            const chunk = encoder.encode(`id: ${version}\ndata: ${JSON.stringify({ value, version })}\n\n`);
+            const encoded = encodeResume?.(value, version) ?? { id: String(version), payload: { value, version } };
+            const chunk = encoder.encode(`id: ${encoded.id}\ndata: ${JSON.stringify(encoded.payload)}\n\n`);
             if (chunk.byteLength > maxPayloadBytes) {
               throw new RangeError(`Live query payload exceeds ${maxPayloadBytes} bytes.`);
             }
@@ -2823,6 +3143,15 @@ function nonNegativeInteger(value: number, name: string): number {
 function positiveIntegerOption(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value < 1) throw new TypeError(`${name} must be a positive integer.`);
   return value;
+}
+
+function liveConnectionEnvironment(): number {
+  const value = (globalThis as any).process?.env?.CLANK_MAX_LIVE_CONNECTIONS;
+  if (value === undefined) return 1_000;
+  if (!/^[1-9][0-9]*$/.test(value) || Number(value) > 20_000) {
+    throw new TypeError("CLANK_MAX_LIVE_CONNECTIONS must be an integer from 1 to 20000.");
+  }
+  return Number(value);
 }
 
 function validatedExpectedVersion(value: number | undefined): number | undefined {

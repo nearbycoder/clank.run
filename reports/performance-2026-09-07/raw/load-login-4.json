@@ -1,0 +1,231 @@
+{
+  "protocol": "clank-load/1",
+  "startedAt": "2026-09-07T23:57:41.763Z",
+  "kind": "app",
+  "users": 1000,
+  "seconds": 8,
+  "rates": [
+    10,
+    25
+  ],
+  "settings": {
+    "mode": "login",
+    "authConcurrency": 4,
+    "ingressRpm": 3000,
+    "cacheEntries": 1000,
+    "metricBuckets": 0
+  },
+  "machine": {
+    "node": "v24.20.0",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "memoryBytes": 117764759552
+  },
+  "topology": "One isolated Node server process and a separate generator process on the same host; loopback HTTP; local SQLite",
+  "recordsPerUser": 20,
+  "samples": [
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 10,
+      "duration": 8,
+      "mode": "login",
+      "offered": 80,
+      "completed": 80,
+      "dropped": 0,
+      "valid": 80,
+      "status": {
+        "200": 80
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 27500,
+      "elapsedSeconds": 8.079658301,
+      "successfulRps": 9.901408824442315,
+      "latencyMs": {
+        "p50": 177.46749499999987,
+        "p95": 196.21444200000042,
+        "p99": 211.64974299999994,
+        "max": 211.64974299999994
+      },
+      "serviceP95Ms": 195.31098299999985,
+      "generatorScheduleP99Ms": 1.0878860000002533,
+      "acceptable": true,
+      "metrics": {
+        "rss": 128348160,
+        "peakRss": 396783616,
+        "heapUsed": 25594616,
+        "cpuPercent": 174.71344894085064,
+        "eventLoopP99Ms": 10.903551,
+        "eventLoopMaxMs": 20.168703,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 45,
+            "cacheHits": 0,
+            "durationMs": 0.3030319999998028,
+            "lastInvalidation": "__auth",
+            "cachedEntries": 45,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 25,
+      "duration": 8,
+      "mode": "login",
+      "offered": 200,
+      "completed": 200,
+      "dropped": 0,
+      "valid": 182,
+      "status": {
+        "200": 182,
+        "503": 18
+      },
+      "failures": {},
+      "errorExamples": {
+        "503": "{\"ok\":false,\"error\":{\"code\":\"AUTH_BUSY\",\"message\":\"Authentication is temporarily busy. Try again shortly.\"}}"
+      },
+      "bytes": 64696,
+      "elapsedSeconds": 8.87041955,
+      "successfulRps": 20.517631547653234,
+      "latencyMs": {
+        "p50": 756.2171120000003,
+        "p95": 997.3549019999991,
+        "p99": 1044.823185000001,
+        "max": 1066.7341930000002
+      },
+      "serviceP95Ms": 996.2888569999996,
+      "generatorScheduleP99Ms": 1.4405649999989691,
+      "acceptable": false,
+      "metrics": {
+        "rss": 90357760,
+        "peakRss": 666664960,
+        "heapUsed": 13707976,
+        "cpuPercent": 397.45115852206385,
+        "eventLoopP99Ms": 11.395071,
+        "eventLoopMaxMs": 22.659071,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 45,
+            "cacheHits": 0,
+            "durationMs": 0.3030319999998028,
+            "lastInvalidation": "__auth",
+            "cachedEntries": 45,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 2,
+      "rate": 10,
+      "duration": 8,
+      "mode": "login",
+      "offered": 80,
+      "completed": 80,
+      "dropped": 0,
+      "valid": 80,
+      "status": {
+        "200": 80
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 27500,
+      "elapsedSeconds": 8.075514324,
+      "successfulRps": 9.906489765270337,
+      "latencyMs": {
+        "p50": 181.34903099999792,
+        "p95": 197.38525300000038,
+        "p99": 204.17660199999955,
+        "max": 204.17660199999955
+      },
+      "serviceP95Ms": 196.7687380000025,
+      "generatorScheduleP99Ms": 1.2797489999975369,
+      "acceptable": true,
+      "metrics": {
+        "rss": 127229952,
+        "peakRss": 395505664,
+        "heapUsed": 25604408,
+        "cpuPercent": 177.32280935022808,
+        "eventLoopP99Ms": 10.944511,
+        "eventLoopMaxMs": 18.923519,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 45,
+            "cacheHits": 0,
+            "durationMs": 0.13921699999991688,
+            "lastInvalidation": "__auth",
+            "cachedEntries": 45,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 2,
+      "rate": 25,
+      "duration": 8,
+      "mode": "login",
+      "offered": 200,
+      "completed": 200,
+      "dropped": 0,
+      "valid": 180,
+      "status": {
+        "200": 180,
+        "503": 20
+      },
+      "failures": {},
+      "errorExamples": {
+        "503": "{\"ok\":false,\"error\":{\"code\":\"AUTH_BUSY\",\"message\":\"Authentication is temporarily busy. Try again shortly.\"}}"
+      },
+      "bytes": 64228,
+      "elapsedSeconds": 8.894092108999997,
+      "successfulRps": 20.23815334876695,
+      "latencyMs": {
+        "p50": 881.923281000003,
+        "p95": 965.6077910000022,
+        "p99": 998.7173860000039,
+        "max": 1001.8758650000018
+      },
+      "serviceP95Ms": 964.7411700000011,
+      "generatorScheduleP99Ms": 1.0709340000030352,
+      "acceptable": false,
+      "metrics": {
+        "rss": 87814144,
+        "peakRss": 664453120,
+        "heapUsed": 13838608,
+        "cpuPercent": 394.5555082737052,
+        "eventLoopP99Ms": 11.272191,
+        "eventLoopMaxMs": 18.186239,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 45,
+            "cacheHits": 0,
+            "durationMs": 0.13921699999991688,
+            "lastInvalidation": "__auth",
+            "cachedEntries": 45,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    }
+  ],
+  "finishedAt": "2026-09-07T23:58:21.611Z"
+}

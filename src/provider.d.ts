@@ -103,6 +103,22 @@ export declare class DeploymentProviderError extends Error {
     readonly code: string;
     constructor(status: number, code: string, message: string);
 }
+export interface DeploymentProviderConformanceCheck {
+    readonly name: "shape" | "stopped-reconcile" | "idempotency" | "rollback" | "delete";
+    readonly status: "passed" | "skipped" | "failed";
+    readonly message: string;
+}
+export interface DeploymentProviderConformanceReport {
+    readonly protocol: "clank-provider-conformance/1";
+    readonly provider: string;
+    readonly ok: boolean;
+    readonly checks: readonly DeploymentProviderConformanceCheck[];
+}
+export declare function runDeploymentProviderConformance(provider: DeploymentProvider, options?: {
+    projectId?: string;
+    timeoutMs?: number;
+    destructive?: boolean;
+}): Promise<DeploymentProviderConformanceReport>;
 /**
  * Runs the standard node lifecycle and gives the selected provider only a
  * verified, credential-free desired-state request.

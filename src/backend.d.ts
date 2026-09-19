@@ -1,8 +1,15 @@
+import { createLiveReplayStore, applyLiveSplice, type LiveResumeOptions } from "./live-resume.js";
+import type { DatabaseQueryDiagnostic } from "./query-advisor.js";
+import type { AgentActivityOptions, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
+import type { MutationReceiptOptions } from "./mutation-receipts.js";
+import type { Tracer } from "./observability.js";
 import { type Cleanup, type ReactiveSignal } from "./core.js";
 import { type InferSchema, type InferSchemaShape, type DocumentId, type Schema, type SchemaShape } from "./ai.js";
 import { type AuthClient, type AuthDefinition, type AuthRequest, type AuthRuntime, type AuthState, type AuthUser, type DefaultAuthProfile } from "./auth.js";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.js";
 import { type JobPublisher, type JobRuntime, type JobSystemDefinition, type OpenJobsOptions } from "./jobs.js";
+import type { BucketManager } from "./buckets.js";
+import type { McpAppDefinition, McpAppVisibility } from "./mcp.js";
 /** A nominal document ID. At runtime this is a compact random string. */
 export type Id<Table extends string> = DocumentId<Table>;
 export type DocumentFor<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> = TableValue<Schema["tables"][Name]> & {
@@ -56,6 +63,8 @@ export interface WriteTable<Schema extends DatabaseSchema<any>, Name extends Tab
     delete(id: Id<Name>, options?: DocumentWriteOptions): boolean;
     /** Restore a historical snapshot as a new, conflict-checked document version. */
     restore(id: Id<Name>, cursor: DocumentRevisionCursor, options?: DocumentRestoreOptions): DocumentFor<Schema, Name>;
+    /** Permanently purge retained snapshots only if the record is still deleted at this cursor. */
+    purgeDeleted(id: Id<Name>, cursor: DocumentRevisionCursor): boolean;
 }
 export interface DocumentWriteOptions {
     /** Reject the write unless the stored document has this exact version. */
@@ -157,6 +166,8 @@ interface DatabaseSyncLike {
     enableLoadExtension?(allow: boolean): void;
 }
 export interface SQLiteOptions {
+  /** Opt-in metadata-only SQL plans and execution statistics, bounded to 500 shapes. */
+  queryDiagnostics?: boolean;
     path?: string;
     wal?: boolean;
     busyTimeout?: number;
@@ -209,6 +220,10 @@ export interface BackendAgentOptions {
     destructive?: boolean;
     idempotent?: boolean;
     openWorld?: boolean;
+    app?: McpAppDefinition | {
+        readonly resource: McpAppDefinition;
+        readonly visibility?: readonly McpAppVisibility[];
+    };
 }
 export type BackendContext<Kind extends "query" | "mutation", DB extends DatabaseSchema<any>, Auth extends AuthDefinition<any> | undefined, Access extends BackendAccess, Jobs extends JobSystemDefinition<DB, any> | undefined = undefined> = (Kind extends "query" ? QueryContext<DB> : MutationContext<DB, Jobs> & MutationJobsContext<DB, Jobs>) & (Auth extends AuthDefinition<any> ? {
     auth: AuthRequest<AuthProfileOf<Auth>>;
@@ -299,6 +314,7 @@ export interface LiveQuery<Value> {
 export interface SyncClient {
     query<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): Promise<OutputOf<Reference>>;
     mutate<Reference extends FunctionReference<"mutation", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): Promise<OutputOf<Reference>>;
+    mutateOnce<Reference extends FunctionReference<"mutation", any, any>>(reference: Reference, args: InputOf<Reference>, receipt: { key: string; userId: string }): Promise<OutputOf<Reference>>;
     live<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): LiveQuery<OutputOf<Reference>>;
     seed<Reference extends FunctionReference<"query", any, any>>(reference: Reference, args: InputOf<Reference>, value: OutputOf<Reference>, version?: number): void;
 }
@@ -311,6 +327,9 @@ interface EventSourceLike {
     close(): void;
 }
 export interface SyncClientOptions {
+  /** Negotiate bounded splice updates; unsupported servers keep sending snapshots. */
+  liveResume?: boolean;
+  maxLiveBytes?: number;
     url?: string;
     fetch?: typeof fetch;
     eventSource?: new (url: string, options?: {
@@ -366,6 +385,7 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     readonly database: SQLiteDatabase<Schema>;
     readonly auth: Auth extends AuthDefinition<infer Profile> ? AuthRuntime<Profile> : undefined;
     readonly jobs: Jobs extends JobSystemDefinition<Schema, any> ? JobRuntime<Jobs> : undefined;
+    readonly buckets: BucketManager | undefined;
     readonly version: number;
     readonly contractRevision: string | null;
     query<Reference extends FunctionReference<"query", any, any>>(reference: Reference, ...args: InputTuple<InputOf<Reference>>): {
@@ -388,9 +408,18 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     subscribe(path: string, input: unknown, listener: (value: unknown, version: number) => void): Cleanup;
     caller(request: Request): Promise<BackendCaller<AuthProfileOf<Auth>>>;
     handle(request: Request): Promise<Response>;
+    inspectQueries(): readonly QueryDiagnostic[];
+  inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
+    inspectAgentActivity(filter?: AgentActivityFilter): AgentActivitySnapshot;
     close(): void;
 }
 export interface OpenBackendOptions extends SQLiteOptions {
+  /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
+  liveResume?: LiveResumeOptions;
+    agentActivity?: AgentActivityOptions;
+    offlineMutations?: MutationReceiptOptions;
+    tracer?: Tracer;
+    diagnostics?: boolean;
     database?: SQLiteDatabase<any>;
     prefix?: string;
     verifyOrigin?: boolean;
@@ -404,6 +433,7 @@ export interface OpenBackendOptions extends SQLiteOptions {
     maxCacheEntries?: number;
     onError?: (error: unknown) => void;
     jobs?: Omit<OpenJobsOptions, "database">;
+    buckets?: BucketManager;
     agent?: false | {
         name?: string;
         title?: string;
@@ -412,11 +442,38 @@ export interface OpenBackendOptions extends SQLiteOptions {
         instructions?: string;
         mcpPath?: string;
         oauthPrefix?: string;
+        /**
+         * Permit credential-free cross-origin browser access to the MCP transport.
+         * Defaults to true for OAuth-protected applications and false for public
+         * applications whose mutations do not require bearer authorization.
+         */
+        browserCors?: boolean;
         /** Maximum simultaneously active OAuth grants for one application user. Defaults to 100. */
         maxUserGrants?: number;
+        /**
+         * Idempotency window for a client retrying the immediately previous OAuth
+         * refresh token. Defaults to 15 minutes and is capped at one hour.
+         */
+        refreshTokenRetryLifetimeMs?: number;
+        /**
+         * Recover clients that do not persist rotated refresh tokens while the
+         * unspent successor remains valid. Defaults to "adaptive"; use "strict"
+         * to revoke as soon as the idempotency window closes.
+         */
+        refreshTokenRotationMode?: "adaptive" | "strict";
     };
 }
 export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>, options?: OpenBackendOptions): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>>;
 export declare function functionKey(path: string, args: unknown): string;
 export declare function stableStringify(value: unknown): string;
 export {};
+
+export interface QueryDiagnostic {
+    readonly path: string;
+    readonly runs: number;
+    readonly cacheHits: number;
+    readonly durationMs: number;
+    readonly lastInvalidation: string | null;
+    readonly cachedEntries: number;
+    readonly subscriptions: number;
+}

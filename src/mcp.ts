@@ -5,12 +5,20 @@ import {
 } from "./security.ts";
 
 /** Latest stable MCP protocol revision implemented by Clank. */
-export const MCP_PROTOCOL_VERSION = "2025-11-25";
+export const MCP_PROTOCOL_VERSION = "2026-07-28";
 export const MCP_SUPPORTED_PROTOCOL_VERSIONS = Object.freeze([
   MCP_PROTOCOL_VERSION,
+  "2025-11-25",
   "2025-06-18",
   "2025-03-26",
 ] as const);
+
+/** Stable MCP Apps extension revision implemented by Clank. */
+export const MCP_APPS_PROTOCOL_VERSION = "2026-01-26";
+/** The only HTML resource type defined by the stable MCP Apps specification. */
+export const MCP_APP_MIME_TYPE = "text/html;profile=mcp-app";
+export const MCP_APPS_EXTENSION_ID = "io.modelcontextprotocol/ui";
+const MCP_APP_DEFINITIONS = new WeakSet<object>();
 
 export type McpScope = "agent:read" | "agent:write";
 
@@ -27,18 +35,70 @@ export interface McpToolAnnotations {
   openWorldHint?: boolean;
 }
 
+export type McpAppVisibility = "model" | "app";
+
+export interface McpAppCsp {
+  readonly connectDomains?: readonly string[];
+  readonly resourceDomains?: readonly string[];
+  readonly frameDomains?: readonly string[];
+  readonly baseUriDomains?: readonly string[];
+}
+
+export interface McpAppPermissions {
+  readonly camera?: Readonly<Record<string, never>>;
+  readonly microphone?: Readonly<Record<string, never>>;
+  readonly geolocation?: Readonly<Record<string, never>>;
+  readonly clipboardWrite?: Readonly<Record<string, never>>;
+}
+
+/**
+ * An immutable HTML view served through MCP resources/read. Use defineMcpApp
+ * so invalid or unsafe declarations fail while the application boots.
+ */
+export interface McpAppDefinition {
+  readonly uri: `ui://${string}`;
+  readonly name: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly html: string;
+  readonly csp?: McpAppCsp;
+  readonly permissions?: McpAppPermissions;
+  readonly domain?: string;
+  readonly prefersBorder?: boolean;
+}
+
+export interface McpToolApp {
+  readonly resourceUri: `ui://${string}`;
+  readonly visibility?: readonly McpAppVisibility[];
+}
+
 export interface McpTool<Context = unknown> {
   readonly name: string;
+  /** Original application action path when the public MCP name is normalized for client portability. */
+  readonly actionPath?: string;
   readonly title?: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   readonly outputSchema?: Record<string, unknown>;
   readonly annotations?: McpToolAnnotations;
+  /** Optional MCP Apps view rendered for this tool's structured result. */
+  readonly app?: McpToolApp;
   readonly requiredScope?: McpScope;
   invoke(input: unknown, context: Context, request: Request): unknown | Promise<unknown>;
 }
 
+export interface McpToolActivity {
+  readonly tool: string;
+  readonly requiredScope: McpScope;
+  readonly scopes: readonly string[];
+  readonly outcome: "ok" | "error" | "denied";
+  readonly startedAt: number;
+  readonly durationMs: number;
+}
+
 export interface McpServerOptions<Context = unknown> {
+  /** Metadata-only completion hook; observer failures cannot change tool outcomes. */
+  onToolActivity?: (event: McpToolActivity, request: Request) => void;
   name: string;
   version?: string;
   title?: string;
@@ -46,11 +106,13 @@ export interface McpServerOptions<Context = unknown> {
   instructions?: string;
   /** Additional bounded, immutable contract data exposed by clank://actions. */
   metadata?: Readonly<Record<string, unknown>>;
+  /** Immutable HTML views referenced by tools through their app metadata. */
+  apps?: readonly McpAppDefinition[];
   tools: readonly McpTool<Context>[];
   /**
-   * Stateful MCP sessions keep long-lived clients synchronized across rolling
-   * deploys. A new server process does not recognize a prior process's session,
-   * so compliant clients reinitialize and discover the current tool contract.
+   * Compatibility settings for initialization-based MCP revisions through
+   * 2025-11-25. MCP 2026-07-28 requests are always stateless and ignore these
+   * settings.
    */
   sessions?: false | {
     idleTimeoutMs?: number;
@@ -60,6 +122,12 @@ export interface McpServerOptions<Context = unknown> {
   };
   allowedOrigins?: readonly string[];
   requireOrigin?: boolean;
+  /**
+   * Allow credential-free browser clients to call this MCP transport from
+   * another origin. Authentication still requires an explicit bearer token;
+   * cookies are never enabled by this option.
+   */
+  browserCors?: boolean;
   maxRequestBytes?: number;
   maxResponseBytes?: number;
   authenticate?: (request: Request) => Promise<McpAuthentication<Context> | null>;
@@ -69,6 +137,7 @@ export interface McpServerOptions<Context = unknown> {
 
 export interface McpServer<Context = unknown> {
   readonly tools: ReadonlyMap<string, McpTool<Context>>;
+  readonly apps: ReadonlyMap<string, McpAppDefinition>;
   readonly revision: string;
   readonly supportsToolListChanged: boolean;
   manifest(scopes?: ReadonlySet<string>): {
@@ -85,15 +154,28 @@ export interface McpServer<Context = unknown> {
     metadata?: Readonly<Record<string, unknown>>;
     tools: Array<{
       name: string;
+      actionPath?: string;
       title?: string;
       description: string;
       inputSchema: Record<string, unknown>;
       outputSchema?: Record<string, unknown>;
       annotations?: McpToolAnnotations;
+      app?: McpToolApp;
       requiredScope: McpScope;
     }>;
+    apps: Array<{
+      uri: `ui://${string}`;
+      name: string;
+      title?: string;
+      description?: string;
+      mimeType: typeof MCP_APP_MIME_TYPE;
+      csp?: McpAppCsp;
+      permissions?: McpAppPermissions;
+      domain?: string;
+      prefersBorder?: boolean;
+    }>;
   };
-  /** Notify connected stateful clients to refresh tools/list. */
+  /** Notify connected legacy clients to refresh tools/list. */
   notifyToolsChanged(): void;
   handle(request: Request): Promise<Response>;
   close(): void;
@@ -125,6 +207,7 @@ interface McpSession {
   initialized: boolean;
   lastSeenAt: number;
   eventCursor: number;
+  supportsMcpApps: boolean;
 }
 
 interface McpEventStream {
@@ -132,8 +215,57 @@ interface McpEventStream {
   close(): void;
 }
 
-const MCP_VERSION_SET = new Set<string>(MCP_SUPPORTED_PROTOCOL_VERSIONS);
+interface McpHeaderBinding {
+  readonly headerName: string;
+  readonly path: readonly string[];
+  readonly type: "string" | "integer" | "boolean";
+}
+
+const MCP_LEGACY_VERSION_SET = new Set<string>(MCP_SUPPORTED_PROTOCOL_VERSIONS.slice(1));
+const MCP_HEADER_MISMATCH = -32020;
+const MCP_UNSUPPORTED_PROTOCOL_VERSION = -32022;
 const JSON_SCHEMA_2020_12 = "https://json-schema.org/draft/2020-12/schema";
+
+/** Define and validate a dependency-free HTML view for an MCP tool. */
+export function defineMcpApp<const App extends McpAppDefinition>(app: App): Readonly<App> {
+  if (!isRecord(app)) throw new TypeError("MCP app definition must be an object.");
+  if (MCP_APP_DEFINITIONS.has(app)) return app;
+  const allowed = new Set([
+    "uri", "name", "title", "description", "html", "csp", "permissions", "domain", "prefersBorder",
+  ]);
+  if (Object.keys(app).some((key) => !allowed.has(key))) {
+    throw new TypeError("MCP app definition contains an unsupported field.");
+  }
+  const uri = mcpAppUri(app.uri, "MCP app uri");
+  boundedText(app.name, "MCP app name", 256);
+  if (app.title !== undefined) boundedText(app.title, "MCP app title", 256);
+  if (app.description !== undefined) boundedText(app.description, "MCP app description", 16 * 1024);
+  boundedText(app.html, "MCP app HTML", 3 * 1024 * 1024);
+  if (!/^\s*<!doctype\s+html(?:\s[^>]*)?>/iu.test(app.html) || !/<html(?:\s|>)/iu.test(app.html)) {
+    throw new TypeError("MCP app HTML must be a complete HTML5 document with a doctype and html element.");
+  }
+  const csp = app.csp === undefined ? undefined : normalizedMcpAppCsp(app.csp);
+  const permissions = app.permissions === undefined
+    ? undefined
+    : normalizedMcpAppPermissions(app.permissions);
+  const domain = app.domain === undefined ? undefined : mcpAppDomain(app.domain);
+  if (app.prefersBorder !== undefined && typeof app.prefersBorder !== "boolean") {
+    throw new TypeError("MCP app prefersBorder must be boolean.");
+  }
+  const definition = Object.freeze({
+    uri,
+    name: app.name.trim(),
+    ...(app.title === undefined ? {} : { title: app.title.trim() }),
+    ...(app.description === undefined ? {} : { description: app.description.trim() }),
+    html: app.html,
+    ...(csp === undefined ? {} : { csp }),
+    ...(permissions === undefined ? {} : { permissions }),
+    ...(domain === undefined ? {} : { domain }),
+    ...(app.prefersBorder === undefined ? {} : { prefersBorder: app.prefersBorder }),
+  }) as Readonly<App>;
+  MCP_APP_DEFINITIONS.add(definition);
+  return definition;
+}
 
 export function createMcpServer<Context = unknown>(
   options: McpServerOptions<Context>,
@@ -163,12 +295,21 @@ export function createMcpServer<Context = unknown>(
   const maxStreamsPerSession = sessionOptions
     ? positiveInteger(sessionOptions.maxStreamsPerSession ?? 2, "sessions.maxStreamsPerSession")
     : 0;
+  const appRegistry = new Map<string, McpAppDefinition>();
+  for (const source of options.apps ?? []) {
+    const app = defineMcpApp(source);
+    if (appRegistry.has(app.uri)) throw new TypeError(`Duplicate MCP app resource: ${app.uri}`);
+    appRegistry.set(app.uri, app);
+  }
   const registry = new Map<string, McpTool<Context>>();
-  for (const tool of options.tools) {
+  const headerBindings = new Map<string, readonly McpHeaderBinding[]>();
+  const portableNames = portableMcpToolNames(options.tools.map((tool) => tool.name));
+  for (const [index, tool] of options.tools.entries()) {
     if (!/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(tool.name)) {
       throw new TypeError(`Invalid MCP tool name: ${tool.name}`);
     }
-    if (registry.has(tool.name)) throw new TypeError(`Duplicate MCP tool: ${tool.name}`);
+    const publicName = portableNames[index]!;
+    if (registry.has(publicName)) throw new TypeError(`Duplicate MCP tool: ${tool.name}`);
     if (!tool.inputSchema || tool.inputSchema.type !== "object") {
       throw new TypeError(`MCP tool ${tool.name} must use an object input schema.`);
     }
@@ -180,15 +321,28 @@ export function createMcpServer<Context = unknown>(
     if (tool.requiredScope !== undefined && !["agent:read", "agent:write"].includes(tool.requiredScope)) {
       throw new TypeError(`MCP tool ${tool.name} has an invalid required scope.`);
     }
+    const app = tool.app === undefined ? undefined : normalizedMcpToolApp(tool.app, tool.name);
+    if (app && !appRegistry.has(app.resourceUri)) {
+      throw new TypeError(`MCP tool ${tool.name} references unknown app resource ${app.resourceUri}.`);
+    }
     if (typeof tool.invoke !== "function") throw new TypeError(`MCP tool ${tool.name} requires an invoke function.`);
-    registry.set(tool.name, Object.freeze({ ...tool }));
+    const registered = Object.freeze({
+      ...tool,
+      name: publicName,
+      ...(app ? { app } : {}),
+      ...(tool.actionPath || tool.name !== publicName ? { actionPath: tool.actionPath ?? tool.name } : {}),
+    });
+    headerBindings.set(publicName, mcpHeaderBindings(tool.inputSchema, publicName));
+    registry.set(publicName, registered);
   }
 
   const visibleTools = (scopes?: ReadonlySet<string>) => [...registry.values()]
     .filter((tool) => !scopes || scopes.has(tool.requiredScope ?? "agent:read"))
-    .sort((left, right) => left.name.localeCompare(right.name));
+    .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
 
   const baseVersion = options.version ?? "1.0.0";
+  const visibleApps = [...appRegistry.values()]
+    .sort((left, right) => left.uri < right.uri ? -1 : left.uri > right.uri ? 1 : 0);
   const revision = contractRevision({
     server: {
       name: options.name,
@@ -200,13 +354,16 @@ export function createMcpServer<Context = unknown>(
     metadata,
     tools: visibleTools().map((tool) => ({
       name: tool.name,
+      actionPath: tool.actionPath,
       title: tool.title,
       description: tool.description,
       inputSchema: tool.inputSchema,
       outputSchema: tool.outputSchema,
       annotations: tool.annotations,
+      app: tool.app,
       requiredScope: tool.requiredScope ?? "agent:read",
     })),
+    apps: visibleApps,
   });
   const serverVersion = revisionedVersion(baseVersion, revision);
   const sessions = new Map<string, McpSession>();
@@ -214,7 +371,7 @@ export function createMcpServer<Context = unknown>(
 
   const manifest = (scopes?: ReadonlySet<string>) => ({
     protocol: "mcp" as const,
-    protocolVersion: MCP_PROTOCOL_VERSION,
+    protocolVersion: MCP_PROTOCOL_VERSION as typeof MCP_PROTOCOL_VERSION,
     revision,
     server: {
       name: options.name,
@@ -226,13 +383,16 @@ export function createMcpServer<Context = unknown>(
     ...(metadata ? { metadata } : {}),
     tools: visibleTools(scopes).map((tool) => ({
       name: tool.name,
+      ...(tool.actionPath ? { actionPath: tool.actionPath } : {}),
       ...(tool.title ? { title: tool.title } : {}),
       description: tool.description,
       inputSchema: tool.inputSchema,
       ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
       ...(tool.annotations ? { annotations: tool.annotations } : {}),
+      ...(tool.app ? { app: tool.app } : {}),
       requiredScope: tool.requiredScope ?? "agent:read" as McpScope,
     })),
+    apps: visibleApps.map(mcpAppManifestDescriptor),
   });
 
   const closeSession = (session: McpSession) => {
@@ -249,7 +409,7 @@ export function createMcpServer<Context = unknown>(
     }
   };
 
-  const createSession = (protocolVersion: string): McpSession | null => {
+  const createSession = (protocolVersion: string, supportsMcpApps: boolean): McpSession | null => {
     pruneSessions();
     if (sessions.size >= maxSessions) return null;
     const session: McpSession = {
@@ -259,6 +419,7 @@ export function createMcpServer<Context = unknown>(
       initialized: false,
       lastSeenAt: Date.now(),
       eventCursor: 0,
+      supportsMcpApps,
     };
     sessions.set(session.id, session);
     return session;
@@ -273,6 +434,7 @@ export function createMcpServer<Context = unknown>(
     return session;
   };
 
+  const grantedScopes = new WeakMap<Request, readonly string[]>();
   const authenticate = async (
     request: Request,
     requiredScope: McpScope,
@@ -283,6 +445,7 @@ export function createMcpServer<Context = unknown>(
       return options.unauthorized?.(request, requiredScope)
         ?? defaultAuthorizationError(401, "invalid_token", "Authentication is required.");
     }
+    if (options.onToolActivity) grantedScopes.set(request, [...authenticated.scopes].filter(scope => scope === "agent:read" || scope === "agent:write"));
     if (!authenticated.scopes.has(requiredScope)) {
       return options.forbidden?.(request, requiredScope)
         ?? defaultAuthorizationError(403, "insufficient_scope", `Scope ${requiredScope} is required.`);
@@ -292,6 +455,13 @@ export function createMcpServer<Context = unknown>(
 
   const stamp = (response: Response): Response => {
     response.headers.set("x-clank-contract-revision", revision);
+    if (options.browserCors) {
+      response.headers.set("access-control-allow-origin", "*");
+      response.headers.set(
+        "access-control-expose-headers",
+        "mcp-protocol-version, mcp-session-id, www-authenticate, x-clank-contract-revision",
+      );
+    }
     return response;
   };
 
@@ -360,6 +530,7 @@ export function createMcpServer<Context = unknown>(
 
   const server: McpServer<Context> = {
     tools: registry,
+    apps: appRegistry,
     revision,
     supportsToolListChanged: Boolean(sessionOptions),
     manifest,
@@ -381,14 +552,18 @@ export function createMcpServer<Context = unknown>(
     },
     async handle(request) {
       if (closed) return stamp(rpcHttpError(503, null, -32603, "MCP server is closed."));
-      if (!requestOriginAllowed(request, {
+      if (options.browserCors && request.method === "OPTIONS") {
+        return stamp(browserCorsPreflight(request));
+      }
+      if (!options.browserCors && !requestOriginAllowed(request, {
         allowedOrigins: options.allowedOrigins,
         requireOrigin: options.requireOrigin,
       })) {
         return stamp(rpcHttpError(403, null, -32000, "Origin is not allowed."));
       }
+      const envelopeProtocol = request.headers.get("mcp-protocol-version");
       if (request.method === "GET") {
-        if (!sessionOptions) {
+        if (!sessionOptions || envelopeProtocol === MCP_PROTOCOL_VERSION) {
           return stamp(new Response(null, {
             status: 405,
             headers: {
@@ -414,11 +589,11 @@ export function createMcpServer<Context = unknown>(
         return stamp(eventStream(request, session));
       }
       if (request.method === "DELETE") {
-        if (!sessionOptions) {
+        if (!sessionOptions || envelopeProtocol === MCP_PROTOCOL_VERSION) {
           return stamp(new Response(null, {
             status: 405,
             headers: {
-              allow: "GET, POST",
+              allow: envelopeProtocol === MCP_PROTOCOL_VERSION ? "POST" : "GET, POST",
               "cache-control": "no-store",
             },
           }));
@@ -467,14 +642,43 @@ export function createMcpServer<Context = unknown>(
         return stamp(rpcHttpError(400, id, -32600, "Invalid Request."));
       }
       const notification = !Object.hasOwn(message, "id");
+      const modern = modernRequest(message, request);
       const suppliedSessionId = request.headers.get("mcp-session-id");
-      if (message.method === "initialize" && suppliedSessionId) {
+      let requestedProtocol: string;
+      if (modern) {
+        const validation = validateModernRequest(
+          message,
+          request,
+          notification,
+          headerBindings,
+        );
+        if (validation instanceof Response) return stamp(validation);
+        requestedProtocol = validation;
+      } else {
+        const legacyProtocol = legacyProtocolFor(message, request, undefined);
+        if (!legacyProtocol) {
+          return stamp(rpcHttpError(400, id, -32600, "Unsupported MCP protocol version."));
+        }
+        requestedProtocol = legacyProtocol;
+      }
+      if (!modern && message.method === "initialize" && suppliedSessionId) {
         return stamp(rpcHttpError(400, id, -32600, "Initialize must not include MCP-Session-Id."));
       }
       const requiredScope = requiredScopeFor(message, registry);
+      const activityTool = message.method === "tools/call" && isRecord(message.params) && typeof message.params.name === "string" ? registry.get(message.params.name) : undefined;
+      const activityStarted = options.onToolActivity ? Date.now() : 0;
+      const activityClock = options.onToolActivity ? performance.now() : 0;
+      let activityEmitted = false;
+      const emitActivity = (outcome: McpToolActivity["outcome"]) => {
+        if (!activityTool || !options.onToolActivity || activityEmitted) return;
+        activityEmitted = true;
+        try { options.onToolActivity(Object.freeze({ tool: activityTool.name, requiredScope,
+          scopes: Object.freeze([...(grantedScopes.get(request) ?? [])]), outcome, startedAt: activityStarted,
+          durationMs: performance.now() - activityClock }), request); } catch { /* Observers cannot change tool outcomes. */ }
+      };
       const authenticated = await authenticate(request, requiredScope);
-      if (authenticated instanceof Response) return stamp(authenticated);
-      if (sessionOptions && message.method !== "initialize" && !suppliedSessionId) {
+      if (authenticated instanceof Response) { emitActivity("denied"); return stamp(authenticated); }
+      if (!modern && sessionOptions && message.method !== "initialize" && !suppliedSessionId) {
         return stamp(rpcHttpError(
           400,
           id,
@@ -486,13 +690,16 @@ export function createMcpServer<Context = unknown>(
           },
         ));
       }
-      const session = suppliedSessionId ? sessionFrom(request) : undefined;
-      if (suppliedSessionId && !session) {
+      const session = !modern && suppliedSessionId ? sessionFrom(request) : undefined;
+      if (!modern && suppliedSessionId && !session) {
         return stamp(rpcHttpError(404, id, -32001, "MCP session is no longer active."));
       }
-      const requestedProtocol = protocolFor(message, request, session?.protocolVersion);
-      if (!requestedProtocol) {
-        return stamp(rpcHttpError(400, id, -32600, "Unsupported MCP protocol version."));
+      if (!modern) {
+        const sessionProtocol = legacyProtocolFor(message, request, session?.protocolVersion);
+        if (!sessionProtocol) {
+          return stamp(rpcHttpError(400, id, -32600, "Unsupported MCP protocol version."));
+        }
+        requestedProtocol = sessionProtocol;
       }
       if (session && requestedProtocol !== session.protocolVersion) {
         return stamp(rpcHttpError(400, id, -32600, "MCP protocol version does not match the active session."));
@@ -502,6 +709,12 @@ export function createMcpServer<Context = unknown>(
         return stamp(notificationResponse(message.method));
       }
 
+      const supportsMcpApps = modern
+        ? requestSupportsMcpApps(message)
+        : message.method === "initialize"
+          ? initializeSupportsMcpApps(message.params)
+          : session?.supportsMcpApps ?? false;
+
       try {
         const result = await dispatch(
           message.method,
@@ -509,24 +722,32 @@ export function createMcpServer<Context = unknown>(
           requestedProtocol,
           visibleTools(authenticated?.scopes),
           registry,
+          appRegistry,
           authenticated?.context as Context,
           request,
           manifest(authenticated?.scopes),
           options.instructions,
           Boolean(sessionOptions),
           revision,
+          modern,
+          supportsMcpApps,
         );
+        emitActivity(isRecord(result) && result.isError === true ? "error" : "ok");
         let created: McpSession | undefined;
-        if (message.method === "initialize" && sessionOptions) {
-          created = createSession(requestedProtocol) ?? undefined;
+        if (!modern && message.method === "initialize" && sessionOptions) {
+          created = createSession(requestedProtocol, supportsMcpApps) ?? undefined;
           if (!created) {
             return stamp(rpcHttpError(503, id, -32000, "MCP session capacity reached."));
           }
         }
-        return stamp(rpcResult(id, result, requestedProtocol, maxResponseBytes, created
+        const responseResult = modern
+          ? modernResult(result, manifest(authenticated?.scopes))
+          : result;
+        return stamp(rpcResult(id, responseResult, requestedProtocol, maxResponseBytes, created
           ? { "mcp-session-id": created.id }
           : undefined));
       } catch (error) {
+        emitActivity("error");
         if (error instanceof RpcDispatchError) {
           return stamp(rpcHttpError(error.status, id, error.rpcCode, error.message, error.data));
         }
@@ -548,14 +769,33 @@ async function dispatch<Context>(
   protocolVersion: string,
   visible: readonly McpTool<Context>[],
   registry: ReadonlyMap<string, McpTool<Context>>,
+  apps: ReadonlyMap<string, McpAppDefinition>,
   context: Context,
   request: Request,
   manifest: ReturnType<McpServer<Context>["manifest"]>,
   instructions?: string,
   listChanged = false,
   revision = manifest.revision,
+  modern = false,
+  supportsMcpApps = false,
 ): Promise<unknown> {
-  if (method === "initialize") {
+  if (modern && method === "server/discover") {
+    recordParams(params);
+    return {
+      supportedVersions: [...MCP_SUPPORTED_PROTOCOL_VERSIONS],
+      capabilities: {
+        tools: {},
+        resources: {},
+      },
+      instructions: `${
+        instructions
+          ?? `Use tools/list to discover the application's typed server actions. ${manifest.server.description ?? ""}`.trim()
+      } Contract revision: ${revision}.`,
+      ttlMs: 0,
+      cacheScope: "private",
+    };
+  }
+  if (!modern && method === "initialize") {
     const input = recordParams(params);
     if (
       typeof input.protocolVersion !== "string"
@@ -582,7 +822,7 @@ async function dispatch<Context>(
       } Contract revision: ${revision}.`,
     };
   }
-  if (method === "ping") return {};
+  if (!modern && method === "ping") return {};
   if (method === "tools/list") {
     if (params !== undefined) {
       const input = recordParams(params);
@@ -590,8 +830,9 @@ async function dispatch<Context>(
         throw new RpcDispatchError(-32602, "Invalid tools/list cursor.");
       }
     }
+    const clientTools = visible.filter((tool) => supportsMcpApps || mcpToolModelVisible(tool));
     return {
-      tools: visible.map(mcpToolDescriptor),
+      tools: clientTools.map((tool) => mcpToolDescriptor(tool)),
       ttlMs: 0,
       cacheScope: "private",
       _meta: {
@@ -605,7 +846,7 @@ async function dispatch<Context>(
       throw new RpcDispatchError(-32602, "Invalid tool call parameters.");
     }
     const tool = registry.get(input.name);
-    if (!tool) {
+    if (!tool || (!supportsMcpApps && !mcpToolModelVisible(tool))) {
       throw new RpcDispatchError(-32602, "Unknown tool. Refresh tools/list and retry.", 200, {
         reason: "TOOLS_CHANGED",
         contractRevision: revision,
@@ -648,13 +889,16 @@ async function dispatch<Context>(
   }
   if (method === "resources/list") {
     return {
-      resources: [{
-        uri: "clank://actions",
-        name: "Clank server action manifest",
-        title: "Application actions",
-        description: "Typed server actions, authorization requirements, and side-effect annotations.",
-        mimeType: "application/json",
-      }],
+      resources: [
+        {
+          uri: "clank://actions",
+          name: "Clank server action manifest",
+          title: "Application actions",
+          description: "Typed server actions, authorization requirements, and side-effect annotations.",
+          mimeType: "application/json",
+        },
+        ...[...apps.values()].map(mcpAppResourceDescriptor),
+      ],
       ttlMs: 0,
       cacheScope: "private",
       _meta: {
@@ -664,7 +908,19 @@ async function dispatch<Context>(
   }
   if (method === "resources/read") {
     const input = recordParams(params);
-    if (input.uri !== "clank://actions") throw new RpcDispatchError(-32602, "Unknown resource.");
+    if (typeof input.uri !== "string") throw new RpcDispatchError(-32602, "Invalid resource URI.");
+    if (input.uri !== "clank://actions") {
+      const app = apps.get(input.uri);
+      if (!app) throw new RpcDispatchError(-32602, "Unknown resource.");
+      return {
+        contents: [mcpAppResourceContent(app)],
+        ttlMs: 0,
+        cacheScope: "private",
+        _meta: {
+          "clank/contractRevision": revision,
+        },
+      };
+    }
     return {
       contents: [{
         uri: "clank://actions",
@@ -682,6 +938,10 @@ async function dispatch<Context>(
 }
 
 function mcpToolDescriptor<Context>(tool: McpTool<Context>): Record<string, unknown> {
+  const meta = {
+    ...(tool.actionPath ? { "clank/actionPath": tool.actionPath } : {}),
+    ...(tool.app ? { ui: tool.app } : {}),
+  };
   return {
     name: tool.name,
     ...(tool.title ? { title: tool.title } : {}),
@@ -689,11 +949,285 @@ function mcpToolDescriptor<Context>(tool: McpTool<Context>): Record<string, unkn
     inputSchema: withJsonSchemaDialect(tool.inputSchema),
     ...(tool.outputSchema ? { outputSchema: withJsonSchemaDialect(tool.outputSchema) } : {}),
     ...(tool.annotations ? { annotations: tool.annotations } : {}),
+    ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
   };
+}
+
+function mcpToolModelVisible<Context>(tool: McpTool<Context>): boolean {
+  return !tool.app?.visibility || tool.app.visibility.includes("model");
+}
+
+function mcpAppManifestDescriptor(app: McpAppDefinition): {
+  uri: `ui://${string}`;
+  name: string;
+  title?: string;
+  description?: string;
+  mimeType: typeof MCP_APP_MIME_TYPE;
+  csp?: McpAppCsp;
+  permissions?: McpAppPermissions;
+  domain?: string;
+  prefersBorder?: boolean;
+} {
+  return {
+    uri: app.uri,
+    name: app.name,
+    ...(app.title ? { title: app.title } : {}),
+    ...(app.description ? { description: app.description } : {}),
+    mimeType: MCP_APP_MIME_TYPE,
+    ...(app.csp ? { csp: app.csp } : {}),
+    ...(app.permissions ? { permissions: app.permissions } : {}),
+    ...(app.domain ? { domain: app.domain } : {}),
+    ...(app.prefersBorder === undefined ? {} : { prefersBorder: app.prefersBorder }),
+  };
+}
+
+function mcpAppUiMeta(app: McpAppDefinition): Record<string, unknown> {
+  return {
+    ...(app.csp ? { csp: app.csp } : {}),
+    ...(app.permissions ? { permissions: app.permissions } : {}),
+    ...(app.domain ? { domain: app.domain } : {}),
+    ...(app.prefersBorder === undefined ? {} : { prefersBorder: app.prefersBorder }),
+  };
+}
+
+function mcpAppResourceDescriptor(app: McpAppDefinition): Record<string, unknown> {
+  return {
+    uri: app.uri,
+    name: app.name,
+    ...(app.title ? { title: app.title } : {}),
+    ...(app.description ? { description: app.description } : {}),
+    mimeType: MCP_APP_MIME_TYPE,
+    _meta: { ui: mcpAppUiMeta(app) },
+  };
+}
+
+function mcpAppResourceContent(app: McpAppDefinition): Record<string, unknown> {
+  return {
+    uri: app.uri,
+    mimeType: MCP_APP_MIME_TYPE,
+    text: app.html,
+    _meta: { ui: mcpAppUiMeta(app) },
+  };
+}
+
+function normalizedMcpToolApp(app: McpToolApp, toolName: string): Readonly<McpToolApp> {
+  if (!isRecord(app)) throw new TypeError(`MCP tool ${toolName} app metadata must be an object.`);
+  if (Object.keys(app).some((key) => key !== "resourceUri" && key !== "visibility")) {
+    throw new TypeError(`MCP tool ${toolName} app metadata contains an unsupported field.`);
+  }
+  const resourceUri = mcpAppUri(app.resourceUri, `MCP tool ${toolName} app resourceUri`);
+  let visibility: readonly McpAppVisibility[] | undefined;
+  if (app.visibility !== undefined) {
+    if (
+      !Array.isArray(app.visibility)
+      || app.visibility.length === 0
+      || app.visibility.length > 2
+      || app.visibility.some((entry) => entry !== "model" && entry !== "app")
+      || new Set(app.visibility).size !== app.visibility.length
+    ) {
+      throw new TypeError(`MCP tool ${toolName} app visibility must contain unique model or app entries.`);
+    }
+    visibility = Object.freeze([...app.visibility]);
+  }
+  return Object.freeze({ resourceUri, ...(visibility ? { visibility } : {}) });
+}
+
+function mcpAppUri(value: unknown, name: string): `ui://${string}` {
+  boundedText(value, name, 2_048);
+  if (!value.startsWith("ui://") || /\s/u.test(value)) {
+    throw new TypeError(`${name} must use a bounded ui:// URI without whitespace.`);
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "ui:" || (!parsed.hostname && parsed.pathname === "")) throw new Error("invalid");
+  } catch {
+    throw new TypeError(`${name} must use a valid ui:// URI.`);
+  }
+  return value as `ui://${string}`;
+}
+
+function normalizedMcpAppCsp(csp: McpAppCsp): Readonly<McpAppCsp> {
+  if (!isRecord(csp)) throw new TypeError("MCP app csp must be an object.");
+  const allowed = new Set(["connectDomains", "resourceDomains", "frameDomains", "baseUriDomains"]);
+  if (Object.keys(csp).some((key) => !allowed.has(key))) {
+    throw new TypeError("MCP app csp contains an unsupported directive.");
+  }
+  const output: Record<string, readonly string[]> = {};
+  for (const key of allowed) {
+    const value = csp[key as keyof McpAppCsp];
+    if (value === undefined) continue;
+    if (!Array.isArray(value) || value.length > 64) {
+      throw new TypeError(`MCP app csp ${key} must be an array with at most 64 origins.`);
+    }
+    const normalized = value.map((entry) => mcpAppCspOrigin(entry, key));
+    if (new Set(normalized).size !== normalized.length) {
+      throw new TypeError(`MCP app csp ${key} must not contain duplicate origins.`);
+    }
+    output[key] = Object.freeze(normalized);
+  }
+  return Object.freeze(output);
+}
+
+function mcpAppCspOrigin(value: unknown, directive: string): string {
+  boundedText(value, `MCP app csp ${directive} origin`, 2_048);
+  const wildcard = /^(?:https|wss):\/\/\*\./iu.test(value);
+  const parseable = wildcard ? value.replace("://*.", "://clank-wildcard.") : value;
+  let parsed: URL;
+  try {
+    parsed = new URL(parseable);
+  } catch {
+    throw new TypeError(`MCP app csp ${directive} contains an invalid origin.`);
+  }
+  if (
+    parsed.username
+    || parsed.password
+    || parsed.pathname !== "/"
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw new TypeError(`MCP app csp ${directive} contains an invalid origin.`);
+  }
+  const secure = parsed.protocol === "https:" || parsed.protocol === "wss:";
+  const local = (parsed.protocol === "http:" || parsed.protocol === "ws:")
+    && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
+    && !wildcard;
+  if (!secure && !local) {
+    throw new TypeError(`MCP app csp ${directive} origins must be secure origins or local development origins.`);
+  }
+  return wildcard
+    ? parsed.origin.replace("://clank-wildcard.", "://*.")
+    : parsed.origin;
+}
+
+function normalizedMcpAppPermissions(permissions: McpAppPermissions): Readonly<McpAppPermissions> {
+  if (!isRecord(permissions)) throw new TypeError("MCP app permissions must be an object.");
+  const allowed = new Set(["camera", "microphone", "geolocation", "clipboardWrite"]);
+  if (Object.keys(permissions).some((key) => !allowed.has(key))) {
+    throw new TypeError("MCP app permissions contain an unsupported browser capability.");
+  }
+  const output: Record<string, Readonly<Record<string, never>>> = {};
+  for (const key of allowed) {
+    const value = permissions[key as keyof McpAppPermissions];
+    if (value === undefined) continue;
+    if (!isRecord(value) || Object.keys(value).length > 0) {
+      throw new TypeError(`MCP app permission ${key} must be an empty object.`);
+    }
+    output[key] = Object.freeze({});
+  }
+  return Object.freeze(output);
+}
+
+function mcpAppDomain(value: unknown): string {
+  boundedText(value, "MCP app domain", 253);
+  if (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/iu.test(value)) {
+    throw new TypeError("MCP app domain must be a hostname without a scheme, path, wildcard, or port.");
+  }
+  return value.toLowerCase();
+}
+
+function initializeSupportsMcpApps(params: unknown): boolean {
+  if (!isRecord(params) || !isRecord(params.capabilities)) return false;
+  return capabilitiesSupportMcpApps(params.capabilities);
+}
+
+function requestSupportsMcpApps(message: JsonRpcMessage): boolean {
+  if (!isRecord(message.params) || !isRecord(message.params._meta)) return false;
+  const capabilities = message.params._meta["io.modelcontextprotocol/clientCapabilities"];
+  return isRecord(capabilities) && capabilitiesSupportMcpApps(capabilities);
+}
+
+function capabilitiesSupportMcpApps(capabilities: Record<string, unknown>): boolean {
+  const extensions = capabilities.extensions;
+  if (!isRecord(extensions)) return false;
+  const ui = extensions[MCP_APPS_EXTENSION_ID];
+  return isRecord(ui)
+    && Array.isArray(ui.mimeTypes)
+    && ui.mimeTypes.includes(MCP_APP_MIME_TYPE);
+}
+
+/**
+ * Converts logical action paths into names accepted by strict MCP/model clients.
+ * Readable names use underscores; overlong or colliding names receive a stable
+ * contract-derived suffix while remaining within Anthropic's 64-character limit.
+ */
+export function portableMcpToolNames(names: readonly string[]): readonly string[] {
+  const readable = names.map((name) => name.replace(/[.-]/gu, "_"));
+  const counts = new Map<string, number>();
+  for (const name of readable) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const output = names.map((source, index) => {
+    const candidate = readable[index]!;
+    if (candidate.length <= 64 && counts.get(candidate) === 1) return candidate;
+    const suffix = contractRevision({ tool: source }).slice("mcp-".length, "mcp-".length + 16);
+    return `${candidate.slice(0, 47)}_${suffix}`;
+  });
+  const unique = new Set(output);
+  if (unique.size !== output.length) {
+    throw new TypeError("MCP tool names collide after portable normalization.");
+  }
+  for (const name of output) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/u.test(name)) {
+      throw new TypeError(`Invalid portable MCP tool name: ${name}`);
+    }
+  }
+  return Object.freeze(output);
 }
 
 function withJsonSchemaDialect(schema: Record<string, unknown>): Record<string, unknown> {
   return schema.$schema ? schema : { $schema: JSON_SCHEMA_2020_12, ...schema };
+}
+
+function mcpHeaderBindings(
+  schema: Record<string, unknown>,
+  toolName: string,
+): readonly McpHeaderBinding[] {
+  const bindings: McpHeaderBinding[] = [];
+  const used = new Set<string>();
+  const stack = new Set<object>();
+  const visit = (node: unknown, path: string[], staticallyReachable: boolean): void => {
+    if (!isRecord(node)) return;
+    if (stack.has(node)) throw new TypeError(`MCP tool ${toolName} has a circular input schema.`);
+    stack.add(node);
+    if (Object.hasOwn(node, "x-mcp-header")) {
+      const suffix = node["x-mcp-header"];
+      const type = node.type;
+      if (
+        !staticallyReachable
+        || path.length === 0
+        || typeof suffix !== "string"
+        || !suffix
+        || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u.test(suffix)
+        || (type !== "string" && type !== "integer" && type !== "boolean")
+      ) {
+        throw new TypeError(`MCP tool ${toolName} has an invalid x-mcp-header annotation.`);
+      }
+      const folded = suffix.toLowerCase();
+      if (used.has(folded)) {
+        throw new TypeError(`MCP tool ${toolName} has duplicate x-mcp-header annotations.`);
+      }
+      used.add(folded);
+      bindings.push({ headerName: `mcp-param-${suffix}`, path: [...path], type });
+    }
+    if (isRecord(node.properties)) {
+      for (const [key, child] of Object.entries(node.properties)) {
+        visit(child, [...path, key], staticallyReachable);
+      }
+    }
+    for (const keyword of [
+      "items", "prefixItems", "contains", "oneOf", "anyOf", "allOf", "not", "if", "then", "else",
+      "$defs", "definitions", "patternProperties", "additionalProperties", "dependentSchemas",
+      "propertyNames", "unevaluatedItems", "unevaluatedProperties",
+    ] as const) {
+      const child = node[keyword];
+      if (Array.isArray(child)) {
+        for (const entry of child) visit(entry, path, false);
+      } else {
+        visit(child, path, false);
+      }
+    }
+    stack.delete(node);
+  };
+  visit(schema, [], true);
+  return Object.freeze(bindings);
 }
 
 function requiredScopeFor<Context>(
@@ -706,7 +1240,7 @@ function requiredScopeFor<Context>(
   return registry.get(message.params.name)?.requiredScope ?? "agent:read";
 }
 
-function protocolFor(
+function legacyProtocolFor(
   message: JsonRpcMessage,
   request: Request,
   sessionProtocol?: string,
@@ -714,11 +1248,184 @@ function protocolFor(
   if (message.method === "initialize" && isRecord(message.params)) {
     const requested = message.params.protocolVersion;
     if (typeof requested !== "string") return null;
-    if (MCP_VERSION_SET.has(requested)) return requested;
-    return MCP_PROTOCOL_VERSION;
+    if (MCP_LEGACY_VERSION_SET.has(requested)) return requested;
+    return "2025-11-25";
   }
   const supplied = request.headers.get("mcp-protocol-version") ?? sessionProtocol ?? "2025-03-26";
-  return MCP_VERSION_SET.has(supplied) ? supplied : null;
+  return MCP_LEGACY_VERSION_SET.has(supplied) ? supplied : null;
+}
+
+function modernRequest(message: JsonRpcMessage, request: Request): boolean {
+  if (message.method === "server/discover") return true;
+  if (request.headers.get("mcp-protocol-version") === MCP_PROTOCOL_VERSION) return true;
+  if (!isRecord(message.params) || !isRecord(message.params._meta)) return false;
+  return Object.hasOwn(message.params._meta, "io.modelcontextprotocol/protocolVersion");
+}
+
+function validateModernRequest(
+  message: JsonRpcMessage,
+  request: Request,
+  notification: boolean,
+  bindingsByTool: ReadonlyMap<string, readonly McpHeaderBinding[]>,
+): string | Response {
+  const id = validId(message.id) ? message.id as JsonRpcId : null;
+  const headerProtocol = request.headers.get("mcp-protocol-version");
+  if (!headerProtocol) return headerMismatch(id, "MCP-Protocol-Version header is required.");
+  if (notification) {
+    if (headerProtocol !== MCP_PROTOCOL_VERSION) {
+      return unsupportedProtocol(id, headerProtocol);
+    }
+    return headerProtocol;
+  }
+  if (!isRecord(message.params) || !isRecord(message.params._meta)) {
+    return rpcHttpError(400, id, -32602, "Request params must include _meta.");
+  }
+  const meta = message.params._meta;
+  const bodyProtocol = meta["io.modelcontextprotocol/protocolVersion"];
+  if (typeof bodyProtocol !== "string") {
+    return rpcHttpError(400, id, -32602, "Request _meta must include a protocol version.");
+  }
+  if (bodyProtocol !== headerProtocol) {
+    return headerMismatch(id, "MCP-Protocol-Version header does not match request _meta.");
+  }
+  if (bodyProtocol !== MCP_PROTOCOL_VERSION) return unsupportedProtocol(id, bodyProtocol);
+  if (!isRecord(meta["io.modelcontextprotocol/clientCapabilities"])) {
+    return rpcHttpError(400, id, -32602, "Request _meta must include client capabilities.");
+  }
+  const clientInfo = meta["io.modelcontextprotocol/clientInfo"];
+  if (
+    clientInfo !== undefined
+    && (!isRecord(clientInfo)
+      || typeof clientInfo.name !== "string"
+      || typeof clientInfo.version !== "string")
+  ) {
+    return rpcHttpError(400, id, -32602, "Client information must include name and version.");
+  }
+  const methodHeader = request.headers.get("mcp-method");
+  if (!methodHeader || methodHeader !== message.method) {
+    return headerMismatch(id, "Mcp-Method header does not match the request method.");
+  }
+  const nameSource = mcpNameSource(message);
+  if (nameSource !== undefined) {
+    const headerName = decodedMcpHeader(request.headers.get("mcp-name"));
+    if (headerName === null || headerName !== nameSource) {
+      return headerMismatch(id, "Mcp-Name header does not match the request target.");
+    }
+  }
+  if (message.method === "tools/call" && isRecord(message.params)) {
+    const toolName = message.params.name;
+    if (typeof toolName === "string") {
+      const headerError = validateToolHeaders(
+        request,
+        isRecord(message.params.arguments) ? message.params.arguments : {},
+        bindingsByTool.get(toolName) ?? [],
+      );
+      if (headerError) return headerMismatch(id, headerError);
+    }
+  }
+  return bodyProtocol;
+}
+
+function mcpNameSource(message: JsonRpcMessage): string | undefined {
+  if (!isRecord(message.params)) return undefined;
+  if (message.method === "tools/call" || message.method === "prompts/get") {
+    return typeof message.params.name === "string" ? message.params.name : undefined;
+  }
+  if (message.method === "resources/read") {
+    return typeof message.params.uri === "string" ? message.params.uri : undefined;
+  }
+  return undefined;
+}
+
+function headerMismatch(id: JsonRpcId, message: string): Response {
+  return rpcHttpError(400, id, MCP_HEADER_MISMATCH, `Header mismatch: ${message}`);
+}
+
+function unsupportedProtocol(id: JsonRpcId, requested: string): Response {
+  return rpcHttpError(
+    400,
+    id,
+    MCP_UNSUPPORTED_PROTOCOL_VERSION,
+    "Unsupported protocol version",
+    { supported: [...MCP_SUPPORTED_PROTOCOL_VERSIONS], requested },
+  );
+}
+
+function decodedMcpHeader(value: string | null): string | null {
+  if (value === null) return null;
+  if (!value.startsWith("=?base64?") || !value.endsWith("?=")) return value;
+  const encoded = value.slice("=?base64?".length, -2);
+  if (!encoded || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
+    return null;
+  }
+  try {
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function validateToolHeaders(
+  request: Request,
+  argumentsValue: Record<string, unknown>,
+  bindings: readonly McpHeaderBinding[],
+): string | null {
+  for (const binding of bindings) {
+    let cursor: unknown = argumentsValue;
+    let present = true;
+    for (const segment of binding.path) {
+      if (!isRecord(cursor) || !Object.hasOwn(cursor, segment)) {
+        present = false;
+        break;
+      }
+      cursor = cursor[segment];
+    }
+    const supplied = request.headers.get(binding.headerName);
+    if (!present || cursor === null || cursor === undefined) {
+      if (supplied !== null) return `${binding.headerName} must be omitted when its argument is absent or null.`;
+      continue;
+    }
+    const decoded = decodedMcpHeader(supplied);
+    if (decoded === null) return `${binding.headerName} is required and must be validly encoded.`;
+    if (binding.type === "string") {
+      if (typeof cursor !== "string" || decoded !== cursor) return `${binding.headerName} does not match its string argument.`;
+      continue;
+    }
+    if (binding.type === "boolean") {
+      if (typeof cursor !== "boolean" || decoded !== String(cursor)) return `${binding.headerName} does not match its boolean argument.`;
+      continue;
+    }
+    const numeric = Number(decoded);
+    if (
+      typeof cursor !== "number"
+      || !Number.isSafeInteger(cursor)
+      || !Number.isSafeInteger(numeric)
+      || numeric !== cursor
+    ) return `${binding.headerName} does not match its integer argument.`;
+  }
+  return null;
+}
+
+function modernResult<Context>(
+  result: unknown,
+  manifest: ReturnType<McpServer<Context>["manifest"]>,
+): Record<string, unknown> {
+  const value = isRecord(result) ? result : {};
+  const meta = isRecord(value._meta) ? value._meta : {};
+  return {
+    ...value,
+    resultType: "complete",
+    _meta: {
+      ...meta,
+      "io.modelcontextprotocol/serverInfo": {
+        name: manifest.server.name,
+        ...(manifest.server.title ? { title: manifest.server.title } : {}),
+        version: manifest.server.version,
+      },
+    },
+  };
 }
 
 function notificationResponse(method: string): Response {
@@ -781,6 +1488,54 @@ function defaultAuthorizationError(status: 401 | 403, error: string, description
       "cache-control": "no-store",
       "www-authenticate": `Bearer error="${error}"`,
       "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function browserCorsPreflight(request: Request): Response {
+  const requestedMethod = request.headers.get("access-control-request-method")?.toUpperCase();
+  if (requestedMethod && !["GET", "POST", "DELETE"].includes(requestedMethod)) {
+    return new Response(null, {
+      status: 405,
+      headers: {
+        allow: "GET, POST, DELETE, OPTIONS",
+        "cache-control": "no-store",
+      },
+    });
+  }
+  const requestedHeaders = request.headers.get("access-control-request-headers") ?? "";
+  if (requestedHeaders.length > 2_048) {
+    return rpcHttpError(400, null, -32600, "CORS request headers are too large.");
+  }
+  const headers = requestedHeaders
+    .split(",")
+    .map((header) => header.trim().toLowerCase())
+    .filter(Boolean);
+  if (headers.some((header) => !/^[!#$%&'*+.^_`|~0-9a-z-]+$/u.test(header))) {
+    return rpcHttpError(400, null, -32600, "CORS request headers are invalid.");
+  }
+  const alwaysAllowed = [
+    "accept",
+    "authorization",
+    "content-type",
+    "last-event-id",
+    "mcp-method",
+    "mcp-name",
+    "mcp-protocol-version",
+    "mcp-session-id",
+  ];
+  if (headers.some((header) => !alwaysAllowed.includes(header) && !/^mcp-param-[a-z0-9-]{1,128}$/u.test(header))) {
+    return rpcHttpError(400, null, -32600, "CORS request headers are not supported.");
+  }
+  const allowedHeaders = [...new Set([...alwaysAllowed, ...headers])];
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-headers": allowedHeaders.join(", "),
+      "access-control-allow-methods": "GET, POST, DELETE, OPTIONS",
+      "access-control-max-age": "600",
+      "cache-control": "no-store",
+      vary: "Access-Control-Request-Headers",
     },
   });
 }

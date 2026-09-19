@@ -26,6 +26,8 @@ export interface ApplyMigrationsOptions extends LoadMigrationsOptions {
   path: string;
   directory: string;
   allowUnsafe?: boolean;
+  /** Refuse statements that can access files or databases outside this connection. */
+  restrictToDatabase?: boolean;
 }
 
 interface DatabaseSyncLike {
@@ -179,6 +181,7 @@ export async function applyMigrations(options: ApplyMigrationsOptions): Promise<
     const appliedIds = new Set(applied.map((migration) => migration.id));
     const pending = migrations.filter((migration) => !appliedIds.has(migration.id));
     for (const migration of pending) {
+      if (options.restrictToDatabase) assertLocalMigrationSql(migration.sql);
       if (!options.allowUnsafe) assertSafeMigrationSql(migration.sql, migration.id);
     }
     if (pending.length === 0) return { applied, pending: [] };
@@ -357,6 +360,11 @@ function splitSqlStatements(sql: string): string[] {
   }
   output.push(sql.slice(start));
   return output;
+}
+
+function assertLocalMigrationSql(sql: string): void {
+  const forbidden = new Set(["ATTACH", "DETACH", "VACUUM", "PRAGMA", "LOAD_EXTENSION", "READFILE", "WRITEFILE"]);
+  if (tokenizeSql(sql).some(token => forbidden.has(token))) throw new Error("Rehearsal migrations must remain inside the disposable database.");
 }
 
 function tokenizeSql(sql: string): string[] {

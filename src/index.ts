@@ -1,4 +1,10 @@
+export { renderAgentActivity } from "./agent-activity.ts";
+export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.ts";
+export * from "./offline.ts";
+export type { MutationReceiptOptions } from "./mutation-receipts.ts";
+export * from "./notifications.ts";
 export * from "./core.ts";
+export * from "./task.ts";
 export * from "./dom.ts";
 export * from "./router.ts";
 export * from "./ai.ts";
@@ -6,12 +12,17 @@ export * from "./agent-contract.ts";
 export * from "./journey.ts";
 export * from "./collaboration.ts";
 export * from "./analytics.ts";
+export * from "./governance.ts";
+export * from "./lifecycle.ts";
+export * from "./tooling.ts";
 export * from "./mcp.ts";
+export * from "./mcp-app.ts";
 export * from "./blueprint.ts";
 export * from "./blueprint-registry.ts";
 export * from "./webauthn.ts";
 export * from "./services.ts";
 export * from "./object-storage.ts";
+export * from "./buckets.ts";
 export * from "./observability.ts";
 export * from "./recovery.ts";
 export * from "./orchestration.ts";
@@ -35,3 +46,9 @@ export * from "./durable-objects.ts";
 export * from "./platform.ts";
 export * from "./ssr.ts";
 export * from "./node.ts";
+
+export * from "./devtools.ts";
+
+export * from "./trace-timeline.ts";
+export * from "./preview-fixtures.ts";
+export * from "./rehearsal.ts";

@@ -184,48 +184,61 @@ test("documentation site serves every human and agent contract securely", async 
   assert.equal(discoveryResponse.status, 200);
   assert.equal(discovery.mcp.endpoint, "https://docs.clank.run/__clank/mcp");
   assert.equal(discovery.mcp.authentication, "none");
-  assert.equal(discovery.mcp.protocolVersion, "2025-11-25");
+  assert.equal(discovery.mcp.protocolVersion, "2026-07-28");
+  assert.equal(discovery.mcp.stateless, true);
+  assert.ok(discovery.mcp.supportedProtocolVersions.includes("2025-11-25"));
 
   const serverCard = await (await fetch(`${origin}/.well-known/mcp/server-card.json`)).json();
   assert.equal(serverCard.serverInfo.name, "clank-docs");
   assert.equal(serverCard.authentication.required, false);
-  assert.equal(serverCard.capabilities.tools.listChanged, true);
+  assert.deepEqual(serverCard.capabilities.tools, {});
   assert.equal(serverCard.contractRevision, discovery.contractRevision);
   assert.deepEqual(serverCard.tools, ["dynamic"]);
 
   let rpcId = 0;
-  let mcpSession;
   const mcp = async (method, params = {}) => {
+    const requestParams = {
+      ...params,
+      _meta: {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientInfo": { name: "docs-site-test", version: "1.0.0" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+      },
+    };
+    const name = method === "resources/read" ? requestParams.uri : method === "tools/call" ? requestParams.name : undefined;
     const mcpResponse = await fetch(`${origin}/__clank/mcp`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "mcp-protocol-version": "2025-11-25",
-        ...(mcpSession ? { "mcp-session-id": mcpSession } : {}),
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": method,
+        ...(typeof name === "string" ? { "mcp-name": name } : {}),
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params: requestParams }),
     });
     const payload = await mcpResponse.json();
     assert.equal(mcpResponse.status, 200, JSON.stringify(payload));
     assert.equal(payload.error, undefined, JSON.stringify(payload));
-    if (method === "initialize") mcpSession = mcpResponse.headers.get("mcp-session-id");
+    assert.equal(mcpResponse.headers.get("mcp-session-id"), null);
     return payload.result;
   };
-  const initialized = await mcp("initialize", {
-    protocolVersion: "2025-11-25",
-    capabilities: {},
-    clientInfo: { name: "docs-site-test", version: "1.0.0" },
-  });
-  assert.ok(mcpSession);
-  assert.equal(initialized.serverInfo.name, "clank-docs");
-  assert.equal(initialized.protocolVersion, "2025-11-25");
-  assert.equal(initialized.capabilities.tools.listChanged, true);
+  const initialized = await mcp("server/discover");
+  assert.equal(initialized.resultType, "complete");
+  assert.equal(initialized._meta["io.modelcontextprotocol/serverInfo"].name, "clank-docs");
+  assert.equal(initialized.supportedVersions[0], "2026-07-28");
+  assert.deepEqual(initialized.capabilities.tools, {});
   const toolList = await mcp("tools/list");
+  assert.equal(toolList.resultType, "complete");
   assert.equal(toolList.ttlMs, 0);
   assert.equal(toolList.cacheScope, "private");
   assert.equal(toolList._meta["clank/contractRevision"], discovery.contractRevision);
   assert.deepEqual(
     toolList.tools.map((tool) => tool.name),
+    ["docs_list", "docs_read", "docs_search"],
+  );
+  assert.deepEqual(
+    toolList.tools.map((tool) => tool._meta["clank/actionPath"]),
     ["docs.list", "docs.read", "docs.search"],
   );
   assert.ok(toolList.tools.every((tool) =>
@@ -233,17 +246,17 @@ test("documentation site serves every human and agent contract securely", async 
     && tool.annotations.destructiveHint === false
     && tool.annotations.openWorldHint === false));
 
-  const listed = await mcp("tools/call", { name: "docs.list", arguments: {} });
+  const listed = await mcp("tools/call", { name: "docs_list", arguments: {} });
   assert.equal(listed.isError, false);
   assert.equal(listed.structuredContent.documents.length, manifest.docs.length);
   const searched = await mcp("tools/call", {
-    name: "docs.search",
+    name: "docs_search",
     arguments: { query: "authenticated MCP", limit: 5 },
   });
   assert.equal(searched.isError, false);
   assert.ok(searched.structuredContent.results.some((entry) => entry.slug === "agent-protocol"));
   const read = await mcp("tools/call", {
-    name: "docs.read",
+    name: "docs_read",
     arguments: { slug: "agent-protocol" },
   });
   assert.equal(read.isError, false);
@@ -262,6 +275,27 @@ test("documentation site serves every human and agent contract securely", async 
   });
   assert.equal(rejectedOrigin.status, 403);
   assert.equal((await fetch(`${origin}/__clank/mcp`)).status, 400);
+  const legacyInitialization = await fetch(`${origin}/__clank/mcp`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2025-11-25",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: "legacy",
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "legacy-docs-test", version: "1.0.0" },
+      },
+    }),
+  });
+  assert.equal(legacyInitialization.status, 200);
+  const mcpSession = legacyInitialization.headers.get("mcp-session-id");
+  assert.ok(mcpSession);
   const eventStream = await fetch(`${origin}/__clank/mcp`, {
     headers: {
       accept: "text/event-stream",
@@ -284,7 +318,7 @@ test("documentation manifest covers every canonical guide exactly once", async (
   const packageJson = JSON.parse(await readFile(new URL("package.json", projectRoot), "utf8"));
   assert.equal(manifest.frameworkVersion, packageJson.version);
   assert.equal(manifest.protocol, "clank-docs/1");
-  assert.equal(manifest.docs.length, 70);
+  assert.equal(manifest.docs.length, 77);
   assert.equal(new Set(manifest.docs.map((doc) => doc.slug)).size, manifest.docs.length);
   assert.ok(manifest.docs.every((doc) =>
     doc.title

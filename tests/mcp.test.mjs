@@ -7,9 +7,19 @@ import {
   defineDatabase,
   defineTable,
   createMcpServer,
+  defineMcpApp,
+  MCP_APP_MIME_TYPE,
+  MCP_APPS_EXTENSION_ID,
   openBackend,
+  portableMcpToolNames,
   s,
 } from "../dist/index.js";
+
+const mcpAppsCapabilities = {
+  extensions: {
+    [MCP_APPS_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+  },
+};
 
 const origin = "https://todo.test";
 const resource = `${origin}/__clank/mcp`;
@@ -48,6 +58,40 @@ function mcpRequest(payload, token, headers = {}) {
       ...headers,
     },
     body: JSON.stringify(payload),
+  });
+}
+
+function modernMcpRequest(payload, token, headers = {}) {
+  const method = payload.method;
+  const params = {
+    ...(payload.params ?? {}),
+    _meta: {
+      ...payload.params?._meta,
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": {
+        name: "clank-modern-test",
+        version: "1.0.0",
+      },
+      "io.modelcontextprotocol/clientCapabilities": {},
+    },
+  };
+  const name = method === "resources/read"
+    ? params.uri
+    : method === "tools/call" || method === "prompts/get"
+      ? params.name
+      : undefined;
+  return new Request(resource, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": method,
+      ...(typeof name === "string" ? { "mcp-name": name } : {}),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...headers,
+    },
+    body: JSON.stringify({ ...payload, params }),
   });
 }
 
@@ -270,6 +314,7 @@ async function approveAuthorization(runtime, session, client, scopes = "agent:re
   const callback = new URL(approval.headers.get("location"));
   assert.equal(callback.origin, "http://127.0.0.1:43123");
   assert.equal(callback.searchParams.get("state"), "opaque-client-state");
+  assert.equal(callback.searchParams.get("iss"), origin);
   const code = callback.searchParams.get("code");
   assert.ok(code);
 
@@ -290,6 +335,135 @@ async function authorize(runtime, session, client, scopes = "agent:read agent:wr
   return { ...(await token.json()), ...approved };
 }
 
+test("OAuth-protected MCP supports credential-free remote browser clients", async () => {
+  const runtime = await openBackend(authenticatedBackend(), {
+    path: ":memory:",
+    agent: { name: "browser-private-todo", title: "Browser Private Todo" },
+  });
+  const browserOrigin = "https://app.mcpjam.com";
+  try {
+    const mcpPreflight = await runtime.handle(new Request(resource, {
+      method: "OPTIONS",
+      headers: {
+        origin: browserOrigin,
+        "sec-fetch-site": "cross-site",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization, content-type, mcp-protocol-version, mcp-method, mcp-param-region",
+      },
+    }));
+    assert.equal(mcpPreflight.status, 204);
+    assert.equal(mcpPreflight.headers.get("access-control-allow-origin"), "*");
+    assert.match(mcpPreflight.headers.get("access-control-allow-methods"), /POST/u);
+    assert.match(mcpPreflight.headers.get("access-control-allow-headers"), /authorization/u);
+    assert.match(mcpPreflight.headers.get("access-control-allow-headers"), /mcp-param-region/u);
+    assert.equal(mcpPreflight.headers.get("access-control-allow-credentials"), null);
+
+    const unsafePreflight = await runtime.handle(new Request(resource, {
+      method: "OPTIONS",
+      headers: {
+        origin: browserOrigin,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "x-clank-internal-authority",
+      },
+    }));
+    assert.equal(unsafePreflight.status, 400);
+    assert.equal(unsafePreflight.headers.get("access-control-allow-origin"), "*");
+
+    const challenged = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "remote-browser", version: "1.0.0" },
+      },
+    }, undefined, {
+      origin: browserOrigin,
+      "sec-fetch-site": "cross-site",
+    }));
+    assert.equal(challenged.status, 401);
+    assert.equal(challenged.headers.get("access-control-allow-origin"), "*");
+    assert.match(challenged.headers.get("access-control-expose-headers"), /www-authenticate/u);
+    assert.match(challenged.headers.get("www-authenticate"), /resource_metadata=/u);
+
+    for (const path of ["/__clank/oauth/register", "/__clank/oauth/token"]) {
+      const oauthPreflight = await runtime.handle(new Request(`${origin}${path}`, {
+        method: "OPTIONS",
+        headers: {
+          origin: browserOrigin,
+          "sec-fetch-site": "cross-site",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type",
+        },
+      }));
+      assert.equal(oauthPreflight.status, 204);
+      assert.equal(oauthPreflight.headers.get("access-control-allow-origin"), "*");
+      assert.equal(oauthPreflight.headers.get("access-control-allow-credentials"), null);
+    }
+
+    const registered = await runtime.handle(jsonRequest("/__clank/oauth/register", {
+      client_name: "Browser hosted client",
+      application_type: "web",
+      redirect_uris: ["https://app.mcpjam.com/oauth/callback"],
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      token_endpoint_auth_method: "none",
+    }, {
+      origin: browserOrigin,
+      "sec-fetch-site": "cross-site",
+    }));
+    assert.equal(registered.status, 201);
+    assert.equal(registered.headers.get("access-control-allow-origin"), "*");
+  } finally {
+    runtime.close();
+  }
+});
+
+test("public MCP keeps cross-origin browser mutations opt-in", async () => {
+  const definition = defineBackend({
+    schema: defineDatabase({ values: defineTable({ value: s.string() }) }),
+  }).functions(({ mutation }) => ({
+    add: mutation({
+      description: "Add a value.",
+      args: { value: s.string() },
+      handler: ({ db }, { value }) => db.table("values").insert({ value }),
+    }),
+  }));
+  const request = () => mcpRequest({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities: {},
+      clientInfo: { name: "remote-public-browser", version: "1.0.0" },
+    },
+  }, undefined, {
+    origin: "https://app.mcpjam.com",
+    "sec-fetch-site": "cross-site",
+  });
+
+  const protectedRuntime = await openBackend(definition, { path: ":memory:" });
+  try {
+    assert.equal((await protectedRuntime.handle(request())).status, 403);
+  } finally {
+    protectedRuntime.close();
+  }
+
+  const optedInRuntime = await openBackend(definition, {
+    path: ":memory:",
+    agent: { browserCors: true },
+  });
+  try {
+    const response = await optedInRuntime.handle(request());
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("access-control-allow-origin"), "*");
+  } finally {
+    optedInRuntime.close();
+  }
+});
+
 test("OAuth sign-in form returns to consent without a separate application tab", async () => {
   const runtime = await openBackend(authenticatedBackend(), {
     path: ":memory:",
@@ -300,7 +474,7 @@ test("OAuth sign-in form returns to consent without a separate application tab",
       description: "Manage private todos.",
     },
   });
-  await registerUser(runtime);
+  const existingSession = await registerUser(runtime);
   const client = await registerClient(runtime);
   const requestParameters = {
     client_id: client.client_id,
@@ -313,13 +487,32 @@ test("OAuth sign-in form returns to consent without a separate application tab",
     resource,
   };
   const authorizeUrl = `/__clank/oauth/authorize?${new URLSearchParams(requestParameters)}`;
-  const signIn = await runtime.handle(new Request(`${origin}${authorizeUrl}`));
+  const firstEntry = await runtime.handle(new Request(`${origin}${authorizeUrl}`));
+  assert.equal(firstEntry.status, 200);
+  const firstEntryHtml = await firstEntry.text();
+  assert.match(firstEntryHtml, /Checking sign-in/u);
+  assert.match(firstEntryHtml, /http-equiv="refresh"/u);
+  assert.match(firstEntryHtml, /clank_login_recheck=1/u);
+
+  const recheckUrl = `${authorizeUrl}&clank_login_recheck=1`;
+  const recoveredSession = await runtime.handle(new Request(`${origin}${recheckUrl}`, {
+    headers: { cookie: existingSession.cookie },
+  }));
+  assert.equal(recoveredSession.status, 200);
+  assert.match(await recoveredSession.text(), /Connect Test MCP client/u);
+
+  const signIn = await runtime.handle(new Request(`${origin}${recheckUrl}`));
   assert.equal(signIn.status, 200);
   const signInHtml = await signIn.text();
   assert.match(signInHtml, /Sign in and continue/u);
   assert.match(signInHtml, /action="\/__clank\/auth\/login"/u);
   assert.doesNotMatch(signInHtml, /I’m signed in — continue/u);
   const returnTo = hiddenInput(signInHtml, "return_to");
+  const loginProof = hiddenInput(signInHtml, "login_proof");
+  const loginProofCookie = signIn.headers.get("set-cookie")?.split(";", 1)[0];
+  assert.match(loginProof, /^clank_login_[A-Za-z0-9_-]+$/u);
+  assert.match(loginProofCookie, /^__Host-clank-login-proof=/u);
+  assert.match(signIn.headers.get("set-cookie"), /SameSite=None/u);
   assert.equal(returnTo, authorizeUrl.replaceAll("&", "&amp;"));
   const decodedReturnTo = returnTo.replaceAll("&amp;", "&");
 
@@ -331,11 +524,83 @@ test("OAuth sign-in form returns to consent without a separate application tab",
   assert.equal(crossOrigin.status, 403);
   assert.equal(crossOrigin.headers.get("set-cookie"), null);
 
+  const opaqueNavigation = {
+    origin: "null",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-dest": "document",
+    "sec-fetch-user": "?1",
+  };
+  for (const unsafeHeaders of [
+    { ...opaqueNavigation, "sec-fetch-site": "cross-site" },
+    { ...opaqueNavigation, "sec-fetch-mode": "cors" },
+    { ...opaqueNavigation, "sec-fetch-dest": "iframe" },
+    { ...opaqueNavigation, "sec-fetch-user": "?0" },
+  ]) {
+    const unsafe = await runtime.handle(formRequest("/__clank/auth/login", {
+      email: "agent@example.com",
+      password: "correct horse battery staple",
+      return_to: decodedReturnTo,
+    }, unsafeHeaders));
+    assert.equal(unsafe.status, 403);
+    assert.equal(unsafe.headers.get("set-cookie"), null);
+  }
+
+  const forgedProof = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+    login_proof: `clank_login_${"A".repeat(32)}`,
+  }, { cookie: loginProofCookie, origin: "null" }));
+  assert.equal(forgedProof.status, 403);
+
+  const wrongBrowser = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+    login_proof: loginProof,
+  }, { cookie: "__Host-clank-login-proof=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", origin: "null" }));
+  assert.equal(wrongBrowser.status, 403);
+
+  const changedReturn = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: `${decodedReturnTo}&auth_error=changed`,
+    login_proof: loginProof,
+  }, { cookie: loginProofCookie, origin: "null" }));
+  assert.equal(changedReturn.status, 403);
+
+  const opaqueLogin = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+    login_proof: loginProof,
+  }, { cookie: loginProofCookie, origin: "null" }));
+  assert.equal(opaqueLogin.status, 303);
+  assert.equal(opaqueLogin.headers.get("location"), `${origin}${authorizeUrl}`);
+  assert.match(opaqueLogin.headers.get("set-cookie"), /^__Host-clank-id=/);
+
+  const replayedProof = await runtime.handle(formRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+    return_to: decodedReturnTo,
+    login_proof: loginProof,
+  }, { cookie: loginProofCookie, origin: "null" }));
+  assert.equal(replayedProof.status, 403);
+  assert.equal(replayedProof.headers.get("set-cookie"), null);
+
+  const opaqueJson = await runtime.handle(jsonRequest("/__clank/auth/login", {
+    email: "agent@example.com",
+    password: "correct horse battery staple",
+  }, opaqueNavigation));
+  assert.equal(opaqueJson.status, 403);
+  assert.equal(opaqueJson.headers.get("set-cookie"), null);
+
   const openRedirect = await runtime.handle(formRequest("/__clank/auth/login", {
     email: "agent@example.com",
     password: "correct horse battery staple",
     return_to: "https://attacker.test/callback",
-  }, { origin }));
+  }, opaqueNavigation));
   assert.equal(openRedirect.status, 422);
   assert.equal(openRedirect.headers.get("set-cookie"), null);
 
@@ -560,6 +825,417 @@ test("MCP contract revisions change for action and metadata changes but remain d
   equivalentWorkflowMetadata.close();
 });
 
+test("MCP tool names use portable underscore identifiers with bounded collision suffixes", async () => {
+  const logicalNames = [
+    "dailyLog.getDailyUpdate",
+    "dailyLog-getDailyUpdate",
+    "dailyLog_getDailyUpdate",
+    `dailyLog.${"readRecentUpdates".repeat(6)}`,
+  ];
+  const portable = portableMcpToolNames(logicalNames);
+  assert.equal(portable.length, logicalNames.length);
+  assert.equal(new Set(portable).size, logicalNames.length);
+  assert.ok(portable.every((name) => /^[A-Za-z0-9_]{1,64}$/u.test(name)));
+  assert.ok(portable.every((name) => !name.includes("-") && !name.includes(".")));
+
+  const ordinary = portableMcpToolNames([
+    "dailyLog.getDailyUpdate",
+    "dailyLog.getDay",
+    "dailyLog.listRecent",
+  ]);
+  assert.deepEqual(ordinary, [
+    "dailyLog_getDailyUpdate",
+    "dailyLog_getDay",
+    "dailyLog_listRecent",
+  ]);
+
+  const server = createMcpServer({
+    name: "portable-tools",
+    tools: logicalNames.map((name) => testTool(name)),
+  });
+  const descriptors = server.manifest().tools;
+  assert.deepEqual(
+    new Set(descriptors.map((tool) => tool.actionPath)),
+    new Set(logicalNames),
+  );
+  assert.ok(descriptors.every((tool) => /^[A-Za-z0-9_]{1,64}$/u.test(tool.name)));
+  server.close();
+});
+
+test("MCP Apps preserve model-visible ui metadata and expose negotiated app-only tools", async () => {
+  const board = defineMcpApp({
+    uri: "ui://todos/board",
+    name: "todo_board",
+    title: "Todo board",
+    description: "Interactive todo board.",
+    html: "<!doctype html><html><head><title>Todos</title></head><body><main id=app></main></body></html>",
+    csp: {
+      connectDomains: ["https://api.example.com", "ws://localhost:8787"],
+      resourceDomains: ["https://cdn.example.com"],
+      frameDomains: [],
+      baseUriDomains: [],
+    },
+    permissions: { clipboardWrite: {} },
+    domain: "todos.claudemcpcontent.com",
+    prefersBorder: true,
+  });
+  const server = createMcpServer({
+    name: "mcp-apps-test",
+    apps: [board],
+    tools: [
+      testTool("todos.list", {
+        app: { resourceUri: board.uri, visibility: ["model", "app"] },
+      }),
+      testTool("todos.refresh", {
+        app: { resourceUri: board.uri, visibility: ["app"] },
+      }),
+    ],
+  });
+
+  const initialize = async (capabilities) => {
+    const response = await server.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities,
+        clientInfo: { name: "mcp-apps-test", version: "1.0.0" },
+      },
+    }));
+    assert.equal(response.status, 200);
+    return response.headers.get("mcp-session-id");
+  };
+  const call = async (session, method, params = {}) => {
+    const response = await server.handle(mcpRequest({ jsonrpc: "2.0", id: 2, method, params }, undefined, {
+      "mcp-session-id": session,
+    }));
+    assert.equal(response.status, 200);
+    return (await response.json()).result;
+  };
+
+  const appSession = await initialize(mcpAppsCapabilities);
+  const listed = await call(appSession, "tools/list");
+  assert.deepEqual(listed.tools.map((tool) => tool.name), ["todos_list", "todos_refresh"]);
+  assert.deepEqual(listed.tools[0]._meta.ui, {
+    resourceUri: board.uri,
+    visibility: ["model", "app"],
+  });
+  assert.deepEqual(listed.tools[1]._meta.ui.visibility, ["app"]);
+
+  const resources = await call(appSession, "resources/list");
+  const listedApp = resources.resources.find((entry) => entry.uri === board.uri);
+  assert.equal(listedApp.mimeType, MCP_APP_MIME_TYPE);
+  assert.equal(listedApp._meta.ui.prefersBorder, true);
+  assert.deepEqual(listedApp._meta.ui.permissions, { clipboardWrite: {} });
+  const resource = await call(appSession, "resources/read", { uri: board.uri });
+  assert.equal(resource.contents.length, 1);
+  assert.equal(resource.contents[0].mimeType, MCP_APP_MIME_TYPE);
+  assert.equal(resource.contents[0].text, board.html);
+  assert.deepEqual(resource.contents[0]._meta.ui.csp, board.csp);
+
+  const plainSession = await initialize({});
+  const plainTools = await call(plainSession, "tools/list");
+  assert.deepEqual(plainTools.tools.map((tool) => tool.name), ["todos_list"]);
+  assert.deepEqual(plainTools.tools[0]._meta.ui, {
+    resourceUri: board.uri,
+    visibility: ["model", "app"],
+  });
+  const hiddenCall = await call(plainSession, "tools/call", {
+    name: "todos_refresh",
+    arguments: { value: "hidden" },
+  });
+  assert.equal(hiddenCall, undefined);
+
+  assert.equal(server.apps.get(board.uri), board);
+  assert.equal(server.manifest().apps[0].mimeType, MCP_APP_MIME_TYPE);
+  assert.equal(server.manifest().tools[0].app.resourceUri, board.uri);
+  server.close();
+});
+
+test("MCP App declarations fail closed for unsafe or stale contracts", () => {
+  const html = "<!doctype html><html><body>Safe</body></html>";
+  assert.throws(() => defineMcpApp(null), /object/u);
+  assert.throws(() => defineMcpApp({ uri: "https://bad.test/view", name: "bad", html }), /ui:\/\//u);
+  assert.throws(() => defineMcpApp({ uri: "ui://bad/extra", name: "bad", html, unexpected: true }), /unsupported field/u);
+  assert.throws(() => defineMcpApp({ uri: "ui://bad/view", name: "bad", html: "<main>fragment</main>" }), /HTML5 document/u);
+  assert.throws(() => defineMcpApp({
+    uri: "ui://bad/csp",
+    name: "bad",
+    html,
+    csp: { connectDomains: ["https://good.test/path"] },
+  }), /invalid origin|secure origins/u);
+  for (const origin of [
+    "https://user@good.test",
+    "https://good.test:99999",
+    "http://example.test",
+    "wss://*.example.test/path",
+  ]) {
+    assert.throws(() => defineMcpApp({
+      uri: `ui://bad/csp-${encodeURIComponent(origin)}`,
+      name: "bad",
+      html,
+      csp: { connectDomains: [origin] },
+    }), /invalid origin|secure origins/u);
+  }
+  assert.throws(() => defineMcpApp({
+    uri: "ui://bad/permissions",
+    name: "bad",
+    html,
+    permissions: { camera: { unexpected: true } },
+  }), /empty object/u);
+  assert.throws(() => createMcpServer({
+    name: "missing-app",
+    tools: [testTool("todos.list", { app: { resourceUri: "ui://missing/view" } })],
+  }), /unknown app resource/u);
+  const app = defineMcpApp({ uri: "ui://safe/view", name: "safe", html });
+  assert.throws(() => createMcpServer({
+    name: "bad-visibility",
+    apps: [app],
+    tools: [testTool("todos.list", { app: { resourceUri: app.uri, visibility: [] } })],
+  }), /visibility/u);
+  assert.throws(() => createMcpServer({
+    name: "bad-app-metadata",
+    apps: [app],
+    tools: [testTool("todos.list", { app: { resourceUri: app.uri, extra: true } })],
+  }), /unsupported field/u);
+
+  const first = createMcpServer({ name: "revision-app", apps: [app], tools: [] });
+  const changed = createMcpServer({
+    name: "revision-app",
+    apps: [defineMcpApp({ ...app, html: "<!doctype html><html><body>Changed</body></html>" })],
+    tools: [],
+  });
+  assert.notEqual(first.revision, changed.revision);
+  first.close();
+  changed.close();
+});
+
+test("MCP 2026-07-28 discovers and invokes tools without process-local sessions", async () => {
+  const invoked = [];
+  const options = {
+    name: "stateless-app",
+    title: "Stateless app",
+    instructions: "Use the typed application actions.",
+    tools: [testTool("todos.echo", {
+      invoke: ({ value }) => {
+        invoked.push(value);
+        return { value };
+      },
+    })],
+  };
+  const firstInstance = createMcpServer(options);
+  const secondInstance = createMcpServer(options);
+
+  const discovered = await firstInstance.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: "discover",
+    method: "server/discover",
+    params: {},
+  }));
+  assert.equal(discovered.status, 200);
+  assert.equal(discovered.headers.get("mcp-session-id"), null);
+  const discovery = (await discovered.json()).result;
+  assert.equal(discovery.resultType, "complete");
+  assert.equal(discovery.supportedVersions[0], "2026-07-28");
+  assert.ok(discovery.supportedVersions.includes("2025-11-25"));
+  assert.deepEqual(discovery.capabilities.tools, {});
+  assert.equal(discovery.ttlMs, 0);
+  assert.equal(discovery.cacheScope, "private");
+  assert.equal(discovery._meta["io.modelcontextprotocol/serverInfo"].name, "stateless-app");
+
+  const listed = await firstInstance.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/list",
+    params: {},
+  }));
+  const listResult = (await listed.json()).result;
+  assert.equal(listResult.resultType, "complete");
+  assert.deepEqual(listResult.tools.map((tool) => tool.name), ["todos_echo"]);
+  assert.equal(listResult.tools[0]._meta["clank/actionPath"], "todos.echo");
+  assert.equal(listResult._meta["clank/contractRevision"], firstInstance.revision);
+  assert.equal(listResult._meta["io.modelcontextprotocol/serverInfo"].name, "stateless-app");
+
+  const called = await secondInstance.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "todos_echo", arguments: { value: "cross-instance" } },
+  }, undefined, {
+    "mcp-session-id": "legacy-session-is-ignored",
+    "last-event-id": "also-ignored",
+  }));
+  assert.equal(called.status, 200);
+  assert.equal(called.headers.get("mcp-session-id"), null);
+  const callResult = (await called.json()).result;
+  assert.equal(callResult.resultType, "complete");
+  assert.deepEqual(callResult.structuredContent, { value: "cross-instance" });
+  assert.deepEqual(invoked, ["cross-instance"]);
+
+  for (const method of ["GET", "DELETE"]) {
+    const response = await firstInstance.handle(new Request(resource, {
+      method,
+      headers: { "mcp-protocol-version": "2026-07-28" },
+    }));
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("allow"), "POST");
+  }
+  const extensionNotification = await firstInstance.handle(new Request(resource, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "mcp-protocol-version": "2026-07-28",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/example" }),
+  }));
+  assert.equal(extensionNotification.status, 202);
+  firstInstance.close();
+  secondInstance.close();
+});
+
+test("MCP 2026-07-28 rejects header smuggling and unsupported revisions before tool execution", async () => {
+  let calls = 0;
+  const server = createMcpServer({
+    name: "header-validation",
+    tools: [testTool("safe.echo", { invoke: () => { calls++; return { ok: true }; } })],
+  });
+  const base = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "safe_echo", arguments: { value: "test" } },
+  };
+  const cases = [
+    { headers: { "mcp-method": "tools/list" }, message: /Mcp-Method/u },
+    { headers: { "mcp-name": "unsafe_echo" }, message: /Mcp-Name/u },
+    { headers: { "mcp-protocol-version": "2025-11-25" }, message: /MCP-Protocol-Version/u },
+  ];
+  for (const entry of cases) {
+    const response = await server.handle(modernMcpRequest(base, undefined, entry.headers));
+    assert.equal(response.status, 400);
+    const payload = await response.json();
+    assert.equal(payload.error.code, -32020);
+    assert.match(payload.error.message, entry.message);
+  }
+  assert.equal(calls, 0);
+
+  const unsupportedBody = JSON.parse(await modernMcpRequest(base).text());
+  unsupportedBody.params._meta["io.modelcontextprotocol/protocolVersion"] = "2099-01-01";
+  const matchingUnsupported = await server.handle(new Request(resource, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2099-01-01",
+      "mcp-method": "tools/call",
+      "mcp-name": "safe_echo",
+    },
+    body: JSON.stringify(unsupportedBody),
+  }));
+  assert.equal(matchingUnsupported.status, 400);
+  const matchingPayload = await matchingUnsupported.json();
+  assert.equal(matchingPayload.error.code, -32022);
+  assert.equal(matchingPayload.error.data.requested, "2099-01-01");
+  assert.ok(matchingPayload.error.data.supported.includes("2026-07-28"));
+  assert.equal(calls, 0);
+
+  const missingMeta = await server.handle(new Request(resource, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": "tools/list",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+  }));
+  assert.equal(missingMeta.status, 400);
+  assert.equal((await missingMeta.json()).error.code, -32602);
+
+  const removedPing = await server.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "ping",
+    params: {},
+  }));
+  assert.equal(removedPing.status, 404);
+  assert.equal((await removedPing.json()).error.code, -32601);
+  server.close();
+});
+
+test("MCP 2026-07-28 validates schema-declared parameter headers", async () => {
+  const received = [];
+  const server = createMcpServer({
+    name: "parameter-headers",
+    tools: [{
+      name: "search",
+      description: "Search in a selected region.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          region: { type: "string", "x-mcp-header": "Region" },
+          enabled: { type: "boolean", "x-mcp-header": "Enabled" },
+          limit: { type: "integer", "x-mcp-header": "Limit" },
+        },
+        required: ["region", "enabled", "limit"],
+      },
+      invoke: (input) => { received.push(input); return input; },
+    }],
+  });
+  const request = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "search", arguments: { region: "north", enabled: true, limit: 42 } },
+  };
+  const missing = await server.handle(modernMcpRequest(request));
+  assert.equal(missing.status, 400);
+  assert.equal((await missing.json()).error.code, -32020);
+  assert.equal(received.length, 0);
+
+  const mismatch = await server.handle(modernMcpRequest(request, undefined, {
+    "mcp-param-region": "south",
+    "mcp-param-enabled": "true",
+    "mcp-param-limit": "42.0",
+  }));
+  assert.equal(mismatch.status, 400);
+  assert.equal((await mismatch.json()).error.code, -32020);
+  assert.equal(received.length, 0);
+
+  const called = await server.handle(modernMcpRequest(request, undefined, {
+    "mcp-param-region": "north",
+    "mcp-param-enabled": "true",
+    "mcp-param-limit": "42.0",
+  }));
+  assert.equal(called.status, 200);
+  assert.deepEqual(received, [{ region: "north", enabled: true, limit: 42 }]);
+  server.close();
+
+  assert.throws(() => createMcpServer({
+    name: "invalid-parameter-header",
+    tools: [testTool("bad", {
+      inputSchema: {
+        type: "object",
+        properties: { value: { type: "number", "x-mcp-header": "Value" } },
+      },
+    })],
+  }), /invalid x-mcp-header/u);
+  assert.throws(() => createMcpServer({
+    name: "unreachable-parameter-header",
+    tools: [testTool("bad", {
+      inputSchema: {
+        type: "object",
+        properties: {
+          value: {
+            oneOf: [{ type: "string", "x-mcp-header": "Value" }],
+          },
+        },
+      },
+    })],
+  }), /invalid x-mcp-header/u);
+});
+
 test("MCP sessions invalidate cached tools across deployments and stream list change notifications", async () => {
   const oldServer = createMcpServer({
     name: "changing-app",
@@ -625,10 +1301,10 @@ test("MCP sessions invalidate cached tools across deployments and stream list ch
   assert.equal(oldListPayload.result.cacheScope, "private");
   assert.equal(oldListPayload.result._meta["clank/contractRevision"], oldServer.revision);
   assert.deepEqual(oldListPayload.result.tools.map((tool) => tool.name), [
-    "todos.add",
-    "todos.list",
-    "todos.remove",
-    "todos.setDone",
+    "todos_add",
+    "todos_list",
+    "todos_remove",
+    "todos_setDone",
   ]);
 
   const newServer = createMcpServer({
@@ -673,13 +1349,13 @@ test("MCP sessions invalidate cached tools across deployments and stream list ch
     params: {},
   }, undefined, { "mcp-session-id": newSession }));
   assert.deepEqual((await refreshed.json()).result.tools.map((tool) => tool.name), [
-    "cards.add",
-    "cards.list",
-    "cards.move",
-    "cards.remove",
-    "columns.add",
-    "columns.list",
-    "columns.rename",
+    "cards_add",
+    "cards_list",
+    "cards_move",
+    "cards_remove",
+    "columns_add",
+    "columns_list",
+    "columns_rename",
   ]);
 
   oldServer.close();
@@ -710,7 +1386,7 @@ test("backend functions become deterministic MCP tools with public discovery", a
   const serverCardPayload = await serverCard.json();
   assert.equal(serverCardPayload.tools[0], "dynamic");
   assert.equal(serverCardPayload.contractRevision, runtime.contractRevision);
-  assert.equal(serverCardPayload.capabilities.tools.listChanged, true);
+  assert.deepEqual(serverCardPayload.capabilities.tools, {});
   assert.match(serverCardPayload.serverInfo.version, /\+clank\.[a-f0-9]{16}$/u);
 
   const protectedMetadata = await runtime.handle(new Request(
@@ -725,6 +1401,7 @@ test("backend functions become deterministic MCP tools with public discovery", a
   const authorization = await authorizationMetadata.json();
   assert.equal(authorization.code_challenge_methods_supported[0], "S256");
   assert.ok(authorization.grant_types_supported.includes("refresh_token"));
+  assert.equal(authorization.authorization_response_iss_parameter_supported, true);
 
   const unauthorized = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
@@ -742,11 +1419,379 @@ test("backend functions become deterministic MCP tools with public discovery", a
   runtime.close();
 });
 
+test("backend actions bind shared MCP Apps views without manual resource plumbing", async () => {
+  const dashboard = defineMcpApp({
+    uri: "ui://reports/dashboard",
+    name: "report_dashboard",
+    html: "<!doctype html><html><body><main id=dashboard></main></body></html>",
+    prefersBorder: false,
+  });
+  const schema = defineDatabase({
+    reports: defineTable({ title: s.string() }),
+  });
+  const definition = defineBackend({ schema }).functions(({ query }) => ({
+    reports: {
+      summary: query({
+        args: {},
+        returns: s.object({ total: s.number() }),
+        agent: { app: dashboard },
+        handler: ({ db }) => ({ total: db.table("reports").collect().length }),
+      }),
+      refresh: query({
+        args: {},
+        agent: { app: { resource: dashboard, visibility: ["app"] } },
+        handler: () => ({ refreshed: true }),
+      }),
+    },
+  }));
+  const runtime = await openBackend(definition, { path: ":memory:" });
+  try {
+    const discovery = await runtime.handle(new Request(`${origin}/.well-known/clank`));
+    const discoveryPayload = await discovery.json();
+    const extension = discoveryPayload.mcp.extensions[MCP_APPS_EXTENSION_ID];
+    assert.equal(extension.protocolVersion, "2026-01-26");
+    assert.deepEqual(extension.mimeTypes, [MCP_APP_MIME_TYPE]);
+    assert.deepEqual(extension.resources, [dashboard.uri]);
+
+    const initialized = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: mcpAppsCapabilities,
+        clientInfo: { name: "backend-app-test", version: "1.0.0" },
+      },
+    }));
+    assert.equal(initialized.status, 200);
+    const session = initialized.headers.get("mcp-session-id");
+    const listed = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: {},
+    }, undefined, { "mcp-session-id": session }));
+    const tools = (await listed.json()).result.tools;
+    assert.equal(tools.find((tool) => tool.name === "reports_summary")._meta.ui.resourceUri, dashboard.uri);
+    assert.deepEqual(tools.find((tool) => tool.name === "reports_refresh")._meta.ui.visibility, ["app"]);
+
+    const read = await runtime.handle(mcpRequest({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "resources/read",
+      params: { uri: dashboard.uri },
+    }, undefined, { "mcp-session-id": session }));
+    const content = (await read.json()).result.contents[0];
+    assert.equal(content.text, dashboard.html);
+    assert.equal(content._meta.ui.prefersBorder, false);
+
+    const statelessPlain = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/list",
+      params: {},
+    }));
+    assert.equal(statelessPlain.status, 200);
+    const statelessTools = (await statelessPlain.json()).result.tools;
+    assert.deepEqual(statelessTools.map((tool) => tool.name), ["reports_summary"]);
+    assert.equal(statelessTools[0]._meta.ui.resourceUri, dashboard.uri);
+  } finally {
+    runtime.close();
+  }
+});
+
+test("concurrent refresh retries converge on one rotated token pair", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    const refresh = () => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource,
+    }));
+    const responses = await Promise.all([refresh(), refresh()]);
+    assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+    const pairs = await Promise.all(responses.map((response) => response.json()));
+    assert.equal(pairs[0].access_token, pairs[1].access_token);
+    assert.equal(pairs[0].refresh_token, pairs[1].refresh_token);
+    assert.equal(pairs[0].scope, pairs[1].scope);
+    assert.ok(Math.abs(pairs[0].expires_in - pairs[1].expires_in) <= 1);
+    assert.notEqual(pairs[0].refresh_token, tokens.refresh_token);
+
+    const authenticated = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "retry-authenticated",
+      method: "tools/list",
+      params: {},
+    }, pairs[0].access_token));
+    assert.equal(authenticated.status, 200);
+  } finally {
+    runtime.close();
+  }
+});
+
+test("delayed refresh retries report the successor access token's remaining lifetime", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  const originalNow = Date.now;
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    let now = originalNow();
+    Date.now = () => now;
+    const refresh = () => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource,
+    }));
+    const first = await refresh();
+    assert.equal(first.status, 200);
+    const firstPair = await first.json();
+
+    now += 12 * 60 * 1_000;
+    const retried = await refresh();
+    assert.equal(retried.status, 200);
+    const retriedPair = await retried.json();
+    assert.equal(retriedPair.access_token, firstPair.access_token);
+    assert.equal(retriedPair.refresh_token, firstPair.refresh_token);
+    assert.equal(retriedPair.expires_in, firstPair.expires_in - 12 * 60);
+  } finally {
+    Date.now = originalNow;
+    runtime.close();
+  }
+});
+
+test("adaptive refresh recovery keeps clients connected when they fail to persist rotation", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  const originalNow = Date.now;
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    let now = originalNow();
+    Date.now = () => now;
+    const refreshOriginal = () => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource,
+    }));
+
+    const firstResponse = await refreshOriginal();
+    assert.equal(firstResponse.status, 200);
+    const first = await firstResponse.json();
+
+    now += 61 * 60 * 1_000;
+    const concurrentRecovery = await Promise.all([refreshOriginal(), refreshOriginal()]);
+    assert.deepEqual(concurrentRecovery.map((response) => response.status), [200, 200]);
+    const [recovered, concurrentRetry] = await Promise.all(
+      concurrentRecovery.map((response) => response.json()),
+    );
+    assert.notEqual(recovered.access_token, first.access_token);
+    assert.equal(recovered.refresh_token, first.refresh_token);
+    assert.equal(recovered.expires_in, 60 * 60);
+    assert.equal(concurrentRetry.access_token, recovered.access_token);
+    assert.equal(concurrentRetry.refresh_token, recovered.refresh_token);
+
+    const immediateRetryResponse = await refreshOriginal();
+    assert.equal(immediateRetryResponse.status, 200);
+    const immediateRetry = await immediateRetryResponse.json();
+    assert.equal(immediateRetry.access_token, recovered.access_token);
+    assert.equal(immediateRetry.refresh_token, recovered.refresh_token);
+
+    now += 61 * 60 * 1_000;
+    const recoveredAgainResponse = await refreshOriginal();
+    assert.equal(recoveredAgainResponse.status, 200);
+    const recoveredAgain = await recoveredAgainResponse.json();
+    assert.notEqual(recoveredAgain.access_token, recovered.access_token);
+    assert.equal(recoveredAgain.refresh_token, first.refresh_token);
+
+    const authenticated = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "adaptive-recovery-authenticated",
+      method: "tools/list",
+      params: {},
+    }, recoveredAgain.access_token));
+    assert.equal(authenticated.status, 200);
+
+    const adoptedResponse = await runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: first.refresh_token,
+      resource,
+    }));
+    assert.equal(adoptedResponse.status, 200);
+    const adopted = await adoptedResponse.json();
+
+    const staleReplay = await refreshOriginal();
+    assert.equal(staleReplay.status, 200);
+    const converged = await staleReplay.json();
+    assert.equal(converged.access_token, adopted.access_token);
+    assert.equal(converged.refresh_token, adopted.refresh_token);
+
+    now += 61 * 60 * 1_000;
+    const advancedResponse = await runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: adopted.refresh_token,
+      resource,
+    }));
+    assert.equal(advancedResponse.status, 200);
+    const advanced = await advancedResponse.json();
+    const laggingReplicaResponse = await refreshOriginal();
+    assert.equal(laggingReplicaResponse.status, 200);
+    const laggingReplica = await laggingReplicaResponse.json();
+    assert.equal(laggingReplica.access_token, advanced.access_token);
+    assert.equal(laggingReplica.refresh_token, advanced.refresh_token);
+
+    const active = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "adaptive-chain-recovery-active",
+      method: "tools/list",
+      params: {},
+    }, advanced.access_token));
+    assert.equal(active.status, 200);
+  } finally {
+    Date.now = originalNow;
+    runtime.close();
+  }
+});
+
+test("strict refresh rotation revokes predecessors after the retry window", async () => {
+  const runtime = await openBackend(authenticatedBackend(), {
+    path: ":memory:",
+    agent: { refreshTokenRotationMode: "strict" },
+  });
+  const originalNow = Date.now;
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    let now = originalNow();
+    Date.now = () => now;
+    const refresh = () => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: tokens.refresh_token,
+      resource,
+    }));
+    assert.equal((await refresh()).status, 200);
+    now += 61 * 60 * 1_000;
+    const stale = await refresh();
+    assert.equal(stale.status, 400);
+    assert.equal((await stale.json()).error_description, "Refresh token reuse was detected.");
+  } finally {
+    Date.now = originalNow;
+    runtime.close();
+  }
+});
+
+test("adaptive refresh rejection does not revoke a newer replica when a legacy handoff is missing", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    const exchange = (refreshToken) => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: refreshToken,
+      resource,
+    }));
+    const firstResponse = await exchange(tokens.refresh_token);
+    assert.equal(firstResponse.status, 200);
+    const first = await firstResponse.json();
+    const currentResponse = await exchange(first.refresh_token);
+    assert.equal(currentResponse.status, 200);
+    const current = await currentResponse.json();
+
+    const predecessorHash = Buffer.from(await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(tokens.refresh_token),
+    )).toString("base64url");
+    runtime.database[Symbol.for("clank.sqlite.internal")]
+      .prepare("DELETE FROM clank_oauth_refresh_retries WHERE predecessor_hash = ?")
+      .run(predecessorHash);
+
+    const stale = await exchange(tokens.refresh_token);
+    assert.equal(stale.status, 400);
+    assert.equal((await stale.json()).error, "invalid_grant");
+    const stillActive = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "legacy-handoff-missing-current-active",
+      method: "tools/list",
+      params: {},
+    }, current.access_token));
+    assert.equal(stillActive.status, 200);
+  } finally {
+    runtime.close();
+  }
+});
+
+test("adaptive refresh handoff traversal is bounded without revoking the current grant", async () => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  try {
+    const session = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, session, client);
+    const exchange = (refreshToken) => runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token",
+      client_id: client.client_id,
+      refresh_token: refreshToken,
+      resource,
+    }));
+    let current = tokens;
+    for (let generation = 0; generation < 65; generation++) {
+      const response = await exchange(current.refresh_token);
+      assert.equal(response.status, 200);
+      current = await response.json();
+    }
+
+    const overlong = await exchange(tokens.refresh_token);
+    assert.equal(overlong.status, 400);
+    assert.equal((await overlong.json()).error, "invalid_grant");
+    const stillActive = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0",
+      id: "bounded-handoff-current-active",
+      method: "tools/list",
+      params: {},
+    }, current.access_token));
+    assert.equal(stillActive.status, 200);
+  } finally {
+    runtime.close();
+  }
+});
+
 test("standard public-client OAuth works without the Clank CLI or control plane", async () => {
   const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
   const session = await registerUser(runtime);
   const client = await registerClient(runtime);
+  assert.equal(client.application_type, "native");
   const tokens = await authorize(runtime, session, client);
+
+  const statelessDiscovery = await runtime.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: "discover",
+    method: "server/discover",
+    params: {},
+  }, tokens.access_token));
+  assert.equal(statelessDiscovery.status, 200);
+  assert.equal(statelessDiscovery.headers.get("mcp-session-id"), null);
+  assert.equal((await statelessDiscovery.json()).result.supportedVersions[0], "2026-07-28");
+  const statelessTools = await runtime.handle(modernMcpRequest({
+    jsonrpc: "2.0",
+    id: "list",
+    method: "tools/list",
+    params: {},
+  }, tokens.access_token));
+  assert.deepEqual(
+    (await statelessTools.json()).result.tools.map((tool) => tool.name),
+    ["todos_add", "todos_list", "todos_removeAll"],
+  );
 
   const initialized = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
@@ -779,22 +1824,25 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
     params: {},
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   const tools = (await listed.json()).result.tools;
-  assert.deepEqual(tools.map((tool) => tool.name), ["todos.add", "todos.list", "todos.removeAll"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["todos_add", "todos_list", "todos_removeAll"]);
   const backendManifest = await runtime.handle(new Request(`${origin}/__clank/manifest`));
   const backendFunctions = (await backendManifest.json()).functions
     .filter((fn) => fn.agent)
     .map((fn) => fn.name)
     .sort();
-  assert.deepEqual(tools.map((tool) => tool.name), backendFunctions);
-  assert.equal(tools.find((tool) => tool.name === "todos.add").annotations.destructiveHint, false);
-  assert.equal(tools.find((tool) => tool.name === "todos.removeAll").annotations.destructiveHint, true);
-  assert.equal(tools.find((tool) => tool.name === "todos.list").annotations.readOnlyHint, true);
+  assert.deepEqual(
+    tools.map((tool) => tool._meta["clank/actionPath"]),
+    backendFunctions,
+  );
+  assert.equal(tools.find((tool) => tool.name === "todos_add").annotations.destructiveHint, false);
+  assert.equal(tools.find((tool) => tool.name === "todos_removeAll").annotations.destructiveHint, true);
+  assert.equal(tools.find((tool) => tool.name === "todos_list").annotations.readOnlyHint, true);
 
   const added = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 4,
     method: "tools/call",
-    params: { name: "todos.add", arguments: { title: "Created by an agent" } },
+    params: { name: "todos_add", arguments: { title: "Created by an agent" } },
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   assert.equal(added.status, 200);
   assert.equal((await added.json()).result.isError, false);
@@ -803,7 +1851,7 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
     jsonrpc: "2.0",
     id: 5,
     method: "tools/call",
-    params: { name: "todos.list", arguments: {} },
+    params: { name: "todos_list", arguments: {} },
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   const listPayload = await listedTodos.json();
   assert.equal(listPayload.result.structuredContent.value[0].title, "Created by an agent");
@@ -841,23 +1889,49 @@ test("standard public-client OAuth works without the Clank CLI or control plane"
     refresh_token: tokens.refresh_token,
     resource,
   }));
-  assert.equal(refreshReplay.status, 400);
-  const revokedFamily = await runtime.handle(mcpRequest({
+  assert.equal(refreshReplay.status, 200);
+  const replayedTokens = await refreshReplay.json();
+  assert.equal(replayedTokens.access_token, nextTokens.access_token);
+  assert.equal(replayedTokens.refresh_token, nextTokens.refresh_token);
+  assert.equal(replayedTokens.scope, nextTokens.scope);
+  const advanced = await runtime.handle(formRequest("/__clank/oauth/token", {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    refresh_token: nextTokens.refresh_token,
+    resource,
+  }));
+  assert.equal(advanced.status, 200);
+  const advancedTokens = await advanced.json();
+  const staleReplay = await runtime.handle(formRequest("/__clank/oauth/token", {
+    grant_type: "refresh_token",
+    client_id: client.client_id,
+    refresh_token: tokens.refresh_token,
+    resource,
+  }));
+  assert.equal(staleReplay.status, 200);
+  const convergedTokens = await staleReplay.json();
+  assert.equal(convergedTokens.access_token, advancedTokens.access_token);
+  assert.equal(convergedTokens.refresh_token, advancedTokens.refresh_token);
+  const activeFamily = await runtime.handle(modernMcpRequest({
     jsonrpc: "2.0",
     id: 5,
     method: "tools/list",
     params: {},
-  }, nextTokens.access_token));
-  assert.equal(revokedFamily.status, 401);
+  }, advancedTokens.access_token));
+  assert.equal(activeFamily.status, 200);
   const replacement = await authorize(runtime, session, client);
 
-  const crossOrigin = await runtime.handle(mcpRequest({
+  const crossOrigin = await runtime.handle(modernMcpRequest({
     jsonrpc: "2.0",
     id: 6,
     method: "tools/list",
     params: {},
-  }, replacement.access_token, { origin: "https://evil.test" }));
-  assert.equal(crossOrigin.status, 403);
+  }, replacement.access_token, {
+    origin: "https://hosted-client.test",
+    "sec-fetch-site": "cross-site",
+  }));
+  assert.equal(crossOrigin.status, 200);
+  assert.equal(crossOrigin.headers.get("access-control-allow-origin"), "*");
 
   runtime.auth.disableUser(session.user.id);
   const disabled = await runtime.handle(mcpRequest({
@@ -901,12 +1975,12 @@ test("read-only OAuth grants hide and reject mutation tools", async () => {
     method: "tools/list",
     params: {},
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
-  assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["todos.list"]);
+  assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["todos_list"]);
   const write = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
-    params: { name: "todos.add", arguments: { title: "No" } },
+    params: { name: "todos_add", arguments: { title: "No" } },
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   assert.equal(write.status, 403);
   assert.equal((await write.json()).error, "insufficient_scope");
@@ -1022,12 +2096,12 @@ test("agent access inbox isolates, reduces, and revokes active OAuth grants imme
     method: "tools/list",
     params: {},
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
-  assert.deepEqual((await tools.json()).result.tools.map((tool) => tool.name), ["todos.list"]);
+  assert.deepEqual((await tools.json()).result.tools.map((tool) => tool.name), ["todos_list"]);
   const write = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
-    params: { name: "todos.add", arguments: { title: "Must remain blocked" } },
+    params: { name: "todos_add", arguments: { title: "Must remain blocked" } },
   }, tokens.access_token, { "mcp-session-id": mcpSession }));
   assert.equal(write.status, 403);
   assert.equal((await write.json()).error, "insufficient_scope");
@@ -1183,6 +2257,20 @@ test("OAuth client registration rejects redirects that could exfiltrate authoriz
   }, { origin: undefined }));
   assert.equal(inconsistent.status, 400);
   assert.equal((await inconsistent.json()).error, "invalid_client_metadata");
+  const webLoopback = await runtime.handle(jsonRequest("/__clank/oauth/register", {
+    client_name: "Misclassified web client",
+    application_type: "web",
+    redirect_uris: ["http://127.0.0.1:43123/callback"],
+  }, { origin: undefined }));
+  assert.equal(webLoopback.status, 400);
+  assert.equal((await webLoopback.json()).error, "invalid_client_metadata");
+  const remoteWeb = await runtime.handle(jsonRequest("/__clank/oauth/register", {
+    client_name: "Web client",
+    application_type: "web",
+    redirect_uris: ["https://client.test/callback"],
+  }, { origin: undefined }));
+  assert.equal(remoteWeb.status, 201);
+  assert.equal((await remoteWeb.json()).application_type, "web");
 
   let chunksRead = 0;
   const oversizedBody = new ReadableStream({
@@ -1225,6 +2313,27 @@ test("agent endpoint configuration fails closed before opening project resources
     }),
     /must not exceed 1000/,
   );
+  await assert.rejects(
+    openBackend(authenticatedBackend(), {
+      path: ":memory:",
+      agent: { refreshTokenRetryLifetimeMs: 999 },
+    }),
+    /refreshTokenRetryLifetimeMs must be from 1000 through 3600000 milliseconds/,
+  );
+  await assert.rejects(
+    openBackend(authenticatedBackend(), {
+      path: ":memory:",
+      agent: { refreshTokenRetryLifetimeMs: 60 * 60 * 1_000 + 1 },
+    }),
+    /refreshTokenRetryLifetimeMs must be from 1000 through 3600000 milliseconds/,
+  );
+  await assert.rejects(
+    openBackend(authenticatedBackend(), {
+      path: ":memory:",
+      agent: { refreshTokenRotationMode: "forever" },
+    }),
+    /refreshTokenRotationMode must be "adaptive" or "strict"/,
+  );
 });
 
 test("projects without browser auth expose the same typed actions as a public MCP server", async () => {
@@ -1266,12 +2375,12 @@ test("projects without browser auth expose the same typed actions as a public MC
     params: {},
   }, undefined, { "mcp-session-id": mcpSession }));
   assert.equal(listed.status, 200);
-  assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["notes.add", "notes.list"]);
+  assert.deepEqual((await listed.json()).result.tools.map((tool) => tool.name), ["notes_add", "notes_list"]);
   const added = await runtime.handle(mcpRequest({
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
-    params: { name: "notes.add", arguments: { title: "Public MCP" } },
+    params: { name: "notes_add", arguments: { title: "Public MCP" } },
   }, undefined, { "mcp-session-id": mcpSession }));
   assert.equal((await added.json()).result.isError, false);
   assert.equal(runtime.query("notes.list", {}).value[0].title, "Public MCP");

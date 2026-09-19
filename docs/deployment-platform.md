@@ -110,7 +110,9 @@ Rules:
 - Symbolic links, special files, parent traversal, `.env*`, private-key names, and VCS metadata are rejected.
 - `build.command` is executed locally without a shell.
 - `env` is public artifact configuration; credentials belong in platform secrets.
-- `PORT`, `HOST`, `NODE_OPTIONS`, and `CLANK_*` variables are reserved.
+- `PORT`, `HOST`, `NODE_OPTIONS`, and `CLANK_*` variables are reserved, except the bounded
+  application capacity settings `CLANK_AUTH_CONCURRENCY` (1–16), `CLANK_AUTH_MAX_QUEUE` (1–128),
+  and `CLANK_MAX_LIVE_CONNECTIONS` (1–20,000). See [capacity sizing](self-hosting.md).
 - `database.path` is persistent project data outside release directories.
 - Changing `database.path` during deployment is rejected to prevent silently forking production data.
 - `database.previewData`, when present, is the active production release's bounded sanitization
@@ -129,7 +131,9 @@ Rules:
 The wire media type is `application/vnd.clank.deploy+gzip`. Its document protocol is `clank-deploy/1` and contains:
 
 - normalized configuration;
-- builder protocol, Clank version, and Node version;
+- builder protocol, Clank version, Node version, and source revision;
+- SHA-256 bindings for normalized configuration and the complete material manifest;
+- the exact ordered immutable migration IDs;
 - a sorted file list with path, size, mode, SHA-256 digest, and base64 content.
 
 The gzip timestamp is fixed, so identical inputs on the same Clank and Node versions produce identical bytes. The CLI also sends an artifact digest and idempotency key.
@@ -141,7 +145,11 @@ clank inspect .clank/artifacts/<digest>.clank.gz
 
 Dry-run artifact creation is offline and does not require platform credentials. Ambiguous upload failures retain a private local attempt record for 24 hours, allowing the next identical command to reuse its idempotency key instead of accidentally creating a second release after a lost response.
 
-The metadata supports the traceability goals of [SLSA provenance](https://slsa.dev/spec/v1.2/provenance), but `clank-deploy/1` is not a signed SLSA attestation. Signing and transparency-log integration are future extensions.
+The decoder verifies the configuration, material, and migration bindings before returning an
+artifact. Set `CLANK_SOURCE_REVISION` when a nonstandard CI system cannot provide `GITHUB_SHA` or
+`RAILWAY_GIT_COMMIT_SHA`. The metadata supports the traceability goals of
+[SLSA provenance](https://slsa.dev/spec/v1.2/provenance), but `clank-deploy/1` is not a signed SLSA
+attestation. Signing and transparency-log integration are future extensions.
 
 ## Release transaction
 
@@ -350,3 +358,52 @@ Managed edge:
 - `GET /_clank/tls/ask` — token-protected, constant-time Caddy certificate permission lookup.
 
 See [CLI](cli.md), [Migrations](migrations.md), [Dashboard and domains](platform-dashboard.md), [Platform security](platform-security.md), and [Self-hosting](self-hosting.md).
+
+## Staged secret rotation
+
+The platform supports staged, encrypted secret versions through the existing `secrets` permission:
+
+```sh
+clank secrets stage PARTNER_KEY --from-env=NEW_PARTNER_KEY
+clank secrets validate <rotation-id>
+clank secrets rotations
+clank secrets activate <rotation-id>
+# Deploy or restart the application to consume the newly active version.
+clank secrets rollback <rotation-id>
+```
+
+`stage` also reads from stdin when `--from-env` is absent. Candidate and previous values are
+stored encrypted with the platform master key; APIs, CLI output, and audit entries contain only
+names, opaque revisions, states, and validation metadata. Activation changes the secret used by
+the next launch; it does not silently restart an application. Rollback restores the previous
+configured secret and likewise requires a deployment/restart to update running processes.
+
+Programmatic hosts can supply `openPlatform({ validateSecret: async ({ projectId, name, value,
+signal }) => ... })` to probe a replacement credential against a trusted service. The probe has a
+10-second deadline. Without a probe, validation is explicitly labelled `format-and-encryption`;
+it does not establish that the remote service accepts the credential. Provider checks are labelled
+`provider-check`. Validation expires after 15 minutes, and an interrupted validation can be
+reclaimed after 15 seconds. A failed check cannot be activated.
+
+Activation compares the exact secret revision captured at staging. An intervening secret update
+blocks stale activation; rollback similarly refuses to overwrite a newer change. A project keeps
+at most 1,000 rotation records. Deleting a secret removes its rotation history atomically, and
+project deletion cascades through all versions.
+
+`clank secrets rotations` reports the current versions and those consumed by the live local
+runtime (web process and background services share launch secrets), or the provider generation
+confirmed running by the coordinator. A `current: false` entry identifies an older/unknown
+consumed version. No running consumer is reported for stopped apps or an unconfirmed provider
+generation. The provider comparison uses its frozen encrypted environment; external services
+outside Clank's runtime inventory are not automatically discovered.
+
+The API exposes these routes:
+
+```text
+GET/POST /api/projects/:id/secrets/rotations
+POST /api/projects/:id/secrets/rotations/:rotationId/{validate|activate|rollback}
+```
+
+Stage accepts
+`{ name, value }`; lifecycle actions accept `{}`. Existing project authorization, browser CSRF,
+and audit behavior apply to every operation.

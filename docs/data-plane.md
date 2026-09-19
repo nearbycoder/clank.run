@@ -22,6 +22,8 @@ The proxy:
 - records bounded per-project ingress metrics; and
 - constructs every target from the trusted upstream origin before assigning the request path, so a scheme-relative path cannot replace the upstream host.
 
+An optional `prepareRoute(route)` hook can activate an inactive assigned route. Managed ingress invokes it only after the request body bound and admission policy pass, deduplicates concurrent preparation for the same project route, reloads the authoritative route, and requires that exact route to be active before proxying. Preparation errors are returned as fixed retryable `503` responses without leaking launch details. `activeRequests(upstream)` and `drain(upstream)` let a supervisor quiesce response streams before stopping the underlying process.
+
 The Clank platform can enable ingress directly:
 
 ```ts

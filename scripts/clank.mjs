@@ -52,6 +52,17 @@ if (command === "dev") {
   process.exit(process.exitCode ?? 0);
 }
 
+if (command === "workbench" && !args.includes("--help") && !args.includes("-h")) {
+  try {
+    const { runWorkbench } = await import("./cli-workbench.mjs");
+    await runWorkbench(args);
+  } catch (error) {
+    console.error(`clank: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
+  process.exit(process.exitCode ?? 0);
+}
+
 if (command !== "build" && command !== "watch") {
   const { run } = await import("./cli-deploy.mjs");
   if (args.includes("--help") || args.includes("-h")) {

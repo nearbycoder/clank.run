@@ -85,12 +85,14 @@ async function linkFramework(target) {
 }
 
 function runNodeTests(cwd, testPath = "tests/app.contract.mjs") {
+  // A generated app is an independent test process, not a worker of this test runner.
+  const { NODE_TEST_CONTEXT: _parentTestContext, ...environment } = process.env;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [
       "--disable-warning=ExperimentalWarning",
       "--test",
       testPath,
-    ], { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    ], { cwd, env: environment, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
@@ -254,6 +256,7 @@ test("compose freezes an exact review before transactionally applying generated 
     const sessionPath = join(target, ".clank", "compose-sessions", `${review.reviewId}.json`);
     assert.equal((await lstat(sessionPath)).mode & 0o777, 0o600);
     assert.equal(JSON.parse(await readFile(sessionPath, "utf8")).planDigest, review.planDigest);
+    await runCli(["build", "src", "dist"], target);
     await linkFramework(target);
     await runNodeTests(target);
   } finally {
@@ -1492,7 +1495,7 @@ test("template discovery and create expose safe agent-readable contracts", async
     assert.equal(catalog.defaultTemplate, "auth-todo");
     assert.deepEqual(
       catalog.templates.map((entry) => entry.id),
-      ["auth-todo", "minimal"],
+      ["auth-todo", "minimal", "approval-queue", "customer-portal", "booking"],
     );
     assert.equal(catalog.templates[0].recommended, true);
     assert.equal(catalog.templates[0].features.includes("mcp-oauth"), true);
@@ -1796,6 +1799,14 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
         : undefined,
     });
     response.setHeader("content-type", "application/json");
+    if (request.method === "POST" && request.url === "/api/projects/project_preview_parent/previews/preview_cli_test/fixture") {
+      assert.equal(request.headers["content-type"], "application/vnd.clank.preview-fixture+sqlite");
+      assert.equal(request.headers["x-clank-content-sha256"], createHash("sha256").update(body).digest("hex"));
+      assert.equal(request.headers["x-clank-fixture-confirmation"], "seed-preview feature-auth");
+      assert.equal(body.subarray(0, 16).toString(), "SQLite format 3\0");
+      response.end(JSON.stringify({ ok: true, data: { mode: "fixture", bytes: body.byteLength } }));
+      return;
+    }
     if (
       request.method === "POST"
       && request.url === "/api/projects/project_preview_parent/previews"
@@ -1946,6 +1957,19 @@ test("preview CLI deploys, lists, and removes an isolated linked environment", a
       confirmation: "delete-preview feature-auth",
       acknowledgeDataLoss: true,
     });
+    const fixtureFile = join(target, "transport-fixture.sqlite");
+    await writeFile(fixtureFile, Buffer.from("SQLite format 3\0fixture-transport"));
+    const fixtureDeploy = await runCliResult(["preview", "deploy", "feature-auth", "--fixture", fixtureFile, "--json"], target, environment);
+    assert.equal(fixtureDeploy.code, 0, fixtureDeploy.stderr);
+    assert.equal(JSON.parse(fixtureDeploy.stdout).data.mode, "fixture");
+    assert.equal(observed.at(-1).url, "/api/projects/project_preview_parent/previews/preview_cli_test/fixture");
+    const countBeforeInvalid = observed.length;
+    const incompatibleModes = await runCliResult(["preview", "deploy", "feature-auth", "--fixture", fixtureFile, "--data=sanitized", "--json"], target, environment);
+    assert.notEqual(incompatibleModes.code, 0);
+    assert.match(incompatibleModes.stderr, /either --fixture/);
+    assert.equal(observed.length, countBeforeInvalid);
+    const linkAfter = JSON.parse(await readFile(join(target, ".clank", "project.json"), "utf8"));
+    assert.equal(linkAfter.projectId, "project_preview_parent");
     assert.ok(observed.every((request) =>
       request.authorization === "Bearer clnk_preview_test_token"));
   } finally {
@@ -2530,4 +2554,46 @@ test("development server resolves documented trailing-slash example URLs", async
       await once(child, "exit");
     }
   }
+});
+
+
+test("workflow recipes scaffold deployable apps with passing ownership, business-rule, UI, and MCP contracts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-workflow-recipes-"));
+  try {
+    for (const name of ["approval-queue", "customer-portal", "booking"]) {
+      const target = join(root, name);
+      await runCli(["create", target, `--template=${name}`, "--framework=local"], repository);
+      await runCli(["build", "src", "dist"], target);
+      await linkFramework(target);
+      const contracts = await runNodeTests(target);
+      assert.match(contracts.stdout, /pass 2/);
+      const doctor = JSON.parse((await runCliOutput(["doctor", target, "--json"])).stdout);
+      assert.equal(doctor.ok, true, JSON.stringify(doctor));
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("secret rotation CLI stages from environment and exposes metadata-only lifecycle commands", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-secret-cli-")), home = join(root, "home"), target = join(root, "app");
+  const id = "12345678-1234-1234-1234-123456789abc", calls = [];
+  const server = createHttpServer(async (request, response) => {
+    let body = ""; for await (const chunk of request) body += chunk;
+    calls.push({ method: request.method, url: request.url, body: body ? JSON.parse(body) : null });
+    response.writeHead(request.method === "POST" && request.url.endsWith("/rotations") ? 201 : 200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true, rotation: { id, name: "PARTNER_KEY", state: "validated", validation: "provider-check" }, rotations: [] }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const platform = `http://127.0.0.1:${server.address().port}/`;
+  try {
+    await mkdir(home); await mkdir(join(target, ".clank"), { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({ version: 1, current: platform, profiles: { [platform]: { token: "clnk_rotation_test_token", expiresAt: Date.now() + 60000 } } }));
+    await writeFile(join(target, ".clank", "project.json"), JSON.stringify({ version: 1, server: platform, projectId: "project_rotation_test" }));
+    const env = { ...process.env, CLANK_HOME: home, ROTATION_FIXTURE_VALUE: "fixture-private-candidate" };
+    const stage = await runCliResult(["secrets", "stage", "PARTNER_KEY", "--from-env=ROTATION_FIXTURE_VALUE"], target, env);
+    assert.doesNotMatch(stage.stdout, /fixture-private-candidate/); assert.equal(calls[0].body.value, "fixture-private-candidate");
+    for (const action of ["validate", "activate", "rollback"]) await runCliResult(["secrets", action, id], target, env);
+    await runCliResult(["secrets", "rotations"], target, env);
+    assert.deepEqual(calls.slice(1, 4).map(call => call.url.split("/").at(-1)), ["validate", "activate", "rollback"]);
+    assert.equal(calls.at(-1).method, "GET");
+  } finally { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); }
 });

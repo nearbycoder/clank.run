@@ -47,6 +47,21 @@ profile. Generated blueprint apps include a mobile smoke journey and `npm run te
 Environment-backed secret inputs support login without recording passwords. See [Semantic browser
 journeys](browser-journeys.md) for operations, security boundaries, and CI output.
 
+## Developer workbench
+
+```sh
+clank workbench help
+clank workbench parity local.json production.json --json
+clank workbench schema current.json target.json --output=0004_change.sql
+clank workbench provider ./provider.mjs --json
+```
+
+`workbench` provides policy and flag evaluation, revision replay, production parity, schema
+evolution, capacity simulation, upgrades, provenance, portable exports, sanitized clones, provider
+conformance, action-contract tests, and visual comparison. See [App Studio and the developer
+workbench](workbench.md), [Governance](governance.md), and [Revision and release
+lifecycle](release-lifecycle.md).
+
 ## Compose with an agent
 
 ```sh
@@ -436,3 +451,8 @@ Production migrations always run inside the deployment transaction.
 Use `clank token create` to issue a short-lived project token containing only the CI job's required permissions, and isolate it with a dedicated `CLANK_HOME`. Membership and token scope are re-evaluated on every request; removing the member or revoking the token stops future access.
 
 Successful commands exit `0`; input, auth, build, upload, migration, or health failures exit non-zero. Commands that document `--json` emit structured failures to standard error with a stable code and message. Failed server revocation prevents `logout` from silently deleting the only local token reference. `--local` is for platform recovery.
+
+Workflow templates are also available through `clank create --template=approval-queue`,
+`--template=customer-portal`, and `--template=booking`. Each includes tested backend rules,
+authenticated UI/MCP flows, fixtures, and a deployment contract; see
+[Runnable workflow recipes](application-recipes.md#runnable-workflow-recipes).

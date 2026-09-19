@@ -1,0 +1,54 @@
+{
+  "protocol": "clank-load-reliability/1",
+  "startedAt": "2026-09-08T01:10:37.520Z",
+  "node": "v24.20.0",
+  "users": 5000,
+  "connections": 5000,
+  "liveLimit": 6000,
+  "readRate": 500,
+  "scenarios": [
+    {
+      "name": "Live connection admission and idle residency",
+      "accepted": 5000,
+      "attempted": 5000,
+      "rejected": 0,
+      "connectMs": 314760.13263300003,
+      "emptyRss": 143994880,
+      "metrics": {
+        "rss": 233680896,
+        "peakRss": 233287680,
+        "heapUsed": 122910344,
+        "cpuPercent": 4.9395527641599015,
+        "eventLoopP99Ms": 11.263999,
+        "eventLoopMaxMs": 629.145599,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 34447,
+            "cacheHits": 5697,
+            "durationMs": 0.2208579999860376,
+            "lastInvalidation": "__auth",
+            "cachedEntries": 1000,
+            "subscriptions": 5000
+          }
+        ],
+        "errors": []
+      }
+    }
+  ],
+  "frameworkVersion": "0.22.0",
+  "serverNode": "v22.23.2",
+  "serverProfile": {
+    "kind": "app",
+    "users": 5000,
+    "liveLimit": 6000,
+    "authConcurrency": 8,
+    "authQueue": 32,
+    "dist": "dist",
+    "threadPoolSize": "16"
+  },
+  "topology": "External generator through Railway TLS and authenticated streaming proxy; persistent-volume fixture",
+  "ok": false,
+  "failure": "Error: socket hang up\n    at TLSSocket.socketOnEnd (node:_http_client:790:25)\n    at TLSSocket.emit (node:events:526:24)\n    at endReadableNT (node:internal/streams/readable:1757:12)\n    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)",
+  "finishedAt": "2026-09-08T01:17:54.014Z"
+}

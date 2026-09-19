@@ -21,4 +21,10 @@ The runner does not import framework source from the repository. It:
 
 The test uses loopback HTTP, temporary owner-only directories, isolated CLI credentials, a one-port application range, and no registry downloads beyond the local tarball.
 
+MCP Apps checks must reuse authenticated OAuth credentials. A protected server intentionally
+returns HTTP `401` before JSON-RPC dispatch, so running protocol or UI-resource checks without a
+token produces downstream “could not run” results. Use MCPJam's OAuth conformance command with
+`--credentials-out`, then pass that file to `server doctor` or `apps conformance`. See
+[Interactive MCP Apps](mcp-apps.md) for the commands and expected resource contract.
+
 `npm run check` runs this suite after the build, zero-dependency check, coverage-enforced unit/integration tests, and documentation/declaration audit, then finishes with the security audit. A release is not acceptable if any stage fails.

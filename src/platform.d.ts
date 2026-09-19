@@ -1,3 +1,4 @@
+import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.js";
 import type { ObjectStore } from "./object-storage.js";
 import type { BackupObjectRepositoryOptions } from "./recovery.js";
 import type { EmailAddress, EmailService } from "./services.js";
@@ -16,7 +17,7 @@ export interface DockerRunnerOptions {
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
 export type PlatformHostingProfile = "trusted" | "isolated";
 export type PlatformProjectPlacement = "local" | "provider";
-export type PlatformQuotaKey = "organizationsPerAccount" | "projectsPerAccount" | "projectsPerOrganization" | "domainsPerProject" | "releasesPerProject" | "releaseStorageBytesPerProject" | "backupsPerProject" | "requestsPerMonthPerOrganization" | "transferBytesPerMonthPerOrganization" | "requestsPerMinutePerProject";
+export type PlatformQuotaKey = "organizationsPerAccount" | "projectsPerAccount" | "projectsPerOrganization" | "domainsPerProject" | "releasesPerProject" | "releaseStorageBytesPerProject" | "bucketStorageBytesPerProject" | "bucketObjectsPerProject" | "backupsPerProject" | "requestsPerMonthPerOrganization" | "transferBytesPerMonthPerOrganization" | "requestsPerMinutePerProject";
 export type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
 export interface PlatformLimits {
     /** Maximum organizations created by one account. Defaults to 5. */
@@ -33,6 +34,10 @@ export interface PlatformLimits {
     releasesPerProject?: number;
     /** Maximum retained release and pre-deploy snapshot bytes per project. Defaults to 20 GiB. */
     releaseStorageBytesPerProject?: number;
+    /** Maximum application bucket bytes across one project. Defaults to 5 GiB. */
+    bucketStorageBytesPerProject?: number;
+    /** Maximum application bucket objects across one project. Defaults to 100,000. */
+    bucketObjectsPerProject?: number;
     /** Maximum admitted requests per UTC month in one workspace. Defaults to 5,000,000. */
     requestsPerMonthPerOrganization?: number;
     /** Maximum known ingress plus declared-response bytes per UTC month in one workspace. Defaults to 100 GiB. */
@@ -123,6 +128,8 @@ export interface PlatformBillingOptions {
     pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
+  /** Optional trusted credential probe. Without it, rotation validation checks format/encryption only. */
+  validateSecret?: SecretRotationOptions["validate"];
     dataDirectory: string;
     publicUrl: string;
     /** Recover active application processes before returning, or concurrently after startup. Defaults to "blocking". */
@@ -194,6 +201,8 @@ export interface ClankPlatformOptions {
     };
     /** Defaults to "bootstrap": only the first platform account may self-register. */
     signup?: boolean | "bootstrap";
+    /** Bounded password-hashing admission. Hash strength remains at the framework defaults. */
+    authentication?: { concurrency?: number; maxQueue?: number };
     masterKey?: string | Uint8Array;
     maxArtifactBytes?: number;
     /** Operator-only escape hatch for configs that request unrestricted SQLite SQL. */
@@ -233,9 +242,21 @@ export interface ClankPlatformOptions {
         /** Maximum time spent on one domain before its claim is released. Defaults to 10 seconds. */
         domainRecheckTimeoutMs?: number;
     };
+    /** Optional per-project local runtime sleeping. Existing projects remain always-on until changed. */
+    scaleToZero?: {
+        /** Policy assigned to newly created projects. Defaults to "always_on". */
+        defaultPolicy?: PlatformRuntimePolicy;
+        /** Idle time assigned to newly created projects. Defaults to 15 minutes. */
+        idleTimeoutMs?: number;
+        /** How often idle local runtimes are checked. Defaults to 30 seconds; false disables automatic sleeping. */
+        sweepIntervalMs?: number | false;
+        /** Maximum time to drain active responses before leaving a runtime online. Defaults to 30 seconds. */
+        drainTimeoutMs?: number;
+    };
     /** Receives unexpected failures for private operator logging. */
     onError?: (error: unknown) => void;
 }
+export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
 export interface PlatformRuntime {
     readonly handle: (request: Request) => Promise<Response>;
     readonly publicUrl: string;

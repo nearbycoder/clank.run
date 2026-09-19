@@ -969,3 +969,146 @@ Before shipping a component built from the headless catalog:
 8. Compile Tailwind classes in production and preserve visible focus and reduced-motion behavior.
 9. Inspect `manifest()` output after meaningful states, including sensitive and error states.
 10. Keep authorization in server actions and MCP tools; headless UI and agent metadata never replace it.
+
+## Virtualized lists and tables
+
+Use `@clank.run/framework/virtual-collections` for large fixed-height collections. The headless
+`createVirtualCollection()` computes visible rows; `mountVirtualCollection()` mounts a list or an
+accessible table-like grid with bounded DOM, stable keyed row identity, scroll anchoring, and
+Arrow/Home/End/Page keyboard navigation. Grid renderers supply cells with `role="gridcell"`.
+Give the container a height and each row a consistent height; variable-height content belongs in
+an ordinary collection until it can be measured reliably.
+
+```ts
+import { mountVirtualCollection } from "@clank.run/framework/virtual-collections";
+
+const view = mountVirtualCollection(container, {
+  items: tickets,
+  key: ticket => ticket.id,
+  rowHeight: 48,
+  label: "Tickets",
+  render(ticket) {
+    const element = document.createElement("span");
+    element.textContent = ticket.title;
+    return { element, update(next) { element.textContent = next.title; } };
+  },
+});
+view.model.setItems(nextTickets); // Call from an effect when the source is reactive.
+// On unmount: stop the source effect, then view.dispose().
+```
+
+Retained rows receive `update(value, index)` after immutable replacements or reordering. An
+optional row `dispose()` releases subscriptions when a row leaves the window. The focused row
+stays mounted even outside the viewport; this adds at most one row to the visible range plus
+overscan. Keyboard navigation on rows scrolls the target into view, while inputs and other nested
+controls keep their own keyboard behavior. Collection positions and total counts remain exposed
+to assistive technology. Browser find-in-page only sees mounted content; provide application
+search or an unvirtualized/export view when users need the entire dataset.
+
+Keys must be unique nonempty strings or safe integers. Invalid updates preserve the previous
+collection. The controller supports up to 100,000 rows and a total height of 16 million pixels;
+paginate larger results. A row height of 16–1000 pixels and overscan of 0–50 keep allocation
+bounded. The mounted view uses ResizeObserver with a window-resize fallback, and disposal removes
+listeners, observers, row resources, and its own viewport without changing the parent container.
+
+## Saved filter and table views
+
+`@clank.run/framework/saved-views` provides account-owned saved filters, sort order, and visible
+columns. It uses the app's existing SQLite authentication database and ordinary authenticated
+RPC/MCP access; it needs no search or preferences service.
+
+```ts
+import { openSavedViews, createSavedViewsClient, mountSavedViews,
+  applySavedView } from "@clank.run/framework/saved-views";
+
+const views = await openSavedViews({
+  path: "./data/app.sqlite", auth, fields: ["status", "score"], maxViews: 50,
+});
+// Route /__clank/views/* to views.handle(request), then call views.close() at shutdown.
+const client = createSavedViewsClient({ auth: authClient });
+const dispose = mountSavedViews(panel, client, {
+  current: () => tableState,
+  apply: definition => {
+    tableState = definition;
+    renderRows(applySavedView(records, definition), definition.columns);
+  },
+});
+```
+
+A definition contains `filters`, `sort`, and `columns`. Filters combine with AND and support
+`eq`, `neq`, case-insensitive `contains`, numeric `gt`/`lt`, and `empty`. Field names are literal
+own-property keys, never object paths. Up to 30 filters, five unique sort fields, and 40 unique
+columns are accepted. Sorting is stable and missing values always appear last. Applying a view
+does not mutate records or change authorization; filter only data the current user may already see.
+
+`client.save({ name, definition })` creates a view. Updates and `remove(id, expectedRevision)`
+require the latest revision and reject stale writes. Names are unique per account without case
+sensitivity. `setDefault(id)` atomically clears the previous default; `setDefault(null)` clears it.
+The host can apply the default returned by `list()` at startup. The controls expose save-current,
+apply, rename, default, delete, refresh, empty, busy, and retry states. Dispose removes the panel
+and ignores late responses. The default limit is 50 views per account (configurable to 200).
+
+## Local full-text search
+
+`@clank.run/framework/local-search` runs in the browser or server with no network connection,
+external index, or runtime dependency. Feed it only records the current user is authorized to read.
+
+```ts
+import { createLocalSearchIndex, mountLocalSearch } from "@clank.run/framework/local-search";
+const index = createLocalSearchIndex({ maxDocuments: 10000, maxBytes: 16 * 1024 * 1024 });
+index.replace(records.map(row => ({ id: row.id, title: row.title, body: row.description })));
+const dispose = mountLocalSearch(panel, index, id => openRecord(id));
+// Mutations can update individual documents without rebuilding the index.
+index.upsert({ id: "record-1", title: "Updated title", body: "Updated content" });
+index.remove("record-2");
+```
+
+Search combines up to 12 distinct words with AND semantics. Unicode words are case-insensitive
+and accent-folded while highlights retain the original spelling. Exact title matches receive
+extra weight; the final word supports prefix completion, disabled with `{ prefix: false }`.
+`search(query, { offset, limit })` returns ranked hits, a total, and `truncated`. Prefix expansion
+stops at 50 terms and sets `truncated` rather than claiming exhaustive results. IDs break score
+ties deterministically. Each hit includes text/match segments for its title and a short snippet;
+render segments as text, never inject their contents as HTML.
+
+The default limits are 10,000 documents and 16 MiB of charged text/index storage. Individual bodies
+are limited to 32,768 characters; a replacement that exceeds capacity fails atomically. `serialize()`
+exports a versioned snapshot, and `restore(snapshot)` validates every document before replacing the
+index. Snapshots contain document content: keep them in the correct account's storage and remove
+them on logout. The search panel debounces input, announces results, supports arrow-key navigation
+and Escape, and clears pending work on disposal. It does not independently synchronize server data.
+
+
+## Searchable command palette
+
+Mount `mountCommandPalette(element, commands)` from `@clank.run/framework/command-palette`. Each command has a stable `id`, a visible `title`, optional `category` and `keywords`, an optional `enabled()` predicate, and `run({ signal })`. The mount adds a Commands button and a native modal dialog; the returned controller supports `open`, `close`, `setCommands`, and `dispose`.
+
+Search is accent-insensitive AND matching across titles, categories, and keywords. Exact titles and title prefixes rank first, with registration order breaking ties. At most 500 commands, 20 keywords per command, and 20 visible matches keep rendering bounded. `searchCommands(commands, query, limit?)` exposes the same search for custom controls. Disabled commands and predicates that throw are excluded; the predicate is checked again before execution. Permissions must still be enforced by the host action/server.
+
+Arrow keys, Home/End, and Enter select and run commands; Escape or Close returns focus to the opener. Commands cannot run twice while pending. Errors keep the dialog open for retry and can be reported through `onError`. Closing aborts the action signal and ignores late UI updates; the host command must honor that signal for cancellable work. Cancellation cannot reverse a mutation that already completed. Visible labels are rendered as text. The palette installs no global key binding; connect `controller.open()` to the shortcut manager or your own button as appropriate.
+
+## Configurable keyboard shortcuts
+
+Create `createShortcutManager(document, definitions, options)` from `@clank.run/framework/shortcuts`. Definitions contain `id`, `label`, `keys` (or null to disable), `run`, and optional `when`/`allowInInputs`. For example, `{ id: "commands", label: "Open commands", keys: "Mod+k", run: () => palette.open() }` connects the command palette. `Mod` resolves to Meta on Apple devices and Ctrl elsewhere; pass `platform` explicitly when needed.
+
+Bindings require Ctrl, Meta, or Alt and support Shift, letters, digits, common punctuation, F1–F12, arrows, navigation keys, Enter, Escape, Space, Delete, and Backspace. Modifier matching is exact. Bare typing keys, duplicate effective combinations, missing definitions, and invalid settings are rejected. The manager skips inputs/contenteditable controls unless opted in, IME composition, repeated keydown events, AltGraph, already-handled events, and actions already running. Optional `scope` limits shortcuts to a DOM subtree. The host must still avoid OS/browser-reserved combinations and enforce action permissions.
+
+`mountShortcutSettings(element, manager)` offers rebinding, disabling, and reset controls. `setBinding`, `reset`, `serialize`, and `restore` support custom settings. For device persistence pass `{ storage: localStorage, storageKey: "account-id:shortcuts" }`; storage failures leave current bindings intact and invalid stored settings fall back to defaults via `onError`. No storage is accessed unless supplied. Close the settings panel with its disposer and call `manager.dispose()` to remove keyboard listeners. In-flight host actions are not cancelled by disposal.
+
+## Resumable onboarding tours
+
+`createTour(document, { id, version, steps, storage? })` from `@clank.run/framework/tours` creates a non-modal guided tour. Steps contain stable `id`, `title`, `body`, `target: () => element`, and optional async `prepare(signal)` to reveal the host view before locating its target. Call `start()` from an onboarding action. The panel highlights and scrolls to real target elements, provides previous/next, retry, pause, skip, and finish controls, and returns focus when closed. Escape pauses while the panel has focus.
+
+Pass `localStorage` to persist the current step and completion/skip status on this device. Include the account in the tour ID where accounts share a browser. Completed/skipped tours remain closed on ordinary `start()`; use `start(true)` for an explicit replay. Change `version` when the tour structure changes to restart safely. Invalid or obsolete saved progress falls back to the first step. `restoreTourProgress` exposes the same bounded validation for custom storage.
+
+Unavailable or hidden targets are reported with Retry and Next controls; they are never silently considered viewed. Preparing a new step aborts the prior signal and ignores late results. Host preparation should honor cancellation, but the tour cannot undo completed host actions. Pause/dispose restore the target's original outline and remove focus changes; `dispose()` removes the panel. Step text uses DOM text nodes. Limits are 50 unique steps, 100-character titles, and 1,000-character bodies. No analytics, account service, or notification provider is required. The tour is non-modal so users can interact with the highlighted host control; it intentionally does not trap focus.
+
+## Customizable dashboard layouts
+
+`@clank.run/framework/dashboard-layouts` stores private named widget arrangements using the existing SQLite/auth database. Open `openDashboardLayouts({ path, auth, widgetIds: ["metrics", "tasks", "notes"] })`, route `/__clank/dashboard-layouts/*` to its handler, and create `createDashboardClient({ auth })` with the host CSRF provider. `mountDashboard(element, client, widgets)` accepts matching `{ id, title, mount(container) }` definitions; a widget may return a cleanup function.
+
+The dashboard loads an account default, switches saved layouts, saves/renames or saves as new, sets the default, confirms deletion, and resets the arrangement. Customize widgets changes visibility, keyboard-accessible order, and one/two-column width. Individual cards collapse/expand. Wide cards shrink to one column on narrow containers. Widget instances remain mounted while hidden, collapsed, or reordered so local state is preserved; the disposer disconnects resize observation and runs their cleanup functions. A widget load failure is isolated to its card. Host widgets remain responsible for authorizing and refreshing their data.
+
+Clients expose `list`, `save({ name, widgets, id?, expectedVersion? })`, `remove(id, expectedVersion)`, and `setDefault(id | null)`. Each placement has an allowed stable `id`, `visible`, `span` (1 or 2), and `collapsed`. Saves reject unknown/duplicate widget IDs and stale versions. Only one layout can be default; setting it is atomic and may advance affected layout versions. Register at most 30 widgets; each account can save 20 layouts with unique case-insensitive names up to 80 characters.
+
+`validateDashboardLayout(value, widgetIds)` validates/detaches placements and appends missing widgets hidden. When the host registry changes, removed widget IDs are omitted from loaded arrangements and newly registered widgets start hidden until the user enables them. The host server/client registries should match. Layout changes remain drafts until saved; refresh and switching layouts explicitly replace those drafts. No separate dashboard, analytics, or layout storage service is needed.

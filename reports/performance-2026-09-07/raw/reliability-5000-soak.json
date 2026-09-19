@@ -1,0 +1,233 @@
+{
+  "protocol": "clank-load-reliability/1",
+  "startedAt": "2026-09-08T00:06:14.096Z",
+  "node": "v24.20.0",
+  "users": 5000,
+  "connections": 5000,
+  "liveLimit": 6000,
+  "readRate": 500,
+  "scenarios": [
+    {
+      "name": "Live connection admission and idle residency",
+      "accepted": 5000,
+      "attempted": 5000,
+      "rejected": 0,
+      "connectMs": 6597.7972740000005,
+      "emptyRss": 198893568,
+      "metrics": {
+        "rss": 383705088,
+        "peakRss": 383705088,
+        "heapUsed": 173474456,
+        "cpuPercent": 29.096760651658187,
+        "eventLoopP99Ms": 20.103167,
+        "eventLoopMaxMs": 25.067519,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 5000,
+            "cacheHits": 5000,
+            "durationMs": 0.05597899999975198,
+            "lastInvalidation": null,
+            "cachedEntries": 1000,
+            "subscriptions": 5000
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "name": "Live update soak",
+      "seconds": 300,
+      "writes": 6000,
+      "deliveryP95Ms": 45.021899999992456,
+      "writeP95Ms": 44.88391999999294,
+      "prematureClosures": 0,
+      "concurrentReads": {
+        "targetRps": 500,
+        "completed": 149952,
+        "failures": 0,
+        "dropped": 0,
+        "p95Ms": 25.33096900000237
+      },
+      "checkpoints": [
+        {
+          "elapsedSeconds": 60,
+          "metrics": {
+            "rss": 557813760,
+            "peakRss": 564269056,
+            "heapUsed": 142858800,
+            "cpuPercent": 31.23714394999007,
+            "eventLoopP99Ms": 22.740991,
+            "eventLoopMaxMs": 57.212927,
+            "queries": [
+              {
+                "path": "list",
+                "runs": 35960,
+                "cacheHits": 5220,
+                "durationMs": 0.0731180000002496,
+                "lastInvalidation": "items",
+                "cachedEntries": 1000,
+                "subscriptions": 5000
+              }
+            ],
+            "errors": []
+          }
+        },
+        {
+          "elapsedSeconds": 120,
+          "metrics": {
+            "rss": 586915840,
+            "peakRss": 596189184,
+            "heapUsed": 169959872,
+            "cpuPercent": 30.372314558689354,
+            "eventLoopP99Ms": 23.543807,
+            "eventLoopMaxMs": 57.212927,
+            "queries": [
+              {
+                "path": "list",
+                "runs": 66909,
+                "cacheHits": 5460,
+                "durationMs": 0.07099699998798314,
+                "lastInvalidation": "items",
+                "cachedEntries": 1000,
+                "subscriptions": 5000
+              }
+            ],
+            "errors": []
+          }
+        },
+        {
+          "elapsedSeconds": 180,
+          "metrics": {
+            "rss": 584327168,
+            "peakRss": 596189184,
+            "heapUsed": 205935680,
+            "cpuPercent": 31.046226404624743,
+            "eventLoopP99Ms": 23.838719,
+            "eventLoopMaxMs": 63.373311,
+            "queries": [
+              {
+                "path": "list",
+                "runs": 97871,
+                "cacheHits": 5700,
+                "durationMs": 0.0679270000255201,
+                "lastInvalidation": "items",
+                "cachedEntries": 1000,
+                "subscriptions": 5000
+              }
+            ],
+            "errors": []
+          }
+        },
+        {
+          "elapsedSeconds": 240,
+          "metrics": {
+            "rss": 606703616,
+            "peakRss": 629571584,
+            "heapUsed": 146042840,
+            "cpuPercent": 31.712875182106465,
+            "eventLoopP99Ms": 24.887295,
+            "eventLoopMaxMs": 63.373311,
+            "queries": [
+              {
+                "path": "list",
+                "runs": 128806,
+                "cacheHits": 5955,
+                "durationMs": 0.07224799998220988,
+                "lastInvalidation": "items",
+                "cachedEntries": 1000,
+                "subscriptions": 5000
+              }
+            ],
+            "errors": []
+          }
+        },
+        {
+          "elapsedSeconds": 300,
+          "metrics": {
+            "rss": 612810752,
+            "peakRss": 629571584,
+            "heapUsed": 230271648,
+            "cpuPercent": 30.876091043133517,
+            "eventLoopP99Ms": 25.231359,
+            "eventLoopMaxMs": 63.373311,
+            "queries": [
+              {
+                "path": "list",
+                "runs": 159797,
+                "cacheHits": 6155,
+                "durationMs": 0.0771270000259392,
+                "lastInvalidation": "items",
+                "cachedEntries": 1000,
+                "subscriptions": 5000
+              }
+            ],
+            "errors": []
+          }
+        }
+      ],
+      "metrics": {
+        "rss": 612810752,
+        "peakRss": 629571584,
+        "heapUsed": 230530960,
+        "cpuPercent": 30.870099242034524,
+        "eventLoopP99Ms": 25.231359,
+        "eventLoopMaxMs": 63.373311,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 159797,
+            "cacheHits": 6155,
+            "durationMs": 0.0771270000259392,
+            "lastInvalidation": "items",
+            "cachedEntries": 1000,
+            "subscriptions": 5000
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "name": "50 simultaneous retries commit exactly once",
+      "passed": true
+    },
+    {
+      "name": "Disconnected live subscriptions released",
+      "metrics": {
+        "rss": 612225024,
+        "peakRss": 612225024,
+        "heapUsed": 24430184,
+        "cpuPercent": 574.1332743969823,
+        "eventLoopP99Ms": 0.000511,
+        "eventLoopMaxMs": 0,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 159799,
+            "cacheHits": 6156,
+            "durationMs": 0.12989600002765656,
+            "lastInvalidation": "items",
+            "cachedEntries": 1000,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "name": "Crash, restart, and ambiguous-write replay",
+      "acknowledgedBeforeCrash": 9,
+      "replayed": 50,
+      "committed": 50,
+      "recoveryMs": 751.2681149999844,
+      "passed": true
+    },
+    {
+      "name": "Session revocation closes live stream and rejects reads",
+      "passed": true
+    }
+  ],
+  "frameworkVersion": "0.22.0",
+  "ok": true,
+  "finishedAt": "2026-09-08T00:11:25.243Z"
+}

@@ -4,6 +4,225 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+No unreleased changes.
+
+## 0.22.1 - 2026-09-07
+
+- Aggregate dashboard metric summaries in one current-period query while preserving chart-summary semantics, and expose bounded platform authentication concurrency and queue settings without changing password-hash strength.
+- Allow explicit, bounded runtime capacity settings for live connections and password-hash admission in deployment environments; application options take precedence and existing defaults remain unchanged.
+
+- Preserve live-query dependency tracking after result-cache eviction, so connected clients keep receiving selective updates under cache pressure.
+
+- Keep platform project listing and dashboard queries scoped to indexed ownership and workspace membership as tenant counts grow.
+
+## 0.22.0 - 2026-09-07
+
+- Add private bookmarks and folders with safe URLs, favorites, search, conflict-checked editing, and atomic folder removal.
+- Add personal activity timelines with trusted event recording, bounded retention, stable pagination, unread filters, and cursor-bounded clearing.
+- Add shared feedback boards with explicit membership, unique votes, proposal editing, moderated status, and searchable controls.
+- Add personal availability calendars with overlap-safe windows, conflict-checked edits, and bounded slot previews with booking buffers.
+- Add saved dashboard layouts with owned defaults, widget visibility/order/width/collapse controls, responsive sizing, and preserved widget instances.
+- Add personal labels with colors, bounded resource assignments, conflict-checked editing, and browser controls.
+- Add owned ordered checklists with atomic completion, item editing, reordering, reset, and conflict-aware controls.
+- Add personal reminders with local-time scheduling, due filters, snooze, completion, and version-fenced editing.
+- Add recoverable device-local autosaved drafts with transactional revision checks, expiry, bounded JSON snapshots, and recovery controls.
+- Add bounded local undo/redo history with named edits, explicit coalescing, atomic transactions, snapshot recovery, and controls.
+- Add searchable command palettes with ranked accent-insensitive matching, keyboard navigation, focus restoration, and cancellable async execution.
+- Add configurable keyboard shortcuts with conflict detection, optional local persistence, input-aware dispatch, scopes, and settings controls.
+- Add resumable onboarding tours with highlighted targets, async preparation, retry, pause, skip, versioned progress, and cleanup.
+- Add spreadsheet-safe CSV exports with explicit column selection, UTF-8 downloads, bounded construction, and cancellable streaming responses.
+- Add an account-owned recycle bin with original-ID restoration, expiration sweeps, guarded permanent history deletion, and browser recovery controls.
+- Add account-owned record history panels with paginated snapshots, structural comparisons, business-rule validation, and version-fenced restore controls.
+- Add shared threaded comments with resource roles, safe edit/delete controls, reply limits, resolution, retry keys, and persistent permission revocation.
+- Add account-owned saved views with validated filters, stable sorting, visible columns, optimistic revisions, default selection, and browser management controls.
+- Add bounded local full-text search with accent folding, title-aware ranking, prefix completion, highlighted snippets, snapshot restore, and keyboard-accessible search controls.
+- Add CSV import with strict bounded parsing, column mapping, typed validation, duplicate handling, preview controls, and idempotent host transaction keys.
+
+## 0.21.0 - 2026-09-06
+
+- Add a persistent release error inbox with source-map frame locations, trace links, per-release counts, bounded retention, and recurrence tracking after resolution.
+- Add opt-in SSE resume with bounded session/query-scoped JSON splices and full-snapshot fallback after cache misses, authorization changes, or invalid client bases.
+- Add encrypted staged secret rotation to the platform and CLI, with bounded validation, conflict-checked activation/rollback, audit metadata, and running-consumer version inspection.
+- Add disposable application resilience rehearsals for offline, lost-response, dependency, upload-interruption, and worker-restart faults with required recovery evidence and CLI gating.
+- Add conservative API/MCP compatibility reports and a CI workbench gate for action removal, input/output schema changes, authentication, agent exposure, and required scopes.
+- Add fixed-height virtualized lists and grids with keyed row retention, scroll anchoring, keyboard navigation, accessible positions, and explicit cleanup.
+- Add a durable authenticated webhook outbox with signed deliveries, bounded attempt history, owner-scoped inspection, controlled replay, and per-attempt signing-key resolution.
+- Add complete application-load budgets from cold-navigation HAR captures, with resource deltas, transitive asset accounting, and failing CI checks for incomplete evidence.
+- Add opt-in SQLite query plans, bounded execution summaries, repeated-query and slow-query advice, and reviewable index candidates in local DevTools.
+
+## 0.20.0 - 2026-09-06
+
+- Enforce deterministic reactive-work and browser-module size budgets in CI, with timing diagnostics.
+- Compare consecutive deployment activations using matched traffic windows, request latency, error rates, and activation duration, with explicit low-traffic and collection states.
+- Add loopback-only DevTools for reactive dependency activity, computation lifetime, and opt-in backend query/cache diagnostics.
+- Carry request trace context through backend operations, durable jobs, retries, and workflow steps; inspect bounded, metadata-only request/job timelines.
+- Build validated synthetic fixture databases and seed isolated preview environments through the CLI and platform, preserving parent application data and recovery safety.
+- Rehearse encrypted-backup recovery and database migrations on disposable copies, including application health checks, timing, table changes, and cleanup.
+- Persist bounded agent tool activity with granted scopes, outcomes, timing, observed revisions, filters, and a local explorer.
+- Queue browser mutations durably with account-bound transactional replay receipts, pending/retry states, expiry checks, and explicit conflict reconciliation.
+- Add persistent user-owned notifications, read state, category preferences, accessible browser controls, and optional durable email delivery with stable provider idempotency keys.
+- Ship approval-queue, customer-portal, and booking application recipes with authenticated UI/MCP contracts, ownership and transition rules, fixtures, migrations, and deployment configuration.
+- Run generated-application contracts in independent Node test contexts and build composed applications before their tests, closing a verification gap in the CLI harness.
+
+## 0.19.6 - 2026-09-06
+
+- Coalesce shared reactive dependency invalidation before effects run, eliminating duplicate executions and partially updated computed values from a single signal write.
+- Dispose server-rendered component scopes after asynchronous output settles, releasing subscriptions and cleanup callbacks on success and failure.
+- Revalidate unchanged static GET/HEAD responses with weak ETags and bodyless `304` responses, avoiding repeated file streams and asset transfers.
+- Release unused HEAD response bodies and response readers after backpressured or early client disconnects, while preserving responses to rejected request bodies.
+- Load managed-ingress custom domains in one query per routing snapshot and skip provider fleet reads on local-only installations, preserving immediate routing and fencing updates.
+- Correct deployment-token setup guidance for workflows that prune inactive releases before publishing.
+
+## 0.19.5 - 2026-08-18
+
+- Fixed recurring MCP OAuth disconnects for clients with replicated credential storage. Adaptive
+  refresh rotation now follows a bounded, encrypted predecessor chain so a lagging replica can
+  converge on the one current successor without branching token authority or revoking a newer
+  replica. Missing or overlong adaptive handoffs fail without collateral grant revocation; strict
+  mode retains replay-driven family revocation for security-sensitive applications.
+
+## 0.19.4 - 2026-08-18
+
+- Added adaptive OAuth refresh recovery for MCP clients that fail to persist a rotated successor.
+  Clank now renews the access token through the encrypted, single-successor handoff while that
+  successor remains unspent, preventing recurring hourly disconnects without branching refresh
+  families or extending their expiry. Successor adoption restores immediate predecessor-replay
+  revocation, and security-sensitive applications can opt into strict post-window rotation.
+
+## 0.19.3 - 2026-08-12
+
+- Corrected delayed OAuth refresh retry responses to report the recovered access token's remaining
+  lifetime rather than its original lifetime, preventing clients from caching it past server expiry.
+
+## 0.19.2 - 2026-08-12
+
+- Made OAuth refresh rotation resilient to MCP clients with concurrent or delayed credential
+  persistence. Retries of the immediately previous refresh token now recover the exact same
+  successor pair for a bounded 15-minute window from an AES-GCM envelope whose key is not stored;
+  older replays and replays after the successor advances still revoke the complete token family.
+
+## 0.19.1 - 2026-08-11
+
+- Preserved MCP Apps `_meta.ui.resourceUri` metadata on model-visible tools even when stateless
+  clients omit the per-request UI capability hint. Codex and other MCP hosts can now associate an
+  already-published `ui://` resource with its tool result instead of treating the resource as a
+  separately read attachment; app-only tools remain hidden and uncallable until UI support is
+  negotiated.
+
+## 0.19.0 - 2026-08-10
+
+- Added first-class support for the stable MCP Apps `2026-01-26` extension. Backend queries and
+  mutations can bind immutable `ui://` HTML resources through `defineMcpApp()` and one `agent.app`
+  declaration; negotiated clients receive exact `text/html;profile=mcp-app` resources, UI tool
+  metadata, visibility, CSP, permission, domain, and border preferences. Application HTML and tool
+  bindings participate in the deterministic MCP revision so UI resources cannot silently drift
+  behind their server actions.
+- Added the dependency-free `@clank.run/framework/mcp-app` browser runtime and document builder for
+  host initialization, tool calls, resource reads, links, downloads, messages, model context,
+  display modes, size changes, lifecycle events, and safe theme-token projection. The complete
+  guide, low-level example, discovery metadata, type inference coverage, MCPJam Apps conformance,
+  and packed-release conformance make the feature usable by humans and coding agents immediately.
+- Hardened MCP App declarations with strict object fields, bounded complete HTML documents, secure
+  CSP origin validation, explicit empty permission grants, trusted-parent message handling, request
+  timeouts, and a clear separation between UI visibility and authorization scope enforcement.
+
+## 0.18.4 - 2026-08-10
+
+- Normalized generated and custom MCP tool names to the strict cross-provider identifier contract:
+  ASCII letters, numbers, and underscores with a 64-character ceiling. Dotted or hyphenated action
+  paths such as `dailyLog.getDay` now publish as `dailyLog_getDay`; overlong or normalization-
+  colliding names receive stable digest suffixes. Tool metadata retains the exact original Clank
+  action path, invocation routes through the portable name, and the changed contract revision makes
+  connected clients refresh stale catalogs automatically.
+
+## 0.18.3 - 2026-08-10
+
+- Fixed hosted MCP sign-in behind proxies that normalize or remove browser Fetch Metadata. The
+  OAuth login page now issues a five-minute, one-time proof bound to both the exact authorization
+  return path and a private browser cookie. Cross-origin form login requires and atomically
+  consumes that proof, so MCPJam, Augment, and other sandboxed hosted clients work without trusting
+  fragile `Sec-Fetch-*` headers or weakening ordinary origin, JSON, redirect, expiry, and replay
+  protections.
+
+## 0.18.2 - 2026-08-10
+
+- Fixed hosted MCP authorization for sandbox-inherited browser popups. OAuth now performs one
+  same-site session recheck to recover legacy Strict cookies, authenticated session checks reissue
+  cookies under the current policy, and password login narrowly accepts a user-activated opaque
+  same-origin top-level form navigation. Cross-site, iframe, scripted, JSON, and unbounded-return
+  requests remain rejected.
+
+## 0.18.1 - 2026-08-10
+
+- Fixed remote browser MCP authorization by making application sessions available to secure
+  cross-site top-level OAuth navigations and adding narrowly scoped, credential-free CORS support
+  for MCP preflight, dynamic client registration, and token requests. Protected MCP endpoints still
+  require resource-bound bearer tokens, password submission remains same-origin only, and public
+  MCP servers remain cross-origin restricted unless explicitly enabled.
+
+## 0.18.0 - 2026-08-09
+
+- Upgraded every generated application MCP endpoint to the stateless `2026-07-28` protocol while
+  retaining dual-era compatibility through `2025-11-25`. Modern requests now implement required
+  `server/discover`, per-request protocol/client metadata, result types and server identity,
+  zero-TTL private discovery, and strict `Mcp-Method`, `Mcp-Name`, and schema-declared
+  `Mcp-Param-*` header/body validation. They mint no process-local session state and remain valid
+  across cold starts, replicas, and rolling deployments.
+- Hardened application OAuth for the current MCP authorization profile with RFC 9207 issuer
+  parameters on successful and error redirects, advertised issuer-response support, and explicit
+  native/web dynamic-client classification. Existing PKCE, exact redirect, resource-bound token,
+  rotating refresh-token, protected-resource metadata, and legacy registration behavior remain
+  compatible.
+
+## 0.17.0 - 2026-08-03
+
+- Added first-class managed application buckets through `@clank.run/framework/buckets` and
+  blueprint `buckets`. The dependency-free runtime composes with local or S3-compatible object
+  storage and provides transactional project/per-owner quotas, isolated metadata listing,
+  immutable generation replacement, signed private/public delivery, CSRF-gated browser uploads,
+  offset-checked resumable chunks, content and SHA-256 verification, raster signature/dimension
+  policy, declared provider-pluggable image variants, and automatic owner-scoped MCP tools.
+- Generated applications now receive zero-setup local bucket storage and production environment
+  composition. The control plane injects a per-project root, stable derived signing key, logical
+  namespace, public origin, and administrator-overridable bucket byte/object ceilings for local and
+  provider placement. Bucket policies participate in backend manifests, MCP contract revisions,
+  discovery, account/workspace limit administration, local project cleanup, and complete human/agent
+  documentation.
+
+## 0.16.0 - 2026-08-02
+
+- Added the opt-in, dependency-free `Task<Success, Failure, Requirements>` runtime. Typed expected
+  failures remain distinct from defects and interruption; nominal services and memoized layers
+  expose requirements; scopes guarantee reverse-order release; reusable schedules provide bounded
+  retry; fibers, races, and concurrency-limited task groups use structured cancellation; Clank
+  tracing plugs in directly; and an injectable deterministic clock covers sleep, retry, race, and
+  timeout tests. Existing promise-based framework APIs remain unchanged.
+- Added the focused `@clank.run/framework/task` package export, complete declarations, behavioral
+  and failure-path coverage, compact API reference, and an agent-friendly guide explaining when to
+  choose Task, promises, durable jobs, workflows, or durable objects.
+
+## 0.15.0 - 2026-08-01
+
+- Added a unified dependency-free governance contract for users, agents, services, hosted
+  entitlement layers, short-lived action/resource-bound HMAC approvals, and deterministic typed
+  feature flags. The control plane now resolves default, billing, workspace, and operator limits
+  through the same typed entitlement layering primitive, and its SSR design consumes the shared
+  Clank theme tokens used by Design Studio.
+- Added release and data lifecycle contracts for canonical provenance, promotion evidence,
+  progressive canary guardrails, causal revision inspection and time travel, deterministic
+  sanitized clones, checksummed portable project exports, and transparent capacity estimates.
+  Deployment bundles now bind source revision, configuration, migration IDs, and every packaged
+  material digest and verify those bindings at each decoding trust boundary.
+- Added public App Studio/tooling APIs and `clank workbench` commands for policy/flag evaluation,
+  revision replay, production parity, classified schema migration plans, capacity simulation,
+  upgrades, provenance and promotions, exports and safe clones, action-contract tests, visual
+  regression, and provider conformance. The provider acceptance kit verifies frozen
+  credential-free requests, idempotency, abortable deadlines, and—with an explicit disposable
+  project opt-in—advertised destructive capabilities.
+- Added three user- and agent-oriented guides for governance, the revision/release lifecycle, and
+  App Studio/workbench workflows, plus package exports at `/governance`, `/lifecycle`, and
+  `/tooling`.
+
 ## 0.14.0 - 2026-08-01
 
 - Added first-party typed durable objects over each application's isolated SQLite database. Stable

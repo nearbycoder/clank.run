@@ -120,6 +120,18 @@ export default {
       capabilities: ["delayed", "retry"],
     },
   },
+  buckets: {
+    attachments: {
+      description: "Private task attachments.",
+      ownership: "user",
+      visibility: "private",
+      browserAccess: "authenticated",
+      allowedContentTypes: ["image/*", "application/pdf"],
+      maxObjectBytes: 25 * 1024 * 1024,
+      perOwnerMaxBytes: 100 * 1024 * 1024,
+      resumable: true,
+    },
+  },
   fixtures: {
     review: {
       description: "A stable state for app and agent contract tests.",
@@ -386,7 +398,8 @@ and generated verification contract.
 
 An entity action name has exactly two segments: `<entity>.<action>`. The local action segment is
 preserved, so `tasks.complete` becomes the browser RPC action and the MCP tool named
-`tasks.complete`; it is not silently renamed to `tasks.toggle`.
+`tasks_complete`; it is not semantically renamed to `tasks.toggle`. MCP metadata retains the
+original `tasks.complete` action path.
 
 Safe generated behaviors are:
 
@@ -458,6 +471,15 @@ startup before the app accepts traffic; optional services may remain absent. Rep
 `openAppServices()` with real drivers and secret-backed configuration before deploying a required
 integration. See [Services](services.md).
 
+## Managed buckets
+
+`buckets` is the first-class file and image contract, not a placeholder service. Generation writes
+`src/buckets.ts`, supplies zero-setup local storage during development, connects the manager to
+auth and MCP, and consumes the deployment platform's isolated root, signing key, namespace, and
+administrator quota. Bucket policy validates ownership, public/private delivery, media types,
+sizes, counts, cache behavior, resumable chunks, image dimensions, and declared variants before
+the app starts. See [Managed buckets](buckets.md).
+
 ## Relationship to generated source
 
 The important files are:
@@ -470,6 +492,7 @@ The important files are:
 | `src/server.tsx` | route SSR, role checks, CSP, health, services, static files, and API/MCP routing |
 | `src/service-requirements.ts` | normalized external service contract |
 | `src/services.ts` | local drivers and production service boundary |
+| `src/buckets.ts` | managed object definitions plus local/S3 provider composition |
 | `fixtures/*.json` | deterministic, synthetic, non-production app states |
 | `tests/app.contract.mjs` | application-owned UI↔MCP parity, manifest, backend, isolation, fixture, and SSR checks |
 | `migrations/` | immutable SQL history plus the canonical blueprint metadata |

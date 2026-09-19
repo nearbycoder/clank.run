@@ -17,6 +17,7 @@ export const groups = [
     entries: [
       ["architecture", "docs/architecture.md"],
       ["reactivity", "docs/reactivity.md"],
+      ["typed-tasks", "docs/task.md"],
       ["collaboration", "docs/collaboration.md"],
       ["rendering", "docs/rendering.md"],
       ["routing", "docs/routing.md"],
@@ -34,6 +35,7 @@ export const groups = [
     description: "Server rendering, live SQLite data, authentication, migrations, services, and observability.",
     entries: [
       ["full-stack", "docs/full-stack.md"],
+      ["offline", "docs/offline.md"],
       ["database", "docs/database.md"],
       ["migrations", "docs/migrations.md"],
       ["auth", "docs/auth.md"],
@@ -43,6 +45,7 @@ export const groups = [
       ["jobs-and-cron", "docs/jobs-and-cron.md"],
       ["services", "docs/services.md"],
       ["object-storage", "docs/object-storage.md"],
+      ["buckets", "docs/buckets.md"],
       ["observability", "docs/observability.md"],
       ["product-analytics", "docs/product-analytics.md"],
       ["data-plane", "docs/data-plane.md"]
@@ -54,9 +57,12 @@ export const groups = [
     description: "Deterministic blueprints, authenticated application actions, and contracts that make applications legible to agents.",
     entries: [
       ["per-app-mcp", "docs/per-app-mcp.md"],
+      ["mcp-apps", "docs/mcp-apps.md"],
       ["agent-protocol", "docs/agent-protocol.md"],
       ["agent-access", "docs/agent-access.md"],
       ["conversational-build", "docs/conversational-build.md"],
+      ["workbench", "docs/workbench.md"],
+      ["governance", "docs/governance.md"],
       ["browser-journeys", "docs/browser-journeys.md"],
       ["admin-studio", "docs/admin-studio.md"],
       ["blueprints", "docs/blueprints.md"],
@@ -71,6 +77,7 @@ export const groups = [
       ["cli", "docs/cli.md"],
       ["deployment-platform", "docs/deployment-platform.md"],
       ["preview-environments", "docs/preview-environments.md"],
+      ["release-lifecycle", "docs/release-lifecycle.md"],
       ["usage-and-limits", "docs/usage-and-limits.md"],
       ["hosted-plans-and-billing", "docs/hosted-plans-and-billing.md"],
       ["platform-dashboard", "docs/platform-dashboard.md"],

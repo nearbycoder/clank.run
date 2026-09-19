@@ -118,6 +118,11 @@ test("auth defaults to an eight-character password minimum", () => {
   );
 });
 
+test("auth defaults to OAuth-compatible Lax sessions and preserves explicit Strict policy", () => {
+  assert.equal(defineAuth().cookie.sameSite, "Lax");
+  assert.equal(defineAuth({ cookie: { sameSite: "Strict" } }).cookie.sameSite, "Strict");
+});
+
 test("auth issues hardened cookies, hashes credentials, and protects state-changing requests", async () => {
   const fixture = await createFixture();
   try {
@@ -126,7 +131,7 @@ test("auth issues hardened cookies, hashes credentials, and protects state-chang
     assert.match(setCookie, /^__Host-clank-id=/);
     assert.match(setCookie, /; Path=\//);
     assert.match(setCookie, /; HttpOnly/);
-    assert.match(setCookie, /; SameSite=Strict/);
+    assert.match(setCookie, /; SameSite=Lax/);
     assert.match(setCookie, /; Secure/);
 
     const rawToken = alice.cookie.slice(alice.cookie.indexOf("=") + 1);
@@ -145,6 +150,15 @@ test("auth issues hardened cookies, hashes credentials, and protects state-chang
     }));
     assert.equal(legacySession.status, 200);
     assert.equal((await legacySession.json()).user.email, "alice@example.com");
+    assert.match(legacySession.headers.get("set-cookie"), /^__Host-clank-id=/);
+    assert.match(legacySession.headers.get("set-cookie"), /; SameSite=Lax/);
+
+    const refreshedSession = await fixture.runtime.handle(request("/__clank/auth/session", {
+      cookie: alice.cookie,
+    }));
+    assert.equal(refreshedSession.status, 200);
+    assert.match(refreshedSession.headers.get("set-cookie"), /^__Host-clank-id=/);
+    assert.match(refreshedSession.headers.get("set-cookie"), /; SameSite=Lax/);
 
     const missingCsrf = await fixture.runtime.handle(request("/__clank/mutation/todos.add", {
       method: "POST",
@@ -163,6 +177,20 @@ test("auth issues hardened cookies, hashes credentials, and protects state-chang
     }));
     assert.equal(crossSite.status, 403);
     assert.equal((await crossSite.json()).error.code, "ORIGIN_MISMATCH");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("explicit Strict sessions preserve their cookie policy when refreshed", async () => {
+  const fixture = await createFixture({ cookie: { sameSite: "Strict" } });
+  try {
+    const session = await register(fixture.runtime, "strict@example.com");
+    const refreshed = await fixture.runtime.handle(request("/__clank/auth/session", {
+      cookie: session.cookie,
+    }));
+    assert.equal(refreshed.status, 200);
+    assert.match(refreshed.headers.get("set-cookie"), /; SameSite=Strict/);
   } finally {
     await fixture.close();
   }

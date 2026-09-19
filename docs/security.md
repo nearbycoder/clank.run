@@ -31,7 +31,7 @@ The TSX transform is a source-to-source compiler, not a data sandbox. It deliber
 ### Authentication and data
 
 - Passwords use versioned scrypt hashes with random salts and optional server-only peppering.
-- Session cookies are `HttpOnly`, `SameSite=Strict` by default, `Secure` on HTTPS, and use the `__Host-` prefix when possible.
+- Session cookies are `HttpOnly`, `SameSite=Lax` by default, `Secure` on HTTPS, and use the `__Host-` prefix when possible. `Lax` preserves top-level MCP OAuth authorization handoffs, and authenticated session checks reissue older cookies under the current policy. Origin validation and session-bound CSRF tokens continue to protect state-changing requests. An opaque-origin OAuth password form requires a five-minute, one-time proof bound to its exact relative return path and a separate private browser cookie; the digest is consumed atomically, while missing, mismatched, replayed, JSON, and unbounded-return requests fail closed. `cookie.sameSite: "Strict"` remains available for applications that do not need cross-site authorization entry.
 - Only SHA-256 token hashes are stored in SQLite; raw session tokens exist only in cookies and the immediate response construction path.
 - Authenticated mutations require a constant-time CSRF-token comparison.
 - Login errors do not reveal whether an account exists or is disabled.
@@ -240,7 +240,11 @@ Before release, verify:
 - unauthenticated MCP requests receive an OAuth resource challenge;
 - read-only agent grants cannot discover or invoke mutations;
 - OAuth codes are single-use, PKCE-bound, and reject redirect or resource mismatches;
-- replaying a rotated refresh token revokes its token family;
+- strict rotation revokes a token family when a rotated predecessor is replayed after its successor
+  is adopted;
+- the default adaptive handoff chain can only converge on the single unspent successor, is encrypted
+  link-by-link with predecessor credentials, is bounded to 64 links, and cannot outlive each link's
+  immediate successor; strict replay revocation remains opt-in;
 - MCP bearer tokens cannot authenticate ordinary browser or backend RPC endpoints;
 - internal-only backend functions use `agent: false`;
 - destructive mutations are explicitly annotated for agent clients;
@@ -251,6 +255,9 @@ Before release, verify:
 - malformed paths and oversized bodies return 4xx, not 500;
 - internal exceptions do not appear in production responses;
 - static traversal, dotfile, and symlink escape attempts fail;
+- bucket writes cannot select an owner, bypass CSRF/origin checks, overcommit active-plus-reserved
+  quotas, replay a committed capability, finalize at a wrong offset/length/digest/type, or publish a
+  new generation before provider integrity succeeds; private/public cache behavior matches policy;
 - CSP is present on HTML;
 - cookies are `HttpOnly`, `Secure`, `SameSite`, and host-only in production;
 - the complete app works in two independent browser contexts.

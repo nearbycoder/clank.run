@@ -204,6 +204,13 @@ Self-hosted defaults are:
 | `CLANK_MAX_REQUESTS_PER_MINUTE_PER_PROJECT` | `3000` | 1–1,000,000 |
 | `CLANK_USAGE_RETENTION_MONTHS` | `24` | 1–120 |
 
+Managed application buckets add two project limits: 5 GiB of active/reserved object bytes and
+100,000 active/reserved objects by default. They appear in the same account/workspace administrator
+limit editor as `bucketStorageBytesPerProject` and `bucketObjectsPerProject`. The control plane
+injects the effective values into each runtime as `CLANK_BUCKET_MAX_BYTES` and
+`CLANK_BUCKET_MAX_OBJECTS`; the bucket catalog enforces them transactionally across all declared
+buckets. Application and per-owner limits may be stricter but cannot raise the platform cap.
+
 The first three values participate in the existing quota hierarchy:
 
 1. an explicit workspace override;
@@ -223,6 +230,8 @@ const platform = await openPlatform({
     requestsPerMonthPerOrganization: 5_000_000,
     transferBytesPerMonthPerOrganization: 100 * 1024 * 1024 * 1024,
     requestsPerMinutePerProject: 3_000,
+    bucketStorageBytesPerProject: 5 * 1024 * 1024 * 1024,
+    bucketObjectsPerProject: 100_000,
     usageRetentionMonths: 24,
   },
 });

@@ -1,0 +1,223 @@
+{
+  "protocol": "clank-load/1",
+  "startedAt": "2026-09-07T23:38:40.282Z",
+  "kind": "app",
+  "users": 1000,
+  "seconds": 8,
+  "rates": [
+    2,
+    5,
+    10,
+    25
+  ],
+  "machine": {
+    "node": "v24.20.0",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "memoryBytes": 117764759552
+  },
+  "topology": "One isolated Node server process and a separate generator process on the same host; loopback HTTP; local SQLite",
+  "recordsPerUser": 20,
+  "samples": [
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 2,
+      "duration": 8,
+      "mode": "login",
+      "offered": 16,
+      "completed": 16,
+      "dropped": 0,
+      "valid": 16,
+      "status": {
+        "200": 16
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 5484,
+      "elapsedSeconds": 8.001361082,
+      "successfulRps": 1.9996597873821587,
+      "latencyMs": {
+        "p50": 164.07310099999995,
+        "p95": 180.05154099999982,
+        "p99": 180.05154099999982,
+        "max": 180.05154099999982
+      },
+      "serviceP95Ms": 179.46467399999983,
+      "generatorScheduleP99Ms": 0.9349380000003293,
+      "acceptable": true,
+      "metrics": {
+        "rss": 127246336,
+        "peakRss": 261468160,
+        "heapUsed": 15068544,
+        "cpuPercent": 33.46941841402757,
+        "eventLoopP99Ms": 10.641407,
+        "eventLoopMaxMs": 11.198463,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 45,
+            "cacheHits": 0,
+            "durationMs": 0.20327499999984866,
+            "lastInvalidation": "__auth",
+            "cachedEntries": 45,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 5,
+      "duration": 8,
+      "mode": "login",
+      "offered": 40,
+      "completed": 40,
+      "dropped": 0,
+      "valid": 40,
+      "status": {
+        "200": 40
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 13740,
+      "elapsedSeconds": 8.000137743,
+      "successfulRps": 4.9999139121072504,
+      "latencyMs": {
+        "p50": 164.67324000000008,
+        "p95": 173.63211799999954,
+        "p99": 177.73153599999932,
+        "max": 177.73153599999932
+      },
+      "serviceP95Ms": 173.3864080000003,
+      "generatorScheduleP99Ms": 1.1199350000006234,
+      "acceptable": true,
+      "metrics": {
+        "rss": 127774720,
+        "peakRss": 261996544,
+        "heapUsed": 13259808,
+        "cpuPercent": 82.50599110860797,
+        "eventLoopP99Ms": 10.993663,
+        "eventLoopMaxMs": 11.395071,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 45,
+            "cacheHits": 0,
+            "durationMs": 0.20327499999984866,
+            "lastInvalidation": "__auth",
+            "cachedEntries": 45,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 10,
+      "duration": 8,
+      "mode": "login",
+      "offered": 80,
+      "completed": 80,
+      "dropped": 0,
+      "valid": 80,
+      "status": {
+        "200": 80
+      },
+      "failures": {},
+      "errorExamples": {},
+      "bytes": 27500,
+      "elapsedSeconds": 8.070386939,
+      "successfulRps": 9.912783687409265,
+      "latencyMs": {
+        "p50": 167.44372099999964,
+        "p95": 178.8971590000001,
+        "p99": 183.42578199999843,
+        "max": 183.42578199999843
+      },
+      "serviceP95Ms": 178.0792220000003,
+      "generatorScheduleP99Ms": 1.303039999998873,
+      "acceptable": true,
+      "metrics": {
+        "rss": 127807488,
+        "peakRss": 308076544,
+        "heapUsed": 15070080,
+        "cpuPercent": 165.76172123472514,
+        "eventLoopP99Ms": 10.887167,
+        "eventLoopMaxMs": 24.363007,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 45,
+            "cacheHits": 0,
+            "durationMs": 0.20327499999984866,
+            "lastInvalidation": "__auth",
+            "cachedEntries": 45,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "candidate": "candidate",
+      "frameworkVersion": "0.22.0",
+      "round": 1,
+      "rate": 25,
+      "duration": 8,
+      "mode": "login",
+      "offered": 200,
+      "completed": 200,
+      "dropped": 0,
+      "valid": 114,
+      "status": {
+        "200": 114,
+        "503": 86
+      },
+      "failures": {},
+      "errorExamples": {
+        "503": "{\"ok\":false,\"error\":{\"code\":\"AUTH_BUSY\",\"message\":\"Authentication is temporarily busy. Try again shortly.\"}}"
+      },
+      "bytes": 48582,
+      "elapsedSeconds": 9.451639407999998,
+      "successfulRps": 12.06139962380588,
+      "latencyMs": {
+        "p50": 698.0982399999994,
+        "p95": 1478.507762000001,
+        "p99": 1490.771729,
+        "max": 1494.8270879999982
+      },
+      "serviceP95Ms": 1478.4420169999976,
+      "generatorScheduleP99Ms": 1.1264620000001742,
+      "acceptable": false,
+      "metrics": {
+        "rss": 129052672,
+        "peakRss": 397496320,
+        "heapUsed": 18731032,
+        "cpuPercent": 201.9244305617728,
+        "eventLoopP99Ms": 11.206655,
+        "eventLoopMaxMs": 23.363583,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 45,
+            "cacheHits": 0,
+            "durationMs": 0.20327499999984866,
+            "lastInvalidation": "__auth",
+            "cachedEntries": 45,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    }
+  ],
+  "finishedAt": "2026-09-07T23:39:16.770Z"
+}

@@ -25,6 +25,24 @@ export interface ProjectOAuthOptions<Profile extends object = DefaultAuthProfile
   applicationName?: string;
   accessTokenLifetimeMs?: number;
   refreshTokenLifetimeMs?: number;
+  /**
+   * Allows a client retrying a just-rotated refresh token to recover the exact
+   * same successor token pair. The predecessor remains invalid, the recovery
+   * envelope is encrypted, and exact-response retries remain time-bounded. In
+   * adaptive rotation mode, a client that did not save the successor may later
+   * recover a new access token while that successor is still unspent.
+   * @default 15 minutes
+   */
+  refreshTokenRetryLifetimeMs?: number;
+  /**
+   * Controls recovery when a public client fails to persist a rotated refresh
+   * token. Adaptive mode retains a bounded encrypted predecessor chain so
+   * lagging replicas can converge on the single current successor without
+   * creating another refresh-token branch. Strict mode revokes the family
+   * when the retry window closes.
+   * @default "adaptive"
+   */
+  refreshTokenRotationMode?: "adaptive" | "strict";
   authorizationCodeLifetimeMs?: number;
   maxClients?: number;
   maxUserGrants?: number;
@@ -74,6 +92,13 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
   const oauthPrefix = absolutePath(options.oauthPrefix ?? "/__clank/oauth", "oauthPrefix");
   const accessTokenLifetimeMs = positiveDuration(options.accessTokenLifetimeMs ?? 60 * 60 * 1_000, "accessTokenLifetimeMs");
   const refreshTokenLifetimeMs = positiveDuration(options.refreshTokenLifetimeMs ?? 30 * 24 * 60 * 60 * 1_000, "refreshTokenLifetimeMs");
+  const refreshTokenRetryLifetimeMs = boundedDuration(
+    options.refreshTokenRetryLifetimeMs ?? 15 * 60 * 1_000,
+    1_000,
+    60 * 60 * 1_000,
+    "refreshTokenRetryLifetimeMs",
+  );
+  const refreshTokenRotationMode = refreshRotationMode(options.refreshTokenRotationMode ?? "adaptive");
   const authorizationCodeLifetimeMs = positiveDuration(options.authorizationCodeLifetimeMs ?? 5 * 60 * 1_000, "authorizationCodeLifetimeMs");
   const maxClients = positiveInteger(options.maxClients ?? 1_000, "maxClients");
   const maxUserGrants = boundedInteger(options.maxUserGrants ?? 100, 1, 1_000, "maxUserGrants");
@@ -113,6 +138,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
       token_endpoint_auth_methods_supported: ["none"],
       code_challenge_methods_supported: ["S256"],
       scopes_supported: [...AGENT_SCOPES],
+      authorization_response_iss_parameter_supported: true,
       service_documentation: `${origin}/.well-known/clank`,
       clank_agent_grants_endpoint: `${origin}${grantsPath}`,
       clank_agent_access_url: `${origin}${grantManagementPath}`,
@@ -152,7 +178,8 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
         return publicJson(authorizationServerMetadata(request));
       }
       if (url.pathname === `${oauthPrefix}/register`) {
-        return registerClient(request, internal, maxClients);
+        if (request.method === "OPTIONS") return oauthMachinePreflight();
+        return oauthMachineResponse(await registerClient(request, internal, maxClients));
       }
       if (url.pathname === `${oauthPrefix}/authorize`) {
         return authorize(request, internal, options.auth, {
@@ -164,12 +191,15 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
         });
       }
       if (url.pathname === `${oauthPrefix}/token`) {
-        return exchangeToken(request, internal, {
+        if (request.method === "OPTIONS") return oauthMachinePreflight();
+        return oauthMachineResponse(await exchangeToken(request, internal, {
           resource: resourceFor(request),
           accessTokenLifetimeMs,
           refreshTokenLifetimeMs,
+          refreshTokenRetryLifetimeMs,
+          refreshTokenRotationMode,
           maxUserGrants,
-        });
+        }));
       }
       if (url.pathname === grantManagementPath) {
         return manageAgentAccess(request, internal, options.auth, {
@@ -260,7 +290,8 @@ async function registerClient(
   }
   if (!isRecord(raw)) return oauthProblem(400, "invalid_client_metadata", "Client metadata must be a JSON object.");
   try {
-    const redirectUris = validateRedirectUris(raw.redirect_uris);
+    const applicationType = registrationApplicationType(raw.application_type, raw.redirect_uris);
+    const redirectUris = validateRedirectUris(raw.redirect_uris, applicationType);
     const clientName = boundedPlainText(
       raw.client_name === undefined ? "MCP client" : raw.client_name,
       "client_name",
@@ -309,6 +340,7 @@ async function registerClient(
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       token_endpoint_auth_method: "none",
+      application_type: applicationType,
     }, {
       status: 201,
       headers: oauthHeaders(),
@@ -340,13 +372,25 @@ async function authorize<Profile extends object>(
     if (!auth.user) {
       if (request.method === "POST") throw new OAuthRequestError("access_denied", "Sign in before approving agent access.", 401);
       const authError = typeof input.auth_error === "string" ? input.auth_error : undefined;
+      if (input.clank_login_recheck !== "1" && authError === undefined) {
+        const target = new URL(request.url);
+        target.searchParams.set("clank_login_recheck", "1");
+        return authorizationHtml(sameSiteLoginRecheckPage(target.href));
+      }
+      const advancedLoginRequired = authRuntime.definition.mfa.required
+        || Boolean(authRuntime.definition.botProtection);
+      const retry = `${options.authorizePath}${authorizationRequestUrl(parameters)}`;
+      const loginProof = advancedLoginRequired
+        ? undefined
+        : await authRuntime.issueBrowserLoginProof(request, retry);
       return authorizationHtml(signInPage(
         parameters,
         options.applicationName,
         options.authorizePath,
-        authRuntime.definition.mfa.required || Boolean(authRuntime.definition.botProtection),
+        advancedLoginRequired,
+        loginProof?.token,
         authError,
-      ));
+      ), 200, undefined, loginProof?.setCookie);
     }
     if (authRuntime.definition.emailVerification.required) auth.requireVerified();
     if (request.method === "GET") {
@@ -379,7 +423,7 @@ async function authorize<Profile extends object>(
       throw new OAuthRequestError("invalid_request", "The authorization request could not be verified.", 403);
     }
     if (input.decision !== "approve") {
-      return authorizationRedirect(parameters, { error: "access_denied" });
+      return authorizationRedirect(parameters, { error: "access_denied" }, new URL(request.url).origin);
     }
     const rawCode = `clank_code_${randomToken(32)}`;
     const codeHash = await digest(rawCode);
@@ -398,10 +442,14 @@ async function authorize<Profile extends object>(
         now + options.codeLifetimeMs,
         now,
       );
-    return authorizationRedirect(parameters, { code: rawCode });
+    return authorizationRedirect(parameters, { code: rawCode }, new URL(request.url).origin);
   } catch (error) {
     if (error instanceof OAuthRedirectError) {
-      return authorizationRedirect(error.parameters, { error: error.oauthCode });
+      return authorizationRedirect(
+        error.parameters,
+        { error: error.oauthCode },
+        new URL(request.url).origin,
+      );
     }
     return request.method === "GET"
       ? authorizationHtml(errorPage(error), error instanceof OAuthRequestError ? error.status : 400)
@@ -416,6 +464,8 @@ async function exchangeToken(
     resource: string;
     accessTokenLifetimeMs: number;
     refreshTokenLifetimeMs: number;
+    refreshTokenRetryLifetimeMs: number;
+    refreshTokenRotationMode: "adaptive" | "strict";
     maxUserGrants: number;
   },
 ): Promise<Response> {
@@ -478,8 +528,18 @@ async function exchangeToken(
         JOIN clank_auth_users u ON u.id = t.user_id
         WHERE t.token_hash = ? AND t.kind = 'refresh'`).get(refreshHash);
       if (row?.consumed_at !== null && row?.consumed_at !== undefined) {
-        internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
-          .run(Date.now(), row.family_id);
+        if (
+          Number(row.disabled) === 0
+          && String(row.client_id) === clientId
+          && String(row.resource) === resource
+        ) {
+          const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row, options);
+          if (recovered) return tokenResponse(recovered);
+        }
+        if (options.refreshTokenRotationMode === "strict") {
+          internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
+            .run(Date.now(), row.family_id);
+        }
         throw new OAuthRequestError("invalid_grant", "Refresh token reuse was detected.");
       }
       if (
@@ -497,17 +557,36 @@ async function exchangeToken(
         options,
         String(row.family_id),
       );
-      internal.transaction(() => {
+      const retry = await prepareRefreshRetry(
+        rawRefresh,
+        refreshHash,
+        pair,
+      );
+      const rotated = internal.transaction(() => {
         const consumed = internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
           WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?`)
           .run(Date.now(), refreshHash, Date.now());
-        if (Number(consumed.changes) !== 1) {
-          internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
-            .run(Date.now(), row.family_id);
-          throw new OAuthRequestError("invalid_grant", "Refresh token reuse was detected.");
+        if (Number(consumed.changes) !== 1) return false;
+        // Adaptive clients can have more than one credential replica. Retain
+        // the encrypted predecessor link so a lagging replica can walk to the
+        // one current successor. Strict mode deliberately removes that link.
+        if (options.refreshTokenRotationMode === "strict") {
+          internal.prepare("DELETE FROM clank_oauth_refresh_retries WHERE refresh_hash = ?")
+            .run(refreshHash);
         }
         insertTokenPair(internal, pair);
+        insertRefreshRetry(internal, retry);
+        return true;
       });
+      if (!rotated) {
+        const recovered = await recoverRefreshRetry(internal, rawRefresh, refreshHash, row, options);
+        if (recovered) return tokenResponse(recovered);
+        if (options.refreshTokenRotationMode === "strict") {
+          internal.prepare("UPDATE clank_oauth_tokens SET consumed_at = ? WHERE family_id = ? AND consumed_at IS NULL")
+            .run(Date.now(), row.family_id);
+        }
+        throw new OAuthRequestError("invalid_grant", "Refresh token reuse was detected.");
+      }
       return tokenResponse(pair);
     }
     throw new OAuthRequestError("unsupported_grant_type", "Only authorization_code and refresh_token grants are supported.");
@@ -529,6 +608,15 @@ interface PreparedTokenPair {
   createdAt: number;
   accessExpiresAt: number;
   refreshExpiresAt: number;
+}
+
+interface PreparedRefreshRetry {
+  predecessorHash: string;
+  accessHash: string;
+  refreshHash: string;
+  envelope: string;
+  expiresAt: number;
+  createdAt: number;
 }
 
 async function prepareTokenPair(
@@ -562,17 +650,7 @@ function insertTokenPair(internal: SQLiteInternal, pair: PreparedTokenPair): voi
   const insert = internal.prepare(`INSERT INTO clank_oauth_tokens
     (token_hash, kind, family_id, client_id, user_id, scope, resource, expires_at, consumed_at, created_at, last_used_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)`);
-  insert.run(
-    pair.accessHash,
-    "access",
-    pair.familyId,
-    pair.clientId,
-    pair.userId,
-    pair.scope,
-    pair.resource,
-    pair.accessExpiresAt,
-    pair.createdAt,
-  );
+  insertAccessToken(insert, pair);
   insert.run(
     pair.refreshHash,
     "refresh",
@@ -586,11 +664,202 @@ function insertTokenPair(internal: SQLiteInternal, pair: PreparedTokenPair): voi
   );
 }
 
+function insertAccessToken(
+  insert: ReturnType<SQLiteInternal["prepare"]>,
+  pair: PreparedTokenPair,
+): void {
+  insert.run(
+    pair.accessHash,
+    "access",
+    pair.familyId,
+    pair.clientId,
+    pair.userId,
+    pair.scope,
+    pair.resource,
+    pair.accessExpiresAt,
+    pair.createdAt,
+  );
+}
+
+function insertRefreshRetry(internal: SQLiteInternal, retry: PreparedRefreshRetry): void {
+  internal.prepare(`INSERT INTO clank_oauth_refresh_retries
+    (predecessor_hash, access_hash, refresh_hash, response_envelope, expires_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(
+      retry.predecessorHash,
+      retry.accessHash,
+      retry.refreshHash,
+      retry.envelope,
+      retry.expiresAt,
+      retry.createdAt,
+    );
+}
+
+async function prepareRefreshRetry(
+  rawRefresh: string,
+  predecessorHash: string,
+  pair: PreparedTokenPair,
+): Promise<PreparedRefreshRetry> {
+  return {
+    predecessorHash,
+    accessHash: pair.accessHash,
+    refreshHash: pair.refreshHash,
+    envelope: await encryptRefreshRetry(rawRefresh, predecessorHash, pair),
+    // Retain the encrypted handoff for the successor's lifetime. Exact
+    // idempotent retries are still bounded by refreshTokenRetryLifetimeMs;
+    // adaptive recovery needs the relationship to determine whether the
+    // successor was adopted before treating the predecessor as a replay.
+    expiresAt: pair.refreshExpiresAt,
+    createdAt: pair.createdAt,
+  };
+}
+
+async function recoverRefreshRetry(
+  internal: SQLiteInternal,
+  rawRefresh: string,
+  predecessorHash: string,
+  predecessor: Record<string, unknown>,
+  options: {
+    accessTokenLifetimeMs: number;
+    refreshTokenRetryLifetimeMs: number;
+    refreshTokenRotationMode: "adaptive" | "strict";
+  },
+  allowRaceRetry = true,
+): Promise<PreparedTokenPair | null> {
+  const now = Date.now();
+  const findRetry = internal.prepare(`SELECT r.response_envelope, r.expires_at AS retry_expires_at,
+      r.created_at AS retry_created_at,
+      access.token_hash AS access_hash, access.expires_at AS access_expires_at,
+      access.consumed_at AS access_consumed_at, access.created_at AS access_created_at,
+      refresh.token_hash AS refresh_hash, refresh.expires_at AS refresh_expires_at,
+      refresh.consumed_at AS refresh_consumed_at,
+      refresh.client_id, refresh.user_id, refresh.scope, refresh.resource, refresh.family_id
+    FROM clank_oauth_refresh_retries r
+    JOIN clank_oauth_tokens access ON access.token_hash = r.access_hash AND access.kind = 'access'
+    JOIN clank_oauth_tokens refresh ON refresh.token_hash = r.refresh_hash AND refresh.kind = 'refresh'
+    WHERE r.predecessor_hash = ?`);
+  let currentRawRefresh = rawRefresh;
+  let currentPredecessorHash = predecessorHash;
+  try {
+    for (let hop = 0; hop < MAX_ADAPTIVE_REFRESH_HANDOFF_HOPS; hop++) {
+      const retry = findRetry.get(currentPredecessorHash);
+      if (
+        !retry
+        || Number(retry.retry_expires_at) <= now
+        || Number(retry.refresh_expires_at) <= now
+        || String(retry.client_id) !== String(predecessor.client_id)
+        || String(retry.user_id) !== String(predecessor.user_id)
+        || String(retry.scope) !== String(predecessor.scope)
+        || String(retry.resource) !== String(predecessor.resource)
+        || String(retry.family_id) !== String(predecessor.family_id)
+      ) return null;
+      const pair = await decryptRefreshRetry(
+        currentRawRefresh,
+        currentPredecessorHash,
+        String(retry.response_envelope),
+      );
+      const [accessHash, refreshHash] = await Promise.all([
+        digest(pair.accessToken),
+        digest(pair.refreshToken),
+      ]);
+      if (
+        !constantTimeEqual(pair.accessHash, String(retry.access_hash))
+        || !constantTimeEqual(pair.refreshHash, String(retry.refresh_hash))
+        || !constantTimeEqual(accessHash, pair.accessHash)
+        || !constantTimeEqual(refreshHash, pair.refreshHash)
+        || pair.clientId !== String(retry.client_id)
+        || pair.userId !== String(retry.user_id)
+        || pair.scope !== String(retry.scope)
+        || pair.resource !== String(retry.resource)
+        || pair.familyId !== String(retry.family_id)
+        || pair.createdAt !== Number(retry.access_created_at)
+        || pair.accessExpiresAt !== Number(retry.access_expires_at)
+        || pair.refreshExpiresAt !== Number(retry.refresh_expires_at)
+      ) return null;
+      if (retry.refresh_consumed_at !== null) {
+        if (options.refreshTokenRotationMode === "strict") return null;
+        currentRawRefresh = pair.refreshToken;
+        currentPredecessorHash = pair.refreshHash;
+        continue;
+      }
+      const insideRetryWindow = Number(retry.retry_created_at) + options.refreshTokenRetryLifetimeMs > now;
+      if (
+        insideRetryWindow
+        && retry.access_consumed_at === null
+        && Number(retry.access_expires_at) > now
+      ) return pair;
+      if (options.refreshTokenRotationMode === "strict") return null;
+
+      const recovered = await prepareRecoveredAccess(pair, options.accessTokenLifetimeMs);
+      const envelope = await encryptRefreshRetry(
+        currentRawRefresh,
+        currentPredecessorHash,
+        recovered,
+      );
+      const replaced = internal.transaction(() => {
+        const insert = internal.prepare(`INSERT INTO clank_oauth_tokens
+          (token_hash, kind, family_id, client_id, user_id, scope, resource, expires_at, consumed_at, created_at, last_used_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)`);
+        insertAccessToken(insert, recovered);
+        const updated = internal.prepare(`UPDATE clank_oauth_refresh_retries
+          SET access_hash = ?, response_envelope = ?, created_at = ?
+          WHERE predecessor_hash = ? AND access_hash = ? AND refresh_hash = ? AND expires_at > ?
+            AND EXISTS (SELECT 1 FROM clank_oauth_tokens current
+              WHERE current.token_hash = ? AND current.kind = 'refresh'
+                AND current.consumed_at IS NULL AND current.expires_at > ?)`)
+          .run(
+            recovered.accessHash,
+            envelope,
+            recovered.createdAt,
+            currentPredecessorHash,
+            pair.accessHash,
+            pair.refreshHash,
+            now,
+            pair.refreshHash,
+            now,
+          );
+        if (Number(updated.changes) !== 1) {
+          internal.prepare("DELETE FROM clank_oauth_tokens WHERE token_hash = ?").run(recovered.accessHash);
+          return false;
+        }
+        internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
+          WHERE token_hash = ? AND kind = 'access' AND consumed_at IS NULL`)
+          .run(now, pair.accessHash);
+        return true;
+      });
+      if (replaced) return recovered;
+      return allowRaceRetry
+        ? recoverRefreshRetry(internal, rawRefresh, predecessorHash, predecessor, options, false)
+        : null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+const MAX_ADAPTIVE_REFRESH_HANDOFF_HOPS = 64;
+
+async function prepareRecoveredAccess(
+  predecessor: PreparedTokenPair,
+  accessTokenLifetimeMs: number,
+): Promise<PreparedTokenPair> {
+  const accessToken = `clank_at_${randomToken(32)}`;
+  const createdAt = Date.now();
+  return {
+    ...predecessor,
+    accessToken,
+    accessHash: await digest(accessToken),
+    createdAt,
+    accessExpiresAt: createdAt + accessTokenLifetimeMs,
+  };
+}
+
 function tokenResponse(pair: PreparedTokenPair): Response {
   return Response.json({
     access_token: pair.accessToken,
     token_type: "Bearer",
-    expires_in: Math.floor((pair.accessExpiresAt - pair.createdAt) / 1_000),
+    expires_in: Math.max(1, Math.floor((pair.accessExpiresAt - Date.now()) / 1_000)),
     refresh_token: pair.refreshToken,
     scope: pair.scope,
   }, {
@@ -960,11 +1229,13 @@ function normalizeScopes(input: unknown): string[] {
 function authorizationRedirect(
   parameters: AuthorizationParameters,
   result: { code?: string; error?: string },
+  issuer: string,
 ): Response {
   const target = new URL(parameters.redirectUri);
   if (result.code) target.searchParams.set("code", result.code);
   if (result.error) target.searchParams.set("error", result.error);
   if (parameters.state) target.searchParams.set("state", parameters.state);
+  target.searchParams.set("iss", issuer);
   return Response.redirect(target, 303);
 }
 
@@ -973,6 +1244,7 @@ function signInPage(
   applicationName: string,
   authorizePath: string,
   advancedLoginRequired: boolean,
+  loginProof?: string,
   authError?: string,
 ): string {
   const retry = `${authorizePath}${authorizationRequestUrl(parameters)}`;
@@ -996,6 +1268,7 @@ function signInPage(
       : `<p>Sign in here to review and approve the requested permissions.</p>
         <form method="post" action="/__clank/auth/login">
           <input type="hidden" name="return_to" value="${escapeAttribute(retry)}">
+          <input type="hidden" name="login_proof" value="${escapeAttribute(loginProof ?? "")}">
           <label class="field">Email
             <input name="email" type="email" autocomplete="username" maxlength="254" required>
           </label>
@@ -1081,10 +1354,20 @@ function errorPage(error: unknown): string {
   );
 }
 
-function pageShell(title: string, body: string): string {
+function sameSiteLoginRecheckPage(target: string): string {
+  const escapedTarget = escapeAttribute(target);
+  return pageShell(
+    "Checking sign-in",
+    `<p>Checking for an existing application session…</p>
+    <p class="meta"><a href="${escapedTarget}">Continue if this page does not advance</a></p>`,
+    `<meta http-equiv="refresh" content="0;url=${escapedTarget}">`,
+  );
+}
+
+function pageShell(title: string, body: string, head = ""): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>${title}</title><style>
+  ${head}<title>${title}</title><style>
   :root{color-scheme:light dark;font:16px/1.55 system-ui,sans-serif}
   body{margin:0;background:#080b12;color:#e8edf7;min-height:100vh;display:grid;place-items:center}
   main{width:min(38rem,calc(100% - 2rem));box-sizing:border-box;padding:2rem;border:1px solid #273249;border-radius:1rem;background:#101724}
@@ -1099,18 +1382,20 @@ function pageShell(title: string, body: string): string {
   </style></head><body><main><h1>${title}</h1>${body}</main></body></html>`;
 }
 
-function authorizationHtml(value: string, status = 200, callbackOrigin?: string): Response {
+function authorizationHtml(value: string, status = 200, callbackOrigin?: string, setCookie?: string): Response {
   const formAction = callbackOrigin ? `'self' ${callbackOrigin}` : "'self'";
+  const headers = new Headers({
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+  });
+  if (setCookie) headers.append("set-cookie", setCookie);
   return new Response(value, {
     status,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store",
-      "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; base-uri 'none'; frame-ancestors 'none'`,
-      "referrer-policy": "no-referrer",
-      "x-content-type-options": "nosniff",
-      "x-frame-options": "DENY",
-    },
+    headers,
   });
 }
 
@@ -1186,18 +1471,28 @@ function createOAuthTables(internal: SQLiteInternal): void {
     created_at INTEGER NOT NULL,
     last_used_at INTEGER
   ) WITHOUT ROWID`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_oauth_refresh_retries (
+    predecessor_hash TEXT PRIMARY KEY REFERENCES clank_oauth_tokens(token_hash) ON DELETE CASCADE,
+    access_hash TEXT NOT NULL REFERENCES clank_oauth_tokens(token_hash) ON DELETE CASCADE,
+    refresh_hash TEXT NOT NULL REFERENCES clank_oauth_tokens(token_hash) ON DELETE CASCADE,
+    response_envelope TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_codes_expiry ON clank_oauth_codes (expires_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_consents_expiry ON clank_oauth_consents (expires_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_consents_session ON clank_oauth_consents (session_id, created_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_tokens_expiry ON clank_oauth_tokens (expires_at)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_tokens_user ON clank_oauth_tokens (user_id)");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_tokens_family ON clank_oauth_tokens (family_id)");
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_oauth_refresh_retries_expiry ON clank_oauth_refresh_retries (expires_at)");
 }
 
 function pruneOAuthState(internal: SQLiteInternal): void {
   const now = Date.now();
   internal.prepare("DELETE FROM clank_oauth_codes WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(now);
   internal.prepare("DELETE FROM clank_oauth_consents WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(now);
+  internal.prepare("DELETE FROM clank_oauth_refresh_retries WHERE expires_at <= ?").run(now);
   // Retain rotated refresh-token digests until their original expiry. Reuse can
   // then revoke the active family for the full lifetime of the old credential.
   internal.prepare("DELETE FROM clank_oauth_tokens WHERE expires_at <= ?").run(now);
@@ -1272,11 +1567,37 @@ function authorizationRequestBinding(parameters: AuthorizationParameters): strin
   ]);
 }
 
-function validateRedirectUris(value: unknown): string[] {
+function registrationApplicationType(
+  value: unknown,
+  redirectUris: unknown,
+): "native" | "web" {
+  if (value !== undefined && value !== "native" && value !== "web") {
+    throw new OAuthRequestError("invalid_client_metadata", "application_type must be native or web.");
+  }
+  if (value === "native" || value === "web") return value;
+  if (Array.isArray(redirectUris) && redirectUris.every((entry) => {
+    if (typeof entry !== "string") return false;
+    try {
+      const url = new URL(entry);
+      return url.protocol === "http:" && isLoopbackHost(url.hostname);
+    } catch {
+      return false;
+    }
+  })) return "native";
+  return "web";
+}
+
+function validateRedirectUris(value: unknown, applicationType: "native" | "web"): string[] {
   if (!Array.isArray(value) || value.length === 0 || value.length > 10) {
     throw new OAuthRequestError("invalid_client_metadata", "redirect_uris must contain between 1 and 10 entries.");
   }
   const values = value.map((entry) => validateRedirectUri(requiredString(entry, "redirect_uri", 2_048)));
+  if (applicationType === "web" && values.some((entry) => new URL(entry).protocol !== "https:")) {
+    throw new OAuthRequestError(
+      "invalid_client_metadata",
+      "Web clients must use HTTPS redirect URIs; loopback HTTP redirects require application_type native.",
+    );
+  }
   if (new Set(values).size !== values.length) {
     throw new OAuthRequestError("invalid_client_metadata", "redirect_uris cannot contain duplicates.");
   }
@@ -1290,11 +1611,15 @@ function validateRedirectUri(value: string): string {
   if (url.hash || url.username || url.password) {
     throw new OAuthRequestError("invalid_request", "Redirect URIs cannot contain fragments or user information.");
   }
-  const loopback = url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "localhost";
+  const loopback = isLoopbackHost(url.hostname);
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
     throw new OAuthRequestError("invalid_request", "Redirect URIs must use HTTPS or an HTTP loopback address.");
   }
   return url.href;
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "localhost";
 }
 
 function validateRegistrationSet(value: unknown, allowed: string[], name: string): void {
@@ -1387,6 +1712,20 @@ function positiveDuration(value: number, name: string): number {
   return value;
 }
 
+function boundedDuration(value: number, minimum: number, maximum: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new TypeError(`${name} must be from ${minimum} through ${maximum} milliseconds.`);
+  }
+  return value;
+}
+
+function refreshRotationMode(value: string): "adaptive" | "strict" {
+  if (value !== "adaptive" && value !== "strict") {
+    throw new TypeError('refreshTokenRotationMode must be "adaptive" or "strict".');
+  }
+  return value;
+}
+
 function positiveInteger(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${name} must be a positive integer.`);
   return value;
@@ -1408,6 +1747,64 @@ async function digest(value: string): Promise<string> {
   return base64url(new Uint8Array(bytes));
 }
 
+async function encryptRefreshRetry(
+  rawRefresh: string,
+  predecessorHash: string,
+  pair: PreparedTokenPair,
+): Promise<string> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt({
+    name: "AES-GCM",
+    iv,
+    additionalData: new TextEncoder().encode(`clank-refresh-retry-v1\0${predecessorHash}`),
+  }, await refreshRetryKey(rawRefresh), new TextEncoder().encode(JSON.stringify(pair)));
+  return `v1.${base64url(iv)}.${base64url(new Uint8Array(encrypted))}`;
+}
+
+async function decryptRefreshRetry(
+  rawRefresh: string,
+  predecessorHash: string,
+  envelope: string,
+): Promise<PreparedTokenPair> {
+  const parts = envelope.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1") throw new Error("Invalid refresh retry envelope.");
+  const decrypted = await crypto.subtle.decrypt({
+    name: "AES-GCM",
+    iv: fromBase64url(parts[1]!),
+    additionalData: new TextEncoder().encode(`clank-refresh-retry-v1\0${predecessorHash}`),
+  }, await refreshRetryKey(rawRefresh), fromBase64url(parts[2]!));
+  return preparedTokenPair(JSON.parse(new TextDecoder().decode(decrypted)));
+}
+
+async function refreshRetryKey(rawRefresh: string): Promise<CryptoKey> {
+  const material = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`clank-refresh-retry-key-v1\0${rawRefresh}`),
+  );
+  return crypto.subtle.importKey("raw", material, "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+
+function preparedTokenPair(value: unknown): PreparedTokenPair {
+  if (!isRecord(value)) throw new Error("Invalid refresh retry payload.");
+  const strings = [
+    "accessToken",
+    "accessHash",
+    "refreshToken",
+    "refreshHash",
+    "userId",
+    "clientId",
+    "scope",
+    "resource",
+    "familyId",
+  ] as const;
+  const numbers = ["createdAt", "accessExpiresAt", "refreshExpiresAt"] as const;
+  if (
+    strings.some((key) => typeof value[key] !== "string")
+    || numbers.some((key) => !Number.isSafeInteger(value[key]))
+  ) throw new Error("Invalid refresh retry payload.");
+  return value as unknown as PreparedTokenPair;
+}
+
 async function pkceChallenge(verifier: string): Promise<string> {
   return digest(verifier);
 }
@@ -1416,6 +1813,13 @@ function base64url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+function fromBase64url(value: string): Uint8Array {
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) throw new Error("Invalid base64url value.");
+  const padding = "=".repeat((4 - value.length % 4) % 4);
+  const binary = atob(value.replaceAll("-", "+").replaceAll("_", "/") + padding);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -1466,6 +1870,22 @@ function oauthHeaders(extra?: HeadersInit): Headers {
   headers.set("pragma", "no-cache");
   headers.set("x-content-type-options", "nosniff");
   return headers;
+}
+
+function oauthMachineResponse(response: Response): Response {
+  response.headers.set("access-control-allow-origin", "*");
+  return response;
+}
+
+function oauthMachinePreflight(): Response {
+  return oauthMachineResponse(new Response(null, {
+    status: 204,
+    headers: oauthHeaders({
+      "access-control-allow-headers": "accept, authorization, content-type",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-max-age": "600",
+    }),
+  }));
 }
 
 function methodNotAllowed(allow: string): Response {

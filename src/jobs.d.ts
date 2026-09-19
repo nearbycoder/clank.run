@@ -1,3 +1,4 @@
+import type { Tracer } from "./observability.js";
 import { type InferSchema, type InferSchemaShape, type Schema, type SchemaShape } from "./ai.js";
 import {
     type DatabaseSchema,
@@ -430,6 +431,7 @@ export interface RunJobProcessOptions {
 }
 
 export interface OpenJobsOptions {
+    tracer?: Tracer;
     now?: () => number;
     random?: () => number;
     onError?: (error: unknown, job?: StoredJob) => void;

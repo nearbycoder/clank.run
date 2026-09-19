@@ -1,6 +1,12 @@
+export { renderAgentActivity } from "./agent-activity.js";
+export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
+export * from "./offline.js";
+export type { MutationReceiptOptions } from "./mutation-receipts.js";
+export * from "./notifications.js";
 /// <reference path="./jsx.d.ts" />
 
 export * from "./core.js";
+export * from "./task.js";
 export * from "./dom.js";
 export * from "./router.js";
 export * from "./ai.js";
@@ -8,12 +14,17 @@ export * from "./agent-contract.js";
 export * from "./journey.js";
 export * from "./collaboration.js";
 export * from "./analytics.js";
+export * from "./governance.js";
+export * from "./lifecycle.js";
+export * from "./tooling.js";
 export * from "./mcp.js";
+export * from "./mcp-app.js";
 export * from "./blueprint.js";
 export * from "./blueprint-registry.js";
 export * from "./webauthn.js";
 export * from "./services.js";
 export * from "./object-storage.js";
+export * from "./buckets.js";
 export * from "./observability.js";
 export * from "./recovery.js";
 export * from "./orchestration.js";
@@ -37,3 +48,9 @@ export * from "./durable-objects.js";
 export * from "./platform.js";
 export * from "./ssr.js";
 export * from "./node.js";
+
+export * from "./devtools.js";
+
+export * from "./trace-timeline.js";
+export * from "./preview-fixtures.js";
+export * from "./rehearsal.js";

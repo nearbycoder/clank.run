@@ -72,6 +72,9 @@ const PROJECT_TEMPLATES = Object.freeze([
       "deployment",
     ]),
   }),
+  Object.freeze({ id: "approval-queue", title: "Approval queue", summary: "Authenticated workflow with typed UI, MCP actions, fixtures, and business-rule tests.", recommended: false, features: Object.freeze(["authentication", "ssr", "hydration", "live-sync", "mcp-oauth", "ui-mcp-parity", "deterministic-fixture", "app-contract-tests", "migrations", "deployment"]) }),
+  Object.freeze({ id: "customer-portal", title: "Customer portal", summary: "Authenticated workflow with typed UI, MCP actions, fixtures, and business-rule tests.", recommended: false, features: Object.freeze(["authentication", "ssr", "hydration", "live-sync", "mcp-oauth", "ui-mcp-parity", "deterministic-fixture", "app-contract-tests", "migrations", "deployment"]) }),
+  Object.freeze({ id: "booking", title: "Booking", summary: "Authenticated workflow with typed UI, MCP actions, fixtures, and business-rule tests.", recommended: false, features: Object.freeze(["authentication", "ssr", "hydration", "live-sync", "mcp-oauth", "ui-mcp-parity", "deterministic-fixture", "app-contract-tests", "migrations", "deployment"]) }),
 ]);
 const COMMANDS = Object.freeze({
   templates: {
@@ -79,7 +82,7 @@ const COMMANDS = Object.freeze({
     summary: "List built-in app starters and their exact capabilities.",
   },
   create: {
-    usage: "clank create <directory> [--template <auth-todo|minimal>] [--name <name>] [--framework <version|local|spec>] [--json]",
+    usage: "clank create <directory> [--template <auth-todo|minimal|approval-queue|customer-portal|booking>] [--name <name>] [--framework <version|local|spec>] [--json]",
     summary: "Create a deploy-ready full-stack app from a built-in template.",
   },
   compose: {
@@ -121,6 +124,10 @@ const COMMANDS = Object.freeze({
   journey: {
     usage: "clank journey [journey.json|journey.mjs] [--url <app-url>] [--browser <executable> | --cdp <loopback-url>] [--headed] [--output <report.json>] [--json]",
     summary: "Replay agent-authored semantic acceptance journeys in an isolated real browser.",
+  },
+  workbench: {
+    usage: "clank workbench <resilience|compatibility|performance|policy|flag|revision|parity|schema|capacity|upgrade|provenance|promotion|rollout|export|sanitize|provider|contract|visual> [arguments] [--json]",
+    summary: "Inspect, test, govern, promote, and port applications through data-only developer tools.",
   },
   doctor: {
     usage: "clank doctor [directory] [--json]",
@@ -171,7 +178,7 @@ const COMMANDS = Object.freeze({
     summary: "Build, package, migrate, and atomically deploy in one command.",
   },
   preview: {
-    usage: "clank preview <deploy|list|remove|github> [name] [directory] [--ttl <hours>] [--data <empty|sanitized>] [--json]",
+    usage: "clank preview <deploy|list|remove|github> [name] [directory] [--ttl <hours>] [--data <empty|sanitized>] [--fixture <database.sqlite>] [--json]",
     summary: "Deploy isolated previews with empty or policy-sanitized data, manually or through GitHub OIDC.",
   },
   status: {
@@ -195,7 +202,7 @@ const COMMANDS = Object.freeze({
     summary: "Create, verify, list, or restore encrypted backups.",
   },
   secrets: {
-    usage: "clank secrets <list|set|delete>",
+    usage: "clank secrets <list|set|delete|rotations|stage|validate|activate|rollback>",
     summary: "Manage write-only runtime secrets.",
   },
   migrate: {
@@ -233,6 +240,7 @@ const VALUE_OPTIONS = Object.freeze({
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "placement", "output"],
   preview: [
+    "fixture",
     "ttl",
     "data",
     "confirm",
@@ -523,6 +531,7 @@ Build and agents:
   clank jobs cancel <job-id>           Request cancellation
   clank jobs retry <job-id>            Retry a dead or cancelled job
   clank journey [journey.json]          Replay semantic acceptance flows in real Chrome
+  clank workbench help                  Open policy, revision, schema, parity, release, and provider tools
 
 Platform:
   clank login                          Authorize with https://clank.run
@@ -566,6 +575,11 @@ Platform:
   clank backup restore <backup-id> --confirm="restore-backup <slug> <id>"
   clank secrets list
   clank secrets set NAME               Read a secret value from stdin
+  clank secrets rotations              Inspect versions and running consumers
+  clank secrets stage NAME             Stage a value from stdin
+  clank secrets validate <rotation-id>  Validate the candidate
+  clank secrets activate <rotation-id>  Activate for the next launch
+  clank secrets rollback <rotation-id>  Restore the previous secret
   clank secrets delete NAME
   clank migrate plan [directory]       Inspect local SQLite migration state
   clank migrate apply [directory]      Apply local migrations
@@ -1932,6 +1946,7 @@ async function deploy(args) {
     frameworkRoot: packageRoot,
     frameworkVersion: packageJson.version,
     nodeVersion: process.version,
+    sourceRevision: deploymentSourceRevision(),
   });
   const digest = await deploymentDigest(artifact);
   const packageMs = performance.now() - packageStartedAt;
@@ -2111,6 +2126,7 @@ async function previewCommand(args) {
       frameworkRoot: packageRoot,
       frameworkVersion: packageJson.version,
       nodeVersion: process.version,
+      sourceRevision: deploymentSourceRevision(),
     });
     const digest = await deploymentDigest(artifact);
     const packageMs = performance.now() - packageStartedAt;
@@ -2125,6 +2141,18 @@ async function previewCommand(args) {
     const dataMode = option(args, "data") ?? "empty";
     if (!["empty", "sanitized"].includes(dataMode)) {
       throw new CliError("--data must be empty or sanitized.");
+    }
+    const fixturePath = option(args, "fixture");
+    let fixtureBytes;
+    let fixtureDigest;
+    if (fixturePath !== undefined) {
+      if (dataMode !== "empty") throw new CliError("Choose either --fixture or --data=sanitized.");
+      const file = resolve(root, fixturePath);
+      const info = await lstat(file);
+      if (!info.isFile() || info.isSymbolicLink() || info.size > 32 * 1024 * 1024) throw new CliError("Fixture must be a regular SQLite file of at most 32 MiB.");
+      fixtureBytes = await readFile(file);
+      if (fixtureBytes.byteLength > 32 * 1024 * 1024 || fixtureBytes.subarray(0, 16).toString() !== "SQLite format 3\0") throw new CliError("Fixture is not a bounded SQLite database.");
+      fixtureDigest = await deploymentDigest(fixtureBytes);
     }
     const created = await platformRequest(
       profile.server,
@@ -2186,6 +2214,16 @@ async function previewCommand(args) {
         },
       );
       data = branched.data;
+    }
+    if (fixtureBytes) {
+      if (!json) console.log("Seeding the isolated preview from the synthetic fixture…");
+      const seeded = await fetchPlatformJson(`${profile.server}/api/projects/${encodeURIComponent(link.projectId)}/previews/${encodeURIComponent(preview.id)}/fixture`, {
+        method: "POST", headers: { authorization: `Bearer ${profile.token}`,
+          "content-type": "application/vnd.clank.preview-fixture+sqlite", "x-clank-content-sha256": fixtureDigest,
+          "x-clank-fixture-confirmation": `seed-preview ${preview.previewName}` }, body: fixtureBytes,
+      }, PLATFORM_DEPLOY_TIMEOUT_MS);
+      if (!seeded.response.ok) throw ApiError.from(seeded.payload, seeded.response.status);
+      data = seeded.payload.data;
     }
     const result = {
       protocol: "clank-preview-result/1",
@@ -3006,6 +3044,22 @@ async function secrets(args) {
   const subcommand = args.shift();
   const { profile, link } = await linkedContext(process.cwd());
   const path = `/api/projects/${link.projectId}/secrets`;
+  if (subcommand === "rotations") {
+    const payload = await platformRequest(profile.server, `${path}/rotations`, { token: profile.token });
+    console.log(JSON.stringify(payload, null, 2)); return;
+  }
+  if (subcommand === "stage") {
+    const name = positionals(args)[0]; if (!name) throw new CliError("Usage: clank secrets stage NAME (value is read from stdin)");
+    const value = option(args, "from-env") ? process.env[option(args, "from-env")] : await readStandardInput();
+    if (value === undefined) throw new CliError("Secret value was not provided.");
+    const result = await platformRequest(profile.server, `${path}/rotations`, { method: "POST", token: profile.token, body: { name, value: value.replace(/\r?\n$/, "") } });
+    console.log(JSON.stringify(result, null, 2)); return;
+  }
+  if (["validate", "activate", "rollback"].includes(subcommand)) {
+    const id = positionals(args)[0]; if (!id || !/^[a-f0-9-]{36}$/.test(id)) throw new CliError(`Usage: clank secrets ${subcommand} <rotation-id>`);
+    const result = await platformRequest(profile.server, `${path}/rotations/${id}/${subcommand}`, { method: "POST", token: profile.token, body: {} });
+    console.log(JSON.stringify(result, null, 2)); return;
+  }
   if (subcommand === "list") {
     const payload = await platformRequest(profile.server, path, { token: profile.token });
     for (const secret of payload.secrets) console.log(`${secret.name}  ${new Date(secret.updatedAt).toISOString()}`);
@@ -3036,7 +3090,7 @@ async function secrets(args) {
     console.log(`Deleted ${name}.`);
     return;
   }
-  throw new CliError("Usage: clank secrets <list|set|delete>");
+  throw new CliError("Usage: clank secrets <list|set|delete|rotations|stage|validate|activate|rollback>");
 }
 
 async function migrate(args) {
@@ -3643,6 +3697,13 @@ function markdownText(value) {
 
 function randomToken() {
   return crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
+}
+
+function deploymentSourceRevision() {
+  return process.env.CLANK_SOURCE_REVISION
+    ?? process.env.GITHUB_SHA
+    ?? process.env.RAILWAY_GIT_COMMIT_SHA
+    ?? "unknown";
 }
 
 function roundedMilliseconds(value) {

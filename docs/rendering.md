@@ -199,6 +199,11 @@ Only structural `HydrationMismatch` failures trigger that fallback. Errors from 
 
 Event handlers and `onMount` callbacks do not run during SSR. They attach or run during hydration. Use `serializeState()`/`renderDocument({ state })` rather than interpolating JSON into scripts; it escapes HTML- and script-significant characters.
 
+SSR components own their computed values, effects, resources, and `onCleanup` callbacks until
+their output (including asynchronous children) finishes rendering. Clank disposes that scope
+on success or failure, so completed requests do not stay subscribed to shared server state.
+Concurrent renders have separate scopes; finishing one does not dispose another's values.
+
 For a strict Content Security Policy, generate a fresh nonce per response and pass it to both the policy and document renderer:
 
 ```tsx

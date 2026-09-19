@@ -604,6 +604,124 @@ test("managed ingress drains requests already assigned to a replaced upstream", 
   assert.equal(await newResponse.text(), "new");
 });
 
+test("managed ingress prepares one inactive route for concurrent requests and revalidates it", async () => {
+  let active = false;
+  let preparations = 0;
+  let releasePreparation;
+  const preparationGate = new Promise((resolve) => { releasePreparation = resolve; });
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_sleeping",
+      projectId: "project_sleeping",
+      hosts: ["sleeping.example.com"],
+      upstream: "http://127.0.0.1:4520",
+      active,
+    }],
+    prepareRoute: async (route) => {
+      preparations++;
+      assert.equal(route.id, "route_sleeping");
+      await preparationGate;
+      active = true;
+    },
+    fetch: async () => new Response("awake"),
+  });
+
+  const first = ingress.handle(new Request("https://sleeping.example.com/one"));
+  const second = ingress.handle(new Request("https://sleeping.example.com/two"));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(preparations, 1);
+  releasePreparation();
+  const responses = await Promise.all([first, second]);
+  assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+  assert.deepEqual(await Promise.all(responses.map((response) => response.text())), ["awake", "awake"]);
+});
+
+test("managed ingress rejects untrusted requests before waking an inactive route", async () => {
+  let preparations = 0;
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_guarded_sleeping",
+      projectId: "project_guarded_sleeping",
+      hosts: ["guarded-sleeping.example.com"],
+      upstream: "http://127.0.0.1:4521",
+      active: false,
+    }],
+    maxBodyBytes: 4,
+    admitRequest: () => ({
+      allowed: false,
+      code: "PROJECT_RATE_LIMIT_REACHED",
+      message: "Request capacity is exhausted.",
+      retryAfterSeconds: 10,
+    }),
+    prepareRoute: async () => { preparations++; },
+    fetch: async () => new Response("must not run"),
+  });
+
+  const oversized = await ingress.handle(new Request("https://guarded-sleeping.example.com/", {
+    method: "POST",
+    body: "12345",
+  }));
+  assert.equal(oversized.status, 413);
+  const denied = await ingress.handle(new Request("https://guarded-sleeping.example.com/"));
+  assert.equal(denied.status, 429);
+  assert.equal(preparations, 0);
+});
+
+test("managed ingress returns a fixed error when route preparation fails or stays inactive", async () => {
+  let failure = true;
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_failed_wake",
+      projectId: "project_failed_wake",
+      hosts: ["failed-wake.example.com"],
+      upstream: "http://127.0.0.1:4522",
+      active: false,
+    }],
+    prepareRoute: async () => {
+      if (failure) throw new Error("private process launch details");
+    },
+    fetch: async () => new Response("must not run"),
+  });
+
+  const failed = await ingress.handle(new Request("https://failed-wake.example.com/"));
+  assert.equal(failed.status, 503);
+  assert.equal(failed.headers.get("retry-after"), "1");
+  const failedBody = await failed.text();
+  assert.equal(JSON.parse(failedBody).error.code, "APPLICATION_UNAVAILABLE");
+  assert.doesNotMatch(failedBody, /private process launch details/);
+
+  failure = false;
+  const inactive = await ingress.handle(new Request("https://failed-wake.example.com/"));
+  assert.equal(inactive.status, 503);
+  assert.equal((await inactive.json()).error.code, "APPLICATION_UNAVAILABLE");
+});
+
+test("managed ingress reports active response streams", async () => {
+  let bodyController;
+  const upstream = "http://127.0.0.1:4523";
+  const ingress = createManagedIngress({
+    routes: () => [{
+      id: "route_activity",
+      projectId: "project_activity",
+      hosts: ["activity.example.com"],
+      upstream,
+      active: true,
+    }],
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) {
+        bodyController = controller;
+        controller.enqueue(new TextEncoder().encode("active"));
+      },
+    })),
+  });
+
+  const response = await ingress.handle(new Request("https://activity.example.com/"));
+  assert.equal(ingress.activeRequests(upstream), 1);
+  bodyController.close();
+  assert.equal(await response.text(), "active");
+  assert.equal(ingress.activeRequests(upstream), 0);
+});
+
 test("custom-domain routing accepts the configured CNAME or edge addresses and reports mismatches", async () => {
   const records = new Map([
     ["tasks.customer.test:CNAME", ["edge.clank.test."]],

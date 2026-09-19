@@ -13,6 +13,7 @@ export interface SpanEvent {
     attributes: Attributes;
 }
 export interface SpanData {
+  requestId?: string;
     traceId: string;
     spanId: string;
     parentSpanId?: string;

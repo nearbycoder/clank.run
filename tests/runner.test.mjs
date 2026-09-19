@@ -78,6 +78,13 @@ async function waitFor(check, message, timeoutMs = 3_000) {
   assert.fail(message);
 }
 
+async function waitForAbort(signal) {
+  if (signal.aborted) return;
+  await new Promise((resolve) => {
+    signal.addEventListener("abort", resolve, { once: true });
+  });
+}
+
 test("authenticated deployment nodes coordinate placement and fenced operations over HTTP", async () => {
   const test = await fixture();
   try {
@@ -1153,9 +1160,7 @@ test("deployment agent abandons a lost lease without completing or failing stale
       pollIntervalMs: 10,
       heartbeatIntervalMs: 100,
       async execute(_operation, context) {
-        await new Promise((resolve) => {
-          context.signal.addEventListener("abort", resolve, { once: true });
-        });
+        await waitForAbort(context.signal);
         aborted = true;
         throw context.signal.reason;
       },
@@ -1288,9 +1293,7 @@ test("deployment agent shutdown drains, renews during grace, and aborts at its d
       shutdownTimeoutMs: 100,
       async execute(_operation, context) {
         started = true;
-        await new Promise((resolve) => {
-          context.signal.addEventListener("abort", resolve, { once: true });
-        });
+        await waitForAbort(context.signal);
         aborted = true;
         return null;
       },

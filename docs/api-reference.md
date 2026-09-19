@@ -1,5 +1,14 @@
 # API reference
 
+## Governance, lifecycle, and tooling
+
+Use `@clank.run/framework/governance` for policy decisions, expiring agent approvals,
+entitlements, and feature flags. Use `@clank.run/framework/lifecycle` for revision replay,
+provenance, promotions, rollout guardrails, sanitized clones, portable exports, and capacity.
+Use `@clank.run/framework/tooling` for App Studio reviews, visual regression, parity, schema
+planning, contract tests, upgrades, and the agent playground. Provider adapters can call
+`runDeploymentProviderConformance()` from `@clank.run/framework/provider`.
+
 This is a compact index of the primary public surfaces. The shipped `.d.ts` files are the
 exhaustive symbol contract; focused guides contain behavioral details and examples.
 
@@ -21,6 +30,35 @@ exhaustive symbol contract; focused guides contain behavioral details and exampl
 - `resource(loader, options?)`: async state with abort and stale-result protection.
 - `consumeStream(iterable, initial, reduce?)`: folds an async iterable into a signal.
 - `SIGNAL`, `STORE`: global protocol symbols for integrations.
+
+## Typed Task runtime
+
+The opt-in runtime is available from the package root or `@clank.run/framework/task`. See
+[Typed tasks, failures, and services](task.md) for the complete execution, cleanup, cancellation,
+and security contract.
+
+- `Task<A, E, R>`: lazy computation with success `A`, typed failure `E`, and service requirements
+  `R`. Composition includes `map`, `flatMap`, `tap`, `as`, `mapError`, `catchAll`, `catchCause`,
+  `ensuring`, `retry`, `timeout`, `provide`, `withSpan`, and generator yielding.
+- Constructors: `Task.succeed`, `Task.fail`, `Task.failCause`, `Task.sync`, `Task.suspend`, `Task.try`,
+  `Task.tryPromise`, `Task.fromPromise`, and `Task.gen`.
+- Execution: `Task.runExit`, `Task.runPromise`, `TaskRuntime`, and `createTaskRuntime`.
+  `runPromise` rejects with inspectable `TaskExecutionError`; `runExit` returns every outcome as
+  data.
+- Outcomes: `Exit`, `Cause`, and `Result`. Cause variants distinguish typed `Failure`, unexpected
+  `Defect`, `Interrupted`, `Sequential`, and `Parallel` outcomes.
+- Services: `service<T>(name)`, nominal `Service<T>`, and memoized `Layer`. `Layer.succeed`,
+  `Layer.effect`, `Layer.fromValue`, `merge`, and `task.provide` compose requirements and scoped
+  implementations.
+- Resources: `Task.acquireRelease`, `Task.addFinalizer`, `Task.scoped`, and `TaskScope`. Finalizers
+  run exactly once in LIFO order and cleanup causes are retained.
+- Scheduling: `Schedule.recurs`, `Schedule.spaced`, `Schedule.exponential`, `while`, `mapDelay`,
+  `intersect`, and `union`.
+- Concurrency: `Task.all`, `Task.race`, `Task.fork`, and `Fiber`. Children own scopes, propagate
+  interruption, and cannot outlive an enclosing runtime scope.
+- Time: `realClock`, injectable `Clock`, and deterministic `TestClock`.
+- Diagnostics: `TaskTracer`, `withSpan`, `TimeoutError`, and `MissingServiceError`. Clank's
+  observability tracer can be passed directly as the runtime tracer.
 
 ## DOM
 
@@ -317,6 +355,21 @@ types.
 - `openPlatform({ backups: { objects: { namespace, store } } })`: gives every project an isolated
   authenticated backup catalog and binds the repository identity/root in the control database.
 
+## Managed buckets
+
+- `defineBucket(input)`: freezes visibility, ownership, browser access, MIME, image, cache,
+  per-object, per-owner, and total quota policy.
+- `openBucketManager(options)`: opens the SQLite catalog over any `ObjectStore`, with project-wide
+  caps, signed capabilities, resumable uploads, verified generations, listing, and cleanup.
+- `createBucketClient(name, options)`: authenticated browser listing, metadata, resumable upload,
+  deletion, and private read intents without object-provider credentials.
+- `createBucketMcpTools(manager, options)`: current owner-scoped read/write tools for each declared
+  bucket and image variant. `openBackend({ buckets })` installs these automatically.
+- `inspectBucketImage(bytes, contentType?)`: signature and dimension inspection for PNG, JPEG,
+  GIF, WebP, and AVIF.
+- Types: `BucketDefinition`, `BucketManager`, `BucketRuntime`, `BucketObject`, `BucketUsage`,
+  `BucketClient`, `BucketUploadIntent`, `BucketReadIntent`, and `BucketImageTransformer`.
+
 ## Remote deployment coordination
 
 - `createDeploymentCoordinatorHandler(orchestrator, options)`: optional versioned HTTP boundary for
@@ -486,17 +539,41 @@ types.
 ## MCP
 
 - `createMcpServer(options)`: zero-dependency MCP Streamable HTTP server for custom typed tools.
+- `defineMcpApp(definition)`: validate and freeze one `ui://` HTML resource, CSP declaration,
+  permission request, dedicated domain, and border preference.
+- `createMcpAppDocument(options)`: build a complete HTML5 resource with Clank's dependency-free
+  iframe bridge inlined; no CDN or separate view bundle is required.
+- `createMcpAppClient(options, environment?)`: connect a view to its host over JSON-RPC
+  `postMessage`, then call tools, read resources, receive tool results and host context, request
+  display modes, and handle teardown.
+- `applyMcpAppTheme(context, root?)`: apply negotiated light/dark state and safe MCP host CSS
+  variables to a view.
+- `mcpAppClientScript()`: standalone source used by `createMcpAppDocument()` and available for
+  custom HTML generation.
+- `portableMcpToolNames(names)`: deterministically converts logical dotted or hyphenated action
+  paths into unique ASCII letter/number/underscore identifiers capped at 64 characters. Ordinary
+  separators become `_`; overlong or colliding names receive a stable digest suffix.
 - `McpServerOptions.metadata`: optional bounded immutable contract data published inside the
   authenticated `clank://actions` resource; framework workflow graphs use this channel.
 - `McpServer.revision`: deterministic identity of server metadata, contract metadata, and the
   complete visible tool contract.
-- `McpServer.notifyToolsChanged()`: sends `notifications/tools/list_changed` to initialized
-  stateful clients; `close()` terminates bounded sessions and streams.
-- `MCP_PROTOCOL_VERSION`: current stable protocol revision (`2025-11-25`).
-- `MCP_SUPPORTED_PROTOCOL_VERSIONS`: compatible stable revisions accepted by the transport.
+- `McpServer.notifyToolsChanged()`: sends `notifications/tools/list_changed` to initialized legacy
+  clients; `close()` terminates compatibility sessions and streams. Stateless `2026-07-28`
+  clients use zero-TTL discovery instead.
+- `MCP_PROTOCOL_VERSION`: current stable protocol revision (`2026-07-28`).
+- `MCP_APPS_PROTOCOL_VERSION`: stable MCP Apps extension revision (`2026-01-26`).
+- `MCP_APP_MIME_TYPE`: exact HTML view MIME type (`text/html;profile=mcp-app`).
+- `MCP_APPS_EXTENSION_ID`: negotiated UI extension identifier
+  (`io.modelcontextprotocol/ui`).
+- `MCP_SUPPORTED_PROTOCOL_VERSIONS`: current stateless revision plus compatible legacy revisions
+  accepted by the dual-era transport.
 - `McpToolError`: public, redacted application-level tool failure.
+- `McpTool.actionPath`: optional original logical path published as `clank/actionPath` metadata when
+  the public tool name is normalized.
 - Types: `McpServer`, `McpServerOptions`, `McpTool`, `McpToolAnnotations`,
-  `McpAuthentication`, and `McpScope`.
+  `McpAuthentication`, `McpScope`, `McpAppDefinition`, `McpToolApp`, `McpAppCsp`,
+  `McpAppPermissions`, `McpAppClient`, `McpAppHostContext`, `McpAppHostCapabilities`,
+  `McpAppContentModalities`, and `McpAppDocumentOptions`.
 - `defineBackend()` functions accept `description` and `agent` metadata.
 - `openBackend()` exposes eligible functions at `/__clank/mcp` by default and installs OAuth
   discovery automatically when the backend uses Clank auth. `BackendRuntime.contractRevision`
@@ -518,8 +595,9 @@ types.
 - Types: `AgentActionTarget`, `AgentActionControl`, `AgentBackendManifest`,
   `AgentActionParityOptions`, `AgentActionParityReport`, and `VerifyAgentActionParityOptions`.
 
-See [Agent protocol](agent-protocol.md) for connection, OAuth, scope, discovery, and security
-details, and [Agent access](agent-access.md) for grant inspection, reduction, and revocation.
+See [Interactive MCP Apps](mcp-apps.md) for embedded views, [Agent protocol](agent-protocol.md) for
+connection, OAuth, scope, discovery, and security details, and [Agent access](agent-access.md) for
+grant inspection, reduction, and revocation.
 
 ## Router
 
@@ -673,5 +751,5 @@ alarm-process, authorization, backup, and placement guarantees.
 ## Node
 
 - `serve(app, options?)`: bounded Fetch-standard Node HTTP server with streaming, timeouts, Host allowlists, proxy controls, and redacted errors.
-- `staticFiles(root, options?)`: traversal/symlink-aware static GET/HEAD handler with dotfile policy.
+- `staticFiles(root, options?)`: traversal/symlink-aware static GET/HEAD handler with dotfile policy and weak ETag revalidation through `If-None-Match`.
 - Types: `FetchApplication`, `ServeOptions`, `ServerHandle`, `StaticFilesOptions`.

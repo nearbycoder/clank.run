@@ -37,12 +37,11 @@ Metadata includes the logical key, size, SHA-256, normalized media type, creatio
 time. Logical keys use bounded portable segments; they are never interpolated as raw filesystem
 paths or unsigned URLs. `put` snapshots a mutable input before returning.
 
-The current contract deliberately buffers one bounded object. It is intended for release archives,
-bounded encrypted-backup chunks, and ordinary application files up to 1 GiB—not multi-gigabyte
-media ingest as one object. The backup manager splits a large encrypted envelope into independently
-verified chunks before it crosses this boundary.
-Multipart upload, public bucket administration, CDN policy, browser presigning, and lifecycle rules
-remain explicit provider integrations.
+The low-level contract deliberately buffers one bounded object. It is intended for release archives,
+bounded encrypted-backup chunks, and storage adapters—not multi-gigabyte media ingest as one object.
+Application code normally uses [managed buckets](buckets.md), which add owner isolation,
+metadata listing, quotas, signed browser access, resumable chunks, public/private delivery, image
+validation, declared variants, and MCP tools over this provider-neutral boundary.
 
 ## Atomic local storage
 

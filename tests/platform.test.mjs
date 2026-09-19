@@ -13,6 +13,9 @@ import {
   defineDatabase,
   DeploymentCoordinatorError,
   deploymentDigest,
+  defineBucket,
+  openBucketManager,
+  openLocalObjectStore,
   openDeploymentOrchestrator,
   openProviderDeploymentAgent,
   openPlatform,
@@ -1183,6 +1186,195 @@ test("platform upgrades legacy quota storage and prunes usage at startup", async
   }
 });
 
+test("preview fixtures replace only the named preview and reject invalid or incompatible databases", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-preview-seeding-"));
+  const dataDirectory = join(root, "platform");
+  const platform = await openPlatform({ dataDirectory, publicUrl: "http://127.0.0.1:4200", signup: true,
+    appPortStart: 4960, appPortEnd: 4965, backups: { intervalMs: false } });
+  try {
+    const owner = await authorizeCli(platform, "fixture-owner@example.com");
+    const other = await authorizeCli(platform, "fixture-other@example.com");
+    const parent = (await payload(platform, jsonRequest("/api/projects", { method: "POST", token: owner.accessToken,
+      body: { name: "Fixture parent", slug: "fixture-parent" } }), 201)).project;
+    const preview = (await payload(platform, jsonRequest(`/api/projects/${parent.id}/previews`, {
+      method: "POST", token: owner.accessToken, body: { name: "seeded" } }), 201)).preview;
+    const migrations = [["0001_items.sql", "CREATE TABLE items(value TEXT NOT NULL);\n"]];
+    const artifact = await appArtifact(join(root, "app"), "healthy", migrations);
+    assert.equal((await deploy(platform, parent.id, owner.accessToken, artifact, "fixture-parent-release")).response.status, 201);
+    assert.equal((await deploy(platform, preview.id, owner.accessToken, artifact, "fixture-preview-release")).response.status, 201);
+    const fixtureFile = join(root, "fixture.sqlite");
+    const db = new DatabaseSync(fixtureFile);
+    db.exec(`CREATE TABLE clank_preview_fixture(protocol TEXT, users INTEGER, records INTEGER);
+      INSERT INTO clank_preview_fixture VALUES ('clank-preview-fixture/1', 0, 0);`);
+    db.close();
+    let bytes = await readFile(fixtureFile);
+    const seed = async (target = preview.id, token = owner.accessToken, digest) => platform.handle(new Request(
+      `http://127.0.0.1:4200/api/projects/${parent.id}/previews/${target}/fixture`, {
+        method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/vnd.clank.preview-fixture+sqlite",
+          "x-clank-fixture-confirmation": "seed-preview seeded", "x-clank-content-sha256": digest ?? await deploymentDigest(bytes) }, body: bytes,
+      }));
+    assert.equal((await seed(preview.id, owner.accessToken, "wrong")).status, 422);
+    assert.ok([403, 404].includes((await seed(preview.id, other.accessToken)).status));
+    assert.equal((await seed(parent.id)).status, 404, "a production project cannot be the fixture target");
+    for (const [suffix, method] of [["/data", "POST"], ["", "DELETE"]]) {
+      const response = await platform.handle(jsonRequest(`/api/projects/${parent.id}/previews/${parent.id}${suffix}`, {
+        method, token: owner.accessToken, body: { mode: "sanitized", confirmation: "irrelevant", acknowledgeDataLoss: true },
+      }));
+      assert.equal(response.status, 404, "parent-as-preview is rejected before acquiring nested locks");
+    }
+    const applied = await seed();
+    assert.equal(applied.status, 200, await applied.clone().text());
+    assert.equal((await applied.json()).data.mode, "fixture");
+    const previewFile = join(dataDirectory, "projects", preview.id, "data", "app.sqlite");
+    const seeded = new DatabaseSync(previewFile);
+    seeded.exec("INSERT INTO items VALUES ('preview-only edit')");
+    seeded.close();
+    const original = new DatabaseSync(join(dataDirectory, "projects", parent.id, "data", "app.sqlite"));
+    assert.equal(original.prepare("SELECT count(*) AS n FROM items").get().n, 0);
+    original.close();
+    const previews = await payload(platform, jsonRequest(`/api/projects/${parent.id}/previews`, { token: owner.accessToken }));
+    assert.equal(previews.previews[0].dataBranch.mode, "fixture");
+    const incompatible = new DatabaseSync(fixtureFile);
+    incompatible.exec("CREATE TABLE items(incompatible INTEGER)");
+    incompatible.close();
+    bytes = await readFile(fixtureFile);
+    assert.equal((await seed()).status, 422, "incompatible migrations cannot replace a healthy preview");
+    const retained = new DatabaseSync(previewFile);
+    assert.equal(retained.prepare("SELECT value FROM items").get().value, "preview-only edit");
+    retained.close();
+    bytes = new TextEncoder().encode("not a database");
+    assert.equal((await seed()).status, 422);
+  } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("deployment comparisons isolate activation windows, traffic confidence, and project access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-release-comparison-"));
+  const platform = await openPlatform({ dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200", signup: true, appPortStart: 4940, appPortEnd: 4945,
+    backups: { intervalMs: false } });
+  const control = new DatabaseSync(join(root, "platform", "control.sqlite"));
+  try {
+    const owner = await authorizeCli(platform, "comparison@example.com");
+    const stranger = await authorizeCli(platform, "comparison-stranger@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", { method: "POST",
+      token: owner.accessToken, body: { name: "Compare", slug: "compare" } }), 201);
+    const id = created.project.id;
+    const read = async () => (await payload(platform, jsonRequest(`/api/projects/${id}/releases`, { token: owner.accessToken }))).comparison;
+    assert.equal((await read()).status, "no-baseline");
+    for (let index = 0; index < 2; index++) {
+      const artifact = await appArtifact(join(root, `release-${index}`), String(index), []);
+      const result = await deploy(platform, id, owner.accessToken, artifact, `comparison-release-${index}`);
+      assert.equal(result.response.status, 201, JSON.stringify(result.body));
+    }
+    const activations = control.prepare("SELECT * FROM clank_platform_activations WHERE project_id = ? ORDER BY id").all(id);
+    assert.equal(activations.length, 2);
+    assert.ok(activations.every(row => row.deployment_duration_ms >= 0));
+    assert.equal((await read()).status, "collecting");
+    const now = Math.floor(Date.now() / 60000) * 60000;
+    const currentAt = now - 10 * 60000 + 1000;
+    control.prepare("UPDATE clank_platform_activations SET activated_at = ? WHERE id = ?").run(now - 40 * 60000, activations[0].id);
+    control.prepare("UPDATE clank_platform_activations SET activated_at = ? WHERE id = ?").run(currentAt, activations[1].id);
+    let report = await read();
+    assert.equal(report.status, "low-traffic");
+    assert.equal(report.change, null);
+    assert.equal(report.durationMs, 9 * 60000);
+    assert.equal(report.before.end, now - 10 * 60000);
+    assert.equal(report.after.start, now - 9 * 60000);
+    const insert = control.prepare(`INSERT INTO clank_platform_metrics
+      (project_id, bucket_started_at, request_count, error_count, duration_sum_ms,
+       latency_le_50, latency_le_100, latency_le_250, latency_le_500,
+       latency_le_1000, latency_le_2500, latency_le_5000, latency_inf)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    insert.run(id, report.before.start, 100, 1, 5000, 100, 100, 100, 100, 100, 100, 100, 100);
+    insert.run(id, report.after.start, 100, 2, 10000, 0, 100, 100, 100, 100, 100, 100, 100);
+    // Mixed activation minute must never enter either release window.
+    insert.run(id, report.before.end, 9000, 9000, 9000000, 0, 0, 0, 0, 9000, 9000, 9000, 9000);
+    report = await read();
+    assert.equal(report.status, "available");
+    assert.equal(report.before.summary.requests, 100);
+    assert.equal(report.after.summary.requests, 100);
+    assert.equal(report.before.summary.errorRate, 0.01);
+    assert.equal(report.after.summary.errorRate, 0.02);
+    assert.equal(report.before.summary.p95LatencyMs, 50);
+    assert.equal(report.after.summary.p95LatencyMs, 100);
+    assert.ok(report.change);
+    const denied = await platform.handle(jsonRequest(`/api/projects/${id}/releases`, { token: stranger.accessToken }));
+    assert.ok([403, 404].includes(denied.status));
+    // A nearby preceding activation shortens both windows equally.
+    control.prepare("UPDATE clank_platform_activations SET activated_at = ? WHERE id = ?")
+      .run(currentAt - 2 * 60000, activations[0].id);
+    assert.equal((await read()).durationMs, 60000);
+  } finally { control.close(); await platform.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("ingress batches domain reads across projects and observes routing changes immediately", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-route-queries-"));
+  const platform = await openPlatform({
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4930,
+    appPortEnd: 4935,
+    ingress: { enabled: true, baseDomain: "apps.example.test", domainRecheckIntervalMs: false },
+    backups: { intervalMs: false },
+  });
+  const writable = new DatabaseSync(join(root, "platform", "control.sqlite"));
+  try {
+    const owner = await authorizeCli(platform, "route-queries@example.com");
+    const projectIds = [];
+    for (let index = 0; index < 3; index++) {
+      const created = await payload(platform, jsonRequest("/api/projects", {
+        method: "POST", token: owner.accessToken,
+        body: { name: `Route ${index}`, slug: `route-${index}` },
+      }), 201);
+      projectIds.push(created.project.id);
+      const artifact = await appArtifact(join(root, `app-${index}`), `app-${index}`, []);
+      const result = await deploy(platform, created.project.id, owner.accessToken, artifact, `route-query-release-${index}`);
+      assert.equal(result.response.status, 201, JSON.stringify(result.body));
+      writable.prepare(`INSERT INTO clank_platform_domains
+        (id, project_id, hostname, record_name, record_value, status, routing_status, expires_at, created_at)
+        VALUES (?, ?, ?, 'test', 'test', 'verified', 'ready', ?, ?)`)
+        .run(`domain_${index}`, created.project.id, `route-${index}.customer.test`, Date.now() + 60_000, Date.now());
+    }
+    const reads = [];
+    const prototype = Object.getPrototypeOf(writable.prepare("SELECT 1"));
+    const all = prototype.all;
+    const spy = t.mock.method(prototype, "all", function (...args) {
+      reads.push(this.sourceSQL);
+      return all.apply(this, args);
+    });
+    try {
+      for (let index = 0; index < 3; index++) {
+        reads.length = 0;
+        const response = await platform.handle(new Request(`https://route-${index}.customer.test/`));
+        assert.equal(response.status, 200);
+        assert.equal(await response.text(), `app-${index}`);
+        assert.equal(reads.filter((sql) => /FROM clank_platform_domains\b/.test(sql)).length, 1,
+          "domain reads must stay constant as the project count grows");
+        assert.equal(reads.filter((sql) => /FROM clank_deployment_nodes\b/.test(sql)).length, 0,
+          "local projects must not load the provider fleet");
+      }
+      writable.prepare("UPDATE clank_platform_domains SET routing_status = 'error' WHERE id = 'domain_0'").run();
+      assert.equal((await platform.handle(new Request("https://route-0.customer.test/"))).status, 404);
+      writable.prepare("UPDATE clank_platform_domains SET status = 'pending' WHERE id = 'domain_1'").run();
+      assert.equal((await platform.handle(new Request("https://route-1.customer.test/"))).status, 404);
+      // Verified custom hosts and canonical hosts remain bound to their own project.
+      for (let index = 0; index < 3; index++) {
+        const response = await platform.handle(new Request(`https://route-${index}.apps.example.test/`));
+        assert.equal(await response.text(), `app-${index}`);
+      }
+      writable.prepare("UPDATE clank_platform_domains SET project_id = ? WHERE id = 'domain_2'").run(projectIds[0]);
+      assert.equal(await platform.handle(new Request("https://route-2.customer.test/")).then((response) => response.text()), "app-0");
+    } finally {
+      spy.mock.restore();
+    }
+  } finally {
+    writable.close();
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("code-only deployments keep serving until a healthy candidate takes traffic", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-rolling-"));
   const platform = await openPlatform({
@@ -1280,6 +1472,109 @@ test("code-only deployments keep serving until a healthy candidate takes traffic
   }
 });
 
+test("on-demand project runtimes sleep, wake on admitted traffic, and stay asleep across restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-sleep-"));
+  const options = {
+    dataDirectory: join(root, "platform"),
+    publicUrl: "http://127.0.0.1:4200",
+    signup: true,
+    appPortStart: 4580,
+    appPortEnd: 4582,
+    ingress: {
+      enabled: true,
+      baseDomain: "apps.example.test",
+      domainRecheckIntervalMs: false,
+    },
+    scaleToZero: {
+      idleTimeoutMs: 1_000,
+      sweepIntervalMs: 1_000,
+      drainTimeoutMs: 1_000,
+    },
+    backups: { intervalMs: false },
+  };
+  let platform = await openPlatform(options);
+  try {
+    const owner = await authorizeCli(platform, "sleeping@example.com");
+    const created = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST",
+      token: owner.accessToken,
+      body: { name: "Sleeping app", slug: "sleeping-app" },
+    }), 201);
+    const projectId = created.project.id;
+    assert.equal(created.project.runtimePolicy, "always_on");
+    const artifact = await appArtifact(
+      join(root, "source"),
+      "awake-response",
+      [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]],
+    );
+    const deployed = await deploy(platform, projectId, owner.accessToken, artifact, "sleep-release-0001");
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+
+    const policy = await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { policy: "on_demand", idleTimeoutMs: 1_000 },
+    }));
+    assert.equal(policy.project.runtimePolicy, "on_demand");
+
+    let detail;
+    const sleepDeadline = Date.now() + 5_000;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      detail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+        token: owner.accessToken,
+      }));
+    } while (detail.runtime.state !== "sleeping" && Date.now() < sleepDeadline);
+    assert.equal(detail.runtime.state, "sleeping");
+    assert.equal(detail.runtime.sleepEligible, true);
+
+    const cold = await platform.handle(new Request("https://sleeping-app.apps.example.test/"));
+    assert.equal(cold.status, 200);
+    assert.equal(await cold.text(), "awake-response");
+    detail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(detail.runtime.state, "online");
+
+    const slept = await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime/sleep`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: {},
+    }));
+    assert.equal(slept.slept, true);
+    await platform.close();
+
+    platform = await openPlatform({ ...options, signup: false });
+    detail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(detail.runtime.state, "sleeping");
+    const restartedCold = await platform.handle(new Request("https://sleeping-app.apps.example.test/"));
+    assert.equal(restartedCold.status, 200);
+    assert.equal(await restartedCold.text(), "awake-response");
+
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { policy: "suspended", idleTimeoutMs: 1_000 },
+    }));
+    const suspended = await platform.handle(new Request("https://sleeping-app.apps.example.test/"));
+    assert.equal(suspended.status, 503);
+    assert.equal((await suspended.json()).error.code, "APPLICATION_UNAVAILABLE");
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { policy: "always_on", idleTimeoutMs: 1_000 },
+    }));
+    const alwaysOn = await platform.handle(new Request("https://sleeping-app.apps.example.test/"));
+    assert.equal(alwaysOn.status, 200);
+    assert.equal(await alwaysOn.text(), "awake-response");
+  } finally {
+    await platform.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("deployments supervise independent worker and scheduler processes beside the responsive web process", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-jobs-"));
   const platform = await openPlatform({
@@ -1330,6 +1625,22 @@ test("deployments supervise independent worker and scheduler processes beside th
       await fetch(deployed.body.release.directUrl).then((response) => response.text()),
       "jobs-release",
     );
+    await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime`, {
+      method: "PUT",
+      token: owner.accessToken,
+      body: { policy: "on_demand", idleTimeoutMs: 1_000 },
+    }));
+    const runtimeDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
+      token: owner.accessToken,
+    }));
+    assert.equal(runtimeDetail.runtime.sleepEligible, false);
+    assert.match(runtimeDetail.runtime.sleepBlockedReason, /worker|scheduler/i);
+    const refusedSleep = await payload(platform, jsonRequest(`/api/projects/${projectId}/runtime/sleep`, {
+      method: "POST",
+      token: owner.accessToken,
+      body: {},
+    }), 409);
+    assert.equal(refusedSleep.error.code, "RUNTIME_REQUIRES_CONTINUITY");
 
     const databasePath = join(root, "platform", "projects", projectId, "data", "app.sqlite");
     await waitFor(() => {
@@ -3508,6 +3819,8 @@ test("browser project management enforces organization and custom-domain quotas 
       projectsPerAccount: 2,
       projectsPerOrganization: 1,
       domainsPerProject: 1,
+      bucketStorageBytesPerProject: 1024,
+      bucketObjectsPerProject: 7,
       metricRetentionDays: 7,
     },
     ingress: {
@@ -3547,6 +3860,34 @@ test("browser project management enforces organization and custom-domain quotas 
       csrf: owner.csrfToken,
       body: { name: "Only Site", slug: "only-site", organizationId },
     }), 201);
+    const bucketRoot = join(root, "platform", "projects", created.project.id, "data", "buckets");
+    const bucketManager = await openBucketManager({
+      definitions: [defineBucket({
+        name: "attachments",
+        ownership: "app",
+        allowedContentTypes: ["text/plain"],
+        maxObjectBytes: 128,
+        maxBytes: 1024,
+      })],
+      store: await openLocalObjectStore({ directory: join(bucketRoot, "objects"), maxObjectBytes: 128 }),
+      databasePath: join(bucketRoot, "catalog.sqlite"),
+      stagingDirectory: join(bucketRoot, "staging"),
+      signingKey: "quota-test-bucket-signing-key-0001",
+      maxBytes: 1024,
+      maxObjects: 7,
+    });
+    await bucketManager.bucket("attachments").put("proof.txt", new TextEncoder().encode("proof"), {
+      contentType: "text/plain",
+    });
+    bucketManager.close();
+    const detail = await payload(platform, jsonRequest(`/api/projects/${created.project.id}`, {
+      cookie: owner.cookie,
+    }));
+    assert.deepEqual(detail.buckets.limits, { bytes: 1024, objects: 7 });
+    assert.equal(detail.buckets.usage.available, true);
+    assert.equal(detail.buckets.usage.source, "local_catalog");
+    assert.equal(detail.buckets.usage.objects, 1);
+    assert.equal(detail.buckets.usage.bytes, 5);
     const overLimit = await platform.handle(jsonRequest("/api/projects", {
       method: "POST",
       token: owner.accessToken,
@@ -5732,8 +6073,18 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     const developerDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
       token: developer.accessToken,
     }));
-    assert.deepEqual(ownerDetail.access, { role: "owner", canDelete: true, canOperateJobs: true });
-    assert.deepEqual(developerDetail.access, { role: "developer", canDelete: false, canOperateJobs: true });
+    assert.deepEqual(ownerDetail.access, {
+      role: "owner",
+      canDelete: true,
+      canOperateJobs: true,
+      canManageRuntime: true,
+    });
+    assert.deepEqual(developerDetail.access, {
+      role: "developer",
+      canDelete: false,
+      canOperateJobs: true,
+      canManageRuntime: true,
+    });
 
     const developerDenied = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
       method: "DELETE",
@@ -5767,7 +6118,12 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     const adminDetail = await payload(platform, jsonRequest(`/api/projects/${projectId}`, {
       token: developer.accessToken,
     }));
-    assert.deepEqual(adminDetail.access, { role: "admin", canDelete: true, canOperateJobs: true });
+    assert.deepEqual(adminDetail.access, {
+      role: "admin",
+      canDelete: true,
+      canOperateJobs: true,
+      canManageRuntime: true,
+    });
     const missingCsrf = await platform.handle(jsonRequest(`/api/projects/${projectId}`, {
       method: "DELETE",
       cookie: owner.cookie,
@@ -6703,9 +7059,31 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     const signedOutConsole = await platform.handle(jsonRequest("/"));
     assert.equal(signedOutConsole.status, 200);
     const signedOutHtml = await signedOutConsole.text();
-    assert.match(signedOutHtml, /<title>Sign in · Clank<\/title>/);
-    assert.match(signedOutHtml, /<section class="auth-layout" id="auth-view">/);
-    assert.match(signedOutHtml, /<section class="app-shell" id="app-view" hidden>/);
+    assert.match(signedOutHtml, /<title>Clank — Build for people and agents<\/title>/);
+    assert.match(signedOutHtml, /One app\.<span>Two intelligences\.<\/span>/);
+    assert.match(signedOutHtml, /href="https:\/\/docs\.clank\.run"/);
+    assert.match(signedOutHtml, /href="https:\/\/design\.clank\.run"/);
+    assert.match(signedOutHtml, /href="https:\/\/github\.com\/nearbycoder\/clank\.run"/);
+    assert.match(signedOutHtml, /href="https:\/\/www\.npmjs\.com\/package\/@clank\.run\/framework"/);
+    assert.match(signedOutHtml, /href="\/login">Sign in<\/a>/);
+    assert.match(signedOutHtml, /\.signal-viz\{position:static;/);
+    assert.match(signedOutHtml, /\.auth-viz\{position:static;/);
+    assert.match(signedOutHtml, /\.feature:nth-child\(3\)\{grid-column:1\/-1;[^}]+display:grid;/);
+    assert.match(signedOutHtml, /@media\(max-width:900px\)\{\.desktop-nav\{display:none\}/);
+    assert.match(signedOutHtml, /\.mobile-nav summary:before,\.mobile-nav summary:after\{[^}]+left:50%;top:50%;/);
+    assert.match(signedOutHtml, /\.mobile-nav\[open\] summary:before\{transform:translate\(-50%,-50%\) rotate\(45deg\)\}/);
+    assert.match(signedOutHtml, /\.closing-card h2 br\{display:none\}/);
+    assert.match(signedOutHtml, /Make the whole app<br> the intelligent interface\./);
+    assert.doesNotMatch(signedOutHtml, /id="auth-view"|id="app-view"|"authenticated":false/);
+    assert.equal(signedOutConsole.headers.get("cache-control"), "public, max-age=0, must-revalidate");
+    assert.equal(signedOutConsole.headers.get("vary"), "cookie");
+    assert.match(signedOutConsole.headers.get("content-security-policy"), /script-src 'none'/);
+    const loginConsole = await platform.handle(jsonRequest("/login"));
+    assert.equal(loginConsole.status, 200);
+    const loginHtml = await loginConsole.text();
+    assert.match(loginHtml, /<title>Sign in · Clank<\/title>/);
+    assert.match(loginHtml, /<section class="auth-layout" id="auth-view">/);
+    assert.match(loginHtml, /<section class="app-shell" id="app-view" hidden>/);
     const signupConsole = await platform.handle(jsonRequest("/signup"));
     const signupHtml = await signupConsole.text();
     assert.match(signupHtml, /<title>Create your account · Clank<\/title>/);
@@ -6742,9 +7120,11 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /<strong id="account-name">first<\/strong><span id="account-email">first@example\.com<\/span>/);
     assert.match(signedInHtml, /class="brand-lockup"><img class="brand-mark"[^>]*><span>Clank<\/span><\/span>/);
     assert.match(signedInHtml, /\.brand-lockup\{display:inline-flex;align-items:center;gap:9px;/);
+    assert.match(signedInHtml, /--clank-canvas:\s*#0a0b0a/);
+    assert.match(signedInHtml, /--bg:var\(--clank-canvas\);--panel:var\(--clank-surface\)/);
     assert.match(signedInHtml, /class="icon-sprite"[^>]*><defs>\s*<symbol id="nav-icon-overview"/);
     assert.match(signedInHtml, /\.nav-icon\{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex:0 0 18px;/);
-    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 15);
+    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 16);
     assert.doesNotMatch(signedInHtml, /<span class="nav-icon">[^<]/);
     assert.match(signedInHtml, /id="nav-usage" href="\/usage"/);
     assert.match(signedInHtml, /class="table mobile-card-table usage-table"/);
@@ -6759,6 +7139,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /data-project-tab="deployments"/);
     assert.match(signedInHtml, /data-project-tab="previews"/);
     assert.match(signedInHtml, /data-project-tab="jobs"/);
+    assert.match(signedInHtml, /data-project-tab="storage"/);
     assert.match(signedInHtml, /aria-controls="sidebar"/);
     assert.match(signedInHtml, /id="sidebar-scrim"[^>]+aria-label="Close navigation"/);
     assert.match(signedInHtml, /class="table mobile-card-table release-table"/);
@@ -6811,6 +7192,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       "/projects/my-todo/deployments",
       "/projects/my-todo/previews",
       "/projects/my-todo/backups",
+      "/projects/my-todo/storage",
       "/projects/my-todo/logs",
       "/projects/my-todo/jobs",
       "/projects/my-todo/settings",
@@ -6845,13 +7227,18 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInProjectHtml, /<title>Project · Clank<\/title>/);
     assert.match(signedInProjectHtml, /id="project-navigation">/);
     assert.match(signedInProjectHtml, /<section id="overview-page" hidden>/);
-    assert.match(signedInProjectHtml, /<section id="project-page" aria-busy="true">/);
+    assert.match(signedInProjectHtml, /<section id="project-page" aria-busy="true" data-loading="initial">/);
     assert.match(signedInProjectHtml, /<div class="project-loading" id="project-loading"><\/div>/);
     assert.match(signedInProjectHtml, /<div class="project-resolved">/);
     assert.match(
       signedInProjectHtml,
-      /#project-page\[aria-busy="true"\] \.project-resolved\{visibility:hidden;pointer-events:none\}/,
+      /#project-page\[data-loading="initial"\] \.project-resolved\{visibility:hidden;pointer-events:none\}/,
     );
+    assert.match(signedInProjectHtml, /if\(state\.currentProject\)loadProject\(true\)/);
+    assert.match(signedInProjectHtml, /async function loadProject\(silent\)/);
+    assert.match(signedInProjectHtml, /dataset\.loading=hasCurrentData\?"refresh":"initial"/);
+    assert.match(signedInProjectHtml, /if\(silent!==true\|\|!hasCurrentData\)toast\(error\.message,true\)/);
+    assert.match(signedInProjectHtml, /state\.currentProject\?loadProject\(false\)/);
     assert.match(signedInProjectHtml, /prepareRoute\(route\);if\(!state\.dashboard\)\{await loadDashboard/);
     assert.match(signedInProjectHtml, /const generation=\+\+state\.routeGeneration/);
     assert.match(signedInProjectHtml, /generation!==state\.routeGeneration\|\|!state\.dashboard/);
@@ -7618,3 +8005,48 @@ async function waitFor(check, timeout = 5_000) {
   }
   assert.fail("Timed out waiting for condition.");
 }
+
+test("secret rotations validate candidates, fence activation/rollback, track running consumers and survive restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-secret-rotations-"));
+  const dataDirectory = join(root, "platform");
+  const options = { dataDirectory, publicUrl: "http://127.0.0.1:4200", signup: true,
+    appPortStart: 59280, appPortEnd: 59285, backups: { intervalMs: false },
+    validateSecret: async ({ value }) => value.startsWith("valid-") };
+  let platform = await openPlatform(options);
+  try {
+    const owner = await authorizeCli(platform, "rotation-owner@example.invalid");
+    const other = await authorizeCli(platform, "rotation-other@example.invalid");
+    const created = await payload(platform, jsonRequest("/api/projects", { method: "POST", token: owner.accessToken, body: { name: "Rotation app", slug: "rotation-app" } }), 201);
+    const project = created.project.id, path = `/api/projects/${project}/secrets`, token = owner.accessToken;
+    const call = (suffix, method = "GET", body, expected = 200) => payload(platform, jsonRequest(path + suffix, { method, body, token }), expected);
+    await call("", "PUT", { values: { PARTNER_KEY: "valid-old-fixture-key" } });
+    const artifact = await appArtifact(join(root, "app"), "rotation-app", [["0001_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY);\n"]]);
+    const deployed = await deploy(platform, project, token, artifact, "rotation-initial");
+    assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
+    const initial = await call("/rotations"); assert.equal(initial.consumer.kind, "local"); assert.equal(initial.consumed[0].current, true);
+    const staged = (await call("/rotations", "POST", { name: "PARTNER_KEY", value: "valid-new-fixture-key" }, 201)).rotation;
+    await call(`/rotations/${staged.id}/activate`, "POST", {}, 409);
+    const validated = (await call(`/rotations/${staged.id}/validate`, "POST", {})).rotation;
+    assert.equal(validated.state, "validated"); assert.equal(validated.validation, "provider-check");
+    await platform.close(); platform = await openPlatform(options);
+    await call(`/rotations/${staged.id}/activate`, "POST", {});
+    const activated = await call("/rotations"); assert.equal(activated.consumed[0].current, false);
+    assert.notEqual(activated.current[0].revision, initial.current[0].revision);
+    await call(`/rotations/${staged.id}/rollback`, "POST", {});
+    assert.equal((await call("/rotations")).consumed[0].current, true);
+    const stale = (await call("/rotations", "POST", { name: "PARTNER_KEY", value: "valid-stale-fixture-key" }, 201)).rotation;
+    await call(`/rotations/${stale.id}/validate`, "POST", {});
+    await call("", "PUT", { values: { PARTNER_KEY: "valid-concurrent-fixture-key" } });
+    await call(`/rotations/${stale.id}/activate`, "POST", {}, 409);
+    const bad = (await call("/rotations", "POST", { name: "PARTNER_KEY", value: "invalid-fixture-key" }, 201)).rotation;
+    assert.equal((await call(`/rotations/${bad.id}/validate`, "POST", {})).rotation.state, "failed");
+    await call(`/rotations/${bad.id}/activate`, "POST", {}, 409);
+    const denied = await platform.handle(jsonRequest(path + "/rotations", { token: other.accessToken })); assert.ok([403, 404].includes(denied.status));
+    const audit = await payload(platform, jsonRequest(`/api/projects/${project}/audit`, { token }));
+    assert.doesNotMatch(JSON.stringify(audit), /valid-old-fixture-key|valid-new-fixture-key|invalid-fixture-key/);
+    const control = new DatabaseSync(join(dataDirectory, "control.sqlite"));
+    assert.doesNotMatch(JSON.stringify(control.prepare("SELECT * FROM clank_platform_secret_rotations").all()), /valid-new-fixture-key|valid-old-fixture-key/); control.close();
+    await call("/PARTNER_KEY", "DELETE"); assert.equal((await call("/rotations")).rotations.length, 0);
+    await call(`/rotations/${staged.id}/rollback`, "POST", {}, 409);
+  } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
+});
