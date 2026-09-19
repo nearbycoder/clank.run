@@ -1,0 +1,257 @@
+{
+  "protocol": "clank-ssr-performance/1",
+  "node": "24.21.0",
+  "rows": 100,
+  "iterations": 500,
+  "rounds": 6,
+  "baseline": "/tmp/clank-performance-baseline-7cf3674/dist",
+  "candidate": "/home/nearby/Sites/clank/dist",
+  "scenarios": [
+    {
+      "name": "static",
+      "htmlBytes": 5589,
+      "synchronousPromiseAllocations": {
+        "baseline": 1008,
+        "candidate": 1
+      },
+      "samples": [
+        {
+          "round": 1,
+          "label": "baseline",
+          "elapsedMs": 273.275942,
+          "rendersPerSecond": 1829.6524616865104
+        },
+        {
+          "round": 1,
+          "label": "candidate",
+          "elapsedMs": 194.31671000000006,
+          "rendersPerSecond": 2573.118904699446
+        },
+        {
+          "round": 2,
+          "label": "candidate",
+          "elapsedMs": 190.94049999999993,
+          "rendersPerSecond": 2618.616794236949
+        },
+        {
+          "round": 2,
+          "label": "baseline",
+          "elapsedMs": 248.48790400000007,
+          "rendersPerSecond": 2012.1703791263812
+        },
+        {
+          "round": 3,
+          "label": "baseline",
+          "elapsedMs": 243.17892000000006,
+          "rendersPerSecond": 2056.099270446632
+        },
+        {
+          "round": 3,
+          "label": "candidate",
+          "elapsedMs": 162.47563999999988,
+          "rendersPerSecond": 3077.3844005169044
+        },
+        {
+          "round": 4,
+          "label": "candidate",
+          "elapsedMs": 188.55749000000014,
+          "rendersPerSecond": 2651.7111571648497
+        },
+        {
+          "round": 4,
+          "label": "baseline",
+          "elapsedMs": 236.39447999999993,
+          "rendersPerSecond": 2115.1086099810796
+        },
+        {
+          "round": 5,
+          "label": "baseline",
+          "elapsedMs": 240.40296200000012,
+          "rendersPerSecond": 2079.8412625215483
+        },
+        {
+          "round": 5,
+          "label": "candidate",
+          "elapsedMs": 180.6686340000001,
+          "rendersPerSecond": 2767.4975391688617
+        },
+        {
+          "round": 6,
+          "label": "candidate",
+          "elapsedMs": 175.16883599999983,
+          "rendersPerSecond": 2854.389007871243
+        },
+        {
+          "round": 6,
+          "label": "baseline",
+          "elapsedMs": 241.3287049999999,
+          "rendersPerSecond": 2071.86293897363
+        }
+      ]
+    },
+    {
+      "name": "components",
+      "htmlBytes": 11851,
+      "synchronousPromiseAllocations": {
+        "baseline": 2626,
+        "candidate": 416
+      },
+      "samples": [
+        {
+          "round": 1,
+          "label": "baseline",
+          "elapsedMs": 656.8841830000001,
+          "rendersPerSecond": 761.1691877196561
+        },
+        {
+          "round": 1,
+          "label": "candidate",
+          "elapsedMs": 522.2752820000001,
+          "rendersPerSecond": 957.3495381311191
+        },
+        {
+          "round": 2,
+          "label": "candidate",
+          "elapsedMs": 489.23487599999953,
+          "rendersPerSecond": 1022.003999567685
+        },
+        {
+          "round": 2,
+          "label": "baseline",
+          "elapsedMs": 730.8044639999998,
+          "rendersPerSecond": 684.1775394519211
+        },
+        {
+          "round": 3,
+          "label": "baseline",
+          "elapsedMs": 630.3969350000007,
+          "rendersPerSecond": 793.1510644162626
+        },
+        {
+          "round": 3,
+          "label": "candidate",
+          "elapsedMs": 502.747848,
+          "rendersPerSecond": 994.5343415970227
+        },
+        {
+          "round": 4,
+          "label": "candidate",
+          "elapsedMs": 528.8963670000003,
+          "rendersPerSecond": 945.3647844777117
+        },
+        {
+          "round": 4,
+          "label": "baseline",
+          "elapsedMs": 650.1207029999996,
+          "rendersPerSecond": 769.0879519645144
+        },
+        {
+          "round": 5,
+          "label": "baseline",
+          "elapsedMs": 643.8517190000002,
+          "rendersPerSecond": 776.5763222261426
+        },
+        {
+          "round": 5,
+          "label": "candidate",
+          "elapsedMs": 483.48373600000104,
+          "rendersPerSecond": 1034.1609505557367
+        },
+        {
+          "round": 6,
+          "label": "candidate",
+          "elapsedMs": 482.81621599999926,
+          "rendersPerSecond": 1035.590735005472
+        },
+        {
+          "round": 6,
+          "label": "baseline",
+          "elapsedMs": 699.0895,
+          "rendersPerSecond": 715.2160059620406
+        }
+      ]
+    },
+    {
+      "name": "mixed",
+      "htmlBytes": 11851,
+      "synchronousPromiseAllocations": {
+        "baseline": 2151,
+        "candidate": 466
+      },
+      "samples": [
+        {
+          "round": 1,
+          "label": "baseline",
+          "elapsedMs": 751.3573379999998,
+          "rendersPerSecond": 665.4623236008113
+        },
+        {
+          "round": 1,
+          "label": "candidate",
+          "elapsedMs": 545.5902249999999,
+          "rendersPerSecond": 916.4387063569551
+        },
+        {
+          "round": 2,
+          "label": "candidate",
+          "elapsedMs": 491.92034799999965,
+          "rendersPerSecond": 1016.4247159786129
+        },
+        {
+          "round": 2,
+          "label": "baseline",
+          "elapsedMs": 661.0571920000002,
+          "rendersPerSecond": 756.3642088020727
+        },
+        {
+          "round": 3,
+          "label": "baseline",
+          "elapsedMs": 679.0820299999996,
+          "rendersPerSecond": 736.288074063748
+        },
+        {
+          "round": 3,
+          "label": "candidate",
+          "elapsedMs": 522.7053699999997,
+          "rendersPerSecond": 956.5618199024822
+        },
+        {
+          "round": 4,
+          "label": "candidate",
+          "elapsedMs": 528.0516029999999,
+          "rendersPerSecond": 946.8771558676626
+        },
+        {
+          "round": 4,
+          "label": "baseline",
+          "elapsedMs": 673.929012999999,
+          "rendersPerSecond": 741.9179028578203
+        },
+        {
+          "round": 5,
+          "label": "baseline",
+          "elapsedMs": 669.2014120000003,
+          "rendersPerSecond": 747.1592125092524
+        },
+        {
+          "round": 5,
+          "label": "candidate",
+          "elapsedMs": 516.409447,
+          "rendersPerSecond": 968.2239604729772
+        },
+        {
+          "round": 6,
+          "label": "candidate",
+          "elapsedMs": 531.766764,
+          "rendersPerSecond": 940.2618475794776
+        },
+        {
+          "round": 6,
+          "label": "baseline",
+          "elapsedMs": 672.1522250000016,
+          "rendersPerSecond": 743.879111610467
+        }
+      ]
+    }
+  ]
+}

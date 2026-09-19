@@ -1,0 +1,37 @@
+{
+  "baselineCommit": "7cf3674be1f38baf586706757a3d9de2ebe0ab2e",
+  "runtime": "24.21.0",
+  "machine": {
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "logicalCpus": 32,
+    "memoryBytes": 117764759552
+  },
+  "baselineSourceHashes": {
+    "src/backend.ts": "c48af145c47aeabc5c666acaee521ebb75eb91a832bbedb98f398fac77cce28f",
+    "src/platform.ts": "03530af2a5a51247b428a597667cde997ec7dc4f47a982041ce7101c2da726c6",
+    "src/ssr.ts": "64dfe86df117c04e0c8a25ea4731c9a02a8423a85c73340b72bae877237cd0ed"
+  },
+  "baselineDist": "/tmp/clank-performance-baseline-7cf3674/dist",
+  "candidateSourceHashes": {
+    "src/backend.ts": "3b1b7e4a2c2f1515478d91f77e8f4690aff38bc1e1c429988f151b364740220b",
+    "src/platform.ts": "292699957a778436968c1009f7c92301f2da666eeb10473b1a0b2f358d9173b5",
+    "src/ssr.ts": "38260c294ee36616fa22d94259d1e88b3498eb265ca7a03490dc44a456066002"
+  },
+  "benchmarkSourceHashes": {
+    "scripts/load/performance-backend.mjs": "b57707eb62e35ed38cf0b363dacfa6e5f14781cb92520d4145d4428138a9446b",
+    "scripts/load/performance-platform.mjs": "84fcfa1eb350874e3fcd0b2151fb770763761e77cd5c9778e4bbbddf160b7e83",
+    "scripts/load/performance-ssr.mjs": "1ca1bd32782b1d483a20f44cec53de25006c7905fbed1d1c5cf67c6321b61e88"
+  },
+  "comparison": "Local serial A/B against the security-audit baseline; isolated synthetic data; no production traffic.",
+  "upstreamMainAtVerification": "fbd3e8dd5adc4d2f6cd91f8a4c974db67bebea80",
+  "baselineDistHashes": {
+    "backend.js": "8bc08c4f90489112b2d669e34889e490dcffd616f3216e93b13cf16517252cb7",
+    "platform.js": "211f92be75dfb9a6d7a0a7d16ff8720d1291a5ddce89d9387051add1799e5c91",
+    "ssr.js": "ac1bfbfa629b9fa3f8399c05f1a4ba3466157bd53d983fc2f52a04e2ba8160f7"
+  },
+  "candidateDistHashes": {
+    "backend.js": "cd0f726fb7f434570f03db0e437d7feb9e6e1414663858a5634f56f6fadd1750",
+    "platform.js": "786c63ce4776c13c12c4484a8f606576af4d6eec206efa171dbc9bb4c4b25226",
+    "ssr.js": "0ae1cbf989f2913821e449562f47f26de45f25301f6b9a31e1903fdaa3653103"
+  }
+}

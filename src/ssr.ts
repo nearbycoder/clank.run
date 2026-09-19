@@ -19,6 +19,8 @@ export interface RenderStringOptions {
   markers?: boolean;
 }
 
+type Rendered = string | Promise<string>;
+
 interface SSRContext {
   contexts: Map<symbol, unknown>;
   markers: boolean;
@@ -81,65 +83,90 @@ export function readState<Value = unknown>(id = "__CLANK_STATE__", root: ParentN
   return text ? JSON.parse(text) as Value : undefined;
 }
 
-async function renderValue(input: Renderable, context: SSRContext): Promise<string> {
-  if (isExpression(input)) return renderDynamic(input.read as () => Renderable, context);
-  if (isSignal(input)) return renderDynamic(() => input.value as Renderable, context);
-  if (isKeyedBlock(input)) return renderKeyed(input, context);
-  if (isPortalBlock(input)) return renderPortal(input, context);
-  if (typeof input === "function") return renderDynamic(input as () => Renderable, context);
-  if (input instanceof Promise) {
-    const resolved: unknown = await (input as Promise<unknown>);
-    return renderValue(resolved as Renderable, context);
+function renderValue(input: Renderable, context: SSRContext): Rendered {
+  try {
+    if (isExpression(input)) return renderDynamic(input.read as () => Renderable, context);
+    if (isSignal(input)) return renderDynamic(() => input.value as Renderable, context);
+    if (isKeyedBlock(input)) return renderKeyed(input, context);
+    if (isPortalBlock(input)) return renderPortal(input, context);
+    if (typeof input === "function") return renderDynamic(input as () => Renderable, context);
+    if (input instanceof Promise) return renderPromise(input as Promise<unknown>, context);
+    if (Array.isArray(input)) return joinRendered(input.map((entry) => renderValue(entry, context)));
+    if (isVNode(input)) return renderVNode(input, context);
+    if (input === null || input === undefined || input === false || input === true) return context.markers ? "<!--clank-->" : "";
+    if (typeof input === "string" || typeof input === "number" || typeof input === "bigint") return escapeText(String(input));
+    if (typeof Node !== "undefined" && input instanceof Node) {
+      return input instanceof Element ? input.outerHTML : escapeText(input.textContent ?? "");
+    }
+    throw new TypeError(`Cannot server-render value: ${String(input)}`);
+  } catch (error) {
+    // Keep failures asynchronous so all sibling results reach Promise.all and
+    // already-started async children retain rejection handlers and cleanup.
+    return Promise.reject(error);
   }
-  if (Array.isArray(input)) return (await Promise.all(input.map((entry) => renderValue(entry, context)))).join("");
-  if (isVNode(input)) return renderVNode(input, context);
-  if (input === null || input === undefined || input === false || input === true) return context.markers ? "<!--clank-->" : "";
-  if (typeof input === "string" || typeof input === "number" || typeof input === "bigint") return escapeText(String(input));
-  if (typeof Node !== "undefined" && input instanceof Node) {
-    return input instanceof Element ? input.outerHTML : escapeText(input.textContent ?? "");
-  }
-  throw new TypeError(`Cannot server-render value: ${String(input)}`);
 }
 
-async function renderDynamic(read: () => Renderable, context: SSRContext): Promise<string> {
-  const content = await renderValue(resolveReactive(read()), context);
-  return context.markers ? `<!--clank:start-->${content}<!--clank:end-->` : content;
+async function renderPromise(input: Promise<unknown>, context: SSRContext): Promise<string> {
+  // Await external promises so renderer chains use a native promise even when
+  // an input subclass customizes methods such as finally.
+  const resolved = await input;
+  return renderValue(resolved as Renderable, context);
 }
 
-async function renderKeyed(block: KeyedBlock<any>, context: SSRContext): Promise<string> {
+function joinRendered(values: Rendered[]): Rendered {
+  return values.every((value) => typeof value === "string")
+    ? values.join("")
+    : Promise.all(values).then((parts) => parts.join(""));
+}
+
+function wrapRendered(content: Rendered, before: string, after: string): Rendered {
+  return typeof content === "string" ? before + content + after : content.then((value) => before + value + after);
+}
+
+function renderDynamic(read: () => Renderable, context: SSRContext): Rendered {
+  const content = renderValue(resolveReactive(read()), context);
+  return context.markers ? wrapRendered(content, "<!--clank:start-->", "<!--clank:end-->") : content;
+}
+
+function renderKeyed(block: KeyedBlock<any>, context: SSRContext): Rendered {
   const values = resolveReactive(block.each as Renderable);
   if (!Array.isArray(values)) throw new TypeError("For expects an array during server rendering.");
   const content = values.length === 0
-    ? await renderValue(resolveReactive(block.fallback ?? null), context)
-    : (await Promise.all(values.map((item, index) => renderValue(block.renderItem(item, () => index), context)))).join("");
-  return context.markers ? `<!--clank:for-->${content}<!--clank:/for-->` : content;
+    ? renderValue(resolveReactive(block.fallback ?? null), context)
+    : joinRendered(values.map((item, index) => {
+      try { return renderValue(block.renderItem(item, () => index), context); }
+      catch (error) { return Promise.reject(error); }
+    }));
+  return context.markers ? wrapRendered(content, "<!--clank:for-->", "<!--clank:/for-->") : content;
 }
 
-async function renderPortal(portal: PortalBlock, context: SSRContext): Promise<string> {
-  const content = await renderValue(portal.children, context);
-  return context.markers ? `<!--clank:portal-->${content}<!--clank:/portal-->` : content;
+function renderPortal(portal: PortalBlock, context: SSRContext): Rendered {
+  const content = renderValue(portal.children, context);
+  return context.markers ? wrapRendered(content, "<!--clank:portal-->", "<!--clank:/portal-->") : content;
 }
 
-async function renderVNode(vnode: VNode, context: SSRContext): Promise<string> {
+function renderVNode(vnode: VNode, context: SSRContext): Rendered {
   if (vnode.type === Fragment) return renderValue(vnode.props.children as Renderable[], context);
-  if (typeof vnode.type === "function") {
-    let dispose: Cleanup = () => {};
-    try {
-      const evaluation = createRoot((cleanup) => {
-        dispose = cleanup;
-        return evaluateComponent(vnode, context.contexts);
-      });
-      // Keep component-owned values alive through async children, then release
-      // subscriptions/resources so completed requests cannot accumulate them.
-      return await renderValue(evaluation.output, { ...context, contexts: evaluation.contexts });
-    } finally {
-      dispose();
-    }
-  }
+  if (typeof vnode.type === "function") return renderComponent(vnode, context);
   return renderElement(vnode, context);
 }
 
-async function renderElement(vnode: VNode, context: SSRContext): Promise<string> {
+async function renderComponent(vnode: VNode, context: SSRContext): Promise<string> {
+  let dispose: Cleanup = () => {};
+  try {
+    const evaluation = createRoot((cleanup) => {
+      dispose = cleanup;
+      return evaluateComponent(vnode, context.contexts);
+    });
+    // Keep component-owned values alive through async children, then release
+    // them after sibling evaluation, even when this component renders inline.
+    return await renderValue(evaluation.output, { ...context, contexts: evaluation.contexts });
+  } finally {
+    dispose();
+  }
+}
+
+function renderElement(vnode: VNode, context: SSRContext): Rendered {
   const tag = vnode.type as string;
   if (!/^[A-Za-z][A-Za-z0-9:._-]*$/.test(tag)) throw new TypeError(`Unsafe HTML tag name: ${tag}`);
   const lowerTag = tag.toLowerCase();
@@ -202,9 +229,9 @@ async function renderElement(vnode: VNode, context: SSRContext): Promise<string>
 
   const rawHTML = props.dangerouslySetInnerHTML;
   const children = rawHTML === undefined
-    ? await renderValue(props.children as Renderable[], context)
+    ? renderValue(props.children as Renderable[], context)
     : String(resolveReactive(rawHTML && typeof rawHTML === "object" ? (rawHTML as { __html?: unknown }).__html : rawHTML) ?? "");
-  return `<${tag}${serialized}>${children}</${tag}>`;
+  return wrapRendered(children, `<${tag}${serialized}>`, `</${tag}>`);
 }
 
 function resolveReactive(input: unknown): any {

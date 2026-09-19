@@ -14,6 +14,7 @@ import {
   defineDatabase,
   defineTable,
   openBackend,
+  openSQLite,
   s,
 } from "../dist/index.js";
 
@@ -709,5 +710,91 @@ test("backend resource limits reject invalid configuration before opening storag
       () => openBackend(todoBackend(), { path: ":memory:", ...options }),
       /positive integer/,
     );
+  }
+});
+
+test("document writes reuse canonical encodings while preserving ownership, no-ops, and revision history", async (t) => {
+  const schema = defineDatabase({
+    documents: defineTable({
+      marker: s.string(), counter: s.number(), payload: s.string(),
+      note: s.optional(s.string()), status: s.default(s.string(), "draft"), metadata: s.record(s.string()),
+    }).owned(),
+  });
+  const database = await openSQLite(schema, { path: ":memory:" });
+  const owner = { userId: "document-owner" };
+  const value = {
+    marker: "encoding-work-regression", counter: 0, payload: "x".repeat(64 * 1024),
+    metadata: { z: "last", a: "first" },
+  };
+  const originalStringify = JSON.stringify;
+  let encodings = 0;
+  t.mock.method(JSON, "stringify", (input, ...options) => {
+    if (input?.marker === value.marker) encodings++;
+    return originalStringify(input, ...options);
+  });
+  try {
+    const id = database.transaction((db) => db.table("documents").insert(value), owner);
+    assert.equal(encodings, 1, "insert encodes one document for the row and history");
+    encodings = 0;
+    database.transaction((db) => db.table("documents").patch(id, { counter: 1 }), owner);
+    assert.equal(encodings, 2, "patch encodes old and new values once each");
+    encodings = 0;
+    database.transaction((db) => db.table("documents").replace(id, { ...value, counter: 2 }), owner);
+    assert.equal(encodings, 2, "replace encodes old and new values once each");
+
+    const revision = database.version;
+    database.transaction((db) => db.table("documents").patch(id, { counter: 2 }), owner);
+    database.transaction((db) => db.table("documents").replace(id, {
+      metadata: { a: "first", z: "last" }, payload: value.payload,
+      note: undefined, counter: 2, marker: value.marker,
+    }), owner);
+    assert.throws(() => database.transaction((db) => db.table("documents").patch(id, { counter: "invalid" }), owner), /Expected a finite number/u);
+    assert.equal(database.version, revision, "unchanged values do not advance the journal");
+    assert.equal(database.transaction((db) => db.table("documents").patch(id, { counter: 99 }), { userId: "other-owner" }), null);
+    assert.throws(() => database.transaction((db) => db.table("documents").patch(id, { counter: 99 }, { ifVersion: 1 }), owner), DatabaseConflictError);
+    const current = database.read((db) => db.table("documents").get(id), owner);
+    const history = database.read((db) => db.table("documents").history(id), owner);
+    assert.equal(current.counter, 2);
+    assert.equal(current._version, 3);
+    assert.equal(current._ownerId, owner.userId);
+    assert.equal(current.status, "draft", "the stored encoding uses schema defaults");
+    assert.equal(current.note, undefined);
+    assert.deepEqual(Object.keys(current.metadata), ["a", "z"]);
+    assert.deepEqual(history.map((entry) => entry.document.counter), [2, 1, 0]);
+    assert.ok(history.every((entry) => entry.document.payload === value.payload && entry.document._ownerId === owner.userId));
+  } finally {
+    database.close();
+  }
+});
+
+test("reused document encodings preserve output limits and transaction rollback", async () => {
+  const schema = defineDatabase({ documents: defineTable({ body: s.string() }) });
+  let id;
+  const definition = defineBackend({ schema }).functions(({ mutation }) => ({
+    write: mutation({
+      args: { operation: s.string() },
+      handler: ({ db }, { operation }) => {
+        const table = db.table("documents");
+        const value = { body: "x".repeat(1_024) };
+        if (operation === "insert") return table.get(table.insert(value));
+        if (operation === "patch") return table.patch(id, value);
+        return table.replace(id, value);
+      },
+    }),
+  }));
+  const runtime = await openBackend(definition, { path: ":memory:", maxResponseBytes: 256 });
+  try {
+    id = runtime.database.transaction((db) => db.table("documents").insert({ body: "retained" }));
+    const revision = runtime.version;
+    for (const operation of ["insert", "patch", "replace"]) {
+      assert.throws(() => runtime.mutation("write", { operation }), (error) =>
+        error.cause instanceof RangeError && /exceeds 256 bytes/u.test(error.cause.message));
+      assert.equal(runtime.version, revision);
+      assert.equal(runtime.database.read((db) => db.table("documents").collect()).length, 1);
+      assert.equal(runtime.database.read((db) => db.table("documents").get(id)).body, "retained");
+      assert.equal(runtime.database.read((db) => db.table("documents").history()).length, 1);
+    }
+  } finally {
+    runtime.close();
   }
 });

@@ -11074,42 +11074,59 @@ function billingEntitlementQuotas(
   }
 }
 
+// Bound to one synchronous dashboard read, never retained between requests.
+interface PlatformQuotaSnapshot {
+  accounts: Map<string, PlatformQuotaValues>;
+  workspaces: Map<string, PlatformQuotaValues>;
+}
+
 function accountQuotas(
   internal: SQLiteInternal,
   accountId: string,
   defaults: PlatformQuotaValues,
+  snapshot?: PlatformQuotaSnapshot,
 ): PlatformQuotaValues {
-  return resolveEntitlements(
+  const existing = snapshot?.accounts.get(accountId);
+  if (existing) return existing;
+  const quotas = resolveEntitlements(
     defaults,
     billingEntitlementQuotas(internal, accountId),
     // Explicit operator overrides always win over commercial plan capacity.
     quotaOverrides(internal, "account", accountId),
   );
+  snapshot?.accounts.set(accountId, quotas);
+  return quotas;
 }
 
 function workspaceQuotas(
   internal: SQLiteInternal,
   workspaceId: string,
   defaults: PlatformQuotaValues,
+  snapshot?: PlatformQuotaSnapshot,
 ): PlatformQuotaValues {
+  const existing = snapshot?.workspaces.get(workspaceId);
+  if (existing) return existing;
   const workspace = internal.prepare(
     "SELECT created_by FROM clank_platform_organizations WHERE id = ?",
   ).get(workspaceId);
   if (!workspace) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "Workspace not found.");
-  return resolveEntitlements(
-    accountQuotas(internal, String(workspace.created_by), defaults),
+  const quotas = resolveEntitlements(
+    accountQuotas(internal, String(workspace.created_by), defaults, snapshot),
     quotaOverrides(internal, "workspace", workspaceId),
   );
+  snapshot?.workspaces.set(workspaceId, quotas);
+  return quotas;
 }
 
 function projectQuotas(
   internal: SQLiteInternal,
   project: ProjectRow,
   defaults: PlatformQuotaValues,
+  snapshot?: PlatformQuotaSnapshot,
 ): PlatformQuotaValues {
   return project.organizationId
-    ? workspaceQuotas(internal, project.organizationId, defaults)
-    : accountQuotas(internal, project.ownerId, defaults);
+    ? workspaceQuotas(internal, project.organizationId, defaults, snapshot)
+    : accountQuotas(internal, project.ownerId, defaults, snapshot);
 }
 
 function publicQuotaDefinitions(): Record<string, unknown>[] {
@@ -11776,7 +11793,8 @@ function dashboardPayload(
     default: PlatformProjectPlacement;
   }>,
 ): Record<string, unknown> {
-  const accountLimits = accountQuotas(internal, principal.userId, defaults);
+  const quotaSnapshot: PlatformQuotaSnapshot = { accounts: new Map(), workspaces: new Map() };
+  const accountLimits = accountQuotas(internal, principal.userId, defaults, quotaSnapshot);
   const organizationRows = principal.organizationId
     ? internal.prepare(`SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, m.role,
         (SELECT count(*) FROM clank_platform_projects p WHERE p.organization_id = o.id) AS project_count
@@ -11789,7 +11807,7 @@ function dashboardPayload(
       JOIN clank_platform_memberships m ON m.organization_id = o.id
       WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
   const organizations = organizationRows.map((row) => {
-    const effective = workspaceQuotas(internal, String(row.id), defaults);
+    const effective = workspaceQuotas(internal, String(row.id), defaults, quotaSnapshot);
     return {
       id: String(row.id),
       name: String(row.name),
@@ -11807,7 +11825,7 @@ function dashboardPayload(
     : visibleRootProjectRows(internal, principal.userId);
   const projects = projectRows.map((source) => {
     const project = projectRow(source);
-    const effective = projectQuotas(internal, project, defaults);
+    const effective = projectQuotas(internal, project, defaults, quotaSnapshot);
     const release = project.activeReleaseId ? releaseById(internal, project.activeReleaseId) : null;
     const domainUsage = internal.prepare(`SELECT count(*) AS count,
       sum(CASE WHEN status = 'verified' AND routing_status = 'ready' THEN 1 ELSE 0 END) AS ready
