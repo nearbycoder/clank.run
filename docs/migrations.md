@@ -35,7 +35,7 @@ Defaults reject:
 - `load_extension`;
 - all `PRAGMA` statements;
 - top-level `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, and `RELEASE`.
-- references to reserved `clank_` and legacy `proact_` SQL tables.
+- references to reserved `clank_` and legacy `proact_` SQL tables, including single-quoted names accepted by SQLite. The conservative guard also rejects single-quoted literals beginning with these reserved prefixes.
 
 Extension loading is disabled, foreign keys and `trusted_schema=OFF` are enforced, durability is `FULL`, and integrity plus foreign-key checks run before and after migration.
 

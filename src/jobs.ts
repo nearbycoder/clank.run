@@ -881,8 +881,8 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     }
     if (idempotencyKey === null) throw new Error("Could not allocate a unique job ID.");
     const existing = internal.prepare(
-      "SELECT id FROM clank_jobs WHERE name = ? AND idempotency_key = ?",
-    ).get(name, idempotencyKey);
+      "SELECT id FROM clank_jobs WHERE name = ? AND owner_id IS ? AND idempotency_key = ?",
+    ).get(name, scope?.userId ?? null, idempotencyKey);
     if (!existing) throw new Error("Job enqueue lost its idempotency record.");
     return Object.freeze({ id: String(existing.id), deduplicated: true });
   };
@@ -1830,8 +1830,13 @@ function ensureJobSchema(internal: SQLiteInternal): void {
   if (!internal.prepare("PRAGMA table_info(clank_jobs)").all().some((column) => column.name === "trace_context")) {
     internal.exec("ALTER TABLE clank_jobs ADD COLUMN trace_context TEXT");
   }
-  internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_jobs_idempotency
-    ON clank_jobs (name, idempotency_key) WHERE idempotency_key IS NOT NULL`);
+  // Migrate the former global key without leaving a window with no uniqueness guard.
+  internal.transaction(() => {
+    internal.exec(`CREATE UNIQUE INDEX IF NOT EXISTS clank_jobs_owner_idempotency
+      ON clank_jobs (name, owner_id IS NULL, coalesce(owner_id, ''), idempotency_key)
+      WHERE idempotency_key IS NOT NULL`);
+    internal.exec("DROP INDEX IF EXISTS clank_jobs_idempotency");
+  });
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_jobs_claim
     ON clank_jobs (state, run_at, priority DESC, created_at)`);
   internal.exec(`CREATE INDEX IF NOT EXISTS clank_jobs_groups

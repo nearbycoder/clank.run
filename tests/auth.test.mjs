@@ -699,3 +699,150 @@ test("MFA, bot protection, and a shared rate-limit store compose without leaking
     await fixture.close();
   }
 });
+
+
+test("backend rechecks session revocation and roles after reading a streamed request body", async () => {
+  const fixture = await createFixture();
+  try {
+    const delayedRequest = (path, account, input, beforeBody) => new Request(`https://todo.test${path}`, {
+      method: "POST",
+      headers: { ...jsonHeaders, cookie: account.cookie, "x-clank-csrf": account.csrf },
+      duplex: "half",
+      body: new ReadableStream({
+        pull(controller) {
+          beforeBody();
+          controller.enqueue(new TextEncoder().encode(JSON.stringify(input)));
+          controller.close();
+        },
+      }, { highWaterMark: 0 }),
+    });
+    for (const operation of ["query", "mutation"]) {
+      const alice = await register(fixture.runtime, `delayed-${operation}@example.com`);
+      const response = await fixture.runtime.handle(delayedRequest(
+        `/__clank/${operation}/todos.${operation === "query" ? "list" : "add"}`,
+        alice,
+        operation === "query" ? {} : { title: "must not be written" },
+        () => fixture.runtime.auth.revokeUserSessions(alice.user.id),
+      ));
+      assert.equal(response.status, 401, operation);
+      assert.equal((await response.json()).error.code, "UNAUTHENTICATED");
+    }
+    const admin = await register(fixture.runtime, "delayed-admin@example.com");
+    fixture.runtime.auth.setRole(admin.user.id, "admin");
+    const response = await fixture.runtime.handle(delayedRequest(
+      "/__clank/query/admin", admin, {},
+      () => fixture.runtime.auth.setRole(admin.user.id, "user"),
+    ));
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).error.code, "FORBIDDEN");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("disabled users cannot finish outstanding MFA challenges or acquire sessions", async () => {
+  const codes = [];
+  const fixture = await createFixture({ mfa: { required: true, send: (delivery) => codes.push(delivery) } });
+  try {
+    const alice = await register(fixture.runtime, "disabled-mfa@example.com");
+    const started = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST",
+      body: { email: alice.user.email, password: "correct horse battery staple" },
+    }));
+    assert.equal(started.status, 202);
+    const challenge = (await started.json()).mfa;
+    fixture.runtime.auth.disableUser(alice.user.id);
+    const response = await fixture.runtime.handle(request("/__clank/auth/mfa/verify", {
+      method: "POST",
+      body: { challengeId: challenge.challengeId, code: codes[0].code },
+    }));
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("set-cookie"), null);
+    const sqlite = new DatabaseSync(fixture.path, { readOnly: true });
+    try {
+      assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM clank_auth_sessions WHERE user_id = ?").get(alice.user.id).count, 0);
+    } finally { sqlite.close(); }
+  } finally {
+    await fixture.close();
+  }
+});
+
+for (const mfaRequired of [false, true]) test(`password sign-in cannot continue after password changes (MFA ${mfaRequired})`, async () => {
+  let afterPasswordVerified;
+  const fixture = await createFixture({
+    mfa: { required: mfaRequired, send: () => {} },
+    rateLimit: {
+      store: {
+        consume: () => undefined,
+        clear: () => afterPasswordVerified?.(),
+      },
+    },
+  });
+  try {
+    const alice = await register(fixture.runtime, "password-race@example.com");
+    afterPasswordVerified = async () => {
+      const changed = await fixture.runtime.handle(request("/__clank/auth/change-password", {
+        method: "POST", cookie: alice.cookie, csrf: alice.csrf,
+        body: { currentPassword: "correct horse battery staple", newPassword: "new password after revocation" },
+      }));
+      assert.equal(changed.status, 200);
+    };
+    const response = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST", body: { email: alice.user.email, password: "correct horse battery staple" },
+    }));
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("set-cookie"), null);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("changing a password invalidates outstanding MFA proofs", async () => {
+  const codes = [];
+  const fixture = await createFixture({ mfa: { required: true, send: (delivery) => codes.push(delivery) } });
+  try {
+    const alice = await register(fixture.runtime, "changed-mfa@example.com");
+    const started = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST", body: { email: alice.user.email, password: "correct horse battery staple" },
+    }));
+    assert.equal(started.status, 202);
+    const challenge = (await started.json()).mfa;
+    const changed = await fixture.runtime.handle(request("/__clank/auth/change-password", {
+      method: "POST", cookie: alice.cookie, csrf: alice.csrf,
+      body: { currentPassword: "correct horse battery staple", newPassword: "new password after challenge" },
+    }));
+    assert.equal(changed.status, 200);
+    const response = await fixture.runtime.handle(request("/__clank/auth/mfa/verify", {
+      method: "POST", body: { challengeId: challenge.challengeId, code: codes[0].code },
+    }));
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("set-cookie"), null);
+  } finally {
+    await fixture.close();
+  }
+});
+
+for (const operation of ["passkeys/delete", "change-password"]) test(`auth ${operation} rechecks revocation after receiving the body`, async () => {
+  const fixture = await createFixture();
+  try {
+    const alice = await register(fixture.runtime, `revoked-auth-${operation.replaceAll("/", "-")}@example.com`);
+    const response = await fixture.runtime.handle(new Request(`https://todo.test/__clank/auth/${operation}`, {
+      method: "POST",
+      headers: { ...jsonHeaders, cookie: alice.cookie, "x-clank-csrf": alice.csrf },
+      duplex: "half",
+      body: new ReadableStream({
+        pull(controller) {
+          fixture.runtime.auth.revokeUserSessions(alice.user.id);
+          controller.enqueue(new TextEncoder().encode(JSON.stringify(operation === "change-password"
+            ? { currentPassword: "correct horse battery staple", newPassword: "must not replace password" }
+            : { id: "missing-passkey" })));
+          controller.close();
+        },
+      }, { highWaterMark: 0 }),
+    }));
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).error.code, "UNAUTHENTICATED");
+  } finally {
+    await fixture.close();
+  }
+});

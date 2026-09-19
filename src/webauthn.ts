@@ -153,8 +153,7 @@ export async function verifyPasskeyAuthentication(input: {
     throw new TypeError("Passkey signature is invalid.");
   }
   if (
-    input.stored.counter !== 0
-    && parsed.counter !== 0
+    (input.stored.counter !== 0 || parsed.counter !== 0)
     && parsed.counter <= input.stored.counter
   ) throw new TypeError("Passkey signature counter did not advance.");
   return { counter: parsed.counter, userVerified: parsed.userVerified };

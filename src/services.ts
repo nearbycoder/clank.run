@@ -146,10 +146,10 @@ export async function openFileEmailService(options: {
   const fs = await nodeFs();
   const path = await nodePath();
   const root = path.resolve(options.directory);
-  await fs.mkdir(root, { recursive: true, mode: 0o700 });
-  await fs.chmod(root, 0o700);
+  await preparePrivateDirectory(fs, root);
   return {
     async send(message) {
+      await assertPrivateDirectory(fs, root);
       const normalized = normalizeEmailMessage(message);
       const id = crypto.randomUUID();
       const acceptedAt = Date.now();
@@ -352,15 +352,22 @@ export async function openLocalFileStore(options: {
   const root = path.resolve(options.directory);
   const objects = path.join(root, "objects");
   const metadata = path.join(root, "metadata");
-  await fs.mkdir(objects, { recursive: true, mode: 0o700 });
-  await fs.mkdir(metadata, { recursive: true, mode: 0o700 });
-  await fs.chmod(root, 0o700);
+  await preparePrivateDirectory(fs, root);
+  await preparePrivateDirectory(fs, objects);
+  await preparePrivateDirectory(fs, metadata);
+  const nodeFsName = "node:fs";
+  const { constants } = await import(nodeFsName) as { constants: { O_RDONLY: number; O_NOFOLLOW?: number; O_NONBLOCK?: number } };
   const signingKey = secretBytes(options.signingKey, "file signing key");
   const maxFileBytes = positiveInteger(options.maxFileBytes ?? 25 * 1024 * 1024, "maxFileBytes");
 
   const locations = async (key: string) => {
     const normalized = fileKey(key);
     const id = await sha256(normalized);
+    for (const directory of [root, objects, metadata]) await assertPrivateDirectory(fs, directory);
+    for (const directory of [path.join(objects, id.slice(0, 2)), path.join(metadata, id.slice(0, 2))]) {
+      try { await assertPrivateDirectory(fs, directory); }
+      catch (error) { if (nodeCode(error) !== "ENOENT") throw error; }
+    }
     return {
       key: normalized,
       data: path.join(objects, id.slice(0, 2), id),
@@ -368,15 +375,40 @@ export async function openLocalFileStore(options: {
     };
   };
 
+  const readPrivateFile = async (target: string, maximum: number): Promise<Uint8Array> => {
+    const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    try {
+      const [stats, current] = await Promise.all([handle.stat(), fs.lstat(target)]);
+      if (!stats.isFile() || current.isSymbolicLink() || current.dev !== stats.dev || current.ino !== stats.ino
+        || !ownedByCurrentUser(stats) || (stats.mode & 0o077) !== 0 || stats.size > maximum) {
+        throw new Error("Stored file is unsafe or exceeds its size limit.");
+      }
+      // Bound allocation and reads even if another process grows the opened file.
+      const bytes = new Uint8Array(stats.size + 1);
+      let offset = 0;
+      while (offset < bytes.byteLength) {
+        const { bytesRead } = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+        if (!bytesRead) break;
+        offset += bytesRead;
+      }
+      if (offset !== stats.size) throw new Error("Stored file size changed during the read.");
+      return bytes.subarray(0, offset);
+    } finally { await handle.close(); }
+  };
+
   const readMetadata = async (key: string): Promise<FileMetadata | null> => {
     const location = await locations(key);
     try {
-      const parsed = JSON.parse(await fs.readFile(location.meta, "utf8")) as FileMetadata;
+      const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await readPrivateFile(location.meta, 16 * 1024))) as FileMetadata;
       if (
-        parsed.key !== location.key
+        !parsed || typeof parsed !== "object" || Array.isArray(parsed)
+        || parsed.key !== location.key
         || !Number.isSafeInteger(parsed.size)
-        || parsed.size < 0
-        || !/^[a-f0-9]{64}$/u.test(parsed.sha256)
+        || parsed.size < 0 || parsed.size > maxFileBytes
+        || typeof parsed.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(parsed.sha256)
+        || typeof parsed.contentType !== "string" || contentType(parsed.contentType) !== parsed.contentType
+        || !Number.isSafeInteger(parsed.createdAt) || parsed.createdAt < 0
+        || !Number.isSafeInteger(parsed.updatedAt) || parsed.updatedAt < parsed.createdAt
       ) throw new Error("Stored file metadata is invalid.");
       return parsed;
     } catch (error) {
@@ -400,8 +432,8 @@ export async function openLocalFileStore(options: {
         createdAt: current?.createdAt ?? now,
         updatedAt: now,
       };
-      await fs.mkdir(path.dirname(location.data), { recursive: true, mode: 0o700 });
-      await fs.mkdir(path.dirname(location.meta), { recursive: true, mode: 0o700 });
+      await preparePrivateDirectory(fs, path.dirname(location.data));
+      await preparePrivateDirectory(fs, path.dirname(location.meta));
       const suffix = `${processId()}-${crypto.randomUUID()}.tmp`;
       const dataTemporary = `${location.data}.${suffix}`;
       const metaTemporary = `${location.meta}.${suffix}`;
@@ -421,7 +453,7 @@ export async function openLocalFileStore(options: {
       const record = await readMetadata(location.key);
       if (!record) return null;
       let bytes: Uint8Array;
-      try { bytes = new Uint8Array(await fs.readFile(location.data)); }
+      try { bytes = await readPrivateFile(location.data, maxFileBytes); }
       catch (error) {
         if (nodeCode(error) === "ENOENT") throw new Error(`File data is missing for ${location.key}.`);
         throw error;
@@ -454,7 +486,7 @@ export async function openLocalFileStore(options: {
     async verify(token, operation) {
       if (typeof token !== "string" || token.length > 4_096) throw new Error("Invalid file capability.");
       const [encoded, signature, extra] = token.split(".");
-      if (!encoded || !signature || extra || !await safeEqual(await hmac(encoded, signingKey), signature)) {
+      if (!encoded || !signature || extra !== undefined || !await safeEqual(await hmac(encoded, signingKey), signature)) {
         throw new Error("Invalid file capability.");
       }
       let payload: unknown;
@@ -481,6 +513,9 @@ export async function openLocalFileStore(options: {
           if (!object) return fileProblem(404, "FILE_NOT_FOUND", "File not found.");
           const headers = new Headers({
             "content-type": object.metadata.contentType,
+            "content-disposition": `attachment; filename="${object.metadata.key.split("/").at(-1)!}"`,
+            "content-security-policy": "sandbox",
+            "referrer-policy": "no-referrer",
             "content-length": String(object.metadata.size),
             etag: `"sha256-${object.metadata.sha256}"`,
             "cache-control": "private, no-store",
@@ -1006,6 +1041,7 @@ function fileKey(input: string): string {
 
 function contentType(value?: string): string {
   if (!value) return "application/octet-stream";
+  if (typeof value !== "string" || value.length > 255) throw new TypeError("Invalid content type.");
   const normalized = value.split(";", 1)[0]!.trim().toLowerCase();
   if (!/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/u.test(normalized)) {
     throw new TypeError("Invalid content type.");
@@ -1154,9 +1190,35 @@ function processId(): number {
   return (globalThis as any).process?.pid ?? 0;
 }
 
+interface PrivateFileStats {
+  dev: number; ino: number; uid: number; mode: number; size: number;
+  isFile(): boolean; isDirectory(): boolean; isSymbolicLink(): boolean;
+}
+function ownedByCurrentUser(stats: PrivateFileStats): boolean {
+  const process = (globalThis as any).process;
+  return typeof process?.getuid !== "function" || stats.uid === process.getuid();
+}
+async function assertPrivateDirectory(fs: Awaited<ReturnType<typeof nodeFs>>, directory: string, checkMode = true): Promise<void> {
+  const stats = await fs.lstat(directory);
+  if (stats.isSymbolicLink() || !stats.isDirectory() || !ownedByCurrentUser(stats) || (checkMode && (stats.mode & 0o077) !== 0)) {
+    throw new Error("Local service storage directory is unsafe.");
+  }
+}
+async function preparePrivateDirectory(fs: Awaited<ReturnType<typeof nodeFs>>, directory: string): Promise<void> {
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  await assertPrivateDirectory(fs, directory, false);
+  await fs.chmod(directory, 0o700);
+}
+
 async function nodeFs(): Promise<{
   mkdir(path: string, options: { recursive: boolean; mode: number }): Promise<void>;
   chmod(path: string, mode: number): Promise<void>;
+  lstat(path: string): Promise<PrivateFileStats>;
+  open(path: string, flags: number): Promise<{
+    stat(): Promise<PrivateFileStats>;
+    read(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{ bytesRead: number }>;
+    close(): Promise<void>;
+  }>;
   writeFile(path: string, value: string | Uint8Array, options: { mode: number; flag: string }): Promise<void>;
   readFile(path: string, encoding?: "utf8"): Promise<any>;
   rename(from: string, to: string): Promise<void>;

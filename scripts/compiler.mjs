@@ -13,7 +13,9 @@ export function compile(source, options = {}) {
     stripTypeScriptTypes(transformed, {
       mode: "transform",
       sourceMap: options.sourceMap !== false,
-      sourceUrl: filename,
+      // A sourceURL without a map renames the emitted module to its source path
+      // in V8, which silently excludes it from coverage of dist/**/*.js.
+      ...(options.sourceMap === false ? {} : { sourceUrl: filename }),
     }));
   javascript = javascript.replace(
     /(\bfrom\s+|\bimport\s*(?:\(\s*)?)(["'])([^"']+?)\.tsx?([?#][^"']*)?\2/g,

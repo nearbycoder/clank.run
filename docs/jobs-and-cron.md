@@ -136,7 +136,7 @@ the handler in the web process.
 | `delayMs` | Delay from enqueue; mutually exclusive with `runAt` |
 | `priority` | Higher values are claimed first |
 | `queue` | Route this occurrence to a queue other than the definition default |
-| `idempotencyKey` | Repeated enqueue returns the retained matching job |
+| `idempotencyKey` | Repeated enqueue returns the retained matching job for the same job name and owner; server jobs have a separate scope |
 | `group` | Serialize active jobs with the same queue and group |
 
 Idempotency applies while the original terminal job is retained. After an operator or retention

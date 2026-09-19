@@ -98,6 +98,3 @@ function App() {
     }, " Clear completed "))));
 }
 render(document.querySelector("#app"), __clankJSX(App, {}));
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/todo/app.tsx

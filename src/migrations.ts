@@ -386,17 +386,23 @@ function tokenizeSql(sql: string): string[] {
     }
     if (character === "'") {
       index++;
+      let literal = "";
       while (index < sql.length) {
         if (sql[index] === "'") {
           if (sql[index + 1] === "'") {
+            literal += "'";
             index += 2;
             continue;
           }
           index++;
           break;
         }
+        literal += sql[index]!;
         index++;
       }
+      // SQLite also accepts single-quoted strings in identifier positions.
+      // Conservatively protect reserved names regardless of quote style.
+      if (/^(?:clank_|proact_)/iu.test(literal)) output.push(literal.toUpperCase());
       continue;
     }
     if (character === "\"" || character === "`" || character === "[") {

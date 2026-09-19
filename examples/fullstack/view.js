@@ -80,6 +80,3 @@ export function TodoApp(props) {
         "class": "mt-6 text-center text-xs text-slate-400"
     }, "Open this URL in another tab. Mutations committed there stream here automatically."));
 }
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/fullstack/view.tsx

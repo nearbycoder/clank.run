@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 
 import {
   defineDatabase,
@@ -934,4 +935,35 @@ test("application schemas cannot shadow durable job and workflow tables", () => 
       /reserved for Clank internals/,
     );
   }
+});
+
+
+test("job idempotency is isolated by owner and migrates retained globally indexed jobs", async () => {
+  const app = await fixture(job => ({ record: job({ args: { value: s.string() }, handler: ({ db }, { value }) => db.transaction(tx => tx.table("events").insert({ value })) }) }));
+  let restarted;
+  try {
+    const job = app.definition.jobs.record;
+    const options = { idempotencyKey: "shared-request" };
+    const alice = app.runtime.publisher({ userId: "alice" }).enqueue(job, { value: "Alice" }, options);
+    app.runtime.close();
+    // Reproduce the schema of existing installations, with a retained owner-scoped job.
+    const legacy = new DatabaseSync(app.path);
+    try {
+      legacy.exec("DROP INDEX clank_jobs_owner_idempotency; CREATE UNIQUE INDEX clank_jobs_idempotency ON clank_jobs(name,idempotency_key) WHERE idempotency_key IS NOT NULL");
+    } finally { legacy.close(); }
+    restarted = openJobs(app.definition, { database: app.database });
+    const duplicate = restarted.publisher({ userId: "alice" }).enqueue(job, { value: "Alice" }, options);
+    assert.deepEqual(duplicate, { id: alice.id, deduplicated: true });
+    const bob = restarted.publisher({ userId: "bob" }).enqueue(job, { value: "Bob" }, options);
+    const server = restarted.enqueue(job, { value: "Server" }, options);
+    assert.equal(new Set([alice.id, bob.id, server.id]).size, 3);
+    assert.equal(bob.deduplicated, false);
+    assert.equal(server.deduplicated, false);
+    assert.equal(restarted.publisher({ userId: "bob" }).enqueue(job, { value: "Bob" }, options).id, bob.id);
+    assert.equal(restarted.enqueue(job, { value: "Server" }, options).id, server.id);
+    assert.equal(restarted.get(bob.id).ownerId, "bob");
+    assert.equal(restarted.get(server.id).ownerId, null);
+    for (let index = 0; index < 3; index++) assert.equal(await restarted.workOnce(), true);
+    assert.deepEqual(app.database.read(db => db.table("events").collect()).map(row => row.value).sort(), ["Alice", "Bob", "Server"]);
+  } finally { restarted?.close(); await app.close(); }
 });

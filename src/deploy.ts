@@ -375,6 +375,8 @@ export async function createDeploymentBundle(
   config: DeploymentConfig,
   options: CreateDeploymentBundleOptions = {},
 ): Promise<Uint8Array> {
+  const fsName = "node:fs/promises";
+  const fs = await import(fsName) as unknown as { realpath(path: string): Promise<string> };
   const pathName = "node:path";
   const path = await import(pathName) as unknown as {
     resolve(...segments: string[]): string;
@@ -382,7 +384,9 @@ export async function createDeploymentBundle(
     relative(from: string, to: string): string;
     sep: string;
   };
-  const base = path.resolve(root);
+  // Callers may intentionally enter a project through a symlink, but no include
+  // path beneath that trusted root may follow one, including its ancestors.
+  const base = await fs.realpath(path.resolve(root));
   let files: Map<string, DeploymentFile> | undefined;
   for (let attempt = 0; attempt < MAX_SOURCE_SNAPSHOT_ATTEMPTS; attempt++) {
     const snapshot = new Map<string, DeploymentFile>();
@@ -391,7 +395,7 @@ export async function createDeploymentBundle(
         await collectPath(base, path.resolve(base, included), snapshot, options, path);
       }
       if (options.frameworkRoot) {
-        const framework = path.resolve(options.frameworkRoot);
+        const framework = await fs.realpath(path.resolve(options.frameworkRoot));
         for (const included of ["dist", "package.json", "LICENSE"]) {
           await collectPath(
             framework,
@@ -613,8 +617,14 @@ async function collectPath(
   };
   type DirectoryEntry = { name: string };
   const fs = await import(fsName) as unknown as {
+    constants: { O_RDONLY: number; O_NOFOLLOW?: number };
     lstat(path: string): Promise<FileStats>;
-    readFile(path: string): Promise<Uint8Array>;
+    realpath(path: string): Promise<string>;
+    open(path: string, flags: number): Promise<{
+      stat(): Promise<FileStats>;
+      readFile(): Promise<Uint8Array>;
+      close(): Promise<void>;
+    }>;
     readdir(path: string, options: { withFileTypes: true }): Promise<DirectoryEntry[]>;
   };
   const resolved = path.resolve(target);
@@ -629,6 +639,9 @@ async function collectPath(
     throw error;
   }
   if (stats.isSymbolicLink()) throw new Error(`Deployment symbolic links are not allowed: ${resolved}`);
+  if (await fs.realpath(resolved) !== resolved) {
+    throw new Error(`Deployment symbolic links are not allowed in include paths: ${resolved}`);
+  }
   if (stats.isDirectory()) {
     let entries: DirectoryEntry[];
     try {
@@ -664,7 +677,21 @@ async function collectPath(
   let bytes: Uint8Array;
   let confirmed: FileStats;
   try {
-    bytes = await fs.readFile(resolved);
+    const handle = await fs.open(resolved, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.dev !== stats.dev || opened.ino !== stats.ino
+        || opened.size !== stats.size || await fs.realpath(resolved) !== resolved) {
+        throw new DeploymentSourceChangedError(resolved);
+      }
+      bytes = await handle.readFile();
+      const read = await handle.stat();
+      if (read.size !== stats.size || read.mtimeMs !== stats.mtimeMs || read.ctimeMs !== stats.ctimeMs) {
+        throw new DeploymentSourceChangedError(resolved);
+      }
+    } finally {
+      await handle.close();
+    }
     confirmed = await fs.lstat(resolved);
   } catch (error) {
     if (errorCode(error) === "ENOENT") throw new DeploymentSourceChangedError(resolved);

@@ -1919,6 +1919,9 @@ export async function openBackend<
 
   const invokeQueryBody = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
     ensureOpen();
+    // Reading a request body can yield while sessions or roles are revoked.
+    // Refresh the session at the synchronous execution boundary.
+    if (authRuntime && auth?.session) auth = authRuntime.refreshSession(auth.session.id) ?? anonymous;
     const fn = functionAt(registry, path, "query");
     authorize(fn, auth);
     const args = fn.args.parse(input ?? {});
@@ -1953,6 +1956,9 @@ export async function openBackend<
 
   const invokeMutationBody = (path: string, input: unknown, auth: AuthRequest<any> | null, key?: string): { value: unknown; version: number } => {
     ensureOpen();
+    // Reading a request body can yield while sessions or roles are revoked.
+    // Refresh the session at the synchronous execution boundary.
+    if (authRuntime && auth?.session) auth = authRuntime.refreshSession(auth.session.id) ?? anonymous;
     const fn = functionAt(registry, path, "mutation");
     authorize(fn, auth);
     const args = fn.args.parse(input ?? {});

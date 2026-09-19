@@ -234,6 +234,3 @@ Object.assign(globalThis, {
         bridge
     }
 });
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/hello/app.tsx

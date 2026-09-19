@@ -564,8 +564,8 @@ async function exchangeToken(
       );
       const rotated = internal.transaction(() => {
         const consumed = internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
-          WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?`)
-          .run(Date.now(), refreshHash, Date.now());
+          WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ? AND scope = ?`)
+          .run(Date.now(), refreshHash, Date.now(), pair.scope);
         if (Number(consumed.changes) !== 1) return false;
         // Adaptive clients can have more than one credential replica. Retain
         // the encrypted predecessor link so a lagging replica can walk to the
@@ -806,7 +806,7 @@ async function recoverRefreshRetry(
           WHERE predecessor_hash = ? AND access_hash = ? AND refresh_hash = ? AND expires_at > ?
             AND EXISTS (SELECT 1 FROM clank_oauth_tokens current
               WHERE current.token_hash = ? AND current.kind = 'refresh'
-                AND current.consumed_at IS NULL AND current.expires_at > ?)`)
+                AND current.consumed_at IS NULL AND current.expires_at > ? AND current.scope = ?)`)
           .run(
             recovered.accessHash,
             envelope,
@@ -817,6 +817,7 @@ async function recoverRefreshRetry(
             now,
             pair.refreshHash,
             now,
+            pair.scope,
           );
         if (Number(updated.changes) !== 1) {
           internal.prepare("DELETE FROM clank_oauth_tokens WHERE token_hash = ?").run(recovered.accessHash);

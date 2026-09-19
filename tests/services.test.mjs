@@ -1,11 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  chmod,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
   stat,
+  symlink,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -416,4 +420,70 @@ test("webhooks bind timestamp and body, reject replay windows, and retry with on
   });
   assert.deepEqual(result, { status: 204, attempts: 2 });
   assert.equal(deliveries[0], deliveries[1]);
+});
+
+test("local file HTTP downloads sandbox active content and never disclose capability URLs as referrers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-files-active-"));
+  try {
+    const files = await openLocalFileStore({ directory: root, signingKey: "a sufficiently long file signing secret for tests" });
+    for (const [key, contentType, body] of [
+      ["attack.html", "text/html", "<script>fetch('/private')</script>"],
+      ["attack.svg", "image/svg+xml", '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'],
+    ]) {
+      const write = await files.sign({ key, operation: "write", expiresAt: Date.now() + 60_000 });
+      assert.equal((await files.handle(new Request(`https://app.test/__clank/files/${write}`, { method: "PUT", headers: { "content-type": contentType }, body }))).status, 201);
+      const read = await files.sign({ key, operation: "read", expiresAt: Date.now() + 60_000 });
+      for (const method of ["GET", "HEAD"]) {
+        const response = await files.handle(new Request(`https://app.test/__clank/files/${read}`, { method }));
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("content-disposition"), `attachment; filename="${key}"`);
+        assert.equal(response.headers.get("content-security-policy"), "sandbox");
+        assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+        assert.equal(await response.text(), method === "GET" ? body : "");
+      }
+      await assert.rejects(files.verify(`${read}.ignored`, "read"), /Invalid file capability/);
+      await assert.rejects(files.verify(`${read}.`, "read"), /Invalid file capability/);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("local services reject linked directories without modifying the target", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-files-link-"));
+  try {
+    const target = join(root, "outside"), linked = join(root, "linked");
+    await mkdir(target, { mode: 0o755 });
+    await symlink(target, linked);
+    const mode = (await stat(target)).mode;
+    await assert.rejects(openLocalFileStore({ directory: linked, signingKey: "a sufficiently long file signing secret for tests" }), /unsafe/);
+    await assert.rejects(openFileEmailService({ directory: linked }), /unsafe/);
+    assert.equal((await stat(target)).mode, mode);
+    assert.deepEqual(await readdir(target), []);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("local file reads reject linked, oversized and publicly readable storage", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-files-safety-"));
+  try {
+    const files = await openLocalFileStore({ directory: root, signingKey: "a sufficiently long file signing secret for tests", maxFileBytes: 32 });
+    await files.put("note.txt", new TextEncoder().encode("private"), { contentType: "text/plain" });
+    const shard = (await readdir(join(root, "objects")))[0];
+    const dataDirectory = join(root, "objects", shard), data = join(dataDirectory, (await readdir(dataDirectory))[0]);
+    const metadataDirectory = join(root, "metadata", shard), meta = join(metadataDirectory, (await readdir(metadataDirectory))[0]);
+    const outside = join(root, "outside");
+    await writeFile(outside, "private", { mode: 0o600 });
+    await rm(data); await symlink(outside, data);
+    await assert.rejects(files.get("note.txt"));
+    await rm(data); await writeFile(data, "private", { mode: 0o644 });
+    await assert.rejects(files.get("note.txt"), /unsafe/);
+    await chmod(data, 0o600); await writeFile(data, "x".repeat(33));
+    await assert.rejects(files.get("note.txt"), /size limit/);
+    await writeFile(data, "private"); await writeFile(meta, "x".repeat(16385));
+    await assert.rejects(files.stat("note.txt"), /size limit/);
+    await rm(dataDirectory, { recursive: true });
+    const escapedShard = join(root, "escaped-shard"); await mkdir(escapedShard, { mode: 0o700 });
+    await symlink(escapedShard, dataDirectory);
+    await assert.rejects(files.put("note.txt", new Uint8Array()), /unsafe/);
+    await assert.rejects(files.delete("note.txt"), /unsafe/);
+    assert.deepEqual(await readdir(escapedShard), []);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

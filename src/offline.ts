@@ -52,7 +52,7 @@ export function createOfflineQueue(options: OfflineQueueOptions): OfflineQueue {
       || new Set(rows.map(row => row.id)).size !== rows.length) throw new Error("Offline queue storage is invalid.");
     return rows;
   };
-  const snapshot = () => Object.freeze(read().map(row => Object.freeze(row)));
+  const snapshot = () => { authorize(); return Object.freeze(read().map(row => Object.freeze(row))); };
   const write = (rows: readonly OfflineMutation[]) => {
     const serialized = JSON.stringify(rows);
     if (rows.length > 100 || new TextEncoder().encode(serialized).length > limit) throw new Error("Offline queue is full.");
@@ -118,6 +118,7 @@ export function createOfflineQueue(options: OfflineQueueOptions): OfflineQueue {
     subscribe(listener) { authorize(); listeners.add(listener); return () => listeners.delete(listener); },
     dispose() { disposed = true; listeners.clear(); },
   };
+  authorize();
   read();
   return queue;
 }

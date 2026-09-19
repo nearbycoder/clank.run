@@ -120,6 +120,3 @@ const server = await serve(app, {
     } : {}
 });
 console.log(`Clank authenticated Todo: ${server.url}`);
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/auth-todo/server.tsx

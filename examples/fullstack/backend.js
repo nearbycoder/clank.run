@@ -89,6 +89,3 @@ export const backend = defineBackend({
             })
         }
     }));
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/fullstack/backend.ts
