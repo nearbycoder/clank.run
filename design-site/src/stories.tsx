@@ -68,7 +68,7 @@ function cleanup(...controllers: Array<{ dispose?: () => void } | undefined>) {
 }
 
 function HiddenInput(props: Record<string, unknown>) {
-  return <input {...props} class="native-projection" />;
+  return <input {...props} class="native-projection" hidden />;
 }
 
 function CheckGlyph() {
@@ -134,9 +134,9 @@ export function AccordionStory() {
       <For each={collectionItems} by="value">
         {(item) => (
           <section {...accordion.item(item.value)} class="accordion-item">
-            <h3 {...accordion.header(item.value)}>
+            <h2 {...accordion.header(item.value)}>
               <button {...accordion.trigger(item.value)} class="accordion-trigger"><span>{item.textValue}</span><Chevron /></button>
-            </h3>
+            </h2>
             <Show when={() => accordion.isPanelMounted(item.value)}>
               <div {...accordion.panel(item.value)} class="accordion-panel">
                 {item.value === "overview" ? "A dependency-free primitive with complete keyboard behavior." : item.value === "details" ? "Every semantic part exposes stable data attributes and agent metadata." : "State changes include their exact reason and can be canceled."}
@@ -278,11 +278,11 @@ export function ButtonStory() {
 export function CheckboxStory() {
   const checkbox = createCheckbox({ id: "story-checkbox", defaultChecked: true, name: "updates" });
   return (
-    <label {...checkbox.root()} class="choice-row">
+    <div {...checkbox.root()} class="choice-row">
       <span class="demo-checkbox"><span {...checkbox.indicator({ keepMounted: true })}><CheckGlyph /></span></span>
       <span><strong>Deployment updates</strong><small>Receive a note when production changes.</small></span>
       <HiddenInput {...checkbox.input()} />
-    </label>
+    </div>
   );
 }
 
@@ -292,8 +292,8 @@ export function CheckboxGroupStory() {
   const labels = { email: "Email", push: "Push notifications", digest: "Weekly digest" };
   return (
     <div {...group.root()} class="choice-stack">
-      <label {...group.parent()} class="choice-row parent"><span class="demo-checkbox"><span {...group.parentIndicator({ keepMounted: true })}><CheckGlyph /></span></span><strong>All notifications</strong></label>
-      <For each={items}>{(value) => <label {...group.item(value)} class="choice-row"><span class="demo-checkbox"><span {...group.indicator(value, { keepMounted: true })}><CheckGlyph /></span></span><span>{labels[value]}</span><HiddenInput {...group.input(value)} /></label>}</For>
+      <div {...group.parent()} class="choice-row parent"><span class="demo-checkbox"><span {...group.parentIndicator({ keepMounted: true })}><CheckGlyph /></span></span><strong>All notifications</strong></div>
+      <For each={items}>{(value) => <div {...group.item(value)} class="choice-row"><span class="demo-checkbox"><span {...group.indicator(value, { keepMounted: true })}><CheckGlyph /></span></span><span>{labels[value]}</span><HiddenInput {...group.input(value)} /></div>}</For>
     </div>
   );
 }
@@ -473,7 +473,7 @@ export function ProgressStory() {
 export function RadioStory() {
   const radio = createRadioGroup({ id: "story-radio", items: ["starter", "pro", "scale"], defaultValue: "pro", name: "plan" });
   const details = { starter: ["Starter", "For personal experiments"], pro: ["Pro", "For shipping side projects"], scale: ["Scale", "For growing teams"] };
-  return <div {...radio.root()} class="radio-cards"><For each={["starter", "pro", "scale"] as const}>{(value) => <label {...radio.item(value)} class="radio-card"><span class="demo-radio"><span {...radio.indicator(value)} /></span><span><strong>{details[value][0]}</strong><small>{details[value][1]}</small></span><HiddenInput {...radio.input(value)} /></label>}</For></div>;
+  return <div {...radio.root()} class="radio-cards"><For each={["starter", "pro", "scale"] as const}>{(value) => <div {...radio.item(value)} class="radio-card"><span class="demo-radio"><span {...radio.indicator(value)} /></span><span><strong>{details[value][0]}</strong><small>{details[value][1]}</small></span><HiddenInput {...radio.input(value)} /></div>}</For></div>;
 }
 
 export function ScrollAreaStory() {
@@ -504,7 +504,7 @@ export function SliderStory() {
 export function SwitchStory() {
   const enabled = createSwitch({ id: "story-switch-enabled", defaultChecked: true, name: "previews" });
   const disabled = createSwitch({ id: "story-switch-disabled", disabled: true });
-  return <div class="choice-stack"><label {...enabled.root()} class="switch-row"><span><strong>Preview deployments</strong><small>Create an isolated URL for every pull request.</small></span><span class="demo-switch"><span {...enabled.thumb()} /></span><HiddenInput {...enabled.input()} /></label><label {...disabled.root()} class="switch-row"><span><strong>Automatic promotion</strong><small>Requires a production approval policy.</small></span><span class="demo-switch"><span {...disabled.thumb()} /></span><HiddenInput {...disabled.input()} /></label></div>;
+  return <div class="choice-stack"><div {...enabled.root()} class="switch-row"><span><strong>Preview deployments</strong><small>Create an isolated URL for every pull request.</small></span><span class="demo-switch"><span {...enabled.thumb()} /></span><HiddenInput {...enabled.input()} /></div><div {...disabled.root()} class="switch-row"><span><strong>Automatic promotion</strong><small>Requires a production approval policy.</small></span><span class="demo-switch"><span {...disabled.thumb()} /></span><HiddenInput {...disabled.input()} /></div></div>;
 }
 
 export function TabsStory() {

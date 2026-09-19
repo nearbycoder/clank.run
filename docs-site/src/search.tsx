@@ -53,7 +53,6 @@ export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string
         autocomplete="off"
         aria-label="Search documentation"
         aria-controls="quick-search-results"
-        aria-expanded={expanded.value}
         onInput={(event) => {
           query.value = event.currentTarget.value;
           focused.value = true;
@@ -69,7 +68,7 @@ export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string
         agentLabel="Search Clank documentation"
       />
       <kbd>/</kbd>
-      <div class="search-popover" id="quick-search-results" role="listbox" hidden={!expanded.value}>
+      <div class="search-popover" id="quick-search-results" role="region" aria-label="Matching guides" hidden={!expanded.value}>
         <div class="search-popover-label">Best matches</div>
         <For
           each={results.value}
@@ -77,7 +76,7 @@ export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string
           fallback={<div class="search-empty">No matching guide. Press Enter for full-text search.</div>}
         >
           {(entry) => (
-            <a href={`/docs/${entry.slug}`} role="option" agentLabel={`Open ${entry.title}`}>
+            <a href={`/docs/${entry.slug}`} agentLabel={`Open ${entry.title}`}>
               <span>
                 <strong>{entry.title}</strong>
                 <small>{entry.groupTitle}</small>

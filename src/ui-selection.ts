@@ -328,7 +328,7 @@ export function createSelect<Value>(options: SelectOptions<Value>): SelectContro
         "aria-disabled": () => disabled.value,
         "aria-readonly": () => readOnly.value,
         "aria-required": () => required.value || undefined,
-        "aria-activedescendant": () => highlightedIndex.value < 0 ? undefined : itemId(id, highlightedIndex.value),
+        "aria-activedescendant": () => !popup.open.value || highlightedIndex.value < 0 ? undefined : itemId(id, highlightedIndex.value),
         disabled: () => disabled.value,
         form: options.form,
         dir: direction,

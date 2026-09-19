@@ -2,6 +2,7 @@
 import { readFile } from "node:fs/promises";
 import {
   For,
+  getClankTheme,
   MCP_PROTOCOL_VERSION,
   MCP_SUPPORTED_PROTOCOL_VERSIONS,
   McpToolError,
@@ -664,7 +665,7 @@ async function page(view: unknown, options: PageOptions): Promise<Response> {
       head: (
         <>
           <meta name="description" content={options.description} />
-          <meta name="theme-color" content="#0a0a0a" />
+          <meta name="theme-color" content={getClankTheme("clank")!.tokens.canvas} />
           <meta name="robots" content={options.status === 404 ? "noindex" : "index,follow"} />
           <link rel="icon" href={`/brand/favicon.ico?v=${manifest.assetVersion}`} sizes="any" />
           <link rel="icon" href={`/brand/clank-mark-32.png?v=${manifest.assetVersion}`} type="image/png" sizes="32x32" />

@@ -98,6 +98,10 @@ for (const path of await filesUnder(sourceRoot)) {
   }
 }
 
+const { createClankThemeStylesheet, getClankTheme } = await import("../dist/ui-theme.js");
+const sourceStyles = await readFile(join(sourceRoot, "styles.css"), "utf8");
+await writeAtomically(join(outputRoot, "styles.css"), `${createClankThemeStylesheet([getClankTheme("clank")])}\n${sourceStyles}`);
+
 await cp(join(projectRoot, "brand"), join(outputRoot, "brand"), { recursive: true });
 await cp(join(projectRoot, "dist"), vendorRoot, { recursive: true });
 await Promise.all([

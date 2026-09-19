@@ -791,3 +791,10 @@ function nativeInput(form) {
     disabled: false,
   });
 }
+
+test("toggle group exposes orientation as styling state without unsupported group ARIA", () => {
+  const group = createToggleGroup({ id: "vertical-toggles", items: ["left", "right"], orientation: "vertical" });
+  assert.equal(group.root().role, "group");
+  assert.equal(group.root()["data-orientation"], "vertical");
+  assert.equal(group.root()["aria-orientation"], undefined);
+});

@@ -94,6 +94,21 @@ restore();
 The component library remains headless. Presets only provide variables; your CSS or Tailwind
 classes decide which variables each visual part consumes.
 
+## Shared visual foundation
+
+The documentation site, control plane, and Design Studio use the same Clank preset from
+`@clank.run/framework/ui/theme`. Generate theme CSS from the preset rather than copying palette
+values into an application. Use `text`, `textMuted`, and `textFaint` for readable text, and pair
+`accent` or `accentHover` fills with `accentContrast`.
+
+All ten built-in presets maintain at least 4.5:1 contrast for these text roles on the five standard
+surfaces and for labels on filled accent and danger controls. Custom themes should verify their
+own combinations, including hover states. Component controllers remain unstyled.
+
+The workshop includes a live overview dialog, mobile component search, theme selection, viewport
+controls, and optional grid and anatomy outlines. Keyboard users can operate the examples and
+scroll documentation code blocks and tables without a pointer.
+
 ## Define a custom theme
 
 Start with all required tokens and validate the object with `defineClankTheme()`. The function

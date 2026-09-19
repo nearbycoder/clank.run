@@ -619,3 +619,22 @@ test("useId normalizes uncontrolled prefixes and still requires a letter", () =>
     /prefix must contain a letter/,
   );
 });
+
+test("removing reflected properties does not recreate false-valued attributes", () => {
+  const root = new FakeElement("main");
+  const attributes = signal({ id: "example", role: "combobox", title: "Example", disabled: true });
+  render(root, h("button", Object.fromEntries(["id", "role", "title", "disabled"].map((name) => [name, expression(() => attributes.value[name])]))));
+  const button = root.children[0];
+  for (const name of ["id", "role", "title"]) {
+    Object.defineProperty(button, name, {
+      configurable: true,
+      get() { return this.getAttribute(name); },
+      set(value) { this.setAttribute(name, String(value)); },
+    });
+  }
+  assert.equal(button.getAttribute("role"), "combobox");
+  button.disabled = true;
+  attributes.value = { id: undefined, role: null, title: false, disabled: false };
+  for (const name of ["id", "role", "title", "disabled"]) assert.equal(button.hasAttribute(name), false, name);
+  assert.equal(button.disabled, false);
+});
