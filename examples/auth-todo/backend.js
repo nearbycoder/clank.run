@@ -157,6 +157,3 @@ export const backend = defineBackend({
             })
         }
     }));
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/auth-todo/backend.ts

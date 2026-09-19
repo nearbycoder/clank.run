@@ -195,6 +195,3 @@ export function TodoWorkspace(props) {
         "agentAction": __clankExpression(()=>api.todos.clearCompleted)
     }, " Clear completed "))));
 }
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/auth-todo/view.tsx

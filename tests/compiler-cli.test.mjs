@@ -759,6 +759,60 @@ test("deployment CLI bounds platform JSON responses before buffering them", asyn
   }
 });
 
+test("deployment CLI refuses redirects before replaying secret request bodies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-secret-redirect-"));
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const secret = "private-secret-redirect-canary";
+  const escaped = [];
+  const sink = createHttpServer(async (request, response) => {
+    for await (const chunk of request) escaped.push(String(chunk));
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("{}");
+  });
+  await new Promise((resolve) => sink.listen(0, "127.0.0.1", resolve));
+  let redirectStatus = 307;
+  let requests = 0;
+  const server = createHttpServer(async (request, response) => {
+    for await (const _chunk of request) { /* Consume the authorized original request. */ }
+    requests++;
+    response.writeHead(redirectStatus, { location: `http://127.0.0.1:${sink.address().port}/collect` });
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const platform = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await mkdir(home);
+    await mkdir(join(project, ".clank"), { recursive: true });
+    await writeFile(join(home, "config.json"), JSON.stringify({
+      version: 1,
+      current: platform,
+      profiles: { [platform]: { token: "clnk_redirect_test_token", expiresAt: Date.now() + 60_000 } },
+    }));
+    await writeFile(join(project, ".clank", "project.json"), JSON.stringify({
+      version: 1,
+      server: platform,
+      projectId: "project_redirect_test",
+    }));
+    for (const status of [307, 308]) {
+      redirectStatus = status;
+      const result = await runCliResult(["secrets", "set", "TOKEN", "--from-env=REDIRECT_TEST_SECRET"], project, {
+        ...process.env,
+        CLANK_HOME: home,
+        REDIRECT_TEST_SECRET: secret,
+      });
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /Could not reach the platform/u);
+      assert.equal(result.stderr.includes(secret), false);
+    }
+    assert.equal(requests, 2);
+    assert.deepEqual(escaped, []);
+  } finally {
+    await Promise.all([server, sink].map((item) => new Promise((resolve) => item.close(resolve))));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("release cleanup CLI sends explicit confirmation and rollback-loss intent", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-release-cleanup-"));
   const home = join(root, "home");

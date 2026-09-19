@@ -84,6 +84,3 @@ const server = await serve(app, {
     port: Number(environment?.PORT ?? 4182)
 });
 console.log(`Clank MCP App example: ${server.url}/mcp`);
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/mcp-app/server.ts

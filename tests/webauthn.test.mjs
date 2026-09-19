@@ -235,3 +235,30 @@ test("WebAuthn rejects oversized and excessively nested CBOR claims without allo
     /nesting/i,
   );
 });
+
+test("WebAuthn rejects a counter reset to zero while allowing counterless passkeys", async () => {
+  const rpId = "todo.test";
+  const origin = "https://todo.test";
+  const challenge = base64url(Buffer.from("counter reset regression challenge"));
+  const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const clientData = new TextEncoder().encode(JSON.stringify({ type: "webauthn.get", challenge, origin }));
+  const authenticatorData = concatenate(sha256(rpId), Uint8Array.of(0x05), unsigned32(0));
+  const credentialId = base64url(Buffer.from("counter-reset-credential-id"));
+  const credential = {
+    id: credentialId, rawId: credentialId, type: "public-key",
+    response: {
+      clientDataJSON: base64url(clientData),
+      authenticatorData: base64url(authenticatorData),
+      signature: base64url(sign("sha256", concatenate(authenticatorData, sha256(clientData)), privateKey)),
+      userHandle: null,
+    },
+  };
+  const stored = { credentialId, publicKey: publicKey.export({ format: "jwk" }), algorithm: -7, counter: 4, transports: [] };
+  await assert.rejects(
+    verifyPasskeyAuthentication({ credential, challenge, origin, rpId, stored }),
+    /counter did not advance/u,
+  );
+  assert.deepEqual(await verifyPasskeyAuthentication({
+    credential, challenge, origin, rpId, stored: { ...stored, counter: 0 },
+  }), { counter: 0, userVerified: true });
+});

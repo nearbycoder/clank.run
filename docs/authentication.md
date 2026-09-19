@@ -40,11 +40,11 @@ export const auth = defineAuth({
 });
 ```
 
-Email verification and password-recovery links are expiring and single use. Password reset revokes every existing browser session before issuing the replacement session. Recovery requests perform a fixed minimum amount of work and return the same response whether or not an account exists. Recovery delivery is dispatched after the response path so provider latency does not reveal account existence; production delivery hooks should enqueue durably before returning from their own worker boundary.
+Email verification and password-recovery links are expiring and single use. Password changes and resets invalidate outstanding password-based MFA challenges and revoke existing browser sessions. Session issuance rechecks that the account is enabled and the verified password is still current, so an in-flight login cannot restore access after a password change. Password and passkey changes recheck the session before writing, so revocation during request parsing or cryptographic work blocks the change. Recovery requests perform a fixed minimum amount of work and return the same response whether or not an account exists. Recovery delivery is dispatched after the response path so provider latency does not reveal account existence; production delivery hooks should enqueue durably before returning from their own worker boundary.
 
 Required email verification is enforced by backend authorization, not only by UI. `auth.requireVerified()` is also available in custom handlers.
 
-MFA login returns a short-lived challenge only after the password is verified. Codes are hashed, attempt-limited, expiring, and single use. Passkeys use required discoverable credentials, WebAuthn `none` attestation, exact challenge and origin binding, RP ID hashes, user-presence and optional user-verification flags, ES256 or RS256 signature verification, and monotonic authenticator counters. Authentication starts without an account-specific credential list, preventing the start response from becoming an account-enumeration oracle.
+MFA login returns a short-lived challenge only after the password is verified. Codes are hashed, attempt-limited, expiring, and single use. Passkeys use required discoverable credentials, WebAuthn `none` attestation, exact challenge and origin binding, RP ID hashes, user-presence and optional user-verification flags, ES256 or RS256 signature verification, and monotonic authenticator counters. Counterless authenticators may keep returning zero; an authenticator that previously reported a nonzero counter cannot reset it to zero. Authentication starts without an account-specific credential list, preventing the start response from becoming an account-enumeration oracle.
 
 The browser client includes:
 

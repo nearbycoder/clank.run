@@ -356,6 +356,3 @@ export default {
         customDomains: true
     }
 };
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/blueprint-workspace/clank.app.ts

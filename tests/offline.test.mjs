@@ -110,3 +110,22 @@ test("offline queue rendering escapes metadata and excludes mutation arguments",
   assert.doesNotMatch(html, /<script>|private-input|hidden-key/i);
   assert.match(html, /&lt;script&gt;/);
 });
+
+
+test("offline snapshots cannot expose another account's pending input or a disposed queue", async () => {
+  const local = storage();
+  let user = "alice";
+  const options = { namespace: "privacy", userId: "alice", currentUser: () => user, storage: local, client: { mutateOnce: async () => {} } };
+  const queue = createOfflineQueue(options);
+  await queue.enqueue(api.add, { title: "Alice private draft" });
+  assert.equal(queue.snapshot()[0].input.title, "Alice private draft");
+  user = "bob";
+  assert.throws(() => queue.snapshot(), /another account/);
+  assert.throws(() => createOfflineQueue(options), /another account/);
+  user = null;
+  assert.throws(() => queue.snapshot(), /another account/);
+  user = "alice";
+  assert.equal(queue.snapshot().length, 1);
+  queue.dispose();
+  assert.throws(() => queue.snapshot(), /disposed/);
+});

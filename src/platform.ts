@@ -596,6 +596,7 @@ interface ReleaseRow {
 
 interface TokenPrincipal {
   tokenId: string | null;
+  sessionId: string | null;
   userId: string;
   email: string;
   organizationId: string | null;
@@ -5769,6 +5770,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           const recovered = await queueProviderFailover(
             {
               tokenId: null,
+              sessionId: auth.session!.id,
               userId: auth.user!.id,
               email: auth.user!.email,
               organizationId: null,
@@ -7549,6 +7551,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const name = boundedString(input.name ?? "Project automation", "name", 1, 100);
         const permissions = inputProjectPermissions(input.permissions);
         for (const permission of permissions) {
+          if (principal.projectId && !principal.permissions.includes(permission)) {
+            throw new PlatformError(403, "TOKEN_SCOPE_DENIED", `This token cannot grant ${permission} permission.`);
+          }
           if (!roleAllows(access.role, permission)) {
             throw new PlatformError(403, "ROLE_DENIED", `Your role cannot grant ${permission} permission.`);
           }
@@ -7558,22 +7563,50 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           : integerInRange(input.expiresIn, "expiresIn", 300, 365 * 24 * 60 * 60);
         const rawToken = `${TOKEN_PREFIX}${await randomToken(32)}`;
         const tokenId = await randomId(18);
-        const expiresAt = Date.now() + expiresIn * 1_000;
-        storage.internal.prepare(`INSERT INTO clank_platform_tokens
-          (id, token_hash, user_id, name, created_at, last_used_at, expires_at, revoked_at,
-           organization_id, project_id, permissions)
-          VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)`)
-          .run(
-            tokenId,
-            syncHash(rawToken),
-            principal.userId,
-            name,
-            Date.now(),
-            expiresAt,
-            project.organizationId,
-            project.id,
-            JSON.stringify(permissions),
-          );
+        let expiresAt = 0;
+        storage.internal.transaction(() => {
+          // Request-body intake yields. Recheck current authority atomically
+          // with issuance so removal or revocation cannot mint a new token.
+          const currentAccess = accessibleProject(storage.internal, project.id, principal, "tokens");
+          for (const permission of permissions) {
+            if (!roleAllows(currentAccess.role, permission)) {
+              throw new PlatformError(403, "ROLE_DENIED", `Your role cannot grant ${permission} permission.`);
+            }
+          }
+          const now = Date.now();
+          if (principal.tokenId === null) {
+            const session = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
+            if (!session?.user || session.user.id !== principal.userId) {
+              throw new PlatformError(401, "UNAUTHENTICATED", "Sign in is required.");
+            }
+          }
+          const issuer = principal.tokenId !== null
+            ? storage.internal.prepare(`SELECT t.expires_at FROM clank_platform_tokens t
+                JOIN clank_auth_users u ON u.id = t.user_id
+                WHERE t.id = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND u.disabled = 0`)
+                .get(principal.tokenId, now)
+            : undefined;
+          if (principal.tokenId !== null && !issuer) {
+            throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
+          }
+          expiresAt = Math.min(now + expiresIn * 1_000, principal.projectId ? Number(issuer!.expires_at) : Infinity);
+          storage.internal.prepare(`INSERT INTO clank_platform_tokens
+            (id, token_hash, user_id, name, created_at, last_used_at, expires_at, revoked_at,
+             organization_id, project_id, permissions, preview_name)
+            VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?)`)
+            .run(
+              tokenId,
+              syncHash(rawToken),
+              principal.userId,
+              name,
+              now,
+              expiresAt,
+              project.organizationId,
+              project.id,
+              JSON.stringify(permissions),
+              principal.previewName,
+            );
+        });
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "project-token.create", {
           tokenId,
           name,
@@ -9018,6 +9051,7 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
   internal.prepare("UPDATE clank_platform_tokens SET last_used_at = ? WHERE id = ?").run(Date.now(), row.id);
   return {
     tokenId: String(row.id),
+    sessionId: null,
     userId: String(row.user_id),
     email: String(row.email),
     organizationId: row.organization_id === null ? null : String(row.organization_id),
@@ -9044,6 +9078,7 @@ async function requirePlatformPrincipal(storage: PlatformDatabase, request: Requ
   }
   return {
     tokenId: null,
+    sessionId: auth.session!.id,
     userId: impersonation?.targetUserId ?? auth.user!.id,
     email: impersonation?.targetEmail ?? auth.user!.email,
     organizationId: null,
@@ -9148,7 +9183,7 @@ function accessibleProject(
   permission: ProjectPermission,
 ): ProjectAccess {
   const row = internal.prepare(`SELECT p.*, COALESCE(m.role,
-      CASE WHEN p.owner_id = ? THEN 'owner' ELSE NULL END) AS membership_role
+      CASE WHEN p.organization_id IS NULL AND p.owner_id = ? THEN 'owner' ELSE NULL END) AS membership_role
     FROM clank_platform_projects p
     LEFT JOIN clank_platform_memberships m
       ON m.organization_id = p.organization_id AND m.user_id = ?
@@ -9193,11 +9228,12 @@ function accessibleProject(
 
 // Enumerate only owned/member project IDs before reading project payloads. A LEFT JOIN
 // with an ownership OR scans every tenant's projects even when this account has only a few.
-// UNION preserves the owner fallback and removes duplicates for owner-members.
+// Only legacy projects without a workspace may fall back to creator ownership.
+// Once assigned to a workspace, current membership is the authority.
 function visibleRootProjectRows(internal: SQLiteInternal, userId: string) {
   return internal.prepare(`SELECT p.* FROM clank_platform_projects p
     WHERE p.parent_project_id IS NULL AND p.id IN (
-      SELECT owned.id FROM clank_platform_projects owned WHERE owned.owner_id = ?
+      SELECT owned.id FROM clank_platform_projects owned WHERE owned.owner_id = ? AND owned.organization_id IS NULL
       UNION
       SELECT member.id FROM clank_platform_memberships m
         JOIN clank_platform_projects member ON member.organization_id = m.organization_id
@@ -11038,42 +11074,59 @@ function billingEntitlementQuotas(
   }
 }
 
+// Bound to one synchronous dashboard read, never retained between requests.
+interface PlatformQuotaSnapshot {
+  accounts: Map<string, PlatformQuotaValues>;
+  workspaces: Map<string, PlatformQuotaValues>;
+}
+
 function accountQuotas(
   internal: SQLiteInternal,
   accountId: string,
   defaults: PlatformQuotaValues,
+  snapshot?: PlatformQuotaSnapshot,
 ): PlatformQuotaValues {
-  return resolveEntitlements(
+  const existing = snapshot?.accounts.get(accountId);
+  if (existing) return existing;
+  const quotas = resolveEntitlements(
     defaults,
     billingEntitlementQuotas(internal, accountId),
     // Explicit operator overrides always win over commercial plan capacity.
     quotaOverrides(internal, "account", accountId),
   );
+  snapshot?.accounts.set(accountId, quotas);
+  return quotas;
 }
 
 function workspaceQuotas(
   internal: SQLiteInternal,
   workspaceId: string,
   defaults: PlatformQuotaValues,
+  snapshot?: PlatformQuotaSnapshot,
 ): PlatformQuotaValues {
+  const existing = snapshot?.workspaces.get(workspaceId);
+  if (existing) return existing;
   const workspace = internal.prepare(
     "SELECT created_by FROM clank_platform_organizations WHERE id = ?",
   ).get(workspaceId);
   if (!workspace) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "Workspace not found.");
-  return resolveEntitlements(
-    accountQuotas(internal, String(workspace.created_by), defaults),
+  const quotas = resolveEntitlements(
+    accountQuotas(internal, String(workspace.created_by), defaults, snapshot),
     quotaOverrides(internal, "workspace", workspaceId),
   );
+  snapshot?.workspaces.set(workspaceId, quotas);
+  return quotas;
 }
 
 function projectQuotas(
   internal: SQLiteInternal,
   project: ProjectRow,
   defaults: PlatformQuotaValues,
+  snapshot?: PlatformQuotaSnapshot,
 ): PlatformQuotaValues {
   return project.organizationId
-    ? workspaceQuotas(internal, project.organizationId, defaults)
-    : accountQuotas(internal, project.ownerId, defaults);
+    ? workspaceQuotas(internal, project.organizationId, defaults, snapshot)
+    : accountQuotas(internal, project.ownerId, defaults, snapshot);
 }
 
 function publicQuotaDefinitions(): Record<string, unknown>[] {
@@ -11740,7 +11793,8 @@ function dashboardPayload(
     default: PlatformProjectPlacement;
   }>,
 ): Record<string, unknown> {
-  const accountLimits = accountQuotas(internal, principal.userId, defaults);
+  const quotaSnapshot: PlatformQuotaSnapshot = { accounts: new Map(), workspaces: new Map() };
+  const accountLimits = accountQuotas(internal, principal.userId, defaults, quotaSnapshot);
   const organizationRows = principal.organizationId
     ? internal.prepare(`SELECT o.id, o.name, o.slug, o.created_at, o.updated_at, m.role,
         (SELECT count(*) FROM clank_platform_projects p WHERE p.organization_id = o.id) AS project_count
@@ -11753,7 +11807,7 @@ function dashboardPayload(
       JOIN clank_platform_memberships m ON m.organization_id = o.id
       WHERE m.user_id = ? ORDER BY o.created_at`).all(principal.userId);
   const organizations = organizationRows.map((row) => {
-    const effective = workspaceQuotas(internal, String(row.id), defaults);
+    const effective = workspaceQuotas(internal, String(row.id), defaults, quotaSnapshot);
     return {
       id: String(row.id),
       name: String(row.name),
@@ -11771,7 +11825,7 @@ function dashboardPayload(
     : visibleRootProjectRows(internal, principal.userId);
   const projects = projectRows.map((source) => {
     const project = projectRow(source);
-    const effective = projectQuotas(internal, project, defaults);
+    const effective = projectQuotas(internal, project, defaults, quotaSnapshot);
     const release = project.activeReleaseId ? releaseById(internal, project.activeReleaseId) : null;
     const domainUsage = internal.prepare(`SELECT count(*) AS count,
       sum(CASE WHEN status = 'verified' AND routing_status = 'ready' THEN 1 ELSE 0 END) AS ready

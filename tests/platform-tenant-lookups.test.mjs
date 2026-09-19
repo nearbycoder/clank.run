@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { openPlatform } from '../dist/platform.js';
 
-test('project lists use indexed tenant lookups without changing membership, ownership fallback, or preview visibility', async t => {
+test('project lists use indexed tenant lookups with workspace membership, legacy ownership, and preview isolation', async t => {
   const root = await mkdtemp(join(tmpdir(), 'clank-tenant-lookups-'));
   let platform = await openPlatform({ dataDirectory: root, publicUrl: 'http://127.0.0.1:4200', signup: true,
     backups: { intervalMs: false } });
@@ -34,7 +34,8 @@ test('project lists use indexed tenant lookups without changing membership, owne
     const insert = (id, owner, organization, parent = null) => project.run(id, owner, organization, id, id, port++, parent, now, now);
     insert('owned', alice.user.id, 'owned-org');
     insert('shared', bob.user.id, 'shared-org');
-    insert('fallback', alice.user.id, 'hidden-org');
+    insert('fallback', alice.user.id, null);
+    insert('removed-creator', alice.user.id, 'hidden-org');
     insert('hidden', bob.user.id, 'hidden-org');
     insert('preview', alice.user.id, 'owned-org', 'owned');
     // Large unrelated population must not turn the visible-project lookup into a catalog scan.

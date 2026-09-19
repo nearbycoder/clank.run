@@ -36,10 +36,12 @@ The registry gives humans and agents one deterministic place to inspect configur
 
 - logical keys never become filesystem paths;
 - data and metadata are owner-only and written atomically;
+- local directories and reads reject symlinks, unsafe permissions, and unexpected owners;
 - every read verifies size and SHA-256;
 - upload size and content type are bounded;
 - signed capabilities bind one key, one operation, and one expiry; and
-- the built-in HTTP handler supports signed `PUT`, `GET`, and `HEAD`.
+- the built-in HTTP handler supports signed `PUT`, `GET`, and `HEAD`; and
+- HTTP downloads use attachment disposition, a sandbox CSP, and no referrer disclosure.
 
 Application code should store file keys and metadata, not local paths. The lower-level
 `ObjectStore` contract now has both atomic local and S3-compatible implementations; use it for

@@ -6,6 +6,29 @@ accepts only a separately provisioned synthetic Railway fixture. Neither mode lo
 accounts or credentials. Keep CPU-heavy test suites and browser timing
 runs separate from server benchmarks.
 
+## SQLite document write encoding
+
+```sh
+node --expose-gc scripts/load/performance-backend.mjs \
+  --baseline=/path/to/baseline/dist --candidate=dist \
+  --rounds=5 --iterations=200 --sizes=4096,65536,262144 \
+  --output=/tmp/backend-writes-ab.json
+```
+
+This benchmark alternates baseline/candidate order per round and uses a fresh in-memory SQLite
+fixture for each insert, patch, and replace sample. Each write belongs to one synthetic owner,
+retains revision history, and changes the counter. Ten warmup writes and final correctness reads
+are outside the measured interval. Fixtures check the final document, retained history, and
+cross-owner denial; timed operation results contribute to a checked checksum. History retains
+four versions per document. The generator caps inserted payload data at 16 MiB per sample
+before SQLite and history overhead. Both distribution directories are read-only inputs.
+
+The report includes raw wall and CPU timings, medians, environment details, and separate canonical
+JSON encoding counts. Insert requires one new-document encoding; patch and replace require one
+new and one old-document encoding for no-op comparison. Reusing the new encoding for the SQL row
+and revision history avoids redundant serialization without changing validation or storage bytes.
+This is a document-write CPU workload, not a disk-durability or end-to-end HTTP capacity test.
+
 ## A/B HTTP workloads
 
 ```sh
@@ -48,6 +71,36 @@ every offered request succeeds, p95 is below 500 ms, and p99 is below 1,000 ms. 
 intentional saturation/quota exploration. These are provisional application SLOs, not a guarantee
 about all workloads. Raw reports include server CPU, sampled peak RSS, heap, event-loop delay,
 query diagnostics, response bytes, and synthetic error examples.
+
+## Dashboard quota microbenchmark
+
+```sh
+node scripts/load/performance-platform.mjs --dist=/path/to/baseline/dist --projects=10 --iterations=1000 --warmup=100
+node scripts/load/performance-platform.mjs --dist=dist --projects=10 --iterations=1000 --warmup=100
+```
+
+Run these serially and alternate their order across repeated trials. The baseline must retain its
+adjacent `brand` directory. Each invocation uses a fresh temporary control database, one synthetic
+authenticated account/workspace, and the chosen number of inactive projects. It measures in-process
+dashboard handling and JSON decoding, excluding registration, fixture setup, and warmup. It reports
+quota-related and total database reads from a separate instrumented request before timing. Add
+`--metricBuckets=1440` for populated 24-hour project histories. The benchmark fixes `Date.now()`
+at fixture creation so metric buckets cannot age out between trials; elapsed and CPU timers remain
+real. Regression tests use the ordinary clock. This isolates dashboard computation;
+it does not measure HTTP transport, admission, running application processes, or production capacity.
+
+## Server rendering microbenchmark
+
+```sh
+node scripts/load/performance-ssr.mjs /path/to/baseline/dist dist 100 500 6
+```
+
+The positional arguments specify baseline and candidate distributions, row count, renders per
+sample, and alternating A/B rounds. Static lists, component/keyed/portal trees, and mixed async
+components must produce identical HTML and dispose every component. Twenty warmup renders per
+implementation are excluded. Promise allocations count only synchronous setup of one render;
+the hook is disabled during timing. Raw JSON timings include HTML equality assertions. These are
+rendering workloads without HTTP transport or application data access.
 
 ## Live connections, recovery, and isolation
 

@@ -387,6 +387,3 @@ window.addEventListener("pagehide", ()=>{
 }, {
     once: true
 });
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/headless-ui/app.tsx

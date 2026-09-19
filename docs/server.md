@@ -97,7 +97,7 @@ await server.close();
 
 `serve()` translates Node HTTP messages to Fetch objects, streams response bodies for SSE, propagates aborts, preserves multiple cookies, caps bodies and headers, configures timeouts, validates Host headers, and can trust forwarded protocol/client IP only when explicitly enabled. Loopback listeners accept loopback hosts by default; public deployments should set `allowedHosts`.
 
-`staticFiles()` supports GET/HEAD, index files, MIME types, cache headers, dotfile denial, traversal rejection, and post-symlink containment checks.
+`staticFiles()` supports GET/HEAD, index files, MIME types, cache headers, dotfile denial, traversal rejection, and post-symlink containment checks. Dotfile denial also applies to the resolved target and directory index, so a public symlink cannot expose a hidden file or directory. Set `dotfiles: "allow"` only for an intentionally public static root.
 Responses include a weak metadata `ETag`. Send it in `If-None-Match` to revalidate an asset:
 unchanged files return a bodyless `304`, avoiding a file stream and repeat transfer. Validators
 are checked against fresh file metadata after path validation. The default remains `no-cache`,

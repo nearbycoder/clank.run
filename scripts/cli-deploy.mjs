@@ -3172,6 +3172,8 @@ async function fetchPlatformJson(url, init, timeoutMs) {
     response = await fetch(url, {
       ...init,
       signal,
+      redirect: "error",
+      credentials: "omit",
     });
   } catch (error) {
     if (signal.aborted || error?.name === "TimeoutError" || error?.name === "AbortError") {

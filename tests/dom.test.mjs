@@ -324,6 +324,16 @@ test("DOM bindings reject inline handlers and executable URL/raw iframe attribut
   assert.throws(() => render(root, h("iframe", { srcdoc: "<script>alert(1)</script>" })), /srcdoc/);
 });
 
+test("DOM bindings validate coercible URL values and object data", () => {
+  const root = new FakeElement("main");
+  assert.throws(() => render(root, h("a", { href: ["javascript:alert(1)"] })), /Unsafe URL scheme/);
+  assert.throws(() => render(root, h("object", { data: "data:text/html,<script>alert(1)</script>" })), /Unsafe data URL/);
+  const href = signal("/safe");
+  render(root, h("a", { href }));
+  assert.throws(() => { href.value = ["java\nscript:alert(1)"]; }, /Unsafe URL scheme/);
+  assert.equal(root.children[0].getAttribute("href"), "/safe");
+});
+
 test("optional nullish event props mount as absent listeners", () => {
   const root = new FakeElement("main");
   assert.doesNotThrow(() => render(root, h("input", { onInvalid: undefined, onChange: null })));

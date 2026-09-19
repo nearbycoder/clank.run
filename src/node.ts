@@ -157,6 +157,7 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
       };
       const path = await import(pathName) as unknown as {
         resolve(...segments: string[]): string;
+        relative(from: string, to: string): string;
         sep: string;
         extname(value: string): string;
       };
@@ -165,7 +166,7 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
       let relative: string;
       try { relative = decodeURIComponent(prefix ? url.pathname.slice(prefix.length) : url.pathname); }
       catch { return new Response("Invalid path", { status: 400 }); }
-      if (options.dotfiles !== "allow" && relative.split("/").some((segment) => segment.startsWith(".") && segment !== "." && segment !== "..")) {
+      if (options.dotfiles !== "allow" && containsDotfile(relative)) {
         return new Response("Not found", { status: 404 });
       }
       const base = await (basePromise ??= fs.realpath(path.resolve(root)));
@@ -174,11 +175,13 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
       try {
         let resolved = await fs.realpath(candidate);
         if (resolved !== base && !resolved.startsWith(base + path.sep)) return new Response("Not found", { status: 404 });
+        if (options.dotfiles !== "allow" && containsDotfile(path.relative(base, resolved))) return new Response("Not found", { status: 404 });
         let stats = await fs.stat(resolved);
         if (stats.isDirectory()) {
           candidate = path.resolve(resolved, options.index ?? "index.html");
           resolved = await fs.realpath(candidate);
           if (resolved !== base && !resolved.startsWith(base + path.sep)) return new Response("Not found", { status: 404 });
+          if (options.dotfiles !== "allow" && containsDotfile(path.relative(base, resolved))) return new Response("Not found", { status: 404 });
           stats = await fs.stat(resolved);
         }
         if (!stats.isFile()) return new Response("Not found", { status: 404 });
@@ -209,6 +212,10 @@ export function staticFiles(root: string, options: StaticFilesOptions = {}): Fet
       }
     },
   };
+}
+
+function containsDotfile(value: string): boolean {
+  return value.split(/[\\/]/u).some((segment) => segment.startsWith(".") && segment !== "." && segment !== "..");
 }
 
 function trimBoundarySlashes(value: string): string {

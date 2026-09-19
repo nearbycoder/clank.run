@@ -514,6 +514,3 @@ Object.assign(globalThis, {
         surface: createAgentSurface(document.querySelector("#app"))
     }
 });
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/booking/app.tsx

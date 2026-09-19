@@ -25,6 +25,3 @@ try {
     await objects.close();
     database.close();
 }
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/durable-counter/run.ts

@@ -189,7 +189,7 @@ Use `by="id"` for a record property or `by={(item) => item.id}` for a custom key
 
 `dangerouslySetInnerHTML={{ __html }}` is deliberately explicit and bypasses child mounting. Sanitize untrusted HTML first.
 
-Ordinary URL attributes reject executable schemes and unsafe data URLs. Inline `on*` attributes and `iframe srcdoc` are rejected; use function event listeners and an explicitly reviewed raw-HTML path instead.
+Ordinary URL attributes, including an object's `data` resource, reject executable schemes and unsafe data URLs. The check also covers values coerced to strings, such as arrays and URL objects. Inline `on*` attributes and `iframe srcdoc` are rejected; use function event listeners and an explicitly reviewed raw-HTML path instead.
 
 `renderToString()` emits comment boundaries around dynamic values and keyed `For` regions. `hydrate(root, view)` walks that marker structure, attaches reactive effects and event handlers, and preserves matching elements, rows, and text nodes. It records `data-clank-hydration="attached"` on success.
 

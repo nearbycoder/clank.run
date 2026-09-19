@@ -138,6 +138,27 @@ They retain the detailed metrics endpoint's interval counts, minute peaks, reque
 latency histograms without building unused chart points or reading a discarded previous period.
 The detailed metrics view still includes those charts and comparisons.
 
+Dashboard quota resolution reuses each account and workspace hierarchy only within the current
+synchronous response. Ten projects in one workspace require four quota-related database reads,
+down from 46. Every new request reads current billing entitlements, operator overrides, workspace
+membership, and session state; there is no quota cache shared between requests. The deterministic
+regressions are in `tests/platform-dashboard-quotas.test.mjs`.
+
+SQLite document writes reuse the validated, canonical JSON encoding for both the current row and
+its revision history. An insert encodes the document once instead of twice. Changed patches and
+replacements encode the old and new document once each instead of four encodings in total.
+No-op detection, ownership, schema validation, version conflicts, and transaction rollback remain
+covered by `tests/backend.test.mjs`.
+
+Server rendering handles synchronous subtrees without allocating a Promise for every node.
+`renderToString()` still returns a Promise, and asynchronous children preserve their output order
+and component cleanup. The SSR tests enforce constant Promise allocations as a static list grows,
+alongside escaping, hydration markers, context, and cleanup after failures.
+
+The [September 19 measurements](https://github.com/nearbycoder/clank.run/tree/main/reports/performance-2026-09-19)
+compare these changes with the preceding security-audit revision. The report includes alternating
+A/B trials, raw results, workload limits, and reproduction commands.
+
 ## Complete application load budgets
 
 `clank workbench performance page.har budgets.json --baseline=before.har --json`

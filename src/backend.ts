@@ -812,6 +812,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           if (definition.ownership === "user" && (ownerId === null || ownerId === undefined)) {
             throw new Error(`Owned table ${name} requires an authenticated user for inserts.`);
           }
+          const encoded = stringifyStoredData(value);
           let id: Id<Name> | undefined;
           const now = Date.now();
           const storedOwner = definition.ownership === "user" ? ownerId : undefined;
@@ -819,7 +820,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             (_id, _owner_id, _creation_time, _version, _data) VALUES (?, ?, ?, 1, ?)`);
           for (let attempt = 0; attempt < 4 && !id; attempt++) {
             const candidate = createId<Name>();
-            const result = insert.run(candidate, storedOwner ?? null, now, stringifyStoredData(value));
+            const result = insert.run(candidate, storedOwner ?? null, now, encoded);
             if (Number(result.changes) === 1) id = candidate;
           }
           if (!id) throw new Error(`Could not allocate a unique ID for ${name}.`);
@@ -831,7 +832,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             documentVersion: 1,
             creationTime: now,
             operation: "create",
-            snapshotData: stringifyStoredData(value),
+            snapshotData: encoded,
             recordedAt: Date.now(),
           });
           return id;
@@ -845,8 +846,10 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             throw new DatabaseConflictError(name, id, expected, previous?._version ?? null);
           }
           if (!previous) return null;
-          const value = definition.schema.parse({ ...documentValue(previous), ...patch });
-          if (stringifyStoredData(value) === stringifyStoredData(documentValue(previous))) return previous;
+          const previousValue = documentValue(previous);
+          const value = definition.schema.parse({ ...previousValue, ...patch });
+          const encoded = stringifyStoredData(value);
+          if (encoded === stringifyStoredData(previousValue)) return previous;
           const nextVersion = nextDocumentVersion(previous._version);
           const storedOwner = definition.ownership === "user"
             ? (previous as DocumentFor<Schema, Name> & { _ownerId: string })._ownerId
@@ -854,7 +857,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           const result = prepared(`UPDATE ${tableIdentifier(name)}
             SET _version = ?, _data = ?
             WHERE _id = ? AND _version = ?${storedOwner === undefined ? "" : " AND _owner_id = ?"}`)
-            .run(nextVersion, stringifyStoredData(value), id, previous._version, ...(storedOwner === undefined ? [] : [storedOwner]));
+            .run(nextVersion, encoded, id, previous._version, ...(storedOwner === undefined ? [] : [storedOwner]));
           if (Number(result.changes) !== 1) {
             const actual = getDocument(name, id, ownerId);
             throw new DatabaseConflictError(name, id, previous._version, actual?._version ?? null);
@@ -867,7 +870,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             documentVersion: nextVersion,
             creationTime: previous._creationTime,
             operation: "update",
-            snapshotData: stringifyStoredData(value),
+            snapshotData: encoded,
             recordedAt: Date.now(),
           });
           return documentWithMetadata(schema, name, value, id, previous._creationTime, nextVersion, storedOwner);
@@ -880,7 +883,8 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           }
           if (!previous) return null;
           const value = definition.schema.parse(raw);
-          if (stringifyStoredData(value) === stringifyStoredData(documentValue(previous))) return previous;
+          const encoded = stringifyStoredData(value);
+          if (encoded === stringifyStoredData(documentValue(previous))) return previous;
           const nextVersion = nextDocumentVersion(previous._version);
           const storedOwner = definition.ownership === "user"
             ? (previous as DocumentFor<Schema, Name> & { _ownerId: string })._ownerId
@@ -888,7 +892,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           const result = prepared(`UPDATE ${tableIdentifier(name)}
             SET _version = ?, _data = ?
             WHERE _id = ? AND _version = ?${storedOwner === undefined ? "" : " AND _owner_id = ?"}`)
-            .run(nextVersion, stringifyStoredData(value), id, previous._version, ...(storedOwner === undefined ? [] : [storedOwner]));
+            .run(nextVersion, encoded, id, previous._version, ...(storedOwner === undefined ? [] : [storedOwner]));
           if (Number(result.changes) !== 1) {
             const actual = getDocument(name, id, ownerId);
             throw new DatabaseConflictError(name, id, previous._version, actual?._version ?? null);
@@ -901,7 +905,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             documentVersion: nextVersion,
             creationTime: previous._creationTime,
             operation: "update",
-            snapshotData: stringifyStoredData(value),
+            snapshotData: encoded,
             recordedAt: Date.now(),
           });
           return documentWithMetadata(schema, name, value, id, previous._creationTime, nextVersion, storedOwner);
@@ -1919,6 +1923,9 @@ export async function openBackend<
 
   const invokeQueryBody = (path: string, input: unknown, auth: AuthRequest<any> | null): { value: unknown; version: number } => {
     ensureOpen();
+    // Reading a request body can yield while sessions or roles are revoked.
+    // Refresh the session at the synchronous execution boundary.
+    if (authRuntime && auth?.session) auth = authRuntime.refreshSession(auth.session.id) ?? anonymous;
     const fn = functionAt(registry, path, "query");
     authorize(fn, auth);
     const args = fn.args.parse(input ?? {});
@@ -1953,6 +1960,9 @@ export async function openBackend<
 
   const invokeMutationBody = (path: string, input: unknown, auth: AuthRequest<any> | null, key?: string): { value: unknown; version: number } => {
     ensureOpen();
+    // Reading a request body can yield while sessions or roles are revoked.
+    // Refresh the session at the synchronous execution boundary.
+    if (authRuntime && auth?.session) auth = authRuntime.refreshSession(auth.session.id) ?? anonymous;
     const fn = functionAt(registry, path, "mutation");
     authorize(fn, auth);
     const args = fn.args.parse(input ?? {});

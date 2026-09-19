@@ -217,7 +217,7 @@ https://my-app.apps.clank.run/__clank/oauth/access
 ```
 
 Making a grant read-only or revoking it changes the authority checked on the next request; every
-stateless MCP request revalidates its resource-bound token and current scopes.
+stateless MCP request revalidates its resource-bound token and current scopes. Refresh rotation and adaptive recovery also compare the current stored scope when committing new tokens, so a concurrent refresh cannot restore write access after a grant is reduced.
 The inbox and its JSON API are stored in this app's isolated database. See [Agent access inbox and
 scoped grants](agent-access.md).
 

@@ -83,6 +83,3 @@ Object.assign(globalThis, {
         auth: client.auth
     }
 });
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/auth-todo/app.tsx

@@ -33,14 +33,18 @@ export function assertSafeAttributeValue(tag: string, name: string, value: unkno
   if (attribute === "srcdoc") {
     throw new TypeError("iframe srcdoc is raw HTML and is not accepted as an attribute.");
   }
-  if (!URL_ATTRIBUTES.has(attribute) || typeof value !== "string") return;
-  const protocol = value.trimStart().replace(/[\u0000-\u0020\u007f]+/g, "").toLowerCase();
+  if (!URL_ATTRIBUTES.has(attribute) && !(tag.toLowerCase() === "object" && attribute === "data")) return;
+  if (value === null || value === undefined || typeof value === "boolean") return;
+  // JSON arrays and other coercible values become strings at the DOM/SSR sink.
+  // Apply the URL policy to that representation too, not only primitive strings.
+  const url = String(value);
+  const protocol = url.trimStart().replace(/[\u0000-\u0020\u007f]+/g, "").toLowerCase();
   if (protocol.startsWith("javascript:") || protocol.startsWith("vbscript:") || protocol.startsWith("file:")) {
     throw new TypeError(`Unsafe URL scheme for ${name}.`);
   }
   if (!protocol.startsWith("data:")) return;
   const imageData = (tag === "img" || tag === "source")
-    && /^data:image\/(?:avif|gif|jpeg|png|webp);base64,/i.test(value.trim());
+    && /^data:image\/(?:avif|gif|jpeg|png|webp);base64,/i.test(url.trim());
   if (!imageData) throw new TypeError(`Unsafe data URL for ${name}.`);
 }
 

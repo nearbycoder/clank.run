@@ -162,6 +162,31 @@ test("deployment config strictly validates provider-neutral worker and scheduler
   }), /valid queue name/);
 });
 
+test("deployment packaging rejects symlinked include ancestors while accepting an explicit root alias", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-bundle-ancestors-"));
+  const project = join(root, "project");
+  const outside = join(root, "outside");
+  try {
+    await mkdir(join(project, "dist"), { recursive: true });
+    await mkdir(join(project, "migrations"));
+    await mkdir(join(outside, "nested"), { recursive: true });
+    await writeFile(join(project, "dist", "server.js"), "console.log('safe');\n");
+    await writeFile(join(outside, "nested", "credentials.json"), "private credential canary");
+    await symlink(outside, join(project, "linked"), "dir");
+    for (const included of ["linked/nested", "linked/nested/credentials.json"]) {
+      await assert.rejects(() => createDeploymentBundle(project, parseDeploymentConfig({
+        ...config,
+        include: ["dist", "migrations", included],
+      })), /symbolic links/u);
+    }
+    await symlink(project, join(root, "project-alias"), "dir");
+    const bundle = await decodeDeploymentBundle(await createDeploymentBundle(join(root, "project-alias"), config));
+    assert.deepEqual(bundle.files.map((file) => file.path), ["dist/server.js"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("deployment config bounds trusted sanitized preview data policies", () => {
   const withPreviewData = parseDeploymentConfig({
     ...config,
@@ -314,6 +339,32 @@ test("SQLite migrations are immutable, transactional, backed up, and reject data
       () => assertSafeMigrationSql("DELETE FROM [clank_auth_sessions];", "0002"),
       /reserved Clank table/,
     );
+    for (const sql of [
+      "DELETE FROM 'clank_migrations';",
+      "DROP TABLE main.'clank_auth_sessions';",
+      "CREATE TRIGGER wipe AFTER INSERT ON notes BEGIN DELETE FROM 'proact_migrations'; END;",
+    ]) assert.throws(() => assertSafeMigrationSql(sql, "0002"), /reserved Clank table/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("migration safety preserves ledger history against single-quoted SQLite identifiers", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-migrate-quoted-"));
+  const directory = join(root, "migrations");
+  const databasePath = join(root, "app.sqlite");
+  try {
+    await mkdir(directory);
+    await writeFile(join(directory, "0001_init.sql"), "CREATE TABLE notes (id INTEGER PRIMARY KEY);\n");
+    await applyMigrations({ path: databasePath, directory });
+    await writeFile(join(directory, "0002_erase_history.sql"), "DELETE FROM 'clank_migrations';\n");
+    await assert.rejects(() => applyMigrations({ path: databasePath, directory }), /reserved Clank table/u);
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      assert.deepEqual(database.prepare("SELECT id FROM clank_migrations").all().map((row) => row.id), ["0001"]);
+    } finally {
+      database.close();
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

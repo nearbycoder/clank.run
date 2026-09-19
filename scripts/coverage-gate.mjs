@@ -5,6 +5,7 @@ const OUTPUT_TAIL_LIMIT = 256 * 1024;
 export const coverageArguments = Object.freeze([
   "--disable-warning=ExperimentalWarning",
   "--test",
+  "--test-reporter=tap",
   "--experimental-test-coverage",
   "--test-coverage-include=dist/**/*.js",
   "--test-coverage-lines=80",
@@ -65,7 +66,15 @@ export async function runCoverageGate(options = {}) {
     ?? ((message) => process.stderr.write(message));
   for (let attempt = 1; attempt <= 2; attempt++) {
     const result = await execute();
-    if (result.code === 0) return;
+    if (result.code === 0) {
+      // Node reports an empty include set as 100% coverage, so a successful
+      // process alone is not evidence that the emitted framework was measured.
+      const report = result.outputTail?.match(/# start of coverage report\r?\n([\s\S]*?)# end of coverage report/u)?.[1];
+      if (!report || !/^#\s+[^|\r\n]+\.js\s+\|\s+[0-9]+(?:\.[0-9]+)?\s+\|/mu.test(report)) {
+        throw new Error("Coverage report contains no measured JavaScript files; check the dist include filter and compiler source URLs.");
+      }
+      return;
+    }
     if (attempt === 1 && isRetryableCoverageArtifactFailure(result)) {
       writeDiagnostic(
         "\nNode produced a truncated experimental coverage artifact after every test passed; "

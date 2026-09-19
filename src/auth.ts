@@ -412,7 +412,20 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     for (const row of rows) notifySession(String(row.id));
   };
 
-  const createSession = async (userId: AuthUserId): Promise<{ rawToken: string; auth: StoredSession<Profile> }> => {
+  const requireActiveUser = (userId: AuthUserId, passwordHash?: string): void => {
+    const user = internal.prepare("SELECT disabled, password_hash FROM clank_auth_users WHERE id = ?").get(userId);
+    if (!user || Number(user.disabled) !== 0 || (passwordHash !== undefined && user.password_hash !== passwordHash)) {
+      throw new AuthError("INVALID_CREDENTIALS", "Email or password is incorrect.", 401);
+    }
+  };
+
+  const requireCurrentSession = (auth: AuthRequest<Profile>): AuthRequest<Profile> => {
+    const current = auth.session ? runtime.refreshSession(auth.session.id) : null;
+    if (!current) throw new AuthError("UNAUTHENTICATED", "Authentication is required.", 401);
+    return current;
+  };
+
+  const createSession = async (userId: AuthUserId, passwordHash?: string): Promise<{ rawToken: string; auth: StoredSession<Profile> }> => {
     const now = Date.now();
     const rawToken = await randomToken(32);
     const csrfToken = await randomToken(24);
@@ -421,6 +434,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     const expiresAt = now + definition.sessionDurationMs;
     const idleExpiresAt = Math.min(expiresAt, now + definition.idleTimeoutMs);
     internal.transaction((changes) => {
+      requireActiveUser(userId, passwordHash);
       internal.prepare(`INSERT INTO clank_auth_sessions
         (id, token_hash, user_id, csrf_token, created_at, last_seen_at, idle_expires_at, expires_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -508,16 +522,18 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
   const createPasskeyChallenge = async (
     type: "registration" | "authentication",
     request: Request,
-    userId?: AuthUserId,
+    registrationAuth?: AuthRequest<Profile>,
   ): Promise<{ id: string; challenge: string; expiresAt: number; origin: string; rpId: string }> => {
     const { origin, rpId } = passkeyContext(request);
     const id = await randomToken(18);
     const challenge = await randomToken(32);
     const expiresAt = Date.now() + definition.passkeys.challengeLifetimeMs;
+    const challengeHash = await digest(challenge);
+    const userId = registrationAuth ? requireCurrentSession(registrationAuth).requireVerified().id : undefined;
     internal.prepare(`INSERT INTO clank_auth_passkey_challenges
       (id, type, challenge_hash, user_id, origin, rp_id, expires_at, consumed_at, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`)
-      .run(id, type, await digest(challenge), userId ?? null, origin, rpId, expiresAt, Date.now());
+      .run(id, type, challengeHash, userId ?? null, origin, rpId, expiresAt, Date.now());
     return { id, challenge, expiresAt, origin, rpId };
   };
 
@@ -588,15 +604,19 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     if (!allowed) throw new AuthError("BOT_CHECK_FAILED", "The request could not be verified.", 403);
   };
 
-  const beginMfa = async (userId: AuthUserId, email: string): Promise<AuthMfaChallenge> => {
+  const beginMfa = async (userId: AuthUserId, email: string, passwordHash: string): Promise<AuthMfaChallenge> => {
     const id = await randomToken(18);
     const code = String(await randomInteger(0, 1_000_000)).padStart(6, "0");
     const expiresAt = Date.now() + definition.mfa.codeLifetimeMs;
-    internal.prepare("DELETE FROM clank_auth_mfa_challenges WHERE user_id = ?").run(userId);
-    internal.prepare(`INSERT INTO clank_auth_mfa_challenges
-      (id, user_id, code_hash, attempts, expires_at, consumed_at, created_at)
-      VALUES (?, ?, ?, 0, ?, NULL, ?)`)
-      .run(id, userId, await digest(`${id}:${code}`), expiresAt, Date.now());
+    const codeHash = await digest(`${id}:${code}`);
+    internal.transaction(() => {
+      requireActiveUser(userId, passwordHash);
+      internal.prepare("DELETE FROM clank_auth_mfa_challenges WHERE user_id = ?").run(userId);
+      internal.prepare(`INSERT INTO clank_auth_mfa_challenges
+        (id, user_id, code_hash, attempts, expires_at, consumed_at, created_at)
+        VALUES (?, ?, ?, 0, ?, NULL, ?)`)
+        .run(id, userId, codeHash, expiresAt, Date.now());
+    });
     await definition.mfa.send!({ userId, email, token: id, code, expiresAt });
     return { required: true, challengeId: id, expiresAt };
   };
@@ -643,8 +663,8 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     }
     await limiter.clear(rateLimitKey(definition.rateLimit, request, input.email, "login"));
     const userId = String(row.id) as AuthUserId;
-    if (definition.mfa.required) return { mfa: await beginMfa(userId, String(row.email)) };
-    return { session: await createSession(userId) };
+    if (definition.mfa.required) return { mfa: await beginMfa(userId, String(row.email), stored) };
+    return { session: await createSession(userId, stored) };
   };
 
   const runtime: AuthRuntime<Profile> = {
@@ -727,8 +747,11 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           const input = objectInput(await readJsonRequest(request, 8 * 1024), "Invalid MFA input.");
           const challengeId = boundedString(input.challengeId, "MFA challenge is required.", 512);
           const code = boundedString(input.code, "MFA code is required.", 16);
-          const row = internal.prepare(`SELECT id, user_id, code_hash, attempts, expires_at, consumed_at
-            FROM clank_auth_mfa_challenges WHERE id = ?`).get(challengeId);
+          const row = internal.prepare(`SELECT c.id, c.user_id, c.code_hash, c.attempts, c.expires_at, c.consumed_at,
+              u.password_hash
+            FROM clank_auth_mfa_challenges c
+            JOIN clank_auth_users u ON u.id = c.user_id
+            WHERE c.id = ?`).get(challengeId);
           const expected = await digest(`${challengeId}:${code}`);
           const valid = row
             && row.consumed_at === null
@@ -749,7 +772,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           if (Number(consumed.changes) !== 1) {
             throw new AuthError("INVALID_MFA", "The verification code is invalid or expired.", 401);
           }
-          const result = await createSession(String(row.user_id) as AuthUserId);
+          const result = await createSession(String(row.user_id) as AuthUserId, String(row.password_hash));
           return sessionResponse(definition, request, result.rawToken, result.auth);
         }
         if (operation === "email/verify") {
@@ -795,12 +818,14 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           const userId = await consumeToken(input.token, "password_recovery");
           const next = await passwordQueue(() => hashPassword(password, definition.password));
           internal.transaction((changes) => {
+            requireActiveUser(userId);
             internal.prepare("UPDATE clank_auth_users SET password_hash = ?, updated_at = ? WHERE id = ?")
               .run(next, Date.now(), userId);
+            internal.prepare("DELETE FROM clank_auth_mfa_challenges WHERE user_id = ?").run(userId);
             changes.record("__auth", userId, userId);
           });
           revokeSessions(userId);
-          const result = await createSession(userId);
+          const result = await createSession(userId, next);
           return sessionResponse(definition, request, result.rawToken, result.auth);
         }
         if (operation === "passkeys/authenticate/start") {
@@ -863,6 +888,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
         const auth = await resolve(request);
         if (!auth.user || !auth.session) throw new AuthError("UNAUTHENTICATED", "Authentication is required.", 401);
         await runtime.verifyCsrf(request, auth);
+        requireCurrentSession(auth);
         if (operation === "email/resend") {
           if (auth.user.emailVerified) return authJson({ ok: true, accepted: true });
           await enforceRateLimit(limiter, definition.rateLimit, request, auth.user.email, "verify");
@@ -872,7 +898,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
         if (operation === "passkeys/register/start") {
           if (!definition.passkeys.enabled) throw new AuthError("PASSKEYS_DISABLED", "Passkeys are disabled.", 404);
           const user = auth.requireVerified();
-          const challenge = await createPasskeyChallenge("registration", request, user.id);
+          const challenge = await createPasskeyChallenge("registration", request, auth);
           const existing = internal.prepare("SELECT credential_id FROM clank_auth_passkeys WHERE user_id = ?").all(user.id);
           const displayName = typeof (user.profile as Record<string, unknown>).name === "string"
             ? String((user.profile as Record<string, unknown>).name)
@@ -916,6 +942,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           const id = await randomToken(18);
           try {
             internal.transaction((changes) => {
+              requireCurrentSession(auth).requireVerified();
               internal.prepare(`INSERT INTO clank_auth_passkeys
                 (id, credential_id, user_id, name, public_key, algorithm, counter, transports, created_at, last_used_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
@@ -952,6 +979,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           const id = boundedString(input.id, "Passkey ID is required.", 512);
           let deleted = 0;
           internal.transaction((changes) => {
+            requireCurrentSession(auth).requireVerified();
             const result = internal.prepare("DELETE FROM clank_auth_passkeys WHERE credential_id = ? AND user_id = ?")
               .run(id, user.id);
             deleted = Number(result.changes);
@@ -979,12 +1007,15 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           if (!valid) throw new AuthError("INVALID_CREDENTIALS", "Current password is incorrect.", 401);
           const next = await passwordQueue(() => hashPassword(input.newPassword, definition.password));
           internal.transaction((changes) => {
+            requireCurrentSession(auth);
+            requireActiveUser(auth.user!.id, String(row.password_hash));
             internal.prepare("UPDATE clank_auth_users SET password_hash = ?, updated_at = ? WHERE id = ?")
               .run(next, Date.now(), auth.user!.id);
+            internal.prepare("DELETE FROM clank_auth_mfa_challenges WHERE user_id = ?").run(auth.user!.id);
             changes.record("__auth", auth.user!.id, auth.user!.id);
           });
           revokeSessions(auth.user.id);
-          const result = await createSession(auth.user.id);
+          const result = await createSession(auth.user.id, next);
           return sessionResponse(definition, request, result.rawToken, result.auth);
         }
         return authProblem(404, "NOT_FOUND", "Auth endpoint not found.");

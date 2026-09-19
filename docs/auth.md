@@ -49,7 +49,7 @@ export const backend = defineBackend({ schema, auth })
   }));
 ```
 
-When `auth` is present, `query` and `mutation` require a signed-in user by default. Their context includes non-null `user`, `auth`, and the correctly scoped `db`. Use `publicQuery` or `publicMutation` only when anonymous access is intentional.
+When `auth` is present, `query` and `mutation` require a signed-in user by default. Their context includes non-null `user`, `auth`, and the correctly scoped `db`. Use `publicQuery` or `publicMutation` only when anonymous access is intentional. Browser session validity and roles are checked again immediately before a query or mutation executes, including after a streamed request body finishes.
 
 An `.owned()` table automatically writes the current user ID on insert and adds that owner condition to every get, query, update, and delete. A user cannot address another user's row even if they learn its document ID.
 

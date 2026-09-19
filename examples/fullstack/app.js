@@ -55,6 +55,3 @@ Object.assign(globalThis, {
         }
     }
 });
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/fullstack/app.tsx

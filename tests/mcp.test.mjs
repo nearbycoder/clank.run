@@ -2386,3 +2386,71 @@ test("projects without browser auth expose the same typed actions as a public MC
   assert.equal(runtime.query("notes.list", {}).value[0].title, "Public MCP");
   runtime.close();
 });
+
+for (const recovery of [false, true]) test(`OAuth scope reduction cannot race ${recovery ? "adaptive recovery" : "refresh rotation"} to restore write access`, { timeout: 10_000 }, async (t) => {
+  const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+  let release;
+  try {
+    const owner = await registerUser(runtime);
+    const client = await registerClient(runtime);
+    const tokens = await authorize(runtime, owner, client);
+    const listed = await runtime.handle(new Request(`${origin}/__clank/oauth/grants`, {
+      headers: { cookie: owner.cookie },
+    }));
+    const grant = (await listed.json()).grants[0];
+    let currentTokens = tokens;
+    if (recovery) {
+      const rotated = await runtime.handle(formRequest("/__clank/oauth/token", {
+        grant_type: "refresh_token", client_id: client.client_id,
+        refresh_token: tokens.refresh_token, resource,
+      }));
+      assert.equal(rotated.status, 200);
+      currentTokens = await rotated.json();
+      const now = Date.now();
+      t.mock.method(Date, "now", () => now + 16 * 60_000);
+    }
+    let reached;
+    const paused = new Promise((resolve) => { reached = resolve; });
+    const barrier = new Promise((resolve) => { release = resolve; });
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    let intercept = true;
+    t.mock.method(crypto.subtle, "digest", async (algorithm, data) => {
+      if (intercept && new TextDecoder().decode(data).startsWith("clank_at_")) {
+        intercept = false;
+        reached();
+        await barrier;
+      }
+      return originalDigest(algorithm, data);
+    });
+    const refreshing = runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token", client_id: client.client_id,
+      refresh_token: tokens.refresh_token, resource,
+    }));
+    await paused;
+    const reduced = await runtime.handle(new Request(`${origin}/__clank/oauth/grants/${grant.id}`, {
+      method: "PATCH",
+      headers: { cookie: owner.cookie, origin, "content-type": "application/json", "x-clank-csrf": owner.csrf },
+      body: JSON.stringify({ scopes: ["agent:read"] }),
+    }));
+    assert.equal(reduced.status, 200);
+    release();
+    const raced = await refreshing;
+    assert.equal(raced.status, 400);
+    assert.equal((await raced.json()).error, "invalid_grant");
+    const retried = await runtime.handle(formRequest("/__clank/oauth/token", {
+      grant_type: "refresh_token", client_id: client.client_id,
+      refresh_token: currentTokens.refresh_token, resource,
+    }));
+    assert.equal(retried.status, 200);
+    const next = await retried.json();
+    assert.equal(next.scope, "agent:read");
+    const denied = await runtime.handle(modernMcpRequest({
+      jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: { name: "todos_add", arguments: { title: "must not write" } },
+    }, next.access_token));
+    assert.equal(denied.status, 403);
+  } finally {
+    release?.();
+    runtime.close();
+  }
+});

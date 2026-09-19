@@ -111,8 +111,8 @@ export function matchPath(pattern: string, pathname: string): Record<string, str
 function queryRecord(search: URLSearchParams): Record<string, string | string[]> {
   const output: Record<string, string | string[]> = {};
   for (const [key, value] of search) {
-    const existing = output[key];
-    if (existing === undefined) output[key] = value;
+    const existing = Object.hasOwn(output, key) ? output[key] : undefined;
+    if (existing === undefined) Object.defineProperty(output, key, { value, writable: true, enumerable: true, configurable: true });
     else if (Array.isArray(existing)) existing.push(value);
     else output[key] = [existing, value];
   }

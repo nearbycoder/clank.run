@@ -61,6 +61,3 @@ export const Counter = defineDurableObject({
             })
         })
 });
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/durable-counter/objects.ts

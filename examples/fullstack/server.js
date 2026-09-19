@@ -78,6 +78,3 @@ const server = await serve(app, {
     port: Number(environment?.PORT ?? 4180)
 });
 console.log(`Clank full-stack example: ${server.url}`);
-
-
-//# sourceURL=/home/nearby/Sites/clank/examples/fullstack/server.tsx
