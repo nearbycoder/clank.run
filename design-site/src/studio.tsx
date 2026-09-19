@@ -89,7 +89,7 @@ function ThemeGallery(props: { selected: () => string; onSelect: (themeId: strin
                 <div class="theme-sample-panel">
                   <small>Workspace</small><strong>New project</strong>
                   <input aria-label={`${theme.name} example input`} value="Design system" />
-                  <div><button type="button">Continue</button><span class="theme-sample-switch"><i /></span></div>
+                  <div><button type="button" onClick={() => props.onSelect(theme.id)}>Apply theme</button><span class="theme-sample-switch"><i /></span></div>
                 </div>
               </div>
               <div class="theme-card-copy"><div><h2>{theme.name}</h2><span>{theme.scheme}</span></div><p>{theme.description}</p><div class="theme-tags"><For each={theme.tags}>{(tag) => <span>{tag}</span>}</For></div></div>
@@ -111,8 +111,9 @@ function Overview(props: { themeId: () => string; onView: (view: StudioView) => 
           <p>A dependency-free component workshop built with the same Clank primitives it documents. Explore real keyboard behavior, semantic anatomy, agent metadata, and ten live token systems.</p>
           <div class="hero-actions"><button type="button" class="studio-button primary" onClick={() => props.onView(UI_COMPONENT_CATALOG[0].slug)}>Open first component <span>→</span></button><button type="button" class="studio-button" onClick={() => props.onView("themes")}>Compare themes</button></div>
         </div>
-        <div class="hero-specimen" aria-label="Theme specimen">
-          <div class="specimen-window"><header><i /><i /><i /><span>design.clank.run</span></header><div><aside><span /><span /><span /><span /></aside><main><span class="specimen-label">Component</span><h2>Dialog</h2><div class="specimen-dialog"><small>Workspace access</small><strong>Invite a teammate</strong><p>Send a secure invitation to your project.</p><button type="button">Send invite</button></div></main></div></div>
+        <div class="hero-specimen" role="region" aria-label="Interactive dialog preview">
+          <div class="specimen-header"><span>Live component</span><span>Dialog</span></div>
+          <div class="specimen-content"><h2>Invite a teammate</h2><p>Try the modal, move through its fields with Tab, and press Escape to return.</p><ComponentStory slug="dialog" /></div>
         </div>
       </section>
       <section class="proof-row" aria-label="Design system properties"><article><strong>{UI_COMPONENT_COUNT}</strong><span>interactive families</span></article><article><strong>10</strong><span>complete themes</span></article><article><strong>32</strong><span>typed design tokens</span></article><article><strong>0</strong><span>runtime dependencies</span></article></section>
@@ -163,7 +164,7 @@ export function DesignStudio(props: DesignStudioProps) {
   const query = signal("");
   const viewport = signal("responsive");
   const panel = signal("anatomy");
-  const grid = signal(true);
+  const grid = signal(false);
   const outlines = signal(false);
   const navOpen = signal(false);
   const currentTheme = computed(() => getClankTheme(themeId.value) ?? CLANK_THEME_PRESETS[0]);
@@ -189,6 +190,7 @@ export function DesignStudio(props: DesignStudioProps) {
     if (typeof document === "undefined") return;
     document.documentElement.dataset.clankTheme = theme.id;
     document.documentElement.style.colorScheme = theme.scheme;
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", theme.tokens.canvas);
     try { localStorage.setItem("clank-design-theme", theme.id); } catch {}
   });
 
@@ -205,7 +207,7 @@ export function DesignStudio(props: DesignStudioProps) {
       <header class="studio-header">
         <button class="mobile-nav-trigger" type="button" aria-label="Open component navigation" aria-expanded={navOpen} onClick={() => { navOpen.value = !navOpen.peek(); }}><Icon name="menu" /></button>
         <a class="studio-wordmark" href="/" onClick={(event: MouseEvent) => { event.preventDefault(); selectView("overview"); }}><img src="/brand/clank-mark-64.png" width="25" height="25" alt="" /><strong>Clank</strong><span>Design</span></a>
-        <label class="studio-search"><Icon name="search" /><input type="search" value={query} onInput={(event: InputEvent) => { query.value = (event.currentTarget as HTMLInputElement).value; }} placeholder={`Search ${UI_COMPONENT_COUNT} components…`} /><kbd>/</kbd></label>
+        <label class="studio-search"><Icon name="search" /><input type="search" aria-label="Search components" value={query} onInput={(event: InputEvent) => { query.value = (event.currentTarget as HTMLInputElement).value; if (window.matchMedia("(max-width: 760px)").matches) navOpen.value = true; }} placeholder={`Search ${UI_COMPONENT_COUNT} components…`} /><kbd>/</kbd></label>
         <nav class="studio-header-links" aria-label="Project"><a href="https://docs.clank.run/docs/ui">Docs</a><a href="https://github.com/nearbycoder/clank.run" target="_blank" rel="noreferrer">GitHub ↗</a></nav>
       </header>
       <aside class="studio-sidebar" classList={{ open: navOpen }}>
@@ -219,7 +221,7 @@ export function DesignStudio(props: DesignStudioProps) {
       <main class="studio-main" id="studio-main">
         <div class="context-bar">
           <div><span>Clank Design</span><i>/</i><strong>{() => titleFor(view.value)}</strong></div>
-          <label class="theme-picker"><span class="theme-dot" /><span class="theme-picker-label">Theme</span><select value={themeId} onChange={(event: Event) => { themeId.value = (event.currentTarget as HTMLSelectElement).value; }}><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <option value={theme.id}>{theme.name}</option>}</For></select></label>
+          <label class="theme-picker"><span class="theme-dot" /><span class="theme-picker-label">Theme</span><select aria-label="Theme" value={themeId} onChange={(event: Event) => { themeId.value = (event.currentTarget as HTMLSelectElement).value; }}><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <option value={theme.id}>{theme.name}</option>}</For></select></label>
         </div>
         <div class="studio-content">
           <Show when={() => view.value === "overview"}><Overview themeId={() => themeId.value} onView={selectView} onTheme={(id) => { themeId.value = id; }} /></Show>

@@ -1,0 +1,121 @@
+{
+  "date": "2026-09-19",
+  "base_commit": "09f18c80b0a39240d8d1b4f3fc81677758bed33a",
+  "viewports": [
+    1440,
+    390
+  ],
+  "studio": {
+    "routes": [
+      "/",
+      "/components/accordion",
+      "/components/alert-dialog",
+      "/components/autocomplete",
+      "/components/avatar",
+      "/components/bottom-sheet",
+      "/components/button",
+      "/components/checkbox",
+      "/components/checkbox-group",
+      "/components/collapsible",
+      "/components/combobox",
+      "/components/context-menu",
+      "/components/dialog",
+      "/components/drawer",
+      "/components/field",
+      "/components/fieldset",
+      "/components/form",
+      "/components/input",
+      "/components/menu",
+      "/components/menubar",
+      "/components/meter",
+      "/components/navigation-menu",
+      "/components/number-field",
+      "/components/otp-field",
+      "/components/pagination",
+      "/components/popover",
+      "/components/preview-card",
+      "/components/progress",
+      "/components/radio",
+      "/components/scroll-area",
+      "/components/select",
+      "/components/separator",
+      "/components/slider",
+      "/components/switch",
+      "/components/tabs",
+      "/components/toast",
+      "/components/toggle",
+      "/components/toggle-group",
+      "/components/toolbar",
+      "/components/tooltip",
+      "/themes"
+    ],
+    "page_states": 82,
+    "overflow": 0,
+    "axe_violations": 0
+  },
+  "dashboard": {
+    "routes": [
+      "/activity",
+      "/overview",
+      "/projects/design-project-2/backups",
+      "/projects/design-project-2/deployments",
+      "/projects/design-project-2/domains",
+      "/projects/design-project-2/jobs",
+      "/projects/design-project-2/logs",
+      "/projects/design-project-2/performance",
+      "/projects/design-project-2/previews",
+      "/projects/design-project-2/settings",
+      "/projects/design-project-2/storage",
+      "/usage",
+      "/workspaces/design-workspace/people"
+    ],
+    "page_states": 26,
+    "overflow": 0,
+    "axe_violations": 0,
+    "fixture": "Disposable synthetic account, inactive projects and request metrics"
+  },
+  "docs": {
+    "desktop": {
+      "inapplicable": 38,
+      "incomplete": 1,
+      "passes": 51,
+      "violations": 0
+    },
+    "mobile": {
+      "inapplicable": 38,
+      "incomplete": 1,
+      "passes": 51,
+      "violations": 0
+    }
+  },
+  "themes": {
+    "verified": [
+      "clank",
+      "porcelain",
+      "midnight",
+      "sakura",
+      "terminal",
+      "tangerine",
+      "nordic",
+      "grape",
+      "sandstone",
+      "candy"
+    ],
+    "portal_colors_match_tokens": true,
+    "escape_closes_and_restores_focus": true,
+    "axe_violations": 0
+  },
+  "raw_evidence_directory": "/tmp/clank-design-audit",
+  "repository_checks": {
+    "command": "npm run check",
+    "node": "24.21.0",
+    "tests": 860,
+    "passed": 860,
+    "failed": 0,
+    "coverage_gate": "passed",
+    "packaged_release_conformance": "passed",
+    "docs_audit": "passed",
+    "security_audit": "passed",
+    "git_diff_check": "passed"
+  }
+}

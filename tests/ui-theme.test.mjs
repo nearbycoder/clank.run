@@ -120,3 +120,26 @@ test("applying a theme is portal-safe and cleanup restores every prior value", (
   assert.equal(properties.size, 2);
   assert.throws(() => applyClankTheme({}, getClankTheme("clank")), /HTMLElement/u);
 });
+
+test("preset text and filled controls meet normal-text contrast across their surfaces", () => {
+  function luminance(hex) {
+    const channels = hex.slice(1).match(/../gu).map((part) => parseInt(part, 16) / 255)
+      .map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  }
+  function check(theme, foreground, background) {
+    const values = [luminance(theme.tokens[foreground]), luminance(theme.tokens[background])].sort((a, b) => b - a);
+    const contrast = (values[0] + 0.05) / (values[1] + 0.05);
+    assert.ok(contrast >= 4.5, `${theme.id}: ${foreground} on ${background} is ${contrast.toFixed(2)}:1`);
+  }
+  for (const theme of CLANK_THEME_PRESETS) {
+    for (const foreground of ["text", "textMuted", "textFaint", "accent", "accentHover"]) {
+      for (const background of ["canvas", "canvasRaised", "surface", "surfaceMuted", "surfaceHover"]) {
+        check(theme, foreground, background);
+      }
+    }
+    check(theme, "accentContrast", "accent");
+    check(theme, "accentContrast", "accentHover");
+    check(theme, "dangerContrast", "danger");
+  }
+});

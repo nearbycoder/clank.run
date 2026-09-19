@@ -23,6 +23,8 @@ import {
   parseDeploymentConfig,
 } from "../dist/index.js";
 
+import { getClankTheme } from "../dist/ui-theme.js";
+
 const IMPERSONATION_RECENT_AUTH_MS_FOR_TEST = 30 * 60_000;
 
 function jsonRequest(path, { method = "GET", body, token, cookie, csrf, origin = "http://127.0.0.1:4200" } = {}) {
@@ -7120,7 +7122,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /<strong id="account-name">first<\/strong><span id="account-email">first@example\.com<\/span>/);
     assert.match(signedInHtml, /class="brand-lockup"><img class="brand-mark"[^>]*><span>Clank<\/span><\/span>/);
     assert.match(signedInHtml, /\.brand-lockup\{display:inline-flex;align-items:center;gap:9px;/);
-    assert.match(signedInHtml, /--clank-canvas:\s*#0a0b0a/);
+    assert.equal(signedInHtml.match(/--clank-canvas:\s*([^;]+)/)?.[1], getClankTheme("clank").tokens.canvas);
     assert.match(signedInHtml, /--bg:var\(--clank-canvas\);--panel:var\(--clank-surface\)/);
     assert.match(signedInHtml, /class="icon-sprite"[^>]*><defs>\s*<symbol id="nav-icon-overview"/);
     assert.match(signedInHtml, /\.nav-icon\{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex:0 0 18px;/);

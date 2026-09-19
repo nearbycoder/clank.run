@@ -1436,7 +1436,6 @@ export function createToggleGroup<Value extends string>(
       id,
       "data-clank-part": "root",
       role: "group",
-      "aria-orientation": options.orientation ?? "horizontal",
       "aria-disabled": () => disabled.value || undefined,
       "aria-readonly": () => readOnly.value || undefined,
       "data-orientation": options.orientation ?? "horizontal",

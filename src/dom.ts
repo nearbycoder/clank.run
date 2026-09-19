@@ -1320,7 +1320,6 @@ function setProperty(element: Element, property: string, value: unknown): void {
     return;
   }
   if (value === false || value === null || value === undefined) {
-    if (element.hasAttribute(name)) element.removeAttribute(name);
     if (property in element && !name.startsWith("data-") && !name.startsWith("aria-")) {
       try {
         const target = element as Element & Record<string, unknown>;
@@ -1328,6 +1327,9 @@ function setProperty(element: Element, property: string, value: unknown): void {
         if (!Object.is(target[property], next)) target[property] = next;
       } catch { /* readonly */ }
     }
+    // Reflected DOM setters can recreate the attribute (for example role="false").
+    // Remove it after resetting the property so an omitted value stays omitted.
+    if (element.hasAttribute(name)) element.removeAttribute(name);
     return;
   }
   if (value === true) {

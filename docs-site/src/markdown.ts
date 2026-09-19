@@ -141,7 +141,7 @@ export function renderMarkdown(markdown: string): RenderedMarkdown {
       if (index < lines.length) index++;
       const source = code.join("\n");
       html.push(
-        `<figure class="code-block"><figcaption><span>${escapeHtml(language)}</span><button type="button" data-copy-code aria-label="Copy ${escapeHtml(language)} code">Copy</button></figcaption><pre><code class="language-${escapeHtml(language)}">${highlightCode(source, language)}</code></pre></figure>`,
+        `<figure class="code-block"><figcaption><span>${escapeHtml(language)}</span><button type="button" data-copy-code aria-label="Copy ${escapeHtml(language)} code">Copy</button></figcaption><pre tabindex="0"><code class="language-${escapeHtml(language)}">${highlightCode(source, language)}</code></pre></figure>`,
       );
       continue;
     }
@@ -169,7 +169,7 @@ export function renderMarkdown(markdown: string): RenderedMarkdown {
       while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
         rows.push(tableCells(lines[index++]));
       }
-      html.push(`<div class="table-scroll"><table><thead><tr>${headers.map((cell) => `<th>${inline(cell)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_cell, cellIndex) => `<td>${inline(row[cellIndex] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      html.push(`<div class="table-scroll" tabindex="0"><table><thead><tr>${headers.map((cell) => `<th>${inline(cell)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_cell, cellIndex) => `<td>${inline(row[cellIndex] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }
 

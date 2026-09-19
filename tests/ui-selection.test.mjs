@@ -877,3 +877,13 @@ function nativeInput(form, document) {
     closest() { return form; },
   });
 }
+
+test("closed select does not announce an active descendant in its unmounted popup", () => {
+  const select = createSelect({ id: "closed-selection", items: [{ value: "one", label: "One" }], defaultValue: "one" });
+  assert.equal(select.trigger()["aria-activedescendant"](), undefined);
+  select.show();
+  assert.equal(select.trigger()["aria-activedescendant"](), "closed-selection-item-0");
+  select.hide();
+  assert.equal(select.trigger()["aria-activedescendant"](), undefined);
+  select.dispose();
+});
