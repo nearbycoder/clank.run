@@ -1,5 +1,5 @@
 /* @clankImportSource ../vendor/dom.js */
-import { For, Show, computed, effect, signal } from "../vendor/dom.js";
+import { For, Show, computed, effect, onMount, signal } from "../vendor/dom.js";
 import {
   CLANK_THEME_PRESETS,
   UI_COMPONENT_CATALOG,
@@ -9,26 +9,28 @@ import {
   type UiCatalogEntry,
 } from "../vendor/ui.js";
 import { ComponentStory } from "./stories.js";
+import { createSpecimenReset } from "./tools/specimen-reset.js";
+import { KeyboardGuide } from "./tools/keyboard-guide.js";
+import { TokenInspector } from "./tools/token-inspector.js";
+import { ContrastChecker } from "./tools/contrast-checker.js";
+import { ThemeExport } from "./tools/theme-export.js";
+import { ThemeComparison } from "./tools/theme-comparison.js";
+import { ThemeSandbox } from "./tools/theme-sandbox.js";
+import { PreviewWidthControls } from "./tools/preview-width.js";
+import { observePreviewWidth, parsePreviewWidth, previewWidthLabel, previewWidthStyle, type PreviewWidth } from "./tools/preview-width-data.js";
+import { catalogModuleLabels as moduleLabels, catalogFilterOptions, filterComponentCatalog } from "./tools/catalog-filters-data.js";
+import { SharePreviewLink } from "./tools/share-settings.js";
+import { parsePreviewSettings, previewSettingsQuery, shouldNavigatePreview, studioViewFromPath, validatePreviewSettings, type PreviewSettings, type InspectorPanel } from "./tools/share-settings-data.js";
 
 export type StudioView = "overview" | "themes" | string;
 
 export interface DesignStudioProps {
   initialView: StudioView;
   initialTheme: string;
+  initialSettings?: PreviewSettings;
   frameworkVersion: string;
 }
 
-const moduleLabels: Readonly<Record<string, string>> = Object.freeze({
-  controls: "Controls",
-  fields: "Fields",
-  selection: "Selection",
-  collections: "Collections",
-  popups: "Popups",
-  utilities: "Utilities",
-  legacy: "Navigation",
-});
-
-const viewportWidths = Object.freeze({ responsive: "100%", mobile: "390px", tablet: "768px", desktop: "1120px" });
 
 function titleFor(view: StudioView): string {
   if (view === "overview") return "Component workshop";
@@ -37,7 +39,7 @@ function titleFor(view: StudioView): string {
 }
 
 function routeFor(view: StudioView): string {
-  return view === "overview" ? "/" : view === "themes" ? "/themes" : `/components/${view}`;
+  return view === "overview" ? "/" : view === "themes" ? "/themes" : `/components/${encodeURIComponent(view)}`;
 }
 
 function Icon(props: { name: "grid" | "palette" | "search" | "menu" | "code" | "details" | "tokens" | "external" }) {
@@ -79,6 +81,28 @@ function ThemeGallery(props: { selected: () => string; onSelect: (themeId: strin
         <h1 id="theme-gallery-title">One anatomy. Ten personalities.</h1>
         <p>Every preset changes color, geometry, density, depth, type, focus, and motion through the same dependency-free contract.</p>
       </header>
+      <section class="theme-tools" aria-label="Theme tools">
+        <details class="theme-tool">
+          <summary><strong>Token inspector</strong><span>Search the selected theme’s complete token map</span></summary>
+          <div class="theme-tool-body"><TokenInspector theme={() => getClankTheme(props.selected()) ?? CLANK_THEME_PRESETS[0]} /></div>
+        </details>
+        <details class="theme-tool">
+          <summary><strong>Contrast checker</strong><span>Compare foreground and background theme tokens</span></summary>
+          <div class="theme-tool-body"><ContrastChecker theme={() => getClankTheme(props.selected()) ?? CLANK_THEME_PRESETS[0]} /></div>
+        </details>
+        <details class="theme-tool">
+          <summary><strong>Theme export</strong><span>Copy or download the selected theme as CSS or JSON</span></summary>
+          <div class="theme-tool-body"><ThemeExport theme={() => getClankTheme(props.selected()) ?? CLANK_THEME_PRESETS[0]} /></div>
+        </details>
+        <details class="theme-tool">
+          <summary><strong>Theme comparison</strong><span>See exactly which token values differ between two presets</span></summary>
+          <div class="theme-tool-body"><ThemeComparison theme={() => getClankTheme(props.selected()) ?? CLANK_THEME_PRESETS[0]} /></div>
+        </details>
+        <details class="theme-tool">
+          <summary><strong>Token sandbox</strong><span>Try safe token overrides in a scoped live sample</span></summary>
+          <div class="theme-tool-body"><ThemeSandbox theme={() => getClankTheme(props.selected()) ?? CLANK_THEME_PRESETS[0]} /></div>
+        </details>
+      </section>
       <div class="theme-card-grid">
         <For each={CLANK_THEME_PRESETS} by="id">
           {(theme, index) => (
@@ -101,7 +125,7 @@ function ThemeGallery(props: { selected: () => string; onSelect: (themeId: strin
   );
 }
 
-function Overview(props: { themeId: () => string; onView: (view: StudioView) => void; onTheme: (id: string) => void }) {
+function Overview(props: { themeId: () => string; href: (view: StudioView) => string; onView: (view: StudioView) => void; onTheme: (id: string) => void }) {
   return (
     <div class="overview-page">
       <section class="overview-hero">
@@ -123,66 +147,101 @@ function Overview(props: { themeId: () => string; onView: (view: StudioView) => 
       </section>
       <section class="overview-section">
         <header><div><span class="view-kicker">Complete catalog</span><h2>Built from real Clank controllers.</h2></div><span class="section-note">Every example is interactive</span></header>
-        <div class="component-index"><For each={UI_COMPONENT_CATALOG} by="slug">{(entry, index) => <a href={routeFor(entry.slug)} onClick={(event: MouseEvent) => { event.preventDefault(); props.onView(entry.slug); }}><span>{String(index() + 1).padStart(2, "0")}</span><div><strong>{entry.name}</strong><small>{entry.description}</small></div><i>→</i></a>}</For></div>
+        <div class="component-index"><For each={UI_COMPONENT_CATALOG} by="slug">{(entry, index) => <a href={props.href(entry.slug)} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); props.onView(entry.slug); }}><span>{String(index() + 1).padStart(2, "0")}</span><div><strong>{entry.name}</strong><small>{entry.description}</small></div><i>→</i></a>}</For></div>
       </section>
     </div>
   );
 }
 
-function ComponentView(props: { entry: UiCatalogEntry; viewport: () => string; panel: () => string; grid: () => boolean; outlines: () => boolean; onViewport: (value: string) => void; onPanel: (value: string) => void; onGrid: () => void; onOutlines: () => void }) {
+function ComponentView(props: { entry: UiCatalogEntry; viewport: () => PreviewWidth; panel: () => string; grid: () => boolean; outlines: () => boolean; onViewport: (value: PreviewWidth) => void; onPanel: (value: string) => void; onGrid: () => void; onOutlines: () => void }) {
   const entry = props.entry;
+  const specimen = createSpecimenReset(() => <ComponentStory slug={entry.slug} />);
   const importLine = `import { ${entry.factory} } from "@clank.run/framework/ui/${entry.slug}";`;
+  let previewFrame: HTMLElement | null = null;
+  const renderedWidth = signal<number | null>(null);
+  onMount(() => previewFrame ? observePreviewWidth(previewFrame, (width) => { renderedWidth.value = width; }) : undefined);
   return (
     <section class="component-page">
       <header class="component-heading">
         <div><span class="view-kicker">{moduleLabels[entry.module] ?? entry.module} / {entry.formAssociated ? "form associated" : "headless primitive"}</span><h1>{entry.name}</h1><p>{entry.description}</p></div>
         <div class="heading-links"><a href={entry.referenceUrl} target="_blank" rel="noreferrer">{entry.source === "clank" ? "Pattern reference" : "Anatomy reference"} <Icon name="external" /></a><a href="https://docs.clank.run/docs/ui">Framework guide <Icon name="external" /></a></div>
       </header>
-      <div class="preview-toolbar" aria-label="Preview controls">
-        <div class="segmented viewport-segments"><For each={Object.keys(viewportWidths)}>{(value) => <button type="button" classList={{ active: props.viewport() === value }} onClick={() => props.onViewport(value)}>{value}</button>}</For></div>
-        <div class="preview-flags"><button type="button" classList={{ active: props.grid() }} onClick={props.onGrid}>Grid</button><button type="button" classList={{ active: props.outlines() }} onClick={props.onOutlines}>Outlines</button></div>
+      <div class="preview-toolbar" role="group" aria-label="Preview controls">
+        <PreviewWidthControls value={props.viewport} onChange={props.onViewport} />
+        <div class="preview-flags"><button type="button" classList={{ active: props.grid() }} aria-pressed={props.grid() ? "true" : "false"} onClick={props.onGrid}>Grid</button><button type="button" classList={{ active: props.outlines() }} aria-pressed={props.outlines() ? "true" : "false"} onClick={props.onOutlines}>Outlines</button><button type="button" onClick={specimen.reset} title="Restore the component’s initial state; keep preview settings">Reset specimen</button></div>
       </div>
       <div class="preview-stage" data-grid={props.grid() ? "" : undefined} data-outlines={props.outlines() ? "" : undefined}>
-        <div class="preview-frame" data-viewport={props.viewport()} style={{ "--preview-width": viewportWidths[props.viewport() as keyof typeof viewportWidths] ?? "100%" }}>
-          <div class="preview-frame-label"><span>{entry.name} / interactive</span><span>{props.viewport() === "responsive" ? "Fluid" : viewportWidths[props.viewport() as keyof typeof viewportWidths]}</span></div>
-          <div class="story-root"><ComponentStory slug={entry.slug} /></div>
+        <div class="preview-frame" ref={(element: HTMLElement | null) => { previewFrame = element; }} data-viewport={typeof props.viewport() === "number" ? "custom" : props.viewport()} style={{ "--preview-width": previewWidthStyle(props.viewport()) }}>
+          <div class="preview-frame-label"><span>{entry.name} / interactive</span><span>{previewWidthLabel(props.viewport(), renderedWidth.value)}</span></div>
+          <div class="story-root">{specimen.render}</div>
         </div>
       </div>
       <section class="inspector">
         <div class="inspector-tabs" role="tablist" aria-label="Component details"><button type="button" role="tab" aria-selected={props.panel() === "anatomy" ? "true" : "false"} onClick={() => props.onPanel("anatomy")}><Icon name="details" />Anatomy</button><button type="button" role="tab" aria-selected={props.panel() === "code" ? "true" : "false"} onClick={() => props.onPanel("code")}><Icon name="code" />Usage</button><button type="button" role="tab" aria-selected={props.panel() === "tokens" ? "true" : "false"} onClick={() => props.onPanel("tokens")}><Icon name="tokens" />Agent contract</button></div>
         <Show when={() => props.panel() === "anatomy"}><div class="inspector-panel"><h2>Semantic parts</h2><p>Spread each part getter onto the matching element, then style its stable state attributes.</p><div class="part-list"><For each={entry.parts}>{(part) => <code>{part}</code>}</For></div></div></Show>
-        <Show when={() => props.panel() === "code"}><div class="inspector-panel"><h2>Focused package import</h2><p>The theme is visual. The controller remains unstyled, accessible, and fully typed.</p><pre><code>{importLine}{"\n\n"}{`const ${entry.slug.replaceAll("-", "_")} = ${entry.factory}({\n  id: "product-${entry.slug}",\n});`}</code></pre></div></Show>
+        <Show when={() => props.panel() === "code"}><div class="inspector-panel"><h2>Focused package import</h2><p>The theme is visual. The controller remains unstyled, accessible, and fully typed.</p><pre tabindex="0" role="region" aria-label="Component usage example"><code>{importLine}{"\n\n"}{`const ${entry.slug.replaceAll("-", "_")} = ${entry.factory}({\n  id: "product-${entry.slug}",\n});`}</code></pre></div></Show>
         <Show when={() => props.panel() === "tokens"}><div class="inspector-panel"><h2>Machine-readable by construction</h2><p>Agents can discover this component through the public catalog API or the Design Studio MCP server.</p><dl class="contract-grid"><div><dt>Factory</dt><dd><code>{entry.factory}</code></dd></div><div><dt>Subpath</dt><dd><code>@clank.run/framework/ui/{entry.slug}</code></dd></div><div><dt>Catalog module</dt><dd>{entry.module}</dd></div><div><dt>Form projection</dt><dd>{entry.formAssociated ? "Included" : "Not required"}</dd></div></dl></div></Show>
       </section>
+      <KeyboardGuide slug={entry.slug} />
     </section>
   );
 }
 
 export function DesignStudio(props: DesignStudioProps) {
+  const initial = validatePreviewSettings(props.initialSettings ?? { theme: props.initialTheme });
   const view = signal<StudioView>(props.initialView);
-  const themeId = signal(getClankTheme(props.initialTheme)?.id ?? "clank");
+  const themeId = signal(initial.theme);
   const query = signal("");
-  const viewport = signal("responsive");
-  const panel = signal("anatomy");
-  const grid = signal(false);
-  const outlines = signal(false);
+  const catalogModule = signal("all");
+  const catalogForm = signal("all");
+  const catalogSource = signal("all");
+  const catalogOptions = catalogFilterOptions(UI_COMPONENT_CATALOG);
+  const viewport = signal<PreviewWidth>(initial.width);
+  const panel = signal<InspectorPanel>(initial.panel);
+  const grid = signal(initial.grid);
+  const outlines = signal(initial.outlines);
   const navOpen = signal(false);
   const currentTheme = computed(() => getClankTheme(themeId.value) ?? CLANK_THEME_PRESETS[0]);
-  const filtered = computed(() => {
-    const term = query.value.trim().toLowerCase();
-    return term ? UI_COMPONENT_CATALOG.filter((entry) => `${entry.name} ${entry.description} ${entry.module}`.toLowerCase().includes(term)) : UI_COMPONENT_CATALOG;
-  });
-  const grouped = Object.fromEntries(Object.keys(moduleLabels).map((module) => [
-    module,
-    computed(() => filtered.value.filter((entry) => entry.module === module)),
-  ]));
+  const filtered = computed(() => filterComponentCatalog(UI_COMPONENT_CATALOG, query.value, { module: catalogModule.value, form: catalogForm.value, source: catalogSource.value }));
+  const visibleModules = computed(() => catalogOptions.modules.filter((option) => filtered.value.entries.some((entry) => entry.module === option.value)));
+  const previewOutsideResults = computed(() => UI_COMPONENT_CATALOG.some((entry) => entry.slug === view.value) && !filtered.value.entries.some((entry) => entry.slug === view.value));
+  function resetCatalogFilters() {
+    query.value = "";
+    catalogModule.value = "all";
+    catalogForm.value = "all";
+    catalogSource.value = "all";
+  }
   const activeComponents = computed(() => UI_COMPONENT_CATALOG.filter((entry) => entry.slug === view.value));
 
-  function selectView(next: StudioView, replace = false) {
+  const settingsQuery = computed(() => previewSettingsQuery({ theme: themeId.value, width: viewport.value, panel: panel.value, grid: grid.value, outlines: outlines.value }));
+  const previewHref = (next: StudioView) => `${routeFor(next)}${settingsQuery.value}`;
+  function writeLocation() {
+    if (typeof window === "undefined") return;
+    const path = previewHref(view.peek());
+    if (`${window.location.pathname}${window.location.search}` !== path) window.history.pushState(null, "", path);
+  }
+  function selectView(next: StudioView) {
     view.value = next;
     navOpen.value = false;
-    if (typeof history !== "undefined") history[replace ? "replaceState" : "pushState"]({ view: next }, "", routeFor(next));
+    writeLocation();
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "auto" });
+  }
+  function selectTheme(id: string) {
+    const theme = getClankTheme(id);
+    if (!theme) return;
+    themeId.value = theme.id;
+    writeLocation();
+  }
+  function selectWidth(value: PreviewWidth) {
+    const width = parsePreviewWidth(value);
+    if (width === null) return;
+    viewport.value = width;
+    writeLocation();
+  }
+  function selectPanel(value: string) {
+    if (value !== "anatomy" && value !== "code" && value !== "tokens") return;
+    panel.value = value;
+    writeLocation();
   }
 
   effect(() => {
@@ -194,26 +253,48 @@ export function DesignStudio(props: DesignStudioProps) {
     try { localStorage.setItem("clank-design-theme", theme.id); } catch {}
   });
 
-  if (typeof window !== "undefined") {
-    window.addEventListener("popstate", () => {
-      const path = window.location.pathname;
-      view.value = path === "/themes" ? "themes" : path.startsWith("/components/") ? decodeURIComponent(path.slice(12)) : "overview";
-    });
-  }
+  onMount(() => {
+    const restoreLocation = () => {
+      const settings = parsePreviewSettings(window.location.search);
+      themeId.value = settings.theme;
+      viewport.value = settings.width;
+      panel.value = settings.panel;
+      grid.value = settings.grid;
+      outlines.value = settings.outlines;
+      view.value = studioViewFromPath(window.location.pathname);
+      navOpen.value = false;
+    };
+    window.addEventListener("popstate", restoreLocation);
+    return () => window.removeEventListener("popstate", restoreLocation);
+  });
 
   return (
     <div class="studio-shell" data-theme={themeId}>
       <a class="skip-link" href="#studio-main">Skip to component preview</a>
       <header class="studio-header">
         <button class="mobile-nav-trigger" type="button" aria-label="Open component navigation" aria-expanded={navOpen} onClick={() => { navOpen.value = !navOpen.peek(); }}><Icon name="menu" /></button>
-        <a class="studio-wordmark" href="/" onClick={(event: MouseEvent) => { event.preventDefault(); selectView("overview"); }}><img src="/brand/clank-mark-64.png" width="25" height="25" alt="" /><strong>Clank</strong><span>Design</span></a>
+        <a class="studio-wordmark" href={previewHref("overview")} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("overview"); }}><img src="/brand/clank-mark-64.png" width="25" height="25" alt="" aria-hidden="true" /><strong>Clank</strong><span>Design</span></a>
         <label class="studio-search"><Icon name="search" /><input type="search" aria-label="Search components" value={query} onInput={(event: InputEvent) => { query.value = (event.currentTarget as HTMLInputElement).value; if (window.matchMedia("(max-width: 760px)").matches) navOpen.value = true; }} placeholder={`Search ${UI_COMPONENT_COUNT} components…`} /><kbd>/</kbd></label>
         <nav class="studio-header-links" aria-label="Project"><a href="https://docs.clank.run/docs/ui">Docs</a><a href="https://github.com/nearbycoder/clank.run" target="_blank" rel="noreferrer">GitHub ↗</a></nav>
       </header>
       <aside class="studio-sidebar" classList={{ open: navOpen }}>
-        <div class="sidebar-primary"><a href="/" classList={{ active: view.value === "overview" }} onClick={(event: MouseEvent) => { event.preventDefault(); selectView("overview"); }}><Icon name="grid" />Overview</a><a href="/themes" classList={{ active: view.value === "themes" }} onClick={(event: MouseEvent) => { event.preventDefault(); selectView("themes"); }}><Icon name="palette" />Themes <span>10</span></a></div>
+        <div class="sidebar-primary"><a href={previewHref("overview")} classList={{ active: view.value === "overview" }} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("overview"); }}><Icon name="grid" />Overview</a><a href={previewHref("themes")} classList={{ active: view.value === "themes" }} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("themes"); }}><Icon name="palette" />Themes <span>10</span></a></div>
         <nav class="component-nav" aria-label="Component catalog">
-          <For each={Object.keys(moduleLabels)}>{(module) => <section><h2>{moduleLabels[module]}</h2><For each={grouped[module]} by="slug" fallback={<span class="nav-empty">No matches</span>}>{(entry) => <a href={routeFor(entry.slug)} classList={{ active: view.value === entry.slug }} aria-current={view.value === entry.slug ? "page" : undefined} onClick={(event: MouseEvent) => { event.preventDefault(); selectView(entry.slug); }}><span>{entry.name}</span><small>{entry.parts.length}</small></a>}</For></section>}</For>
+          <details class="catalog-filters">
+            <summary>Filter components <span>{() => filtered.value.activeCount ? `(${filtered.value.activeCount})` : ""}</span></summary>
+            <div class="catalog-filter-fields">
+              <label for="catalog-module">Category</label>
+              <select id="catalog-module" value={catalogModule} onChange={(event: Event) => { catalogModule.value = (event.currentTarget as HTMLSelectElement).value; }}><option value="all" selected={catalogModule.value === "all"}>All categories</option><For each={catalogOptions.modules} by="value">{(option) => <option value={option.value} selected={catalogModule.value === option.value}>{option.label}</option>}</For></select>
+              <label for="catalog-form">Form associated</label>
+              <select id="catalog-form" value={catalogForm} onChange={(event: Event) => { catalogForm.value = (event.currentTarget as HTMLSelectElement).value; }}><option value="all" selected={catalogForm.value === "all"}>All components</option><option value="yes" selected={catalogForm.value === "yes"}>Yes</option><option value="no" selected={catalogForm.value === "no"}>No</option></select>
+              <label for="catalog-source">Source</label>
+              <select id="catalog-source" value={catalogSource} onChange={(event: Event) => { catalogSource.value = (event.currentTarget as HTMLSelectElement).value; }}><option value="all" selected={catalogSource.value === "all"}>All sources</option><For each={catalogOptions.sources} by="value">{(option) => <option value={option.value} selected={catalogSource.value === option.value}>{option.label}</option>}</For></select>
+            </div>
+          </details>
+          <div class="catalog-result-count"><span role="status" aria-live="polite">{() => `${filtered.value.count} of ${filtered.value.total} components`}</span><button type="button" disabled={!filtered.value.activeCount && !filtered.value.hasQuery} onClick={resetCatalogFilters}>Reset</button></div>
+          <Show when={previewOutsideResults}><div class="catalog-current-preview"><span>Current preview · outside results</span><a href={previewHref(view.value)} aria-current="page" onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView(view.peek()); }}>{() => titleFor(view.value)}</a></div></Show>
+          <Show when={() => filtered.value.count === 0}><div class="catalog-no-results"><strong>No components match</strong><p>Try another search or reset the filters to browse the full catalog.</p><button type="button" onClick={resetCatalogFilters}>Clear search and filters</button></div></Show>
+          <For each={visibleModules} by="value">{(module) => <section><h2>{module.label}</h2><For each={() => filtered.value.entries.filter((entry) => entry.module === module.value)} by="slug">{(entry) => <a href={previewHref(entry.slug)} classList={{ active: view.value === entry.slug }} aria-current={view.value === entry.slug ? "page" : undefined} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView(entry.slug); }}><span>{entry.name}</span><small>{entry.parts.length}</small></a>}</For></section>}</For>
         </nav>
         <div class="sidebar-footer"><span>Framework</span><strong>v{props.frameworkVersion}</strong><a href="/__clank/mcp">MCP ↗</a></div>
       </aside>
@@ -221,18 +302,19 @@ export function DesignStudio(props: DesignStudioProps) {
       <main class="studio-main" id="studio-main">
         <div class="context-bar">
           <div><span>Clank Design</span><i>/</i><strong>{() => titleFor(view.value)}</strong></div>
-          <label class="theme-picker"><span class="theme-dot" /><span class="theme-picker-label">Theme</span><select aria-label="Theme" value={themeId} onChange={(event: Event) => { themeId.value = (event.currentTarget as HTMLSelectElement).value; }}><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <option value={theme.id}>{theme.name}</option>}</For></select></label>
+          <label class="theme-picker"><span class="theme-dot" /><span class="theme-picker-label">Theme</span><select aria-label="Theme" value={themeId} onChange={(event: Event) => selectTheme((event.currentTarget as HTMLSelectElement).value)}><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <option value={theme.id} selected={theme.id === themeId.value}>{theme.name}</option>}</For></select></label>
         </div>
         <div class="studio-content">
-          <Show when={() => view.value === "overview"}><Overview themeId={() => themeId.value} onView={selectView} onTheme={(id) => { themeId.value = id; }} /></Show>
-          <Show when={() => view.value === "themes"}><ThemeGallery selected={() => themeId.value} onSelect={(id) => { themeId.value = id; }} /></Show>
+          <SharePreviewLink href={() => previewHref(view.value)} />
+          <Show when={() => view.value === "overview"}><Overview themeId={() => themeId.value} href={previewHref} onView={selectView} onTheme={selectTheme} /></Show>
+          <Show when={() => view.value === "themes"}><ThemeGallery selected={() => themeId.value} onSelect={selectTheme} /></Show>
           <Show when={() => view.value !== "overview" && view.value !== "themes"}>
             <For
               each={activeComponents}
               by="slug"
               fallback={<section class="not-found"><span>404</span><h1>That component is not in the catalog.</h1><a href="/">Return to the workshop</a></section>}
             >
-              {(entry) => <ComponentView entry={entry} viewport={() => viewport.value} panel={() => panel.value} grid={() => grid.value} outlines={() => outlines.value} onViewport={(value) => { viewport.value = value; }} onPanel={(value) => { panel.value = value; }} onGrid={() => { grid.value = !grid.peek(); }} onOutlines={() => { outlines.value = !outlines.peek(); }} />}
+              {(entry) => <ComponentView entry={entry} viewport={() => viewport.value} panel={() => panel.value} grid={() => grid.value} outlines={() => outlines.value} onViewport={selectWidth} onPanel={selectPanel} onGrid={() => { grid.value = !grid.peek(); writeLocation(); }} onOutlines={() => { outlines.value = !outlines.peek(); writeLocation(); }} />}
             </For>
           </Show>
         </div>

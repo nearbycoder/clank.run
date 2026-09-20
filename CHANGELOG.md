@@ -4,7 +4,13 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
-No unreleased changes.
+- Add dashboard project sorting and workspace/status filters, activity search and action filtering,
+  runtime log search and stream filtering, refresh pause, traffic tables, and monthly usage CSV export.
+- Add documentation reading history, bookmarks, reading-position resume, progress, focus mode,
+  text sizing, code wrapping, print layout, category search, and keyboard quick-search navigation.
+- Add Studio token inspection, contrast calculation, theme export/comparison/sandbox tools,
+  custom preview widths, shareable settings, catalog filters, keyboard guides, and specimen reset.
+- Restrict dashboard touch zoom and use 16px mobile form controls to avoid focus-triggered zoom.
 
 ## 0.22.1 - 2026-09-07
 

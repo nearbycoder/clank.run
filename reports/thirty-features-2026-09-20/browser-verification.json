@@ -1,0 +1,259 @@
+{
+  "verifiedAt": "2026-09-20T15:22:07.791Z",
+  "dashboard": {
+    "sort": true,
+    "workspaceAndStatusFilters": true,
+    "activityQueryAndAction": true,
+    "logQueryAndStream": true,
+    "refreshPauseSurvivesNavigation": true,
+    "manualRefreshWhilePaused": true,
+    "trafficTable": {
+      "initialRows": 96,
+      "zeroRows": 91,
+      "rangeChangeRows": 60,
+      "utc": true,
+      "keyboardFocusable": true
+    },
+    "usageCsv": {
+      "downloaded": true,
+      "rows": 2,
+      "columns": 8,
+      "crlf": true,
+      "formulaPrefixProtected": true
+    },
+    "mobile": {
+      "width": 390,
+      "scrollWidth": 390
+    }
+  },
+  "docs": {
+    "bookmarksAndHistory": true,
+    "explicitResume": true,
+    "focusAndFontPreferences": true,
+    "codeWrap": true,
+    "readingProgressFixed": true,
+    "searchCategory": {
+      "group": "deploy",
+      "results": 19
+    },
+    "quickSearchArrowAndEscape": true,
+    "printPdf": {
+      "rendered": true,
+      "lightPageCanvas": true,
+      "sourceUrl": true
+    },
+    "endpoints": {
+      "endpoints": [
+        {
+          "path": "/",
+          "status": 200,
+          "bytes": 67101,
+          "type": "text/html; charset=utf-8"
+        },
+        {
+          "path": "/search?q=deploy&group=deploy",
+          "status": 200,
+          "bytes": 69377,
+          "type": "text/html; charset=utf-8"
+        },
+        {
+          "path": "/docs/getting-started",
+          "status": 200,
+          "bytes": 88048,
+          "type": "text/html; charset=utf-8"
+        },
+        {
+          "path": "/raw/getting-started.md",
+          "status": 200,
+          "bytes": 13253,
+          "type": "text/plain; charset=utf-8"
+        },
+        {
+          "path": "/api/docs.json",
+          "status": 200,
+          "bytes": 62819,
+          "type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "/api/docs/getting-started.json",
+          "status": 200,
+          "bytes": 15403,
+          "type": "application/json; charset=utf-8"
+        },
+        {
+          "path": "/llms.txt",
+          "status": 200,
+          "bytes": 23006,
+          "type": "text/plain; charset=utf-8"
+        },
+        {
+          "path": "/llms-full.txt",
+          "status": 200,
+          "bytes": 1162591,
+          "type": "text/plain; charset=utf-8"
+        },
+        {
+          "path": "/.well-known/clank",
+          "status": 200,
+          "bytes": 700,
+          "type": "application/json; charset=utf-8"
+        }
+      ],
+      "rpc": [
+        {
+          "method": "server/discover",
+          "status": 200,
+          "resultKeys": [
+            "supportedVersions",
+            "capabilities",
+            "instructions",
+            "ttlMs",
+            "cacheScope",
+            "resultType",
+            "_meta"
+          ]
+        },
+        {
+          "method": "tools/list",
+          "status": 200,
+          "resultKeys": [
+            "tools",
+            "ttlMs",
+            "cacheScope",
+            "_meta",
+            "resultType"
+          ]
+        },
+        {
+          "method": "tools/call",
+          "tool": "docs_search",
+          "status": 200,
+          "resultKeys": [
+            "content",
+            "structuredContent",
+            "isError",
+            "resultType",
+            "_meta"
+          ]
+        },
+        {
+          "method": "tools/call",
+          "tool": "docs_read",
+          "status": 200,
+          "resultKeys": [
+            "content",
+            "structuredContent",
+            "isError",
+            "resultType",
+            "_meta"
+          ]
+        }
+      ]
+    }
+  },
+  "studio": {
+    "themeTokenTools": true,
+    "jsonDownload": {
+      "tokens": 32,
+      "protocol": "clank-theme/1"
+    },
+    "sandboxScoped": true,
+    "sandboxRejectsUrl": true,
+    "comparison": {
+      "identical": 0,
+      "different": 24
+    },
+    "customWidthPreservesStory": true,
+    "shareSsrReloadAndHistory": true,
+    "clipboardDeniedFallback": true,
+    "catalogFilters": {
+      "fieldsFormCount": 7,
+      "total": 39
+    },
+    "resetClearsStoryPreservesSettingsAndFocus": true,
+    "mobile": {
+      "width": 390,
+      "scrollWidth": 390,
+      "toolbarHeight": 178
+    },
+    "routeSweep": {
+      "checks": 82,
+      "componentRoutes": 39,
+      "viewports": [
+        1280,
+        390
+      ],
+      "themes": 10,
+      "failures": 0
+    },
+    "discovery": {
+      "catalog": 39,
+      "mcpTools": 4,
+      "readOnly": true
+    }
+  },
+  "a11y": {
+    "docs-search-final": {
+      "url": "http://127.0.0.1:54300/search?q=deploy&group=deploy",
+      "counts": {
+        "inapplicable": 46,
+        "incomplete": 1,
+        "passes": 43,
+        "violations": 0
+      },
+      "violations": []
+    },
+    "docs-guide-final": {
+      "url": "http://127.0.0.1:54300/docs/getting-started?verify=print-final",
+      "counts": {
+        "inapplicable": 42,
+        "incomplete": 1,
+        "passes": 47,
+        "violations": 0
+      },
+      "violations": []
+    },
+    "dashboard-final": {
+      "url": "http://127.0.0.1:54200/projects/feature-project-0/performance",
+      "counts": {
+        "inapplicable": 45,
+        "incomplete": 1,
+        "passes": 43,
+        "violations": 1
+      },
+      "violations": [
+        {
+          "id": "meta-viewport",
+          "impact": "moderate"
+        }
+      ]
+    },
+    "studio-final": {
+      "url": "http://127.0.0.1:54400/components/button?theme=midnight&width=523&grid=1&outlines=1&panel=code",
+      "counts": {
+        "inapplicable": 45,
+        "incomplete": 0,
+        "passes": 44,
+        "violations": 0
+      },
+      "violations": []
+    },
+    "dashboardZoomNote": "The meta-viewport finding reflects the user-requested mobile zoom restriction preserved in commit 566f358."
+  },
+  "package": {
+    "files": 335,
+    "unpackedBytes": 5205730,
+    "unpackedLimitBytes": 5242880,
+    "dependencies": 0
+  },
+  "siteDeployChecks": {
+    "docs": {
+      "doctor": "7 passed",
+      "dryRun": "verified; no upload"
+    },
+    "studio": {
+      "doctor": "7 passed",
+      "dryRun": "verified; no upload"
+    }
+  }
+}

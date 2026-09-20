@@ -44,6 +44,20 @@ The overview shows:
 - enforced project capacity across the account's organizations; and
 - a searchable project list with request and p95-latency summaries.
 
+Project search combines with the workspace and runtime-status filters. Use **Sort** to order the
+visible projects by name, request volume, or p95 latency; **Default order** preserves the platform's
+ordering. These controls operate on the projects already authorized for the current account.
+
+Activity search and its action filter apply to the events currently loaded in the browser. Load
+older events to include them in the same filtered view. Runtime log search and the stream selector
+similarly filter the latest redacted output; they do not query an unbounded log archive.
+
+Automatic refresh can be paused while inspecting data and resumed afterward. Manual refresh
+remains available. The traffic chart also offers a table of its exact bucket timestamps, request
+counts, and p95 values. Usage can be downloaded as CSV for the selected workspace and month,
+using the same project rows shown on the page. Text cells are protected against spreadsheet
+formula interpretation.
+
 Selecting a project switches the desktop sidebar to contextual project navigation with an explicit
 return to **All projects**. Phone and tablet layouts switch to an off-canvas sidebar with a
 click-away backdrop; the closed drawer stays out of both the keyboard and accessibility trees.

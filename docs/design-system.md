@@ -22,6 +22,16 @@ Each component page includes a live specimen, responsive preview widths, optiona
 outlines, the canonical semantic parts, a focused package import, upstream anatomy reference, and
 the factory metadata an agent needs to generate the component correctly.
 
+The Theme laboratory includes a searchable token inspector, a foreground/background contrast
+calculator, CSS and JSON export, a two-theme comparison, and a sandbox for validated token
+overrides. The sandbox previews changes locally without changing the built-in presets. Contrast
+results describe the selected colors and text thresholds; they do not certify an entire interface.
+
+Component previews support custom bounded widths, shareable settings, catalog filters, keyboard
+interaction guidance, and a reset control that restores the specimen's initial state while retaining
+preview settings and the share URL. Settings are validated when read from a shared URL. Exported themes use the existing theme
+contract and can be reviewed before being copied or downloaded.
+
 ## Theme package
 
 Import the visual token layer separately from the unstyled controllers:
