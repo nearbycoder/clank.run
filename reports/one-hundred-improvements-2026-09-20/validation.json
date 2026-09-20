@@ -56,5 +56,12 @@
     "No deployment was uploaded by these dry runs.",
     "Browser verification used synthetic local accounts and datasets.",
     "GitHub CI results are available on the pull request."
-  ]
+  ],
+  "testHarnessFollowup": {
+    "reason": "CodeQL flagged case-sensitive script-tag expressions in three test files.",
+    "change": "Extract generated fixture script tags case-insensitively and detect script opening tags with attributes in the escaping assertion.",
+    "targetedTestsPassed": 32,
+    "targetedTestsFailed": 0,
+    "log": "/tmp/clank-hundred/codeql-test-followup.log"
+  }
 }

@@ -24,7 +24,7 @@ const { filterConsoleProjectStatus } = await import(pathToFileURL(join(directory
 const { filterConsoleProjectWorkspace } = await import(pathToFileURL(join(directory, "platform-console-project-workspace.js")));
 const html = await platformConsolePage("http://localhost", { user: null, csrfToken: null }, "", false, false).text();
 const lines = html.split("\n");
-new Script(html.match(/<script[^>]*>([\s\S]*?)<\/script>/)[1]);
+new Script(html.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/iu)[1]);
 const names = ["searchConsoleRows", "compareConsoleText", "formatDate", "titleConsoleTime", "consoleTime", "consoleTimeCell", "operationalId", "operationalIdCell", "renderReleaseStatusOptions", "previewExpiryCell", "renderMembers", "renderInvitations", "clearWorkspaceView", "renderReleases", "renderPreviews", "renderBackups", "renderJobs", "visibleUsageProjects", "usageMonthBounds", "renderUsageMonths", "selectUsageMonth", "moveUsageMonth", "renderUsage", "clearUsageView", "setUsageProgress", "canExportUsage", "renderUsageExport", "downloadUsageCsv"];
 const source = names.map(name => {
   const found = lines.find(value => value.startsWith(`function ${name}(`));

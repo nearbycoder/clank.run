@@ -48,7 +48,7 @@ test("083: todo starter exposes escaped server and local mutation errors", async
     user, todos: [], version: 1, connected: true, error: "Denied <script>alert(1)</script>", add() {}, setDone() {}, remove() {}, logout() {},
   }), { markers: false });
   assert.match(html, /role="alert"[^>]*>Denied &lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
-  assert.doesNotMatch(html, /<script>/u);
+  assert.doesNotMatch(html, /<script\b/iu);
   const node = todoView(t, { remove: async () => { throw new Error("Could not remove"); } });
   await click(control(node, "todo-one-remove"));
   assert.ok(node.textContent.includes("Could not remove"));
