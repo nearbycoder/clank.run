@@ -8,9 +8,29 @@ import {once} from 'node:events';
 import {DatabaseSync} from 'node:sqlite';
 import {rehearseResilience} from '../dist/resilience.js';
 async function fixture(){const root=await mkdtemp(join(tmpdir(),'clank-resilience-')),databasePath=join(root,'app.sqlite');const db=new DatabaseSync(databasePath);db.exec('CREATE TABLE items(id TEXT PRIMARY KEY); CREATE TABLE pending(id TEXT PRIMARY KEY);');db.close();return{root,databasePath};}
-const workerScript=`import{DatabaseSync}from'node:sqlite';const db=new DatabaseSync(process.argv[1]);db.exec('PRAGMA busy_timeout=1000');setInterval(()=>{db.exec('BEGIN IMMEDIATE');try{db.exec('INSERT OR IGNORE INTO items SELECT id FROM pending; DELETE FROM pending; COMMIT');}catch{db.exec('ROLLBACK');}},10);console.log('ready');`;
+// Idle polling must not repeatedly acquire a write lock while the parent verifies
+// recovery. WAL and bounded busy retries preserve real cross-process work without
+// turning coverage instrumentation or a loaded CI host into an unrelated failure.
+const workerScript=`
+import { DatabaseSync } from 'node:sqlite';
+const db = new DatabaseSync(process.argv[1]);
+db.exec('PRAGMA busy_timeout=5000');
+const pending = db.prepare('SELECT 1 FROM pending LIMIT 1');
+setInterval(() => {
+  let begun = false;
+  try {
+    if (!pending.get()) return;
+    db.exec('BEGIN IMMEDIATE');
+    begun = true;
+    db.exec('INSERT OR IGNORE INTO items SELECT id FROM pending; DELETE FROM pending; COMMIT');
+  } catch (error) {
+    if (begun) db.exec('ROLLBACK');
+    if (![5, 6].includes(error.errcode & 255)) throw error;
+  }
+}, 10);
+console.log('ready');`;
 async function boot({databasePath,signal,fetchDependency}){
- const db=new DatabaseSync(databasePath);db.exec('PRAGMA busy_timeout=1000');let worker;
+ const db=new DatabaseSync(databasePath);db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL');let worker;
  const start=async()=>{worker=spawn(process.execPath,['--disable-warning=ExperimentalWarning','--input-type=module','-e',workerScript,databasePath],{stdio:['ignore','pipe','ignore']});await once(worker.stdout,'data');};
  const stop=async()=>{if(worker&&worker.exitCode===null){const exited=once(worker,'exit');worker.kill('SIGKILL');await exited;}};
  await start();
