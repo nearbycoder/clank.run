@@ -127,6 +127,10 @@ const input = signal<HTMLInputElement | null>(null);
 
 `ref` accepts a callback or signal. `use` accepts one directive or an array. A directive may return an unmount cleanup.
 
+If a later directive fails to install, earlier directive cleanups still run. Unmounting releases
+remaining sibling resources, event listeners, and refs even when one cleanup throws, then reports
+the cleanup error. Repeated disposal does not run those resources again.
+
 ## Lifecycle and context
 
 ```tsx

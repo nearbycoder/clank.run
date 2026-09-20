@@ -335,6 +335,11 @@ logically belongs to a modal is portaled outside its popup subtree, spread
 registration is reference-counted, participates in outside-event containment, and causes the
 modal inert boundary to be recalculated when branches mount or unmount.
 
+Open shadow roots are searched even when their host is not itself focusable. Hidden or inert
+ancestors exclude their descendants from focus traversal. If a candidate silently refuses focus,
+the scope tries the next eligible element. Selection and OTP keyboard handlers defer to active IME
+composition; NumberField wheel stepping ignores pinch-to-zoom and purely horizontal wheel events.
+
 `overlay.branch(element, { interactionOnly: true })` is the narrower primitive for detached
 triggers or anchors: it prevents an outside-press dismissal race without adding that background
 control to the modal focus scope or exempting its ancestors from inerting. Popup controllers use

@@ -7236,7 +7236,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       signedInProjectHtml,
       /#project-page\[data-loading="initial"\] \.project-resolved\{visibility:hidden;pointer-events:none\}/,
     );
-    assert.match(signedInProjectHtml, /if\(state\.currentProject\)loadProject\(true\)/);
+    assert.match(signedInProjectHtml, /if\(state\.currentProject\)return loadProject\(true\)/);
     assert.match(signedInProjectHtml, /async function loadProject\(silent\)/);
     assert.match(signedInProjectHtml, /dataset\.loading=hasCurrentData\?"refresh":"initial"/);
     assert.match(signedInProjectHtml, /if\(silent!==true\|\|!hasCurrentData\)toast\(error\.message,true\)/);

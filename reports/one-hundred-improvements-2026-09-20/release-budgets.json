@@ -1,0 +1,57 @@
+{
+  "baseUnpackedBytes": 5205730,
+  "unpackedBytes": 5277592,
+  "addedUnpackedBytes": 71862,
+  "packageFileCount": 335,
+  "previousUnpackedLimitBytes": 5242880,
+  "unpackedLimitBytes": 5373952,
+  "runtimeDependencies": 0,
+  "newPublicExports": 0,
+  "performance": {
+    "protocol": "clank-performance-budgets/1",
+    "ok": true,
+    "node": "24.21.0",
+    "checks": [
+      {
+        "name": "signalEffectRuns",
+        "actual": 1000,
+        "maximum": 1000,
+        "passed": true
+      },
+      {
+        "name": "retainedSsrEffectRuns",
+        "actual": 0,
+        "maximum": 0,
+        "passed": true
+      },
+      {
+        "name": "coreGzipBytes",
+        "actual": 4145,
+        "maximum": 4500,
+        "passed": true
+      },
+      {
+        "name": "domGzipBytes",
+        "actual": 10329,
+        "maximum": 12000,
+        "passed": true
+      },
+      {
+        "name": "routerGzipBytes",
+        "actual": 2796,
+        "maximum": 3500,
+        "passed": true
+      },
+      {
+        "name": "formsGzipBytes",
+        "actual": 4923,
+        "maximum": 5500,
+        "passed": true
+      }
+    ],
+    "timings": {
+      "signalFanoutMs": 22.080766,
+      "ssr100RequestsMs": 1.4752749999999963
+    }
+  }
+}

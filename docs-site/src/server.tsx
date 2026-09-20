@@ -17,7 +17,7 @@ import {
   text,
 } from "../vendor/index.js";
 import { escapeHtml, markdownPlainText, renderMarkdown, type TableOfContentsEntry } from "./markdown.ts";
-import { SearchBox, type SearchEntry } from "./search.tsx";
+import { SearchBox, SearchHighlight, type SearchEntry } from "./search.tsx";
 
 interface DocMetadata extends SearchEntry {
   source: string;
@@ -161,6 +161,20 @@ function TableOfContents(props: { entries: TableOfContentsEntry[] }) {
         <a href="/api/docs.json">JSON index</a>
       </div>
     </aside>
+  );
+}
+
+function MobileTableOfContents(props: { entries: TableOfContentsEntry[] }) {
+  if (!props.entries.length) return null;
+  return (
+    <details class="mobile-toc">
+      <summary>On this page</summary>
+      <nav aria-label="On this page">
+        <For each={props.entries} by="id">
+          {(entry) => <a class={`toc-level-${entry.level}`} href={`#${entry.id}`}>{entry.title}</a>}
+        </For>
+      </nav>
+    </details>
   );
 }
 
@@ -355,6 +369,7 @@ function DocPage(props: { doc: DocumentationPage }) {
           <a href={`/api/docs/${props.doc.slug}.json`}>JSON</a>
           <a href={`https://github.com/nearbycoder/clank.run/edit/main/${props.doc.source}`} target="_blank" rel="noreferrer">Edit on GitHub ↗</a>
         </div>
+        <MobileTableOfContents entries={props.doc.toc} />
       </header>
       <div id="docs-article-body" class="markdown" tabindex="-1" dangerouslySetInnerHTML={{ __html: props.doc.html }} />
       <aside class="agent-note">
@@ -649,8 +664,8 @@ function SearchPage(props: { query: string; group?: DocGroup }) {
           {(result) => (
             <a href={`/docs/${result.doc.slug}`}>
               <span>{result.doc.groupTitle}</span>
-              <h2>{result.doc.title}</h2>
-              <p>{searchSnippet(result.doc, props.query)}</p>
+              <h2><SearchHighlight text={result.doc.title} query={props.query} /></h2>
+              <p><SearchHighlight text={searchSnippet(result.doc, props.query)} query={props.query} /></p>
               <small>{result.doc.readingMinutes} min read · Open guide →</small>
             </a>
           )}

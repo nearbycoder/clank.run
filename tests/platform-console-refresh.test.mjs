@@ -15,7 +15,7 @@ async function fixture(authenticated = true) {
   const state = { refreshTimer: null, refreshPaused: false, currentProject: null, impersonationExpiryTimer: null };
   const initial = { authenticated, impersonation: null };
   const context = {
-    state, initial,
+    state, initial, document: { hidden: false },
     q(selector) {
       if (!nodes.has(selector)) nodes.set(selector, {
         hidden: true, value: "", textContent: "", disabled: false,
@@ -49,7 +49,7 @@ async function fixture(authenticated = true) {
   for (const name of ["loadProject", "loadAdmin", "loadBilling", "loadUsage", "loadWorkspace", "loadActivity", "loadDashboard"]) {
     context[name] = async (...args) => { calls.push([name, ...args]); };
   }
-  const functions = ["renderAutoRefresh", "startRefresh", "returnToSignIn", "handleAuthFailure"]
+  const functions = ["renderAutoRefresh", "startRefresh", "refreshVisibleView", "returnToSignIn", "handleAuthFailure"]
     .map(name => html.match(new RegExp(`function ${name}\\([^\\n]+`))[0]).join("\n");
   const handlers = html.split("\n").filter(line => /^q\("#(?:auto-refresh|auth-form|sign-out)"\)\./.test(line)).join("\n");
   const manualRefresh = html.match(/q\("#refresh"\)\.onclick=.+?;(?=q\("#mobile-menu"\))/)[0];
@@ -89,9 +89,9 @@ test("automatic refresh exposes a labeled toggle and replaces its 30-second inte
   assert.equal(f.intervals.size, 1);
   assert.equal(f.context.q("#auto-refresh")["aria-pressed"], "true");
   assert.equal(f.context.q("#auto-refresh").disabled, false);
-  f.advance(29999);
+  f.advance(29999); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.calls, []);
-  f.advance(1);
+  f.advance(1); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.calls, [["loadDashboard", true]]);
   const staleCallback = f.intervals.get(f.state.refreshTimer).callback;
   f.start();
@@ -99,7 +99,7 @@ test("automatic refresh exposes a labeled toggle and replaces its 30-second inte
   assert.equal(f.intervals.size, 1);
   staleCallback();
   assert.equal(f.calls.length, 1, "a replaced timer cannot issue a queued refresh");
-  f.advance(30000);
+  f.advance(30000); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.length, 2);
 });
 
@@ -118,7 +118,7 @@ test("pausing survives navigation and repeated starts while manual refresh remai
   f.start();
   f.start();
   staleCallback();
-  f.advance(90000);
+  f.advance(90000); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.calls, []);
   await f.manual();
   assert.deepEqual(f.calls, [["loadProject", false]]);
@@ -130,11 +130,11 @@ test("pausing survives navigation and repeated starts while manual refresh remai
   assert.equal(f.calls.length, 1, "resume waits for the next interval instead of bursting requests");
   staleCallback();
   assert.equal(f.calls.length, 1, "a pre-pause callback remains stale after resume");
-  f.advance(30000);
+  f.advance(30000); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.calls.at(-1), ["loadProject", true]);
   for (let index = 0; index < 4; index++) { f.toggle(); f.toggle(); }
   assert.equal(f.intervals.size, 1);
-  f.advance(30000);
+  f.advance(30000); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.length, 3);
 });
 
@@ -143,7 +143,7 @@ test("automatic refresh follows the active view without changing manual refresh 
   f.start();
   for (const [view, loader] of [["admin", "loadAdmin"], ["billing", "loadBilling"], ["usage", "loadUsage"], ["workspace", "loadWorkspace"], ["activity", "loadActivity"]]) {
     for (const name of ["admin", "billing", "usage", "workspace", "activity"]) f.context.q(`#${name}-page`).hidden = name !== view;
-    f.advance(30000);
+    f.advance(30000); await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(f.calls.at(-1), view === "activity" ? [loader, true, true] : [loader, true]);
   }
   f.toggle();
@@ -164,7 +164,7 @@ test("pausing leaves impersonation expiry and other safety timeouts running", as
   f.start();
   f.toggle();
   assert.equal(f.timeouts.size, 2);
-  f.advance(60000);
+  f.advance(60000); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(safetyEvents, ["impersonation expired", "session expired"]);
   assert.deepEqual(f.calls, []);
 });
@@ -184,7 +184,7 @@ test("logout clears refresh state and successful authentication starts a fresh s
   f.start();
   f.toggle();
   staleCallback();
-  f.advance(60000);
+  f.advance(60000); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.length, afterLogout);
   assert.equal(f.intervals.size, 0);
   assert.equal(f.context.q("#auto-refresh").disabled, true);
@@ -208,7 +208,7 @@ test("unauthenticated startup cannot poll or toggle refresh", async () => {
   const f = await fixture(false);
   f.start();
   f.toggle();
-  f.advance(90000);
+  f.advance(90000); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.intervals.size, 0);
   assert.equal(f.state.refreshPaused, false);
   assert.deepEqual(f.calls, []);

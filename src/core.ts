@@ -287,6 +287,7 @@ class ReactiveEffect implements Observer {
   readonly dependencies = new Set<Source>();
   active = true;
   #running = false;
+  #initialized = false;
   #cleanup: Cleanup | undefined;
 
   constructor(readonly callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup) {}
@@ -300,6 +301,8 @@ class ReactiveEffect implements Observer {
   run(): void {
     if (!this.active || this.#running) return;
     this.#running = true;
+    const initial = !this.#initialized;
+    this.#initialized = true;
     const diagnosticStarted = diagnosticListeners.size ? performance.now() : 0;
     pendingEffects.delete(this);
     const previous = activeObserver;
@@ -311,6 +314,13 @@ class ReactiveEffect implements Observer {
       activeObserver = this;
       const nextCleanup = this.callback((next) => { this.#cleanup = next; });
       if (typeof nextCleanup === "function") this.#cleanup = nextCleanup;
+    } catch (error) {
+      if (initial) {
+        activeObserver = previous;
+        try { this.dispose(); }
+        catch (cleanupError) { throw new AggregateError([error, cleanupError], "A Clank effect and its cleanup both failed."); }
+      }
+      throw error;
     } finally {
       activeObserver = previous;
       this.#running = false;
@@ -437,6 +447,7 @@ const rawByProxy = new WeakMap<object, object>();
 const proxyByRaw = new WeakMap<object, object>();
 
 export function store<T extends object>(initial: T): T {
+  if (rawByProxy.has(initial)) return initial;
   if (proxyByRaw.has(initial)) return proxyByRaw.get(initial) as T;
   const signals = new Map<PropertyKey, ReactiveSignal<unknown>>();
   const iteration = signal(0);
@@ -455,8 +466,13 @@ export function store<T extends object>(initial: T): T {
       return value && typeof value === "object" ? store(value as object) : value;
     },
     set(target, key, value, receiver) {
-      const existed = Reflect.has(target, key);
+      const owned = Object.hasOwn(target, key);
+      const array = Array.isArray(target) ? target : undefined;
+      const previousLength = array?.length ?? 0;
       const raw = toRaw(value);
+      const previousKeyCount = array && key === "length" && (typeof raw !== "number" || raw < previousLength)
+        ? Reflect.ownKeys(target).length
+        : 0;
       const result = key === "__proto__"
         ? Reflect.defineProperty(target, key, {
             value: raw,
@@ -465,17 +481,40 @@ export function store<T extends object>(initial: T): T {
             writable: true,
           })
         : Reflect.set(target, key, raw, receiver);
-      const entry = signals.get(key);
-      if (!entry) signals.set(key, signal<unknown>(raw, { equals: Object.is }));
-      else entry.set(raw);
-      if (!existed) iteration.update((count) => count + 1);
+      batch(() => {
+        // Array length writes coerce their input and can partially truncate even
+        // when rejected. Cache the native result, including removed indexes.
+        // Unread accessors remain lazy; writes need only refresh cached reads.
+        signals.get(key)?.set(() => Reflect.get(target, key, receiver));
+        if (array && key === "length" && array.length < previousLength) {
+          for (const [property, cached] of signals) {
+            const index = typeof property === "string" ? Number(property) : NaN;
+            if (Number.isInteger(index) && index >= array.length && index < previousLength && String(index) === property) {
+              cached.set(() => Reflect.get(target, property, receiver));
+            }
+          }
+          // A shorter length changes the shape only when own indexes disappeared.
+          if (Reflect.ownKeys(target).length < previousKeyCount) iteration.update((count) => count + 1);
+        }
+        // Writing an array index can grow its native length without a separate
+        // proxy write to "length". Publish both changes before effects run.
+        if (array && key !== "length" && array.length !== previousLength) {
+          signals.get("length")?.set(array.length);
+        }
+        if (owned !== Object.hasOwn(target, key)) iteration.update((count) => count + 1);
+      });
       return result;
     },
     deleteProperty(target, key) {
-      if (!Reflect.has(target, key)) return true;
+      const owned = Object.hasOwn(target, key);
       const result = Reflect.deleteProperty(target, key);
-      signals.get(key)?.set(undefined);
-      iteration.update((count) => count + 1);
+      if (!result || !owned) return result;
+      batch(() => {
+        // Removing a shadow exposes its prototype value, with normal getter
+        // receiver semantics, while inherited-only deletes leave it untouched.
+        signals.get(key)?.set(() => Reflect.get(target, key, proxied));
+        iteration.update((count) => count + 1);
+      });
       return result;
     },
     ownKeys(target) {

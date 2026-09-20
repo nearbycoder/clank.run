@@ -297,9 +297,9 @@ test("composed event paths and containment cross shadow boundaries", () => {
 test("focus helpers filter unavailable nodes, sort tab order, cross open shadows, and fall back", () => {
   const focused = [];
   const document = { nodeType: 9, documentElement: {}, defaultView: null, activeElement: null };
-  const normal = focusNode("button", {}, { ownerDocument: document, focus: () => focused.push("normal") });
-  const priorityTwo = focusNode("button", { tabindex: "2" }, { ownerDocument: document, focus: () => focused.push("two") });
-  const priorityThree = focusNode("button", { tabindex: "3" }, { ownerDocument: document, focus: () => focused.push("three") });
+  const normal = focusNode("button", {}, { ownerDocument: document, focus() { document.activeElement = this; focused.push("normal"); } });
+  const priorityTwo = focusNode("button", { tabindex: "2" }, { ownerDocument: document, focus() { document.activeElement = this; focused.push("two"); } });
+  const priorityThree = focusNode("button", { tabindex: "3" }, { ownerDocument: document, focus() { document.activeElement = this; focused.push("three"); } });
   const disabled = focusNode("button", { disabled: "" }, { ownerDocument: document });
   const programmatic = focusNode("div", { tabindex: "-1" }, { ownerDocument: document });
   const hiddenParent = attributeNode({ "aria-hidden": "true" });
@@ -319,7 +319,7 @@ test("focus helpers filter unavailable nodes, sort tab order, cross open shadows
   assert.deepEqual(focused, ["two"]);
 
   const broken = focusNode("button", {}, { ownerDocument: document, focus: () => { throw new Error("detached"); } });
-  const fallback = focusNode("button", {}, { ownerDocument: document, focus: () => focused.push("fallback") });
+  const fallback = focusNode("button", {}, { ownerDocument: document, focus() { document.activeElement = this; focused.push("fallback"); } });
   assert.equal(focusFirst([broken], { fallback }), fallback);
   assert.equal(focused.at(-1), "fallback");
 });

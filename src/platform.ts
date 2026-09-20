@@ -14108,10 +14108,14 @@ function normalizeEdgeAddresses(values: readonly string[]): string[] {
     const raw = boundedString(input, "ingress.customDomainAddresses entry", 2, 64).trim().toLowerCase();
     let address: string;
     if (raw.includes(":")) {
-      if (!/^[0-9a-f:]+$/u.test(raw) || !raw.includes(":")) {
+      try {
+        // URL's IPv6 parser rejects malformed compression/group counts and
+        // returns one canonical representation for equivalent addresses.
+        if (!/^[0-9a-f:.]+$/u.test(raw)) throw new TypeError("Invalid IPv6 address.");
+        address = new URL(`http://[${raw}]/`).hostname.slice(1, -1);
+      } catch {
         throw new PlatformError(422, "INVALID_INPUT", `Invalid edge IP address: ${raw}`);
       }
-      address = raw;
     } else {
       const segments = raw.split(".");
       if (segments.length !== 4 || segments.some((segment) => !/^\d{1,3}$/u.test(segment) || Number(segment) > 255)) {
@@ -14143,7 +14147,7 @@ function normalizeAppUrlTemplate(value: string): string {
 }
 
 function isLoopbackUrl(url: URL): boolean {
-  return url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  return url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
 }
 
 function normalizeSlug(value: unknown): string {
@@ -15394,7 +15398,7 @@ function providerControlToken(
 
 function providerIngressOrigin(endpoint: string, allowedHosts: readonly string[]): string {
   const url = new URL(endpoint);
-  const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
   if (
     url.username
     || url.password

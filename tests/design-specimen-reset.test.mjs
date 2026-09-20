@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { compile } from "../scripts/compiler.mjs";
-import { h, onCleanup, Portal, render } from "../dist/dom.js";
+import { h, hydrate, onCleanup, Portal, render } from "../dist/dom.js";
 import { createToastProvider } from "../dist/ui-utilities.js";
 import { renderToString } from "../dist/ssr.js";
 
@@ -240,7 +240,7 @@ test("the integrated Studio resets only its story and keeps the real preview set
   const stage = elements().find((node) => node.getAttribute("class") === "preview-stage");
   const sidebar = elements().find((node) => node.getAttribute("class") === "studio-sidebar");
   const share = elements().find((node) => node.getAttribute("class") === "preview-share");
-  const panel = elements().find((node) => node.getAttribute("class") === "inspector-panel");
+  const panel = elements().find((node) => node.getAttribute("class") === "inspector-panel" && node.hasAttribute("data-active"));
   const reset = elements().find((node) => node.tagName === "BUTTON" && node.textContent === "Reset specimen");
   const before = byId(document, "story-input");
   before.value = "Changed"; before.emit("input");
@@ -260,4 +260,34 @@ test("direct Studio SSR includes one reset action and the initial story; its bro
   assert.match(html, /value="Clank Design Studio"/u);
   const server = await readFile(new URL("../design-site/src/server.tsx", import.meta.url), "utf8");
   assert.ok(server.includes('["tools/specimen-reset.js", "tools/specimen-reset.js"]'));
+});
+
+test("the compiled Studio specimen boundary hydrates its server nodes and retains reset ownership", async (t) => {
+  const studioSource = await readFile(new URL("../design-site/src/studio.tsx", import.meta.url), "utf8");
+  const boundary = studioSource.match(/<div class="story-root">[^\n]+?<\/div>/u)?.[0];
+  assert.ok(boundary, "Use the actual Studio boundary so an extra accessor wrapper cannot regress unnoticed");
+  const source = `import { h, onCleanup } from ${JSON.stringify(runtime + "dom.js")};
+import { createSpecimenReset } from "./tools/specimen-reset.js";
+export let controls, clicks = 0, disposals = 0;
+function Story() { onCleanup(() => { disposals++; }); return h("button", { type: "button", onClick: () => { clicks++; } }, "Original"); }
+export function Fixture() { const specimen = createSpecimenReset(() => h(Story)); controls = specimen; return ${boundary}; }`;
+  const path = join(temporary, "specimen-hydration.js");
+  await writeFile(path, compile(source, { filename: "specimen-hydration.tsx", jsxImportSource: runtime + "dom.js", sourceMap: false }));
+  const fixture = await import(pathToFileURL(path).href);
+  assert.equal(await renderToString(h(fixture.Fixture)), '<div class="story-root"><!--clank:start--><button type="button">Original</button><!--clank:end--></div>');
+  const { document, onDispose } = browser(t);
+  const root = document.createElement("main"), storyRoot = document.createElement("div"), original = document.createElement("button");
+  storyRoot.setAttribute("class", "story-root"); original.setAttribute("type", "button"); original.append(document.createTextNode("Original"));
+  storyRoot.append(document.createComment("clank:start"), original, document.createComment("clank:end"));
+  root.append(storyRoot); document.body.append(root);
+  const before = fixture.disposals;
+  const dispose = hydrate(root, h(fixture.Fixture)); onDispose(dispose);
+  assert.equal(root.getAttribute("data-clank-hydration"), "attached");
+  assert.equal(root.firstChild, storyRoot); assert.equal(storyRoot.children[0], original);
+  original.emit("click"); assert.equal(fixture.clicks, 1);
+  assert.equal(fixture.disposals, before);
+  fixture.controls.reset({ currentTarget: null });
+  assert.equal(fixture.disposals, before + 1);
+  assert.notEqual(storyRoot.children[0], original);
+  dispose(); assert.equal(fixture.disposals, before + 2);
 });

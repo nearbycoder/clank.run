@@ -1,0 +1,51 @@
+{
+  "status": "passed",
+  "node": "24.21.0",
+  "commandsPassed": 6,
+  "warnings": 0,
+  "execution": "sequential",
+  "sites": [
+    {
+      "site": "docs",
+      "doctorExitCode": 0,
+      "doctorSummary": "7 passed, 0 warnings, 0 failed.",
+      "deployCheckExitCode": 0,
+      "artifactId": "23aa0c854f723c32565147136ea0da111ec7d57418f66827dec1dd05d3add162",
+      "artifactPath": "/home/nearby/Sites/clank/docs-site/.clank/artifacts/23aa0c854f723c32565147136ea0da111ec7d57418f66827dec1dd05d3add162.clank.gz",
+      "artifactBytes": 3740925,
+      "uploaded": false,
+      "logs": {
+        "doctor": "/tmp/clank-hundred/docs-final-doctor.log",
+        "deployCheck": "/tmp/clank-hundred/docs-final-deploy-check.log"
+      }
+    },
+    {
+      "site": "synth",
+      "doctorExitCode": 0,
+      "doctorSummary": "7 passed, 0 warnings, 0 failed.",
+      "deployCheckExitCode": 0,
+      "artifactId": "25ea689d2607f47929b8e6d7c555c60183232624f969f01eef8ec06ec22d8f48",
+      "artifactPath": "/home/nearby/Sites/clank/synth-site/.clank/artifacts/25ea689d2607f47929b8e6d7c555c60183232624f969f01eef8ec06ec22d8f48.clank.gz",
+      "artifactBytes": 3072241,
+      "uploaded": false,
+      "logs": {
+        "doctor": "/tmp/clank-hundred/synth-final-doctor.log",
+        "deployCheck": "/tmp/clank-hundred/synth-final-deploy-check.log"
+      }
+    },
+    {
+      "site": "studio",
+      "doctorExitCode": 0,
+      "doctorSummary": "7 passed, 0 warnings, 0 failed.",
+      "deployCheckExitCode": 0,
+      "artifactId": "e9c3983771f5d40efcd1f3989eb296732aed0a1c7da44ae038404259e0bad060",
+      "artifactPath": "/home/nearby/Sites/clank/design-site/.clank/artifacts/e9c3983771f5d40efcd1f3989eb296732aed0a1c7da44ae038404259e0bad060.clank.gz",
+      "artifactBytes": 3171536,
+      "uploaded": false,
+      "logs": {
+        "doctor": "/tmp/clank-hundred/studio-final-doctor.log",
+        "deployCheck": "/tmp/clank-hundred/studio-final-deploy-check.log"
+      }
+    }
+  ]
+}

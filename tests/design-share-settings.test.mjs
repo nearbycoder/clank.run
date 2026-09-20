@@ -113,7 +113,7 @@ test("direct deep links serialize identical hydration state and serve every prev
   assert.match(html, /style="--preview-width:280px"/u);
   assert.match(html, /Machine-readable by construction/u);
   assert.match(html, /rel="canonical" href="https:\/\/design\.clank\.run\/components\/switch"/u);
-  for (const filename of ["preview-width.js", "preview-width-data.js", "share-settings.js", "share-settings-data.js"]) {
+  for (const filename of ["preview-width.js", "preview-width-data.js", "share-settings.js", "share-settings-data.js", "studio-data.js", "copy-text.js", "copy-text-data.js", "theme-sandbox-export-data.js"]) {
     assert.equal((await fetch(`${origin}/assets/tools/${filename}`)).status, 200, filename);
   }
   assert.equal((await fetch(`${origin}/assets/tools/unknown.js`)).status, 404);

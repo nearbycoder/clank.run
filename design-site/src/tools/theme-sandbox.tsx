@@ -2,6 +2,9 @@
 import { For, Show, computed, signal } from "../../vendor/dom.js";
 import { CLANK_THEME_PRESETS, clankThemeVariables, getClankTheme, type ClankTheme, type ClankThemeTokenName } from "../../vendor/ui.js";
 import { SANDBOX_TOKEN_NAMES, applySandboxOverride, createThemeSandbox, resetSandboxOverride, sandboxTheme, sandboxTokenHint } from "./theme-sandbox-data.js";
+import { createSandboxExport } from "./theme-sandbox-export-data.js";
+import { downloadThemeExport } from "./theme-export-data.js";
+import { CopyText } from "./copy-text.js";
 
 export function ThemeSandbox(props: { theme: () => ClankTheme }) {
   const state = signal(createThemeSandbox(props.theme().id));
@@ -11,6 +14,18 @@ export function ThemeSandbox(props: { theme: () => ClankTheme }) {
   const error = signal("");
   const notice = signal("No overrides applied.");
   const edited = computed(() => SANDBOX_TOKEN_NAMES.filter((name) => state.value.overrides[name] !== undefined));
+  const file = computed(() => createSandboxExport(state.value));
+  const downloadNotice = signal<{ contents: string; message: string } | null>(null);
+  let exportCode: HTMLElement | null = null;
+  function download() {
+    const selected = file.peek();
+    try {
+      downloadThemeExport(selected);
+      downloadNotice.value = { contents: selected.contents, message: `Download requested for ${selected.filename}.` };
+    } catch {
+      downloadNotice.value = { contents: selected.contents, message: "Could not download. Select and copy the CSS below." };
+    }
+  }
   function refreshDraft() { draft.value = preview.value.tokens[token.peek()]; error.value = ""; }
   function apply() {
     const result = applySandboxOverride(state.peek(), token.peek(), draft.peek());
@@ -37,6 +52,12 @@ export function ThemeSandbox(props: { theme: () => ClankTheme }) {
       <p class="theme-sandbox-error" id="theme-sandbox-error" role="alert">{error.value ? `${error.value} The preview keeps the last valid value.` : ""}</p>
       <p class="theme-tool-status" role="status" aria-live="polite">{notice} {edited.value.length} edited tokens.</p>
       <Show when={() => edited.value.length > 0}><ul class="theme-sandbox-edits" aria-label="Applied token overrides"><For each={edited}>{(name) => <li><code>{name}</code><span>{state.value.overrides[name]}</span></li>}</For></ul></Show>
+      <section class="theme-sandbox-export" aria-label="Export sandbox overrides">
+        <h2>Export overrides</h2><p class="theme-tool-description">Apply this CSS after the base preset and add <code>data-clank-sandbox</code> to your container. Only applied overrides are included; an unfinished or invalid draft is excluded.</p>
+        <div class="theme-export-actions"><CopyText text={() => file.value.contents} preview={() => exportCode} label="Copy override CSS" description="Sandbox override CSS" /><button type="button" class="studio-button" onClick={download}>Download override CSS</button></div>
+        <p class="theme-tool-status" role="status" aria-live="polite">{downloadNotice.value?.contents === file.value.contents ? downloadNotice.value.message : ""}</p>
+        <pre class="theme-export-preview" tabindex="0" role="region" aria-label="Sandbox override CSS"><code ref={(element: HTMLElement | null) => { exportCode = element; }}>{file.value.contents}</code></pre>
+      </section>
       <section class="theme-sandbox-preview" aria-label="Scoped theme sandbox preview" style={clankThemeVariables(preview.value)} data-scheme={preview.value.scheme}>
         <span class="theme-sandbox-eyebrow">{getClankTheme(state.value.baseId)?.name} · live sample</span>
         <h2>Make room for your next idea.</h2><p>Primary text, quieter details, and interactive controls share the tokens you edit here.</p>

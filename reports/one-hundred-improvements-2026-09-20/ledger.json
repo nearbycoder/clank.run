@@ -1,0 +1,1217 @@
+{
+  "base": "edaf811c224fe649338143c0cf9e4690024cd521",
+  "branch": "codex/one-hundred-improvements",
+  "requestedImprovements": 100,
+  "requestedSubagents": 100,
+  "items": [
+    {
+      "id": "001",
+      "area": "Core",
+      "title": "Reactive array append updates length",
+      "paths": [
+        "src/core.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_inventory_core",
+      "tests": "15 targeted/core tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "002",
+      "area": "Core",
+      "title": "Array truncation invalidates removed values",
+      "paths": [
+        "src/core.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_002",
+      "tests": "22 core/append/truncation tests passed; 7 new regressions failed before fix",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "003",
+      "area": "Core",
+      "title": "Array truncation updates key observers",
+      "paths": [
+        "src/core.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_003",
+      "tests": "27 isolated tests passed; 5 new cases",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "004",
+      "area": "Core",
+      "title": "Store wrapping preserves proxy identity",
+      "paths": [
+        "src/core.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_004",
+      "tests": "35 isolated core tests passed; 8 new identity regressions",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "005",
+      "area": "Core",
+      "title": "Rejected store mutations do not publish phantom changes",
+      "paths": [
+        "src/core.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_005",
+      "tests": "44 isolated core tests passed; 9 new rejected-mutation regressions",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "006",
+      "area": "Core",
+      "title": "Own-property shadowing updates shape and inherited fallback",
+      "paths": [
+        "src/core.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_006",
+      "tests": "54 isolated core regressions passed; 10 new shadowing and lazy-accessor cases",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "007",
+      "area": "Core",
+      "title": "Structured form values begin and reset clean",
+      "paths": [
+        "src/forms.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "14 isolated forms tests passed, including opaque values and reset baseline invalidation",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "008",
+      "area": "Core",
+      "title": "Form setValues rejects unknown keys atomically",
+      "paths": [
+        "src/forms.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "30 isolated forms tests passed; lifecycle suite had 12 baseline failures",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "009",
+      "area": "Core",
+      "title": "Invalid form reset preserves an active submission",
+      "paths": [
+        "src/forms.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "30 isolated forms tests passed; invalid reset preserves active submit",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "010",
+      "area": "Core",
+      "title": "Stale submissions cannot replace current errors",
+      "paths": [
+        "src/forms.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "30 isolated forms tests passed; stale context error callbacks fenced",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "011",
+      "area": "Core",
+      "title": "Stale submissions cannot reset newer form state",
+      "paths": [
+        "src/forms.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "30 isolated forms tests passed; stale context reset callbacks fenced",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "012",
+      "area": "Core",
+      "title": "Thrown validators settle form submission state",
+      "paths": [
+        "src/forms.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "30 isolated forms tests passed; validation and reentrant terminal cases settle correctly",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "013",
+      "area": "Core",
+      "title": "Textarea values render correctly in SSR",
+      "paths": [
+        "src/ssr.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "58 isolated DOM/SSR/forms tests pass; escaped textarea and hydration regressions",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "014",
+      "area": "Core",
+      "title": "Select values render selected options in SSR",
+      "paths": [
+        "src/ssr.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "58 isolated DOM/SSR/forms tests pass; controlled options across nested/async children",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "015",
+      "area": "Core",
+      "title": "Multiple select arrays update native option selection",
+      "paths": [
+        "src/dom.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "58 isolated DOM/SSR/forms tests pass; native multiple selection and late-option cleanup",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "016",
+      "area": "Core",
+      "title": "Relative navigation resolves against the current page",
+      "paths": [
+        "src/router.ts"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "21 router/CLI regressions passed; current-page URL resolution verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "017",
+      "area": "Core",
+      "title": "Slow route guards cannot overwrite newer navigation",
+      "paths": [
+        "src/router.ts"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "21 router/CLI regressions passed; stale guards fenced across navigation/resolve/stop",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "018",
+      "area": "Core",
+      "title": "Cyclic route redirects fail within a bounded chain",
+      "paths": [
+        "src/router.ts"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "21 router/CLI regressions passed; bounded redirect cycles and valid chains verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "019",
+      "area": "Core",
+      "title": "Focus discovery traverses open shadow roots",
+      "paths": [
+        "src/ui-foundation.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "020",
+      "area": "Core",
+      "title": "Hidden ancestors exclude descendants from focus",
+      "paths": [
+        "src/ui-foundation.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "021",
+      "area": "Core",
+      "title": "Focus fallback skips elements that reject focus",
+      "paths": [
+        "src/ui-foundation.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "022",
+      "area": "Core",
+      "title": "Combobox and autocomplete preserve IME composition",
+      "paths": [
+        "src/ui-selection.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "023",
+      "area": "Core",
+      "title": "Select typeahead preserves IME composition",
+      "paths": [
+        "src/ui-selection.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "024",
+      "area": "Core",
+      "title": "PIN input preserves IME editing",
+      "paths": [
+        "src/ui-fields.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "025",
+      "area": "Core",
+      "title": "Reactive checked and selected updates restore live state",
+      "paths": [
+        "src/dom.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "026",
+      "area": "Core",
+      "title": "Number field scrolling preserves browser zoom gestures",
+      "paths": [
+        "src/ui-fields.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "027",
+      "area": "Core",
+      "title": "Router respects empty native download attributes",
+      "paths": [
+        "src/router.ts"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "21 router/CLI regressions passed; empty native download attribute preserved",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "028",
+      "area": "Core",
+      "title": "Failed directive installation releases earlier directives",
+      "paths": [
+        "src/dom.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "029",
+      "area": "Core",
+      "title": "Directive cleanup continues after a sibling failure",
+      "paths": [
+        "src/dom.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "030",
+      "area": "Core",
+      "title": "Initially failed effects unsubscribe cleanly",
+      "paths": [
+        "src/core.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_007",
+      "tests": "244 isolated regression tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "031",
+      "area": "Platform",
+      "title": "Rapid workspace switches show only current data",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_inventory_platform",
+      "tests": "22 isolated workspace and duplicate-submit regressions passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "032",
+      "area": "Platform",
+      "title": "Project and domain forms prevent duplicate submissions",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_032",
+      "tests": "9 isolated compile/VM tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "033",
+      "area": "Platform",
+      "title": "Dashboard copy actions offer reliable fallbacks",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "30 isolated clipboard and workspace/form regressions passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "034",
+      "area": "Platform",
+      "title": "Log refresh preserves reading position and supports Latest",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "14 new scroll regressions plus 44 existing console regressions passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "035",
+      "area": "Platform",
+      "title": "Runtime log line wrapping",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "90 isolated console regressions passed; 4 new wrapping cases",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "036",
+      "area": "Platform",
+      "title": "Activity refresh retains loaded older history",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "90 isolated console regressions passed; activity merge/cursor/race cases",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "037",
+      "area": "Platform",
+      "title": "Activity refresh preserves expanded event details",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "90 isolated console regressions passed; expansion persistence/pruning cases",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "038",
+      "area": "Platform",
+      "title": "Automatic refresh preserves unsaved runtime settings",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "90 isolated console regressions passed; 9 runtime draft/save/cancel cases",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "039",
+      "area": "Platform",
+      "title": "Mobile navigation contains and restores keyboard focus",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "141 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "040",
+      "area": "Platform",
+      "title": "Dashboard skip navigation and route focus",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "141 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "041",
+      "area": "Platform",
+      "title": "Dashboard respects reduced motion",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "141 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "042",
+      "area": "Platform",
+      "title": "Reset combined project filters",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "141 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "043",
+      "area": "Platform",
+      "title": "Search workspace members",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "044",
+      "area": "Platform",
+      "title": "Find and filter pending invitations",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "045",
+      "area": "Platform",
+      "title": "Filter deployment history",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "046",
+      "area": "Platform",
+      "title": "Sort and prioritize preview expiry",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "047",
+      "area": "Platform",
+      "title": "Search and sort backup restore points",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "048",
+      "area": "Platform",
+      "title": "Search and sort monthly usage rows",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "049",
+      "area": "Platform",
+      "title": "Previous, current, and next usage month navigation",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "050",
+      "area": "Platform",
+      "title": "Copy complete operational IDs",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "051",
+      "area": "Platform",
+      "title": "Exact operational timestamps",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "052",
+      "area": "Platform",
+      "title": "Bound dashboard GET waits with retry feedback",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "053",
+      "area": "Platform",
+      "title": "Suspend automatic polling in hidden tabs",
+      "paths": [
+        "src/platform-console.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_033",
+      "tests": "165 targeted and regression tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "054",
+      "area": "Platform",
+      "title": "Bundle verification rejects missing worker entry",
+      "paths": [
+        "src/deploy.ts"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated deployment regressions pass; missing jobs entries rejected at encode/decode",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "055",
+      "area": "Platform",
+      "title": "Linear bundle byte accounting",
+      "paths": [
+        "src/deploy.ts"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated deployment regressions pass; measured linear file visits and exact byte limits",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "056",
+      "area": "Platform",
+      "title": "Bound CLI artifact inspection before allocation",
+      "paths": [
+        "scripts/cli-deploy.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated deployment regressions pass; artifact reads bounded before allocation",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "057",
+      "area": "Platform",
+      "title": "Useful bounded JSON-mode build diagnostics",
+      "paths": [
+        "scripts/cli-deploy.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated deployment regressions pass; bounded stripped stderr preserved in JSON errors",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "058",
+      "area": "Platform",
+      "title": "Accurate deployment configuration read failures",
+      "paths": [
+        "src/deploy.ts"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated deployment regressions pass; I/O errors preserved, nonregular config rejected",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "059",
+      "area": "Platform",
+      "title": "IPv6 loopback development URLs",
+      "paths": [
+        "src/platform.ts",
+        "scripts/cli-deploy.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated deployment regressions pass; IPv6 loopback accepts and deny cases verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "060",
+      "area": "Platform",
+      "title": "Validate and deduplicate actual IPv6 edge addresses",
+      "paths": [
+        "src/platform.ts"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated deployment regressions pass; canonical IPv6 DNS matching verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "061",
+      "area": "Applications",
+      "title": "Documentation clipboard selection fallback",
+      "paths": [
+        "docs-site/src/app.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_inventory_sites",
+      "tests": "18 targeted tests passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "062",
+      "area": "Applications",
+      "title": "Keyboard-accessible heading permalinks",
+      "paths": [
+        "docs-site/src/markdown.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_062",
+      "tests": "4 isolated tests passed; parent emits escaped plain names directly",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "063",
+      "area": "Applications",
+      "title": "Mobile On this page navigation",
+      "paths": [
+        "docs-site/src/server.tsx",
+        "docs-site/src/styles.css"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "28 isolated docs regressions passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "064",
+      "area": "Applications",
+      "title": "Safe search-term highlighting",
+      "paths": [
+        "docs-site/src/search.tsx",
+        "docs-site/src/server.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_064",
+      "tests": "12 isolated search regressions passed",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "065",
+      "area": "Applications",
+      "title": "Markdown tables preserve escaped pipes and code spans",
+      "paths": [
+        "docs-site/src/markdown.ts"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "13 isolated docs tests passed; all 72 guides retain table counts",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "066",
+      "area": "Applications",
+      "title": "Current documentation section announced in the TOC",
+      "paths": [
+        "docs-site/src/app.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "54 isolated docs regressions passed; 1024-heading navigation stays logarithmic",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "067",
+      "area": "Applications",
+      "title": "Studio inspector keyboard tabs and panels",
+      "paths": [
+        "design-site/src/studio.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "47 isolated Studio tests pass; keyboard tabs and URL state verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "068",
+      "area": "Applications",
+      "title": "Copy component usage examples",
+      "paths": [
+        "design-site/src/studio.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "47 isolated Studio tests pass; exact copy and truthful fallback verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "069",
+      "area": "Applications",
+      "title": "Favorite Studio components",
+      "paths": [
+        "design-site/src/studio.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "47 isolated Studio tests pass; bounded validated cross-tab favorites verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "070",
+      "area": "Applications",
+      "title": "Theme gallery search and scheme filters",
+      "paths": [
+        "design-site/src/studio.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "47 isolated Studio tests pass; theme search/scheme filtering verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "071",
+      "area": "Applications",
+      "title": "Export validated sandbox overrides",
+      "paths": [
+        "design-site/src/tools/theme-sandbox.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "47 isolated Studio tests pass; applied scoped CSS validation/export verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "072",
+      "area": "Applications",
+      "title": "Synth saved-value validation and zero swing restoration",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "073",
+      "area": "Applications",
+      "title": "Synth master volume controls actual audio",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "074",
+      "area": "Applications",
+      "title": "Synth shortcuts preserve native Space activation",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "075",
+      "area": "Applications",
+      "title": "Synth transport disposes and restarts reliably",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "076",
+      "area": "Applications",
+      "title": "Import exported Synth patterns",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "077",
+      "area": "Applications",
+      "title": "Undo and redo Synth pattern edits",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "078",
+      "area": "Applications",
+      "title": "Clear an individual instrument track",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "079",
+      "area": "Applications",
+      "title": "Rotate track rhythms left and right",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "080",
+      "area": "Applications",
+      "title": "Synth tap tempo",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "081",
+      "area": "Applications",
+      "title": "Sequencer arrow-key grid navigation",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "082",
+      "area": "Applications",
+      "title": "Reset Synth mix without changing the pattern",
+      "paths": [
+        "synth-site/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "moon_063",
+      "tests": "27 isolated state, audio, renderer tests pass",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "083",
+      "area": "Applications",
+      "title": "Todo starter displays mutation errors",
+      "paths": [
+        "templates/auth-todo/src/app.tsx",
+        "templates/auth-todo/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated starter-view tests pass; escaped client/local errors visible",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "084",
+      "area": "Applications",
+      "title": "Todo starter preserves failed drafts and prevents duplicate adds",
+      "paths": [
+        "templates/auth-todo/src/app.tsx",
+        "templates/auth-todo/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated starter-view tests pass; duplicate submits, draft retention and focus verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "085",
+      "area": "Applications",
+      "title": "Todo starter prevents overlapping row mutations",
+      "paths": [
+        "templates/auth-todo/src/app.tsx",
+        "templates/auth-todo/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated starter-view tests pass; per-row pending guards preserve other actions",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "086",
+      "area": "Applications",
+      "title": "Todo starter completion filters and counts",
+      "paths": [
+        "templates/auth-todo/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated starter-view tests pass; completion filters/counts/empty states verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "087",
+      "area": "Applications",
+      "title": "Todo starter title search",
+      "paths": [
+        "templates/auth-todo/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated starter-view tests pass; search composes with completion filters",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "088",
+      "area": "Applications",
+      "title": "Approval starter status filters",
+      "paths": [
+        "templates/approval-queue/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated starter-view tests pass; status filters update with live authorized rows",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "089",
+      "area": "Applications",
+      "title": "Booking starter calendar export",
+      "paths": [
+        "templates/booking/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated starter-view tests pass; UTC iCalendar escaping, IDs and byte folding verified",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "090",
+      "area": "Applications",
+      "title": "Customer portal open and closed request views",
+      "paths": [
+        "templates/customer-portal/src/view.tsx"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "7 isolated starter-view tests pass; open/closed views update with live authorized rows",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "091",
+      "area": "CLI",
+      "title": "Compiler watch updates all copied static asset types",
+      "paths": [
+        "scripts/clank.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "092",
+      "area": "CLI",
+      "title": "Compiler watch handles directory renames and deletions",
+      "paths": [
+        "scripts/clank.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "093",
+      "area": "CLI",
+      "title": "Compiler watch serializes rebuilds",
+      "paths": [
+        "scripts/clank.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "094",
+      "area": "CLI",
+      "title": "Compiler rejects colliding output paths",
+      "paths": [
+        "scripts/clank.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "095",
+      "area": "CLI",
+      "title": "Compiler bounds parallel file work",
+      "paths": [
+        "scripts/clank.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "096",
+      "area": "CLI",
+      "title": "Tailwind failures retain actual build diagnostics",
+      "paths": [
+        "scripts/clank.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "097",
+      "area": "CLI",
+      "title": "Compiler rejects nested dot-prefixed output directories",
+      "paths": [
+        "scripts/clank.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "098",
+      "area": "CLI",
+      "title": "Workbench rejects unknown options",
+      "paths": [
+        "scripts/cli-workbench.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "099",
+      "area": "CLI",
+      "title": "Workbench rejects excess positional arguments",
+      "paths": [
+        "scripts/cli-workbench.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    },
+    {
+      "id": "100",
+      "area": "CLI",
+      "title": "Visual workbench validates RGBA channels before conversion",
+      "paths": [
+        "scripts/cli-workbench.mjs"
+      ],
+      "status": "verified",
+      "agent": "root",
+      "tests": "10 CLI regressions and 12 existing compiler/workbench tests pass; integration review complete",
+      "integrationValidation": "Full repository check: 1,407 tests passed; see validation.json."
+    }
+  ],
+  "newSubagentsCreated": 14,
+  "agentCapacityNote": "New-agent creation was rejected by the thread limit while assigning improvement065. Remaining work reuses existing agents; no claim of 100 distinct agents.",
+  "status": "verified"
+}

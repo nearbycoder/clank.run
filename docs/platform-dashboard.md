@@ -47,20 +47,31 @@ The overview shows:
 Project search combines with the workspace and runtime-status filters. Use **Sort** to order the
 visible projects by name, request volume, or p95 latency; **Default order** preserves the platform's
 ordering. These controls operate on the projects already authorized for the current account.
+**Reset filters** restores that list's defaults without clearing filters in other views.
 
 Activity search and its action filter apply to the events currently loaded in the browser. Load
 older events to include them in the same filtered view. Runtime log search and the stream selector
 similarly filter the latest redacted output; they do not query an unbounded log archive.
+Refreshing activity retains loaded older pages and expanded event details. Logs preserve your
+reading position while new lines arrive; **Latest** returns to following output, and **Wrap lines**
+changes presentation without fetching more data.
 
 Automatic refresh can be paused while inspecting data and resumed afterward. Manual refresh
-remains available. The traffic chart also offers a table of its exact bucket timestamps, request
+remains available. Hidden tabs suspend automatic polling and refresh once when visible again,
+unless refresh was manually paused. GET requests, including response-body reads, time out after
+15 seconds with manual retry guidance; failed mutations are never automatically retried. The
+traffic chart also offers a table of its exact bucket timestamps, request
 counts, and p95 values. Usage can be downloaded as CSV for the selected workspace and month,
-using the same project rows shown on the page. Text cells are protected against spreadsheet
+using the complete authorized monthly snapshot even when its visible project list is filtered.
+Text cells are protected against spreadsheet
 formula interpretation.
 
 Selecting a project switches the desktop sidebar to contextual project navigation with an explicit
 return to **All projects**. Phone and tablet layouts switch to an off-canvas sidebar with a
 click-away backdrop; the closed drawer stays out of both the keyboard and accessibility trees.
+The open mobile drawer contains keyboard focus and closes with Escape, restoring its menu button.
+A skip link reaches the main view, user navigation focuses its heading, and background refreshes
+leave focus in place. The console honors reduced-motion preferences.
 Project sections become a complete two- or three-column tab grid, so every destination remains
 visible without horizontal scrolling. Dense deployment, backup, and operator tables become
 labelled record cards, domain instructions and runtime logs wrap safely, and interactive controls
@@ -79,6 +90,22 @@ until usage retention expires. Partial pre-upgrade months are labelled instead o
 presented as complete, and the page states that streamed response bytes and prices are not
 calculated. The same stable response is available through `clank usage --json`; see
 [Usage accounting and traffic limits](usage-and-limits.md).
+
+Usage project search matches names, slugs, and IDs. Sort its rows by requests, transfer, or
+rejections while whole-month totals stay unchanged. Previous, current, and next month controls
+respect the API's retention window and never request a future month.
+
+People has member email/ID search and invitation recipient, delivery-state, and access-scope
+filters. Deployments can be filtered by release ID, status, and artifact availability; backups by
+ID or reason and creation order. Preview ordering supports name and expiry, with labels for expired
+previews and those expiring within 24 hours. These controls only filter already authorized data.
+Release, backup, and job rows disclose their complete operational IDs for copying. Operational
+timestamps expose exact UTC values alongside readable dates. Clipboard failures offer the visible
+text for manual copying instead of claiming success.
+
+Unsaved runtime policy and timeout edits survive background refresh and failed saves. Cancelling
+an edit restores the latest server values, and switching projects discards the previous project's
+draft. Workspace switches similarly reject stale responses and detached actions from older views.
 
 The **People** view creates and switches between the account's workspaces, then shows the current role, members, pending invitations, and project usage. The creation control reflects the transactionally enforced owned-workspace quota and selects the new workspace immediately. A signed-in recipient can paste an email-bound workspace token to join without using the CLI. Owners and administrators can invite by email, copy the single-use token once, revoke pending invitations, change roles, remove collaborators, or leave when last-owner protection permits. Allowlisted platform administrators get an additional **Personal workspace only** choice that onboards the recipient without granting access to any inviter workspace. The pending list labels both access scopes explicitly. Pending invitation addresses are hidden from unauthorized workspace members, including email redaction in developer activity metadata; disabled controls reflect server capabilities, but every operation is authorized again by the API.
 

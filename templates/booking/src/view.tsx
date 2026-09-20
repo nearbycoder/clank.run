@@ -29,9 +29,51 @@ export function RecipeView(props: RecipeViewProps) {
 }
 function RecordCard(props: { row: RecipeRecord; user: AuthUser<DefaultAuthProfile>; update: RecipeViewProps["update"] }) {
   const note = signal(props.row.note), busy = signal(false);
+  const calendarError = signal("");
   const act = async (status: RecipeDecision, response?: string) => { if (busy.value) return; busy.value = true; try { await props.update(props.row, status, response); } finally { busy.value = false; } };
+  const download = () => {
+    calendarError.value = "";
+    if (props.row.status !== "booked") return;
+    try {
+      const url = URL.createObjectURL(new Blob([bookingCalendar(props.row, window.location.host)], { type: "text/calendar;charset=utf-8" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `booking-${String(props.row._id).replace(/[^A-Za-z0-9_-]/gu, "-").slice(0, 80)}.ics`;
+      try { document.body.append(anchor); anchor.click(); }
+      finally { anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1_000); }
+    } catch { calendarError.value = "Could not export this booking. Refresh and try again."; }
+  };
   return <article><div class="record-heading"><h2>{props.row.title}</h2><span class="status">{props.row.status}</span></div><p class="detail">{props.row.detail}</p>
     {props.row.note ? <p class="response">Response: {props.row.note}</p> : null}
-    {props.row.status === "booked" ? <button disabled={busy.value} onClick={() => act("cancelled")} agentId={`cancel-${props.row._id}`} agentAction={api.records.update}>Cancel booking</button> : null}
+    {props.row.status === "booked" ? <div class="actions"><button type="button" onClick={download} agentId={`calendar-${props.row._id}`} agentLabel={`Add ${props.row.title} to calendar`}>Add to calendar</button><button disabled={busy.value} onClick={() => act("cancelled")} agentId={`cancel-${props.row._id}`} agentAction={api.records.update}>Cancel booking</button></div> : null}
+    <p role="alert" hidden={!calendarError.value}>{calendarError.value}</p>
   </article>;
+}
+
+function bookingCalendar(row: RecipeRecord, host: string): string {
+  const utc = (value: number) => {
+    if (!Number.isFinite(value)) throw new Error("Invalid booking date.");
+    const date = new Date(value).toISOString();
+    if (!/^\d{4}-/u.test(date)) throw new Error("Invalid booking date.");
+    return date.slice(0, 19).replace(/[-:]/gu, "") + "Z";
+  };
+  if (row.status !== "booked" || row.endsAt - row.startsAt !== 30 * 60_000) throw new Error("Invalid booking duration.");
+  const text = (value: string) => value.replaceAll("\\", "\\\\").replace(/\r\n|\r|\n/gu, "\\n").replaceAll(",", "\\,").replaceAll(";", "\\;").replace(/[\u0000-\u0008\u000b-\u001f\u007f]/gu, "");
+  // RFC 5545 §§3.1/3.3.11: CRLF content lines, escaped TEXT, 75-octet folds.
+  const encoder = new TextEncoder();
+  const fold = (line: string) => {
+    let output = "", bytes = 0;
+    for (const character of line) {
+      const size = encoder.encode(character).length;
+      if (bytes + size > 75) { output += "\r\n "; bytes = 1; }
+      output += character;
+      bytes += size;
+    }
+    return output;
+  };
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Clank//Booking//EN", "CALSCALE:GREGORIAN", "BEGIN:VEVENT",
+    `UID:${encodeURIComponent(String(row._id))}@${encodeURIComponent(host)}`,
+    `DTSTAMP:${utc(row._creationTime)}`, `DTSTART:${utc(row.startsAt)}`, `DTEND:${utc(row.endsAt)}`,
+    `SUMMARY:${text(row.title)}`, `DESCRIPTION:${text(`30-minute consultation. Start time: ${row.detail} UTC.${row.note ? `\n${row.note}` : ""}`)}`,
+    "STATUS:CONFIRMED", "END:VEVENT", "END:VCALENDAR", ""].map(fold).join("\r\n");
 }

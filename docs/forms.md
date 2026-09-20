@@ -86,6 +86,11 @@ Field helpers return ordinary Clank/HTML props:
 
 `aria-invalid` remains explicitly `"true"` or `"false"`. When errors exist, the control automatically references its error element with `aria-describedby`.
 
+Controlled textarea values render as escaped text content during SSR, including leading newlines.
+Select values render matching options as selected before hydration. Use an array field with
+`multiple` for a native multi-select; browser bindings read and write the complete selection,
+including options added after the control mounts.
+
 ## State
 
 The form controller exposes:
@@ -120,6 +125,15 @@ signup.reset({
 ```
 
 Reset values must contain exactly the original fields. Unknown field errors throw instead of disappearing silently.
+
+`setValues()` checks all supplied keys before applying changes. `reset(values)` checks and clones
+the complete replacement before changing the baseline or cancelling an active submission, so a
+rejected update leaves the form intact.
+
+Dirty state compares arrays and plain objects by value, including cycles, and understands dates,
+regular expressions, ordered maps and sets, and binary buffers. A reset establishes a clean cloned
+baseline. Other opaque objects are conservatively treated as changed when replaced. Assign new
+field values through the controller; mutating an object in place does not notify its signal.
 
 ## Validation
 
@@ -174,6 +188,11 @@ const invite = createForm({
 ```
 
 New submissions abort older submissions by default and ignore their stale results. Set `concurrency: "ignore"` when a second submit should do nothing while the first is pending.
+
+The `setErrors` and `reset` helpers passed to `onSubmit` work only while that submission is current
+and pending. Retained callbacks cannot overwrite a newer submission or a manually reset form.
+A validator exception during submission sets the form's error state and clears pending state;
+calling `validate()` directly still throws the exception to its caller.
 
 An invalid submit marks every field touched and focuses the first invalid named control unless `focusFirstError: false` is configured.
 

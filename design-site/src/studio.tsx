@@ -1,5 +1,5 @@
 /* @clankImportSource ../vendor/dom.js */
-import { For, Show, computed, effect, onMount, signal } from "../vendor/dom.js";
+import { For, Show, computed, effect, onCleanup, onMount, signal } from "../vendor/dom.js";
 import {
   CLANK_THEME_PRESETS,
   UI_COMPONENT_CATALOG,
@@ -21,6 +21,8 @@ import { observePreviewWidth, parsePreviewWidth, previewWidthLabel, previewWidth
 import { catalogModuleLabels as moduleLabels, catalogFilterOptions, filterComponentCatalog } from "./tools/catalog-filters-data.js";
 import { SharePreviewLink } from "./tools/share-settings.js";
 import { parsePreviewSettings, previewSettingsQuery, shouldNavigatePreview, studioViewFromPath, validatePreviewSettings, type PreviewSettings, type InspectorPanel } from "./tools/share-settings-data.js";
+import { FAVORITES_KEY, INSPECTOR_PANELS, componentUsage, createInspectorTabs, filterThemeGallery, readFavoriteComponents, saveFavoriteComponents, toggleFavoriteComponent } from "./tools/studio-data.js";
+import { CopyText } from "./tools/copy-text.js";
 
 export type StudioView = "overview" | "themes" | string;
 
@@ -74,6 +76,10 @@ function ThemeMiniature(props: { theme: (typeof CLANK_THEME_PRESETS)[number]; ac
 }
 
 function ThemeGallery(props: { selected: () => string; onSelect: (themeId: string) => void }) {
+  const query = signal("");
+  const scheme = signal("all");
+  const matches = computed(() => filterThemeGallery(CLANK_THEME_PRESETS, query.value, scheme.value));
+  const reset = () => { query.value = ""; scheme.value = "all"; };
   return (
     <section class="theme-gallery" aria-labelledby="theme-gallery-title">
       <header class="view-heading">
@@ -103,11 +109,19 @@ function ThemeGallery(props: { selected: () => string; onSelect: (themeId: strin
           <div class="theme-tool-body"><ThemeSandbox theme={() => getClankTheme(props.selected()) ?? CLANK_THEME_PRESETS[0]} /></div>
         </details>
       </section>
+      <div class="theme-gallery-filters">
+        <label class="theme-tool-field" for="theme-gallery-search"><span>Search themes</span><input id="theme-gallery-search" type="search" maxlength={160} value={query} placeholder="Name, description, or tag" onInput={(event: InputEvent) => { query.value = (event.currentTarget as HTMLInputElement).value; }} /></label>
+        <label class="theme-tool-field" for="theme-gallery-scheme"><span>Color scheme</span><select id="theme-gallery-scheme" value={scheme} onChange={(event: Event) => { scheme.value = (event.currentTarget as HTMLSelectElement).value; }}><option value="all">Light and dark</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+        <button type="button" class="studio-button" disabled={!matches.value.active} onClick={reset}>Reset themes</button>
+      </div>
+      <p class="theme-tool-status" role="status" aria-live="polite">{matches.value.count} of {matches.value.total} themes</p>
+      <Show when={() => !matches.value.entries.some((theme) => theme.id === props.selected())}><p class="theme-tool-status">Current theme: {getClankTheme(props.selected())?.name}. It remains active outside these results.</p></Show>
+      <Show when={() => matches.value.count === 0}><p class="theme-tool-empty">No themes match. Try another search or reset the theme filters.</p></Show>
       <div class="theme-card-grid">
-        <For each={CLANK_THEME_PRESETS} by="id">
-          {(theme, index) => (
+        <For each={() => matches.value.entries} by="id">
+          {(theme) => (
             <article class="theme-card" style={clankThemeVariables(getClankTheme(theme.id) ?? CLANK_THEME_PRESETS[0])} data-scheme={theme.scheme}>
-              <header><span>{String(index() + 1).padStart(2, "0")}</span><button type="button" onClick={() => props.onSelect(theme.id)}>{props.selected() === theme.id ? "Selected" : "Use theme"}</button></header>
+              <header><span>{String(CLANK_THEME_PRESETS.findIndex((entry) => entry.id === theme.id) + 1).padStart(2, "0")}</span><button type="button" onClick={() => props.onSelect(theme.id)}>{props.selected() === theme.id ? "Selected" : "Use theme"}</button></header>
               <div class="theme-card-canvas">
                 <div class="theme-sample-nav"><i /><span /><span /></div>
                 <div class="theme-sample-panel">
@@ -153,10 +167,13 @@ function Overview(props: { themeId: () => string; href: (view: StudioView) => st
   );
 }
 
-function ComponentView(props: { entry: UiCatalogEntry; viewport: () => PreviewWidth; panel: () => string; grid: () => boolean; outlines: () => boolean; onViewport: (value: PreviewWidth) => void; onPanel: (value: string) => void; onGrid: () => void; onOutlines: () => void }) {
+function ComponentView(props: { entry: UiCatalogEntry; viewport: () => PreviewWidth; panel: () => InspectorPanel; grid: () => boolean; outlines: () => boolean; favorite: () => boolean; onFavorite: () => void; onViewport: (value: PreviewWidth) => void; onPanel: (value: string) => void; onGrid: () => void; onOutlines: () => void }) {
   const entry = props.entry;
   const specimen = createSpecimenReset(() => <ComponentStory slug={entry.slug} />);
-  const importLine = `import { ${entry.factory} } from "@clank.run/framework/ui/${entry.slug}";`;
+  const usage = componentUsage(entry);
+  const tabs = createInspectorTabs(entry.slug, props.panel, props.onPanel);
+  onCleanup(tabs.dispose);
+  let usageCode: HTMLElement | null = null;
   let previewFrame: HTMLElement | null = null;
   const renderedWidth = signal<number | null>(null);
   onMount(() => previewFrame ? observePreviewWidth(previewFrame, (width) => { renderedWidth.value = width; }) : undefined);
@@ -164,7 +181,7 @@ function ComponentView(props: { entry: UiCatalogEntry; viewport: () => PreviewWi
     <section class="component-page">
       <header class="component-heading">
         <div><span class="view-kicker">{moduleLabels[entry.module] ?? entry.module} / {entry.formAssociated ? "form associated" : "headless primitive"}</span><h1>{entry.name}</h1><p>{entry.description}</p></div>
-        <div class="heading-links"><a href={entry.referenceUrl} target="_blank" rel="noreferrer">{entry.source === "clank" ? "Pattern reference" : "Anatomy reference"} <Icon name="external" /></a><a href="https://docs.clank.run/docs/ui">Framework guide <Icon name="external" /></a></div>
+        <div class="heading-links"><button type="button" class="studio-button favorite-toggle" aria-label={`Favorite ${entry.name}`} aria-pressed={props.favorite() ? "true" : "false"} onClick={props.onFavorite}>{props.favorite() ? "Favorited" : "Favorite"}</button><a href={entry.referenceUrl} target="_blank" rel="noreferrer">{entry.source === "clank" ? "Pattern reference" : "Anatomy reference"} <Icon name="external" /></a><a href="https://docs.clank.run/docs/ui">Framework guide <Icon name="external" /></a></div>
       </header>
       <div class="preview-toolbar" role="group" aria-label="Preview controls">
         <PreviewWidthControls value={props.viewport} onChange={props.onViewport} />
@@ -173,14 +190,14 @@ function ComponentView(props: { entry: UiCatalogEntry; viewport: () => PreviewWi
       <div class="preview-stage" data-grid={props.grid() ? "" : undefined} data-outlines={props.outlines() ? "" : undefined}>
         <div class="preview-frame" ref={(element: HTMLElement | null) => { previewFrame = element; }} data-viewport={typeof props.viewport() === "number" ? "custom" : props.viewport()} style={{ "--preview-width": previewWidthStyle(props.viewport()) }}>
           <div class="preview-frame-label"><span>{entry.name} / interactive</span><span>{previewWidthLabel(props.viewport(), renderedWidth.value)}</span></div>
-          <div class="story-root">{specimen.render}</div>
+          <div class="story-root">{specimen.render()}</div>
         </div>
       </div>
-      <section class="inspector">
-        <div class="inspector-tabs" role="tablist" aria-label="Component details"><button type="button" role="tab" aria-selected={props.panel() === "anatomy" ? "true" : "false"} onClick={() => props.onPanel("anatomy")}><Icon name="details" />Anatomy</button><button type="button" role="tab" aria-selected={props.panel() === "code" ? "true" : "false"} onClick={() => props.onPanel("code")}><Icon name="code" />Usage</button><button type="button" role="tab" aria-selected={props.panel() === "tokens" ? "true" : "false"} onClick={() => props.onPanel("tokens")}><Icon name="tokens" />Agent contract</button></div>
-        <Show when={() => props.panel() === "anatomy"}><div class="inspector-panel"><h2>Semantic parts</h2><p>Spread each part getter onto the matching element, then style its stable state attributes.</p><div class="part-list"><For each={entry.parts}>{(part) => <code>{part}</code>}</For></div></div></Show>
-        <Show when={() => props.panel() === "code"}><div class="inspector-panel"><h2>Focused package import</h2><p>The theme is visual. The controller remains unstyled, accessible, and fully typed.</p><pre tabindex="0" role="region" aria-label="Component usage example"><code>{importLine}{"\n\n"}{`const ${entry.slug.replaceAll("-", "_")} = ${entry.factory}({\n  id: "product-${entry.slug}",\n});`}</code></pre></div></Show>
-        <Show when={() => props.panel() === "tokens"}><div class="inspector-panel"><h2>Machine-readable by construction</h2><p>Agents can discover this component through the public catalog API or the Design Studio MCP server.</p><dl class="contract-grid"><div><dt>Factory</dt><dd><code>{entry.factory}</code></dd></div><div><dt>Subpath</dt><dd><code>@clank.run/framework/ui/{entry.slug}</code></dd></div><div><dt>Catalog module</dt><dd>{entry.module}</dd></div><div><dt>Form projection</dt><dd>{entry.formAssociated ? "Included" : "Not required"}</dd></div></dl></div></Show>
+      <section {...tabs.root()} class="inspector">
+        <div {...tabs.list({ label: "Component details" })} class="inspector-tabs"><For each={INSPECTOR_PANELS} by="value">{(item) => <button {...tabs.tab(item.value)}><Icon name={item.icon} />{item.textValue}</button>}</For></div>
+        <div {...tabs.panel("anatomy", { keepMounted: true })} class="inspector-panel"><Show when={() => props.panel() === "anatomy"}><h2>Semantic parts</h2><p>Spread each part getter onto the matching element, then style its stable state attributes.</p><div class="part-list"><For each={entry.parts}>{(part) => <code>{part}</code>}</For></div></Show></div>
+        <div {...tabs.panel("code", { keepMounted: true })} class="inspector-panel"><Show when={() => props.panel() === "code"}><h2>Focused package import</h2><p>The theme is visual. The controller remains unstyled, accessible, and fully typed.</p><CopyText text={() => usage} preview={() => usageCode} label="Copy usage example" description={`${entry.name} usage example`} /><pre tabindex="0" role="region" aria-label="Component usage example"><code ref={(element: HTMLElement | null) => { usageCode = element; }}>{usage}</code></pre></Show></div>
+        <div {...tabs.panel("tokens", { keepMounted: true })} class="inspector-panel"><Show when={() => props.panel() === "tokens"}><h2>Machine-readable by construction</h2><p>Agents can discover this component through the public catalog API or the Design Studio MCP server.</p><dl class="contract-grid"><div><dt>Factory</dt><dd><code>{entry.factory}</code></dd></div><div><dt>Subpath</dt><dd><code>@clank.run/framework/ui/{entry.slug}</code></dd></div><div><dt>Catalog module</dt><dd>{entry.module}</dd></div><div><dt>Form projection</dt><dd>{entry.formAssociated ? "Included" : "Not required"}</dd></div></dl></Show></div>
       </section>
       <KeyboardGuide slug={entry.slug} />
     </section>
@@ -201,6 +218,25 @@ export function DesignStudio(props: DesignStudioProps) {
   const grid = signal(initial.grid);
   const outlines = signal(initial.outlines);
   const navOpen = signal(false);
+  const favorites = signal<string[]>([]);
+  const favoriteNotice = signal("");
+  const favoriteEntries = computed(() => favorites.value.flatMap((id) => UI_COMPONENT_CATALOG.filter((entry) => entry.slug === id)));
+  const unsavedFavorites = new Map<string, boolean>();
+  function readFavorites() {
+    let current = readFavoriteComponents(UI_COMPONENT_CATALOG, favorites.peek());
+    for (const [id, selected] of unsavedFavorites) {
+      if (current.includes(id) !== selected) current = toggleFavoriteComponent(UI_COMPONENT_CATALOG, current, id);
+    }
+    return current;
+  }
+  function toggleFavorite(id: string) {
+    const current = readFavorites();
+    favorites.value = toggleFavoriteComponent(UI_COMPONENT_CATALOG, current, id);
+    if (saveFavoriteComponents(UI_COMPONENT_CATALOG, favorites.peek())) unsavedFavorites.clear();
+    else unsavedFavorites.set(id, favorites.peek().includes(id));
+    const name = UI_COMPONENT_CATALOG.find((entry) => entry.slug === id)?.name;
+    favoriteNotice.value = `${name} ${favorites.peek().includes(id) ? "added to" : "removed from"} favorites.`;
+  }
   const currentTheme = computed(() => getClankTheme(themeId.value) ?? CLANK_THEME_PRESETS[0]);
   const filtered = computed(() => filterComponentCatalog(UI_COMPONENT_CATALOG, query.value, { module: catalogModule.value, form: catalogForm.value, source: catalogSource.value }));
   const visibleModules = computed(() => catalogOptions.modules.filter((option) => filtered.value.entries.some((entry) => entry.module === option.value)));
@@ -254,6 +290,13 @@ export function DesignStudio(props: DesignStudioProps) {
   });
 
   onMount(() => {
+    favorites.value = readFavoriteComponents(UI_COMPONENT_CATALOG);
+    const restoreFavorites = (event: StorageEvent) => {
+      if (event.key === FAVORITES_KEY || event.key === null) {
+        favorites.value = readFavorites();
+        favoriteNotice.value = "";
+      }
+    };
     const restoreLocation = () => {
       const settings = parsePreviewSettings(window.location.search);
       themeId.value = settings.theme;
@@ -265,7 +308,8 @@ export function DesignStudio(props: DesignStudioProps) {
       navOpen.value = false;
     };
     window.addEventListener("popstate", restoreLocation);
-    return () => window.removeEventListener("popstate", restoreLocation);
+    window.addEventListener("storage", restoreFavorites);
+    return () => { window.removeEventListener("popstate", restoreLocation); window.removeEventListener("storage", restoreFavorites); };
   });
 
   return (
@@ -280,6 +324,8 @@ export function DesignStudio(props: DesignStudioProps) {
       <aside class="studio-sidebar" classList={{ open: navOpen }}>
         <div class="sidebar-primary"><a href={previewHref("overview")} classList={{ active: view.value === "overview" }} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("overview"); }}><Icon name="grid" />Overview</a><a href={previewHref("themes")} classList={{ active: view.value === "themes" }} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("themes"); }}><Icon name="palette" />Themes <span>10</span></a></div>
         <nav class="component-nav" aria-label="Component catalog">
+          <details class="favorite-navigation" open><summary>Favorites ({favoriteEntries.value.length})</summary><For each={favoriteEntries} by="slug" fallback={<p>Use a component’s Favorite button to save it here.</p>}>{(entry) => <a href={previewHref(entry.slug)} aria-current={view.value === entry.slug ? "page" : undefined} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView(entry.slug); }}>{entry.name}</a>}</For></details>
+          <p class="favorite-status" role="status" aria-live="polite">{favoriteNotice}</p>
           <details class="catalog-filters">
             <summary>Filter components <span>{() => filtered.value.activeCount ? `(${filtered.value.activeCount})` : ""}</span></summary>
             <div class="catalog-filter-fields">
@@ -314,7 +360,7 @@ export function DesignStudio(props: DesignStudioProps) {
               by="slug"
               fallback={<section class="not-found"><span>404</span><h1>That component is not in the catalog.</h1><a href="/">Return to the workshop</a></section>}
             >
-              {(entry) => <ComponentView entry={entry} viewport={() => viewport.value} panel={() => panel.value} grid={() => grid.value} outlines={() => outlines.value} onViewport={selectWidth} onPanel={selectPanel} onGrid={() => { grid.value = !grid.peek(); writeLocation(); }} onOutlines={() => { outlines.value = !outlines.peek(); writeLocation(); }} />}
+              {(entry) => <ComponentView entry={entry} viewport={() => viewport.value} panel={() => panel.value} grid={() => grid.value} outlines={() => outlines.value} favorite={() => favorites.value.includes(entry.slug)} onFavorite={() => toggleFavorite(entry.slug)} onViewport={selectWidth} onPanel={selectPanel} onGrid={() => { grid.value = !grid.peek(); writeLocation(); }} onOutlines={() => { outlines.value = !outlines.peek(); writeLocation(); }} />}
             </For>
           </Show>
         </div>

@@ -2,6 +2,8 @@
 
 Private service requests with staff responses and customer-controlled closure.
 
+Use All, Open, or Closed to filter the authorized request list, with counts for each status.
+
 Run `npm install`, `npm test`, `npm run dev`, `npm run doctor`, and `npm run deploy:check`. `npm run deploy` uses the ordinary Clank deployment flow.
 
 The backend, typed UI actions, automatic MCP/OAuth surface, synthetic fixture, and application contract live in this project. Modify these readable files for your product. Lists show the latest 100 visible records.

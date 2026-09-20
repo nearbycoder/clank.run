@@ -32,6 +32,12 @@ interaction guidance, and a reset control that restores the specimen's initial s
 preview settings and the share URL. Settings are validated when read from a shared URL. Exported themes use the existing theme
 contract and can be reviewed before being copied or downloaded.
 
+Use the inspector's arrow keys, Home, and End to move between its tabs. Usage examples can be
+copied directly; a browser that denies clipboard access offers selected text for manual copying.
+Favorite components provide local shortcuts and synchronize between tabs when browser storage is
+available. Search the theme gallery by name, description, or tag, and filter by light or dark scheme.
+The sandbox can also copy or download its applied overrides as CSS scoped to `[data-clank-sandbox]`.
+
 ## Theme package
 
 Import the visual token layer separately from the unstyled controllers:

@@ -1467,7 +1467,7 @@ test("create scaffolds a named, buildable authenticated application", async () =
     assert.match(server, /imports: \{ "@clank\.run\/framework": "\/_clank\/index\.js" \}/);
     assert.match(view, /const projectTitle = "Team Tasks"/);
     assert.match(view, />\{projectTitle\}</);
-    assert.match(view, /<For each=\{props\.todos\} by="_id"/);
+    assert.match(view, /<For each=\{[^}]+\} by="_id"/);
     assert.equal(tsconfig.compilerOptions.allowImportingTsExtensions, true);
     assert.match(gitignore, /\.clank/);
     assert.match(readme, /# Team Tasks/);

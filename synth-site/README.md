@@ -22,6 +22,21 @@ first, then starts the loop without autoplaying on page load.
   pattern is saved automatically in the browser and can be downloaded with **Export JSON**.
 - Mute or solo tracks while the sequencer is running. The active step is announced to assistive
   technology and highlighted in the grid.
+- Import a saved version-1 JSON pattern file. Imports are validated as a
+  complete pattern, limited to 16 KiB, and stop playback without starting audio automatically.
+- Undo and redo retain up to 40 edits, including imported patterns and their tempo and levels.
+  Transport ticks do not consume history; undo and redo stop playback before restoring an edit.
+- Clear or rotate each instrument's steps from the track rack. **Reset mix** restores track and
+  master levels and clears mute/solo choices while keeping the pattern, tempo, and swing.
+- Use **Tap tempo** to average recent taps, bounded to 60–180 BPM. A pause longer than two seconds
+  begins a new sequence.
+
+The sequencer has one keyboard tab stop. Arrow keys move between cells, Home/End move within a
+track, Ctrl+Home/End move to the first/last cell, and Enter or Space toggles the focused step.
+Space outside inputs and controls toggles transport. Composition, repeated keys, and modifier
+shortcuts do not start playback. Stopping clears scheduled voices and timing indicators; removing
+the synth also releases its keyboard listener and audio context. Saved zero swing and zero volume
+remain zero when restored.
 
 The synth uses the browser's native `AudioContext`: oscillators and filtered noise are scheduled
 slightly ahead of time so the loop stays tight without a dependency or a server-side audio service.

@@ -51,7 +51,7 @@ async function fixture() {
     loadDashboard: async () => { state.usageWorkspaceId = null; },
     api: path => new Promise((resolve, reject) => requests.push({ path, resolve, reject })),
   };
-  const names = ["canExportUsage", "renderUsageExport", "downloadUsageCsv", "loadUsage", "clearUsageView", "setUsageProgress", "renderUsage"];
+  const names = ["searchConsoleRows", "compareConsoleText", "consoleTime", "consoleTimeCell", "visibleUsageProjects", "usageMonthBounds", "renderUsageMonths", "selectUsageMonth", "moveUsageMonth", "canExportUsage", "renderUsageExport", "downloadUsageCsv", "loadUsage", "clearUsageView", "setUsageProgress", "renderUsage"];
   const functions = names.map(name => html.match(new RegExp(`(?:async )?function ${name}\\([^\\n]+`))[0]).join("\n");
   const handlers = html.split("\n").filter(line => /^q\("#usage-(?:export|workspace|month)"\)\./.test(line) || line.startsWith('window.addEventListener("pagehide"')).join("\n");
   runInNewContext(`${functions}\n${handlers}`, context);

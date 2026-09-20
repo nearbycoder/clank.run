@@ -61,27 +61,60 @@ function safeHref(raw: string): { href: string; external: boolean } | null {
   return { href: `${GITHUB_ROOT}docs/${path}${fragment ? `#${encodeURIComponent(fragment)}` : ""}`, external: true };
 }
 
-function inline(source: string): string {
+function closingBackticks(source: string, start: number, length: number): number {
+  let index = start;
+  while (index < source.length) {
+    const next = source.indexOf("`", index);
+    if (next < 0) break;
+    index = next;
+    while (source[index] === "`") index++;
+    if (index - next === length) return next;
+  }
+  return -1;
+}
+
+function inline(source: string, textOnly = false): string {
   const tokens: string[] = [];
   const token = (html: string): string => {
     const id = `CLANKDOCSTOKEN${tokens.length}END`;
     tokens.push(html);
     return id;
   };
-  let text = source.replace(/`([^`\n]+)`/gu, (_match, code: string) =>
-    token(`<code>${escapeHtml(code)}</code>`));
+  let text = "";
+  for (let index = 0; index < source.length;) {
+    if (source[index] === "\\") {
+      text += source.slice(index, index + 2);
+      index += 2;
+    } else if (source[index] === "`") {
+      let end = index;
+      while (source[end] === "`") end++;
+      const length = end - index;
+      const close = closingBackticks(source, end, length);
+      if (close < 0) {
+        text += source.slice(index, end);
+        index = end;
+      } else {
+        const code = escapeHtml(source.slice(end, close));
+        text += token(textOnly ? code : `<code>${code}</code>`);
+        index = close + length;
+      }
+    } else {
+      text += source[index++];
+    }
+  }
   text = text.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/gu, (_match, label: string, href: string) => {
     const target = safeHref(href);
     if (!target) return escapeHtml(label);
+    if (textOnly) return token(inline(label, true));
     const external = target.external ? " target=\"_blank\" rel=\"noreferrer\"" : "";
     return token(`<a href="${escapeHtml(target.href)}"${external}>${inline(label)}</a>`);
   });
   text = text.replace(/<(https?:\/\/[^>\s]+)>/gu, (_match, href: string) =>
-    token(`<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(href)}</a>`));
+    token(textOnly ? escapeHtml(href) : `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(href)}</a>`));
   text = escapeHtml(text)
-    .replace(/\*\*([^*]+)\*\*/gu, "<strong>$1</strong>")
-    .replace(/__([^_]+)__/gu, "<strong>$1</strong>")
-    .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,;:!?])/gu, "$1<em>$2</em>");
+    .replace(/\*\*([^*]+)\*\*/gu, textOnly ? "$1" : "<strong>$1</strong>")
+    .replace(/__([^_]+)__/gu, textOnly ? "$1" : "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,;:!?])/gu, textOnly ? "$1$2" : "$1<em>$2</em>");
   for (let index = tokens.length - 1; index >= 0; index--) {
     text = text.replaceAll(`CLANKDOCSTOKEN${index}END`, tokens[index]);
   }
@@ -89,12 +122,39 @@ function inline(source: string): string {
 }
 
 function tableCells(line: string): string[] {
-  return line.trim().replace(/^\|/u, "").replace(/\|$/u, "").split("|").map((cell) => cell.trim());
+  const source = line.trim();
+  const cells: string[] = [];
+  let start = 0;
+  for (let index = 0; index < source.length;) {
+    if (source[index] === "\\") {
+      // Skip escape pairs so an odd backslash count protects the following pipe.
+      index += 2;
+    } else if (source[index] === "`") {
+      let end = index;
+      while (source[end] === "`") end++;
+      const length = end - index;
+      const close = closingBackticks(source, end, length);
+      index = close < 0 ? end : close + length;
+    } else if (source[index] === "|") {
+      cells.push(source.slice(start, index));
+      start = ++index;
+    } else {
+      index++;
+    }
+  }
+  if (!cells.length) return [];
+  cells.push(source.slice(start));
+  if (source.startsWith("|")) cells.shift();
+  if (start === source.length) cells.pop();
+  // Table pipe escapes apply to code spans too; preserve all other backslashes.
+  return cells.map((cell) => cell.trim().replace(/(\\+)\|/gu, (match, slashes: string) =>
+    slashes.length % 2 ? `${slashes.slice(1)}|` : match));
 }
 
-function isTableDivider(line: string): boolean {
+function isTableDivider(line: string, columns: number): boolean {
   const cells = tableCells(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
+  if (!cells.length) cells.push(line.trim());
+  return cells.length === columns && cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
 }
 
 function isBlockStart(lines: string[], index: number): boolean {
@@ -107,7 +167,7 @@ function isBlockStart(lines: string[], index: number): boolean {
     || /^\s*[-*+]\s+/u.test(line)
     || /^\s*\d+[.)]\s+/u.test(line)
     || /^([-*_])\1{2,}\s*$/u.test(line.trim())
-    || (line.includes("|") && isTableDivider(next));
+    || isTableDivider(next, tableCells(line).length);
 }
 
 export function renderMarkdown(markdown: string): RenderedMarkdown {
@@ -157,17 +217,23 @@ export function renderMarkdown(markdown: string): RenderedMarkdown {
       }
       const id = headingId(text);
       if (level <= 3) toc.push({ id, title: text, level });
-      html.push(`<h${level} id="${id}"><a class="heading-anchor" href="#${id}" aria-hidden="true" tabindex="-1">#</a>${inline(text)}</h${level}>`);
+      const content = inline(text);
+      // Emit escaped text directly rather than stripping tags from generated markup.
+      const label = inline(text, true);
+      html.push(`<h${level} id="${id}"><a class="heading-anchor" href="#${id}" aria-label="Link to ${label}"><span aria-hidden="true">#</span></a>${content}</h${level}>`);
       index++;
       continue;
     }
 
-    if (line.includes("|") && isTableDivider(lines[index + 1] ?? "")) {
-      const headers = tableCells(line);
+    const headers = tableCells(line);
+    if (isTableDivider(lines[index + 1] ?? "", headers.length)) {
       index += 2;
       const rows: string[][] = [];
-      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
-        rows.push(tableCells(lines[index++]));
+      while (index < lines.length) {
+        const row = tableCells(lines[index]);
+        if (!row.length) break;
+        rows.push(row);
+        index++;
       }
       html.push(`<div class="table-scroll" tabindex="0"><table><thead><tr>${headers.map((cell) => `<th>${inline(cell)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_cell, cellIndex) => `<td>${inline(row[cellIndex] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
       continue;

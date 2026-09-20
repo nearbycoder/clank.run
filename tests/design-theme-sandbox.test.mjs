@@ -13,7 +13,7 @@ const temporary = await mkdtemp(join(tmpdir(), "clank-theme-sandbox-"));
 after(() => rm(temporary, { recursive: true, force: true }));
 await writeFile(join(temporary, "package.json"), '{"type":"module"}');
 const runtime = new URL("../dist/", import.meta.url).href;
-for (const filename of ["token-inspector-data.ts", "contrast-checker-data.ts", "theme-sandbox-data.ts", "theme-sandbox.tsx"]) {
+for (const filename of ["token-inspector-data.ts", "contrast-checker-data.ts", "theme-sandbox-data.ts", "theme-sandbox-export-data.ts", "theme-export-data.ts", "copy-text-data.ts", "copy-text.tsx", "theme-sandbox.tsx"]) {
   const source = await readFile(new URL(`../design-site/src/tools/${filename}`, import.meta.url), "utf8");
   await writeFile(join(temporary, filename.replace(/\.tsx?$/u, ".js")), compile(source.replaceAll("../../vendor/", runtime), { filename, sourceMap: false }));
 }

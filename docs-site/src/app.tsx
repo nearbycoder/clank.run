@@ -11,6 +11,8 @@ import { installFocusMode } from "./enhancements/focus-mode.ts";
 import { installTextSize } from "./enhancements/text-size.ts";
 import { installCodeWrap } from "./enhancements/code-wrap.ts";
 import { installPrintGuide } from "./enhancements/print-guide.ts";
+import { installCopyControls } from "./enhancements/clipboard.ts";
+import { installCurrentSection } from "./enhancements/current-section.ts";
 
 interface BootState {
   search: SearchEntry[];
@@ -56,41 +58,5 @@ document.addEventListener("keydown", (event) => {
   handleSearchShortcut(event);
 });
 
-async function copy(value: string, button: HTMLButtonElement) {
-  const previous = button.textContent ?? "Copy";
-  try {
-    await navigator.clipboard.writeText(value);
-    button.textContent = "Copied";
-  } catch {
-    button.textContent = "Select";
-  }
-  setTimeout(() => { button.textContent = previous; }, 1400);
-}
-
-document.querySelectorAll<HTMLButtonElement>("[data-copy-code]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const code = button.closest("figure")?.querySelector("code")?.textContent ?? "";
-    void copy(code, button);
-  });
-});
-document.querySelectorAll<HTMLButtonElement>("[data-copy-text]").forEach((button) => {
-  button.addEventListener("click", () => void copy(button.dataset.copyText ?? "", button));
-});
-
-const tocLinks = [...document.querySelectorAll<HTMLAnchorElement>(".toc a[href^='#']")];
-const headings = tocLinks
-  .map((link) => document.getElementById(decodeURIComponent(link.hash.slice(1))))
-  .filter((heading): heading is HTMLElement => Boolean(heading));
-if (headings.length && "IntersectionObserver" in window) {
-  const visible = new Set<string>();
-  const observer = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (entry.isIntersecting) visible.add(entry.target.id);
-      else visible.delete(entry.target.id);
-    }
-    const active = headings.find((heading) => visible.has(heading.id))
-      ?? [...headings].reverse().find((heading) => heading.getBoundingClientRect().top < 160);
-    for (const link of tocLinks) link.classList.toggle("active", link.hash === `#${active?.id}`);
-  }, { rootMargin: "-120px 0px -65% 0px" });
-  for (const heading of headings) observer.observe(heading);
-}
+installCopyControls();
+installCurrentSection();

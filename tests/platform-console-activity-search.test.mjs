@@ -10,7 +10,7 @@ const events = Object.freeze([
   Object.freeze({ id: 20, action: "membership.role_changed", project: null, organization: { name: "Research <script>team</script>", slug: "research" }, actor: { id: "user-b", email: null }, metadata: {}, createdAt: 1000 }),
   Object.freeze({ id: 10, action: "token.revoke", project: null, organization: null, actor: { id: "system", email: "robot@example.test" }, metadata: {}, createdAt: 1000 }),
 ]);
-const ids = rows => rows.map(event => event.id);
+const ids = rows => Array.from(rows, event => event.id);
 
 test("activity search matches action, displayed target, and actor across audit shapes", () => {
   for (const [search, expected] of [
@@ -35,7 +35,7 @@ test("activity search is bounded, literal, immutable, and accepts an empty loade
 });
 
 function node(tagName, className, textContent) {
-  return { tagName, className, textContent, value: "", hidden: false, children: [], append(...children) { this.children.push(...children); }, focus() { this.focused = true; } };
+  return { tagName, className, textContent, value: "", hidden: false, dataset: {}, children: [], append(...children) { this.children.push(...children); }, setAttribute(name, value) { this[name] = value; }, focus() { this.focused = true; } };
 }
 
 async function fixture() {
@@ -47,7 +47,7 @@ async function fixture() {
     q: selector => { if (!nodes.has(selector)) nodes.set(selector, node("div")); return nodes.get(selector); },
     clear: element => { element.children = []; }, el: node, formatDate: String,
   };
-  const functions = ["renderActivity", "updateActivitySearch", "loadActivity"].map(name => html.match(new RegExp(`(?:async )?function ${name}\\([^\\n]+`))[0]).join("\n");
+  const functions = ["activityScopeKey", "syncActivityScope", "renderActivity", "updateActivitySearch", "loadActivity"].map(name => html.match(new RegExp(`(?:async )?function ${name}\\([^\\n]+`))[0]).join("\n");
   runInNewContext(functions, context);
   return { html, nodes, state, context };
 }
@@ -74,7 +74,7 @@ test("activity results show counts and safe text while preserving older-event na
   assert.equal(context.q("#activity-footer").hidden, true);
 });
 
-test("activity search combines new pages and remains applied when refresh replaces the snapshot", async () => {
+test("activity search combines new pages and remains applied when refresh merges the head without discarding older pages", async () => {
   const { state, context } = await fixture();
   const requests = [];
   const older = { ...events[0], id: 5 };
@@ -92,10 +92,11 @@ test("activity search combines new pages and remains applied when refresh replac
   assert.equal(state.activityNextBefore, 5);
   await runInNewContext("loadActivity(true)", context);
   assert.equal(state.activitySearch, "release");
-  assert.equal(context.q("#activity-count").textContent, "1 of 1 loaded events shown");
-  assert.deepEqual(ids(state.activityEvents), [40]);
+  assert.equal(context.q("#activity-count").textContent, "3 of 5 loaded events shown");
+  assert.deepEqual(ids(state.activityEvents), [40, 30, 20, 10, 5]);
+  assert.equal(state.activityNextBefore, 5);
   assert.deepEqual(requests, ["/api/audit?limit=50&before=10", "/api/audit?limit=50"]);
-  assert.equal(context.q("#activity-footer").hidden, true);
+  assert.equal(context.q("#activity-footer").hidden, false);
   assert.equal(context.q("#activity-more").disabled, false);
 });
 
