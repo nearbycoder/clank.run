@@ -216,6 +216,34 @@ export function createForm<Values extends FormValues, Result = unknown>(
     () => formErrors.value.length === 0 && keys.every((name) => !fields.get(name)!.invalid.value),
     { name: `${id}.valid` },
   );
+  const validate = (reason: FormValidationContext["reason"], isCurrent = () => true): boolean => {
+    const raw = values.peek();
+    const next: FormErrorMap<Values> = {};
+    let parsed = raw;
+    if (options.schema) {
+      const checked = options.schema.safeParse(raw);
+      if (checked.success) parsed = checked.data;
+      else assignValidationIssues(next, checked.error.issues, keys);
+    }
+    if (!isCurrent()) return false;
+    if (!hasErrors(next) && options.validate) {
+      const custom = options.validate(parsed, { reason });
+      if (custom) assertErrorKeys(keys, custom);
+      mergeErrors(next, custom);
+    }
+    // Validators may synchronously reset or replace their submission. Commit
+    // its parsed values, errors and status together only while it still owns
+    // the form; direct/manual validation retains its unconditional behavior.
+    if (!isCurrent()) return false;
+    const accepted = !hasErrors(next);
+    batch(() => {
+      parsedValues = parsed;
+      applyErrors(keys, fields, formErrors, next);
+      if (!accepted) status.value = "invalid";
+      else if (!pending.peek() && status.peek() === "invalid") status.value = "idle";
+    });
+    return accepted;
+  };
 
   const controller: FormController<Values, Result> = {
     id,
@@ -239,45 +267,34 @@ export function createForm<Values extends FormValues, Result = unknown>(
       controller.field(name).set(value);
     },
     setValues(next) {
+      const entries = Object.entries(next) as Array<[FormKey<Values>, Values[FormKey<Values>]]>;
+      for (const [name] of entries) controller.field(name);
       batch(() => {
-        for (const [name, value] of Object.entries(next) as Array<[FormKey<Values>, Values[FormKey<Values>]]>) {
+        for (const [name, value] of entries) {
           controller.field(name).set(value);
         }
       });
     },
     setErrors(next) {
       assertErrorKeys(keys, next);
-      applyErrors(keys, fields, formErrors, next);
-      submissionRejected = hasErrors(next);
-      if (submissionRejected) status.value = "invalid";
+      batch(() => {
+        applyErrors(keys, fields, formErrors, next);
+        submissionRejected = hasErrors(next);
+        if (submissionRejected) status.value = "invalid";
+      });
     },
     validate(reason = "manual") {
-      const raw = values.peek();
-      const next: FormErrorMap<Values> = {};
-      let parsed = raw;
-      if (options.schema) {
-        const checked = options.schema.safeParse(raw);
-        if (checked.success) parsed = checked.data;
-        else assignValidationIssues(next, checked.error.issues, keys);
-      }
-      if (!hasErrors(next) && options.validate) {
-        const custom = options.validate(parsed, { reason });
-        if (custom) assertErrorKeys(keys, custom);
-        mergeErrors(next, custom);
-      }
-      parsedValues = parsed;
-      applyErrors(keys, fields, formErrors, next);
-      const accepted = !hasErrors(next);
-      if (!accepted) status.value = "invalid";
-      else if (!pending.peek() && status.peek() === "invalid") status.value = "idle";
-      return accepted;
+      return validate(reason);
     },
     async submit(event) {
       event?.preventDefault();
       if (pending.peek() && (options.concurrency ?? "replace") === "ignore") return result.peek();
       submitController?.abort(new DOMException("A newer form submission replaced this one.", "AbortError"));
-      submitController = new AbortController();
+      const submission = new AbortController();
+      submitController = submission;
       const revision = ++submitRevision;
+      let settled = false;
+      const isCurrent = () => !settled && revision === submitRevision && !submission.signal.aborted;
       submissionRejected = false;
       batch(() => {
         pending.value = true;
@@ -288,25 +305,32 @@ export function createForm<Values extends FormValues, Result = unknown>(
         formErrors.value = [];
         for (const field of fields.values()) field.touch();
       });
-      if (!controller.validate("submit")) {
-        pending.value = false;
-        if (options.focusFirstError !== false) queueMicrotask(() => controller.focusFirstError());
-        return undefined;
-      }
-      if (!options.onSubmit) {
-        batch(() => {
-          pending.value = false;
-          status.value = "success";
-        });
-        return undefined;
-      }
       try {
+        if (!isCurrent()) return result.peek();
+        const accepted = validate("submit", isCurrent);
+        if (!isCurrent()) return result.peek();
+        if (!accepted) {
+          pending.value = false;
+          if (options.focusFirstError !== false) queueMicrotask(() => controller.focusFirstError());
+          return undefined;
+        }
+        if (!options.onSubmit) {
+          batch(() => {
+            pending.value = false;
+            status.value = "success";
+          });
+          return undefined;
+        }
         const output = await options.onSubmit(cloneValues(parsedValues), {
-          signal: submitController.signal,
-          setErrors: controller.setErrors,
-          reset: controller.reset,
+          signal: submission.signal,
+          setErrors(next) {
+            if (isCurrent() && pending.peek()) controller.setErrors(next);
+          },
+          reset(next) {
+            if (isCurrent() && pending.peek()) controller.reset(next);
+          },
         });
-        if (revision !== submitRevision || submitController.signal.aborted) return result.peek();
+        if (!isCurrent()) return result.peek();
         if (submissionRejected) {
           pending.value = false;
           if (options.focusFirstError !== false) queueMicrotask(() => controller.focusFirstError());
@@ -317,25 +341,29 @@ export function createForm<Values extends FormValues, Result = unknown>(
           pending.value = false;
           status.value = "success";
         });
-        if (options.resetOnSuccess) controller.reset();
+        if (options.resetOnSuccess && isCurrent()) controller.reset();
         return output;
       } catch (reason) {
-        if (revision !== submitRevision || submitController.signal.aborted) return result.peek();
+        if (!isCurrent()) return result.peek();
         batch(() => {
           error.value = reason;
           pending.value = false;
           status.value = "error";
         });
         return undefined;
+      } finally {
+        settled = true;
       }
     },
     reset(next) {
+      let nextBaseline = baseline;
+      if (next !== undefined) {
+        assertExactValues(keys, next);
+        nextBaseline = cloneValues(next);
+      }
       submitRevision++;
       submitController?.abort(new DOMException("The form was reset.", "AbortError"));
-      if (next) {
-        assertExactValues(keys, next);
-        baseline = cloneValues(next);
-      }
+      baseline = nextBaseline;
       batch(() => {
         for (const name of keys) {
           const field = fields.get(name)!;
@@ -384,11 +412,25 @@ function createField<Value>(
   onChange: () => void,
   validateAfter: (reason: "input" | "blur") => void,
 ): InternalField<Value> {
-  let baseline = cloneValue(initial);
-  const value = signal(cloneValue(initial), { name: `${form}.${name}` });
+  const baseline = signal(cloneValue(initial));
+  let cleanOpaqueValues = new WeakMap<object, object>();
+  const cloneBaseline = () => {
+    const next = cloneValue(baseline.peek());
+    cleanOpaqueValues = new WeakMap();
+    // Remember opaque leaves from this known clean clone, including nested ones.
+    sameFieldValue(next, baseline.peek(), (clone, original) => {
+      cleanOpaqueValues.set(clone, original);
+      return true;
+    });
+    return next;
+  };
+  const value = signal(cloneBaseline(), { name: `${form}.${name}` });
   const errors = signal<readonly string[]>([], { name: `${form}.${name}.errors` });
   const touched = signal(false, { name: `${form}.${name}.touched` });
-  const dirty = computed(() => !Object.is(value.value, baseline), { name: `${form}.${name}.dirty` });
+  const dirty = computed(
+    () => !sameFieldValue(value.value, baseline.value, (clone, original) => cleanOpaqueValues.get(clone) === original),
+    { name: `${form}.${name}.dirty` },
+  );
   const invalid = computed(() => errors.value.length > 0, { name: `${form}.${name}.invalid` });
   const message = computed(() => errors.value[0], { name: `${form}.${name}.message` });
   const id = `${form}-${safeId(name)}`;
@@ -430,13 +472,13 @@ function createField<Value>(
     touch() { touched.value = true; },
     reset() {
       batch(() => {
-        value.value = cloneValue(baseline);
+        value.value = cloneBaseline();
         errors.value = [];
         touched.value = false;
       });
     },
     setInitial(next) {
-      baseline = cloneValue(next);
+      baseline.value = cloneValue(next);
     },
     input(options = {}) {
       const type = options.type ?? "text";
@@ -578,6 +620,9 @@ function assertExactValues<Values extends FormValues>(
   keys: Array<FormKey<Values>>,
   values: Values,
 ): void {
+  if (!values || typeof values !== "object" || Array.isArray(values)) {
+    throw new TypeError("Form reset values must contain exactly the original fields.");
+  }
   const actual = Object.keys(values);
   if (actual.length !== keys.length || actual.some((key) => !keys.includes(key as FormKey<Values>))) {
     throw new TypeError("Form reset values must contain exactly the original fields.");
@@ -655,4 +700,54 @@ function cloneValues<Values extends FormValues>(values: Values): Values {
 
 function cloneValue<Value>(value: Value): Value {
   return typeof structuredClone === "function" ? structuredClone(value) : value;
+}
+
+function sameFieldValue(
+  left: unknown,
+  right: unknown,
+  sameOpaqueValue: (left: object, right: object) => boolean,
+  seen = new Map<object, Set<object>>(),
+): boolean {
+  if (Object.is(left, right)) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  const kind = Object.prototype.toString.call(left);
+  if (kind !== Object.prototype.toString.call(right)) return false;
+  if (seen.get(left)?.has(right)) return true;
+  if (!seen.has(left)) seen.set(left, new Set());
+  seen.get(left)!.add(right);
+  const equal = (a: unknown, b: unknown) => sameFieldValue(a, b, sameOpaqueValue, seen);
+
+  if (left instanceof Date && right instanceof Date) return Object.is(left.getTime(), right.getTime());
+  if (left instanceof RegExp && right instanceof RegExp) return left.source === right.source && left.flags === right.flags;
+  // Collection iteration order is part of the value preserved by structuredClone.
+  if (left instanceof Map && right instanceof Map) {
+    const entries = right.entries();
+    return left.size === right.size && [...left].every(([key, value]) => {
+      const other = entries.next().value!;
+      return equal(key, other[0]) && equal(value, other[1]);
+    });
+  }
+  if (left instanceof Set && right instanceof Set) {
+    const entries = right.values();
+    return left.size === right.size && [...left].every((value) => equal(value, entries.next().value));
+  }
+  if (left instanceof ArrayBuffer && right instanceof ArrayBuffer) {
+    return equal(new Uint8Array(left), new Uint8Array(right));
+  }
+  if (ArrayBuffer.isView(left) && ArrayBuffer.isView(right)) {
+    const a = new Uint8Array(left.buffer, left.byteOffset, left.byteLength);
+    const b = new Uint8Array(right.buffer, right.byteOffset, right.byteLength);
+    return a.length === b.length && a.every((byte, index) => byte === b[index]);
+  }
+  if (Array.isArray(left) && Array.isArray(right)) {
+    if (left.length !== right.length) return false;
+  } else if (kind !== "[object Object]") {
+    // Opaque values are clean only when assigned by our own baseline clone.
+    return sameOpaqueValue(left, right);
+  }
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return leftKeys.length === rightKeys.length && leftKeys.every((key) =>
+    Object.hasOwn(right, key)
+      && equal((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]));
 }

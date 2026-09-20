@@ -158,10 +158,11 @@ for (const file of files) {
 for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", "dist/index.d.ts"]) {
   if (!files.some((file) => file.path === expected)) fail(`Published package is missing ${expected}.`);
 }
-// The reviewed 328-file package gains seven private console filtering/export modules.
-// No dependencies or public entry points are added; keep the 5 MiB size ceiling.
+// The reviewed 100-improvement pass keeps the same 335 published files and no
+// dependencies or public entry points. Allow 128 KiB for the added behavior and
+// starter documentation, while retaining a bounded 5.125 MiB release envelope.
 if ((packResult?.entryCount ?? 0) > 335) fail("Published package unexpectedly exceeds 335 files.");
-if ((packResult?.unpackedSize ?? 0) > 5 * 1024 * 1024) fail("Published package unexpectedly exceeds 5 MiB unpacked.");
+if ((packResult?.unpackedSize ?? 0) > 5 * 1024 * 1024 + 128 * 1024) fail("Published package unexpectedly exceeds 5.125 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
 const secretPatterns = [

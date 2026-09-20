@@ -145,7 +145,7 @@ export async function readDeploymentConfig(
   const pathName = "node:path";
   const fs = await import(fsName) as unknown as {
     readFile(path: string, encoding: "utf8"): Promise<string>;
-    stat(path: string): Promise<{ size: number }>;
+    stat(path: string): Promise<{ size: number; isFile(): boolean }>;
   };
   const path = await import(pathName) as unknown as { resolve(...segments: string[]): string };
   let target = path.resolve(root, filename);
@@ -159,10 +159,13 @@ export async function readDeploymentConfig(
     target = path.resolve(root, displayName);
     stats = await fs.stat(target);
   }
+  if (!stats.isFile()) throw new Error(`${displayName} must be a regular file.`);
   if (stats.size > 64 * 1024) throw new Error(`${displayName} exceeds 64 KiB.`);
+  const contents = await fs.readFile(target, "utf8");
+  if (new TextEncoder().encode(contents).byteLength > 64 * 1024) throw new Error(`${displayName} exceeds 64 KiB.`);
   let value: unknown;
   try {
-    value = JSON.parse(await fs.readFile(target, "utf8"));
+    value = JSON.parse(contents);
   } catch {
     throw new Error(`${displayName} must contain valid JSON.`);
   }
@@ -390,9 +393,10 @@ export async function createDeploymentBundle(
   let files: Map<string, DeploymentFile> | undefined;
   for (let attempt = 0; attempt < MAX_SOURCE_SNAPSHOT_ATTEMPTS; attempt++) {
     const snapshot = new Map<string, DeploymentFile>();
+    const accounting = { bytes: 0 };
     try {
       for (const included of config.include) {
-        await collectPath(base, path.resolve(base, included), snapshot, options, path);
+        await collectPath(base, path.resolve(base, included), snapshot, accounting, options, path);
       }
       if (options.frameworkRoot) {
         const framework = await fs.realpath(path.resolve(options.frameworkRoot));
@@ -401,6 +405,7 @@ export async function createDeploymentBundle(
             framework,
             path.join(framework, included),
             snapshot,
+            accounting,
             options,
             path,
             "node_modules/@clank.run/framework",
@@ -421,6 +426,7 @@ export async function createDeploymentBundle(
   }
   if (!files) throw new Error("Deployment source could not be snapshotted.");
   if (!files.has(config.entry)) throw new Error(`Deployment entry ${config.entry} was not packaged.`);
+  if (config.jobs && !files.has(config.jobs.entry)) throw new Error(`Deployment jobs entry ${config.jobs.entry} was not packaged.`);
   const sortedFiles = [...files.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   const configurationSha256 = await sha256(new TextEncoder().encode(JSON.stringify(config)));
   const materialsSha256 = await sha256(new TextEncoder().encode(JSON.stringify(
@@ -535,6 +541,7 @@ export async function decodeDeploymentBundle(
     files.push({ path: name, size, sha256: digest, mode, content });
   }
   if (!names.has(config.entry)) throw new Error("Deployment entry is missing from the artifact.");
+  if (config.jobs && !names.has(config.jobs.entry)) throw new Error("Deployment jobs entry is missing from the artifact.");
   if (provenance.configurationSha256) {
     const expected = await sha256(new TextEncoder().encode(JSON.stringify(config)));
     if (expected !== provenance.configurationSha256) throw new Error("Deployment configuration provenance does not match the artifact.");
@@ -593,6 +600,7 @@ async function collectPath(
   root: string,
   target: string,
   files: Map<string, DeploymentFile>,
+  accounting: { bytes: number },
   limits: BundleLimits,
   path: {
     resolve(...segments: string[]): string;
@@ -651,7 +659,7 @@ async function collectPath(
       throw error;
     }
     for (const entry of entries) {
-      await collectPath(root, path.join(resolved, entry.name), files, limits, path, prefix, false);
+      await collectPath(root, path.join(resolved, entry.name), files, accounting, limits, path, prefix, false);
     }
     let confirmedEntries: DirectoryEntry[];
     try {
@@ -708,7 +716,7 @@ async function collectPath(
     || bytes.byteLength !== stats.size) {
     throw new DeploymentSourceChangedError(resolved);
   }
-  const total = [...files.values()].reduce((sum, file) => sum + file.size, 0) + bytes.byteLength;
+  const total = accounting.bytes + bytes.byteLength;
   if (total > (limits.maxTotalBytes ?? 100 * 1024 * 1024)) throw new Error("Deployment is too large.");
   files.set(artifactName, Object.freeze({
     path: artifactName,
@@ -717,6 +725,7 @@ async function collectPath(
     mode: stats.mode & 0o111 ? 0o755 : 0o644,
     content: bytesToBase64(bytes),
   }));
+  accounting.bytes = total;
 }
 
 function safeRelativePath(value: string, label: string): string {

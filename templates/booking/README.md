@@ -2,6 +2,10 @@
 
 Reserve one 30-minute consultation. Start times use UTC.
 
+Booked appointments include an Add to calendar download with their UTC start and end time.
+The calendar file is created in the browser; importing it does not subscribe to future changes.
+Cancelled appointments do not offer the download.
+
 Run `npm install`, `npm test`, `npm run dev`, `npm run doctor`, and `npm run deploy:check`. `npm run deploy` uses the ordinary Clank deployment flow.
 
 The backend, typed UI actions, automatic MCP/OAuth surface, synthetic fixture, and application contract live in this project. Modify these readable files for your product. Lists show the latest 100 visible records.

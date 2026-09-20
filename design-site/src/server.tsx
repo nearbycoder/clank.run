@@ -159,6 +159,10 @@ function versionedAsset(request: Request, filename: string): Response | Promise<
     ["tools/theme-comparison-data.js", "tools/theme-comparison-data.js"],
     ["tools/theme-sandbox.js", "tools/theme-sandbox.js"],
     ["tools/theme-sandbox-data.js", "tools/theme-sandbox-data.js"],
+    ["tools/studio-data.js", "tools/studio-data.js"],
+    ["tools/copy-text.js", "tools/copy-text.js"],
+    ["tools/copy-text-data.js", "tools/copy-text-data.js"],
+    ["tools/theme-sandbox-export-data.js", "tools/theme-sandbox-export-data.js"],
   ]).get(filename);
   if (!target) return text("Asset not found.\n", { status: 404 });
   const url = new URL(request.url); url.pathname = `/${target}`; url.search = "";

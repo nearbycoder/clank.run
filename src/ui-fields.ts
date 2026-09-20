@@ -1494,7 +1494,7 @@ export function createNumberField(options: NumberFieldOptions): NumberFieldContr
           event.preventDefault();
         },
         onWheel: (event: WheelEvent) => {
-          if (event.defaultPrevented || !options.allowWheelScrub || blocked() || !focused.peek()) return;
+          if (event.defaultPrevented || event.ctrlKey || event.deltaY === 0 || !options.allowWheelScrub || blocked() || !focused.peek()) return;
           const changed = changeBy(event.deltaY < 0 ? 1 : -1, "wheel", event);
           if (changed) commit("wheel", event);
           event.preventDefault();
@@ -1868,7 +1868,7 @@ export function createOtpField(options: OtpFieldOptions): OtpFieldController {
           event.preventDefault();
         },
         onKeyDown: (event: KeyboardEvent) => {
-          if (blocked() || event.defaultPrevented) return;
+          if (blocked() || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
           const resolvedDirection = resolveDirection(direction, event.currentTarget as Element);
           const previousKey = resolvedDirection === "rtl" ? "ArrowRight" : "ArrowLeft";
           const nextKey = resolvedDirection === "rtl" ? "ArrowLeft" : "ArrowRight";

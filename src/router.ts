@@ -148,9 +148,10 @@ export function createRouter(options: RouterOptions): Router {
   const current = computed(() => state.value, { name: "router.current" });
   let controller: AbortController | undefined;
   let revision = 0;
+  let navigationRevision = 0;
   let started = false;
 
-  const resolve = async (input?: string): Promise<RouteState | null> => {
+  const resolveRoute = async (input?: string): Promise<RouteState | null> => {
     const href = input ?? (typeof location === "undefined" ? "/" : location.href);
     const matched = matchRoutes(options.routes, href, options.base);
     controller?.abort();
@@ -180,25 +181,46 @@ export function createRouter(options: RouterOptions): Router {
     }
   };
 
+  const resolve = (input?: string): Promise<RouteState | null> => {
+    navigationRevision++;
+    return resolveRoute(input);
+  };
+
   const navigate = async (to: string, navigateOptions: NavigateOptions = {}): Promise<boolean> => {
-    const origin = typeof location === "undefined" ? "http://clank.local" : location.origin;
-    const target = new URL(to, origin);
+    const base = typeof location === "undefined" ? "http://clank.local" : location.href;
+    let target = new URL(to, base);
     assertNavigationProtocol(target);
-    if (typeof location !== "undefined" && target.origin !== location.origin) {
-      location.assign(target.href);
-      return true;
+    const navigation = ++navigationRevision;
+    const visited = new Set<string>();
+    for (let redirects = 0; redirects <= 32; redirects++) {
+      if (navigation !== navigationRevision) return false;
+      assertNavigationProtocol(target);
+      if (visited.has(target.href)) throw new Error("Route guard redirect cycle detected.");
+      visited.add(target.href);
+      if (typeof location !== "undefined" && target.origin !== location.origin) {
+        controller?.abort();
+        location.assign(target.href);
+        return true;
+      }
+      const matched = matchRoutes(options.routes, target, options.base);
+      if (matched?.route.guard) {
+        let permitted: boolean | string;
+        try { permitted = await matched.route.guard({ ...matched, from: state.peek() }); }
+        catch (error) { if (navigation !== navigationRevision) return false; throw error; }
+        if (navigation !== navigationRevision || permitted === false) return false;
+        if (typeof permitted === "string") {
+          target = new URL(permitted, base);
+          navigateOptions = { replace: true };
+          continue;
+        }
+      }
+      if (typeof history !== "undefined") {
+        history[navigateOptions.replace ? "replaceState" : "pushState"](navigateOptions.state, "", target);
+      }
+      await resolveRoute(target.href);
+      return navigation === navigationRevision;
     }
-    const matched = matchRoutes(options.routes, target, options.base);
-    if (matched?.route.guard) {
-      const permitted = await matched.route.guard({ ...matched, from: state.peek() });
-      if (permitted === false) return false;
-      if (typeof permitted === "string") return navigate(permitted, { replace: true });
-    }
-    if (typeof history !== "undefined") {
-      history[navigateOptions.replace ? "replaceState" : "pushState"](navigateOptions.state, "", target);
-    }
-    await resolve(target.href);
-    return true;
+    throw new Error("Route guard redirect limit exceeded.");
   };
 
   const start = (): (() => void) => {
@@ -209,15 +231,19 @@ export function createRouter(options: RouterOptions): Router {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const target = event.target as Element | null;
       const anchor = target?.closest?.("a[data-clank-link]") as HTMLAnchorElement | null;
-      if (!anchor || anchor.target || anchor.download || anchor.origin !== location.origin) return;
+      if (!anchor || anchor.target || anchor.hasAttribute("download") || anchor.origin !== location.origin) return;
       event.preventDefault();
       void navigate(anchor.href);
     };
     window.addEventListener("popstate", onPopState);
     document.addEventListener("click", onClick);
     void resolve();
+    let stopped = false;
     return () => {
+      if (stopped) return;
+      stopped = true;
       started = false;
+      navigationRevision++;
       controller?.abort();
       window.removeEventListener("popstate", onPopState);
       document.removeEventListener("click", onClick);

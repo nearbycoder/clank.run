@@ -1,0 +1,67 @@
+{
+  "date": "2026-09-20",
+  "node": "24.21.0",
+  "base": "edaf811c224fe649338143c0cf9e4690024cd521",
+  "status": "passed",
+  "repositoryCheck": {
+    "command": "npm run check",
+    "exitCode": 0,
+    "tests": 1407,
+    "passed": 1407,
+    "failed": 0,
+    "coveragePercent": {
+      "lines": 87.08,
+      "branches": 78.56,
+      "functions": 89.58
+    },
+    "builds": [
+      "framework",
+      "docs",
+      "Design Studio",
+      "Synth"
+    ],
+    "dependencyContract": "passed",
+    "documentationAudit": {
+      "markdownFiles": 77,
+      "localLinks": 243,
+      "indexedGuides": 72,
+      "synchronizedDeclarationFiles": 98,
+      "packageExports": 132
+    },
+    "packagedReleaseConformance": {
+      "steps": 10,
+      "status": "passed",
+      "coverage": [
+        "MCP Apps",
+        "browser authentication",
+        "agent OAuth",
+        "MCP actions",
+        "live synchronization",
+        "tenant isolation",
+        "deployment",
+        "migration",
+        "failed activation",
+        "rollback",
+        "data restore"
+      ]
+    },
+    "securityAudit": "passed",
+    "log": "/tmp/clank-hundred/check-final.log"
+  },
+  "performance": "release-budgets.json",
+  "browser": "browser-verification.json",
+  "starterContractsAndDryRuns": "starter-validation.json",
+  "siteDoctorsAndDryRuns": "site-validation.json",
+  "notes": [
+    "No deployment was uploaded by these dry runs.",
+    "Browser verification used synthetic local accounts and datasets.",
+    "GitHub CI results are available on the pull request."
+  ],
+  "testHarnessFollowup": {
+    "reason": "CodeQL flagged script-tag expressions in three test files.",
+    "change": "Extract the trusted generated console script using its exact fixture boundaries with presence assertions; detect script opening tags with attributes case-insensitively in the escaping assertion.",
+    "targetedTestsPassed": 32,
+    "targetedTestsFailed": 0,
+    "log": "/tmp/clank-hundred/codeql-test-followup.log"
+  }
+}

@@ -4,6 +4,20 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Deliver 100 practical framework, dashboard, documentation, Studio, Synth, starter, and CLI
+  improvements; the numbered implementation and validation ledger is in
+  `reports/one-hundred-improvements-2026-09-20/` in the source repository.
+- Correct reactive array and own-property tracking, form reset/submission races, native textarea
+  and select SSR/hydration, navigation guard races, IME handling, focus traversal, and cleanup failures.
+- Preserve dashboard workspace, activity, log-reading, and settings state; add operational filters,
+  month navigation, full-ID copying, exact timestamps, bounded reads, and accessible mobile navigation.
+- Add docs mobile contents and section tracking, search highlights and copy fallback; add Studio
+  keyboard tabs, component favorites, theme filters, and sandbox CSS export.
+- Add Synth pattern import, undo/redo, track editing, tap tempo, keyboard grid navigation, mix reset,
+  validated saved state, and predictable audio lifecycle; improve starter filtering and todo recovery,
+  and add booking calendar downloads.
+- Bound compiler concurrency, serialize asset rebuilds, reject output collisions, preserve build
+  diagnostics, validate workbench arguments, and harden deployment artifact/configuration handling.
 - Add dashboard project sorting and workspace/status filters, activity search and action filtering,
   runtime log search and stream filtering, refresh pause, traffic tables, and monthly usage CSV export.
 - Add documentation reading history, bookmarks, reading-position resume, progress, focus mode,

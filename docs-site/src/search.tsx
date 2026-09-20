@@ -1,6 +1,6 @@
 /* @clankImportSource ../vendor/dom.js */
 import { computed, signal } from "../vendor/core.js";
-import { For } from "../vendor/dom.js";
+import { For, type Renderable } from "../vendor/dom.js";
 
 export interface SearchEntry {
   slug: string;
@@ -9,6 +9,26 @@ export interface SearchEntry {
   groupId?: string;
   groupTitle: string;
   headings: string[];
+}
+
+export function SearchHighlight(props: { text: string; query: string }) {
+  // Return a reactive child so retained quick-search links update with the query.
+  return () => {
+    const terms = [...new Set(props.query.trim().slice(0, 120).split(/\s+/u).filter(Boolean))]
+      .sort((left, right) => right.length - left.length);
+    if (!terms.length) return props.text;
+    // The bounded pattern contains literal terms only; all text is escaped by Clank.
+    const pattern = new RegExp(terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|"), "giu");
+    const parts: Renderable[] = [];
+    let cursor = 0;
+    for (const match of props.text.matchAll(pattern)) {
+      if (match.index > cursor) parts.push(props.text.slice(cursor, match.index));
+      parts.push(<mark>{match[0]}</mark>);
+      cursor = match.index + match[0].length;
+    }
+    if (cursor < props.text.length) parts.push(props.text.slice(cursor));
+    return parts;
+  };
 }
 
 export function handleSearchShortcut(event: KeyboardEvent): void {
@@ -115,7 +135,7 @@ export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string
           {(entry) => (
             <a href={`/docs/${entry.slug}`} agentLabel={`Open ${entry.title}`}>
               <span>
-                <strong>{entry.title}</strong>
+                <strong><SearchHighlight text={entry.title} query={query.value} /></strong>
                 <small>{entry.groupTitle}</small>
               </span>
               <span aria-hidden="true">↗</span>

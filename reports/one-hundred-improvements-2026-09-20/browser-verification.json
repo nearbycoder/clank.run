@@ -1,0 +1,117 @@
+{
+  "date": "2026-09-20",
+  "runtime": "Node24.21.0 and local Chromium via agent-browser",
+  "dashboard": {
+    "mobileWidth": 390,
+    "desktopWidth": 1440,
+    "mobileZoomRestricted": true,
+    "noHorizontalOverflow": true,
+    "drawerFocusTrapAndEscapeRestore": true,
+    "userNavigationFocusesHeading": true,
+    "projectReset": true,
+    "memberAndInvitationSearch": true,
+    "releaseStatusAndArtifactFilters": true,
+    "fullReleaseIdDisclosure": true,
+    "utcTimestamps": true,
+    "previewNameOrderingAndExpiryLabels": true,
+    "usageFilterPreservesTotalsAndCompleteCsv": true,
+    "previousAndCurrentMonthNavigation": true,
+    "runtimeDraftSurvivesRefreshAndCancelsToServer": true
+  },
+  "docs": {
+    "homeSearchLongGuide": true,
+    "mobileContentsAndActiveSection": true,
+    "desktopContents": true,
+    "searchHighlights": true,
+    "deniedClipboardSelectsExactCode": true,
+    "noHorizontalOverflow": true,
+    "endpoints": [
+      "/",
+      "/search?q=form",
+      "/docs/forms",
+      "/raw/forms.md",
+      "/api/docs.json",
+      "/api/docs/forms.json",
+      "/llms.txt",
+      "/llms-full.txt",
+      "/.well-known/clank",
+      "docs_search",
+      "docs_read"
+    ]
+  },
+  "studio": {
+    "componentRouteCount": 39,
+    "themeSwitchCount": 10,
+    "keyboardInspectorTabs": true,
+    "usageCopyFallback": true,
+    "favoritesWithWriteOnlyStorageFailure": true,
+    "themeSearchAndSchemeFilter": true,
+    "scopedCssDownloadMatchesPreview": true,
+    "dialogPortalThemeAndEscapeFocus": true,
+    "noHorizontalOverflow": true,
+    "hydration": "attached on all routes at both widths",
+    "routeCount": 41,
+    "viewportWidths": [
+      1440,
+      390
+    ],
+    "routeChecks": 82,
+    "consoleErrors": 0
+  },
+  "synth": {
+    "clear": true,
+    "rotation": true,
+    "undoRedo": true,
+    "keyboard": true,
+    "import": true,
+    "invalidImportAtomic": true,
+    "zeroValues": true,
+    "resetMix": true,
+    "playStop": true,
+    "mobileOverflow": false,
+    "consoleErrors": 0
+  },
+  "starters": {
+    "authTodo": [
+      "registration",
+      "creation",
+      "completion toggle",
+      "completion and search filters",
+      "phone layout"
+    ],
+    "approvalQueue": [
+      "registration",
+      "creation",
+      "status filters",
+      "sign out and sign in",
+      "phone layout"
+    ],
+    "customerPortal": [
+      "registration",
+      "creation",
+      "status filters",
+      "sign out and sign in",
+      "phone layout"
+    ],
+    "booking": [
+      "registration",
+      "creation",
+      "UTC calendar download",
+      "sign out and sign in",
+      "phone layout"
+    ]
+  },
+  "nativeControls": {
+    "textareaLeadingNewlineAndEscapingBeforeAfterHydration": true,
+    "multipleSelectionBeforeAfterHydration": true,
+    "singleSelectDuplicateValuesFirstOption": true,
+    "lateOptionSelection": true,
+    "twoWayMultipleSelection": true,
+    "hydration": "attached"
+  },
+  "notes": [
+    "Synthetic local accounts and datasets only.",
+    "Native Web Audio Play/Stop and scheduling tests passed; subjective sound quality was not assessed.",
+    "Screenshots and executable preview fixtures retained under /tmp/clank-hundred; report records the verified behavior."
+  ]
+}

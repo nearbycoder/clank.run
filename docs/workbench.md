@@ -77,6 +77,9 @@ clank workbench visual test/baselines/home.png artifacts/home.png \
 A mismatch exits nonzero for CI. Decoding rejects malformed chunks, unsupported image modes,
 compressed payloads over 16 MiB, and images over 16,777,216 pixels.
 
+JSON RGBA inputs require integer channels from 0 through 255. Out-of-range values are rejected
+before conversion to bytes, so malformed screenshots cannot silently wrap or truncate channels.
+
 ## Upgrade assistant
 
 ```sh

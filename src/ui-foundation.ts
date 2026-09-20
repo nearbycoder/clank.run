@@ -193,12 +193,22 @@ export function mergeProps(...sources: Array<UiProps | null | undefined | false>
         if (typeof cleanup === "function") cleanups.push(cleanup);
       }
     } catch (error) {
-      for (const cleanup of cleanups.reverse()) cleanup();
+      try { disposeDirectives(cleanups); }
+      catch (cleanupError) { throw new AggregateError([error, cleanupError], "A UI directive and its cleanup both failed."); }
       throw error;
     }
-    return () => { for (const cleanup of cleanups.reverse()) cleanup(); };
+    return () => disposeDirectives(cleanups);
   };
   return output;
+}
+
+function disposeDirectives(cleanups: Cleanup[]): void {
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups.splice(0).reverse()) {
+    try { cleanup(); } catch (error) { errors.push(error); }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Multiple UI directive cleanups failed.");
 }
 
 export type UiRef<Value> =
@@ -500,10 +510,14 @@ export function focusableElements(root: ParentNode, options: FocusableElementsOp
   const candidates: Element[] = [];
   const seen = new Set<Element>();
   const visit = (scope: ParentNode) => {
-    if (options.includeRoot && isElementLike(scope)) add(scope);
+    if (isElementLike(scope)) {
+      if (options.includeRoot) add(scope);
+      const shadow = (scope as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
+      if (shadow) visit(shadow);
+    }
     if (typeof scope.querySelectorAll !== "function") return;
-    for (const element of Array.from(scope.querySelectorAll(FOCUSABLE_SELECTOR))) {
-      add(element);
+    for (const element of Array.from(scope.querySelectorAll("*"))) {
+      if (element.matches(FOCUSABLE_SELECTOR)) add(element);
       const shadow = (element as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
       if (shadow) visit(shadow);
     }
@@ -545,18 +559,19 @@ export function focusFirst(
   for (const element of elements) {
     try {
       element.focus({ preventScroll: options.preventScroll });
-      if (options.select && typeof (element as HTMLInputElement).select === "function") {
-        (element as HTMLInputElement).select();
-      }
-      return element;
     } catch {
       try {
         element.focus();
-        return element;
       } catch {
-        // Continue to the next candidate.
+        continue;
       }
     }
+    const root = element.getRootNode?.() as Document | ShadowRoot | undefined;
+    if (root?.activeElement !== element && getOwnerDocument(element)?.activeElement !== element) continue;
+    if (options.select && typeof (element as HTMLInputElement).select === "function") {
+      try { (element as HTMLInputElement).select(); } catch { /* Focus already succeeded. */ }
+    }
+    return element;
   }
   return null;
 }
@@ -981,10 +996,18 @@ function isUnavailable(element: Element): boolean {
 
   let current: unknown = element;
   const seen = new Set<unknown>();
+  const view = getOwnerDocument(element)?.defaultView;
   while (current && !seen.has(current)) {
     seen.add(current);
     if (hasAttribute(current as Element, "hidden") || hasAttribute(current as Element, "inert")) return true;
     if (readAttribute(current, "aria-hidden") === "true") return true;
+    if (isElementLike(current) && typeof view?.getComputedStyle === "function") {
+      try {
+        const style = view.getComputedStyle(current);
+        if (style.display === "none" || style.contentVisibility === "hidden"
+          || (current === element && (style.visibility === "hidden" || style.visibility === "collapse"))) return true;
+      } catch { /* Detached or cross-document style access may be unavailable. */ }
+    }
     if (elementName(current as Element) === "details" && !hasAttribute(current as Element, "open")) {
       const summary = typeof (current as Element).querySelector === "function"
         ? (current as Element).querySelector(":scope > summary")
@@ -994,18 +1017,6 @@ function isUnavailable(element: Element): boolean {
     current = parentElementOrHost(current);
   }
 
-  const document = getOwnerDocument(element);
-  const view = document?.defaultView;
-  if (typeof view?.getComputedStyle === "function") {
-    try {
-      const style = view.getComputedStyle(element);
-      if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || style.contentVisibility === "hidden") {
-        return true;
-      }
-    } catch {
-      // Cross-document style access is allowed to fail closed over native checks.
-    }
-  }
   return false;
 }
 

@@ -1,5 +1,5 @@
 /* @clankImportSource @clank.run/framework */
-import { For, createApi, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
+import { For, computed, createApi, signal, type AuthUser, type DefaultAuthProfile } from "@clank.run/framework";
 import type { backend, RecipeRecord, RecipeDecision } from "./backend.ts";
 const projectTitle = __PROJECT_TITLE_JSON__;
 const api = createApi<typeof backend>();
@@ -11,6 +11,9 @@ export interface RecipeViewProps {
 }
 export function RecipeView(props: RecipeViewProps) {
   const title = signal(""), detail = signal(""), busy = signal(false);
+  const filter = signal("all");
+  const filters = [{ value: "all", label: "All" }, { value: "open", label: "Open" }, { value: "closed", label: "Closed" }];
+  const visible = computed(() => props.records.filter((row) => filter.value === "all" || row.status === filter.value));
   const submit = async (event: Event) => {
     event.preventDefault(); if (busy.value) return; busy.value = true;
     try { if (await props.create(title.value, detail.value)) { title.value = ""; detail.value = ""; } }
@@ -22,7 +25,9 @@ export function RecipeView(props: RecipeViewProps) {
       <label>Details<textarea bind:value={detail} maxlength={2000} required agentId="record-detail" agentLabel="Details" /></label>
       <button type="submit" disabled={busy.value} agentId="record-create" agentAction={api.records.create}>Create request</button>
     </form>
-    <section aria-label="Records"><For each={props.records} by="_id" fallback={<p class="empty">No records yet.</p>}>
+    <div class="record-filters" role="group" aria-label="Request status filter"><For each={filters} by="value">{(item) => <button type="button" aria-pressed={filter.value === item.value} onClick={() => { filter.value = item.value; }} agentId={`filter-${item.value}`}>{item.label} ({props.records.filter((row) => item.value === "all" || row.status === item.value).length})</button>}</For></div>
+    <p role="status">Showing {visible.value.length} of {props.records.length} requests.</p>
+    <section aria-label="Records"><For each={visible.value} by="_id" fallback={<p class="empty">{props.records.length ? "No requests match this status." : "No records yet."}</p>}>
       {(row) => <RecordCard row={row} user={props.user} update={props.update} />}
     </For></section>
   </main>;

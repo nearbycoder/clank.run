@@ -157,3 +157,33 @@ input[type="range"] { width: 100%; height: 4px; accent-color: var(--clank-accent
   .sequencer-footer { flex-wrap: wrap; gap: 10px 15px; }
   .sequencer-count { width: 100%; margin-left: 0; }
 }
+
+/* Pattern editing stays outside the horizontally scrolling step controls. */
+.transport-main, .header-actions { flex-wrap: wrap; }
+.transport-main { flex-shrink: 0; }
+.secondary-button:disabled { opacity: .45; cursor: default; transform: none; }
+.pattern-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 14px 23px 0; }
+.history-actions, .track-edit-actions { display: inline-flex; align-items: center; gap: 5px; }
+.pattern-tools .secondary-button { min-height: 34px; background: var(--clank-surface-muted); border-color: var(--clank-border); color: var(--clank-text); }
+.pattern-tools > span { margin-left: auto; color: var(--clank-text-muted); font-size: 10px; }
+.import-button { position: relative; overflow: hidden; cursor: pointer; }
+.import-button input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.import-button:focus-within { outline: 2px solid var(--clank-focus); outline-offset: 3px; }
+.import-error { margin: 14px 23px 0; padding: 10px 12px; border: 1px solid var(--clank-border); border-radius: var(--clank-radius-sm); background: var(--clank-surface-muted); color: var(--clank-text); font-size: 12px; overflow-wrap: anywhere; }
+.track-edit-actions { flex-shrink: 0; }
+.track-edit-actions button { min-height: 32px; min-width: 30px; border: 1px solid var(--clank-border); border-radius: var(--clank-radius-sm); background: var(--clank-surface-muted); color: var(--clank-text); font-size: 10px; }
+.track-edit-actions button:hover { border-color: var(--clank-accent); }
+.instrument-row { min-height: 48px; }
+.instrument-swatch, .instrument-level { flex-shrink: 0; }
+.instrument-row > div:not(.track-edit-actions) { min-width: 0; }
+@media (min-width: 841px) and (max-width: 1100px) { .transport { flex-wrap: wrap; } .transport-sliders { width: 100%; } }
+@media (max-width: 520px) {
+  .pattern-tools > span { width: 100%; margin-left: 0; }
+  .instrument-row { flex-wrap: wrap; gap: 7px; padding: 9px 0; }
+  .track-edit-actions { margin-left: auto; }
+  .track-edit-actions button { min-height: 36px; min-width: 32px; }
+}
+.topbar { gap: 16px; }
+.wordmark, .theme-control, .live-dot { flex-shrink: 0; }
+.topbar-tools, .topbar-meta { min-width: 0; }
+.topbar-meta > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

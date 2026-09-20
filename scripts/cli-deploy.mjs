@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
-import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants as fileConstants } from "node:fs";
 import { homedir, hostname, platform as operatingSystem } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import {
   createDeploymentBundle,
   decodeDeploymentBundle,
@@ -31,6 +33,7 @@ import { composeApp, ComposeError } from "./cli-compose.mjs";
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
 const MAX_LOCAL_CONFIG_BYTES = 1024 * 1024;
+const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024;
 const MAX_PLATFORM_RESPONSE_BYTES = 4 * 1024 * 1024;
 const PLATFORM_REQUEST_TIMEOUT_MS = 30_000;
 const PLATFORM_DEPLOY_TIMEOUT_MS = 5 * 60_000;
@@ -3121,7 +3124,33 @@ async function migrate(args) {
 async function inspectArtifact(args) {
   const filename = positionals(args)[0];
   if (!filename) throw new CliError("Usage: clank inspect <artifact>");
-  const bytes = await readFile(resolve(filename));
+  const target = resolve(filename);
+  const stats = await lstat(target);
+  if (!stats.isFile() || stats.size > MAX_ARTIFACT_BYTES) throw new CliError("Artifact must be a regular file of at most 100 MiB.");
+  const handle = await open(target, fileConstants.O_RDONLY | (fileConstants.O_NOFOLLOW ?? 0) | (fileConstants.O_NONBLOCK ?? 0));
+  let bytes;
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.dev !== stats.dev || opened.ino !== stats.ino || opened.size !== stats.size) {
+      throw new CliError("Artifact changed while being inspected. Retry with a stable file.");
+    }
+    // One extra byte detects growth without permitting readFile to allocate an
+    // unbounded buffer after the initial file-size check.
+    const buffer = Buffer.allocUnsafe(stats.size + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    const after = await handle.stat();
+    if (length !== stats.size || after.size !== stats.size || after.mtimeMs !== stats.mtimeMs || after.ctimeMs !== stats.ctimeMs) {
+      throw new CliError("Artifact changed while being inspected. Retry with a stable file.");
+    }
+    bytes = buffer.subarray(0, length);
+  } finally {
+    await handle.close();
+  }
   const bundle = await decodeDeploymentBundle(bytes);
   console.log(JSON.stringify({
     protocol: bundle.protocol,
@@ -3140,15 +3169,34 @@ async function runBuild(command, cwd, options = {}) {
     ? [resolve(process.argv[1]), ...rawArguments]
     : rawArguments;
   await new Promise((resolvePromise, reject) => {
+    let diagnostics = "";
+    let settled = false;
+    let drainTimer;
     const child = spawn(executable, arguments_, {
       cwd,
-      stdio: options.quiet ? ["ignore", "ignore", "ignore"] : "inherit",
+      stdio: options.quiet ? ["ignore", "ignore", "pipe"] : "inherit",
       shell: false,
     });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => code === 0
-      ? resolvePromise()
-      : reject(new CliError(`Build exited with ${code ?? signal}.`)));
+    child.stderr?.setEncoding("utf8").on("data", (chunk) => {
+      diagnostics = (diagnostics + chunk).slice(-8_192);
+    });
+    const finish = (code, signal, error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(drainTimer);
+      child.stderr?.destroy();
+      if (error) { reject(error); return; }
+      if (code === 0) { resolvePromise(); return; }
+      const detail = stripVTControlCharacters(diagnostics).replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu, "").trim();
+      reject(new CliError(`Build exited with ${code ?? signal}.${detail ? `\n${detail}` : ""}`));
+    };
+    child.once("error", (error) => finish(null, null, error));
+    child.once("exit", (code, signal) => {
+      // A descendant can inherit stderr after the build itself exits. Keep the
+      // normal close/drain path, but do not wait indefinitely for that child.
+      if (!settled) drainTimer = setTimeout(() => finish(code, signal), 100);
+    });
+    child.once("close", (code, signal) => finish(code, signal));
   });
 }
 
@@ -3386,7 +3434,7 @@ async function deploymentAttempt(root, expected) {
 function normalizeServer(value) {
   if (!value) return null;
   const url = new URL(value);
-  if (url.username || url.password || url.search || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)))) {
+  if (url.username || url.password || url.search || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) {
     throw new CliError("Platform URL must use HTTPS, except for loopback development.");
   }
   url.pathname = trimTrailingSlashes(url.pathname);

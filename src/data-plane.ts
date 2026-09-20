@@ -522,7 +522,7 @@ export async function inspectDomainRouting(
   const hostname = domainName(hostnameInput);
   const cname = targetInput.cname === undefined ? null : domainName(targetInput.cname);
   if (cname === hostname) throw new TypeError("Custom-domain CNAME target must differ from the customer hostname.");
-  const configuredAddresses = Object.freeze(uniqueDnsValues(targetInput.addresses ?? []));
+  const configuredAddresses = Object.freeze(uniqueDnsAddresses(targetInput.addresses ?? []));
   if (!cname && configuredAddresses.length === 0) {
     throw new TypeError("Domain routing requires a CNAME target or at least one edge address.");
   }
@@ -534,8 +534,8 @@ export async function inspectDomainRouting(
     cname ? dnsLookup(() => resolver.resolve6(cname)) : Promise.resolve({ values: [] as string[] }),
   ]);
   const cnames = uniqueDnsValues(cnameLookup.values.map(normalizeDnsName));
-  const addresses = uniqueDnsValues([...ipv4Lookup.values, ...ipv6Lookup.values]);
-  const targetAddresses = new Set(uniqueDnsValues([
+  const addresses = uniqueDnsAddresses([...ipv4Lookup.values, ...ipv6Lookup.values]);
+  const targetAddresses = new Set(uniqueDnsAddresses([
     ...configuredAddresses,
     ...target4Lookup.values,
     ...target6Lookup.values,
@@ -1102,6 +1102,16 @@ async function dnsLookup(
   }
 }
 
+function uniqueDnsAddresses(values: readonly string[]): string[] {
+  return uniqueDnsValues(uniqueDnsValues(values).map((value) => {
+    if (value.includes(":") && /^[0-9a-f:.]+$/u.test(value)) {
+      try { return new URL(`http://[${value}]/`).hostname.slice(1, -1); }
+      catch { /* Preserve unsuccessful lookup evidence without matching valid targets. */ }
+    }
+    return value;
+  }));
+}
+
 function uniqueDnsValues(values: readonly string[]): string[] {
   const output: string[] = [];
   const seen = new Set<string>();
@@ -1138,7 +1148,7 @@ function upstreamUrl(input: string, allowedHosts?: readonly string[]): string {
   }
   if (url.pathname !== "/") throw new TypeError("Ingress upstream cannot include a path.");
   const allowed = allowedHosts?.map((host) => host.toLowerCase());
-  const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
   if (!loopback && !(allowed?.includes(url.hostname.toLowerCase()))) {
     throw new TypeError(`Ingress upstream host is not allowed: ${url.hostname}`);
   }

@@ -34,8 +34,10 @@ function LiveTodos() {
     error.value = "";
     try {
       await operation();
+      return true;
     } catch (reason) {
       error.value = reason instanceof Error ? reason.message : "The operation failed.";
+      return false;
     }
   };
   return (
@@ -44,6 +46,7 @@ function LiveTodos() {
       todos={todos.data.value ?? boot.todos}
       version={todos.version.value}
       connected={!todos.loading.value && !todos.error.value}
+      error={error.value}
       add={(title) => mutate(() => client.mutate(client.api.todos.add, { title }))}
       setDone={(id, done, version) => mutate(() => client.mutate(client.api.todos.setDone, { id, done, version }))}
       remove={(id, version) => mutate(() => client.mutate(client.api.todos.remove, { id, version }))}

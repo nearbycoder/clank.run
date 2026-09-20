@@ -4,6 +4,10 @@ A full-stack Clank app with built-in authentication, private per-user todos, dur
 jobs, SQLite migrations, server rendering, hydration, Tailwind styling, and live synchronization
 across browsers.
 
+The browser shows mutation errors, preserves an unsaved title when creation fails, and prevents
+duplicate submissions or overlapping changes to the same todo. Search titles and combine the
+search with All, Active, or Completed filters; counts describe your current authorized list.
+
 ## Start
 
 ```sh

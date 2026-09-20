@@ -52,6 +52,10 @@ await router.navigate("/login", { replace: true, state: { from: "/private" } });
 
 Router links render ordinary anchors with `data-clank-link`. Modified clicks, downloads, explicit targets, external origins, and already-prevented events retain native browser behavior.
 
+In the browser, relative destinations resolve against the current document URL. For example,
+`?page=2` keeps the current path, `#details` keeps its path and query, and `../settings` moves
+up one path segment. An empty `download` attribute also preserves native download behavior.
+
 ## Loaders and cancellation
 
 Navigation sets the route to `loading`, passes an `AbortSignal` to its loader, then commits `ready` data. The previous loader is aborted on a newer navigation, and revision checks reject stale results even if the loader ignores abort.
@@ -65,7 +69,13 @@ guard: ({ from, params }) => {
 }
 ```
 
-A guard may return `true`, `false`, or a redirect URL, synchronously or asynchronously. `false` cancels navigation. A string recursively navigates with replacement.
+A guard may return `true`, `false`, or a redirect URL, synchronously or asynchronously. `false`
+cancels navigation. Redirects replace history only after the final guard accepts; a repeated URL
+or more than 32 redirects rejects navigation without adding a history entry.
+
+Only the latest navigation may apply a guard result. A newer navigation, explicit `resolve()`,
+history traversal, or the disposer returned by `start()` invalidates pending guards. Stale guard
+results and failures settle as `false`; a current guard failure rejects the navigation promise.
 
 ## Base paths and non-browser resolution
 

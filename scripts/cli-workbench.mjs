@@ -13,12 +13,36 @@ import { runDeploymentProviderConformance } from "../dist/provider.js";
 
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
 const EXCLUDED = new Set([".git", ".clank", ".proact", "node_modules", ".env", ".envrc", ".dev.vars", ".npmrc", ".yarnrc", ".pypirc", ".netrc", ".ssh", ".aws", "id_rsa", "id_ed25519"]);
+const ARGUMENTS = {
+  compatibility: [2, []], performance: [2, ["baseline", "page"]],
+  resilience: [1, []], restore: [1, []], migrate: [1, []],
+  policy: [2, ["principal", "kind", "roles", "resource"]],
+  flag: [2, ["subject", "principal", "kind", "roles"]],
+  revision: [1, ["revision"]], parity: [2, []], schema: [2, ["output"]],
+  capacity: [2, []], upgrade: [1, ["node", "exports"]], provenance: [1, []],
+  promotion: [3, []], rollout: [2, []],
+  export: [1, ["output", "name", "framework", "force"]],
+  sanitize: [2, ["output"]], provider: [1, ["export", "project", "destructive"]],
+  contract: [2, []], visual: [2, ["tolerance", "ratio"]],
+};
 
 export async function runWorkbench(args) {
   const subcommand = args.shift();
   if (!subcommand || subcommand === "help" || args.includes("--help") || args.includes("-h")) return help();
+  if (!Object.hasOwn(ARGUMENTS, subcommand)) throw new Error(`Unknown workbench command: ${subcommand}. Run clank workbench help.`);
+  const [maximumValues, allowedOptions] = ARGUMENTS[subcommand];
+  for (const argument of args) {
+    if (!argument.startsWith("-") || argument === "--json") continue;
+    const equals = argument.indexOf("=");
+    const name = argument.slice(2, equals < 0 ? undefined : equals);
+    if (!argument.startsWith("--") || !allowedOptions.includes(name)) {
+      throw new Error(`Unknown option ${argument} for clank workbench ${subcommand}.`);
+    }
+    if (equals < 0 || equals === argument.length - 1) throw new Error(`--${name} requires a value (--${name}=<value>).`);
+  }
   const json = args.includes("--json");
   const values = args.filter((item) => !item.startsWith("--"));
+  if (values.length > maximumValues) throw new Error(`Too many arguments for clank workbench ${subcommand}. Run clank workbench help.`);
   const option = (name) => args.find((item) => item.startsWith(`--${name}=`))?.slice(name.length + 3);
   let result;
   switch (subcommand) {
@@ -203,7 +227,13 @@ async function visualFile(path) {
 async function importLocal(path) { const target = resolve(path); const stats = await lstat(target); if (!stats.isFile() || stats.isSymbolicLink() || stats.size > MAX_JSON_BYTES) throw new Error("Module must be a bounded regular file."); return import(`${pathToFileURL(target).href}?workbench=${stats.mtimeMs}`); }
 async function exportFiles(root, excludedPath) { const rootStats = await lstat(root); if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) throw new Error("Export root must be a real directory."); const output = []; async function visit(directory) { for (const entry of await readdir(directory, { withFileTypes: true })) { if (excludedExportEntry(entry.name)) continue; const path = join(directory, entry.name); if (resolve(path) === excludedPath) continue; if (entry.isSymbolicLink()) throw new Error(`Project exports reject symbolic links: ${relative(root, path)}`); if (entry.isDirectory()) await visit(path); else if (entry.isFile()) { const stats = await lstat(path); if (stats.size > 8 * 1024 * 1024) throw new Error(`Export file exceeds 8 MiB: ${relative(root, path)}`); output.push({ path: relative(root, path).replaceAll("\\", "/"), bytes: new Uint8Array(await readFile(path)), mode: stats.mode & 0o111 ? 0o755 : 0o644 }); } } } await visit(root); return output; }
 function excludedExportEntry(name) { return EXCLUDED.has(name) || name.startsWith(".env.") || name.endsWith(".sqlite") || name.endsWith(".sqlite-wal") || name.endsWith(".sqlite-shm") || name.endsWith(".clank-export.json"); }
-function visualImage(value) { if (!value || !Array.isArray(value.rgba)) throw new Error("Visual JSON must contain width, height, and an RGBA byte array."); return { width: value.width, height: value.height, rgba: Uint8Array.from(value.rgba) }; }
+function visualImage(value) {
+  if (!value || !Array.isArray(value.rgba)) throw new Error("Visual JSON must contain width, height, and an RGBA byte array.");
+  if (value.rgba.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)) {
+    throw new Error("Visual JSON RGBA channels must be integers between 0 and 255.");
+  }
+  return { width: value.width, height: value.height, rgba: Uint8Array.from(value.rgba) };
+}
 function parseJson(bytes, path) { try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw new Error(`Visual JSON input is invalid: ${path}`); } }
 function pngSignature(bytes) { return bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => bytes[index] === value); }
 function decodePng(bytes) {

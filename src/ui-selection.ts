@@ -255,7 +255,7 @@ export function createSelect<Value>(options: SelectOptions<Value>): SelectContro
     if (next >= 0) highlightedIndex.value = next;
   };
   const onListKeyDown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || disabled.peek() || readOnly.peek()) return;
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || disabled.peek() || readOnly.peek()) return;
     const intent = getCollectionNavigationIntent(event.key, "vertical", direction);
     if (intent) {
       event.preventDefault();
@@ -349,7 +349,7 @@ export function createSelect<Value>(options: SelectOptions<Value>): SelectContro
         },
         onInvalid: fieldPart?.onInvalid,
         onKeyDown: (event: KeyboardEvent) => {
-          if (event.defaultPrevented || disabled.peek() || readOnly.peek()) return;
+          if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || disabled.peek() || readOnly.peek()) return;
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             if (!popup.open.peek()) show("trigger-press", event);
             else move(event.key === "ArrowDown" ? "next" : "previous");
@@ -897,7 +897,7 @@ function createEditableSelection<Value>(
     if (inputState.set("", "programmatic", event)) renderInlineCompletion();
   };
   const onInputKeyDown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || disabled.peek() || readOnly.peek()) return;
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || disabled.peek() || readOnly.peek()) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
       if (!popup.open.peek()) popup.show("trigger-press", event);
       move(getCollectionNavigationIntent(event.key, "vertical", direction));
@@ -1085,7 +1085,7 @@ function createEditableSelection<Value>(
       } : {}),
       onKeyDown: triggerOptions.standalone
         ? (event: KeyboardEvent) => {
-          if (event.defaultPrevented || disabled.peek() || readOnly.peek()) return;
+          if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || disabled.peek() || readOnly.peek()) return;
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
           if (!popup.open.peek()) {
             prepareStandaloneSearch(event);

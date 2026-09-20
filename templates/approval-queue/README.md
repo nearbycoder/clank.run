@@ -2,6 +2,9 @@
 
 Submit requests for a separate reviewer to approve or reject.
 
+Filter the visible request list by All, Pending, Approved, or Rejected, with counts for each status.
+Filtering uses the records already authorized for the current account.
+
 Run `npm install`, `npm test`, `npm run dev`, `npm run doctor`, and `npm run deploy:check`. `npm run deploy` uses the ordinary Clank deployment flow.
 
 The backend, typed UI actions, automatic MCP/OAuth surface, synthetic fixture, and application contract live in this project. Modify these readable files for your product. Lists show the latest 100 visible records.

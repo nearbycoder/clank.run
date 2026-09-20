@@ -62,6 +62,9 @@ conformance, action-contract tests, and visual comparison. See [App Studio and t
 workbench](workbench.md), [Governance](governance.md), and [Revision and release
 lifecycle](release-lifecycle.md).
 
+Each workbench command validates its own options and positional argument count before reading
+inputs or creating output files. Unknown options and empty option values fail immediately.
+
 ## Compose with an agent
 
 ```sh
@@ -181,6 +184,11 @@ restarted, failure, and shutdown signal.
 
 `clank watch` remains available as a compiler-only primitive when another process manager owns the
 server. For normal application work, prefer `clank dev`.
+
+The compiler watcher includes static assets and directory changes. Rebuilds are debounced and
+serialized, with a further pass when files change during a build. Compilation rejects source paths
+that would produce the same output before writing files, and bounds concurrent file work. An
+installed Tailwind CLI's failure includes its actual diagnostic; a missing CLI is reported separately.
 
 ## Help and readiness
 
@@ -362,6 +370,11 @@ clank inspect /secure/path/release.clank.gz
 Deployment validates config, runs the local build without a shell, packages included files plus the exact Clank runtime, verifies the artifact locally, creates and links a project if needed, uploads with a digest/idempotency key, and waits for migration and health. `--name`, `--slug`, `--org`, and `--placement` configure only that automatic first project creation, so login plus one deploy command is sufficient.
 
 `--dry-run` is deliberately offline: it builds and writes a verified artifact without reading a login, creating a project, or contacting a platform. `--json` suppresses human progress output and emits one `clank-deploy-result/1` document with artifact, release, URL, and timing data.
+
+A failed build retains a bounded, terminal-control-free stderr diagnostic even in JSON mode.
+`inspect` reads only a regular artifact file of at most 100 MiB, rejects symbolic links and files
+that change during reading, and verifies the decoded artifact before reporting it. Deployment
+configuration must also be a regular file; filesystem errors retain their original diagnostics.
 
 Before upload the CLI stores a non-secret attempt record in `.clank/deploy-attempt.json`. If the
 connection fails after the platform may have accepted the artifact, or a provider returns

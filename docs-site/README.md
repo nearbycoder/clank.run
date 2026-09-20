@@ -11,6 +11,12 @@ resume, article progress, focus mode, text size, and code wrapping help with lon
 The print view removes navigation and controls while keeping the article readable for paper or
 PDF. Full search supports category filtering, and quick search supports keyboard result navigation.
 
+Search highlights matching words in titles and result excerpts. Long guides expose an on-page
+contents disclosure on mobile, track the current section, and provide keyboard-accessible heading
+permalinks. Code copying reports success only after the browser accepts it; when clipboard access
+is unavailable, the rendered code is selected for manual copying. Markdown tables support escaped
+pipes and pipes inside inline code.
+
 History, bookmarks, and reading preferences stay in this browser. They do not create an account
 or synchronize to a server; storage restrictions leave the public guides available. History and
 saved items can be cleared or removed through their controls.

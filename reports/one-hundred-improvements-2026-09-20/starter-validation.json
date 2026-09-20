@@ -1,0 +1,96 @@
+{
+  "status": "passed",
+  "allCommandsPassed": 12,
+  "contractTestsPassed": 7,
+  "warnings": 4,
+  "starters": [
+    {
+      "starter": "auth-todo",
+      "node": "24.21.0",
+      "commands": {
+        "npm test": 0,
+        "npm run doctor": 0,
+        "npm run deploy:check": 0
+      },
+      "contractTestsPassed": 1,
+      "doctor": "7 passed, 1 warnings, 0 failed.",
+      "warning": "This directory is not linked; the first deploy will create a project.",
+      "artifact": "/tmp/clank-hundred/starters/auth-todo/.clank/artifacts/0d2dc5184871c8a4bf1927b294f9bef38ce9877c388807647b9b63f5a7845b19.clank.gz",
+      "artifactBytes": 1483878,
+      "verifiedArtifactId": "0d2dc5184871c8a4bf1927b294f9bef38ce9877c388807647b9b63f5a7845b19",
+      "frameworkResolvedPath": "/home/nearby/Sites/clank",
+      "logs": {
+        "test": "/tmp/clank-hundred/auth-todo-final-test.log",
+        "doctor": "/tmp/clank-hundred/auth-todo-final-doctor.log",
+        "deploy-check": "/tmp/clank-hundred/auth-todo-final-deploy-check.log"
+      },
+      "coverage": "Registers primary and outsider; outsider cannot read primary todos; verifies SSR agent-action parity. No privileged application role."
+    },
+    {
+      "starter": "approval-queue",
+      "node": "24.21.0",
+      "commands": {
+        "npm test": 0,
+        "npm run doctor": 0,
+        "npm run deploy:check": 0
+      },
+      "contractTestsPassed": 2,
+      "doctor": "6 passed, 1 warnings, 0 failed.",
+      "warning": "This directory is not linked; the first deploy will create a project.",
+      "artifact": "/tmp/clank-hundred/starters/approval-queue/.clank/artifacts/3bef75799f59c952d55b8b70a73fd465158beed745c1050c5a5dca97ba2ebfa7.clank.gz",
+      "artifactBytes": 1477749,
+      "verifiedArtifactId": "3bef75799f59c952d55b8b70a73fd465158beed745c1050c5a5dca97ba2ebfa7",
+      "frameworkResolvedPath": "/home/nearby/Sites/clank",
+      "logs": {
+        "test": "/tmp/clank-hundred/approval-queue-final-test.log",
+        "doctor": "/tmp/clank-hundred/approval-queue-final-doctor.log",
+        "deploy-check": "/tmp/clank-hundred/approval-queue-final-deploy-check.log"
+      },
+      "coverage": "Two accounts; foreign writes denied; reviewer privilege permits cross-account review; self-approval and invalid transitions denied; least-privilege MCP/OAuth and migration/reopen ownership coverage."
+    },
+    {
+      "starter": "customer-portal",
+      "node": "24.21.0",
+      "commands": {
+        "npm test": 0,
+        "npm run doctor": 0,
+        "npm run deploy:check": 0
+      },
+      "contractTestsPassed": 2,
+      "doctor": "6 passed, 1 warnings, 0 failed.",
+      "warning": "This directory is not linked; the first deploy will create a project.",
+      "artifact": "/tmp/clank-hundred/starters/customer-portal/.clank/artifacts/6d7798919c2d7452dd1e66de8f26ba6beb9d95767afb9bb351115b2115a77c1c.clank.gz",
+      "artifactBytes": 1477434,
+      "verifiedArtifactId": "6d7798919c2d7452dd1e66de8f26ba6beb9d95767afb9bb351115b2115a77c1c",
+      "frameworkResolvedPath": "/home/nearby/Sites/clank",
+      "logs": {
+        "test": "/tmp/clank-hundred/customer-portal-final-test.log",
+        "doctor": "/tmp/clank-hundred/customer-portal-final-doctor.log",
+        "deploy-check": "/tmp/clank-hundred/customer-portal-final-deploy-check.log"
+      },
+      "coverage": "Two accounts; foreign writes and forged customer responses denied; staff privilege permits response; version conflict enforced; least-privilege MCP/OAuth and migration/reopen ownership coverage."
+    },
+    {
+      "starter": "booking",
+      "node": "24.21.0",
+      "commands": {
+        "npm test": 0,
+        "npm run doctor": 0,
+        "npm run deploy:check": 0
+      },
+      "contractTestsPassed": 2,
+      "doctor": "6 passed, 1 warnings, 0 failed.",
+      "warning": "This directory is not linked; the first deploy will create a project.",
+      "artifact": "/tmp/clank-hundred/starters/booking/.clank/artifacts/a784bd802a7e9f72addcc0ac2088df5f4c32a725265f69109957c9c31cab5579.clank.gz",
+      "artifactBytes": 1479081,
+      "verifiedArtifactId": "a784bd802a7e9f72addcc0ac2088df5f4c32a725265f69109957c9c31cab5579",
+      "frameworkResolvedPath": "/home/nearby/Sites/clank",
+      "logs": {
+        "test": "/tmp/clank-hundred/booking-final-test.log",
+        "doctor": "/tmp/clank-hundred/booking-final-doctor.log",
+        "deploy-check": "/tmp/clank-hundred/booking-final-deploy-check.log"
+      },
+      "coverage": "Two accounts; foreign mutation denied; duplicate slot and past time rejected; cancellation permits other account to reserve; cross-runtime slot/ownership and least-privilege MCP/OAuth coverage. No privileged application role."
+    }
+  ]
+}

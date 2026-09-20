@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { cp, mkdir, readFile, readdir, rename, rm, watch, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { access, cp, mkdir, readFile, readdir, rename, rm, watch, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compile } from "./compiler.mjs";
 
 const args = process.argv.slice(2);
@@ -115,7 +115,7 @@ const tailwindInput = option("tailwind", null);
 
 const inside = (parent, child) => {
   const path = relative(parent, child);
-  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 };
 if (inside(input, output) || inside(output, input)) {
   console.error("Input and output directories must not overlap.");
@@ -176,6 +176,13 @@ async function compileTailwind() {
   const executableArguments = configured
     ? []
     : [resolve("node_modules", "@tailwindcss", "cli", "dist", "index.mjs")];
+  if (!configured) {
+    try { await access(executableArguments[0]); }
+    catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      throw new Error("Tailwind CLI is unavailable. Run npm install or set CLANK_TAILWIND_EXECUTABLE to the standalone binary.");
+    }
+  }
   const target = join(output, "styles.css");
   await writeTargetAtomically(target, (temporaryPath) => new Promise((resolvePromise, reject) => {
     const child = spawn(executable, [
@@ -201,21 +208,40 @@ async function compileTailwind() {
     });
     child.once("exit", (code, signal) => code === 0
       ? resolvePromise()
-      : reject(new Error(
-          configured
-            ? `Tailwind build exited with ${code ?? signal}.`
-            : "Tailwind CLI is unavailable. Run npm install or set CLANK_TAILWIND_EXECUTABLE to the standalone binary.",
-        )));
+      : reject(new Error(`Tailwind build exited with ${code ?? signal}.`)));
   }));
 }
 
 async function build() {
   const started = performance.now();
-  await mkdir(output, { recursive: true });
   const files = await filesUnder(input);
-  const expectedOutputs = new Set(files.map(outputFor));
+  const sourcesByOutput = new Map();
+  for (const path of files) {
+    const target = outputFor(path);
+    const previous = sourcesByOutput.get(target);
+    if (previous) {
+      throw new Error(`Output collision: ${relative(input, previous)} and ${relative(input, path)} both produce ${relative(output, target)}.`);
+    }
+    sourcesByOutput.set(target, path);
+  }
+  const expectedOutputs = new Set(sourcesByOutput.keys());
   if (resolvedTailwindInput) expectedOutputs.add(join(output, "styles.css"));
-  await Promise.all(files.map(compileFile));
+  await mkdir(output, { recursive: true });
+  // Limit open files and temporary writes, and settle every worker before the
+  // build reports failure so a subsequent watch build cannot overlap it.
+  let nextFile = 0;
+  let failed = false;
+  let failure;
+  await Promise.all(Array.from({ length: Math.min(16, files.length) }, async () => {
+    while (!failed && nextFile < files.length) {
+      const path = files[nextFile++];
+      try { await compileFile(path); }
+      catch (error) {
+        if (!failed) { failed = true; failure = error; }
+      }
+    }
+  }));
+  if (failed) throw failure;
   await compileTailwind();
   for (const path of await filesUnder(output)) {
     if (!path.includes(".clank-build-") && !expectedOutputs.has(path)) await rm(path, { force: true });
@@ -233,11 +259,22 @@ try {
 if (command === "watch") {
   console.log(`Watching ${input}`);
   let queued;
-  for await (const event of watch(input, { recursive: true })) {
-    if (event.filename && !/\.(?:tsx?|html|css|json|svg)$/.test(event.filename)) continue;
+  let rebuilding = false;
+  let dirty = false;
+  const rebuild = async () => {
+    if (rebuilding) { dirty = true; return; }
+    rebuilding = true;
+    do {
+      dirty = false;
+      try { await build(); }
+      catch (error) { console.error(`clank: ${error instanceof Error ? error.message : String(error)}`); }
+    } while (dirty);
+    rebuilding = false;
+  };
+  // Every source entry is copied or compiled. Directory events and arbitrary
+  // static extensions must trigger the same rebuild as TypeScript changes.
+  for await (const _event of watch(input, { recursive: true })) {
     clearTimeout(queued);
-    queued = setTimeout(() => void build().catch((error) => {
-      console.error(`clank: ${error instanceof Error ? error.message : String(error)}`);
-    }), 40);
+    queued = setTimeout(() => void rebuild(), 40);
   }
 }

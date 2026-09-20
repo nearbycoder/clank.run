@@ -24,6 +24,9 @@ type Rendered = string | Promise<string>;
 interface SSRContext {
   contexts: Map<symbol, unknown>;
   markers: boolean;
+  selection?: { values: Set<string>; multiple: boolean; matched: boolean };
+  selectionBefore?: Rendered;
+  text?: Rendered[];
 }
 
 /** Renders Clank TSX/VNodes to escaped HTML without requiring a DOM. */
@@ -90,12 +93,22 @@ function renderValue(input: Renderable, context: SSRContext): Rendered {
     if (isKeyedBlock(input)) return renderKeyed(input, context);
     if (isPortalBlock(input)) return renderPortal(input, context);
     if (typeof input === "function") return renderDynamic(input as () => Renderable, context);
-    if (input instanceof Promise) return renderPromise(input as Promise<unknown>, context);
-    if (Array.isArray(input)) return joinRendered(input.map((entry) => renderValue(entry, context)));
+    if (input instanceof Promise) {
+      if (!context.text) return renderPromise(input as Promise<unknown>, context);
+      const text: Rendered[] = [];
+      const rendered = renderPromise(input as Promise<unknown>, { ...context, text });
+      context.text.push(rendered.then(() => joinRendered(text)));
+      return rendered;
+    }
+    if (Array.isArray(input)) return renderSiblings(input, renderValue, context);
     if (isVNode(input)) return renderVNode(input, context);
     if (input === null || input === undefined || input === false || input === true) return context.markers ? "<!--clank-->" : "";
-    if (typeof input === "string" || typeof input === "number" || typeof input === "bigint") return escapeText(String(input));
+    if (typeof input === "string" || typeof input === "number" || typeof input === "bigint") {
+      context.text?.push(String(input));
+      return escapeText(String(input));
+    }
     if (typeof Node !== "undefined" && input instanceof Node) {
+      context.text?.push(input.textContent ?? "");
       return input instanceof Element ? input.outerHTML : escapeText(input.textContent ?? "");
     }
     throw new TypeError(`Cannot server-render value: ${String(input)}`);
@@ -119,6 +132,19 @@ function joinRendered(values: Rendered[]): Rendered {
     : Promise.all(values).then((parts) => parts.join(""));
 }
 
+function renderSiblings<T>(values: T[], render: (value: T, context: SSRContext) => Rendered, context: SSRContext): Rendered {
+  const ordered = context.selection && !context.selection.multiple;
+  let previous = context.selectionBefore;
+  return joinRendered(values.map((value) => {
+    const child = ordered ? { ...context, selectionBefore: previous } : context;
+    const rendered = render(value, child);
+    // Start all children now, including their rejection handlers. Only a
+    // single select's selection decisions wait for preceding DOM siblings.
+    if (ordered) previous = previous instanceof Promise ? Promise.all([previous, rendered]).then(() => "", () => "") : rendered;
+    return rendered;
+  }));
+}
+
 function wrapRendered(content: Rendered, before: string, after: string): Rendered {
   return typeof content === "string" ? before + content + after : content.then((value) => before + value + after);
 }
@@ -133,10 +159,10 @@ function renderKeyed(block: KeyedBlock<any>, context: SSRContext): Rendered {
   if (!Array.isArray(values)) throw new TypeError("For expects an array during server rendering.");
   const content = values.length === 0
     ? renderValue(resolveReactive(block.fallback ?? null), context)
-    : joinRendered(values.map((item, index) => {
-      try { return renderValue(block.renderItem(item, () => index), context); }
+    : renderSiblings(values.map((item, index) => ({ item, index })), ({ item, index }, childContext) => {
+      try { return renderValue(block.renderItem(item, () => index), childContext); }
       catch (error) { return Promise.reject(error); }
-    }));
+    }, context);
   return context.markers ? wrapRendered(content, "<!--clank:for-->", "<!--clank:/for-->") : content;
 }
 
@@ -174,10 +200,18 @@ function renderElement(vnode: VNode, context: SSRContext): Rendered {
   const attributes = new Map<string, string | true>();
   let baseClassName = "";
   let classListName = "";
+  let hasValue = false;
+  let controlValue: unknown;
 
   for (const [property, raw] of Object.entries(props)) {
     if (property === "children" || property === "key" || property === "ref" || property === "use" || property === "dangerouslySetInnerHTML") continue;
     if (/^on(?::|[a-z])/i.test(property)) continue;
+    if ((lowerTag === "textarea" || lowerTag === "select") && (property === "value" || property === "bind:value")) {
+      hasValue = true;
+      controlValue = resolveReactive(raw);
+      if (property === "value" && controlValue === false) controlValue = "";
+      continue;
+    }
     if (property === "class" || property === "className") {
       baseClassName = normalizeClass(resolveReactive(raw));
       continue;
@@ -222,16 +256,51 @@ function renderElement(vnode: VNode, context: SSRContext): Rendered {
   )].join(" ");
   if (className) attributes.set("class", className);
 
-  const serialized = [...attributes].map(([name, value]) => value === true
+  const opening = () => `<${tag}${[...attributes].map(([name, value]) => value === true
     ? ` ${name}`
-    : ` ${name}="${escapeAttribute(value)}"`).join("");
-  if (VOID_ELEMENTS.has(lowerTag)) return `<${tag}${serialized}>`;
+    : ` ${name}="${escapeAttribute(value)}"`).join("")}>`;
+  if (VOID_ELEMENTS.has(lowerTag)) return opening();
+
+  if (lowerTag === "textarea" && hasValue) {
+    const text = String(controlValue ?? "");
+    context.text?.push(text);
+    // HTML parsing removes one leading line feed from textarea content.
+    return `${opening()}${/^[\r\n]/.test(text) ? "\n" : ""}${escapeText(text)}</${tag}>`;
+  }
+
+  let childContext = context;
+  if (lowerTag === "select") {
+    const selected = attributes.has("multiple") && Array.isArray(controlValue)
+      ? controlValue.map(String)
+      : [String(controlValue ?? "")];
+    childContext = { ...context, selection: hasValue ? { values: new Set(selected), multiple: attributes.has("multiple"), matched: false } : undefined, selectionBefore: undefined };
+  }
+  const optionText: Rendered[] | undefined = lowerTag === "option" && context.selection && !attributes.has("value") ? [] : undefined;
+  if (optionText) childContext = { ...childContext, text: optionText };
 
   const rawHTML = props.dangerouslySetInnerHTML;
   const children = rawHTML === undefined
-    ? renderValue(props.children as Renderable[], context)
+    ? renderValue(props.children as Renderable[], childContext)
     : String(resolveReactive(rawHTML && typeof rawHTML === "object" ? (rawHTML as { __html?: unknown }).__html : rawHTML) ?? "");
-  return wrapRendered(children, `<${tag}${serialized}>`, `</${tag}>`);
+  const finish = (content: Rendered, text?: string) => {
+    if (lowerTag === "option" && context.selection) {
+      const explicit = attributes.get("value");
+      const value = explicit === undefined ? (text ?? "").replace(/[\t\n\f\r ]+/g, " ").replace(/^ | $/g, "") : explicit === true ? "" : explicit;
+      if (context.selection.values.has(value) && (context.selection.multiple || !context.selection.matched)) {
+        attributes.set("selected", true);
+        context.selection.matched = true;
+      } else attributes.delete("selected");
+    }
+    return wrapRendered(content, opening(), `</${tag}>`);
+  };
+  const orderedFinish = (content: Rendered, text?: string): Rendered => lowerTag === "option" && context.selectionBefore instanceof Promise
+    ? Promise.all([context.selectionBefore, content]).then(([, content]) => finish(content, text))
+    : finish(content, text);
+  if (optionText) {
+    const text = joinRendered(optionText);
+    return typeof text === "string" ? orderedFinish(children, text) : Promise.all([children, text]).then(([content, text]) => orderedFinish(content, text));
+  }
+  return orderedFinish(children);
 }
 
 function resolveReactive(input: unknown): any {

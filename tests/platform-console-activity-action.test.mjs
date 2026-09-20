@@ -7,7 +7,7 @@ import { platformConsolePage } from "../dist/platform-console.js";
 
 const event = (id, action, email = "owner@example.test") => Object.freeze({ id, action, actor: { id: "user-1", email }, project: null, organization: null, metadata: {}, createdAt: 1000 });
 const events = Object.freeze([event(30, "release.deploy"), event(20, "token.revoke"), event(10, "release.deploy", "member@example.test")]);
-const ids = rows => rows.map(row => row.id);
+const ids = rows => Array.from(rows, row => row.id);
 
 test("activity action choices are distinct, sorted, exact, and limited to loaded events", () => {
   const filtered = filterConsoleActivityAction(events, "release.deploy");
@@ -35,7 +35,7 @@ test("activity action values are bounded without trimming or accidentally matchi
 });
 
 function node(tagName, className, textContent) {
-  return { tagName, className, textContent, value: "", hidden: false, children: [], append(...children) { this.children.push(...children); }, focus() {} };
+  return { tagName, className, textContent, value: "", hidden: false, dataset: {}, children: [], append(...children) { this.children.push(...children); }, setAttribute(name, value) { this[name] = value; }, focus() {} };
 }
 
 async function fixture() {
@@ -47,7 +47,7 @@ async function fixture() {
     q: selector => { if (!nodes.has(selector)) nodes.set(selector, node("div")); return nodes.get(selector); },
     clear: element => { element.children = []; }, el: node, formatDate: String,
   };
-  const functions = ["renderActivity", "updateActivitySearch", "loadActivity"].map(name => html.match(new RegExp(`(?:async )?function ${name}\\([^\\n]+`))[0]).join("\n");
+  const functions = ["activityScopeKey", "syncActivityScope", "renderActivity", "updateActivitySearch", "loadActivity"].map(name => html.match(new RegExp(`(?:async )?function ${name}\\([^\\n]+`))[0]).join("\n");
   const handler = html.split("\n").find(line => line.startsWith('q("#activity-action").onchange='));
   runInNewContext(`${functions}\n${handler}\nrenderActivity()`, context);
   return { html, state, context };
@@ -78,7 +78,7 @@ test("the action selector composes with search and keeps all loaded action choic
   assert.equal(context.q("#activity-count").textContent, "1 of 3 loaded events shown");
 });
 
-test("older pages add action choices; refresh preserves a valid choice and resets a missing choice", async () => {
+test("older pages add action choices; head refresh retains loaded choices and the selected filter", async () => {
   const { state, context } = await fixture();
   const requests = [];
   const pages = [
@@ -98,11 +98,12 @@ test("older pages add action choices; refresh preserves a valid choice and reset
   await runInNewContext("loadActivity(true)", context);
   assert.equal(state.activityAction, "backup.create");
   assert.equal(selector.value, "backup.create");
-  assert.equal(context.q("#activity-count").textContent, "1 of 2 loaded events shown");
+  assert.equal(context.q("#activity-count").textContent, "2 of 6 loaded events shown");
   await runInNewContext("loadActivity(true)", context);
-  assert.equal(state.activityAction, "");
-  assert.equal(selector.value, "");
-  assert.equal(context.q("#activity-count").textContent, "1 of 1 loaded events shown");
+  assert.equal(state.activityAction, "backup.create");
+  assert.equal(selector.value, "backup.create");
+  assert.equal(context.q("#activity-count").textContent, "2 of 7 loaded events shown");
+  assert.equal(state.activityNextBefore, 5);
   assert.deepEqual(requests, ["/api/audit?limit=50&before=10", "/api/audit?limit=50", "/api/audit?limit=50"]);
 });
 

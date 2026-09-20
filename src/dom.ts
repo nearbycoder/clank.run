@@ -149,8 +149,8 @@ export function render(root: Element | DocumentFragment, view: Renderable): Clea
     onCleanup(() => mounted.dispose());
   });
   return () => {
-    disposeRoot();
-    while (root.firstChild) root.removeChild(root.firstChild);
+    try { disposeRoot(); }
+    finally { while (root.firstChild) root.removeChild(root.firstChild); }
   };
 }
 
@@ -174,8 +174,8 @@ export function hydrate(root: Element, view: Renderable): Cleanup {
   }
   root.setAttribute("data-clank-hydration", "attached");
   return () => {
-    disposeRoot();
-    while (root.firstChild) root.removeChild(root.firstChild);
+    try { disposeRoot(); }
+    finally { while (root.firstChild) root.removeChild(root.firstChild); }
   };
 }
 
@@ -265,7 +265,7 @@ function hydrateFragment(parent: Node, values: Renderable[], cursor: HydrationCu
   return {
     get nodes() { return mounted.flatMap((entry) => entry.nodes); },
     dispose(remove = true) {
-      for (const entry of mounted.splice(0).reverse()) entry.dispose(remove);
+      cleanupAll(mounted.splice(0).reverse().map((entry) => () => entry.dispose(remove)));
     },
   };
 }
@@ -380,6 +380,13 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
   const deferred: Array<[string, unknown]> = [];
   let children: Mounted | undefined;
   const ref = vnode.props.ref;
+  let refAssigned = false;
+  const clearRef = () => {
+    if (!refAssigned) return;
+    refAssigned = false;
+    if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === node) (ref as ReactiveSignal<Element | null>).value = null;
+    if (typeof ref === "function") (ref as (element: Element | null) => void)(null);
+  };
   try {
     const classCleanup = bindClassProperties(node, vnode.props);
     if (classCleanup) cleanups.push(classCleanup);
@@ -394,7 +401,7 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
       if (cleanup) cleanups.push(cleanup);
     }
     const rawHTML = vnode.props.dangerouslySetInnerHTML;
-    if (rawHTML === undefined) {
+    if (rawHTML === undefined && !hasTextareaValue(node, vnode.props)) {
       const childCursor: HydrationCursor = { node: node.firstChild };
       children = hydrateFragment(node, vnode.props.children as Renderable[], childCursor, { ...context, namespace: childNamespace });
       if (childCursor.node !== null) throw new HydrationMismatch(`Unexpected children in server-rendered <${tag}>.`);
@@ -403,26 +410,26 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
       const cleanup = bindProperty(node, name, value);
       if (cleanup) cleanups.push(cleanup);
     }
-    if (typeof ref === "function") (ref as (element: Element) => void)(node);
-    else if (isSignal(ref)) (ref as ReactiveSignal<Element | null>).value = node;
+    if (typeof ref === "function") {
+      refAssigned = true;
+      (ref as (element: Element) => void)(node);
+    } else if (isSignal(ref)) {
+      refAssigned = true;
+      (ref as ReactiveSignal<Element | null>).value = node;
+    }
   } catch (error) {
     cleanupAfterError(error, [
       () => children?.dispose(false),
-      ...cleanups.reverse(),
-      () => {
-        if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === node) {
-          (ref as ReactiveSignal<Element | null>).value = null;
-        }
-      },
+      ...cleanups.splice(0).reverse(),
+      clearRef,
     ]);
   }
   return simpleMount([node], () => {
-    children?.dispose(false);
-    for (const cleanup of cleanups.reverse()) cleanup();
-    if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === node) {
-      (ref as ReactiveSignal<Element | null>).value = null;
-    }
-    if (typeof ref === "function") (ref as (element: Element | null) => void)(null);
+    cleanupAll([
+      () => children?.dispose(false),
+      ...cleanups.splice(0).reverse(),
+      clearRef,
+    ]);
   });
 }
 
@@ -465,8 +472,8 @@ function simpleMount(nodes: Node[], cleanup?: Cleanup): Mounted {
     dispose(remove = true) {
       if (!active) return;
       active = false;
-      cleanup?.();
-      if (remove) for (const node of nodes) node.parentNode?.removeChild(node);
+      try { cleanup?.(); }
+      finally { if (remove) for (const node of nodes) node.parentNode?.removeChild(node); }
     },
   };
 }
@@ -486,12 +493,26 @@ function cleanupAfterError(error: unknown, cleanups: Cleanup[]): never {
   throw error;
 }
 
+function cleanupAll(cleanups: Cleanup[]): void {
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups) {
+    try { cleanup(); } catch (error) { errors.push(error); }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Multiple Clank DOM cleanup callbacks failed.");
+}
+
 function mountFragment(parent: Node, values: Renderable[], before: Node | null, context: MountContext): Mounted {
-  const mounted = values.map((value) => mountValue(parent, value, before, context));
+  const mounted: Mounted[] = [];
+  try {
+    for (const value of values) mounted.push(mountValue(parent, value, before, context));
+  } catch (error) {
+    cleanupAfterError(error, mounted.reverse().map((entry) => () => entry.dispose()));
+  }
   return {
     get nodes() { return mounted.flatMap((entry) => entry.nodes); },
     dispose(remove = true) {
-      for (const entry of mounted.splice(0).reverse()) entry.dispose(remove);
+      cleanupAll(mounted.splice(0).reverse().map((entry) => () => entry.dispose(remove)));
     },
   };
 }
@@ -686,28 +707,32 @@ function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, 
       nextOrdered.push(entry);
     });
 
-    for (const [key, entry] of entries) if (!next.has(key)) entry.mounted.dispose();
+    const removed = [...entries].filter(([key]) => !next.has(key)).map(([, entry]) => entry);
     entries = next;
     ordered = nextOrdered;
-
-    if (ordered.length === 0) {
-      fallback ??= mountValue(parent, block.fallback ?? null, end, context);
-    } else {
-      fallback?.dispose();
-      fallback = undefined;
-      let cursor: Node = end;
-      for (let index = ordered.length - 1; index >= 0; index--) {
-        const nodes = ordered[index].mounted.nodes;
-        if (nodes.length > 0 && nodes[nodes.length - 1].nextSibling === cursor) {
-          cursor = nodes[0];
-          continue;
+    cleanupAll([
+      ...removed.map((entry) => () => entry.mounted.dispose()),
+      () => {
+        if (ordered.length === 0) {
+          fallback ??= mountValue(parent, block.fallback ?? null, end, context);
+        } else {
+          fallback?.dispose();
+          fallback = undefined;
+          let cursor: Node = end;
+          for (let index = ordered.length - 1; index >= 0; index--) {
+            const nodes = ordered[index].mounted.nodes;
+            if (nodes.length > 0 && nodes[nodes.length - 1].nextSibling === cursor) {
+              cursor = nodes[0];
+              continue;
+            }
+            for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
+              parent.insertBefore(nodes[nodeIndex], cursor);
+              cursor = nodes[nodeIndex];
+            }
+          }
         }
-        for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
-          parent.insertBefore(nodes[nodeIndex], cursor);
-          cursor = nodes[nodeIndex];
-        }
-      }
-    }
+      },
+    ]);
   });
 
   let active = true;
@@ -716,15 +741,19 @@ function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, 
     dispose(remove = true) {
       if (!active) return;
       active = false;
-      stop();
-      fallback?.dispose(remove);
-      for (const entry of ordered.reverse()) entry.mounted.dispose(remove);
-      entries.clear();
-      ordered = [];
-      if (remove) {
-        start.parentNode?.removeChild(start);
-        end.parentNode?.removeChild(end);
-      }
+      cleanupAll([
+        stop,
+        () => fallback?.dispose(remove),
+        ...ordered.reverse().map((entry) => () => entry.mounted.dispose(remove)),
+        () => {
+          entries.clear();
+          ordered = [];
+          if (remove) {
+            start.parentNode?.removeChild(start);
+            end.parentNode?.removeChild(end);
+          }
+        },
+      ]);
     },
   };
 }
@@ -813,27 +842,32 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
         nextOrdered.push(entry);
       });
 
-      for (const [key, entry] of entries) if (!next.has(key)) entry.mounted.dispose();
+      const removed = [...entries].filter(([key]) => !next.has(key)).map(([, entry]) => entry);
       entries = next;
       ordered = nextOrdered;
-      if (ordered.length === 0) {
-        fallback ??= mountValue(parent, block.fallback ?? null, end, context);
-      } else {
-        fallback?.dispose();
-        fallback = undefined;
-        let position: Node = end;
-        for (let index = ordered.length - 1; index >= 0; index--) {
-          const nodes = ordered[index].mounted.nodes;
-          if (nodes.length > 0 && nodes[nodes.length - 1].nextSibling === position) {
-            position = nodes[0];
-            continue;
+      cleanupAll([
+        ...removed.map((entry) => () => entry.mounted.dispose()),
+        () => {
+          if (ordered.length === 0) {
+            fallback ??= mountValue(parent, block.fallback ?? null, end, context);
+          } else {
+            fallback?.dispose();
+            fallback = undefined;
+            let position: Node = end;
+            for (let index = ordered.length - 1; index >= 0; index--) {
+              const nodes = ordered[index].mounted.nodes;
+              if (nodes.length > 0 && nodes[nodes.length - 1].nextSibling === position) {
+                position = nodes[0];
+                continue;
+              }
+              for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
+                parent.insertBefore(nodes[nodeIndex], position);
+                position = nodes[nodeIndex];
+              }
+            }
           }
-          for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
-            parent.insertBefore(nodes[nodeIndex], position);
-            position = nodes[nodeIndex];
-          }
-        }
-      }
+        },
+      ]);
     });
   } catch (error) {
     cleanupAfterError(error, [
@@ -848,15 +882,19 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
     dispose(remove = true) {
       if (!active) return;
       active = false;
-      stop();
-      fallback?.dispose(remove);
-      for (const entry of ordered.reverse()) entry.mounted.dispose(remove);
-      entries.clear();
-      ordered = [];
-      if (remove) {
-        start.parentNode?.removeChild(start);
-        end.parentNode?.removeChild(end);
-      }
+      cleanupAll([
+        stop,
+        () => fallback?.dispose(remove),
+        ...ordered.reverse().map((entry) => () => entry.mounted.dispose(remove)),
+        () => {
+          entries.clear();
+          ordered = [];
+          if (remove) {
+            start.parentNode?.removeChild(start);
+            end.parentNode?.removeChild(end);
+          }
+        },
+      ]);
     },
   };
 }
@@ -1022,38 +1060,53 @@ function mountElement(parent: Node, vnode: VNode, before: Node | null, context: 
     : ownerDocument.createElement(tag);
   const cleanups: Cleanup[] = [];
   const deferred: Array<[string, unknown]> = [];
-  const classCleanup = bindClassProperties(element, vnode.props);
-  if (classCleanup) cleanups.push(classCleanup);
-  for (const [name, value] of Object.entries(vnode.props)) {
-    if (name === "children" || name === "key") continue;
-    if (name === "class" || name === "className" || name === "classList") continue;
-    if (bindingNeedsChildren(element, name)) {
-      deferred.push([name, value]);
-      continue;
-    }
-    const cleanup = bindProperty(element, name, value);
-    if (cleanup) cleanups.push(cleanup);
-  }
-  const rawHTML = vnode.props.dangerouslySetInnerHTML;
-  const children = rawHTML === undefined
-    ? mountFragment(element, vnode.props.children as Renderable[], null, { ...context, namespace: childNamespace })
-    : undefined;
-  for (const [name, value] of deferred) {
-    const cleanup = bindProperty(element, name, value);
-    if (cleanup) cleanups.push(cleanup);
-  }
-  parent.insertBefore(element, before);
+  let children: Mounted | undefined;
   const ref = vnode.props.ref;
-  if (typeof ref === "function") (ref as (node: Element) => void)(element);
-  else if (isSignal(ref)) (ref as ReactiveSignal<Element | null>).value = element;
-  return simpleMount([element], () => {
-    children?.dispose(false);
-    for (const cleanup of cleanups.reverse()) cleanup();
-    if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === element) {
-      (ref as ReactiveSignal<Element | null>).value = null;
-    }
+  let refAssigned = false;
+  const clearRef = () => {
+    if (!refAssigned) return;
+    refAssigned = false;
+    if (isSignal(ref) && (ref as ReactiveSignal<Element | null>).peek() === element) (ref as ReactiveSignal<Element | null>).value = null;
     if (typeof ref === "function") (ref as (node: Element | null) => void)(null);
-  });
+  };
+  try {
+    const classCleanup = bindClassProperties(element, vnode.props);
+    if (classCleanup) cleanups.push(classCleanup);
+    for (const [name, value] of Object.entries(vnode.props)) {
+      if (name === "children" || name === "key") continue;
+      if (name === "class" || name === "className" || name === "classList") continue;
+      if (bindingNeedsChildren(element, name)) {
+        deferred.push([name, value]);
+        continue;
+      }
+      const cleanup = bindProperty(element, name, value);
+      if (cleanup) cleanups.push(cleanup);
+    }
+    const rawHTML = vnode.props.dangerouslySetInnerHTML;
+    children = rawHTML === undefined && !hasTextareaValue(element, vnode.props)
+      ? mountFragment(element, vnode.props.children as Renderable[], null, { ...context, namespace: childNamespace })
+      : undefined;
+    for (const [name, value] of deferred) {
+      const cleanup = bindProperty(element, name, value);
+      if (cleanup) cleanups.push(cleanup);
+    }
+    parent.insertBefore(element, before);
+    if (typeof ref === "function") {
+      refAssigned = true;
+      (ref as (node: Element) => void)(element);
+    } else if (isSignal(ref)) {
+      refAssigned = true;
+      (ref as ReactiveSignal<Element | null>).value = element;
+    }
+  } catch (error) {
+    cleanupAfterError(error, [
+      () => children?.dispose(), ...cleanups.splice(0).reverse(), clearRef,
+      () => element.parentNode?.removeChild(element),
+    ]);
+  }
+  return simpleMount([element], () => cleanupAll([
+    () => children?.dispose(false), ...cleanups.splice(0).reverse(), clearRef,
+  ]));
 }
 
 function bindingNeedsChildren(element: Element, name: string): boolean {
@@ -1062,6 +1115,10 @@ function bindingNeedsChildren(element: Element, name: string): boolean {
       || name === "selectedIndex"
       || name === "bind:value"
       || name === "bind:selectedIndex");
+}
+
+function hasTextareaValue(element: Element, props: Record<string, unknown>): boolean {
+  return element.localName === "textarea" && (Object.hasOwn(props, "value") || Object.hasOwn(props, "bind:value"));
 }
 
 function bindClassProperties(element: Element, props: Record<string, unknown>): Cleanup | undefined {
@@ -1105,11 +1162,17 @@ function bindProperty(element: Element, name: string, input: unknown): Cleanup |
   if (name === "ref") return undefined;
   if (name === "use") {
     const actions = Array.isArray(input) ? input : [input];
-    const cleanups = actions
-      .filter((entry): entry is (node: Element) => void | Cleanup => typeof entry === "function")
-      .map((action) => action(element))
-      .filter((entry): entry is Cleanup => typeof entry === "function");
-    return () => cleanups.reverse().forEach((cleanup) => cleanup());
+    const cleanups: Cleanup[] = [];
+    try {
+      for (const action of actions) {
+        if (typeof action !== "function") continue;
+        const cleanup = action(element);
+        if (typeof cleanup === "function") cleanups.push(cleanup);
+      }
+    } catch (error) {
+      cleanupAfterError(error, cleanups.splice(0).reverse());
+    }
+    return () => cleanupAll(cleanups.splice(0).reverse());
   }
   if (name.startsWith("bind:")) return bindTwoWay(element, name.slice(5), input);
   if (isEventProperty(name)) {
@@ -1131,6 +1194,12 @@ function bindProperty(element: Element, name: string, input: unknown): Cleanup |
       setProperty(element, name, input);
       return undefined;
     }
+  }
+  if (element.localName === "select" && name === "value") {
+    const apply = () => setProperty(element, name, resolve(input));
+    const stop = effect(apply);
+    const stopObserving = observeSelectOptions(element, () => resolve(input));
+    return () => { stopObserving(); stop(); };
   }
   if (name === "style" && (isExpression(input) || isSignal(input) || typeof input === "function")) {
     return bindDynamicStyle(element as HTMLElement, () => resolve(input));
@@ -1216,14 +1285,39 @@ function bindTwoWay(element: Element, property: string, input: unknown): Cleanup
   if (!isSignal(input)) throw new TypeError(`bind:${property} expects a signal.`);
   const target = element as Element & Record<string, unknown>;
   const state = input as ReactiveSignal<unknown>;
-  const stop = effect(() => { target[property] = state.value; });
+  const apply = () => {
+    const value = state.value;
+    if (!setMultipleSelectValue(element, property, value)) target[property] = value;
+  };
+  const stop = effect(apply);
+  const stopObserving = property === "value" ? observeSelectOptions(element, () => state.peek()) : () => {};
   const eventName = property === "value" ? "input" : "change";
-  const listener = () => { state.value = target[property]; };
+  const listener = () => {
+    state.value = property === "value" && element.localName === "select" && (element as HTMLSelectElement).multiple && Array.isArray(state.peek())
+      ? [...(element as HTMLSelectElement).selectedOptions].map((option) => option.value)
+      : target[property];
+  };
   element.addEventListener(eventName, listener);
   return () => {
     stop();
+    stopObserving();
     element.removeEventListener(eventName, listener);
   };
+}
+
+function setMultipleSelectValue(element: Element, property: string, value: unknown): boolean {
+  if (property !== "value" || element.localName !== "select" || !(element as HTMLSelectElement).multiple || !Array.isArray(value)) return false;
+  const selected = new Set(value.map(String));
+  for (const option of (element as HTMLSelectElement).options) option.selected = selected.has(option.value);
+  return true;
+}
+
+function observeSelectOptions(element: Element, read: () => unknown): Cleanup {
+  const Observer = element.ownerDocument?.defaultView?.MutationObserver ?? globalThis.MutationObserver;
+  if (element.localName !== "select" || !Observer) return () => {};
+  const observer = new Observer(() => { setMultipleSelectValue(element, "value", read()); });
+  observer.observe(element, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["value", "multiple"] });
+  return () => observer.disconnect();
 }
 
 function bindStyle(element: HTMLElement, styles: Record<string, unknown>): Cleanup {
@@ -1292,6 +1386,7 @@ const attributeAliases: Record<string, string> = {
 };
 
 function setProperty(element: Element, property: string, value: unknown): void {
+  if (setMultipleSelectValue(element, property, value)) return;
   if (property === "dangerouslySetInnerHTML") {
     const html = typeof value === "object" && value ? (value as { __html?: unknown }).__html : value;
     const next = html === null || html === undefined ? "" : String(html);
@@ -1333,6 +1428,9 @@ function setProperty(element: Element, property: string, value: unknown): void {
     return;
   }
   if (value === true) {
+    if ((property === "checked" || property === "selected") && property in element) {
+      (element as Element & Record<string, unknown>)[property] = true;
+    }
     if (!element.hasAttribute(name)) element.setAttribute(name, "");
     return;
   }

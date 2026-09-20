@@ -119,6 +119,8 @@ Rules:
   contract for explicit `clank preview deploy --data=sanitized` branches. It is never read from the
   preview artifact, and raw database copying remains unavailable.
 - `jobs.entry` is one compiled provider-neutral worker/scheduler module inside an included path.
+- The configured background entry must be present in the artifact, including scheduler-only
+  deployments with zero workers. It may also be the web entry when the application supports both roles.
 - `jobs.workers` controls independent processes; `jobs.concurrency` controls handlers per worker.
 - `jobs.queues` is an optional allowlist and `jobs.scheduler` enables one independently leased
   cron scheduler.

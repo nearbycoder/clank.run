@@ -45,6 +45,9 @@ stop();
 
 The previous cleanup runs before the next effect execution and again when disposed. Effects are synchronous. Use an async resource for request state and stale-result protection instead of making an effect callback itself async.
 
+If an effect's initial execution throws, including an initial run deferred until a batch ends,
+its subscriptions and registered cleanup are released before the original error is rethrown.
+
 ## Batches and transactions
 
 ```ts
@@ -106,6 +109,12 @@ const serializable = snapshot(state);
 ```
 
 Stores are lazy deep proxies. Each accessed property gets an independent signal, and object-key iteration has its own dependency. `toRaw()` returns the original object for an individual proxy; `snapshot()` recursively returns plain current values.
+
+Passing an existing store proxy to `store()` preserves its identity. Array index writes update
+tracked length, and shortening an array updates removed values and key iteration. Native object
+rules still apply: rejected writes or deletes do not publish values that the object did not accept.
+Creating an own property over an inherited value updates own-key consumers even when its value
+is unchanged; deleting it reveals the inherited value again.
 
 ## Async resources
 
