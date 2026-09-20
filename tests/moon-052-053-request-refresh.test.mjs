@@ -24,7 +24,11 @@ const { filterConsoleProjectStatus } = await import(pathToFileURL(join(directory
 const { filterConsoleProjectWorkspace } = await import(pathToFileURL(join(directory, "platform-console-project-workspace.js")));
 const html = await platformConsolePage("http://localhost", { user: null, csrfToken: null }, "", false, false).text();
 const lines = html.split("\n");
-new Script(html.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/iu)[1]);
+// This is the exact trusted fixture emitted by platformConsolePage, not arbitrary HTML.
+const scriptStart = html.indexOf(">const initial=");
+const scriptEnd = html.indexOf("</script>", scriptStart);
+assert.ok(scriptStart >= 0 && scriptEnd > scriptStart, "Generated console script is present");
+new Script(html.slice(scriptStart + 1, scriptEnd));
 const select = prefix => { const value = lines.find(line => line.startsWith(prefix)); assert.ok(value, prefix); return value; };
 const apiSource = select("async function api(");
 const refreshSource = ["renderAutoRefresh", "startRefresh", "refreshVisibleView"].map(name => select(`function ${name}(`)).concat(select('document.addEventListener("visibilitychange"'), select('q("#auto-refresh").onclick=')).join("\n");

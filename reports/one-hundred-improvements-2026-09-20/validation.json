@@ -58,8 +58,8 @@
     "GitHub CI results are available on the pull request."
   ],
   "testHarnessFollowup": {
-    "reason": "CodeQL flagged case-sensitive script-tag expressions in three test files.",
-    "change": "Extract generated fixture script tags case-insensitively and detect script opening tags with attributes in the escaping assertion.",
+    "reason": "CodeQL flagged script-tag expressions in three test files.",
+    "change": "Extract the trusted generated console script using its exact fixture boundaries with presence assertions; detect script opening tags with attributes case-insensitively in the escaping assertion.",
     "targetedTestsPassed": 32,
     "targetedTestsFailed": 0,
     "log": "/tmp/clank-hundred/codeql-test-followup.log"
