@@ -80,7 +80,7 @@ test("the frame is measured on mount and resize, and observer cleanup prevents s
 
 test("SSR exposes labeled bounded width editing and keeps preset selection accurate", async () => {
   for (const width of ["responsive", "mobile", "tablet", "desktop", 280, 1600]) {
-    const html = (await renderToString(h(PreviewWidthControls, { value: () => width, onChange() { throw new Error("SSR must not change the setting"); } }))).replace(/<!--[^]*?-->/gu, "");
+    const html = (await renderToString(h(PreviewWidthControls, { value: () => width, onChange() { throw new Error("SSR must not change the setting"); } }), { markers: false }));
     assert.match(html, /<label for="preview-custom-width">Width \(px\)<\/label>/u);
     assert.match(html, /id="preview-custom-width"[^>]*type="number"[^>]*min="280"[^>]*max="1600"[^>]*step="1"/u);
     assert.match(html, /aria-describedby="preview-width-hint preview-width-error"/u);
@@ -93,7 +93,7 @@ test("SSR exposes labeled bounded width editing and keeps preset selection accur
 });
 
 test("direct component SSR uses a stable fluid default and does not claim a browser measurement", async () => {
-  const html = (await renderToString(h(DesignStudio, { initialView: "switch", initialTheme: "clank", frameworkVersion: "test" }))).replace(/<!--[^]*?-->/gu, "");
+  const html = (await renderToString(h(DesignStudio, { initialView: "switch", initialTheme: "clank", frameworkVersion: "test" }), { markers: false }));
   assert.match(html, /<div(?=[^>]*class="preview-frame")(?=[^>]*data-viewport="responsive")(?=[^>]*style="--preview-width:100%")[^>]*>/u);
   assert.match(html, /Fluid · fits available space/u);
   assert.doesNotMatch(html, /\d+px rendered/u);

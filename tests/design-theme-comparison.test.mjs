@@ -62,7 +62,7 @@ test("comparison defaults to the selected preset and a distinct preset with labe
   for (const selected of CLANK_THEME_PRESETS) {
     const other = CLANK_THEME_PRESETS.find((theme) => theme.id !== selected.id);
     const expected = compareThemeTokens(selected, other);
-    const html = (await renderToString(h(ThemeComparison, { theme: () => selected }))).replace(/<!--[^]*?-->/gu, "");
+    const html = (await renderToString(h(ThemeComparison, { theme: () => selected }), { markers: false }));
     assert.match(html, /<label[^>]*for="theme-comparison-left"/u);
     assert.match(html, /<label[^>]*for="theme-comparison-right"/u);
     assert.match(html, /<select[^>]*id="theme-comparison-left"/u);

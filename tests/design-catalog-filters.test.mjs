@@ -66,7 +66,7 @@ test("invalid filter values recover independently, while reset restores the comp
 });
 
 test("SSR exposes labeled collapsed filters, live count, reset, current story, and shared-setting links", async () => {
-  const html = (await renderToString(h(DesignStudio, { initialView: "switch", initialTheme: "midnight", initialSettings: { theme: "midnight", width: "mobile", panel: "anatomy", grid: false, outlines: false }, frameworkVersion: "test" }))).replace(/<!--[^]*?-->/gu, "");
+  const html = (await renderToString(h(DesignStudio, { initialView: "switch", initialTheme: "midnight", initialSettings: { theme: "midnight", width: "mobile", panel: "anatomy", grid: false, outlines: false }, frameworkVersion: "test" }), { markers: false }));
   assert.match(html, /<details class="catalog-filters"><summary>Filter components /u);
   for (const name of ["module", "form", "source"]) {
     assert.match(html, new RegExp(`<label for="catalog-${name}">`));

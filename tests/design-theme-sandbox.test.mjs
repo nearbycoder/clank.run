@@ -109,7 +109,7 @@ test("token reset, reset all, and base changes have distinct predictable scope",
 
 test("sandbox SSR labels editor controls, announces errors, and limits theme variables to the sample", async () => {
   for (const base of CLANK_THEME_PRESETS) {
-    const html = (await renderToString(h(ThemeSandbox, { theme: () => base }))).replace(/<!--[^]*?-->/gu, "");
+    const html = (await renderToString(h(ThemeSandbox, { theme: () => base }), { markers: false }));
     for (const id of ["theme-sandbox-base", "theme-sandbox-token", "theme-sandbox-value", "theme-sandbox-sample-input"]) {
       assert.match(html, new RegExp(`<label[^>]*for="${id}"`));
       assert.match(html, new RegExp(`<(?:select|input)[^>]*id="${id}"`));

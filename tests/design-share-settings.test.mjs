@@ -70,7 +70,7 @@ test("copy status reports success only after clipboard writing succeeds", async 
 
 test("SSR uses shared settings for controls, the frame, inspector, theme, and ordinary navigation links", async () => {
   const initialSettings = parsePreviewSettings("?theme=midnight&width=523&grid=1&outlines=1&panel=code");
-  const html = (await renderToString(h(DesignStudio, { initialView: "switch", initialTheme: "clank", initialSettings, frameworkVersion: "test" }))).replace(/<!--[^]*?-->/gu, "");
+  const html = (await renderToString(h(DesignStudio, { initialView: "switch", initialTheme: "clank", initialSettings, frameworkVersion: "test" }), { markers: false }));
   assert.match(html, /data-theme="midnight"/u);
   assert.match(html, /<div(?=[^>]*class="preview-stage")(?=[^>]*data-grid="")(?=[^>]*data-outlines="")[^>]*>/u);
   assert.match(html, /data-viewport="custom" style="--preview-width:523px"/u);
