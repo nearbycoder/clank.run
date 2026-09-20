@@ -872,7 +872,11 @@ test("deployed framework auth receives its exact managed public origin", async (
     );
     assert.equal(metrics.comparison.previous.requests, 0);
     assert.equal(metrics.comparison.change.requestsPercent, null);
-    assert.ok(metrics.summary.peakRequestsPerMinute >= 2);
+    // The requests may straddle a minute boundary on a busy CI runner.
+    assert.equal(
+      metrics.summary.peakRequestsPerMinute,
+      Math.max(...metrics.points.map((point) => point.requests)),
+    );
     assert.equal(metrics.summary.lastRequestAt % 60_000, 0);
     assert.equal(Object.hasOwn(metrics.summary, "paths"), false);
 

@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.23.0 - 2026-09-20
+
 - Deliver 100 practical framework, dashboard, documentation, Studio, Synth, starter, and CLI
   improvements; the numbered implementation and validation ledger is in
   `reports/one-hundred-improvements-2026-09-20/` in the source repository.
@@ -25,6 +27,15 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Add Studio token inspection, contrast calculation, theme export/comparison/sandbox tools,
   custom preview widths, shareable settings, catalog filters, keyboard guides, and specimen reset.
 - Restrict dashboard touch zoom and use 16px mobile form controls to avoid focus-triggered zoom.
+
+- Include the previously merged authentication, delegated-token, tenant-access, file-serving,
+  deployment-packaging, rendered-URL, and job-isolation hardening. Legacy signed files download
+  as attachments; unsafe private storage paths fail closed; job deduplication is owner-scoped;
+  removed workspace members lose creator fallback access.
+- Reduce repeated SQLite document-write, dashboard quota, and server-rendering work while
+  preserving ownership, validation, history, and component cleanup.
+- Make the resilience test worker avoid empty write transactions and tolerate bounded SQLite
+  contention so release verification exercises fault recovery reliably under coverage.
 
 ## 0.22.1 - 2026-09-07
 
