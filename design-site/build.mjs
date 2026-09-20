@@ -68,7 +68,7 @@ for (const path of await filesUnder(vendorRoot)) {
 }
 
 function versionVendorImports(javascript) {
-  return javascript.replace(/(["'])\.\.\/vendor\/([^"'?]+\.js)\1/gu, (_match, quote, path) => `${quote}../vendor/${path}?v=${vendorVersion}${quote}`);
+  return javascript.replace(/(["'])((?:\.\.\/)+vendor\/[^"'?]+\.js)\1/gu, (_match, quote, path) => `${quote}${path}?v=${vendorVersion}${quote}`);
 }
 
 for (const path of await filesUnder(sourceRoot)) {

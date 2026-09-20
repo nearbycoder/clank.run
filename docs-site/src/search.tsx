@@ -6,8 +6,19 @@ export interface SearchEntry {
   slug: string;
   title: string;
   description: string;
+  groupId?: string;
   groupTitle: string;
   headings: string[];
+}
+
+export function handleSearchShortcut(event: KeyboardEvent): void {
+  if (event.defaultPrevented || event.isComposing || event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+  const target = event.target;
+  if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+  const input = document.querySelector<HTMLInputElement>('.search-box input[type="search"]');
+  if (!input) return;
+  event.preventDefault();
+  input.focus();
 }
 
 function score(entry: SearchEntry, rawQuery: string): number {
@@ -31,10 +42,11 @@ function score(entry: SearchEntry, rawQuery: string): number {
   return value;
 }
 
-export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string }) {
+export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string; searchGroup?: string }) {
   const query = signal(props.initialQuery ?? "");
   const focused = signal(false);
   const results = computed(() => props.entries
+    .filter((entry) => !props.searchGroup || entry.groupId === props.searchGroup)
     .map((entry) => ({ entry, score: score(entry, query.value) }))
     .filter((result) => result.score > 0)
     .sort((left, right) => right.score - left.score || left.entry.title.localeCompare(right.entry.title))
@@ -42,8 +54,40 @@ export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string
     .map((result) => result.entry));
   const expanded = computed(() => focused.value && query.value.trim().length > 0);
 
+  function navigateResults(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    const form = event.currentTarget as HTMLFormElement;
+    const input = form.querySelector<HTMLInputElement>('input[type="search"]');
+    if (!input) return;
+    if (event.key === "Escape" && expanded.peek()) {
+      event.preventDefault();
+      event.stopPropagation();
+      input.focus();
+      focused.value = false;
+      return;
+    }
+    if ((event.key !== "ArrowDown" && event.key !== "ArrowUp") || !query.peek().trim()) return;
+    // Read the current links rather than retaining an index across query changes.
+    const links = [...form.querySelectorAll<HTMLAnchorElement>(".search-popover a[href]")];
+    const index = links.indexOf(event.target as HTMLAnchorElement);
+    if (!links.length || (event.target !== input && index < 0)) return;
+    event.preventDefault();
+    focused.value = true;
+    const next = event.key === "ArrowDown"
+      ? (index + 1) % (links.length + 1)
+      : (index + links.length) % (links.length + 1);
+    (links[next] ?? input).focus();
+  }
+
   return (
-    <form class="search-box" action="/search" method="get" role="search" agentId="documentation-search">
+    <form
+      class="search-box" action="/search" method="get" role="search" agentId="documentation-search"
+      onFocusIn={() => { focused.value = true; }}
+      onFocusOut={(event) => {
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) focused.value = false;
+      }}
+      onKeyDown={navigateResults}
+    >
       <span class="search-icon" aria-hidden="true">⌕</span>
       <input
         type="search"
@@ -57,16 +101,9 @@ export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string
           query.value = event.currentTarget.value;
           focused.value = true;
         }}
-        onFocus={() => { focused.value = true; }}
-        onBlur={() => { setTimeout(() => { focused.value = false; }, 160); }}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            query.value = "";
-            event.currentTarget.blur();
-          }
-        }}
         agentLabel="Search Clank documentation"
       />
+      {props.searchGroup ? <input type="hidden" name="group" value={props.searchGroup} /> : null}
       <kbd>/</kbd>
       <div class="search-popover" id="quick-search-results" role="region" aria-label="Matching guides" hidden={!expanded.value}>
         <div class="search-popover-label">Best matches</div>
@@ -85,7 +122,7 @@ export function SearchBox(props: { entries: SearchEntry[]; initialQuery?: string
             </a>
           )}
         </For>
-        <button class="search-all" type="submit">Search every guide for “{query.value}”</button>
+        <button class="search-all" type="submit">Search {props.searchGroup ? "this category" : "every guide"} for “{query.value}”</button>
       </div>
     </form>
   );

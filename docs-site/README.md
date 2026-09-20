@@ -4,6 +4,17 @@ The application served at [docs.clank.run](https://docs.clank.run). It is built 
 
 The site treats the repository's `docs/*.md` files as canonical. Its build validates that every guide appears exactly once in `content-manifest.mjs`, compiles the Clank server and browser enhancement, copies the exact local framework runtime, and snapshots the source corpus into a deterministic deployment artifact.
 
+## Reading and finding guides
+
+Recent guides and saved bookmarks provide shortcuts back to documentation. Reading-position
+resume, article progress, focus mode, text size, and code wrapping help with longer guides.
+The print view removes navigation and controls while keeping the article readable for paper or
+PDF. Full search supports category filtering, and quick search supports keyboard result navigation.
+
+History, bookmarks, and reading preferences stay in this browser. They do not create an account
+or synchronize to a server; storage restrictions leave the public guides available. History and
+saved items can be cleared or removed through their controls.
+
 ## Develop
 
 ```sh

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { build as buildFramework } from "../scripts/build.mjs";
 import { compile } from "../scripts/compiler.mjs";
 import { groups } from "./content-manifest.mjs";
+import { browserAssetCopies } from "./browser-assets.mjs";
 
 const siteRoot = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(siteRoot, "..");
@@ -132,22 +133,27 @@ if (missing.length || unknown.length) {
 
 const packageJson = JSON.parse(await readFile(join(projectRoot, "package.json"), "utf8"));
 const assetHash = createHash("sha256");
-for (const directory of [outputRoot, contentRoot]) {
+for (const directory of [outputRoot, contentRoot, vendorRoot]) {
   for (const path of (await filesUnder(directory)).sort()) {
     assetHash.update(relative(siteRoot, path));
     assetHash.update(await readFile(path));
   }
 }
 const assetVersion = assetHash.digest("hex").slice(0, 16);
-const appPath = join(outputRoot, "app.js");
-await writeAtomically(
-  appPath,
-  (await readFile(appPath, "utf8")).replaceAll("\"./search.js\"", `"./search.${assetVersion}.js"`),
-);
+const moduleSources = new Map();
+for (const path of await filesUnder(outputRoot)) {
+  if (path.endsWith(".js")) moduleSources.set(relative(outputRoot, path), await readFile(path, "utf8"));
+}
+const browserAssets = { [`styles.${assetVersion}.css`]: "styles.css" };
+for (const copy of browserAssetCopies(moduleSources, assetVersion)) {
+  browserAssets[copy.asset] = copy.filename;
+  await writeAtomically(join(outputRoot, copy.filename), copy.source);
+}
 await writeAtomically(join(contentRoot, "manifest.json"), `${JSON.stringify({
   protocol: "clank-docs/1",
   frameworkVersion: packageJson.version,
   assetVersion,
+  browserAssets,
   groups: groups.map(({ id, title, description, entries }) => ({
     id,
     title,

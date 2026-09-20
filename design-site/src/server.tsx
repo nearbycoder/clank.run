@@ -17,6 +17,7 @@ import {
   text,
 } from "../vendor/index.js";
 import { DesignStudio, type StudioView } from "./studio.js";
+import { parsePreviewSettings } from "./tools/share-settings-data.js";
 
 interface Manifest {
   protocol: "clank-design/1";
@@ -140,6 +141,24 @@ function versionedAsset(request: Request, filename: string): Response | Promise<
     [`styles.${manifest.assetVersion}.css`, "styles.css"],
     ["studio.js", "studio.js"],
     ["stories.js", "stories.js"],
+    ["tools/keyboard-guide.js", "tools/keyboard-guide.js"],
+    ["tools/keyboard-guide-data.js", "tools/keyboard-guide-data.js"],
+    ["tools/specimen-reset.js", "tools/specimen-reset.js"],
+    ["tools/preview-width.js", "tools/preview-width.js"],
+    ["tools/preview-width-data.js", "tools/preview-width-data.js"],
+    ["tools/catalog-filters-data.js", "tools/catalog-filters-data.js"],
+    ["tools/share-settings.js", "tools/share-settings.js"],
+    ["tools/share-settings-data.js", "tools/share-settings-data.js"],
+    ["tools/token-inspector.js", "tools/token-inspector.js"],
+    ["tools/token-inspector-data.js", "tools/token-inspector-data.js"],
+    ["tools/contrast-checker.js", "tools/contrast-checker.js"],
+    ["tools/contrast-checker-data.js", "tools/contrast-checker-data.js"],
+    ["tools/theme-export.js", "tools/theme-export.js"],
+    ["tools/theme-export-data.js", "tools/theme-export-data.js"],
+    ["tools/theme-comparison.js", "tools/theme-comparison.js"],
+    ["tools/theme-comparison-data.js", "tools/theme-comparison-data.js"],
+    ["tools/theme-sandbox.js", "tools/theme-sandbox.js"],
+    ["tools/theme-sandbox-data.js", "tools/theme-sandbox-data.js"],
   ]).get(filename);
   if (!target) return text("Asset not found.\n", { status: 404 });
   const url = new URL(request.url); url.pathname = `/${target}`; url.search = "";
@@ -152,21 +171,24 @@ function versionedAsset(request: Request, filename: string): Response | Promise<
   });
 }
 
-async function page(view: StudioView, path: string, status = 200): Promise<Response> {
+async function page(view: StudioView, path: string, status = 200, search = ""): Promise<Response> {
   const entry = UI_COMPONENT_CATALOG.find((candidate) => candidate.slug === view);
   const title = view === "overview" ? "Clank Design Studio" : view === "themes" ? "Themes · Clank Design Studio" : entry ? `${entry.name} · Clank Design Studio` : "Not found · Clank Design Studio";
   const description = entry?.description ?? (view === "themes" ? "Compare ten dependency-free Clank themes across color, radius, density, typography, depth, focus, and motion." : `Explore all ${UI_COMPONENT_COUNT} Clank headless UI component families and ten live dependency-free themes.`);
   const nonce = crypto.randomUUID().replaceAll("-", "");
-  const state = { initialView: view, initialTheme: "clank", frameworkVersion: manifest.frameworkVersion };
+  const initialSettings = parsePreviewSettings(search);
+  const theme = CLANK_THEME_PRESETS.find((candidate) => candidate.id === initialSettings.theme) ?? CLANK_THEME_PRESETS[0];
+  const state = { initialView: view, initialTheme: theme.id, initialSettings, frameworkVersion: manifest.frameworkVersion };
   const document = await renderDocument(<div id="design-root"><DesignStudio {...state} /></div>, {
     title,
     nonce,
     bodyClass: "design-body",
     stylesheets: [`/assets/styles.${manifest.assetVersion}.css`],
     state,
-    head: <><meta name="description" content={description} /><meta name="theme-color" content={CLANK_THEME_PRESETS[0].tokens.canvas} /><meta name="robots" content={status === 404 ? "noindex" : "index,follow"} /><link rel="icon" href={`/brand/favicon.ico?v=${manifest.assetVersion}`} sizes="any" /><link rel="icon" href={`/brand/clank-mark-32.png?v=${manifest.assetVersion}`} type="image/png" sizes="32x32" /><link rel="apple-touch-icon" href={`/brand/apple-touch-icon.png?v=${manifest.assetVersion}`} /><link rel="canonical" href={`${canonicalOrigin}${path}`} /><link rel="alternate" type="application/json" href="/api/catalog.json" title="Component catalog" /><meta property="og:title" content={title} /><meta property="og:description" content={description} /><meta property="og:type" content="website" /><meta property="og:url" content={`${canonicalOrigin}${path}`} /><script type="module" nonce={nonce} dangerouslySetInnerHTML={{ __html: `import(\"/assets/app.${manifest.assetVersion}.js\").catch((error) => console.error(\"Clank Design enhancement failed.\", error))` }} /></>,
+    head: <><meta name="description" content={description} /><meta name="theme-color" content={theme.tokens.canvas} /><meta name="robots" content={status === 404 ? "noindex" : "index,follow"} /><link rel="icon" href={`/brand/favicon.ico?v=${manifest.assetVersion}`} sizes="any" /><link rel="icon" href={`/brand/clank-mark-32.png?v=${manifest.assetVersion}`} type="image/png" sizes="32x32" /><link rel="apple-touch-icon" href={`/brand/apple-touch-icon.png?v=${manifest.assetVersion}`} /><link rel="canonical" href={`${canonicalOrigin}${path}`} /><link rel="alternate" type="application/json" href="/api/catalog.json" title="Component catalog" /><meta property="og:title" content={title} /><meta property="og:description" content={description} /><meta property="og:type" content="website" /><meta property="og:url" content={`${canonicalOrigin}${path}`} /><script type="module" nonce={nonce} dangerouslySetInnerHTML={{ __html: `import(\"/assets/app.${manifest.assetVersion}.js\").catch((error) => console.error(\"Clank Design enhancement failed.\", error))` }} /></>,
   });
-  return html(document, { status, headers: { "cache-control": "public, max-age=180, stale-while-revalidate=86400", "content-security-policy": ["default-src 'self'", `script-src 'self' 'nonce-${nonce}'`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data:", "connect-src 'self'", "font-src 'self'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'none'", "object-src 'none'"].join("; ") } });
+  const themedDocument = document.replace("<html lang=\"en\">", `<html lang="en" data-clank-theme="${theme.id}" style="color-scheme:${theme.scheme}">`);
+  return html(themedDocument, { status, headers: { "cache-control": "public, max-age=180, stale-while-revalidate=86400", "content-security-policy": ["default-src 'self'", `script-src 'self' 'nonce-${nonce}'`, "style-src 'self' 'unsafe-inline'", "img-src 'self' data:", "connect-src 'self'", "font-src 'self'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'none'", "object-src 'none'"].join("; ") } });
 }
 
 function llmsIndex(): string {
@@ -183,12 +205,12 @@ const app = createApp({ onError(error) { console.error("Design Studio request fa
   .get("/favicon.ico", ({ request }) => brandedAsset(request, "favicon.ico"))
   .route("HEAD", "/apple-touch-icon.png", ({ request }) => brandedAsset(request, "apple-touch-icon.png"))
   .get("/apple-touch-icon.png", ({ request }) => brandedAsset(request, "apple-touch-icon.png"))
-  .get("/", () => page("overview", "/"))
-  .get("/themes", () => page("themes", "/themes"))
+  .get("/", ({ url }) => page("overview", "/", 200, url.search))
+  .get("/themes", ({ url }) => page("themes", "/themes", 200, url.search))
   .get("/components/:slug", ({ params, url }) => {
-    if (url.pathname.endsWith("/")) return new Response(null, { status: 308, headers: { location: url.pathname.slice(0, -1) } });
+    if (url.pathname.endsWith("/")) return new Response(null, { status: 308, headers: { location: `${url.pathname.slice(0, -1)}${url.search}` } });
     const entry = UI_COMPONENT_CATALOG.find((candidate) => candidate.slug === params.slug);
-    return entry ? page(entry.slug, `/components/${entry.slug}`) : page(params.slug, `/components/${encodeURIComponent(params.slug)}`, 404);
+    return entry ? page(entry.slug, `/components/${entry.slug}`, 200, url.search) : page(params.slug, `/components/${encodeURIComponent(params.slug)}`, 404, url.search);
   })
   .get("/api/catalog.json", () => json({ protocol: manifest.protocol, frameworkVersion: manifest.frameworkVersion, total: UI_COMPONENT_COUNT, components: UI_COMPONENT_CATALOG.map(componentRecord) }, { headers: { "cache-control": "public, max-age=3600", "access-control-allow-origin": "*" } }))
   .get("/api/components/:filename", ({ params }) => { const slug = params.filename.replace(/\.json$/u, ""); const entry = UI_COMPONENT_CATALOG.find((candidate) => candidate.slug === slug); return entry ? json({ protocol: "clank-component/1", frameworkVersion: manifest.frameworkVersion, component: componentRecord(entry) }, { headers: { "cache-control": "public, max-age=3600", "access-control-allow-origin": "*" } }) : json({ error: { code: "COMPONENT_NOT_FOUND", message: "Component not found." } }, { status: 404 }); })
@@ -197,10 +219,11 @@ const app = createApp({ onError(error) { console.error("Design Studio request fa
   .get("/llms.txt", () => text(llmsIndex(), { headers: { "cache-control": "public, max-age=3600" } }))
   .get("/robots.txt", () => text(`User-agent: *\nAllow: /\nSitemap: ${canonicalOrigin}/sitemap.xml\n`))
   .get("/sitemap.xml", () => { const left = String.fromCharCode(60); const paths = ["/", "/themes", ...UI_COMPONENT_CATALOG.map((entry) => `/components/${entry.slug}`)]; return new Response(`${left}?xml version="1.0" encoding="UTF-8"?>${left}urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${paths.map((path) => `${left}url>${left}loc>${canonicalOrigin}${path}${left}/loc>${left}/url>`).join("")}${left}/urlset>`, { headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=3600" } }); })
+  .get("/assets/tools/:filename", ({ request, params }) => versionedAsset(request, `tools/${params.filename}`))
   .get("/assets/:filename", ({ request, params }) => versionedAsset(request, params.filename))
   .route("*", "/brand/*", ({ request }) => appFiles.handle(request))
   .get("/vendor/*", ({ request }) => vendorFiles.handle(request))
-  .route("*", "*", ({ url }) => page("missing", url.pathname, 404));
+  .route("*", "*", ({ url }) => page("missing", url.pathname, 404, url.search));
 
 const server = await serve(app, { hostname: environment?.HOST ?? "127.0.0.1", port: Number(environment?.PORT ?? 4400), trustProxy: environment?.TRUST_PROXY === "1", allowedHosts: environment?.ALLOWED_HOSTS?.split(",").map((host) => host.trim()).filter(Boolean) });
 console.log(`Clank Design Studio: ${server.url}`);

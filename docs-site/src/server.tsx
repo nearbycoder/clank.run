@@ -37,6 +37,7 @@ interface Manifest {
   protocol: "clank-docs/1";
   frameworkVersion: string;
   assetVersion: string;
+  browserAssets: Record<string, string>;
   groups: DocGroup[];
   docs: DocMetadata[];
 }
@@ -56,6 +57,7 @@ interface PageOptions {
   toc?: TableOfContentsEntry[];
   status?: number;
   initialQuery?: string;
+  searchGroup?: string;
 }
 
 const environment = (globalThis as unknown as {
@@ -78,15 +80,16 @@ const docs = await Promise.all(manifest.docs.map(async (metadata) => {
   } satisfies DocumentationPage;
 }));
 const docsBySlug = new Map(docs.map((doc) => [doc.slug, doc]));
-const searchEntries: SearchEntry[] = docs.map(({ slug, title, description, groupTitle, headings }) => ({
+const searchEntries: SearchEntry[] = docs.map(({ slug, title, description, groupId, groupTitle, headings }) => ({
   slug,
   title,
   description,
+  groupId,
   groupTitle,
   headings,
 }));
 const appFiles = staticFiles(distRoot, { cacheControl: "public, max-age=31536000, immutable" });
-const vendorFiles = staticFiles(vendorRoot, { prefix: "/vendor", cacheControl: "public, max-age=31536000, immutable" });
+const vendorFiles = staticFiles(vendorRoot, { prefix: `/vendor/${manifest.assetVersion}`, cacheControl: "public, max-age=31536000, immutable" });
 
 function brandedAsset(request: Request, filename: string): Response | Promise<Response> {
   const url = new URL(request.url);
@@ -96,12 +99,7 @@ function brandedAsset(request: Request, filename: string): Response | Promise<Re
 }
 
 function versionedAsset(request: Request, filename: string): Response | Promise<Response> {
-  const expected = new Map([
-    [`app.${manifest.assetVersion}.js`, "app.js"],
-    [`search.${manifest.assetVersion}.js`, "search.js"],
-    [`styles.${manifest.assetVersion}.css`, "styles.css"],
-  ]);
-  const target = expected.get(filename);
+  const target = Object.hasOwn(manifest.browserAssets, filename) ? manifest.browserAssets[filename] : undefined;
   if (!target) return text("Asset not found.\n", { status: 404 });
   const url = new URL(request.url);
   url.pathname = `/${target}`;
@@ -120,6 +118,8 @@ function Navigation(props: { activeSlug?: string }) {
         <span class="nav-home-mark" aria-hidden="true">↗</span>
         <span><strong>Documentation</strong><small>Clank {manifest.frameworkVersion}</small></span>
       </a>
+      <section id="docs-reader-history" class="reader-history" hidden />
+      <section id="docs-bookmarks" class="reader-history" hidden />
       <For each={manifest.groups} by="id">
         {(group) => (
           <section class="nav-group">
@@ -168,6 +168,7 @@ function SiteChrome(props: {
   activeSlug?: string;
   toc?: TableOfContentsEntry[];
   initialQuery?: string;
+  searchGroup?: string;
   children: unknown;
 }) {
   return (
@@ -181,7 +182,7 @@ function SiteChrome(props: {
             <span>clank</span><span class="wordmark-docs">docs</span>
           </a>
           <div id="docs-search" class="header-search">
-            <SearchBox entries={searchEntries} initialQuery={props.initialQuery} />
+            <SearchBox entries={searchEntries} initialQuery={props.initialQuery} searchGroup={props.searchGroup} />
           </div>
           <nav class="header-links" aria-label="Project">
             <a href="/docs/getting-started">Get started</a>
@@ -339,10 +340,15 @@ function DocPage(props: { doc: DocumentationPage }) {
         </nav>
         <h1>{props.doc.title}</h1>
         <p>{props.doc.description}</p>
+        <p class="print-source">Source: {canonicalOrigin}/docs/{props.doc.slug}</p>
         <div class="doc-meta">
           <span>{props.doc.readingMinutes} min read</span>
           <span>{props.doc.words.toLocaleString()} words</span>
           <span>Clank {manifest.frameworkVersion}</span>
+        </div>
+        <div id="docs-reader-tools" class="reader-tools" role="group" aria-label="Guide reading tools">
+          <button id="docs-bookmark-toggle" class="bookmark-toggle" type="button" aria-pressed="false" hidden>Save guide</button>
+          <span id="docs-bookmark-status" class="visually-hidden" role="status" />
         </div>
         <div class="doc-formats">
           <a href={`/raw/${props.doc.slug}.md`}>Raw Markdown</a>
@@ -350,7 +356,7 @@ function DocPage(props: { doc: DocumentationPage }) {
           <a href={`https://github.com/nearbycoder/clank.run/edit/main/${props.doc.source}`} target="_blank" rel="noreferrer">Edit on GitHub ↗</a>
         </div>
       </header>
-      <div class="markdown" dangerouslySetInnerHTML={{ __html: props.doc.html }} />
+      <div id="docs-article-body" class="markdown" tabindex="-1" dangerouslySetInnerHTML={{ __html: props.doc.html }} />
       <aside class="agent-note">
         <strong>Using an agent?</strong>
         <p>The raw source for this page is available at <code>/raw/{props.doc.slug}.md</code>. The complete framework corpus is at <a href="/llms-full.txt">/llms-full.txt</a>.</p>
@@ -617,15 +623,29 @@ const docsMcp = createMcpServer({
 });
 const docsMcpManifest = docsMcp.manifest();
 
-function SearchPage(props: { query: string }) {
-  const results = props.query ? searchDocumentation(props.query) : [];
+function SearchPage(props: { query: string; group?: DocGroup }) {
+  const results = props.query ? searchDocumentation(props.query)
+    .filter(({ doc }) => !props.group || doc.groupId === props.group.id) : [];
+  const scope = props.group ? `in ${props.group.title}` : "across the complete documentation corpus";
   return (
     <section class="search-page">
       <div class="breadcrumbs"><a href="/">Docs</a><span>/</span><span>Search</span></div>
       <h1>{props.query ? `Search results for “${props.query}”` : "Search all documentation"}</h1>
-      <p>{props.query ? `${results.length} matching guide${results.length === 1 ? "" : "s"} across the complete documentation corpus.` : "Enter a framework concept, CLI command, API, or operational task."}</p>
+      <p>{props.query ? `${results.length} matching guide${results.length === 1 ? "" : "s"} ${scope}.` : "Enter a framework concept, CLI command, API, or operational task."}</p>
+      <form class="search-filters" action="/search" method="get" aria-label="Filter documentation search">
+        <input type="hidden" name="q" value={props.query} />
+        <label for="search-category">Category</label>
+        <select id="search-category" name="group">
+          <option value="" selected={!props.group}>All categories</option>
+          <For each={manifest.groups} by="id">
+            {(group) => <option value={group.id} selected={group.id === props.group?.id}>{group.title}</option>}
+          </For>
+        </select>
+        <button type="submit">Apply filter</button>
+        {props.group ? <a href={props.query ? `/search?q=${encodeURIComponent(props.query)}` : "/search"}>Reset to all categories</a> : null}
+      </form>
       <div class="search-results">
-        <For each={results} by={(entry) => entry.doc.slug} fallback={<div class="no-results"><strong>No matching guides</strong><span>Try a shorter term, an exact API name, or browse the categories in the navigation.</span></div>}>
+        <For each={results} by={(entry) => entry.doc.slug} fallback={<div class="no-results"><strong>{props.query ? "No matching guides" : "Enter a search term"}</strong><span>{props.group ? "Try another term or reset to all categories to search the complete documentation." : "Try a shorter term, an exact API name, or browse the categories in the navigation."}</span></div>}>
           {(result) => (
             <a href={`/docs/${result.doc.slug}`}>
               <span>{result.doc.groupTitle}</span>
@@ -655,13 +675,13 @@ async function page(view: unknown, options: PageOptions): Promise<Response> {
   const nonce = crypto.randomUUID().replaceAll("-", "");
   const canonical = `${canonicalOrigin}${options.path}`;
   const document = await renderDocument(
-    <SiteChrome activeSlug={options.activeSlug} toc={options.toc} initialQuery={options.initialQuery}>{view}</SiteChrome>,
+    <SiteChrome activeSlug={options.activeSlug} toc={options.toc} initialQuery={options.initialQuery} searchGroup={options.searchGroup}>{view}</SiteChrome>,
     {
       title: options.title === "Clank Documentation" ? options.title : `${options.title} · Clank Documentation`,
-      bodyClass: "site-body",
+      bodyClass: options.activeSlug && docsBySlug.has(options.activeSlug) ? "site-body guide-page" : "site-body",
       nonce,
       stylesheets: [`/assets/styles.${manifest.assetVersion}.css`],
-      state: { search: searchEntries, initialQuery: options.initialQuery ?? "" },
+      state: { search: searchEntries, initialQuery: options.initialQuery ?? "", searchGroup: options.searchGroup, activeSlug: options.activeSlug },
       head: (
         <>
           <meta name="description" content={options.description} />
@@ -869,11 +889,19 @@ const app = createApp({
   })
   .get("/search", ({ url }) => {
     const query = (url.searchParams.get("q") ?? "").trim().slice(0, 120);
-    return page(<SearchPage query={query} />, {
+    const requestedGroup = url.searchParams.get("group") ?? "";
+    const group = requestedGroup.length <= 64 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(requestedGroup)
+      ? manifest.groups.find((entry) => entry.id === requestedGroup)
+      : undefined;
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (group) params.set("group", group.id);
+    return page(<SearchPage query={query} group={group} />, {
       title: query ? `Search: ${query}` : "Search",
       description: "Search the complete Clank framework and deployment documentation.",
-      path: query ? `/search?q=${encodeURIComponent(query)}` : "/search",
+      path: params.size ? `/search?${params}` : "/search",
       initialQuery: query,
+      searchGroup: group?.id,
     });
   })
   .get("/raw/:filename", ({ params }) => {
@@ -939,7 +967,7 @@ const app = createApp({
       headers: { "content-type": "application/xml; charset=utf-8", "cache-control": "public, max-age=3600" },
     });
   })
-  .get("/assets/:filename", ({ request, params }) => versionedAsset(request, params.filename))
+  .get("/assets/*", ({ request, url }) => versionedAsset(request, url.pathname.slice("/assets/".length)))
   .route("*", "/brand/*", ({ request }) => appFiles.handle(request))
   .get("/vendor/*", ({ request }) => vendorFiles.handle(request))
   .route("*", "*", ({ url }) => {

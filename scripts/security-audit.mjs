@@ -158,8 +158,9 @@ for (const file of files) {
 for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", "dist/index.d.ts"]) {
   if (!files.some((file) => file.path === expected)) fail(`Published package is missing ${expected}.`);
 }
-// Twenty optional feature entry points add 40 runtime/declaration files to the reviewed 288-file baseline.
-if ((packResult?.entryCount ?? 0) > 328) fail("Published package unexpectedly exceeds 328 files.");
+// The reviewed 328-file package gains seven private console filtering/export modules.
+// No dependencies or public entry points are added; keep the 5 MiB size ceiling.
+if ((packResult?.entryCount ?? 0) > 335) fail("Published package unexpectedly exceeds 335 files.");
 if ((packResult?.unpackedSize ?? 0) > 5 * 1024 * 1024) fail("Published package unexpectedly exceeds 5 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
