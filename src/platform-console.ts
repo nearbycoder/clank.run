@@ -92,7 +92,7 @@ export function platformConsolePage(
     bootstrapSignup,
   }).replaceAll("<", "\\u003c");
   const body = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" href="/brand/clank-mark-32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" href="/brand/clank-mark-32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
 <meta name="theme-color" content="${CONTROL_PLANE_THEME.tokens.canvas}"><title>${pageTitle}</title><style>
 :root{color-scheme:dark;--bg:#080b12;--panel:#10151f;--panel-2:#151b27;--line:#252d3b;--line-2:#313b4d;--text:#f4f6fb;--muted:#929cad;--faint:#697386;--lime:#c7f36a;--lime-2:#9fce43;--purple:#9c86ff;--cyan:#70d7e7;--red:#ff7d8d;--amber:#f4be5b;--radius:16px;--shadow:0 20px 70px rgba(0,0,0,.28)}
 *{box-sizing:border-box}html{min-height:100%}body{margin:0;min-height:100vh;background:radial-gradient(circle at 82% -10%,rgba(105,76,220,.16),transparent 29%),var(--bg);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select{font:inherit}button{color:inherit}a{color:inherit}[hidden]{display:none!important}
@@ -146,6 +146,11 @@ dialog{background:var(--clank-canvas-raised);border-color:#383838;border-radius:
 @media(max-width:430px){.stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.stat{padding:15px}.stat-value{font-size:22px}.project-page-head{gap:16px}.project-heading h1{font-size:clamp(24px,8vw,30px)}.analytics-facts{grid-template-columns:1fr}.detail-row{grid-template-columns:1fr;gap:3px}.admin-facts{grid-template-columns:1fr 1fr}.admin-growth-row{grid-template-columns:minmax(88px,.55fr) 1fr auto;gap:8px}.analytics-chart-panel .metric-toolbar{grid-template-columns:repeat(5,minmax(44px,1fr));gap:4px}#admin-runner-status{flex:1 0 100%;margin-left:0;text-align:left;overflow-wrap:anywhere}.dialog-actions{display:grid;grid-template-columns:1fr}.dialog-actions .button{width:100%}}
 @media(max-width:620px){.quota-fields{grid-template-columns:1fr}.quota-field-copy{min-height:0}.usage-controls{align-items:stretch;flex-direction:column;width:100%}.usage-controls .input{width:100%;min-width:0}}
 @media(max-width:340px){.stat-grid{grid-template-columns:1fr}.breakdown-row{grid-template-columns:minmax(72px,.7fr) minmax(0,1fr)}.breakdown-value{grid-column:1/-1}.dialog-actions{display:grid;grid-template-columns:1fr}.dialog-actions .button{width:100%}.domain-actions{grid-template-columns:1fr}.desktop-project-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* Keep touch scrolling while suppressing mobile page zoom, including nested scrollers. */
+@media(max-width:900px),(hover:none) and (pointer:coarse){
+  html,body,body *{touch-action:pan-x pan-y}
+  body input,body select,body textarea{font-size:16px!important}
+}
 ${CONTROL_PLANE_THEME_CSS}
 :root{--bg:var(--clank-canvas);--panel:var(--clank-surface);--panel-2:var(--clank-surface-muted);--line:var(--clank-border);--line-2:var(--clank-border-strong);--text:var(--clank-text);--muted:var(--clank-text-muted);--faint:var(--clank-text-faint);--lime:var(--clank-accent);--lime-2:var(--clank-accent-hover);--red:var(--clank-danger);--radius:var(--clank-radius-md);--shadow:var(--clank-shadow-lg)}
 
