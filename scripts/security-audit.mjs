@@ -95,6 +95,12 @@ for (const [relative, source] of workflows) {
 }
 const ci = workflows.find(([relative]) => relative.endsWith("/ci.yml"))?.[1] ?? "";
 const codeql = workflows.find(([relative]) => relative.endsWith("/codeql.yml"))?.[1] ?? "";
+const codeqlPins = [...codeql.matchAll(/uses:\s*github\/codeql-action\/(init|analyze)@([a-f0-9]{40})/gu)];
+if (codeqlPins.length !== 2
+  || new Set(codeqlPins.map((match) => match[1])).size !== 2
+  || new Set(codeqlPins.map((match) => match[2])).size !== 1) {
+  fail("CodeQL init and analyze must use the same immutable action revision.");
+}
 const designDeploy = workflows.find(([relative]) => relative.endsWith("/design-deploy.yml"))?.[1] ?? "";
 const docsDeploy = workflows.find(([relative]) => relative.endsWith("/docs-deploy.yml"))?.[1] ?? "";
 const release = workflows.find(([relative]) => relative.endsWith("/release.yml"))?.[1] ?? "";

@@ -5,3 +5,14 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    groups:
+      # CodeQL shares versioned state between its init and analyze actions.
+      codeql:
+        patterns:
+          - "github/codeql-action/*"
+      github-actions-maintenance:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
