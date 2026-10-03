@@ -10,6 +10,102 @@ Install one npm package, create an authenticated full-stack application, and run
 
 The official package is `@clank.run/framework`. The unscoped `clank` package on npm is a different project.
 
+## Set up with an agent
+
+Use this prompt in your coding agent to go from an unconfigured development environment to a
+running app. Use **Copy** on the block to copy the entire prompt, then replace the three bracketed
+values before sending it. Open the agent in the parent directory where you want the app created, or in an existing
+Clank application. For manual setup, continue with [Install Clank](#1-install-clank).
+
+```text
+Set up my development environment and start building an app with Clank.
+
+App name: [My App]
+Project directory: [my-app]
+App idea and first useful user flow: [Describe who it is for and what they should be able to do.]
+
+Do the setup and implementation, not just a plan. Use the published
+@clank.run/framework npm package; the unscoped clank package is unrelated.
+Do not clone the framework repository to build my application.
+
+1. Inspect the environment.
+   Identify the OS, shell, working directory, and any existing application.
+   Read relevant README.md and AGENTS.md files and inspect existing changes.
+   Reuse an existing Clank app when present; do not overwrite unrelated work.
+   If my app idea is still a placeholder, ask what I want to build while
+   completing the environment checks that do not depend on that answer.
+
+2. Install missing prerequisites.
+   Run node --version and npm --version. Prefer Node 24 LTS with npm 10+;
+   Clank supports Node >=22.16 and <27. Keep an existing supported version.
+   If Node/npm is missing or unsupported, use the existing version manager
+   or an official installer appropriate to this OS. Explain any step that
+   needs my administrator access, then resume after I complete it. Verify
+   the installed versions and PATH in the shell that will run the app.
+   SQLite and the TypeScript/TSX compiler are included. Do not install a
+   separate database server, Docker, or another framework toolchain for
+   the default starter.
+
+3. Install and inspect Clank.
+   Run npm install --global @clank.run/framework@latest, then clank --version
+   and clank templates --json. If global installation is unavailable, use
+   npm exec --yes --package=@clank.run/framework@latest -- clank <arguments>
+   for these CLI commands instead of using sudo or installing unscoped clank.
+   Read https://docs.clank.run/llms.txt and the relevant current guides;
+   verify available commands with clank help --json rather than guessing APIs.
+
+4. Create the application and install its dependencies.
+   For a new app, use auth-todo as the default authenticated full-stack
+   starter unless another listed template better fits my request:
+   clank create <project-directory> --template auth-todo --name "<app-name>" --json
+   Enter the generated directory and run npm install. This also installs
+   the starter's Tailwind build dependencies. Keep package-lock.json.
+   Run npm audit, review any findings, apply compatible fixes, and report
+   unresolved advisories. Do not force breaking dependency changes.
+   If this is an existing Clank app, follow its setup instructions instead
+   of scaffolding over it. Read its generated README.md and AGENTS.md.
+
+5. Verify the starter before changing it.
+   Run npm test, npm run doctor, and npm run deploy:check. Fix local setup
+   failures first. These checks do not require a hosted Clank account;
+   report optional login/project-link notices separately from failures.
+   Keep this application separate from Clank's own source repository.
+
+6. Build the first useful flow from my app idea.
+   Edit src/, not generated dist/. Put schemas, validation, permissions,
+   and trusted data operations in src/backend.ts; UI in src/view.tsx;
+   browser coordination in src/app.tsx; and routes/SSR in src/server.tsx.
+   Preserve authentication, user-owned data isolation, live updates, and
+   the shared typed browser/MCP action contract. Use explicit workspace
+   authorization for shared data. Add numbered migrations without changing
+   applied migrations. Keep secrets and local databases out of source control.
+   Add or update the app-owned tests for the behavior I asked for.
+
+7. Run and test the actual app.
+   Run npm run dev -- --host=127.0.0.1 and verify its reported local URL
+   and /healthz. Use disposable local accounts to check registration/login,
+   the main user flow, and account isolation. Check browser errors and a
+   phone-width layout when browser tools are available; otherwise state
+   which browser checks you could not perform. If the app uses queued
+   jobs, run npm run jobs:worker in a separate terminal.
+   Re-run npm test, npm run doctor, and npm run deploy:check after changes.
+
+8. Hand over a working development app.
+   Leave the development server available and report the project directory,
+   Node/npm/Clank versions, local URL, implemented flow, commands and results,
+   and any remaining blockers. Include how to restart the app and its worker.
+   Do not create cloud resources or deploy publicly unless I ask for that.
+```
+
+The prompt uses the same installation and verification steps as the rest of this guide. A global
+CLI is convenient; the `npm exec --package` alternative also works before a project exists.
+After installation, the application's npm scripts use its own local Clank dependency.
+
+Linux control planes and database-helper operations additionally require working Bubblewrap
+namespaces and util-linux. Verify those prerequisites when using those workflows; do not disable
+isolation to make a check pass. See [SQLite worker isolation](sqlite-isolation.md). You do not need
+a hosted account, production credentials, or a separate SQLite server to start developing locally.
+
 ## 1. Install Clank
 
 Install the package globally to make the `clank` command available in every project:
@@ -252,13 +348,9 @@ For the compiler contract and standalone-binary option, see [Tailwind CSS](tailw
 
 ## Build with an agent
 
-Open the generated directory in your coding agent and describe the product you want. For example:
-
-```text
-Turn this starter into a shared meal planner. Keep authentication, make every
-record user-owned, add immutable migrations, preserve live updates, and run
-npm run build, npm run doctor, and npm run deploy:check when finished.
-```
+Use the [copyable setup prompt](#set-up-with-an-agent) to install prerequisites, create or reuse an
+app, and implement its first useful flow. For later changes, open the generated app directory in
+your coding agent and describe the behavior you want; keep using its app-owned tests and checks.
 
 The generated `AGENTS.md` tells the agent where each concern belongs, which security and migration invariants it must preserve, and how to prove the app is deployable. The documentation is also available as [a compact agent map](https://docs.clank.run/llms.txt), [the complete Markdown corpus](https://docs.clank.run/llms-full.txt), and [structured JSON](https://docs.clank.run/api/docs.json).
 
