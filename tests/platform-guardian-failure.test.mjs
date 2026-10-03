@@ -33,7 +33,7 @@ test('failed daemon cleanup fences initial-deploy data rollback and later writer
     const application = join(root, 'application');
     await mkdir(join(application, 'dist'), { recursive: true }); await mkdir(join(application, 'migrations'));
     await writeFile(join(application, 'migrations/0001_writes.sql'), 'CREATE TABLE writer_events(id INTEGER PRIMARY KEY,at INTEGER);');
-    await writeFile(join(application, 'dist/server.mjs'), `import{DatabaseSync}from'node:sqlite';import{createServer}from'node:http';const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH);const add=db.prepare('INSERT INTO writer_events(at) VALUES(?)');add.run(Date.now());setInterval(()=>add.run(Date.now()),20);createServer((q,s)=>{s.statusCode=q.url==='/healthz'?503:200;s.end('unhealthy writer');}).listen(Number(process.env.PORT),process.env.HOST);`);
+    await writeFile(join(application, 'dist/server.mjs'), `import{DatabaseSync}from'node:sqlite';import{createServer}from'node:http';const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH);db.exec('PRAGMA busy_timeout = 5000');const add=db.prepare('INSERT INTO writer_events(at) VALUES(?)');add.run(Date.now());setInterval(()=>add.run(Date.now()),20);createServer((q,s)=>{s.statusCode=q.url==='/healthz'?503:200;s.end('unhealthy writer');}).listen(Number(process.env.PORT),process.env.HOST);`);
     const bytes = await createDeploymentBundle(application, parseDeploymentConfig({ version: 1,
       entry: 'dist/server.mjs', include: ['dist', 'migrations'], database: { path: 'app.sqlite', migrations: 'migrations' },
       health: { path: '/healthz', timeoutMs: 1000 }, env: {} }), { frameworkVersion: 'test', nodeVersion: process.versions.node });
@@ -52,10 +52,13 @@ test('failed daemon cleanup fences initial-deploy data rollback and later writer
     const databasePath = join(root, 'platform/projects', project.id, 'data/app.sqlite');
     assert.equal((await stat(databasePath)).isFile(), true, 'failed initial deployment must preserve data while cleanup is unverified');
     database = new DatabaseSync(databasePath, { readOnly: true });
+    database.exec('PRAGMA busy_timeout = 5000');
     const before = database.prepare('SELECT COUNT(*) AS n FROM writer_events').get().n;
-    await new Promise(resolve => setTimeout(resolve, 100));
-    assert.ok(database.prepare('SELECT COUNT(*) AS n FROM writer_events').get().n > before,
-      'the simulated daemon-owned writer really outlives failed client cleanup');
+    const writerDeadline = Date.now() + 10000;
+    while (database.prepare('SELECT COUNT(*) AS n FROM writer_events').get().n <= before) {
+      assert.ok(Date.now() < writerDeadline, 'the simulated daemon-owned writer must outlive failed client cleanup');
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
     const containersBefore = await readdir(join(root, 'containers'));
     const retried = await deploy('guardian-blocked-retry-0002');
     assert.ok(retried.status >= 400, await retried.text());

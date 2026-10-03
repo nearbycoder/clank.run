@@ -22,7 +22,7 @@ const { project } = await json(request('/api/projects', { name: 'Crash fixture',
 async function artifact(label) {
   const directory = join(config.root, label); await mkdir(join(directory, 'dist'), { recursive: true }); await mkdir(join(directory, 'migrations'));
   await writeFile(join(directory, 'dist/server.mjs'), `import{createServer}from'node:http';createServer((q,s)=>s.end(q.url==='/healthz'?'ok':${JSON.stringify(label)})).listen(Number(process.env.PORT),process.env.HOST);`);
-  await writeFile(join(directory, 'dist/worker.mjs'), `import{DatabaseSync}from'node:sqlite';const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH,{timeout:5000});const add=db.prepare('INSERT INTO writer_events(release,pid,at) VALUES(?,?,?)');const write=()=>add.run(${JSON.stringify(label)},process.pid,Date.now());write();setInterval(write,20);`);
+  await writeFile(join(directory, 'dist/worker.mjs'), `import{DatabaseSync}from'node:sqlite';const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH,{timeout:5000});db.exec('PRAGMA busy_timeout = 5000');const add=db.prepare('INSERT INTO writer_events(release,pid,at) VALUES(?,?,?)');const write=()=>add.run(${JSON.stringify(label)},process.pid,Date.now());write();setInterval(write,20);`);
   await writeFile(join(directory, 'migrations/0001_writers.sql'), 'CREATE TABLE writer_events(id INTEGER PRIMARY KEY,release TEXT,pid INTEGER,at INTEGER);');
   return createDeploymentBundle(directory, parseDeploymentConfig({ version: 1, entry: 'dist/server.mjs', include: ['dist','migrations'], database: { path: 'app.sqlite', migrations: 'migrations' }, health: { path: '/healthz', timeoutMs: 10000 }, env: {}, jobs: { entry: 'dist/worker.mjs', workers: 1, scheduler: false, concurrency: 1, queues: [] } }), { frameworkVersion: 'test', nodeVersion: process.versions.node });
 }
@@ -41,6 +41,7 @@ while (true) {
 const guardians = await Promise.all((await readdir(join(config.root, 'platform/runtime-guardians'))).map(name => readFile(join(config.root, 'platform/runtime-guardians', name), 'utf8').then(JSON.parse)));
 const databasePath = join(config.root, 'platform/projects', project.id, 'data/app.sqlite');
 const database = new DatabaseSync(databasePath, { readOnly: true });
+database.exec('PRAGMA busy_timeout = 5000');
 const writerDeadline = Date.now() + 10000;
 try {
   while (!database.prepare("SELECT COUNT(*) AS count FROM writer_events WHERE release='candidate'").get().count) {

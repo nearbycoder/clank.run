@@ -49,7 +49,7 @@ export function isRetryableCoverageArtifactFailure(result) {
   const cancelled = Number(output.match(/# cancelled (\d+)(?:\r?\n|$)/u)?.[1] ?? -1);
   const skipped = Number(output.match(/# skipped (\d+)(?:\r?\n|$)/u)?.[1] ?? -1);
   const todo = Number(output.match(/# todo (\d+)(?:\r?\n|$)/u)?.[1] ?? -1);
-  return /# Warning: Could not report code coverage\. SyntaxError: Unexpected end of JSON input/u.test(output)
+  return /# Warning: Could not report code coverage\. SyntaxError: (?:Unexpected end of JSON input|Unexpected non-whitespace character after JSON at position \d+ \(line \d+ column \d+\))/u.test(output)
     && tests > 0
     && passed > 0
     && failed === 0
@@ -77,7 +77,7 @@ export async function runCoverageGate(options = {}) {
     }
     if (attempt === 1 && isRetryableCoverageArtifactFailure(result)) {
       writeDiagnostic(
-        "\nNode produced a truncated experimental coverage artifact after every test passed; "
+        "\nNode produced a malformed experimental coverage artifact after every test passed; "
         + "retrying the isolated coverage run once.\n\n",
       );
       continue;

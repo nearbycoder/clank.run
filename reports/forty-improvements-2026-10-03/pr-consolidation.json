@@ -30,7 +30,29 @@
     "securityAudit": "Passed",
     "pairingGuard": "Actual guard accepts aligned pins, rejects mismatched pins and missing analyze step.",
     "independentReviews": "CodeQL pair, attestation update and final consolidation diff reviewed separately.",
-    "applicationChecks": "No application source changed after the complete Node22/24/26 gates recorded in verification.json."
+    "applicationChecks": "No application source changed after the complete Node22/24/26 gates recorded in verification.json.",
+    "hostedFollowUp": {
+      "firstHead": "71d677bbc6ab981fea4ac3067feeddf22c94f2c8",
+      "ciRun": 37134609969,
+      "findings": "Node22 and conformance exposed default-zero SQLite busy timeout on concurrent crash-test reader connections. Node24 and CodeQL passed.",
+      "fix": "Test readers and generated writers explicitly configure5000ms busy handling; positive writer checks poll within10s. No lock errors are swallowed; all cleanup, ordering, data-preservation and deletion assertions remain.",
+      "stress": "20/20 affected tests passed under forced exclusive write locks on Node22.16.0 and24.21.0. Removing only reader busy handling reproduced both failures.",
+      "coverageArtifact": "All1590 tests completed with0 failures, but one local Node coverage run produced trailing non-whitespace JSON data. Added this exact malformed-artifact error to the existing single bounded retry. Final valid measured coverage and unchanged80/65/80 thresholds remain required.",
+      "coverageGuardTests": "5/5 passed on Node22,24,26; independent review found no bypass.",
+      "finalLocalGate": {
+        "node": "22.16.0",
+        "passed": 1587,
+        "failed": 0,
+        "skipped": 3,
+        "coverage": {
+          "lines": 87.51,
+          "branches": 79.36,
+          "functions": 89.68
+        },
+        "result": "Full scripts/check.mjs passed including documentation, conformance, security and dependency checks.",
+        "logSha256": "a8ba2d525144d1608074d795534bcdf088e03ff39d4505d79894d4648ec6ebb8"
+      }
+    }
   },
   "constraints": "The release-only OIDC attestation operation is not invoked by PR CI and was not tested by publishing a release. No package was published.",
   "officialGroupingReference": "https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#groups"

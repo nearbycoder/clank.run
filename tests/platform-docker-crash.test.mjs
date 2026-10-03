@@ -51,6 +51,7 @@ test('real Docker controller crash removes old web and canary workers before imm
     assert.ok(containers.some(container => container.name.includes('-worker-')));
     assert.equal(await fetch('http://127.0.0.1:4961/').then(response => response.text()), 'candidate');
     database = new DatabaseSync(state.databasePath, { readOnly: true });
+    database.exec('PRAGMA busy_timeout = 5000');
     const oldStableBoundary = database.prepare("SELECT MAX(id) AS id FROM writer_events WHERE release='stable'").get().id;
     assert.ok(oldStableBoundary > 0);
     child.kill('SIGKILL'); await childExited;
@@ -66,8 +67,14 @@ test('real Docker controller crash removes old web and canary workers before imm
     await new Promise(resolve => setTimeout(resolve, 200));
     assert.equal(database.prepare("SELECT COUNT(*) AS count FROM writer_events WHERE release='candidate'").get().count, candidateCount);
     const lastCandidate = database.prepare("SELECT MAX(id) AS id FROM writer_events WHERE release='candidate'").get().id;
-    const resumedStable = database.prepare("SELECT MIN(id) AS id, COUNT(*) AS count FROM writer_events WHERE release='stable' AND id>?").get(oldStableBoundary);
-    assert.ok(resumedStable.count > 1, 'the prior stable worker must resume');
+    const resumedWrites = database.prepare("SELECT MIN(id) AS id, COUNT(*) AS count FROM writer_events WHERE release='stable' AND id>?");
+    const writerDeadline = Date.now() + 10000;
+    let resumedStable = resumedWrites.get(oldStableBoundary);
+    while (resumedStable.count <= 1) {
+      assert.ok(Date.now() < writerDeadline, 'the prior stable worker must resume');
+      await new Promise(resolve => setTimeout(resolve, 25));
+      resumedStable = resumedWrites.get(oldStableBoundary);
+    }
     assert.ok(lastCandidate < resumedStable.id, 'all candidate writes must precede admission of the replacement stable worker');
     assert.equal(await platform.handle(new Request('https://crash-fixture.apps.example.test/')).then(response => response.text()), 'stable');
     database.close(); database = undefined;
