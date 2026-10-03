@@ -13,6 +13,47 @@ const URL_ATTRIBUTES = new Set([
 
 const TRUSTED_CLIENT_ADDRESSES = new WeakMap<Request, string>();
 
+/** Capture complete bounded log lines; never expose a truncated secret fragment. */
+export async function captureLogLines(stream: AsyncIterable<Uint8Array>, write: (line: string) => void): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffered = "";
+  let discarding = false;
+  const accept = (text: string) => {
+    buffered += text;
+    while (true) {
+      const newline = buffered.indexOf("\n");
+      if (newline === -1) break;
+      const line = buffered.slice(0, newline).replace(/\r$/, "");
+      if (!discarding) write(line.length > 16_384 ? "[TRUNCATED]" : line);
+      discarding = false;
+      buffered = buffered.slice(newline + 1);
+    }
+    if (buffered.length > 16_384) {
+      if (!discarding) write("[TRUNCATED]");
+      discarding = true;
+      buffered = "";
+    }
+  };
+  for await (const chunk of stream) accept(decoder.decode(chunk, { stream: true }));
+  accept(decoder.decode());
+  if (buffered && !discarding) write(buffered);
+}
+
+/** Line-oriented logs must also redact each nonempty line of multiline secrets. */
+export function redactLogSecrets(line: string, secrets: Iterable<string>): string {
+  const fragments = new Set<string>();
+  for (const value of secrets) {
+    if (!value) continue;
+    fragments.add(value);
+    for (const fragment of value.split(/\r?\n/)) if (fragment) fragments.add(fragment);
+  }
+  let output = line;
+  for (const value of [...fragments].sort((left, right) => right.length - left.length)) {
+    output = output.split(value).join("[REDACTED]");
+  }
+  return output;
+}
+
 /** Attaches adapter-authenticated network identity without trusting request headers. */
 export function setTrustedClientAddress(request: Request, address: string): void {
   const normalized = address.trim();
@@ -32,6 +73,9 @@ export function assertSafeAttributeValue(tag: string, name: string, value: unkno
   const attribute = name.toLowerCase();
   if (attribute === "srcdoc") {
     throw new TypeError("iframe srcdoc is raw HTML and is not accepted as an attribute.");
+  }
+  if (attribute === "innerhtml" || attribute === "outerhtml") {
+    throw new TypeError(`${name} is raw HTML; use dangerouslySetInnerHTML only with trusted markup.`);
   }
   if (!URL_ATTRIBUTES.has(attribute) && !(tag.toLowerCase() === "object" && attribute === "data")) return;
   if (value === null || value === undefined || typeof value === "boolean") return;

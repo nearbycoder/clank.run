@@ -39,11 +39,19 @@ Defaults reject:
 
 Extension loading is disabled, foreign keys and `trusted_schema=OFF` are enforced, durability is `FULL`, and integrity plus foreign-key checks run before and after migration.
 
+Planning, migrations, backup, restore, and database integrity inspection run in separate terminable processes. Each operation has a 10-second wall-clock deadline, a 128 MiB V8 heap limit, and a 16 MiB request/response limit. Each host process admits two active SQLite tasks and at most 16 waiting tasks; excess work fails with a retryable capacity error. Pending migration transactions recover through SQLite's journal after a worker is killed; the platform's existing deployment recovery restores its pre-change backup when applicable.
+
+The execution deadline begins when a queued task starts. The queue is shared across projects and does not guarantee per-project fairness. These process limits do not enforce disk quotas; operators still need filesystem capacity limits and monitoring.
+
+Linux additionally requires the `prlimit` system utility from util-linux at `/usr/bin/prlimit` or `/bin/prlimit`. Workers run without JIT compilation, with kernel limits of 256 MiB for the data segment, 1 GiB of address space, 10 CPU seconds, and disabled core dumps. A missing utility rejects database work. These are system requirements, not npm dependencies. Other operating systems enforce the deadline and V8 limit but need an external sandbox for native allocation limits; SQLite's `hard_heap_limit` is only defense in depth because standard Node builds disable the memory accounting needed to enforce it.
+
 `allowUnsafeMigrations: true` is only a request. The platform operator must also set `CLANK_ALLOW_UNSAFE_MIGRATIONS=1`; otherwise deployment is rejected. Enabling it lets migration SQL execute with control-plane filesystem authority and is inappropriate for untrusted deployers.
 
 ## Backup and failure
 
-Before migration, Clank stops the active app and uses Node's SQLite backup API. Backup and restore reject symbolic links, verify source and destination integrity, keep files private, and replace through a verified temporary file. On migration, startup, or health failure Clank stops the candidate, restores the snapshot, and restarts the prior release.
+Before applying pending migrations, Clank stops the active app. Planning and the pre-release snapshot can run while the prior release is still active. Backup uses Node's SQLite backup API. Backup and restore reject final symbolic links, verify source and destination integrity, keep files private, and replace through a verified temporary file. On migration, startup, or health failure Clank stops the candidate, restores the snapshot, and restarts the prior release.
+
+The SQLite worker retains its host user's filesystem authority. Static path checks do not prevent a running application from substituting paths or SQLite sidecars between validation and access. Docker application isolation alone does not contain these host database operations. Until database work also runs inside a tenant-limited filesystem namespace, restrict deployment and application data-directory mutation to trusted operators. The process resource limits above do not close this filesystem boundary.
 
 Same-disk snapshots do not protect against disk loss. Export encrypted backups off-host and test restoration.
 

@@ -1,3 +1,4 @@
+import { runSQLiteTask } from "./sqlite-task.ts";
 import { backupSQLite, applyMigrations } from "./migrations.ts";
 import { serve } from "./node.ts";
 import { readResponseBytes } from "./security.ts";
@@ -79,34 +80,40 @@ async function rehearse(options: RehearsalOptions, kind: RehearsalReport["kind"]
     controller.abort(); reject(new Error("Rehearsal deadline exceeded."));
   }, timeoutMs); });
   const withinDeadline = <Value>(operation: Promise<Value>) => Promise.race([operation, deadline]);
+  const databaseTasks = new Set<Promise<unknown>>();
+  const databaseWithinDeadline = <Value>(operation: Promise<Value>) => {
+    databaseTasks.add(operation);
+    void operation.finally(() => databaseTasks.delete(operation)).catch(() => {});
+    return withinDeadline(operation);
+  };
   try {
     const restoreStarted = performance.now();
     if ("databasePath" in options.source) {
       const stats = await fs.lstat(options.source.databasePath);
       if (!stats.isFile() || stats.isSymbolicLink() || stats.size > maximum) throw new Error("Invalid rehearsal source.");
-      await withinDeadline(backupSQLite(options.source.databasePath, target));
+      await databaseWithinDeadline(backupSQLite(options.source.databasePath, target));
     } else {
       const backup = await withinDeadline(options.source.manager.read(options.source.backupId));
       if (backup.bytes.byteLength > maximum) throw new Error("Backup exceeds rehearsal limit.");
       const incoming = path.join(root, "verified-backup.sqlite");
       await fs.writeFile(incoming, backup.bytes, { flag: "wx", mode: 0o600 });
-      await withinDeadline(backupSQLite(incoming, target));
+      await databaseWithinDeadline(backupSQLite(incoming, target));
     }
     restoredBytes = (await fs.stat(target)).size;
     if (restoredBytes > maximum) throw new Error("Restored database exceeds rehearsal limit.");
     timings.restoreMs = performance.now() - restoreStarted;
     const key = crypto.randomBytes(32);
-    const before = await inspectDatabase(target, key);
+    const before = await databaseWithinDeadline(inspectDatabase(target, key));
     if (options.migrations) {
       phase = "migrations";
       const started = performance.now();
       const stats = await fs.lstat(options.migrations.directory);
       if (!stats.isDirectory() || stats.isSymbolicLink()) throw new Error("Invalid migration directory.");
-      const plan = await withinDeadline(applyMigrations({ path: target, directory: options.migrations.directory, allowUnsafe: options.migrations.allowUnsafe, restrictToDatabase: true }));
+      const plan = await databaseWithinDeadline(applyMigrations({ path: target, directory: options.migrations.directory, allowUnsafe: options.migrations.allowUnsafe, restrictToDatabase: true }));
       migrations = plan.pending.map(migration => migration.id);
       timings.migrationsMs = performance.now() - started;
     }
-    const after = await inspectDatabase(target, key);
+    const after = await databaseWithinDeadline(inspectDatabase(target, key));
     changes = [...new Set([...before.keys(), ...after.keys()])].sort().flatMap(table => {
       const left = before.get(table), right = after.get(table);
       if (left?.schema === right?.schema && left?.digest === right?.digest) return [];
@@ -138,6 +145,9 @@ async function rehearse(options: RehearsalOptions, kind: RehearsalReport["kind"]
   finally {
     if (timer) clearTimeout(timer);
     controller.abort();
+    // A wall-clock deadline cannot cancel native SQLite. Wait for its bounded
+    // worker to finish/close before deleting data it may still be accessing.
+    await Promise.allSettled(databaseTasks);
     try { await server?.close(); } catch (error) { failure ??= "cleanup"; privateError(error); }
     try { await application?.close(); } catch (error) { failure ??= "cleanup"; privateError(error); }
     try { await fs.rm(root, { recursive: true, force: true }); } catch (error) { failure ??= "cleanup"; privateError(error); }
@@ -149,29 +159,6 @@ async function rehearse(options: RehearsalOptions, kind: RehearsalReport["kind"]
 }
 
 async function inspectDatabase(file: string, key: Uint8Array): Promise<Map<string, { rows: number; schema: string; digest: string }>> {
-  const sqliteName = "node:sqlite", cryptoName = "node:crypto";
-  const [sqlite, crypto] = await Promise.all([import(sqliteName), import(cryptoName)]);
-  const database = new sqlite.DatabaseSync(file, { readOnly: true });
-  const result = new Map<string, { rows: number; schema: string; digest: string }>();
-  const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
-  try {
-    const tables = database.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 501").all();
-    if (tables.length > 500) throw new Error("Rehearsal supports at most 500 tables.");
-    let totalRows = 0;
-    for (const table of tables) {
-      const columns = database.prepare(`PRAGMA table_info(${quote(table.name)})`).all();
-      if (columns.length > 200) throw new Error("Rehearsal supports at most 200 columns per table.");
-      const hash = crypto.createHmac("sha256", key);
-      let rows = 0;
-      const statement = database.prepare(`SELECT * FROM ${quote(table.name)} ORDER BY ${columns.map((column: { name: string }) => (quote(column.name) + " COLLATE BINARY")).join(", ")}`);
-      statement.setReadBigInts(true);
-      for (const row of statement.iterate()) {
-        if (++totalRows > 100_000) throw new Error("Rehearsal supports at most 100000 rows.");
-        hash.update(JSON.stringify(row, (_name, value) => typeof value === "bigint" ? { integer: String(value) } : value));
-        hash.update("\n"); rows++;
-      }
-      result.set(table.name, { rows, schema: table.sql, digest: hash.digest("hex") });
-    }
-    return result;
-  } finally { database.close(); }
+  return new Map(await runSQLiteTask<Array<[string, { rows: number; schema: string; digest: string }]>>(
+    "inspection", "inspectRehearsalDatabase", [file, Array.from(key)]));
 }

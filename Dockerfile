@@ -14,6 +14,12 @@ RUN node --disable-warning=ExperimentalWarning scripts/build.mjs
 
 FROM node:22-bookworm-slim AS runtime
 
+# Host-side SQLite tasks require kernel resource limits before reading tenant data.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends util-linux \
+    && test -x /usr/bin/prlimit \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     CLANK_PLATFORM_DATA=/data

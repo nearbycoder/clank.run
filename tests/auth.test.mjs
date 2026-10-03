@@ -846,3 +846,49 @@ for (const operation of ["passkeys/delete", "change-password"]) test(`auth ${ope
     await fixture.close();
   }
 });
+
+for (const terminal of ["success", "attempt-limit"]) test(`stale MFA failures preserve ${terminal} terminal state`, async (t) => {
+  const codes = [];
+  const fixture = await createFixture({ mfa: { required: true, send: (delivery) => codes.push(delivery) } });
+  try {
+    const alice = await register(fixture.runtime, "mfa-terminal@example.com");
+    const started = await fixture.runtime.handle(request("/__clank/auth/login", {
+      method: "POST", body: { email: alice.user.email, password: "correct horse battery staple" },
+    }));
+    assert.equal(started.status, 202);
+    const { challengeId } = (await started.json()).mfa;
+    const invalidCode = codes[0].code === "000000" ? "111111" : "000000";
+    const verify = (code) => fixture.runtime.handle(request("/__clank/auth/mfa/verify", {
+      method: "POST", body: { challengeId, code },
+    }));
+    if (terminal === "attempt-limit") {
+      for (let attempt = 0; attempt < 4; attempt++) assert.equal((await verify(invalidCode)).status, 401);
+    }
+    const internal = fixture.runtime.database[Symbol.for("clank.sqlite.internal")];
+    const originalPrepare = internal.prepare.bind(internal);
+    const terminalState = { attempts: terminal === "success" ? 0 : 5, consumed_at: Date.now() };
+    let intercept = true;
+    t.mock.method(internal, "prepare", (sql) => {
+      const statement = originalPrepare(sql);
+      if (!intercept || !sql.includes("SELECT c.id, c.user_id, c.code_hash")) return statement;
+      return {
+        ...statement,
+        get(...parameters) {
+          const snapshot = statement.get(...parameters);
+          intercept = false;
+          // Simulate another verifier committing after this request read its
+          // snapshot, before the asynchronous digest/comparison returns.
+          originalPrepare("UPDATE clank_auth_mfa_challenges SET attempts = ?, consumed_at = ? WHERE id = ?")
+            .run(terminalState.attempts, terminalState.consumed_at, challengeId);
+          return snapshot;
+        },
+      };
+    });
+    assert.equal((await verify(invalidCode)).status, 401);
+    const persisted = originalPrepare("SELECT attempts, consumed_at FROM clank_auth_mfa_challenges WHERE id = ?").get(challengeId);
+    assert.deepEqual({ ...persisted }, terminalState);
+    assert.equal((await verify(codes[0].code)).status, 401);
+  } finally {
+    await fixture.close();
+  }
+});

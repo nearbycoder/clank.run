@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
 import {
@@ -18,6 +19,12 @@ import { s } from "../dist/ai.js";
 
 const encoder = new TextEncoder();
 const text = (value) => encoder.encode(value);
+
+function barrier() {
+  let resolve;
+  const promise = new Promise((ready) => { resolve = ready; });
+  return { promise, resolve };
+}
 
 async function fixture(definitions, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "clank-buckets-"));
@@ -355,6 +362,289 @@ test("openBackend publishes bucket policy and invokes the same live bucket throu
     assert.equal(environment.manager.bucket("assets").stat("agent.txt").size, 5);
   } finally {
     runtime.close();
+    await environment.close();
+  }
+});
+
+test("smaller pending replacements keep owner, bucket, and project usage readable without lending future capacity", async (t) => {
+  for (const completion of ["commit", "cancel", "expire"]) {
+    await t.test(completion, async () => {
+      let now = 2_000_000_000_000;
+      const files = defineBucket({ name: "files", ownership: "user", allowedContentTypes: ["text/plain"], maxBytes: 10, maxObjectBytes: 8, perOwnerMaxBytes: 9 });
+      const other = defineBucket({ name: "other", ownership: "user", allowedContentTypes: ["text/plain"], maxObjectBytes: 10 });
+      const environment = await fixture([files, other], { maxBytes: 12, now: () => now, capabilityTtlMs: 1000 });
+      try {
+        const bucket = environment.manager.bucket("files");
+        await bucket.put("large", text("12345678"), { userId: "alice", contentType: "text/plain" });
+        const intent = await bucket.createUploadIntent({ key: "large", size: 1, userId: "alice", contentType: "text/plain", resumable: true });
+        assert.equal(bucket.usage({ userId: "alice" }).reservedBytes, 0);
+        assert.equal(bucket.list({ userId: "alice" }).usage.bytes, 8);
+        assert.equal(environment.manager.usage().reservedBytes, 0);
+        await bucket.put("alice", text("a"), { userId: "alice", contentType: "text/plain" });
+        await assert.rejects(bucket.put("owner-over", text("a"), { userId: "alice", contentType: "text/plain" }),
+          (error) => error.code === "BUCKET_QUOTA_EXCEEDED");
+        await bucket.put("bob", text("b"), { userId: "bob", contentType: "text/plain" });
+        await assert.rejects(bucket.put("bucket-over", text("b"), { userId: "bob", contentType: "text/plain" }),
+          (error) => error.code === "BUCKET_QUOTA_EXCEEDED");
+        await environment.manager.bucket("other").put("other", text("cc"), { userId: "carol", contentType: "text/plain" });
+        await assert.rejects(environment.manager.bucket("other").put("project-over", text("c"), { userId: "carol", contentType: "text/plain" }),
+          (error) => error.code === "PROJECT_BUCKET_QUOTA_EXCEEDED");
+        if (completion === "commit") {
+          const response = await environment.manager.handle(new Request(intent.url, {
+            method: "PATCH", headers: intent.headers, body: text("x"),
+          }));
+          assert.equal(response.status, 201);
+        } else if (completion === "cancel") {
+          assert.equal((await environment.manager.handle(new Request(intent.url, { method: "DELETE" }))).status, 204);
+        } else {
+          now += 1001;
+          await environment.manager.sweep();
+        }
+        assert.equal(environment.manager.usage().bytes, completion === "commit" ? 5 : 12);
+        assert.equal(environment.manager.usage().reservedBytes, 0);
+        assert.equal(bucket.usage({ userId: "alice" }).bytes, completion === "commit" ? 2 : 9);
+      } finally {
+        await environment.close();
+      }
+    });
+  }
+});
+
+test("a direct capability has one provider writer, including duplicate and conflicting payloads", async (t) => {
+  for (const loserValue of ["winner", "loserr"]) {
+    await t.test(loserValue, async () => {
+      const entered = barrier();
+      const release = barrier();
+      let writes = 0;
+      const environment = await fixture([defineBucket({ name: "files", ownership: "app", allowedContentTypes: ["text/plain"] })], {
+        wrapStore: (store) => ({
+          ...store,
+          async put(...args) {
+            writes++;
+            if (writes === 1) { entered.resolve(); await release.promise; }
+            return store.put(...args);
+          },
+        }),
+      });
+      let winning;
+      try {
+        const bucket = environment.manager.bucket("files");
+        const intent = await bucket.createUploadIntent({ key: "same", size: 6, contentType: "text/plain", resumable: false });
+        const request = (value) => environment.manager.handle(new Request(intent.url, { method: "PUT", headers: intent.headers, body: text(value) }));
+        winning = request("winner");
+        await entered.promise;
+        const losing = await request(loserValue);
+        assert.equal(losing.status, 409);
+        assert.equal((await losing.json()).error.code, "UPLOAD_BUSY");
+        assert.equal(writes, 1);
+        release.resolve();
+        assert.equal((await winning).status, 201);
+        assert.equal((await request(loserValue)).status, 410);
+        assert.equal(new TextDecoder().decode((await bucket.get("same")).bytes), "winner");
+        assert.equal(bucket.usage().objects, 1);
+        assert.equal(bucket.usage().reservedObjects, 0);
+      } finally {
+        release.resolve();
+        await winning;
+        await environment.close();
+      }
+    });
+  }
+});
+
+test("deletion cancels equal and growing pending replacements before releasing quota", async (t) => {
+  for (const size of [4, 6]) {
+    await t.test(String(size), async () => {
+      const files = defineBucket({ name: "files", ownership: "user", allowedContentTypes: ["text/plain"], maxObjects: 1, maxBytes: 6, perOwnerMaxObjects: 1, perOwnerMaxBytes: 6, maxObjectBytes: 6 });
+      const environment = await fixture([files], { maxObjects: 1, maxBytes: 6 });
+      try {
+        const bucket = environment.manager.bucket("files");
+        await bucket.put("same", text("old!"), { userId: "alice", contentType: "text/plain" });
+        const intent = await bucket.createUploadIntent({ key: "same", size, userId: "alice", contentType: "text/plain", resumable: false });
+        assert.equal(await bucket.delete("same", { userId: "alice" }), true);
+        assert.deepEqual(environment.manager.usage(), { objects: 0, bytes: 0, reservedObjects: 0, reservedBytes: 0, maxObjects: 1, maxBytes: 6 });
+        await bucket.put("next", text("filled"), { userId: "alice", contentType: "text/plain" });
+        assert.equal((await environment.manager.handle(new Request(intent.url, { method: "PUT", headers: intent.headers, body: text("x".repeat(size)) }))).status, 410);
+        assert.equal(bucket.stat("same", { userId: "alice" }), null);
+        assert.equal(bucket.usage({ userId: "alice" }).bytes, 6);
+        assert.equal(environment.manager.usage().objects, 1);
+      } finally {
+        await environment.close();
+      }
+    });
+  }
+});
+
+test("deletion fences an in-flight replacement and reclaims its late provider write", async () => {
+  const entered = barrier();
+  const release = barrier();
+  let writes = 0;
+  let canceledKey;
+  const environment = await fixture([defineBucket({ name: "files", ownership: "app", allowedContentTypes: ["text/plain"], maxObjects: 1, maxBytes: 6, maxObjectBytes: 6 })], {
+    maxObjects: 1,
+    maxBytes: 6,
+    wrapStore: (store) => ({
+      ...store,
+      async put(...args) {
+        writes++;
+        if (writes === 2) { canceledKey = args[0]; entered.resolve(); await release.promise; }
+        return store.put(...args);
+      },
+    }),
+  });
+  let canceled;
+  try {
+    const bucket = environment.manager.bucket("files");
+    await bucket.put("same", text("old!"), { contentType: "text/plain" });
+    const intent = await bucket.createUploadIntent({ key: "same", size: 6, contentType: "text/plain", resumable: false });
+    canceled = environment.manager.handle(new Request(intent.url, { method: "PUT", headers: intent.headers, body: text("cancel") }));
+    await entered.promise;
+    assert.equal(await bucket.delete("same"), true);
+    await bucket.put("same", text("winner"), { contentType: "text/plain" });
+    release.resolve();
+    assert.equal((await canceled).status, 409);
+    assert.equal(new TextDecoder().decode((await bucket.get("same")).bytes), "winner");
+    assert.equal(await environment.store.stat(canceledKey), null);
+    assert.deepEqual(environment.manager.usage(), { objects: 1, bytes: 6, reservedObjects: 0, reservedBytes: 0, maxObjects: 1, maxBytes: 6 });
+  } finally {
+    release.resolve();
+    await canceled;
+    await environment.close();
+  }
+});
+
+test("a failed bucket BEGIN leaves the manager usable and does not attempt rollback", async (t) => {
+  const environment = await fixture([defineBucket({ name: "files", ownership: "app", allowedContentTypes: ["text/plain"] })]);
+  const original = DatabaseSync.prototype.exec;
+  let failBegin = true;
+  let rollbacks = 0;
+  const mocked = t.mock.method(DatabaseSync.prototype, "exec", function(sql) {
+    if (sql === "BEGIN IMMEDIATE" && failBegin) {
+      failBegin = false;
+      throw new Error("injected BEGIN failure");
+    }
+    if (sql === "ROLLBACK") rollbacks++;
+    return original.call(this, sql);
+  });
+  try {
+    const bucket = environment.manager.bucket("files");
+    await assert.rejects(bucket.put("failed", text("no"), { contentType: "text/plain" }), /injected BEGIN failure/u);
+    assert.equal(rollbacks, 0);
+    await bucket.put("works", text("yes"), { contentType: "text/plain" });
+    assert.equal(bucket.stat("works").size, 3);
+  } finally {
+    mocked.mock.restore();
+    await environment.close();
+  }
+});
+
+test("failed server put validation releases reservations immediately", async () => {
+  const avatars = defineBucket({ name: "avatars", ownership: "app", maxObjects: 1, maxBytes: 24, maxObjectBytes: 24, image: { maxWidth: 10, maxHeight: 10 } });
+  const environment = await fixture([avatars], { maxObjects: 1, maxBytes: 24 });
+  try {
+    const bucket = environment.manager.bucket("avatars");
+    for (const invalid of [
+      { bytes: text("not png"), code: "INVALID_IMAGE" },
+      { bytes: png(), code: "UPLOAD_DIGEST_MISMATCH", expectedSha256: "0".repeat(64) },
+    ]) {
+      await assert.rejects(bucket.put("avatar", invalid.bytes, { contentType: "image/png", expectedSha256: invalid.expectedSha256 }),
+        (error) => error.code === invalid.code);
+      assert.equal(environment.manager.usage().reservedObjects, 0);
+      assert.equal(environment.manager.usage().reservedBytes, 0);
+    }
+    assert.equal((await bucket.put("avatar", png(), { contentType: "image/png" })).size, 24);
+  } finally {
+    await environment.close();
+  }
+});
+
+test("provider failures release finalizer claims and preserve retryable cleanup", async (t) => {
+  for (const failure of ["throw", "metadata"]) {
+    await t.test(failure, async () => {
+      let fail = true;
+      let failedKey;
+      const environment = await fixture([defineBucket({ name: "files", ownership: "app", allowedContentTypes: ["text/plain"], maxObjects: 1 })], {
+        wrapStore: (store) => ({
+          ...store,
+          async put(...args) {
+            const result = await store.put(...args);
+            if (!fail) return result;
+            failedKey = args[0];
+            if (failure === "throw") throw new Error("provider failed after write");
+            return { ...result, sha256: "0".repeat(64) };
+          },
+        }),
+      });
+      try {
+        const bucket = environment.manager.bucket("files");
+        const intent = await bucket.createUploadIntent({ key: "same", size: 4, contentType: "text/plain", resumable: false });
+        const response = await environment.manager.handle(new Request(intent.url, { method: "PUT", headers: intent.headers, body: text("fail") }));
+        assert.equal(response.status, failure === "throw" ? 500 : 502);
+        assert.equal(bucket.stat("same"), null);
+        assert.equal(environment.manager.usage().reservedObjects, 0);
+        assert.equal(await environment.store.stat(failedKey), null);
+        fail = false;
+        await bucket.put("same", text("next"), { contentType: "text/plain" });
+        assert.equal(new TextDecoder().decode((await bucket.get("same")).bytes), "next");
+      } finally {
+        await environment.close();
+      }
+    });
+  }
+});
+
+test("an older garbage collector cannot acknowledge cleanup requeued by a canceled provider write", async () => {
+  const writing = barrier();
+  const releaseWrite = barrier();
+  const deleting = barrier();
+  const releaseDelete = barrier();
+  let storageKey;
+  let deletes = 0;
+  let failRetry = true;
+  const environment = await fixture([defineBucket({ name: "files", ownership: "app", allowedContentTypes: ["text/plain"] })], {
+    wrapStore: (store) => ({
+      ...store,
+      async put(...args) {
+        storageKey = args[0];
+        writing.resolve();
+        await releaseWrite.promise;
+        return store.put(...args);
+      },
+      async delete(key) {
+        if (key !== storageKey) return store.delete(key);
+        deletes++;
+        if (deletes === 1) {
+          const result = await store.delete(key);
+          deleting.resolve();
+          await releaseDelete.promise;
+          return result;
+        }
+        if (failRetry) throw new Error("cleanup temporarily unavailable");
+        return store.delete(key);
+      },
+    }),
+  });
+  let upload;
+  let deletion;
+  try {
+    const bucket = environment.manager.bucket("files");
+    const intent = await bucket.createUploadIntent({ key: "pending", size: 4, contentType: "text/plain", resumable: false });
+    upload = environment.manager.handle(new Request(intent.url, { method: "PUT", headers: intent.headers, body: text("late") }));
+    await writing.promise;
+    deletion = bucket.delete("pending");
+    await deleting.promise;
+    releaseWrite.resolve();
+    assert.equal((await upload).status, 409);
+    assert.ok(await environment.store.stat(storageKey));
+    releaseDelete.resolve();
+    assert.equal(await deletion, false);
+    failRetry = false;
+    assert.equal((await environment.manager.sweep()).objects, 1);
+    assert.equal(await environment.store.stat(storageKey), null);
+  } finally {
+    releaseWrite.resolve();
+    releaseDelete.resolve();
+    await Promise.all([upload, deletion]);
     await environment.close();
   }
 });

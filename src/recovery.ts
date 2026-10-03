@@ -1,3 +1,4 @@
+import { runSQLiteTask } from "./sqlite-task.ts";
 import { backupSQLite, restoreSQLiteBackup } from "./migrations.ts";
 import type { ObjectStore } from "./object-storage.ts";
 
@@ -1538,44 +1539,16 @@ async function fileDigest(path: string, maximum: number): Promise<{ bytes: numbe
   return { bytes, sha256: digest.digest("hex") };
 }
 
-async function inspectSQLite(path: string): Promise<{
+function inspectSQLite(path: string): Promise<{
   revision: number | null;
   migrationCount: number;
   latestMigration: string | null;
 }> {
-  const sqlite = await import("node:sqlite") as any;
-  const database = new sqlite.DatabaseSync(path, { readOnly: true });
-  try {
-    const table = (name: string) => Boolean(database.prepare(
-      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?",
-    ).get(name));
-    const revision = table("clank_meta")
-      ? Number(database.prepare("SELECT _value FROM clank_meta WHERE _key = 'global_version'").get()?._value ?? 0)
-      : null;
-    const migration = table("clank_migrations")
-      ? database.prepare("SELECT count(*) AS count, max(id) AS latest FROM clank_migrations").get()
-      : { count: 0, latest: null };
-    return {
-      revision,
-      migrationCount: Number(migration.count),
-      latestMigration: migration.latest === null ? null : String(migration.latest),
-    };
-  } finally {
-    database.close();
-  }
+  return runSQLiteTask("inspection", "inspectSQLite", [path]);
 }
 
-async function verifySQLite(path: string): Promise<void> {
-  const sqlite = await import("node:sqlite") as any;
-  const database = new sqlite.DatabaseSync(path, { readOnly: true });
-  try {
-    const rows = database.prepare("PRAGMA integrity_check").all();
-    if (rows.length !== 1 || String(Object.values(rows[0] ?? {})[0]).toLowerCase() !== "ok") {
-      throw new Error("SQLite integrity check failed.");
-    }
-  } finally {
-    database.close();
-  }
+function verifySQLite(path: string): Promise<void> {
+  return runSQLiteTask("inspection", "verifySQLite", [path]);
 }
 
 function backupSnapshotInput(

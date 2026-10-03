@@ -221,12 +221,12 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
     if (closed) throw new Error("Deployment orchestrator is closed.");
   };
 
-  const verifyNode = async (id: string, token: string): Promise<Record<string, unknown>> => {
+  const verifyNode = (id: string, token: string): Record<string, unknown> => {
     const row = internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(nodeId(id));
     const valid = row
       && typeof token === "string"
       && token.startsWith("clnka_")
-      && await safeEqual(String(row.token_hash), await digest(token));
+      && safeEqual(String(row.token_hash), syncDigest(token));
     if (!valid) throw new Error("Deployment node authentication failed.");
     return row;
   };
@@ -382,7 +382,7 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
     },
     async authenticateNode(idInput, token) {
       ensureOpen();
-      const row = await verifyNode(nodeId(idInput), token);
+      const row = verifyNode(nodeId(idInput), token);
       if (Number(row.expires_at) <= Date.now() || String(row.status) === "offline") {
         throw new Error("Deployment node lease is expired.");
       }
@@ -391,7 +391,7 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
     async heartbeat(idInput, token, heartbeat = {}) {
       ensureOpen();
       const id = nodeId(idInput);
-      await verifyNode(id, token);
+      verifyNode(id, token);
       const tokenHash = await digest(token);
       const now = Date.now();
       return internal.transaction((changes) => {
@@ -432,10 +432,13 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
     async drainNode(idInput, token, draining = true) {
       ensureOpen();
       const id = nodeId(idInput);
-      await verifyNode(id, token);
-      internal.prepare("UPDATE clank_deployment_nodes SET status = ?, updated_at = ? WHERE id = ?")
-        .run(draining ? "draining" : "active", Date.now(), id);
-      return nodeFromRow(internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id)!);
+      return internal.transaction((changes) => {
+        verifyNode(id, token);
+        internal.prepare("UPDATE clank_deployment_nodes SET status = ?, updated_at = ? WHERE id = ?")
+          .run(draining ? "draining" : "active", Date.now(), id);
+        changes.record("__orchestration", id);
+        return nodeFromRow(internal.prepare("SELECT * FROM clank_deployment_nodes WHERE id = ?").get(id)!);
+      });
     },
     setNodeDraining(idInput, draining) {
       ensureOpen();
@@ -719,7 +722,7 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
     async observe(nodeIdInput, token, input) {
       ensureOpen();
       const id = nodeId(nodeIdInput);
-      await verifyNode(id, token);
+      const node = verifyNode(id, token);
       const result = internal.prepare(`UPDATE clank_deployment_placements
         SET observed_release_id = ?, observed_state = ?, observed_generation = ?,
             assigned_node_id = CASE
@@ -728,7 +731,8 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
               ELSE assigned_node_id
             END,
             updated_at = ?
-        WHERE project_id = ? AND assigned_node_id = ? AND generation = ? AND observed_generation <= ?`)
+        WHERE project_id = ? AND assigned_node_id = ? AND generation = ? AND observed_generation <= ?
+          AND EXISTS (SELECT 1 FROM clank_deployment_nodes WHERE id = ? AND token_hash = ?)`)
         .run(
           input.releaseId,
           input.state,
@@ -739,6 +743,8 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
           id,
           input.generation,
           input.generation,
+          id,
+          node.token_hash,
         );
       return Number(result.changes) === 1;
     },
@@ -785,7 +791,7 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
     async claim(nodeIdInput, token, limit = 10) {
       ensureOpen();
       const id = nodeId(nodeIdInput);
-      const node = await verifyNode(id, token);
+      const node = verifyNode(id, token);
       if (Number(node.expires_at) <= Date.now() || String(node.status) !== "active") {
         if (String(node.status) === "draining") return [];
         throw new Error("Deployment node lease is expired.");
@@ -805,6 +811,11 @@ export function openDeploymentOrchestrator<DB extends DatabaseSchema<any>>(
         const leaseTokenHash = await digest(leaseToken);
         const expiresAt = now + operationLeaseMs;
         const fence = internal.transaction(() => {
+          const currentNode = verifyNode(id, token);
+          if (Number(currentNode.expires_at) <= Date.now() || String(currentNode.status) === "offline") {
+            throw new Error("Deployment node lease is expired.");
+          }
+          if (String(currentNode.status) !== "active") return null;
           const current = internal.prepare(`SELECT project_id
             FROM clank_deployment_operations
             WHERE id = ? AND node_id = ? AND (
@@ -1318,7 +1329,7 @@ function syncDigest(value: string): string {
   return module.createHash("sha256").update(value, "utf8").digest("base64url");
 }
 
-async function safeEqual(left: string, right: string): Promise<boolean> {
+function safeEqual(left: string, right: string): boolean {
   const leftBytes = new TextEncoder().encode(left);
   const rightBytes = new TextEncoder().encode(right);
   if (leftBytes.byteLength !== rightBytes.byteLength) return false;

@@ -10,6 +10,7 @@ Clank treats browser input, agent input, URLs, cookies, request bodies, and pers
 - Serialized state escapes `<`, `>`, `&`, and Unicode line separators.
 - Inline `on*` attributes are rejected case-insensitively.
 - `javascript:`, `vbscript:`, `file:`, non-image `data:`, SVG data images, and `srcdoc` attributes are rejected.
+- Ordinary `innerHTML` and `outerHTML` props are rejected in SSR, rendering, and hydration; trusted raw markup must use the explicit escape hatch below.
 - Event listeners must be functions and are installed through `addEventListener`.
 - Two-way binding is restricted to `value`, `checked`, `selected`, and `selectedIndex`.
 - `renderDocument({ nonce })` applies a validated CSP nonce to generated boot-state and module script tags.
@@ -17,6 +18,12 @@ Clank treats browser input, agent input, URLs, cookies, request bodies, and pers
 `dangerouslySetInnerHTML` deliberately bypasses escaping. Use it only with trusted static content or an application-selected sanitizer. Clank does not include an HTML sanitizer because safe policies depend on the tags, attributes, and URL schemes an application intends to allow.
 
 The TSX transform is a source-to-source compiler, not a data sandbox. It deliberately preserves application-authored JavaScript and TypeScript expressions in generated modules. Compile only trusted project source, never request or database values; execute mutually untrusted generated applications inside the documented runner isolation boundary.
+
+### Logs and portable exports
+
+Platform logs redact current secret values and each nonempty line of multiline secrets. Provider logs also redact the exact running generation's environment, so rotating or deleting a stored secret does not expose its old launch value. Missing generation metadata makes provider log retrieval fail closed. Lines longer than 16 KiB are replaced with `[TRUNCATED]` and discarded through the next newline; retaining a prefix could expose a partial secret. Redaction does not promise to recognize application-encoded values or secrets that application code deliberately prints in separate fragments.
+
+Portable CLI exports exclude framework runner, provider, and platform state directories, including legacy `.proact` names. File count and aggregate byte limits are checked during collection, before the next file is buffered. Arbitrarily named application credential files still need explicit removal before exporting a project.
 
 ### Requests and RPC
 
@@ -129,7 +136,8 @@ do not sandbox handler code. See [Durable jobs, workflow graphs, and cron](jobs-
 - Secrets use AES-256-GCM and values are never returned by the API.
 - SQL migration history is immutable and pending migrations are transactional.
 - Safe migrations cannot modify Clank-managed SQL namespaces.
-- SQLite is integrity-checked and backed up after quiescing the active app.
+- SQLite is integrity-checked and backed up; pending migrations and restore quiesce the active app, while planning and online snapshots can run against a live app.
+- Tenant SQLite operations (migrations, jobs, backup inspection, preview processing, and rehearsal inspection) run in terminable workers with bounded concurrency, messages, deadlines, and V8 heaps. Linux also requires util-linux `prlimit` for kernel CPU, native-memory, address-space, and core-dump limits; see [SQLite migrations](migrations.md).
 - Database and backup paths reject final symbolic links and use private file permissions.
 - Migration, startup, or health failure restores the prior database and process.
 - Code rollback is health-gated; data rollback is narrowly scoped and confirmed.
@@ -148,6 +156,8 @@ do not sandbox handler code. See [Durable jobs, workflow graphs, and cron](jobs-
 - Client disconnects abort proxied upstream work and cancel streamed Node responses.
 
 See [Platform security](platform-security.md) for the runner trust boundary.
+
+The database workers still retain host filesystem authority. Application-writable database paths and sidecars are not protected from concurrent substitution by a filesystem namespace. Treat deployment access as trusted-operator access until that boundary is isolated; Docker application limits and worker resource limits alone do not resolve it. Non-Linux hosts also need external native-memory limits for these workers.
 
 ## Recommended production setup
 

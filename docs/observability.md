@@ -2,6 +2,8 @@
 
 One `createObservability` instance provides structured logs, W3C trace propagation, metrics, and readiness checks without a runtime package.
 
+Framework HTTP instrumentation drops metric samples when its series budget is exhausted and bounds generated span names. These telemetry limits and exporter failures preserve the handler's response or original error. Custom metric calls still report invalid labels and exhausted series budgets to their caller.
+
 ```ts
 import {
   createObservability,

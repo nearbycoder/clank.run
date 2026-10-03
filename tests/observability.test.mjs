@@ -8,6 +8,39 @@ import {
   parseTraceparent,
 } from "../dist/index.js";
 
+test("request telemetry stays bounded without changing responses or handler errors", async () => {
+  const exporter = createMemorySpanExporter();
+  const observability = createObservability({ serviceName: "bounded", maxMetricSeries: 2, exporter, log: () => {} });
+  try {
+    for (const [method, path] of [["GET", "/first"], ["GET", "/second"], ["POST", "/third"], ["PATCH", `/${"long".repeat(100)}`]]) {
+      const response = await observability.instrument(new Request(`https://example.test${path}`, { method }),
+        async () => new Response("handler response", { status: 201 }));
+      assert.equal(response.status, 201);
+      assert.equal(await response.text(), "handler response");
+    }
+    const failure = new Error("original handler error");
+    await assert.rejects(observability.instrument(new Request("https://example.test/failure", { method: "DELETE" }),
+      async () => { throw failure; }), (error) => error === failure);
+    await observability.flush();
+    assert.equal(exporter.spans.length, 5);
+    assert.ok(exporter.spans.every((span) => span.name.length <= 200));
+    const series = observability.metrics.prometheus().split("\n").filter((line) => line && !line.startsWith("#"));
+    assert.ok(series.length <= 2);
+    assert.match(observability.metrics.prometheus(), /clank_http_active_requests\{method="GET"\} 0/);
+  } finally { await observability.close(); }
+});
+
+test("synchronous exporter failures do not replace successful HTTP responses", async () => {
+  const observability = createObservability({ serviceName: "export-failure", exporter: {
+    export() { throw new Error("collector unavailable"); },
+  }, log: () => {} });
+  try {
+    const response = await observability.instrument(new Request("https://example.test/"), async () => new Response("ok"));
+    assert.equal(await response.text(), "ok");
+    await observability.flush();
+  } finally { await observability.close(); }
+});
+
 test("request instrumentation propagates W3C traces, redacts logs, and emits bounded metrics", async () => {
   const exporter = createMemorySpanExporter();
   const logs = [];

@@ -863,3 +863,29 @@ test("external database provisioner is idempotency-oriented and destruction is c
   await provisioner.destroy(binding.id, `destroy ${binding.id}`);
   assert.match(calls[1].url, /database_0001\/destroy$/);
 });
+
+test("database provisioner bounds streamed response bodies on success and failure", async () => {
+  for (const status of [200, 503]) {
+    let cancelled = false;
+    const provisioner = createHttpDatabaseProvisioner({
+      url: "https://data.example.test/api/", token: "provisioner-token",
+      fetch: async () => new Response(new ReadableStream({
+        pull(controller) { controller.enqueue(new Uint8Array(256 * 1024)); },
+        cancel() { cancelled = true; },
+      }), { status }),
+    });
+    await assert.rejects(provisioner.provision({ projectId: "project_0001", region: "us-central", idempotencyKey: "provision-project-0001" }), /Response body exceeds/);
+    assert.equal(cancelled, true);
+  }
+});
+
+test("ingress health cancels response streams it does not consume", async () => {
+  let cancelled = 0;
+  const ingress = createManagedIngress({
+    routes: () => [{ id: "route_health", projectId: "project_health", hosts: ["app.example.test"], upstream: "http://127.0.0.1:9001", active: true }],
+    fetch: async () => new Response(new ReadableStream({ cancel() { cancelled++; } })),
+  });
+  const result = await ingress.health();
+  assert.equal(result.route_health.ok, true);
+  assert.equal(cancelled, 1);
+});

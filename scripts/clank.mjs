@@ -257,6 +257,10 @@ try {
 }
 
 if (command === "watch") {
+  // fs.promises.watch is lazy: advance the iterator to register the underlying
+  // watcher before telling callers it is safe to make their first edit.
+  const events = watch(input, { recursive: true });
+  let event = events.next();
   console.log(`Watching ${input}`);
   let queued;
   let rebuilding = false;
@@ -273,8 +277,14 @@ if (command === "watch") {
   };
   // Every source entry is copied or compiled. Directory events and arbitrary
   // static extensions must trigger the same rebuild as TypeScript changes.
-  for await (const _event of watch(input, { recursive: true })) {
+  try {
+    while (!(await event).done) {
+      clearTimeout(queued);
+      queued = setTimeout(() => void rebuild(), 40);
+      event = events.next();
+    }
+  } finally {
     clearTimeout(queued);
-    queued = setTimeout(() => void rebuild(), 40);
+    await events.return();
   }
 }

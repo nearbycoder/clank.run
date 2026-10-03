@@ -224,7 +224,7 @@
     "check": "node --disable-warning=ExperimentalWarning scripts/check.mjs"
   },
   "engines": {
-    "node": ">=22.16"
+    "node": ">=22.16 <26"
   },
   "publishConfig": {
     "access": "public",

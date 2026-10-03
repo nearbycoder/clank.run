@@ -83,7 +83,13 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
   await mkdir(join(root, "migrations"), { recursive: true });
   await writeFile(join(root, "dist", "server.js"), `
     import { createServer } from "node:http";
+    import { existsSync, writeFileSync } from "node:fs";
     await new Promise((resolve) => setTimeout(resolve, ${Number(options.startupDelayMs ?? 0)}));
+    const startupGate = ${JSON.stringify(options.startupGate ?? null)};
+    if (startupGate && existsSync(startupGate.hold)) {
+      writeFileSync(startupGate.entered, "waiting");
+      while (existsSync(startupGate.hold)) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     const server = createServer(async (request, response) => {
       if (request.url === "/_clank-rollout-slow") {
         await new Promise((resolve) => setTimeout(resolve, ${Number(options.responseDelayMs ?? 0)}));
@@ -1759,6 +1765,7 @@ test("background startup recovery exposes the control plane before slow applicat
   const root = await mkdtemp(join(tmpdir(), "clank-platform-background-recovery-"));
   const dataDirectory = join(root, "platform");
   const errors = [];
+  const startupGate = { hold: join(root, "hold-startup"), entered: join(root, "startup-entered") };
   const options = {
     dataDirectory,
     publicUrl: "http://127.0.0.1:4200",
@@ -1786,7 +1793,7 @@ test("background startup recovery exposes the control plane before slow applicat
       "recovered",
       [["0001_create_items.sql", "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT NOT NULL);\n"]],
       false,
-      { startupDelayMs: 500 },
+      { startupGate },
     );
     const deployed = await deploy(
       platform,
@@ -1798,13 +1805,19 @@ test("background startup recovery exposes the control plane before slow applicat
     assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
     await platform.close();
 
-    const startedAt = performance.now();
+    // Keep application recovery pending until the control plane proves it can
+    // serve requests. Scheduler load cannot accidentally complete this gate.
+    await writeFile(startupGate.hold, "hold");
     platform = await openPlatform({ ...options, startupRecovery: "background" });
-    const elapsed = performance.now() - startedAt;
-    assert.ok(elapsed < 400, `background recovery blocked openPlatform for ${elapsed.toFixed(1)}ms`);
+    await waitFor(async () => {
+      try { await stat(startupGate.entered); return true; }
+      catch (error) { if (error.code === "ENOENT") return false; throw error; }
+    });
+    assert.deepEqual(errors, [], "background recovery must still be waiting for the application");
     assert.equal((await platform.handle(new Request(
       "https://healthcheck.railway.app/_clank/readyz",
     ))).status, 200);
+    await unlink(startupGate.hold);
     let lastRecoveryResponse = "none";
     try {
       await waitFor(async () => {
@@ -1819,6 +1832,7 @@ test("background startup recovery exposes the control plane before slow applicat
       );
     }
   } finally {
+    await rm(startupGate.hold, { force: true });
     await platform.close();
     await rm(root, { recursive: true, force: true });
   }
@@ -2601,6 +2615,14 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       }],
     );
     providerDiagnosticsFault = "legacy";
+    // Rotating/deleting a stored secret must not reveal the credentials still
+    // consumed by the current runtime generation to a log reader.
+    await payload(platform, jsonRequest(`/api/projects/${created.project.id}/secrets`, {
+      method: "PUT", token: owner.accessToken,
+      body: { values: { PRIVATE_RUNTIME_SECRET: "provider-secret-replacement" } },
+    }));
+    const rotatedLogs = await payload(platform, jsonRequest(`/api/projects/${created.project.id}/logs?limit=100`, { token: owner.accessToken }));
+    assert.equal(rotatedLogs.logs.find((entry) => entry.source === "provider").message, "provider log [REDACTED]");
     const legacyProviderMetrics = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/metrics?range=15m`,
       { cookie: owner.cookie },
@@ -2776,7 +2798,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     assert.equal(
       providerControlRequests.filter((request) =>
         request.url.includes("/diagnostics?")).length,
-      7,
+      8,
     );
     const remoteJobs = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/jobs`,

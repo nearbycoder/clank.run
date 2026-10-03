@@ -1,3 +1,4 @@
+import { captureLogLines } from "./security.ts";
 import { parseDeploymentConfig, type DeploymentConfig } from "./deploy.ts";
 import type { PreparedDeploymentRuntimeData } from "./provider-data.ts";
 
@@ -1430,41 +1431,9 @@ function captureRuntimeOutput(
   stream: AsyncIterable<Uint8Array> | undefined,
 ): void {
   if (!stream) return;
-  void (async () => {
-    const decoder = new TextDecoder();
-    let buffered = "";
-    try {
-      for await (const chunk of stream) {
-        buffered += decoder.decode(chunk, { stream: true });
-        while (true) {
-          const newline = buffered.indexOf("\n");
-          if (newline === -1) break;
-          appendRuntimeLog(
-            record,
-            process,
-            streamName,
-            buffered.slice(0, newline).replace(/\r$/u, ""),
-          );
-          buffered = buffered.slice(newline + 1);
-        }
-        if (buffered.length > MAX_RUNTIME_LOG_LINE) {
-          appendRuntimeLog(
-            record,
-            process,
-            streamName,
-            buffered.slice(0, MAX_RUNTIME_LOG_LINE),
-          );
-          buffered = "";
-        }
-      }
-      buffered += decoder.decode();
-      if (buffered) {
-        appendRuntimeLog(record, process, streamName, buffered);
-      }
-    } catch {
-      // The attached process exit path reports infrastructure failures.
-    }
-  })();
+  void captureLogLines(stream, (line) => appendRuntimeLog(record, process, streamName, line)).catch(() => {
+    // The attached process exit path reports infrastructure failures.
+  });
 }
 
 function appendRuntimeLog(

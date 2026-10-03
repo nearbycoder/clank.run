@@ -4,6 +4,30 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { h, matchRoutes, renderToString, staticFiles } from "../dist/index.js";
+import { captureLogLines, redactLogSecrets } from "../dist/security.js";
+
+test("log capture redacts multiline secrets and withholds oversized line fragments", async () => {
+  const secret = "synthetic-private-first\r\nsynthetic-private-second";
+  const longSecret = "private".repeat(3_000);
+  const raw = `start\n${secret}\n${longSecret}\ncomplete\n`;
+  const lines = [];
+  async function* chunks() {
+    const bytes = new TextEncoder().encode(raw);
+    for (let offset = 0; offset < bytes.length; offset += 31) yield bytes.subarray(offset, offset + 31);
+  }
+  await captureLogLines(chunks(), (line) => lines.push(redactLogSecrets(line, [secret, longSecret])));
+  assert.deepEqual(lines, ["start", "[REDACTED]", "[REDACTED]", "[TRUNCATED]", "complete"]);
+  const singleChunk = [];
+  await captureLogLines((async function* () { yield new TextEncoder().encode(`${longSecret}\nafter`); })(), (line) => singleChunk.push(line));
+  assert.deepEqual(singleChunk, ["[TRUNCATED]", "after"]);
+});
+
+test("SSR requires the explicit trusted markup escape hatch for raw HTML", async () => {
+  for (const name of ["innerHTML", "outerHTML", "innerhtml", "outerhtml"]) {
+    await assert.rejects(renderToString(h("div", { [name]: "<strong>untrusted</strong>" })), /raw HTML/);
+  }
+  assert.equal(await renderToString(h("div", { dangerouslySetInnerHTML: { __html: "<strong>trusted</strong>" } })), "<div><strong>trusted</strong></div>");
+});
 
 test("SSR validates coerced URLs and object resource URLs", async () => {
   for (const [tag, name, value] of [

@@ -60,8 +60,8 @@ async function content(path) {
   catch (error) { if (error.code === "ENOENT") return null; throw error; }
 }
 
-async function watching(t, root, extra = []) {
-  const process = launch(["watch", "src", "dist", ...extra], root);
+async function watching(t, root, extra = [], preload) {
+  const process = launch(["watch", "src", "dist", ...extra], root, preload);
   watchers.get(root).push(process);
   await until(() => process.stdout.includes("Watching "), `Watch did not start: ${process.stderr}`);
   return process;
@@ -94,7 +94,42 @@ test("093: watch coalesces changes during a slow build without overlapping write
   const tailwind = join(root, "node_modules", "@tailwindcss", "cli", "dist");
   await mkdir(tailwind, { recursive: true });
   await writeFile(join(root, "src", "style.css"), "initial");
+  const preload = join(root, "watch-readiness.mjs");
+  await writeFile(preload, `
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const originalWatch = fs.promises.watch;
+let registered = false;
+fs.promises.watch = (...args) => {
+  const events = originalWatch(...args);
+  return {
+    [Symbol.asyncIterator]() { return this; },
+    next(...args) {
+      const pending = events.next(...args);
+      registered = true;
+      return pending;
+    },
+    return(...args) { return events.return(...args); },
+  };
+};
+syncBuiltinESMExports();
+const originalLog = console.log;
+console.log = (...args) => {
+  if (String(args[0]).startsWith("Watching ") && !registered) {
+    throw new Error("Watch readiness was announced before registering filesystem events");
+  }
+  originalLog(...args);
+};
+// Acknowledge completion of the CLI's scheduled callbacks, so the test can
+// keep a build held until it has processed the next debounced change.
+const originalTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, milliseconds, ...args) => originalTimeout(function () {
+  try { callback.apply(this, args); }
+  finally { fs.appendFileSync("watch-ticks", "tick\\n"); }
+}, milliseconds);
+`);
   await writeFile(join(tailwind, "index.mjs"), `
+import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { setTimeout } from "node:timers/promises";
 try { await mkdir("active-build"); }
@@ -102,21 +137,32 @@ catch { await appendFile("build-events", "overlap\\n"); process.exit(1); }
 try {
   await appendFile("build-events", "start\\n");
   const source = await readFile(process.argv[process.argv.indexOf("-i") + 1], "utf8");
-  await setTimeout(240);
+  if (source === "second") {
+    await writeFile("second-build-started", "waiting");
+    while (!existsSync("release-second-build")) await setTimeout(10);
+  }
   await writeFile(process.argv[process.argv.indexOf("-o") + 1], source);
   await appendFile("build-events", "end\\n");
 } finally { await rm("active-build", { recursive: true }); }
 `);
-  const process = await watching(t, root, ["--tailwind=src/style.css"]);
-  await writeFile(join(root, "src", "style.css"), "second");
-  await until(async () => (await content(join(root, "build-events")))?.split("start").length >= 3, "Second build did not start");
-  await writeFile(join(root, "src", "style.css"), "third");
-  await delay(80);
-  await writeFile(join(root, "src", "style.css"), "latest");
-  await until(async () => await content(join(root, "dist", "styles.css")) === "latest", "Queued build did not publish the latest source");
-  const events = await content(join(root, "build-events"));
-  assert.doesNotMatch(events, /overlap/u);
-  assert.equal(process.stderr, "");
+  const process = await watching(t, root, ["--tailwind=src/style.css"], preload);
+  try {
+    await writeFile(join(root, "src", "style.css"), "second");
+    await until(async () => await content(join(root, "second-build-started")) === "waiting", "Second build did not start");
+    for (const source of ["third", "latest"]) {
+      const ticks = await content(join(root, "watch-ticks"));
+      await writeFile(join(root, "src", "style.css"), source);
+      await until(async () => await content(join(root, "watch-ticks")) !== ticks,
+        `Watch did not process ${source} while the second build was held`);
+    }
+    await writeFile(join(root, "release-second-build"), "release");
+    await until(async () => await content(join(root, "dist", "styles.css")) === "latest", "Queued build did not publish the latest source");
+    const events = await content(join(root, "build-events"));
+    assert.doesNotMatch(events, /overlap/u);
+    assert.equal(process.stderr, "");
+  } finally {
+    await writeFile(join(root, "release-second-build"), "release");
+  }
 });
 
 test("094: colliding compiler outputs fail before replacing previous artifacts", async (t) => {

@@ -334,6 +334,20 @@ test("DOM bindings validate coercible URL values and object data", () => {
   assert.equal(root.children[0].getAttribute("href"), "/safe");
 });
 
+test("DOM render, reactive bindings, and hydration reject implicit raw HTML", () => {
+  for (const name of ["innerHTML", "outerHTML"]) {
+    const root = new FakeElement("main");
+    assert.throws(() => render(root, h("div", { [name]: "<strong>untrusted</strong>" })), /raw HTML/);
+    const value = signal("<strong>untrusted</strong>");
+    assert.throws(() => render(root, h("div", { [name]: value })), /raw HTML/);
+    root.insertBefore(new FakeElement("div"), null);
+    assert.throws(() => hydrate(root, h("div", { [name]: "<strong>untrusted</strong>" })), /raw HTML/);
+  }
+  const root = new FakeElement("main");
+  render(root, h("div", { dangerouslySetInnerHTML: { __html: "<strong>trusted</strong>" } }));
+  assert.equal(root.children[0].innerHTML, "<strong>trusted</strong>");
+});
+
 test("optional nullish event props mount as absent listeners", () => {
   const root = new FakeElement("main");
   assert.doesNotThrow(() => render(root, h("input", { onInvalid: undefined, onChange: null })));

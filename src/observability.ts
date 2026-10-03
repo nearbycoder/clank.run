@@ -251,7 +251,7 @@ export function createObservability(options: ObservabilityOptions): Observabilit
             attributes,
             events,
           };
-          const exportPromise = options.exporter.export([data]).catch((error) => {
+          const exportPromise = Promise.resolve().then(() => options.exporter!.export([data])).catch((error) => {
             logger.warn("Trace export failed.", { error: safeError(error) });
           });
           pending.add(exportPromise);
@@ -296,10 +296,16 @@ export function createObservability(options: ObservabilityOptions): Observabilit
   );
 
   const instrument = async (request: Request, handler: () => Promise<Response>): Promise<Response> => {
+    // Framework telemetry must never replace the application's response or error.
+    // User-created metric instruments still report invalid labels/series limits.
+    const observe = (operation: () => void): boolean => {
+      try { operation(); return true; }
+      catch { return false; }
+    };
     const started = performance.now();
     const parent = parseTraceparent(request.headers.get("traceparent") ?? undefined);
     const requestId = requestIdValue(request.headers.get("x-request-id"));
-    const span = tracer.startSpan(`${request.method} ${new URL(request.url).pathname}`, {
+    const span = tracer.startSpan(`${request.method} ${new URL(request.url).pathname}`.slice(0, 200), {
       kind: "server",
       parent: parent ? { ...parent, requestId } : undefined,
       attributes: {
@@ -309,7 +315,7 @@ export function createObservability(options: ObservabilityOptions): Observabilit
       },
     });
     span.context.requestId = requestId;
-    active.add(1, { method: request.method });
+    const countedActive = observe(() => active.add(1, { method: request.method }));
     return tracer.withSpan(span, async () => {
       let response: Response;
       try {
@@ -319,8 +325,8 @@ export function createObservability(options: ObservabilityOptions): Observabilit
         span.recordException(error);
         const route = routeLabel(new URL(request.url).pathname);
         const elapsed = (performance.now() - started) / 1_000;
-        requests.add(1, { method: request.method, route, status_class: "5xx" });
-        duration.observe(elapsed, { method: request.method, route, status_class: "5xx" });
+        observe(() => requests.add(1, { method: request.method, route, status_class: "5xx" }));
+        observe(() => duration.observe(elapsed, { method: request.method, route, status_class: "5xx" }));
         span.end();
         logger.error("HTTP request failed.", {
           method: request.method,
@@ -330,14 +336,14 @@ export function createObservability(options: ObservabilityOptions): Observabilit
         });
         throw error;
       } finally {
-        active.add(-1, { method: request.method });
+        if (countedActive) observe(() => active.add(-1, { method: request.method }));
       }
       const path = new URL(request.url).pathname;
       const route = routeLabel(path);
       const statusClass = `${Math.floor(response.status / 100)}xx`;
       const elapsed = (performance.now() - started) / 1_000;
-      requests.add(1, { method: request.method, route, status_class: statusClass });
-      duration.observe(elapsed, { method: request.method, route, status_class: statusClass });
+      observe(() => requests.add(1, { method: request.method, route, status_class: statusClass }));
+      observe(() => duration.observe(elapsed, { method: request.method, route, status_class: statusClass }));
       span.setAttribute("http.response.status_code", response.status);
       span.end();
       logger.info("HTTP request completed.", {

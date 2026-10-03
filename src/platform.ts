@@ -1,3 +1,5 @@
+import { captureLogLines, redactLogSecrets } from "./security.ts";
+import { runSQLiteTask } from "./sqlite-task.ts";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
 import {
   AuthError,
@@ -16,8 +18,6 @@ import {
   extractDeploymentBundle,
   type DeploymentBundle,
   type DeployPreviewDataConfig,
-  type DeployPreviewDataTransform,
-  type DeployPreviewJsonTransform,
 } from "./deploy.ts";
 import {
   applyMigrations,
@@ -1287,9 +1287,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
   };
 
-  const domainStore: DomainChallengeStore = {
+  const createDomainStore = (authorize?: () => void): DomainChallengeStore => ({
     save(challenge) {
       storage.internal.transaction(() => {
+        authorize?.();
         const existing = storage.internal.prepare(
           "SELECT id, project_id FROM clank_platform_domains WHERE hostname = ?",
         ).get(challenge.hostname);
@@ -1352,7 +1353,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const row = storage.internal.prepare("SELECT * FROM clank_platform_domains WHERE hostname = ?").get(hostname);
       return row ? domainChallengeFromRow(row) : undefined;
     },
-  };
+  });
+  const domainStore = createDomainStore();
   const domains = createDomainManager({
     store: domainStore,
     ...(options.ingress?.resolveTxt ? { resolveTxt: options.ingress.resolveTxt } : {}),
@@ -2160,6 +2162,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     release: ReleaseRow,
     config: DeploymentBundle["config"] | null,
     retryFailed = false,
+    permission: "deploy" | "rollback" = "deploy",
   ): Promise<Record<string, unknown>> => {
     if (!providerPlacement || !deploymentCoordinator) {
       throw new PlatformError(
@@ -2258,19 +2261,23 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const databaseMode = project.activeGeneration === null
       ? "initialize"
       : "preserve";
-    storage.internal.prepare(`INSERT INTO clank_platform_provider_generations
-      (project_id, generation, release_id, encrypted_environment, database_mode,
-        restore_backup_id, restore_database_sha256, restore_database_bytes,
-        safety_backup_id, created_at)
-      VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)`)
-      .run(
-        project.id,
-        generation,
-        release.id,
-        encryptedEnvironment,
-        databaseMode,
-        Date.now(),
-      );
+    storage.internal.transaction(() => {
+      requireCurrentPlatformPrincipal(storage, principal);
+      accessibleProject(storage.internal, project.id, principal, permission);
+      storage.internal.prepare(`INSERT INTO clank_platform_provider_generations
+        (project_id, generation, release_id, encrypted_environment, database_mode,
+          restore_backup_id, restore_database_sha256, restore_database_bytes,
+          safety_backup_id, created_at)
+        VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)`)
+        .run(
+          project.id,
+          generation,
+          release.id,
+          encryptedEnvironment,
+          databaseMode,
+          Date.now(),
+        );
+    });
     try {
       const desired = await orchestrator.setDesired({
         projectId: project.id,
@@ -2496,22 +2503,26 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       },
     );
     const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
-    storage.internal.prepare(`INSERT INTO clank_platform_provider_generations
-      (project_id, generation, release_id, encrypted_environment, database_mode,
-        restore_backup_id, restore_database_sha256, restore_database_bytes,
-        safety_backup_id, recovery_kind, recovery_source_node_id, created_at)
-      VALUES (?, ?, ?, ?, 'replace', ?, ?, ?, ?, 'restore', NULL, ?)`)
-      .run(
-        project.id,
-        generation,
-        currentRelease.id,
-        encryptedEnvironment,
-        backupId,
-        verification.databaseSha256,
-        verification.databaseBytes,
-        safetyBackupId,
-        Date.now(),
-      );
+    storage.internal.transaction(() => {
+      requireCurrentPlatformPrincipal(storage, principal);
+      accessibleProject(storage.internal, project.id, principal, "rollback");
+      storage.internal.prepare(`INSERT INTO clank_platform_provider_generations
+        (project_id, generation, release_id, encrypted_environment, database_mode,
+          restore_backup_id, restore_database_sha256, restore_database_bytes,
+          safety_backup_id, recovery_kind, recovery_source_node_id, created_at)
+        VALUES (?, ?, ?, ?, 'replace', ?, ?, ?, ?, 'restore', NULL, ?)`)
+        .run(
+          project.id,
+          generation,
+          currentRelease.id,
+          encryptedEnvironment,
+          backupId,
+          verification.databaseSha256,
+          verification.databaseBytes,
+          safetyBackupId,
+          Date.now(),
+        );
+    });
     try {
       const desired = await orchestrator.setDesired({
         projectId: project.id,
@@ -3462,20 +3473,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const temporary = await releaseBackupPath(paths.projects, preview.id, `fixture-upload-${await randomId(8)}`);
     const verified = await releaseBackupPath(paths.projects, preview.id, `fixture-verified-${await randomId(8)}`);
     let safety: string | null = null;
-    const fsName = "node:fs/promises", sqliteName = "node:sqlite", pathName = "node:path";
-    const [fs, sqlite, path] = await Promise.all([import(fsName), import(sqliteName), import(pathName)]);
+    const fsName = "node:fs/promises", pathName = "node:path";
+    const [fs, path] = await Promise.all([import(fsName), import(pathName)]);
     try {
       await fs.writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
       await backupSQLite(temporary, verified);
-      const database = new sqlite.DatabaseSync(verified, { readOnly: true });
-      let manifest: Record<string, unknown>;
-      try {
-        const entries = database.prepare("SELECT protocol, users, records FROM clank_preview_fixture LIMIT 2").all();
-        if (entries.length !== 1 || entries[0].protocol !== "clank-preview-fixture/1"
-          || !Number.isSafeInteger(entries[0].users) || entries[0].users < 0 || entries[0].users > 20
-          || !Number.isSafeInteger(entries[0].records) || entries[0].records < 0 || entries[0].records > 10_000) throw new Error("Invalid fixture manifest.");
-        manifest = entries[0];
-      } finally { database.close(); }
+      const manifest = await runSQLiteTask<Record<string, unknown>>("inspection", "inspectFixtureManifest", [verified]);
       if (preview.placement === "provider") {
         const effective = projectQuotas(storage.internal, preview, quotaDefaults);
         const manager = await projectBackupManager(paths.projects, preview, masterKey,
@@ -3828,6 +3831,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     claimedDigest: string,
     idempotencyKey: string,
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
+    requireCurrentPlatformPrincipal(storage, principal);
+    project = accessibleProject(storage.internal, project.id, principal, "deploy").project;
     cancelRestart(project.id);
     const digest = await deploymentDigest(bytes);
     if (claimedDigest !== digest) throw new PlatformError(400, "DIGEST_MISMATCH", "Artifact digest does not match its header.");
@@ -3906,30 +3911,34 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const releaseDirectory = await newReleaseDirectory(paths.projects, project.id, releaseId);
     const previousReleaseId = project.activeReleaseId;
     const createdAt = Date.now();
-    storage.internal.prepare(`INSERT INTO clank_platform_releases
-      (id, project_id, previous_release_id, status, digest, artifact_bytes, runtime_bytes, runner_artifact_bytes,
-       runner_artifact_store, runner_artifact_key,
-       snapshot_bytes, storage_bytes, artifact_available, framework_version, node_version,
-       config, directory, backup_path, idempotency_key, created_at)
-      VALUES (?, ?, ?, 'staging', ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?, ?, ?, NULL, ?, ?)`)
-      .run(
-        releaseId,
-        project.id,
-        previousReleaseId,
-        digest,
-        bytes.byteLength,
-        runtimeStorageBytes,
-        runnerArtifactBytes,
-        runnerArtifactStore,
-        runnerArtifactKey,
-        runtimeStorageBytes + runnerArtifactBytes + databaseStorageBytes,
-        bundle.provenance.frameworkVersion,
-        bundle.provenance.nodeVersion,
-        JSON.stringify(bundle.config),
-        releaseDirectory,
-        idempotencyKey,
-        createdAt,
-      );
+    storage.internal.transaction(() => {
+      requireCurrentPlatformPrincipal(storage, principal);
+      accessibleProject(storage.internal, project.id, principal, "deploy");
+      storage.internal.prepare(`INSERT INTO clank_platform_releases
+        (id, project_id, previous_release_id, status, digest, artifact_bytes, runtime_bytes, runner_artifact_bytes,
+         runner_artifact_store, runner_artifact_key,
+         snapshot_bytes, storage_bytes, artifact_available, framework_version, node_version,
+         config, directory, backup_path, idempotency_key, created_at)
+        VALUES (?, ?, ?, 'staging', ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?, ?, ?, NULL, ?, ?)`)
+        .run(
+          releaseId,
+          project.id,
+          previousReleaseId,
+          digest,
+          bytes.byteLength,
+          runtimeStorageBytes,
+          runnerArtifactBytes,
+          runnerArtifactStore,
+          runnerArtifactKey,
+          runtimeStorageBytes + runnerArtifactBytes + databaseStorageBytes,
+          bundle.provenance.frameworkVersion,
+          bundle.provenance.nodeVersion,
+          JSON.stringify(bundle.config),
+          releaseDirectory,
+          idempotencyKey,
+          createdAt,
+        );
+    });
     let backupPath: string | null = null;
     let databaseExisted = false;
     let databaseChanged = false;
@@ -4270,6 +4279,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     restoreData: boolean,
     confirmation: string | undefined,
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
+    requireCurrentPlatformPrincipal(storage, principal);
+    project = accessibleProject(storage.internal, project.id, principal, "rollback").project;
     cancelRestart(project.id);
     const current = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
     const target = releaseById(storage.internal, targetId);
@@ -4329,6 +4340,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         target,
         target.config,
         true,
+        "rollback",
       );
       audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.rollback", {
         from: current.id,
@@ -4393,6 +4405,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     confirmation: string,
     allowRollbackLoss: boolean,
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
+    requireCurrentPlatformPrincipal(storage, principal);
+    project = accessibleProject(storage.internal, project.id, principal, "rollback").project;
     const currentProject = projectById(storage.internal, project.id);
     const release = releaseById(storage.internal, releaseId);
     if (!currentProject || !release || release.projectId !== project.id) {
@@ -4611,6 +4625,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     confirmation: string,
     acknowledgeDataLoss: boolean,
   ): Promise<Record<string, unknown>> => withProjectLock(projectId, async () => {
+    requireCurrentPlatformPrincipal(storage, principal);
     const access = accessibleProject(storage.internal, projectId, principal, "tokens");
     if (principal.projectId) {
       throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "Project-scoped tokens cannot delete a site.");
@@ -5898,6 +5913,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
 
       const principal = await requirePlatformPrincipal(storage, request);
+      if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) requireCurrentPlatformPrincipal(storage, principal);
       if (url.pathname === "/api/billing" && request.method === "GET") {
         if (!billing) throw new PlatformError(404, "NOT_FOUND", "Billing is not configured.");
         if (principal.projectId) {
@@ -5922,6 +5938,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const input = plainObject(await readJsonRequest(request, 8 * 1024));
         exact(input, ["planId"]);
         const planId = boundedString(input.planId, "planId", 2, 64);
+        requireCurrentPlatformPrincipal(storage, principal);
         return api(await startPlatformBillingCheckout(
           storage.internal,
           principal,
@@ -5941,6 +5958,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         const input = plainObject(await readJsonRequest(request, 8 * 1024));
         exact(input, []);
+        requireCurrentPlatformPrincipal(storage, principal);
         return api(await startPlatformBillingPortal(
           storage.internal,
           principal,
@@ -5978,7 +5996,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metrics.");
         }
         if (!principal.projectId && !principal.impersonation) {
-          await ensurePersonalOrganization(storage.internal, principal, quotaDefaults);
+          await ensurePersonalOrganization(storage.internal, principal, quotaDefaults,
+            () => requireCurrentPlatformPrincipal(storage, principal));
         }
         return api(dashboardPayload(
           storage.internal,
@@ -6142,6 +6161,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           name,
           slug,
           quotaDefaults,
+          () => requireCurrentPlatformPrincipal(storage, principal),
         );
         audit(storage.internal, principal.userId, principal.tokenId, null, "organization.create", {
           organizationId: organization.id,
@@ -6166,6 +6186,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         ) throw new PlatformError(400, "INVALID_INVITATION", "Invitation is invalid or expired.");
         const now = Date.now();
         storage.internal.transaction((changes) => {
+          requireCurrentPlatformPrincipal(storage, principal);
           const accepted = storage.internal.prepare(`UPDATE clank_platform_invitations SET accepted_at = ?
             WHERE id = ? AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > ?`)
             .run(now, invitation.id, now);
@@ -6261,6 +6282,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           let replacedInvitationId: string | null = null;
           let delivery = invitationDeliveries.view(id);
           storage.internal.transaction((changes) => {
+            requireCurrentPlatformPrincipal(storage, principal);
+            requireOrganizationAdministration(organizationMembership(storage.internal, organizationId, principal.userId).role);
             const existingMember = storage.internal.prepare(`SELECT 1 AS present
               FROM clank_platform_memberships m
               JOIN clank_auth_users u ON u.id = m.user_id
@@ -6320,6 +6343,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           const invitationId = invitationMatch[1]!;
           const now = Date.now();
           storage.internal.transaction((changes) => {
+            requireCurrentPlatformPrincipal(storage, principal);
+            requireOrganizationAdministration(organizationMembership(storage.internal, organizationId, principal.userId).role);
             const result = storage.internal.prepare(`UPDATE clank_platform_invitations SET revoked_at = ?
               WHERE id = ? AND organization_id = ? AND accepted_at IS NULL
                 AND revoked_at IS NULL AND expires_at > ?`).run(now, invitationId, organizationId, now);
@@ -6340,29 +6365,32 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           const memberId = memberMatch[1]!;
           const selfRemoval = request.method === "DELETE" && memberId === principal.userId;
           if (!selfRemoval) requireOrganizationAdministration(membership.role);
-          const target = storage.internal.prepare(`SELECT role FROM clank_platform_memberships
-            WHERE organization_id = ? AND user_id = ?`).get(organizationId, memberId);
-          if (!target) throw new PlatformError(404, "MEMBER_NOT_FOUND", "Organization member not found.");
-          const targetRole = validateOrganizationRole(String(target.role), true);
-          if (targetRole === "owner" && membership.role !== "owner") {
-            throw new PlatformError(403, "ROLE_DENIED", "Only an owner can change another owner.");
-          }
           let nextRole: OrganizationRole | null = null;
           if (request.method === "PATCH") {
             const input = plainObject(await readJsonRequest(request, 8 * 1024));
             exact(input, ["role"]);
             nextRole = validateOrganizationRole(String(input.role), true);
-            if (nextRole === "owner" && membership.role !== "owner") {
-              throw new PlatformError(403, "ROLE_DENIED", "Only an owner can grant the owner role.");
-            }
-          }
-          if (targetRole === "owner" && nextRole !== "owner") {
-            const owners = Number(storage.internal.prepare(`SELECT count(*) AS count FROM clank_platform_memberships
-              WHERE organization_id = ? AND role = 'owner'`).get(organizationId)?.count ?? 0);
-            if (owners <= 1) throw new PlatformError(409, "LAST_OWNER", "An organization must retain at least one owner.");
           }
           const now = Date.now();
           storage.internal.transaction((changes) => {
+            requireCurrentPlatformPrincipal(storage, principal);
+            const currentMembership = organizationMembership(storage.internal, organizationId, principal.userId);
+            if (!selfRemoval) requireOrganizationAdministration(currentMembership.role);
+            const target = storage.internal.prepare(`SELECT role FROM clank_platform_memberships
+              WHERE organization_id = ? AND user_id = ?`).get(organizationId, memberId);
+            if (!target) throw new PlatformError(404, "MEMBER_NOT_FOUND", "Organization member not found.");
+            const targetRole = validateOrganizationRole(String(target.role), true);
+            if (targetRole === "owner" && currentMembership.role !== "owner") {
+              throw new PlatformError(403, "ROLE_DENIED", "Only an owner can change another owner.");
+            }
+            if (nextRole === "owner" && currentMembership.role !== "owner") {
+              throw new PlatformError(403, "ROLE_DENIED", "Only an owner can grant the owner role.");
+            }
+            if (targetRole === "owner" && nextRole !== "owner") {
+              const owners = Number(storage.internal.prepare(`SELECT count(*) AS count FROM clank_platform_memberships
+                WHERE organization_id = ? AND role = 'owner'`).get(organizationId)?.count ?? 0);
+              if (owners <= 1) throw new PlatformError(409, "LAST_OWNER", "An organization must retain at least one owner.");
+            }
             if (request.method === "DELETE") {
               storage.internal.prepare("DELETE FROM clank_platform_memberships WHERE organization_id = ? AND user_id = ?")
                 .run(organizationId, memberId);
@@ -6420,7 +6448,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           providerPlacement !== null,
         );
         const organizationId = input.organizationId === undefined
-          ? await ensurePersonalOrganization(storage.internal, principal, quotaDefaults)
+          ? await ensurePersonalOrganization(storage.internal, principal, quotaDefaults,
+              () => requireCurrentPlatformPrincipal(storage, principal))
           : boundedString(input.organizationId, "organizationId", 8, 128);
         const membership = organizationMembership(storage.internal, organizationId, principal.userId);
         requireOrganizationAdministration(membership.role);
@@ -6429,6 +6458,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const now = Date.now();
         try {
           storage.internal.transaction((changes) => {
+            requireCurrentPlatformPrincipal(storage, principal);
+            requireOrganizationAdministration(organizationMembership(storage.internal, organizationId, principal.userId).role);
             const accountLimits = accountQuotas(storage.internal, principal.userId, quotaDefaults);
             const organizationLimits = workspaceQuotas(storage.internal, organizationId, quotaDefaults);
             const accountCount = Number(storage.internal.prepare(
@@ -6522,10 +6553,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 : "read";
       const access = accessibleProject(storage.internal, matched[1]!, principal, requiredPermission);
       const project = access.project;
+      const requireCurrentProjectAuthority = () => {
+        requireCurrentPlatformPrincipal(storage, principal);
+        accessibleProject(storage.internal, project.id, principal, requiredPermission);
+      };
       if (!operation && request.method === "DELETE") {
         const input = plainObject(await readJsonRequest(request, 8 * 1024));
         exact(input, ["confirmation", "acknowledgeDataLoss"]);
         const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
+        requireCurrentProjectAuthority();
         return api({
           ok: true,
           project: await deleteProject(
@@ -6608,6 +6644,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw new PlatformError(409, "RUNTIME_POLICY_UNAVAILABLE", "On-demand and suspended policies require a local runtime behind managed ingress.");
         }
         const changed = await withProjectLock(project.id, async () => {
+          requireCurrentProjectAuthority();
           const current = projectById(storage.internal, project.id);
           if (!current) throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
           const release = current.activeReleaseId ? releaseById(storage.internal, current.activeReleaseId) : null;
@@ -6623,6 +6660,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           }
           const now = Date.now();
           storage.internal.transaction((changes) => {
+            requireCurrentProjectAuthority();
             storage.internal.prepare(`UPDATE clank_platform_projects
               SET runtime_policy = ?, idle_timeout_ms = ?, updated_at = ? WHERE id = ?`)
               .run(policy, idleTimeoutMs, now, current.id);
@@ -6641,6 +6679,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (operation === "runtime/sleep" && request.method === "POST") {
         exact(plainObject(await readJsonRequest(request, 1_024)), []);
         const slept = await withProjectLock(project.id, async () => {
+          requireCurrentProjectAuthority();
           const current = projectById(storage.internal, project.id);
           if (!current || !current.activeReleaseId) {
             throw new PlatformError(409, "RUNTIME_NOT_DEPLOYED", "Deploy this project before managing its runtime.");
@@ -6659,6 +6698,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (operation === "runtime/wake" && request.method === "POST") {
         exact(plainObject(await readJsonRequest(request, 1_024)), []);
         const woke = await withProjectLock(project.id, async () => {
+          requireCurrentProjectAuthority();
           const current = projectById(storage.internal, project.id);
           if (!current || !current.activeReleaseId) {
             throw new PlatformError(409, "RUNTIME_NOT_DEPLOYED", "Deploy this project before managing its runtime.");
@@ -6734,6 +6774,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const repositoryId = githubRepositoryId(input.repositoryId);
         const now = Date.now();
         storage.internal.transaction((changes) => {
+          requireCurrentProjectAuthority();
           storage.internal.prepare(`INSERT INTO clank_platform_github_preview_bindings
             (project_id, repository, repository_id, deploy_workflow, cleanup_workflow,
              cleanup_ref, created_by, created_at, updated_at)
@@ -6794,6 +6835,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
         }
         storage.internal.transaction((changes) => {
+          requireCurrentProjectAuthority();
           storage.internal.prepare(
             "DELETE FROM clank_platform_github_preview_bindings WHERE project_id = ?",
           ).run(project.id);
@@ -6904,6 +6946,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               Math.floor(previewMaxTtlMs / (60 * 60_000)),
             ) * 60 * 60_000;
         const result = await withProjectLock(project.id, async () => {
+          requireCurrentProjectAuthority();
           const current = projectById(storage.internal, project.id);
           if (!current || current.parentProjectId) {
             throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
@@ -6915,6 +6958,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           if (existingRow) {
             const existingId = projectRow(existingRow).id;
             const refreshed = await withProjectLock(existingId, async () => {
+              requireCurrentProjectAuthority();
               const existing = projectById(storage.internal, existingId);
               if (
                 !existing
@@ -6922,6 +6966,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 || existing.previewName !== previewName
               ) return null;
               storage.internal.transaction((changes) => {
+                requireCurrentProjectAuthority();
                 storage.internal.prepare(`UPDATE clank_platform_projects
                   SET preview_expires_at = ?, updated_at = ? WHERE id = ?`)
                   .run(expiresAt, now, existing.id);
@@ -6942,6 +6987,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           let port = 0;
           try {
             storage.internal.transaction((changes) => {
+              requireCurrentProjectAuthority();
               const accountLimits = accountQuotas(storage.internal, principal.userId, quotaDefaults);
               const organizationLimits = workspaceQuotas(
                 storage.internal,
@@ -7040,6 +7086,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const digest = await deploymentRuntimeDigest(bytes);
         if (request.headers.get("x-clank-content-sha256") !== digest) throw new PlatformError(422, "FIXTURE_DIGEST_MISMATCH", "Fixture checksum did not match.");
         const result = await withProjectLock(project.id, () => withProjectLock(fixtureMatch[1]!, async () => {
+          requireCurrentProjectAuthority();
           const parent = projectById(storage.internal, project.id);
           const preview = projectById(storage.internal, fixtureMatch[1]!);
           if (!parent || parent.parentProjectId || !preview || preview.parentProjectId !== parent.id || !preview.previewName
@@ -7065,6 +7112,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
         const result = await withProjectLock(project.id, () =>
           withProjectLock(previewId, async () => {
+            requireCurrentProjectAuthority();
             const parent = projectById(storage.internal, project.id);
             const preview = projectById(storage.internal, previewId);
             if (
@@ -7108,6 +7156,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const previewId = previewDeleteMatch[1]!;
         const deleted = await withProjectLock(project.id, () =>
           withProjectLock(previewId, async () => {
+            requireCurrentProjectAuthority();
             const preview = projectById(storage.internal, previewId);
             if (
               !preview
@@ -7175,6 +7224,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         exact(input, ["confirmation", "allowRollbackLoss"]);
         const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
         const allowRollbackLoss = input.allowRollbackLoss === true;
+        requireCurrentProjectAuthority();
         return api({
           ok: true,
           release: await cleanupRelease(
@@ -7221,6 +7271,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           }
           throw error;
         }
+        requireCurrentProjectAuthority();
         return api({ ok: true, release: await deploy(principal, project, bytes, claimedDigest, idempotencyKey) }, 201);
       }
       if (operation === "rollback" && request.method === "POST") {
@@ -7231,6 +7282,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const confirmation = input.confirmation === undefined
           ? undefined
           : boundedString(input.confirmation, "confirmation", 1, 200);
+        requireCurrentProjectAuthority();
         return api({ ok: true, release: await rollback(principal, project, releaseId, restoreData, confirmation) });
       }
       if (operation === "backups" && request.method === "GET") {
@@ -7267,6 +7319,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? "manual"
           : boundedString(input.reason, "reason", 1, 200);
         const backup = await withProjectLock(project.id, async () => {
+          requireCurrentProjectAuthority();
           const current = projectById(storage.internal, project.id);
           if (!current) throw new PlatformError(404, "PROJECT_NOT_FOUND", "Project not found.");
           return createEncryptedProjectBackup(current, reason);
@@ -7301,6 +7354,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         if (project.placement === "provider") {
           return await withProjectLock(project.id, async () => {
+            requireCurrentProjectAuthority();
             const current = projectById(storage.internal, project.id);
             const activeRelease = current?.activeReleaseId
               ? releaseById(storage.internal, current.activeReleaseId)
@@ -7328,6 +7382,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }, backupObjects);
         try {
           return await withProjectLock(project.id, async () => {
+            requireCurrentProjectAuthority();
             cancelRestart(project.id);
             const activeRelease = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
             const safety = await manager.create({
@@ -7447,6 +7502,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const input = plainObject(await readJsonRequest(request, 8 * 1024));
         exact(input, jobMutationMatch[2] === "retry" ? ["runAt"] : []);
         const mutation = await withProjectLock(project.id, async () => {
+          requireCurrentProjectAuthority();
           const current = accessibleProject(storage.internal, project.id, principal, "jobs").project;
           const action = jobMutationMatch[2] as "cancel" | "retry";
           const runAt = action === "retry" && input.runAt !== undefined
@@ -7470,6 +7526,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               limit: 1,
             });
             if (compatibility.compatibility === "ready") {
+              requireCurrentProjectAuthority();
               result = await mutateProviderJob(current, release, {
                 id: jobMutationMatch[1]!,
                 action,
@@ -7492,6 +7549,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               alertDueAfterMs: jobAlertDueAfterMs,
               limit: 1,
             });
+            requireCurrentProjectAuthority();
             result = compatibility.compatibility === "ready"
               ? await mutatePlatformJob({
                   databasePath,
@@ -7665,16 +7723,26 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (assigned && assigned.projectId !== project.id) {
           throw new PlatformError(409, "DOMAIN_UNAVAILABLE", "That hostname is already assigned to another site.");
         }
-        const challenge = await domains.begin(project.id, hostname);
+        const authorizedDomains = createDomainManager({
+          store: createDomainStore(requireCurrentProjectAuthority),
+          ...(options.ingress?.resolveTxt ? { resolveTxt: options.ingress.resolveTxt } : {}),
+        });
+        const challenge = await authorizedDomains.begin(project.id, hostname);
         try {
           const report = await inspectRouting(challenge.hostname);
-          saveDomainRouting(storage.internal, challenge.id, report, {
-            nextCheckAt: nextDomainCheckAt(),
+          storage.internal.transaction(() => {
+            requireCurrentProjectAuthority();
+            saveDomainRouting(storage.internal, challenge.id, report, {
+              nextCheckAt: nextDomainCheckAt(),
+            });
           });
         } catch (error) {
           if (error instanceof PlatformError) throw error;
-          saveDomainRoutingError(storage.internal, challenge.id, {
-            nextCheckAt: nextDomainCheckAt(),
+          storage.internal.transaction(() => {
+            requireCurrentProjectAuthority();
+            saveDomainRoutingError(storage.internal, challenge.id, {
+              nextCheckAt: nextDomainCheckAt(),
+            });
           });
         }
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "domain.begin", {
@@ -7692,9 +7760,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw new PlatformError(404, "DOMAIN_NOT_FOUND", "Domain not found.");
         }
         let challenge = current;
+        requireCurrentProjectAuthority();
         if (domainMatch[2] === "verify") {
           try {
-            challenge = await domains.verify(current.id);
+            const authorizedDomains = createDomainManager({
+              store: createDomainStore(requireCurrentProjectAuthority),
+              ...(options.ingress?.resolveTxt ? { resolveTxt: options.ingress.resolveTxt } : {}),
+            });
+            challenge = await authorizedDomains.verify(current.id);
           } catch (error) {
             if (error instanceof DomainVerificationError) {
               throw new PlatformError(422, "DOMAIN_OWNERSHIP_PENDING", error.message);
@@ -7706,12 +7779,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         try {
           const report = await inspectRouting(challenge.hostname);
           routingStatus = report.status;
-          saveDomainRouting(storage.internal, challenge.id, report, {
-            nextCheckAt: nextDomainCheckAt(),
+          storage.internal.transaction(() => {
+            requireCurrentProjectAuthority();
+            saveDomainRouting(storage.internal, challenge.id, report, {
+              nextCheckAt: nextDomainCheckAt(),
+            });
           });
         } catch (error) {
-          saveDomainRoutingError(storage.internal, challenge.id, {
-            nextCheckAt: nextDomainCheckAt(),
+          if (error instanceof PlatformError) throw error;
+          storage.internal.transaction(() => {
+            requireCurrentProjectAuthority();
+            saveDomainRoutingError(storage.internal, challenge.id, {
+              nextCheckAt: nextDomainCheckAt(),
+            });
           });
           try { options.onError?.(error); } catch { /* Operator reporting must not change the API result. */ }
         }
@@ -7724,8 +7804,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         return api({ ok: true, domain: publicDomain(row, customDomainTarget, customDomainAddresses) });
       }
       if (domainMatch && !domainMatch[2] && request.method === "DELETE") {
-        const result = storage.internal.prepare("DELETE FROM clank_platform_domains WHERE id = ? AND project_id = ?")
-          .run(domainMatch[1], project.id);
+        const result = storage.internal.transaction(() => {
+          requireCurrentProjectAuthority();
+          return storage.internal.prepare("DELETE FROM clank_platform_domains WHERE id = ? AND project_id = ?")
+            .run(domainMatch[1], project.id);
+        });
         if (Number(result.changes) !== 1) throw new PlatformError(404, "DOMAIN_NOT_FOUND", "Domain not found.");
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "domain.delete", {
           domainId: domainMatch[1],
@@ -7814,6 +7897,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 project.id,
                 masterKey,
               );
+              const generation = providerGeneration(storage.internal, project.id, diagnostics.generation, diagnostics.releaseId);
+              if (!generation) throw new Error("Provider log generation metadata is unavailable.");
+              // Keep both old launch values and current values when a name rotates.
+              const launchValues = Object.values(decryptProviderEnvironment(generation.encryptedEnvironment, masterKey));
+              const redactionValues = [...Object.values(secrets), ...launchValues];
               for (const entry of diagnostics.logs) {
                 const role = entry.role === "worker"
                   ? `worker[${entry.instance + 1}]`
@@ -7822,7 +7910,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                   id: entry.sequence,
                   releaseId: diagnostics.releaseId,
                   stream: `${role}:${entry.stream}`,
-                  message: redact(entry.message, secrets),
+                  message: redactLogSecrets(entry.message, redactionValues),
                   createdAt: entry.createdAt,
                   source: "provider",
                 });
@@ -7862,7 +7950,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const input = plainObject(await readJsonRequest(request, 128 * 1024)); exact(input, ["name", "value"]);
         const name = boundedString(input.name, "name", 1, 128); validateSecretName(name);
         const value = boundedString(input.value, "value", 0, 64 * 1024);
-        const rotation = secretRotations.stage(project.id, name, value);
+        const rotation = secretRotations.stage(project.id, name, value, requireCurrentProjectAuthority);
         audit(storage.internal, principal.userId, principal.tokenId, project.id, "secrets.stage", { name, rotationId: rotation.id });
         return api({ ok: true, rotation }, 201);
       }
@@ -7871,10 +7959,17 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         const input = plainObject(await readJsonRequest(request, 1024)); exact(input, []);
         const id = rotationOperation[1]!, action = rotationOperation[2]!;
         try {
-          const rotation = action === "validate" ? await secretRotations.validate(project.id, id) : action === "activate" ? secretRotations.activate(project.id, id) : secretRotations.rollback(project.id, id);
+          const rotation = action === "validate"
+            ? await secretRotations.validate(project.id, id, requireCurrentProjectAuthority)
+            : action === "activate"
+              ? secretRotations.activate(project.id, id, requireCurrentProjectAuthority)
+              : secretRotations.rollback(project.id, id, requireCurrentProjectAuthority);
           audit(storage.internal, principal.userId, principal.tokenId, project.id, `secrets.${action}`, { name: rotation.name, rotationId: id, validation: rotation.validation });
           return api({ ok: true, rotation });
-        } catch { throw new PlatformError(409, "SECRET_ROTATION_CONFLICT", "Rotation is unavailable, stale, or not in the required state. Refresh its status before retrying."); }
+        } catch (error) {
+          if (error instanceof PlatformError) throw error;
+          throw new PlatformError(409, "SECRET_ROTATION_CONFLICT", "Rotation is unavailable, stale, or not in the required state. Refresh its status before retrying.");
+        }
       }
       if (operation === "secrets" && request.method === "GET") {
         const rows = storage.internal.prepare(
@@ -7889,6 +7984,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (Object.keys(values).length > 100) throw new PlatformError(422, "TOO_MANY_SECRETS", "At most 100 secrets may be changed at once.");
         const names: string[] = [];
         storage.internal.transaction((changes) => {
+          requireCurrentProjectAuthority();
           for (const [name, rawValue] of Object.entries(values)) {
             validateSecretName(name);
             const value = boundedString(rawValue, `values.${name}`, 0, 64 * 1024);
@@ -7913,6 +8009,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         validateSecretName(name);
         storage.internal.transaction((changes) => {
+          requireCurrentProjectAuthority();
           storage.internal.prepare("DELETE FROM clank_platform_secrets WHERE project_id = ? AND name = ?").run(project.id, name);
           storage.internal.prepare("DELETE FROM clank_platform_secret_rotations WHERE project_id=? AND name=?").run(project.id, name);
           changes.record("__platform", project.id);
@@ -9060,6 +9157,21 @@ async function requireToken(internal: SQLiteInternal, request: Request): Promise
     previewName: row.preview_name === null ? null : String(row.preview_name),
     impersonation: null,
   };
+}
+
+function requireCurrentPlatformPrincipal(storage: PlatformDatabase, principal: TokenPrincipal): void {
+  if (principal.tokenId !== null) {
+    const active = storage.internal.prepare(`SELECT 1 AS active FROM clank_platform_tokens t
+      JOIN clank_auth_users u ON u.id = t.user_id
+      WHERE t.id = ? AND t.user_id = ? AND t.revoked_at IS NULL AND t.expires_at > ? AND u.disabled = 0`)
+      .get(principal.tokenId, principal.userId, Date.now());
+    if (!active) throw new PlatformError(401, "INVALID_TOKEN", "The CLI access token is invalid or expired.");
+  } else {
+    const current = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
+    if (!current?.user || current.user.id !== principal.userId || principal.impersonation !== null) {
+      throw new PlatformError(401, "UNAUTHENTICATED", "Sign in to continue.");
+    }
+  }
 }
 
 async function requirePlatformPrincipal(storage: PlatformDatabase, request: Request): Promise<TokenPrincipal> {
@@ -13060,33 +13172,13 @@ async function assertPortAvailable(port: number): Promise<void> {
 
 function captureOutput(stream: ActiveProcess["child"]["stdout"], write: (line: string) => void): void {
   if (!stream) return;
-  void (async () => {
-    const decoder = new TextDecoder();
-    let buffered = "";
-    for await (const chunk of stream) {
-      buffered += decoder.decode(chunk, { stream: true });
-      while (true) {
-        const newline = buffered.indexOf("\n");
-        if (newline === -1) break;
-        write(buffered.slice(0, newline).replace(/\r$/, ""));
-        buffered = buffered.slice(newline + 1);
-      }
-      if (buffered.length > 16_384) {
-        write(buffered.slice(0, 16_384));
-        buffered = "";
-      }
-    }
-    buffered += decoder.decode();
-    if (buffered) write(buffered);
-  })();
+  void captureLogLines(stream, write).catch(() => {
+    // Process exit handling owns stream failures.
+  });
 }
 
 function redact(line: string, secrets: Record<string, string>): string {
-  let output = line;
-  for (const value of Object.values(secrets).filter(Boolean).sort((left, right) => right.length - left.length)) {
-    output = output.split(value).join("[REDACTED]");
-  }
-  return output;
+  return redactLogSecrets(line, Object.values(secrets));
 }
 
 async function projectDataDirectory(projectsRoot: string, projectId: string): Promise<string> {
@@ -13115,75 +13207,15 @@ async function inspectProjectBucketUsage(
   projectsRoot: string,
   project: ProjectRow,
 ): Promise<ProjectBucketUsageSnapshot> {
-  const unavailable = Object.freeze({
-    available: false,
-    source: "application" as const,
-    objects: null,
-    bytes: null,
-    reservedObjects: null,
-    reservedBytes: null,
-    sampledAt: null,
-  });
-  // Provider volumes are deliberately outside the control-plane trust boundary.
-  // Their users see the same live inventory through the authenticated app URL.
+  const unavailable = Object.freeze({ available: false, source: "application" as const,
+    objects: null, bytes: null, reservedObjects: null, reservedBytes: null, sampledAt: null });
   if (project.placement !== "local") return unavailable;
-  const fsName = "node:fs/promises";
-  const pathName = "node:path";
-  const sqliteName = "node:sqlite";
-  const [fs, path, sqlite] = await Promise.all([
-    import(fsName) as unknown as Promise<{
-      lstat(path: string): Promise<{
-        mtimeMs: number;
-        isFile(): boolean;
-        isSymbolicLink(): boolean;
-      }>;
-    }>,
-    import(pathName) as unknown as Promise<{ join(...segments: string[]): string }>,
-    import(sqliteName) as unknown as Promise<{
-      DatabaseSync: new(path: string, options: { readOnly: boolean }) => {
-        exec(sql: string): void;
-        prepare(sql: string): { get(...values: unknown[]): Record<string, unknown> | undefined };
-        close(): void;
-      };
-    }>,
-  ]);
-  const catalog = path.join(projectsRoot, project.id, "data", "buckets", "catalog.sqlite");
-  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
   try {
-    const stats = await fs.lstat(catalog);
-    if (!stats.isFile() || stats.isSymbolicLink()) return unavailable;
-    database = new sqlite.DatabaseSync(catalog, { readOnly: true });
-    database.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF; PRAGMA busy_timeout = 1000;");
-    const schema = database.prepare(`SELECT count(*) AS count FROM sqlite_schema
-      WHERE type = 'table' AND name IN ('clank_bucket_objects', 'clank_bucket_reservations')`).get();
-    if (Number(schema?.count ?? 0) !== 2) return unavailable;
-    const row = database.prepare(`SELECT
-      (SELECT count(*) FROM clank_bucket_objects) AS objects,
-      (SELECT coalesce(sum(size), 0) FROM clank_bucket_objects) AS bytes,
-      (SELECT coalesce(sum(CASE WHEN replaces_size IS NULL THEN 1 ELSE 0 END), 0)
-        FROM clank_bucket_reservations) AS reserved_objects,
-      (SELECT coalesce(sum(size - coalesce(replaces_size, 0)), 0)
-        FROM clank_bucket_reservations) AS reserved_bytes`).get();
-    return Object.freeze({
-      available: true,
-      source: "local_catalog",
-      objects: safeUsageInteger(row?.objects),
-      bytes: safeUsageInteger(row?.bytes),
-      reservedObjects: safeUsageInteger(row?.reserved_objects),
-      reservedBytes: safeUsageInteger(row?.reserved_bytes),
-      sampledAt: Math.max(0, Math.trunc(stats.mtimeMs)),
-    });
+    return Object.freeze(await runSQLiteTask<ProjectBucketUsageSnapshot>("inspection", "inspectProjectBucketUsage",
+      [projectsRoot, { id: project.id, placement: project.placement }]));
   } catch {
     return unavailable;
-  } finally {
-    database?.close();
   }
-}
-
-function safeUsageInteger(value: unknown): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new TypeError("Bucket catalog usage is invalid.");
-  return parsed;
 }
 
 function releaseStorageUsage(
@@ -14246,277 +14278,12 @@ interface PreviewDataSanitizationReport {
   valuesExplicitlyKept: number;
 }
 
-const PREVIEW_DATA_PRESERVED_TABLES = new Set(["clank_meta", "clank_migrations"]);
-const PREVIEW_DATA_PURGED_TABLES = new Set([
-  "clank_changes",
-  // Revision snapshots contain prior application values and must never bypass
-  // the active release's explicit per-column preview sanitization policy.
-  "clank_document_revisions",
-  "clank_job_events",
-  "clank_job_schedules",
-  "clank_jobs",
-  "clank_service_jobs",
-  "clank_workflow_events",
-  "clank_workflow_steps",
-  "clank_workflow_runs",
-]);
-const PREVIEW_DATA_PURGED_PREFIXES = ["clank_auth_", "clank_oauth_"];
-
-async function sanitizePreviewDatabase(
+function sanitizePreviewDatabase(
   databasePath: string,
   policy: DeployPreviewDataConfig,
   seed: Uint8Array,
 ): Promise<PreviewDataSanitizationReport> {
-  const sqliteName = "node:sqlite";
-  const cryptoName = "node:crypto";
-  const [{ DatabaseSync }, cryptoModule] = await Promise.all([
-    import(sqliteName) as unknown as Promise<{ DatabaseSync: new(path: string) => any }>,
-    import(cryptoName) as unknown as Promise<{
-      createHmac(algorithm: string, key: Uint8Array): {
-        update(value: string | Uint8Array): { digest(encoding: "hex"): string };
-      };
-    }>,
-  ]);
-  const database = new DatabaseSync(databasePath);
-  const report: PreviewDataSanitizationReport = {
-    tablesCopied: 0,
-    tablesEmptied: 0,
-    rowsRetained: 0,
-    rowsRemoved: 0,
-    valuesTransformed: 0,
-    valuesExplicitlyKept: 0,
-  };
-  const digest = (value: unknown): string => {
-    const encoded = value instanceof Uint8Array
-      ? value
-      : `${value === null ? "null" : typeof value}:${String(value)}`;
-    return cryptoModule.createHmac("sha256", seed).update(encoded).digest("hex");
-  };
-  try {
-    database.exec("PRAGMA trusted_schema = OFF");
-    database.exec("PRAGMA foreign_keys = OFF");
-    database.exec("PRAGMA secure_delete = ON");
-    const tables = database.prepare(`SELECT name, sql FROM sqlite_schema
-      WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`).all() as Array<{
-        name: string;
-        sql: string | null;
-      }>;
-    const tableNames = new Set(tables.map((table) => String(table.name)));
-    for (const requested of Object.keys(policy.tables)) {
-      if (!tableNames.has(requested)) {
-        throw new Error(`Preview data policy references missing table ${requested}.`);
-      }
-      if (previewDataTableIsProtected(requested)) {
-        throw new Error(`Preview data policy cannot retain protected table ${requested}.`);
-      }
-    }
-    database.exec("BEGIN IMMEDIATE");
-    try {
-      let totalRows = 0;
-      for (const table of tables) {
-        const name = String(table.name);
-        if (PREVIEW_DATA_PRESERVED_TABLES.has(name)) continue;
-        const tablePolicy = policy.tables[name];
-        if (!tablePolicy || previewDataTableIsProtected(name)) {
-          const removed = Number(database.prepare(
-            `SELECT count(*) AS count FROM ${previewSqlIdentifier(name)}`,
-          ).get().count);
-          database.prepare(`DELETE FROM ${previewSqlIdentifier(name)}`).run();
-          report.tablesEmptied++;
-          report.rowsRemoved += removed;
-          continue;
-        }
-        report.tablesCopied++;
-        const columns = database.prepare(
-          `PRAGMA table_info(${previewSqlIdentifier(name)})`,
-        ).all() as Array<{
-          name: string;
-          type: string;
-          pk: number;
-        }>;
-        const columnNames = new Set(columns.map((column) => String(column.name)));
-        for (const configured of Object.keys(tablePolicy.columns ?? {})) {
-          if (!columnNames.has(configured)) {
-            throw new Error(`Preview data policy references missing column ${name}.${configured}.`);
-          }
-        }
-        const primary = columns
-          .filter((column) => Number(column.pk) > 0)
-          .sort((left, right) => Number(left.pk) - Number(right.pk));
-        const withoutRowId = /\bWITHOUT\s+ROWID\b/iu.test(String(table.sql ?? ""));
-        const identity = primary.length > 0
-          ? primary.map((column) => String(column.name))
-          : withoutRowId
-            ? []
-            : ["rowid"];
-        if (identity.length === 0) {
-          throw new Error(`Preview data table ${name} has no deterministic row identity.`);
-        }
-        const rowLimit = tablePolicy.rows ?? 1_000;
-        const ordering = identity.map(previewSqlIdentifier).join(", ");
-        const identityTuple = identity.length === 1
-          ? previewSqlIdentifier(identity[0]!)
-          : `(${identity.map(previewSqlIdentifier).join(", ")})`;
-        const before = Number(database.prepare(
-          `SELECT count(*) AS count FROM ${previewSqlIdentifier(name)}`,
-        ).get().count);
-        database.prepare(`DELETE FROM ${previewSqlIdentifier(name)} WHERE ${identityTuple} NOT IN (
-          SELECT ${identity.map(previewSqlIdentifier).join(", ")}
-          FROM ${previewSqlIdentifier(name)} ORDER BY ${ordering} LIMIT ?
-        )`).run(rowLimit);
-        const after = Math.min(before, rowLimit);
-        report.rowsRemoved += before - after;
-        report.rowsRetained += after;
-        totalRows += after;
-        if (totalRows > 50_000) {
-          throw new Error("Sanitized preview data cannot retain more than 50,000 rows.");
-        }
-        const selectIdentity = identity[0] === "rowid"
-          ? `rowid AS ${previewSqlIdentifier("__clank_preview_rowid")}`
-          : identity.map(previewSqlIdentifier).join(", ");
-        const selectedColumns = columns.map((column) => previewSqlIdentifier(String(column.name))).join(", ");
-        const rows = database.prepare(`SELECT ${selectIdentity}, ${selectedColumns}
-          FROM ${previewSqlIdentifier(name)} ORDER BY ${ordering}`).all() as Array<Record<string, unknown>>;
-        for (const row of rows) {
-          const assignments: string[] = [];
-          const values: unknown[] = [];
-          for (const column of columns) {
-            const columnName = String(column.name);
-            const configured = tablePolicy.columns?.[columnName];
-            const current = row[columnName];
-            const transformed = configured && typeof configured === "object"
-              ? sanitizePreviewJson(current, configured, digest, report)
-              : sanitizePreviewValue(
-                  current,
-                  configured ?? previewDefaultTransform(String(column.type)),
-                  digest,
-                  report,
-                  configured !== undefined,
-                );
-            if (!previewValuesEqual(current, transformed)) {
-              assignments.push(`${previewSqlIdentifier(columnName)} = ?`);
-              values.push(transformed);
-            }
-          }
-          if (assignments.length === 0) continue;
-          const predicates = identity.map((column) => `${previewSqlIdentifier(column)} IS ?`).join(" AND ");
-          const identityValues = identity.map((column) =>
-            row[column === "rowid" ? "__clank_preview_rowid" : column]);
-          database.prepare(`UPDATE ${previewSqlIdentifier(name)} SET ${assignments.join(", ")}
-            WHERE ${predicates}`).run(...values, ...identityValues);
-        }
-      }
-      database.exec("COMMIT");
-    } catch (error) {
-      database.exec("ROLLBACK");
-      throw error;
-    }
-    database.exec("PRAGMA foreign_keys = ON");
-    const foreignKeyFailure = database.prepare("PRAGMA foreign_key_check").get();
-    if (foreignKeyFailure) {
-      throw new Error("Sanitized preview data violates a foreign-key relationship; retain or empty the related tables together.");
-    }
-    const integrity = database.prepare("PRAGMA quick_check").get() as Record<string, unknown> | undefined;
-    if (!integrity || String(Object.values(integrity)[0]) !== "ok") {
-      throw new Error("Sanitized preview database failed SQLite integrity verification.");
-    }
-    database.exec("VACUUM");
-    database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    return Object.freeze(report);
-  } finally {
-    database.close();
-  }
-}
-
-function previewDataTableIsProtected(name: string): boolean {
-  return PREVIEW_DATA_PRESERVED_TABLES.has(name)
-    || PREVIEW_DATA_PURGED_TABLES.has(name)
-    || PREVIEW_DATA_PURGED_PREFIXES.some((prefix) => name.startsWith(prefix));
-}
-
-function previewSqlIdentifier(value: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(value) && value !== "rowid") {
-    throw new Error("Preview data contains an unsafe SQLite identifier.");
-  }
-  return `"${value}"`;
-}
-
-function previewDefaultTransform(declaredType: string): DeployPreviewDataTransform {
-  return /(?:INT|REAL|FLOA|DOUB|NUM|DEC|BOOL|DATE|TIME)/iu.test(declaredType)
-    ? "keep"
-    : "hash";
-}
-
-function sanitizePreviewValue(
-  value: unknown,
-  transform: DeployPreviewDataTransform,
-  digest: (value: unknown) => string,
-  report: PreviewDataSanitizationReport,
-  countExplicitKeep = true,
-): unknown {
-  if (value === null) return null;
-  if (transform === "keep") {
-    if (countExplicitKeep) report.valuesExplicitlyKept++;
-    return value;
-  }
-  report.valuesTransformed++;
-  if (transform === "email") return `preview+${digest(value).slice(0, 16)}@example.invalid`;
-  if (transform === "redact") {
-    if (typeof value === "number" || typeof value === "bigint") return 0;
-    if (value instanceof Uint8Array) return new Uint8Array();
-    return "[redacted]";
-  }
-  if (typeof value === "number") return Number.parseInt(digest(value).slice(0, 12), 16);
-  if (typeof value === "bigint") return BigInt(`0x${digest(value).slice(0, 15)}`);
-  if (value instanceof Uint8Array) {
-    return Uint8Array.from(digest(value).match(/.{2}/gu)!.slice(0, Math.min(value.byteLength, 32)), (pair) =>
-      Number.parseInt(pair, 16));
-  }
-  return `pv_${digest(value).slice(0, 16)}`;
-}
-
-function sanitizePreviewJson(
-  value: unknown,
-  configured: DeployPreviewJsonTransform,
-  digest: (value: unknown) => string,
-  report: PreviewDataSanitizationReport,
-): string {
-  if (typeof value !== "string") throw new Error("Configured preview JSON columns must contain text.");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("Configured preview JSON columns must contain valid JSON.");
-  }
-  const walk = (current: unknown, pointer: string): unknown => {
-    if (Array.isArray(current)) {
-      return current.map((entry, index) => walk(entry, `${pointer}/${index}`));
-    }
-    if (current && typeof current === "object") {
-      return Object.fromEntries(Object.entries(current as Record<string, unknown>).map(([key, entry]) => [
-        key,
-        walk(entry, `${pointer}/${key.replaceAll("~", "~0").replaceAll("/", "~1")}`),
-      ]));
-    }
-    const pathTransform = configured.json.paths?.[pointer];
-    const transform = pathTransform ?? configured.json.default ?? "hash";
-    return sanitizePreviewValue(
-      current,
-      transform,
-      digest,
-      report,
-      pathTransform !== undefined || configured.json.default !== undefined,
-    );
-  };
-  return JSON.stringify(walk(parsed, ""));
-}
-
-function previewValuesEqual(left: unknown, right: unknown): boolean {
-  if (left instanceof Uint8Array && right instanceof Uint8Array) {
-    return left.byteLength === right.byteLength
-      && left.every((value, index) => value === right[index]);
-  }
-  return Object.is(left, right);
+  return runSQLiteTask("inspection", "sanitizePreviewDatabase", [databasePath, policy, Array.from(seed)]);
 }
 
 function previewDataBranchSeed(
@@ -14721,11 +14488,13 @@ async function createOrganization(
   name: string,
   slug: string,
   defaults: PlatformQuotaValues,
+  authorize?: () => void,
 ): Promise<Record<string, unknown>> {
   const id = await randomId(18);
   const now = Date.now();
   try {
     internal.transaction((changes) => {
+      authorize?.();
       const organizationsPerAccount = accountQuotas(
         internal,
         userId,
@@ -14762,6 +14531,7 @@ async function ensurePersonalOrganization(
   internal: SQLiteInternal,
   principal: TokenPrincipal,
   defaults: PlatformQuotaValues,
+  authorize?: () => void,
 ): Promise<string> {
   const existing = internal.prepare(`SELECT o.id
     FROM clank_platform_organizations o
@@ -14772,7 +14542,7 @@ async function ensurePersonalOrganization(
   const id = await randomId(18);
   const baseName = principal.email.split("@")[0]?.replace(/[^A-Za-z0-9 ]+/g, " ").trim() || "Personal";
   const slug = normalizeSlug(`personal-${id.slice(0, 10)}`);
-  await createOrganization(internal, principal.userId, `${baseName}'s workspace`, slug, defaults);
+  await createOrganization(internal, principal.userId, `${baseName}'s workspace`, slug, defaults, authorize);
   const created = internal.prepare("SELECT id FROM clank_platform_organizations WHERE slug = ?").get(slug);
   return String(created!.id);
 }

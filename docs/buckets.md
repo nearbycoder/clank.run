@@ -224,7 +224,12 @@ CSRF/scope checks.
 - The SQLite catalog is authoritative for visibility, ownership, quota, and the active generation.
 - An object-store write is not visible until its size, SHA-256, type, and key match the reservation.
 - Reservations count against quota, preventing concurrent uploads from overcommitting capacity.
-- Replacements reserve only their byte delta and use compare-and-set SHA-256 when requested.
+- Replacements reserve only additional bytes; smaller replacements release capacity when they commit,
+  and compare-and-set SHA-256 is enforced when requested.
+- Each upload reservation permits one finalizer to write provider bytes. Duplicate completions fail
+  without overwriting or deleting the winning generation.
+- Deleting a key also cancels its pending upload, including a replacement already writing provider
+  bytes. Canceled capabilities cannot restore the key or retain replacement quota credit.
 - Expired reservations and staging files are swept on startup and before new reservations.
 - Provider deletions enter a durable garbage ledger before catalog visibility is removed; failures
   retry across sweeps/restarts without resurrecting the object or losing its cleanup key.
