@@ -1,0 +1,40 @@
+{
+  "baselineCommit": "e1447fbb0ec7bff14a569293c804939c380f1a5d",
+  "buildNode": "22.16.0",
+  "benchmarkNode": "24.21.0",
+  "browser": "Chromium 154.0.0.0",
+  "baselineDist": "/tmp/clank-perf-baseline-e1447fb-brjt6dkd/dist",
+  "baselineSourceHashes": {
+    "src/backend.ts": "6f8b514891a15683c4532a0485e8bb4ab21872678ac6563178032cb4a6308b8b",
+    "src/dom.ts": "a032f602e35d0d4861387ab5308bb1444acae3ec70076e70aae4ce1f7d783f9e",
+    "src/platform.ts": "099953d032f44ca532372d91326d57c0bfcef0cfad0f66fe1b14223d2a2f7d74"
+  },
+  "candidateSourceHashes": {
+    "src/backend.ts": "2b3634868024255e58ab685c89437ccf8c9b52dd4eaa6eaf03970f75fa3e37e5",
+    "src/dom.ts": "21a379ca418a865cab21edd1f13efca410157fc1f6ec3abe55a378bb6b0996ed",
+    "src/platform.ts": "290705cb4b85b40ab3065e184507b54cf46bf387ef4c22887267ffdc64fefda6"
+  },
+  "baselineDistHashes": {
+    "backend.js": "281451c9c439513b6902658a9cd8fc906fc14a834ea51346922619275e1082dd",
+    "dom.js": "5d55609548e90e440357c71c0575aff9079f4c7fb9b1c2a84fe664cfde4ce085",
+    "platform.js": "15b2c41c8309b6c52a5573c841f30b59ae9584f760b8f199e8dc12c5268ffbbe"
+  },
+  "candidateDistHashes": {
+    "backend.js": "289dd9f696daebbb4a6ce530bbe0e7f5b8b963a6748ca8b2ad394e1b23bf6e8f",
+    "dom.js": "f1366f020ec212cc81b18252aa4a5dcfa2baa17fd529e7ba2230f1d68b2fe344",
+    "platform.js": "11463d14f3ceb78ac2724bcb91753f08ae1066a73cd92c4127678f2317cb634d"
+  },
+  "benchmarkSourceHashes": {
+    "scripts/load/performance-invalidation.mjs": "20af40493266b2a2610927a4f0386ae666c6a3bc20cb309ff119c12590a12a94",
+    "scripts/load/performance-dom.mjs": "bdca78af11b58635df2099895eedeed6da8cc09ac09278c53bf305ec6a92d7ea",
+    "scripts/load/performance-platform.mjs": "84fcfa1eb350874e3fcd0b2151fb770763761e77cd5c9778e4bbbddf160b7e83",
+    "scripts/load/performance-backend.mjs": "b57707eb62e35ed38cf0b363dacfa6e5f14781cb92520d4145d4428138a9446b",
+    "scripts/load/performance-ssr.mjs": "1ca1bd32782b1d483a20f44cec53de25006c7905fbed1d1c5cf67c6321b61e88",
+    "scripts/load/run.mjs": "eb8741ab6ecf012f2a0050e6891b9793de0e3cad4108fffbbf0cb4318a289f5d",
+    "scripts/load/reliability.mjs": "796ff36019004c81ff254ce3febe269cc7694d699525b42e52c94687daade87c",
+    "scripts/load/fixture.mjs": "8c5ca8e9fd037ede014cf137823879d8d6204d0fb6adcc26729d2500bbc2fa12"
+  },
+  "comparison": "Synthetic fixtures only. This task ran timed profiles serially on a shared workstation; unrelated host activity was not controlled. A/B order alternates. No production traffic, data, or infrastructure changes.",
+  "measuredDomSourceHashBeforeCommentCondensation": "f4fea159e5ef99fa95e24155fb89612cfe522503688762ed9cd9f31addbd0970",
+  "node26BudgetAdjustment": "Condensed six source comments without changing their technical meaning. Node 26 native type stripping preserves comments, reducing DOM gzip from 12,193 to 11,929 bytes. Node 22 and 24 compiled output is byte-identical to the measured candidate; all benchmark results still apply. The budget stays 12,000 bytes."
+}

@@ -44,12 +44,20 @@ async function fixture(openService, serviceOptions = {}) {
   };
 }
 
-test("bulk editing previews typed changes, checks current ACL/versions, and rolls back the entire selected batch", async () => {
+test("bulk editing previews typed changes, checks current ACL/versions, and rolls back the entire selected batch", async (t) => {
   const denied = new Set();
   const app = await fixture(openBulkEditor, { authorize: (_context, record) => !denied.has(record._id) });
   try {
     const alice = await app.user("alice@example.invalid"), bob = await app.user("bob@example.invalid"), a = await app.caller(alice), b = await app.caller(bob);
-    const ids = [a.mutation("create", { title: "First", score: 1 }).value, a.mutation("create", { title: "Second", score: 2 }).value];
+    // Equal creation times sort by ID, which need not match insertion order.
+    const now = Date.now(), uuids = ["00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-000000000001"];
+    const clock = t.mock.method(Date, "now", () => now);
+    const uuid = t.mock.method(globalThis.crypto, "randomUUID", () => uuids.shift());
+    let ids;
+    try {
+      ids = [a.mutation("create", { title: "First", score: 1 }).value, a.mutation("create", { title: "Second", score: 2 }).value];
+    } finally { clock.mock.restore(); uuid.mock.restore(); }
+    assert.deepEqual(a.query("list").value.map(row => row._id), [ids[1], ids[0]]);
     const other = b.mutation("create", { title: "Other", score: 3 }).value;
     const client = createBulkEditClient(app.clientOptions("bulk", alice));
     const preview = await client.preview(ids, { score: 10 }); assert.equal(preview.records.length, 2); assert.equal(preview.records[0].after.score, 10);
@@ -59,10 +67,10 @@ test("bulk editing previews typed changes, checks current ACL/versions, and roll
     denied.add(ids[1]);
     await assert.rejects(client.preview(ids, { score: 10 }), error => error.status === 404, "cached preview must recheck current ACL");
     await assert.rejects(client.apply(preview), error => error.status === 404);
-    assert.deepEqual(a.query("list").value.map(row => row.score), [1, 2]);
+    assert.deepEqual(new Map(a.query("list").value.map(row => [row._id, row.score])), new Map([[ids[0], 1], [ids[1], 2]]));
     denied.clear(); assert.deepEqual(await client.apply(preview), { updated: 2 });
     await assert.rejects(client.apply(preview), error => error.code === "BULK_PREVIEW_STALE");
-    assert.deepEqual(a.query("list").value.map(row => row.score), [10, 10]);
+    assert.deepEqual(new Map(a.query("list").value.map(row => [row._id, row.score])), new Map(ids.map(id => [id, 10])));
   } finally { await app.close(); }
 });
 

@@ -6784,18 +6784,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (principal.projectId && !principal.permissions.includes("read")) {
           throw new PlatformError(403, "TOKEN_SCOPE_DENIED", "This token cannot read project metadata.");
         }
-        const rows = principal.projectId
-          ? storage.internal.prepare(`SELECT p.* FROM clank_platform_projects p
-              JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
-              WHERE p.id = ? AND m.user_id = ?`).all(principal.projectId, principal.userId)
-          : visibleRootProjectRows(storage.internal, principal.userId);
+        const rows = visibleProjectRows(storage.internal, principal.userId, principal.projectId);
         const usageRows = storage.internal.prepare(`SELECT organization_id, count(*) AS count
           FROM clank_platform_projects WHERE organization_id IN (
             SELECT organization_id FROM clank_platform_memberships WHERE user_id = ?
           ) GROUP BY organization_id`).all(principal.userId);
         return api({
           ok: true,
-          projects: rows.filter(row => projectMembershipAllows(storage.internal, projectRow(row), principal.userId, "read")).map((row) => projectPayload(projectRow(row))),
+          projects: rows.map((row) => projectPayload(projectRow(row))),
           limits: publicLimits(
             accountQuotas(storage.internal, principal.userId, quotaDefaults),
             options.maxArtifactBytes,
@@ -9783,22 +9779,54 @@ function projectMembershipAllows(internal: SQLiteInternal, project: ProjectRow, 
   if (!role) return false;
   if (role === "owner" || role === "admin") return true;
   const explicit = internal.prepare("SELECT permissions FROM clank_platform_project_members WHERE project_id = ? AND user_id = ?").get(project.parentProjectId ?? project.id, userId);
-  return explicit ? parseProjectPermissions(explicit.permissions).includes(permission) : roleAllows(role as OrganizationRole, permission);
+  return projectMembershipRoleAllows(role as OrganizationRole, explicit?.permissions, permission);
+}
+
+function projectMembershipRoleAllows(
+  role: OrganizationRole | null | undefined,
+  explicitPermissions: unknown,
+  permission: ProjectPermission,
+): boolean {
+  if (!role) return false;
+  if (role === "owner" || role === "admin") return true;
+  return explicitPermissions === null || explicitPermissions === undefined
+    ? roleAllows(role, permission)
+    : parseProjectPermissions(explicitPermissions).includes(permission);
 }
 
 // Enumerate only owned/member project IDs before reading project payloads. A LEFT JOIN
 // with an ownership OR scans every tenant's projects even when this account has only a few.
 // Only legacy projects without a workspace may fall back to creator ownership.
 // Once assigned to a workspace, current membership is the authority.
-function visibleRootProjectRows(internal: SQLiteInternal, userId: string) {
-  return internal.prepare(`SELECT p.* FROM clank_platform_projects p
-    WHERE p.parent_project_id IS NULL AND p.id IN (
-      SELECT owned.id FROM clank_platform_projects owned WHERE owned.owner_id = ? AND owned.organization_id IS NULL
-      UNION
-      SELECT member.id FROM clank_platform_memberships m
-        JOIN clank_platform_projects member ON member.organization_id = m.organization_id
-        WHERE m.user_id = ?
-    ) ORDER BY p.created_at`).all(userId, userId);
+function visibleProjectRows(internal: SQLiteInternal, userId: string, projectId: string | null) {
+  // Read current roles and project restrictions with the indexed project lookup.
+  // This snapshot belongs only to this synchronous response; the next request
+  // sees revocations immediately, without one additional query per project.
+  const rows = projectId
+    ? internal.prepare(`SELECT p.*, m.role AS membership_role, pm.permissions AS project_permissions
+        FROM clank_platform_projects p
+        JOIN clank_platform_memberships m ON m.organization_id = p.organization_id AND m.user_id = ?
+        LEFT JOIN clank_platform_project_members pm
+          ON pm.project_id = coalesce(p.parent_project_id, p.id) AND pm.user_id = ?
+        WHERE p.id = ?`).all(userId, userId, projectId)
+    : internal.prepare(`SELECT p.*, coalesce(membership.role,
+        CASE WHEN p.organization_id IS NULL AND p.owner_id = ? THEN 'owner' ELSE NULL END) AS membership_role,
+        pm.permissions AS project_permissions
+      FROM clank_platform_projects p
+      LEFT JOIN clank_platform_memberships membership
+        ON membership.organization_id = p.organization_id AND membership.user_id = ?
+      LEFT JOIN clank_platform_project_members pm
+        ON pm.project_id = p.id AND pm.user_id = ?
+      WHERE p.parent_project_id IS NULL AND p.id IN (
+        SELECT owned.id FROM clank_platform_projects owned WHERE owned.owner_id = ? AND owned.organization_id IS NULL
+        UNION
+        SELECT member.id FROM clank_platform_memberships m
+          JOIN clank_platform_projects member ON member.organization_id = m.organization_id
+          WHERE m.user_id = ?
+      ) ORDER BY p.created_at`).all(userId, userId, userId, userId, userId);
+  return rows.filter((row) => projectMembershipRoleAllows(
+    row.membership_role as OrganizationRole | null, row.project_permissions, "read",
+  ));
 }
 
 function projectPayload(project: ProjectRow): Record<string, unknown> {
@@ -12333,6 +12361,32 @@ function writeBillingAccount(
     );
 }
 
+function dashboardProjectUsage(internal: SQLiteInternal, projectIds: readonly string[]): {
+  domains: Map<string, { count: number; ready: number }>;
+  releases: Map<string, { releases: number; storageBytes: number }>;
+} {
+  const domains = new Map<string, { count: number; ready: number }>();
+  const releases = new Map<string, { releases: number; storageBytes: number }>();
+  if (projectIds.length === 0) return { domains, releases };
+  // Restrict both aggregates to the freshly authorized project IDs. json_each
+  // keeps a fixed statement shape without SQLite's bound-parameter limit.
+  const ids = JSON.stringify(projectIds);
+  for (const row of internal.prepare(`SELECT project_id, count(*) AS count,
+      sum(CASE WHEN status = 'verified' AND routing_status = 'ready' THEN 1 ELSE 0 END) AS ready
+    FROM clank_platform_domains
+    WHERE project_id IN (SELECT value FROM json_each(?)) GROUP BY project_id`).all(ids)) {
+    domains.set(String(row.project_id), { count: Number(row.count), ready: Number(row.ready) });
+  }
+  for (const row of internal.prepare(`SELECT project_id,
+      sum(CASE WHEN artifact_available = 1 THEN 1 ELSE 0 END) AS releases,
+      sum(CASE WHEN artifact_available = 1 THEN storage_bytes ELSE 0 END) AS storage_bytes
+    FROM clank_platform_releases
+    WHERE project_id IN (SELECT value FROM json_each(?)) GROUP BY project_id`).all(ids)) {
+    releases.set(String(row.project_id), { releases: Number(row.releases), storageBytes: Number(row.storage_bytes) });
+  }
+  return { domains, releases };
+}
+
 function dashboardPayload(
   internal: SQLiteInternal,
   principal: TokenPrincipal,
@@ -12385,19 +12439,14 @@ function dashboardPayload(
       usage: { projects: Number(row.project_count), limit: effective.projectsPerOrganization },
     };
   });
-  const projectRows = principal.projectId
-    ? internal.prepare(`SELECT p.* FROM clank_platform_projects p
-        JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
-        WHERE p.id = ? AND m.user_id = ?`).all(principal.projectId, principal.userId)
-    : visibleRootProjectRows(internal, principal.userId);
-  const projects = projectRows.filter(source => projectMembershipAllows(internal, projectRow(source), principal.userId, "read")).map((source) => {
+  const projectRows = visibleProjectRows(internal, principal.userId, principal.projectId);
+  const projectUsage = dashboardProjectUsage(internal, projectRows.map((row) => String(row.id)));
+  const projects = projectRows.map((source) => {
     const project = projectRow(source);
     const effective = projectQuotas(internal, project, defaults, quotaSnapshot);
     const release = project.activeReleaseId ? releaseById(internal, project.activeReleaseId) : null;
-    const domainUsage = internal.prepare(`SELECT count(*) AS count,
-      sum(CASE WHEN status = 'verified' AND routing_status = 'ready' THEN 1 ELSE 0 END) AS ready
-      FROM clank_platform_domains WHERE project_id = ?`).get(project.id);
-    const releases = releaseStorageUsage(internal, project.id);
+    const domainUsage = projectUsage.domains.get(project.id);
+    const releases = projectUsage.releases.get(project.id) ?? { releases: 0, storageBytes: 0 };
     const metrics = projectMetricSummary(internal, project.id) as Record<string, number>;
     return {
       ...projectPayload(project),

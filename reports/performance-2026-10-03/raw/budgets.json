@@ -1,0 +1,47 @@
+{
+  "protocol": "clank-performance-budgets/1",
+  "ok": true,
+  "node": "24.21.0",
+  "checks": [
+    {
+      "name": "signalEffectRuns",
+      "actual": 1000,
+      "maximum": 1000,
+      "passed": true
+    },
+    {
+      "name": "retainedSsrEffectRuns",
+      "actual": 0,
+      "maximum": 0,
+      "passed": true
+    },
+    {
+      "name": "coreGzipBytes",
+      "actual": 4140,
+      "maximum": 4500,
+      "passed": true
+    },
+    {
+      "name": "domGzipBytes",
+      "actual": 10560,
+      "maximum": 12000,
+      "passed": true
+    },
+    {
+      "name": "routerGzipBytes",
+      "actual": 2796,
+      "maximum": 3500,
+      "passed": true
+    },
+    {
+      "name": "formsGzipBytes",
+      "actual": 4923,
+      "maximum": 5500,
+      "passed": true
+    }
+  ],
+  "timings": {
+    "signalFanoutMs": 19.271634999999996,
+    "ssr100RequestsMs": 1.9660030000000006
+  }
+}

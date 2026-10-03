@@ -1,0 +1,277 @@
+{
+  "protocol": "clank-invalidation-performance/1",
+  "paths": {
+    "baseline": "/tmp/clank-perf-baseline-e1447fb-brjt6dkd/dist",
+    "candidate": "/home/nearby/Sites/clank/dist"
+  },
+  "rounds": 5,
+  "iterations": 100,
+  "environment": {
+    "node": "v24.21.0",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "gcExposed": true
+  },
+  "workload": "Alternating A/B synchronous SQLite writes plus committed query invalidation and live delivery. Independent in-memory database per sample, ten excluded warmups, four retained revisions per document. No auth, HTTP, disk persistence, production data, or network capacity measurement. Ownership is covered by separate regression tests.",
+  "results": [
+    {
+      "name": "single-write-no-readers",
+      "subscriptions": 0,
+      "cacheEntries": 0,
+      "batch": 1,
+      "matched": 0,
+      "counts": {
+        "baseline": {
+          "notifications": 0,
+          "recordReads": 1
+        },
+        "candidate": {
+          "notifications": 0,
+          "recordReads": 1
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "milliseconds": 2.3985310000000197,
+            "cpuMilliseconds": 7.532,
+            "batchesPerSecond": 41692.18575869946,
+            "notifications": 0
+          },
+          {
+            "milliseconds": 2.313383999999985,
+            "cpuMilliseconds": 4.873,
+            "batchesPerSecond": 43226.71895370619,
+            "notifications": 0
+          },
+          {
+            "milliseconds": 2.3872010000000046,
+            "cpuMilliseconds": 5.466,
+            "batchesPerSecond": 41890.06288117331,
+            "notifications": 0
+          },
+          {
+            "milliseconds": 2.355481999999995,
+            "cpuMilliseconds": 3.683,
+            "batchesPerSecond": 42454.155879773316,
+            "notifications": 0
+          },
+          {
+            "milliseconds": 2.921065999999996,
+            "cpuMilliseconds": 5.004,
+            "batchesPerSecond": 34234.077559356796,
+            "notifications": 0
+          }
+        ],
+        "candidate": [
+          {
+            "milliseconds": 3.0379429999999843,
+            "cpuMilliseconds": 5.446,
+            "batchesPerSecond": 32917.009963649914,
+            "notifications": 0
+          },
+          {
+            "milliseconds": 2.341321999999991,
+            "cpuMilliseconds": 5.305,
+            "batchesPerSecond": 42710.912894510184,
+            "notifications": 0
+          },
+          {
+            "milliseconds": 2.1458980000000167,
+            "cpuMilliseconds": 3.684,
+            "batchesPerSecond": 46600.5373973969,
+            "notifications": 0
+          },
+          {
+            "milliseconds": 2.285113999999993,
+            "cpuMilliseconds": 3.506,
+            "batchesPerSecond": 43761.49286206304,
+            "notifications": 0
+          },
+          {
+            "milliseconds": 2.1207490000000178,
+            "cpuMilliseconds": 4.091,
+            "batchesPerSecond": 47153.15202317633,
+            "notifications": 0
+          }
+        ]
+      },
+      "baselineMedianMs": 2.3872010000000046,
+      "candidateMedianMs": 2.285113999999993,
+      "elapsedReductionPercent": 4.27643084935082
+    },
+    {
+      "name": "single-write-cached-readers",
+      "subscriptions": 100,
+      "cacheEntries": 100,
+      "batch": 1,
+      "matched": 1,
+      "counts": {
+        "baseline": {
+          "notifications": 101,
+          "recordReads": 102
+        },
+        "candidate": {
+          "notifications": 101,
+          "recordReads": 3
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "milliseconds": 4.515049000000005,
+            "cpuMilliseconds": 7.786,
+            "batchesPerSecond": 22148.153873856052,
+            "notifications": 210
+          },
+          {
+            "milliseconds": 5.572349999999972,
+            "cpuMilliseconds": 8.216,
+            "batchesPerSecond": 17945.749997756873,
+            "notifications": 210
+          },
+          {
+            "milliseconds": 5.196300000000008,
+            "cpuMilliseconds": 10.28,
+            "batchesPerSecond": 19244.46240594266,
+            "notifications": 210
+          },
+          {
+            "milliseconds": 6.436653999999976,
+            "cpuMilliseconds": 9.757,
+            "batchesPerSecond": 15536.02228735619,
+            "notifications": 210
+          },
+          {
+            "milliseconds": 4.990755999999976,
+            "cpuMilliseconds": 8.089,
+            "batchesPerSecond": 20037.04448784923,
+            "notifications": 210
+          }
+        ],
+        "candidate": [
+          {
+            "milliseconds": 4.438643000000013,
+            "cpuMilliseconds": 7.053,
+            "batchesPerSecond": 22529.408199758283,
+            "notifications": 210
+          },
+          {
+            "milliseconds": 4.271327000000014,
+            "cpuMilliseconds": 8.007,
+            "batchesPerSecond": 23411.927955878742,
+            "notifications": 210
+          },
+          {
+            "milliseconds": 4.778342000000009,
+            "cpuMilliseconds": 8.97,
+            "batchesPerSecond": 20927.76113555702,
+            "notifications": 210
+          },
+          {
+            "milliseconds": 4.219918000000007,
+            "cpuMilliseconds": 7.767,
+            "batchesPerSecond": 23697.142930265432,
+            "notifications": 210
+          },
+          {
+            "milliseconds": 4.52188000000001,
+            "cpuMilliseconds": 5.761,
+            "batchesPerSecond": 22114.69565755831,
+            "notifications": 210
+          }
+        ]
+      },
+      "baselineMedianMs": 5.196300000000008,
+      "candidateMedianMs": 4.438643000000013,
+      "elapsedReductionPercent": 14.580701653099194
+    },
+    {
+      "name": "bulk-write-evicted-readers",
+      "subscriptions": 1000,
+      "cacheEntries": 32,
+      "batch": 64,
+      "matched": 16,
+      "counts": {
+        "baseline": {
+          "notifications": 1016,
+          "recordReads": 63176
+        },
+        "candidate": {
+          "notifications": 1016,
+          "recordReads": 192
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "milliseconds": 293.31881999999996,
+            "cpuMilliseconds": 325.629,
+            "batchesPerSecond": 340.925958995744,
+            "notifications": 2760
+          },
+          {
+            "milliseconds": 290.33138600000007,
+            "cpuMilliseconds": 318.026,
+            "batchesPerSecond": 344.4339979143694,
+            "notifications": 2760
+          },
+          {
+            "milliseconds": 292.517703,
+            "cpuMilliseconds": 304.996,
+            "batchesPerSecond": 341.85965148235834,
+            "notifications": 2760
+          },
+          {
+            "milliseconds": 299.2081700000001,
+            "cpuMilliseconds": 321.164,
+            "batchesPerSecond": 334.2154727927381,
+            "notifications": 2760
+          },
+          {
+            "milliseconds": 332.9622879999997,
+            "cpuMilliseconds": 358.78,
+            "batchesPerSecond": 300.33431293576433,
+            "notifications": 2760
+          }
+        ],
+        "candidate": [
+          {
+            "milliseconds": 97.87087099999997,
+            "cpuMilliseconds": 142.262,
+            "batchesPerSecond": 1021.754470745438,
+            "notifications": 2760
+          },
+          {
+            "milliseconds": 101.35858000000007,
+            "cpuMilliseconds": 128.104,
+            "batchesPerSecond": 986.5962999876273,
+            "notifications": 2760
+          },
+          {
+            "milliseconds": 99.58940199999984,
+            "cpuMilliseconds": 127.204,
+            "batchesPerSecond": 1004.1229085801738,
+            "notifications": 2760
+          },
+          {
+            "milliseconds": 97.58983899999998,
+            "cpuMilliseconds": 118.972,
+            "batchesPerSecond": 1024.6968436949674,
+            "notifications": 2760
+          },
+          {
+            "milliseconds": 100.77107700000033,
+            "cpuMilliseconds": 115.756,
+            "batchesPerSecond": 992.3482310306127,
+            "notifications": 2760
+          }
+        ]
+      },
+      "baselineMedianMs": 293.31881999999996,
+      "candidateMedianMs": 99.58940199999984,
+      "elapsedReductionPercent": 66.04738761733739
+    }
+  ]
+}

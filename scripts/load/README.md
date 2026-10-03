@@ -29,6 +29,23 @@ new and one old-document encoding for no-op comparison. Reusing the new encoding
 and revision history avoids redundant serialization without changing validation or storage bytes.
 This is a document-write CPU workload, not a disk-durability or end-to-end HTTP capacity test.
 
+## Bulk writes and live-query invalidation
+
+```sh
+node --expose-gc scripts/load/performance-invalidation.mjs \
+  --baseline=/path/to/baseline/dist --candidate=dist \
+  --rounds=5 --iterations=100 --output=/tmp/invalidation-ab.json
+```
+
+This comparison includes a single write with no readers, a single write with 100 cached readers,
+and a 64-document transaction with 1,000 live readers and only 32 cached results. Each sample uses
+a fresh in-memory database, ten excluded warmup transactions, and four retained revisions per
+document. A/B order alternates. Changed-record access counts are instrumented separately from
+timing. Every trial checks current values, notification counts, and cache bounds; unrelated
+readers must stay quiet even after eviction. The measured time includes writes, invalidation,
+and synchronous subscriber delivery. Authentication, network latency, and persistent disk I/O
+are outside this workload; ownership and revocation are covered by the regression suite.
+
 ## A/B HTTP workloads
 
 ```sh
@@ -122,6 +139,26 @@ A failing invariant or recovery deadline exits nonzero. This validates local cra
 it does not simulate losing the host or persistent volume.
 
 ## Browser usability
+
+### Keyed updates against a previous revision
+
+```sh
+node scripts/load/performance-dom.mjs /path/to/baseline/dist dist
+```
+
+Open the printed loopback URL in Chromium and choose **Run A/B comparison**. Save
+`window.benchmarkResult` when `window.benchmarkDone` becomes true; a result containing `error`
+is a failed run. The fixture alternates five baseline/candidate rounds at 1,000 and 10,000 rows,
+with ten updates per sample, for last-to-first rotations, prepends, and same-order field edits.
+Three warmup updates and one separate DOM-insertion count probe precede each profile.
+
+Script time and forced layout time are recorded separately. All trials verify row order,
+reactive labels/indexes, retained element identity, and complete disposal. Fixture construction
+and correctness checks are outside the update timings. Run serially with other performance
+profiles; record viewport, browser version, and hardware. Repeat at a phone width for layout
+coverage, but do not interpret a desktop browser at a narrow width as a mobile CPU measurement.
+
+### Virtualized lists
 
 ```sh
 node scripts/load/browser.mjs
