@@ -9,6 +9,7 @@ import {
   defineTable, openJobs, openSQLite, planMigrations, s,
 } from "../dist/index.js";
 import { mutatePlatformJob } from "../dist/platform-jobs.js";
+import { applyMigrations as applyMigrationsInWorker } from "../dist/migrations-worker.js";
 
 const endlessQuery = "WITH RECURSIVE counter(x) AS (VALUES(1) UNION ALL SELECT x + 1 FROM counter) SELECT sum(x) FROM counter;";
 
@@ -102,29 +103,36 @@ test("SQLite task pipes preserve Unicode across multi-chunk requests", async () 
   assert.deepEqual(result.pending, migrations);
 });
 
-test("oversized migration results are rejected before pending SQL or ledger rows commit", async () => {
-  const root = await mkdtemp(join(tmpdir(), "clank-sqlite-response-bound-"));
-  const directory = join(root, "migrations");
-  const path = join(root, "app.sqlite");
-  try {
-    await mkdir(directory);
-    await writeFile(join(directory, "0001_initial.sql"), "CREATE TABLE state(value INTEGER); INSERT INTO state VALUES(0);");
-    await applyMigrations({ path, directory });
-    // JSON escapes these comment bytes to six characters each. Three files
-    // exceed the 16 MiB response limit without first exhausting native memory,
-    // so this specifically exercises the precommit response-size guard.
-    const sql = `-- ${"\u0001".repeat(1024 * 1024 - 100)}\nUPDATE state SET value = value + 1;`;
-    for (let index = 2; index <= 4; index++) {
-      await writeFile(join(directory, `${String(index).padStart(4, "0")}_large.sql`), sql);
-    }
-    await assert.rejects(applyMigrations({ path, directory }), /response exceeds its limit/u);
-    const database = new DatabaseSync(path);
+// Check the exact precommit guard independently of the process memory budget.
+// The public bridge may reach either resource bound first on different hosts;
+// both paths must leave pending SQL and migration history untouched.
+for (const [boundary, apply, rejection] of [
+  ["precommit guard", applyMigrationsInWorker, /response exceeds its limit/u],
+  ["bounded worker", applyMigrations, /response exceeds its limit|resource limit/u],
+]) {
+  test(`oversized migration results cannot commit pending SQL or ledger rows (${boundary})`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "clank-sqlite-response-bound-"));
+    const directory = join(root, "migrations");
+    const path = join(root, "app.sqlite");
     try {
-      assert.equal(database.prepare("SELECT value FROM state").get().value, 0);
-      assert.deepEqual(database.prepare("SELECT id FROM clank_migrations").all().map((row) => row.id), ["0001"]);
-    } finally { database.close(); }
-  } finally { await rm(root, { recursive: true, force: true }); }
-});
+      await mkdir(directory);
+      await writeFile(join(directory, "0001_initial.sql"), "CREATE TABLE state(value INTEGER); INSERT INTO state VALUES(0);");
+      await apply({ path, directory });
+      // JSON escapes these comment bytes to six characters each. Three files
+      // exceed the 16 MiB response limit with only 3 MiB of input SQL.
+      const sql = `-- ${"\u0001".repeat(1024 * 1024 - 100)}\nUPDATE state SET value = value + 1;`;
+      for (let index = 2; index <= 4; index++) {
+        await writeFile(join(directory, `${String(index).padStart(4, "0")}_large.sql`), sql);
+      }
+      await assert.rejects(apply({ path, directory }), rejection);
+      const database = new DatabaseSync(path);
+      try {
+        assert.equal(database.prepare("SELECT value FROM state").get().value, 0);
+        assert.deepEqual(database.prepare("SELECT id FROM clank_migrations").all().map((row) => row.id), ["0001"]);
+      } finally { database.close(); }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
 
 test("killed backup workers clean their private staging and never publish destination sidecars", async (context) => {
   const root = await mkdtemp(join(tmpdir(), "clank-sqlite-cleanup-"));
