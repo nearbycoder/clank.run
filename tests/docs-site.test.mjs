@@ -7,6 +7,25 @@ import { groups } from "../docs-site/content-manifest.mjs";
 const projectRoot = new URL("../", import.meta.url);
 const docsRoot = new URL("../docs-site/", import.meta.url);
 const manifest = JSON.parse(await readFile(new URL("content/manifest.json", docsRoot), "utf8"));
+const gettingStartedSource = await readFile(new URL("docs/getting-started.md", projectRoot), "utf8");
+const setupPrompt = gettingStartedSource.match(/## Set up with an agent\n[\s\S]*?```text\n([\s\S]*?)\n```/u)?.[1];
+assert.ok(setupPrompt, "Getting Started must contain the canonical setup prompt");
+
+function assertSetupPromptCard(page) {
+  const card = page.match(/<section\b[^>]*class="agent-setup-card"[^>]*>[\s\S]*?<\/section>/u)?.[0];
+  assert.ok(card, "The setup prompt must have a dedicated visible card");
+  assert.match(card, /<h2 id="agent-setup-title">Build with your agent<\/h2>/u);
+  assert.match(card, /href="\/docs\/getting-started#set-up-with-an-agent"/u);
+  assert.match(card, /<button[^>]*data-copy-code[^>]*>Copy setup prompt<\/button>/u);
+  assert.match(card, /<pre(?=[^>]*tabindex="0")(?=[^>]*aria-label="Agent setup prompt")[^>]*>/u);
+  const code = card.match(/<code class="language-text">([\s\S]*?)<\/code>/u)?.[1];
+  assert.ok(code, "Clipboard fallback must have rendered, selectable source");
+  assert.equal(code.replace(/<!--[\s\S]*?-->/gu, "")
+    .replaceAll("&lt;", "<").replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"').replaceAll("&#39;", "'").replaceAll("&amp;", "&"), setupPrompt,
+  "The card must render the complete canonical prompt without drift");
+  assert.doesNotMatch(card, /\shidden(?:[\s=>])/u);
+}
 
 async function startDocumentationServer(t) {
   const child = spawn(process.execPath, [
@@ -76,6 +95,10 @@ test("documentation site serves every human and agent contract securely", async 
   assert.match(home, /Running in four commands/u);
   assert.match(home, /Registration and secure sessions/u);
   assert.match(home, /Machine-readable by default/u);
+  assertSetupPromptCard(home);
+  assert.match(home, /href="#agent-setup"[^>]*>Build with your agent<\/a>/u);
+  assert.ok(home.indexOf('class="agent-setup-card"') < home.indexOf('class="home-proof"'),
+    "The setup prompt must be visible immediately after the hero, before package details");
   assert.match(home, /rel="icon" href="\/brand\/favicon\.ico\?v=[a-f0-9]{16}" sizes="any"/u);
   assert.match(home, /src="\/brand\/clank-mark-64\.png"/u);
   assert.match(home, /<link rel="canonical" href="https:\/\/docs\.clank\.run\/"/u);
@@ -136,6 +159,11 @@ test("documentation site serves every human and agent contract securely", async 
   assert.match(gettingStarted, /npm run deploy:check/u);
   assert.match(gettingStarted, /class="tok-keyword"/u);
   assert.match(gettingStarted, /class="tok-string"/u);
+  assert.match(gettingStarted, /<a(?=[^>]*class="guide-agent-link")(?=[^>]*href="#set-up-with-an-agent")[^>]*>Copy the agent setup prompt/u);
+  assert.ok(gettingStarted.indexOf('class="guide-agent-link"') < gettingStarted.indexOf('id="docs-article-body"'),
+    "Getting Started must link to its copyable setup prompt before the long guide");
+  assert.equal(gettingStarted.split("Set up my development environment and start building an app with Clank.").length - 1, 1,
+    "Getting Started must contain only one complete setup prompt");
 
   const redirect = await fetch(`${origin}/docs`, { redirect: "manual" });
   assert.equal(redirect.status, 308);

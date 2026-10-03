@@ -12,7 +12,8 @@ dist
 node_modules
 test
 templates
-docs
+docs-site/content
+docs-site/vendor
 coverage
 *.clank.gz
 *.proact.gz

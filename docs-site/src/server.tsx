@@ -1,5 +1,6 @@
 /* @clankImportSource ../vendor/dom.js */
 import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 import {
   For,
   getClankTheme,
@@ -18,6 +19,7 @@ import {
 } from "../vendor/index.js";
 import { escapeHtml, markdownPlainText, renderMarkdown, type TableOfContentsEntry } from "./markdown.ts";
 import { SearchBox, SearchHighlight, type SearchEntry } from "./search.tsx";
+import { agentSetupPrompt } from "../vendor/agent-setup-prompt.js";
 
 interface DocMetadata extends SearchEntry {
   source: string;
@@ -229,6 +231,23 @@ function SiteChrome(props: {
   );
 }
 
+function AgentSetupCard() {
+  return (
+    <section class="agent-setup-card" id="agent-setup" aria-labelledby="agent-setup-title">
+      <div class="agent-setup-intro">
+        <h2 id="agent-setup-title">Build with your agent</h2>
+        <p>Copy this prompt into your coding agent, add your app idea, and let it set up Clank and build your first working flow.</p>
+        <a href="/docs/getting-started#set-up-with-an-agent">Read the setup walkthrough <span aria-hidden="true">→</span></a>
+      </div>
+      <figure class="code-block agent-setup-code">
+        <figcaption><span>Make it your app</span><button type="button" data-copy-code aria-label="Copy setup prompt">Copy setup prompt</button></figcaption>
+        <pre tabindex="0" aria-label="Agent setup prompt"><code class="language-text">{agentSetupPrompt}</code></pre>
+      </figure>
+      <p class="agent-setup-hint">Replace the three bracketed values before sending. You can also select and copy the prompt below its copy button.</p>
+    </section>
+  );
+}
+
 function HomePage() {
   return (
     <div class="home">
@@ -238,6 +257,7 @@ function HomePage() {
         <p><code>@clank.run/framework</code> includes the reactive TypeScript runtime, compiler, authenticated starter, live SQLite data, and deployment CLI. Create a working full-stack app without cloning this repository or assembling a toolchain.</p>
         <div class="hero-actions">
           <a class="primary-action" href="/docs/getting-started">Get started with npm <span>→</span></a>
+          <a class="secondary-action" href="#agent-setup">Build with your agent</a>
           <a class="secondary-action" href="/docs/application-recipes">Choose an app shape</a>
         </div>
         <div class="install-command">
@@ -246,6 +266,8 @@ function HomePage() {
           <button type="button" data-copy-text="npm install --global @clank.run/framework" aria-label="Copy npm install command">Copy</button>
         </div>
       </section>
+
+      <AgentSetupCard />
 
       <section class="home-proof" aria-label="Package properties">
         <article><strong>1</strong><span>application dependency</span></article>
@@ -365,6 +387,9 @@ function DocPage(props: { doc: DocumentationPage }) {
         </nav>
         <h1>{props.doc.title}</h1>
         <p>{props.doc.description}</p>
+        {props.doc.slug === "getting-started"
+          ? <a class="guide-agent-link" href="#set-up-with-an-agent">Copy the agent setup prompt <span aria-hidden="true">↓</span></a>
+          : null}
         <p class="print-source">Source: {canonicalOrigin}/docs/{props.doc.slug}</p>
         <div class="doc-meta">
           <span>{props.doc.readingMinutes} min read</span>
@@ -813,7 +838,7 @@ function llmsFull(): string {
   ].join("\n");
 }
 
-const app = createApp({
+export const app = createApp({
   onError(error) {
     console.error("Documentation request failed.", error instanceof Error ? error.message : "Unknown error");
   },
@@ -1008,11 +1033,14 @@ const app = createApp({
     });
   });
 
-const server = await serve(app, {
-  hostname: environment?.HOST ?? "127.0.0.1",
-  port: Number(environment?.PORT ?? 4300),
-  trustProxy: environment?.TRUST_PROXY === "1",
-  allowedHosts: environment?.ALLOWED_HOSTS?.split(",").map((host) => host.trim()).filter(Boolean),
-});
+const entryPath = (globalThis as { process?: { argv?: string[] } }).process?.argv?.[1];
+if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
+  const server = await serve(app, {
+    hostname: environment?.HOST ?? "127.0.0.1",
+    port: Number(environment?.PORT ?? 4300),
+    trustProxy: environment?.TRUST_PROXY === "1",
+    allowedHosts: environment?.ALLOWED_HOSTS?.split(",").map((host) => host.trim()).filter(Boolean),
+  });
 
-console.log(`Clank Documentation: ${server.url}`);
+  console.log(`Clank Documentation: ${server.url}`);
+}

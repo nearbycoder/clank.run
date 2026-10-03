@@ -214,6 +214,7 @@
     "scripts/clank-runner.mjs",
     "scripts/clank-provider.mjs",
     "scripts/platform-hosting.mjs",
+    "scripts/platform-documentation.mjs",
     "scripts/platform-billing.mjs",
     "scripts/conformance.mjs",
     "scripts/tsx.mjs",
