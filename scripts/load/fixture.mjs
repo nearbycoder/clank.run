@@ -155,7 +155,11 @@ process.on('message', async message => {
       result = { rss: peakRss };
     } else if (message.command === 'metrics') {
       const usage = process.cpuUsage(cpu);
-      result = { rss: process.memoryUsage().rss, peakRss, heapUsed: process.memoryUsage().heapUsed,
+      const memory = process.memoryUsage();
+      // Include the final observation as well as the periodic samples. A short
+      // allocation burst between timer ticks must not report a peak below RSS.
+      peakRss = Math.max(peakRss, memory.rss);
+      result = { rss: memory.rss, peakRss, heapUsed: memory.heapUsed,
         cpuPercent: (usage.user + usage.system) / ((performance.now() - since) * 10),
         eventLoopP99Ms: lag.percentile(99) / 1e6, eventLoopMaxMs: lag.max / 1e6,
         queries: runtime.inspectQueries?.(), errors };

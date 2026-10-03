@@ -562,6 +562,109 @@ test("keyed For preserves row and text identity across edits and reorders", () =
   assert.equal(root.insertions, 2, "one new row and one moved row are the only insertions");
 });
 
+for (const mode of ["render", "hydrate"]) {
+  test(`keyed ${mode} moves only the changed row in large rotations and prepends`, () => {
+    const initial = Array.from({ length: 1_000 }, (_, id) => ({ id, label: `Row ${id}` }));
+    const items = signal(initial);
+    const root = new FakeElement("main");
+    const mounted = new Map();
+    const removed = [];
+    const view = h(For, { each: items, by: "id", fallback: h("p", {}, "Empty") }, (item, index) =>
+      h("p", { "data-id": String(item.id), ref: (node) => {
+        if (node) mounted.set(item.id, node);
+        else removed.push(item.id);
+      } }, expression(() => `${item.label}:${index()}`)),
+    );
+    if (mode === "hydrate") {
+      root.insertBefore(new FakeComment("clank:for"), null);
+      for (const item of initial) {
+        const paragraph = new FakeElement("p");
+        paragraph.setAttribute("data-id", String(item.id));
+        paragraph.insertBefore(new FakeComment("clank:start"), null);
+        paragraph.insertBefore(new FakeText(`${item.label}:${item.id}`), null);
+        paragraph.insertBefore(new FakeComment("clank:end"), null);
+        root.insertBefore(paragraph, null);
+      }
+      root.insertBefore(new FakeComment("clank:/for"), null);
+    }
+    const dispose = mode === "hydrate" ? hydrate(root, view) : render(root, view);
+    if (mode === "hydrate") assert.equal(root.getAttribute("data-clank-hydration"), "attached");
+    const retained = root.children.slice();
+    const textNodes = retained.map((node) => node.childNodes.find((child) => child instanceof FakeText));
+    root.insertions = 0;
+    items.value = [initial.at(-1), ...initial.slice(0, -1)];
+    assert.equal(root.insertions, 1, "moving the last row to the front needs one DOM move");
+    assert.deepEqual(root.children, [retained.at(-1), ...retained.slice(0, -1)]);
+    assert.equal(root.children[0].textContent, "Row 999:0");
+    assert.equal(root.children[1].textContent, "Row 0:1");
+    for (let index = 0; index < retained.length; index++) {
+      assert.equal(retained[index].childNodes.find((child) => child instanceof FakeText), textNodes[index]);
+    }
+    assert.deepEqual(removed, []);
+
+    root.insertions = 0;
+    items.value = [{ id: 1_000, label: "New" }, ...items.peek()];
+    assert.equal(root.insertions, 2, "only mount and place the new row; retained rows stay in place");
+    assert.equal(mounted.size, 1_001);
+    assert.equal(root.children[0].textContent, "New:0");
+    assert.equal(root.children[1], retained.at(-1));
+
+    root.insertions = 0;
+    items.value = items.peek().filter((item) => item.id !== 500);
+    assert.equal(root.insertions, 0, "deletion does not move retained rows");
+    assert.deepEqual(removed, [500]);
+    items.value = [];
+    assert.equal(root.textContent, "Empty");
+    assert.equal(removed.length, 1_001);
+    dispose();
+    assert.equal(root.childNodes.length, 0);
+  });
+}
+
+test("keyed permutations preserve minimal retained ranges, including fragments and empty rows", () => {
+  const initial = Array.from({ length: 5 }, (_, id) => ({ id }));
+  const permutations = (values) => values.length === 0 ? [[]] : values.flatMap((value, index) =>
+    permutations(values.filter((_, offset) => offset !== index)).map((tail) => [value, ...tail]));
+  // A small independent quadratic oracle keeps the move budget independent of
+  // the renderer's binary-search algorithm.
+  const increasingLength = (values) => {
+    const lengths = values.map(() => 1);
+    for (let index = 0; index < values.length; index++) {
+      for (let before = 0; before < index; before++) {
+        if (values[before] < values[index]) lengths[index] = Math.max(lengths[index], lengths[before] + 1);
+      }
+    }
+    return Math.max(...lengths);
+  };
+  const items = signal(initial);
+  const root = new FakeElement("main");
+  const dispose = render(root, h(For, { each: items, by: "id" }, (item) => [
+    h("span", { "data-id": String(item.id) }, String(item.id)),
+    h("b", {}, "!"),
+  ]));
+  const identities = new Map(initial.map((item, index) => [item.id, root.children.slice(index * 2, index * 2 + 2)]));
+  let previous = initial;
+  for (const next of permutations(initial)) {
+    root.insertions = 0;
+    items.value = next;
+    assert.deepEqual(root.children, next.flatMap((item) => identities.get(item.id)));
+    const positions = next.map((item) => previous.indexOf(item));
+    assert.equal(root.insertions, 2 * (initial.length - increasingLength(positions)));
+    previous = next;
+  }
+  dispose();
+
+  const emptyItems = signal(initial);
+  const emptyRoot = new FakeElement("main");
+  const stop = render(emptyRoot, h(For, { each: emptyItems, by: "id" }, (item) =>
+    item.id === 1 ? [] : item.id === 3 ? null : h("span", {}, String(item.id))));
+  for (const next of permutations(initial)) {
+    emptyItems.value = next;
+    assert.equal(emptyRoot.textContent, next.filter((item) => item.id !== 1 && item.id !== 3).map((item) => item.id).join(""));
+  }
+  stop();
+});
+
 test("keyed For resolves array accessors and tracks their reactive dependencies", () => {
   const items = signal([
     { id: "navigation-menu", name: "NavigationMenu" },

@@ -13,8 +13,7 @@ import {
 import { agentActionPath, type AgentActionTarget } from "./agent-contract.ts";
 import { assertSafeAttributeValue } from "./security.ts";
 
-// Re-export the lifecycle primitives used by JSX components so applications can
-// bind rendering and cleanup to the exact same runtime instance as the DOM owner.
+// Export lifecycle helpers from the same runtime instance that owns JSX rendering.
 export { computed, effect, onCleanup, signal };
 
 export const VNODE = Symbol.for("clank.vnode");
@@ -659,6 +658,49 @@ interface KeyedEntry<T> {
   mounted: Mounted;
 }
 
+function reorderKeyed<T>(parent: Node, ordered: KeyedEntry<T>[], previous: number[], end: Node): void {
+  // Keep the longest DOM-ordered subsequence; a last-to-first move otherwise moves every other row.
+  let highest = -1;
+  let reordered = false;
+  for (const index of previous) {
+    if (index < 0) continue;
+    if (index < highest) reordered = true;
+    highest = index;
+  }
+  let stable: Set<number> | undefined;
+  if (reordered) {
+    const tails: number[] = [];
+    const predecessors = new Array<number>(previous.length);
+    for (let index = 0; index < previous.length; index++) {
+      if (previous[index] < 0) continue;
+      let low = 0;
+      let high = tails.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (previous[tails[middle]] < previous[index]) low = middle + 1;
+        else high = middle;
+      }
+      predecessors[index] = low > 0 ? tails[low - 1] : -1;
+      tails[low] = index;
+    }
+    stable = new Set<number>();
+    for (let index = tails[tails.length - 1]; index !== undefined && index >= 0; index = predecessors[index]) stable.add(index);
+  }
+  let cursor: Node = end;
+  for (let index = ordered.length - 1; index >= 0; index--) {
+    const nodes = ordered[index].mounted.nodes;
+    if (nodes.length === 0) continue;
+    if ((previous[index] >= 0 && (!stable || stable.has(index))) || nodes[nodes.length - 1].nextSibling === cursor) {
+      cursor = nodes[0];
+      continue;
+    }
+    for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
+      parent.insertBefore(nodes[nodeIndex], cursor);
+      cursor = nodes[nodeIndex];
+    }
+  }
+}
+
 function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, context: MountContext): Mounted {
   const ownerDocument = ownerDocumentFor(parent);
   const start = ownerDocument.createComment("clank:for");
@@ -687,9 +729,11 @@ function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, 
     }
     const next = new Map<unknown, KeyedEntry<T>>();
     const nextOrdered: KeyedEntry<T>[] = [];
+    const previous: number[] = [];
 
     keyedValues.forEach(({ item, index, key }) => {
       let entry = entries.get(key);
+      previous.push(entry ? entry.index.peek() : -1);
       if (entry) {
         entry.updateItem(item);
         entry.index.value = index;
@@ -718,18 +762,7 @@ function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, 
         } else {
           fallback?.dispose();
           fallback = undefined;
-          let cursor: Node = end;
-          for (let index = ordered.length - 1; index >= 0; index--) {
-            const nodes = ordered[index].mounted.nodes;
-            if (nodes.length > 0 && nodes[nodes.length - 1].nextSibling === cursor) {
-              cursor = nodes[0];
-              continue;
-            }
-            for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
-              parent.insertBefore(nodes[nodeIndex], cursor);
-              cursor = nodes[nodeIndex];
-            }
-          }
+          reorderKeyed(parent, ordered, previous, end);
         }
       },
     ]);
@@ -823,8 +856,10 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
       }
       const next = new Map<unknown, KeyedEntry<T>>();
       const nextOrdered: KeyedEntry<T>[] = [];
+      const previous: number[] = [];
       keyedValues.forEach(({ item, index, key }) => {
         let entry = entries.get(key);
+        previous.push(entry ? entry.index.peek() : -1);
         if (entry) {
           entry.updateItem(item);
           entry.index.value = index;
@@ -853,18 +888,7 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
           } else {
             fallback?.dispose();
             fallback = undefined;
-            let position: Node = end;
-            for (let index = ordered.length - 1; index >= 0; index--) {
-              const nodes = ordered[index].mounted.nodes;
-              if (nodes.length > 0 && nodes[nodes.length - 1].nextSibling === position) {
-                position = nodes[0];
-                continue;
-              }
-              for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
-                parent.insertBefore(nodes[nodeIndex], position);
-                position = nodes[nodeIndex];
-              }
-            }
+            reorderKeyed(parent, ordered, previous, end);
           }
         },
       ]);
@@ -1126,8 +1150,7 @@ function bindClassProperties(element: Element, props: Record<string, unknown>): 
   let listInput: unknown;
   let hasBase = false;
   let hasList = false;
-  // Treat class and className as aliases; if both are supplied, the last one
-  // in declaration order wins. classList is always composed after that base.
+  // class/className: last declaration wins; compose classList after that base.
   for (const [name, value] of Object.entries(props)) {
     if (name === "class" || name === "className") {
       baseInput = value;
@@ -1176,9 +1199,7 @@ function bindProperty(element: Element, name: string, input: unknown): Cleanup |
   }
   if (name.startsWith("bind:")) return bindTwoWay(element, name.slice(5), input);
   if (isEventProperty(name)) {
-    // Optional composed part handlers are commonly represented as undefined.
-    // Treat nullish values as an absent listener while continuing to reject
-    // strings and other executable-attribute lookalikes.
+    // Nullish optional handlers are absent; reject strings and other non-functions.
     if (input == null) return undefined;
     if (typeof input !== "function") throw new TypeError(`${name} expects an event listener function.`);
     return bindEvent(element, name, input as EventListener);
@@ -1321,9 +1342,7 @@ function observeSelectOptions(element: Element, read: () => unknown): Cleanup {
 }
 
 function bindStyle(element: HTMLElement, styles: Record<string, unknown>): Cleanup {
-  // A style prop owns the complete inline declaration. Clear parser- or
-  // server-provided leftovers synchronously before attaching its fine-grained
-  // property effects so hydration reconciles stale declarations as well.
+  // Styles own the inline declaration. Clear stale SSR/parser styles before attaching property effects.
   element.style.cssText = "";
   const stops = Object.entries(styles).map(([name, value]) => effect(() => {
     const next = resolve(value);
@@ -1422,8 +1441,7 @@ function setProperty(element: Element, property: string, value: unknown): void {
         if (!Object.is(target[property], next)) target[property] = next;
       } catch { /* readonly */ }
     }
-    // Reflected DOM setters can recreate the attribute (for example role="false").
-    // Remove it after resetting the property so an omitted value stays omitted.
+    // Remove after resetting: reflected setters can recreate omitted attributes (e.g. role="false").
     if (element.hasAttribute(name)) element.removeAttribute(name);
     return;
   }

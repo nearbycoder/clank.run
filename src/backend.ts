@@ -2084,24 +2084,29 @@ export async function openBackend<
   };
 
   const stopChanges = database.subscribe((change) => {
-    if (change.all || change.records.some(record => record.table === "__auth")) replayStore?.clear();
+    const affectedUsers = new Set(change.records
+      .filter((record) => record.table === "__auth")
+      .map((record) => record.ownerId ?? record.id));
+    if (change.all || affectedUsers.size) replayStore?.clear();
     if (authRuntime) {
       if (change.all) {
         authRuntime.notifyAllUserChanges();
       } else {
-        const affectedUsers = new Set(change.records
-          .filter((record) => record.table === "__auth")
-          .map((record) => record.ownerId ?? record.id));
         for (const userId of affectedUsers) authRuntime.notifyUserChange(userId as AuthUserId);
       }
     }
+    if (cache.size === 0 && subscribers.size === 0) return;
+    const affects = changeMatcher(change);
+    const invalidationReason = options.diagnostics
+      ? change.all ? "revision history reset"
+        : [...new Set(change.records.map((record) => record.table))].slice(0, 20).join(", ").slice(0, 256)
+      : null;
     const invalidated = new Set<string>();
     for (const [key, entry] of cache) {
-      if (entry.dependencies.some((dependency) => changeAffects(dependency, change))) {
+      if (entry.dependencies.some(affects)) {
         entry.dirty = true;
         const diagnostic = queryDiagnostic(entry.path);
-        if (diagnostic) diagnostic.lastInvalidation = change.all ? "revision history reset"
-          : [...new Set(change.records.map((record) => record.table))].slice(0, 20).join(", ").slice(0, 256);
+        if (diagnostic) diagnostic.lastInvalidation = invalidationReason;
         invalidated.add(key);
       }
     }
@@ -2109,7 +2114,7 @@ export async function openBackend<
     // Recompute matching subscriptions without increasing maxCacheEntries or waking
     // unrelated tenants merely because their result was evicted.
     for (const [key, subscription] of subscribers) {
-      if (!cache.has(key) && subscription.dependencies.some(dependency => changeAffects(dependency, change))) {
+      if (!cache.has(key) && subscription.dependencies.some(affects)) {
         invalidated.add(key);
       }
     }
@@ -2117,10 +2122,7 @@ export async function openBackend<
       const subscription = subscribers.get(key);
       if (subscription?.auth?.session && (
         change.all
-        || change.records.some((record) =>
-          record.table === "__auth"
-          && (record.ownerId ?? record.id) === subscription.auth?.user?.id
-        )
+        || affectedUsers.has(subscription.auth.user?.id ?? "")
       )) {
         const refreshed = authRuntime?.refreshSession(subscription.auth.session.id);
         if (!refreshed) continue;
@@ -2995,13 +2997,34 @@ function toSchema(input: FunctionArgs): Schema<any> {
   return typeof (input as Schema<any>).parse === "function" ? input as Schema<any> : s.object(input as SchemaShape);
 }
 
-function changeAffects(dependency: ReadDependency, change: DatabaseChange): boolean {
-  if (change.all) return true;
-  return change.records.some((record) => {
-    if (record.table !== dependency.table) return false;
-    if (dependency.ownerId !== undefined && record.ownerId !== dependency.ownerId) return false;
-    return dependency.id === undefined || record.id === dependency.id;
-  });
+function changeMatcher(change: DatabaseChange): (dependency: ReadDependency) => boolean {
+  if (change.all) return () => true;
+  if (change.records.length === 1) {
+    const { table, id, ownerId } = change.records[0]!;
+    return (dependency) => dependency.table === table
+      && (dependency.ownerId === undefined || dependency.ownerId === ownerId)
+      && (dependency.id === undefined || dependency.id === id);
+  }
+  // A bulk mutation must not rescan every changed record for every cached or
+  // evicted live query. Keep this index local to the committed change so cache
+  // eviction, dynamic dependencies, and ownership changes retain their semantics.
+  const tables = new Map<string, {
+    ids: Set<string>;
+    owners: Map<string | null | undefined, Set<string>>;
+  }>();
+  for (const { table, id, ownerId } of change.records) {
+    let entry = tables.get(table);
+    if (!entry) tables.set(table, entry = { ids: new Set(), owners: new Map() });
+    entry.ids.add(id);
+    let ownerIds = entry.owners.get(ownerId);
+    if (!ownerIds) entry.owners.set(ownerId, ownerIds = new Set());
+    ownerIds.add(id);
+  }
+  return (dependency) => {
+    const table = tables.get(dependency.table);
+    const ids = dependency.ownerId === undefined ? table?.ids : table?.owners.get(dependency.ownerId);
+    return ids !== undefined && (dependency.id === undefined || ids.has(dependency.id));
+  };
 }
 
 export function functionKey(path: string, args: unknown): string {

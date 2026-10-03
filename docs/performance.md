@@ -162,6 +162,25 @@ The [September 19 measurements](https://github.com/nearbycoder/clank.run/tree/ma
 compare these changes with the preceding security-audit revision. The report includes alternating
 A/B trials, raw results, workload limits, and reproduction commands.
 
+The October performance pass extends those guarantees to large updates and workspaces:
+
+- Keyed rendering and hydration keep the longest retained sequence in place when order changes.
+  Moving the last row to the front of a 1,000-row list moves one existing element instead of 999.
+  Ordered edits skip sequence analysis; node identity, reactive indexes, and disposal stay intact.
+- Bulk live-query invalidation builds one temporary table/owner/record index per committed batch.
+  A 64-record change with 1,000 live readers reads changed-record table metadata 192 times instead
+  of 63,176 in the instrumented fixture, with identical notifications. Single-record writes use
+  a direct matcher, and a backend without readers does not build the index. No stale cache is added.
+- Project lists join current workspace roles and explicit project permissions into the indexed
+  visibility lookup. Dashboard domain and release summaries use two grouped queries restricted
+  to the authorized project IDs. A 100-project fixture needs 112 database reads instead of 410;
+  per-project metric aggregation remains and can dominate populated dashboards.
+
+The regressions cover permission and session revocation, parent-project permission inheritance,
+tenant isolation after cache eviction, dynamic query dependencies, and rendering/hydration
+permutations. See the [October 3 measurements](https://github.com/nearbycoder/clank.run/tree/main/reports/performance-2026-10-03)
+for browser layout timings, HTTP load, live-delivery/recovery checks, controls, and reproduction.
+
 ## Complete application load budgets
 
 `clank workbench performance page.har budgets.json --baseline=before.har --json`

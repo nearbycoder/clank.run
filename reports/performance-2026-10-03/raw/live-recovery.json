@@ -1,0 +1,117 @@
+{
+  "protocol": "clank-load-reliability/1",
+  "startedAt": "2026-10-03T17:49:33.585Z",
+  "node": "v24.21.0",
+  "users": 1000,
+  "connections": 1001,
+  "liveLimit": 1000,
+  "readRate": 100,
+  "scenarios": [
+    {
+      "name": "Live connection admission and idle residency",
+      "accepted": 1000,
+      "attempted": 1002,
+      "rejected": 2,
+      "connectMs": 5427.04316,
+      "emptyRss": 126660608,
+      "metrics": {
+        "rss": 188948480,
+        "peakRss": 188948480,
+        "heapUsed": 63088392,
+        "cpuPercent": 10.359800893453519,
+        "eventLoopP99Ms": 16.941055,
+        "eventLoopMaxMs": 26.345471,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 1000,
+            "cacheHits": 1000,
+            "durationMs": 0.05801800000017465,
+            "lastInvalidation": null,
+            "cachedEntries": 1000,
+            "subscriptions": 1000
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "name": "Live update soak",
+      "seconds": 15,
+      "writes": 300,
+      "deliveryP95Ms": 24.20973200000026,
+      "writeP95Ms": 24.1144460000005,
+      "prematureClosures": 0,
+      "concurrentReads": {
+        "targetRps": 100,
+        "completed": 1499,
+        "failures": 0,
+        "dropped": 0,
+        "p95Ms": 31.790157000001273
+      },
+      "checkpoints": [],
+      "metrics": {
+        "rss": 266940416,
+        "peakRss": 266940416,
+        "heapUsed": 76733976,
+        "cpuPercent": 12.160744899057462,
+        "eventLoopP99Ms": 13.852671,
+        "eventLoopMaxMs": 32.260095,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 1300,
+            "cacheHits": 2499,
+            "durationMs": 0.06930800000191084,
+            "lastInvalidation": "items",
+            "cachedEntries": 1000,
+            "subscriptions": 1000
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "name": "50 simultaneous retries commit exactly once",
+      "passed": true
+    },
+    {
+      "name": "Disconnected live subscriptions released",
+      "metrics": {
+        "rss": 266199040,
+        "peakRss": 266199040,
+        "heapUsed": 22662288,
+        "cpuPercent": 636.9262617207676,
+        "eventLoopP99Ms": 0.000511,
+        "eventLoopMaxMs": 0,
+        "queries": [
+          {
+            "path": "list",
+            "runs": 1301,
+            "cacheHits": 2501,
+            "durationMs": 0.11046599999826867,
+            "lastInvalidation": "items",
+            "cachedEntries": 1000,
+            "subscriptions": 0
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "name": "Crash, restart, and ambiguous-write replay",
+      "acknowledgedBeforeCrash": 14,
+      "replayed": 50,
+      "committed": 50,
+      "recoveryMs": 441.26048199999786,
+      "passed": true
+    },
+    {
+      "name": "Session revocation closes live stream and rejects reads",
+      "passed": true
+    }
+  ],
+  "frameworkVersion": "0.23.0",
+  "ok": true,
+  "finishedAt": "2026-10-03T17:49:56.321Z"
+}

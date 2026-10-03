@@ -1,0 +1,126 @@
+{
+  "date": "2026-10-03",
+  "localReleaseGates": [
+    {
+      "log": "clank-performance-check22.log",
+      "sha256": "6ded6a4cfaf3ba14ab5d4f6165f9847ebeccc1673f066787e5ab7fd72a672155",
+      "node": "22.16.0",
+      "command": "node --disable-warning=ExperimentalWarning scripts/check.mjs",
+      "exitCode": 0,
+      "counts": {
+        "tests": 1598,
+        "pass": 1595,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 3
+      },
+      "coveragePercent": {
+        "lines": 87.52,
+        "branches": 79.4,
+        "functions": 89.74
+      }
+    },
+    {
+      "log": "clank-performance-check24.log",
+      "sha256": "045721dbfa8cb6d8df44bf7925dddb29f1c6edf39673a720fb54c3848e811f84",
+      "node": "24.21.0",
+      "command": "node --disable-warning=ExperimentalWarning scripts/check.mjs",
+      "exitCode": 0,
+      "counts": {
+        "tests": 1598,
+        "pass": 1595,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 3
+      },
+      "coveragePercent": {
+        "lines": 87.52,
+        "branches": 79.38,
+        "functions": 89.69
+      }
+    },
+    {
+      "log": "clank-performance-check26.log",
+      "sha256": "a20f329a75c08e6902884bc6031d1e7bdb63c27a0080971e7c5ba48caf99b6b2",
+      "node": "26.10.0",
+      "command": "node --disable-warning=ExperimentalWarning scripts/check.mjs",
+      "exitCode": 0,
+      "counts": {
+        "tests": 1598,
+        "pass": 1595,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 3
+      },
+      "coveragePercent": {
+        "lines": 91.93,
+        "branches": 79.37,
+        "functions": 89.7
+      }
+    }
+  ],
+  "gateScope": "Framework/docs/Design Studio/Synth builds, documentation examples, zero-dependency contract, full test suite with coverage, documentation audit, packaged-release conformance, and repository/package/history security audit.",
+  "skips": [
+    "Real XFS hard-limit test requires a disposable XFS mount in CLANK_XFS_TEST_MOUNT.",
+    "Two real Docker integration tests require CLANK_DOCKER_INTEGRATION=1 on a disposable VM."
+  ],
+  "incrementalValidation": "Node 22/24 full gates preceded comment-only DOM condensation and the durable test correction. Canonical compiled runtime and benchmark harness hashes match the measured candidate. The final durable test passed all 8 cases on Node 22/24/26 and was included in the final complete Node 26 gate; Node 22/24 were also rerun against the final canonical build.",
+  "resolvedFailures": [
+    {
+      "log": "clank-performance-check26-initial.log",
+      "sha256": "a80ef001b3502b8d014ed7f32ba6c0abd232a787f0b4e571fa2ee30aee69c651",
+      "cause": "Node 26 native output preserved comments and exceeded the 12,000-byte DOM gzip budget at 12,193 bytes.",
+      "resolution": "Condensed six comments; final Node 26 gzip is 11,929 bytes. Node 22/24 compiled output is byte-identical. No budget increase."
+    },
+    {
+      "log": "clank-performance-check26-ordering.log",
+      "sha256": "de198cb30df349e347f1fde14cf659042303b5231053f44ed6f6eac79ba8f78f",
+      "cause": "Existing bulk-edit rollback test assumed insertion order when records share a millisecond creation time.",
+      "resolution": "Compare record IDs and scores, and force tied timestamps with descending IDs. The original positional assertion fails deterministically against baseline; no runtime ordering change."
+    }
+  ],
+  "negativeControls": [
+    "Original DOM implementation fails the rotation regression at 999 insertions instead of 1.",
+    "Original backend invalidation fails its bounded work regression at 16,513 record-metadata reads against a 256-read ceiling.",
+    "Original platform code fails zero per-project authorization and two aggregate-query regressions (10 and 78 queries respectively).",
+    {
+      "log": "clank-performance-durable-negative.log",
+      "sha256": "0e2bbc8d0411fe969bd6ec28ea03681b995834cf9a9c6c3a14cdf192cce058c1",
+      "expectedExitCode": 1,
+      "actualScores": [
+        2,
+        1
+      ],
+      "incorrectExpectedScores": [
+        1,
+        2
+      ]
+    }
+  ],
+  "independentReviews": [
+    "Platform query changes reviewed by rendering agent; no actionable findings.",
+    "Backend invalidation changes reviewed by platform agent; no actionable findings.",
+    "Bulk-edit test ordering independently confirmed by backend agent.",
+    "Report math independently checked against raw results; desktop viewport corrected to 1280x633."
+  ],
+  "benchmarkIntegrity": "All candidate source hashes, canonical Node 22 distribution hashes, and benchmark harness hashes match manifest.json after final build. Raw results include all measured slower trials and failed latency acceptance rounds.",
+  "securityScope": "No dependencies, production data, production load, password-strength/default concurrency changes, sandbox changes, or increased performance budgets.",
+  "finalFocusedTests": [
+    {
+      "nodeMajor": 22,
+      "tests": 8,
+      "passed": 8,
+      "failed": 0,
+      "log": "clank-performance-durable-final22.log",
+      "sha256": "e0a991f4806f44a0ba93b7fafa123b0ec7e3dbb315816d5f45422bd7a58a9308"
+    },
+    {
+      "nodeMajor": 24,
+      "tests": 8,
+      "passed": 8,
+      "failed": 0,
+      "log": "clank-performance-durable-final24.log",
+      "sha256": "c6899c7023523075fee0919abaf3ef0ecf2b9ecbb6450e781a17255850b283e7"
+    }
+  ]
+}

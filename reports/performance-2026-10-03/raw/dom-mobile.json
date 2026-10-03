@@ -1,0 +1,734 @@
+{
+  "protocol": "clank-keyed-dom-performance/1",
+  "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "rounds": 5,
+  "iterations": 10,
+  "work": [
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 1,
+      "scriptMs": 3.699999988079071,
+      "layoutMs": 5.600000008940697,
+      "totalMs": 9.299999997019768,
+      "domInsertions": 999
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 1,
+      "scriptMs": 2.8999999910593033,
+      "layoutMs": 3.5,
+      "totalMs": 6.399999991059303,
+      "domInsertions": 1
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 1,
+      "scriptMs": 2.7999999970197678,
+      "layoutMs": 3.6000000089406967,
+      "totalMs": 6.4000000059604645,
+      "domInsertions": 1000
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 1,
+      "scriptMs": 2.7000000029802322,
+      "layoutMs": 2.7999999970197678,
+      "totalMs": 5.5,
+      "domInsertions": 2
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 1,
+      "scriptMs": 0.29999999701976776,
+      "layoutMs": 0.10000000894069672,
+      "totalMs": 0.4000000059604645,
+      "domInsertions": 0
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 1,
+      "scriptMs": 0.5,
+      "layoutMs": 0.10000000894069672,
+      "totalMs": 0.6000000089406967,
+      "domInsertions": 0
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 1,
+      "scriptMs": 41.6000000089407,
+      "layoutMs": 44.599999994039536,
+      "totalMs": 86.20000000298023,
+      "domInsertions": 9999
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 1,
+      "scriptMs": 36.80000001192093,
+      "layoutMs": 30.599999994039536,
+      "totalMs": 67.40000000596046,
+      "domInsertions": 1
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 1,
+      "scriptMs": 53.29999999701977,
+      "layoutMs": 43.79999999701977,
+      "totalMs": 97.09999999403954,
+      "domInsertions": 10000
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 1,
+      "scriptMs": 29.599999994039536,
+      "layoutMs": 36.400000005960464,
+      "totalMs": 66,
+      "domInsertions": 2
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 1,
+      "scriptMs": 3.800000011920929,
+      "layoutMs": 2.5,
+      "totalMs": 6.300000011920929,
+      "domInsertions": 0
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 1,
+      "scriptMs": 3.3999999910593033,
+      "layoutMs": 1.7999999970197678,
+      "totalMs": 5.199999988079071,
+      "domInsertions": 0
+    }
+  ],
+  "samples": [
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 34.69999998807907,
+      "layoutMs": 55.900000005960464,
+      "totalMs": 90.59999999403954,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 18.00000001490116,
+      "layoutMs": 38.8999999910593,
+      "totalMs": 56.900000005960464,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 16.900000020861626,
+      "layoutMs": 41.3999999910593,
+      "totalMs": 58.30000001192093,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 26.600000023841858,
+      "layoutMs": 46.29999998211861,
+      "totalMs": 72.90000000596046,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 24.200000017881393,
+      "layoutMs": 38.49999998509884,
+      "totalMs": 62.70000000298023,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 13.200000017881393,
+      "layoutMs": 28.899999976158142,
+      "totalMs": 42.099999994039536,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 13.500000014901161,
+      "layoutMs": 30.399999991059303,
+      "totalMs": 43.900000005960464,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 21.000000029802322,
+      "layoutMs": 38.599999979138374,
+      "totalMs": 59.6000000089407,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 24.900000020861626,
+      "layoutMs": 42.39999997615814,
+      "totalMs": 67.29999999701977,
+      "round": 5
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 12.900000020861626,
+      "layoutMs": 26.099999979138374,
+      "totalMs": 39,
+      "round": 5
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 26.799999982118607,
+      "layoutMs": 39.20000001788139,
+      "totalMs": 66,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 14.699999988079071,
+      "layoutMs": 27.50000001490116,
+      "totalMs": 42.20000000298023,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 14.5,
+      "layoutMs": 27.700000002980232,
+      "totalMs": 42.20000000298023,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 21.700000002980232,
+      "layoutMs": 37.29999999701977,
+      "totalMs": 59,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 21.700000002980232,
+      "layoutMs": 36.79999999701977,
+      "totalMs": 58.5,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 12.900000005960464,
+      "layoutMs": 27.099999994039536,
+      "totalMs": 40,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 12.700000002980232,
+      "layoutMs": 27.299999997019768,
+      "totalMs": 40,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 23.49999998509884,
+      "layoutMs": 37.60000002384186,
+      "totalMs": 61.1000000089407,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 21.399999991059303,
+      "layoutMs": 39.6000000089407,
+      "totalMs": 61,
+      "round": 5
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 14.200000002980232,
+      "layoutMs": 28.299999997019768,
+      "totalMs": 42.5,
+      "round": 5
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 1.8999999910593033,
+      "layoutMs": 1.300000011920929,
+      "totalMs": 3.2000000029802322,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 1.699999988079071,
+      "layoutMs": 1.2000000029802322,
+      "totalMs": 2.8999999910593033,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 1.399999976158142,
+      "layoutMs": 1.100000038743019,
+      "totalMs": 2.500000014901161,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 1.2000000029802322,
+      "layoutMs": 1.5,
+      "totalMs": 2.7000000029802322,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 1.3999999910593033,
+      "layoutMs": 1.4000000059604645,
+      "totalMs": 2.7999999970197678,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 1.5999999940395355,
+      "layoutMs": 1.1000000089406967,
+      "totalMs": 2.7000000029802322,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 1,
+      "layoutMs": 1.5,
+      "totalMs": 2.5,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 1.600000038743019,
+      "layoutMs": 0.9999999701976776,
+      "totalMs": 2.6000000089406967,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 1,
+      "layoutMs": 1.300000011920929,
+      "totalMs": 2.300000011920929,
+      "round": 5
+    },
+    {
+      "label": "candidate",
+      "count": 1000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 0.9999999701976776,
+      "layoutMs": 1.2000000178813934,
+      "totalMs": 2.199999988079071,
+      "round": 5
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 379.50000001490116,
+      "layoutMs": 442.399999961257,
+      "totalMs": 821.8999999761581,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 310.50000001490116,
+      "layoutMs": 365.89999997615814,
+      "totalMs": 676.3999999910593,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 297.4000000357628,
+      "layoutMs": 384.39999997615814,
+      "totalMs": 681.8000000119209,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 370.69999995827675,
+      "layoutMs": 426.9000000208616,
+      "totalMs": 797.5999999791384,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 472.6000000089407,
+      "layoutMs": 407.7999999821186,
+      "totalMs": 880.3999999910593,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 296.60000002384186,
+      "layoutMs": 359.19999998807907,
+      "totalMs": 655.8000000119209,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 305.4000000208616,
+      "layoutMs": 350.6999999731779,
+      "totalMs": 656.0999999940395,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 425.49999998509884,
+      "layoutMs": 432.00000001490116,
+      "totalMs": 857.5,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 520.4000000208616,
+      "layoutMs": 413.99999998509884,
+      "totalMs": 934.4000000059605,
+      "round": 5
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "last-to-first",
+      "iterations": 10,
+      "scriptMs": 382.5999999791384,
+      "layoutMs": 366.4000000208616,
+      "totalMs": 749,
+      "round": 5
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 382,
+      "layoutMs": 415.30000001192093,
+      "totalMs": 797.3000000119209,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 268.4999999701977,
+      "layoutMs": 333.3000000268221,
+      "totalMs": 601.7999999970198,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 255.49999998509884,
+      "layoutMs": 330.20000000298023,
+      "totalMs": 585.6999999880791,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 404.5000000298023,
+      "layoutMs": 406.19999998807907,
+      "totalMs": 810.7000000178814,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 385.6000000089407,
+      "layoutMs": 406.1000000089407,
+      "totalMs": 791.7000000178814,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 310.7000000178814,
+      "layoutMs": 356.5999999791384,
+      "totalMs": 667.2999999970198,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 322.10000002384186,
+      "layoutMs": 339.19999998807907,
+      "totalMs": 661.3000000119209,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 439.7999999821186,
+      "layoutMs": 414.70000000298023,
+      "totalMs": 854.4999999850988,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 454.9999999701977,
+      "layoutMs": 404.4000000357628,
+      "totalMs": 859.4000000059605,
+      "round": 5
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "prepend",
+      "iterations": 10,
+      "scriptMs": 339.10000002384186,
+      "layoutMs": 343.1999999731779,
+      "totalMs": 682.2999999970198,
+      "round": 5
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 20.899999991059303,
+      "layoutMs": 14.30000002682209,
+      "totalMs": 35.20000001788139,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 20.19999998807907,
+      "layoutMs": 17.400000005960464,
+      "totalMs": 37.599999994039536,
+      "round": 1
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 13.100000023841858,
+      "layoutMs": 15.099999979138374,
+      "totalMs": 28.200000002980232,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 42.99999997019768,
+      "layoutMs": 14.80000002682209,
+      "totalMs": 57.79999999701977,
+      "round": 2
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 16.900000020861626,
+      "layoutMs": 13.999999985098839,
+      "totalMs": 30.900000005960464,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 18.99999998509884,
+      "layoutMs": 15.300000011920929,
+      "totalMs": 34.29999999701977,
+      "round": 3
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 15.300000011920929,
+      "layoutMs": 14.199999988079071,
+      "totalMs": 29.5,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 19.30000001192093,
+      "layoutMs": 14.199999988079071,
+      "totalMs": 33.5,
+      "round": 4
+    },
+    {
+      "label": "baseline",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 16.400000020861626,
+      "layoutMs": 13.999999985098839,
+      "totalMs": 30.400000005960464,
+      "round": 5
+    },
+    {
+      "label": "candidate",
+      "count": 10000,
+      "scenario": "same-order-edit",
+      "iterations": 10,
+      "scriptMs": 13.199999988079071,
+      "layoutMs": 14,
+      "totalMs": 27.19999998807907,
+      "round": 5
+    }
+  ]
+}
