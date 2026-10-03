@@ -59,6 +59,16 @@ export async function build({ quiet = false } = {}) {
       await compileFile(path, javascriptOutput, { jsxImportSource: "./index.js" });
     }
   }
+  // Ship the same canonical prompt with the platform and the documentation site.
+  const gettingStarted = await readFile(join(projectRoot, "docs/getting-started.md"), "utf8");
+  const setupSection = gettingStarted.split("\n## Set up with an agent\n")[1]?.split("\n## ")[0];
+  const prompts = [...(setupSection ?? "").matchAll(/^```text\n([\s\S]*?)\n```$/gmu)];
+  if (prompts.length !== 1 || !prompts[0][1].trim()) {
+    throw new Error("Getting Started must contain one complete agent setup prompt.");
+  }
+  const promptOutput = join(outputRoot, "agent-setup-prompt.js");
+  expectedOutputs.add(promptOutput);
+  await writeFileAtomically(promptOutput, `export const agentSetupPrompt = ${JSON.stringify(prompts[0][1])};\n`);
   for (const path of await filesUnder(outputRoot)) {
     if (!path.includes(".clank-build-") && !expectedOutputs.has(path)) await rm(path, { force: true });
   }

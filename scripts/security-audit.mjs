@@ -112,12 +112,21 @@ if (!/permissions:\s*\n\s*contents:\s*read/u.test(docsDeploy)
   || !/workflow_run\.head_branch == 'main'/u.test(docsDeploy)
   || !/workflow_run\.head_repository\.full_name == github\.repository/u.test(docsDeploy)
   || !/ref: \$\{\{ github\.event\.workflow_run\.head_sha \}\}/u.test(docsDeploy)) {
-  fail("Documentation deployment must use the exact successful, same-repository main CI revision.");
+  fail("Documentation rollout verification must use the exact successful, same-repository main CI revision.");
 }
-if (!/environment:\s*\n\s*name:\s*docs/u.test(docsDeploy)
-  || !/\$\{\{ secrets\.CLANK_DOCS_TOKEN \}\}/u.test(docsDeploy)
-  || !/\$\{\{ vars\.CLANK_DOCS_PROJECT_ID \}\}/u.test(docsDeploy)) {
-  fail("Documentation deployment must isolate its project-scoped identity in the docs environment.");
+if (/secrets\.|CLANK_DOCS_TOKEN|CLANK_DOCS_PROJECT_ID|\b[a-z-]+:\s*write/u.test(docsDeploy)
+  || /npm run (?:build|deploy|doctor)|clank\.mjs|releases delete|writeFile/u.test(docsDeploy)
+  || !/cancel-in-progress:\s*true/u.test(docsDeploy)
+  || !/node-version:\s*"24"/u.test(docsDeploy)
+  || !/const origin = "https:\/\/docs\.clank\.run"/u.test(docsDeploy)
+  || !/readFile\("docs\/getting-started\.md", "utf8"\)/u.test(docsDeploy)
+  || !/readPublic\("\/raw\/getting-started\.md"\)/u.test(docsDeploy)
+  || !/markdown !== expected/u.test(docsDeploy)
+  || !/home\.includes\(">Copy setup prompt<\/button>"\)/u.test(docsDeploy)
+  || !/redirect:\s*"error"/u.test(docsDeploy)
+  || !/const deadline = Date\.now\(\) \+ 270_000/u.test(docsDeploy)
+  || !/AbortSignal\.timeout\(Math\.max\(1, Math\.min\(10_000, deadline - Date\.now\(\)\)\)\)/u.test(docsDeploy)) {
+  fail("Documentation rollout verification must use bounded, read-only public checks without deployment credentials or release mutations.");
 }
 if (!/permissions:\s*\n\s*contents:\s*read/u.test(designDeploy)
   || !/workflow_run\.conclusion == 'success'/u.test(designDeploy)

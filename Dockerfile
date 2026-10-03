@@ -9,8 +9,11 @@ COPY brand ./brand
 COPY scripts ./scripts
 COPY src ./src
 COPY examples ./examples
+COPY docs ./docs
+COPY docs-site ./docs-site
+COPY README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md LICENSE ./
 
-RUN node --disable-warning=ExperimentalWarning scripts/build.mjs
+RUN node --disable-warning=ExperimentalWarning docs-site/build.mjs
 
 FROM node:22-bookworm-slim AS runtime
 
@@ -29,8 +32,11 @@ WORKDIR /app
 
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/brand ./brand
+COPY --from=build /app/docs-site/dist ./docs-site/dist
+COPY --from=build /app/docs-site/content ./docs-site/content
+COPY --from=build /app/docs-site/vendor ./docs-site/vendor
 COPY package.json LICENSE ./
-COPY scripts/clank-platform.mjs scripts/platform-hosting.mjs scripts/platform-billing.mjs ./scripts/
+COPY scripts/clank-platform.mjs scripts/platform-hosting.mjs scripts/platform-billing.mjs scripts/platform-documentation.mjs ./scripts/
 
 EXPOSE 4200
 STOPSIGNAL SIGTERM

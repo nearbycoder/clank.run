@@ -14,6 +14,7 @@ import {
   resolveRunnerArtifactStorage,
 } from "./platform-hosting.mjs";
 import { resolvePlatformBilling } from "./platform-billing.mjs";
+import { loadBundledDocumentation, routeBundledDocumentation } from "./platform-documentation.mjs";
 
 process.umask(0o077);
 
@@ -21,6 +22,7 @@ const port = number(process.env.PORT, 4200);
 const hostname = process.env.HOST ?? "127.0.0.1";
 const publicUrl = environment("CLANK_PLATFORM_URL", "PROACT_PLATFORM_URL")
   ?? `http://${hostname === "0.0.0.0" ? "127.0.0.1" : hostname}:${port}`;
+const documentation = await loadBundledDocumentation(process.env, publicUrl);
 const dataDirectory = environment("CLANK_PLATFORM_DATA", "PROACT_PLATFORM_DATA")
   ?? await defaultDataDirectory();
 const signupSetting = environment("CLANK_SIGNUP", "PROACT_SIGNUP");
@@ -219,7 +221,7 @@ const allowedHosts = process.env.ALLOWED_HOSTS
   ?.split(",")
   .map((value) => value.trim())
   .filter(Boolean);
-const server = await serve(platform, {
+const server = await serve(routeBundledDocumentation(platform, documentation), {
   hostname,
   port,
   trustProxy: process.env.TRUST_PROXY === "1",
@@ -229,6 +231,7 @@ const server = await serve(platform, {
 });
 
 console.log(`Clank deployment platform: ${publicUrl}`);
+if (documentation) console.log(`Bundled documentation: ${documentation.hostname}`);
 console.log(`Platform data: ${platform.dataDirectory}`);
 console.log(`Hosting profile: ${platform.hostingProfile}`);
 console.log(`Runner: ${runner.kind}`);

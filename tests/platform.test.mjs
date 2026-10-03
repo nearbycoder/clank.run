@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
-import { createSign, generateKeyPairSync } from "node:crypto";
+import { createHash, createSign, generateKeyPairSync } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
   createDeploymentCoordinatorClient,
@@ -4457,6 +4457,8 @@ test("Docker runner prevents application environment from controlling the host D
   const source = join(root, "source");
   const runnerPath = join(root, "fake-docker.mjs");
   const invocationPath = join(root, "docker-invocation.json");
+  // A short hexadecimal secret can also occur in legitimate random IDs and mount paths.
+  const applicationSecret = "clank-test-secret::only-inside-application::8f10942d";
   await writeFile(runnerPath, `#!/usr/bin/env node
     import { spawn } from "node:child_process";
     import { readFile, writeFile } from "node:fs/promises";
@@ -4472,10 +4474,10 @@ test("Docker runner prevents application environment from controlling the host D
     await writeFile(${JSON.stringify(invocationPath)}, JSON.stringify({
       arguments_,
       envelopePresent: typeof encoded === "string",
-      hostSecretPresent: process.env.DOCKER_TEST_SECRET === "abc",
+      hostSecretPresent: process.env.DOCKER_TEST_SECRET === ${JSON.stringify(applicationSecret)},
       hostDockerRedirected: process.env.DOCKER_HOST === "tcp://attacker.example:2375",
       hostPreloadInjected: process.env.LD_PRELOAD === "/app/evil.so",
-      runtimeSecretPresent: runtimeEnvironment.DOCKER_TEST_SECRET === "abc",
+      runtimeSecretPresent: runtimeEnvironment.DOCKER_TEST_SECRET === ${JSON.stringify(applicationSecret)},
       runtimeDockerHostPresent: runtimeEnvironment.DOCKER_HOST === "tcp://attacker.example:2375",
       runtimePreloadPresent: runtimeEnvironment.LD_PRELOAD === "/app/evil.so",
     }));
@@ -4514,7 +4516,7 @@ test("Docker runner prevents application environment from controlling the host D
       token: owner.accessToken,
       body: {
         values: {
-          DOCKER_TEST_SECRET: "abc",
+          DOCKER_TEST_SECRET: applicationSecret,
           DOCKER_HOST: "tcp://attacker.example:2375",
           LD_PRELOAD: "/app/evil.so",
         },
@@ -4542,7 +4544,7 @@ test("Docker runner prevents application environment from controlling the host D
     assert.equal(invocation.arguments_.includes("CLANK_RUNTIME_ENV_B64"), true);
     assert.equal(
       invocation.arguments_.some((argument) =>
-        /abc|attacker\.example|evil\.so/u.test(argument)),
+        argument.includes(applicationSecret) || /attacker\.example|evil\.so/u.test(argument)),
       false,
     );
   } finally {
@@ -7139,7 +7141,12 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.doesNotMatch(signedOutHtml, /id="auth-view"|id="app-view"|"authenticated":false/);
     assert.equal(signedOutConsole.headers.get("cache-control"), "public, max-age=0, must-revalidate");
     assert.equal(signedOutConsole.headers.get("vary"), "cookie");
-    assert.match(signedOutConsole.headers.get("content-security-policy"), /script-src 'none'/);
+    const marketingScript = signedOutHtml.match(/<script>([\s\S]*?)<\/script>/iu)?.[1];
+    assert.ok(marketingScript, "the setup prompt copy control must have an authorized script");
+    const scriptHash = createHash("sha256").update(marketingScript).digest("base64");
+    const marketingPolicy = signedOutConsole.headers.get("content-security-policy");
+    assert.ok(marketingPolicy.includes(`script-src 'sha256-${scriptHash}';`));
+    assert.doesNotMatch(marketingPolicy, /script-src[^;]*(?:unsafe-inline|unsafe-eval)/u);
     const loginConsole = await platform.handle(jsonRequest("/login"));
     assert.equal(loginConsole.status, 200);
     const loginHtml = await loginConsole.text();

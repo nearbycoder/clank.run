@@ -37,21 +37,16 @@ Clank releases are built from reviewed source, submitted through npm trusted pub
 
 9. Require two-factor authentication, disallow traditional publish tokens, and revoke any bootstrap token or saved npm session that is no longer needed.
 10. Enable GitHub private vulnerability reporting.
-11. Create a GitHub Actions environment named `docs`, restrict it to protected branches, and set:
-    - `CLANK_DOCS_PROJECT_ID` as an environment variable containing the linked `docs.clank.run` project ID; and
-    - `CLANK_DOCS_TOKEN` as an environment secret containing a project token limited to `read,deploy,rollback`.
+11. Route `docs.clank.run` to the platform service and set `CLANK_DOCUMENTATION_HOST=docs.clank.run`
+    on that service to opt into the documentation bundled in its Docker image. Keep the host exact;
+    other hosts continue to use the platform's ordinary routing. The documentation rollout workflow
+    needs no deployment token, linked project, or GitHub environment secret.
 
-Create the documentation token from the linked `docs-site` directory with
-`clank token create --name github-actions-docs --permissions read,deploy,rollback --expires-in=31536000`.
-The secret is shown once. Store it directly in the `docs` environment, record its expiry in the
-operator calendar, and replace then revoke it before it expires. Never use an account-wide device
-token for the workflow.
-
-The `rollback` permission is required by the workflow's inactive-release pruning step when
-artifact capacity is full. Apply the same project-scoped permissions to `CLANK_DESIGN_TOKEN`
-in the protected `design` environment. A token limited to `read,deploy` can deploy while capacity
-remains but cannot reclaim old release storage. Rotate by creating a replacement token, updating
-the environment secret, verifying a successful workflow run, then revoking the old token.
+Design Studio still uses a project-scoped `CLANK_DESIGN_TOKEN` with `read,deploy,rollback`
+permissions in the protected `design` environment. Its `rollback` permission allows inactive-release
+pruning when artifact capacity is full. A token limited to `read,deploy` cannot reclaim old release
+storage. Rotate by creating a replacement token, updating the environment secret, verifying a
+successful workflow run, then revoking the old token. Never use an account-wide device token.
 
 The release workflow uses Node 24 with npm 11.18.0 and requests `id-token: write` only in the publish job. npm exchanges that GitHub OIDC identity for a short-lived credential and automatically produces package provenance for the public package.
 
@@ -81,11 +76,19 @@ The security gate also requires the package version, dated changelog heading, an
 example in Getting Started to match exactly. A version pull request therefore cannot pass while
 the published identity and installation documentation disagree.
 
-Every successful same-repository `main` CI run also starts the documentation deployment workflow.
-It checks out the exact commit that passed CI, rebuilds the complete documentation corpus, runs
-`doctor` and a deterministic dry-run, then deploys to the fixed `docs.clank.run` project. The
-project-scoped token is available only through the protected `docs` environment. Pull requests,
-forks, failed CI runs, other branches, and unverified revisions cannot reach the deployment job.
+The production Docker image includes the documentation build and canonical Markdown corpus.
+With `CLANK_DOCUMENTATION_HOST=docs.clank.run`, the platform serves that immutable build for the
+exact documentation host, so documentation changes roll out with the platform image. This path
+does not create a hosted application release or run tenant SQLite tasks. Standalone documentation
+hosting remains supported through the `docs-site` build and public Clank deployment commands.
+
+Every successful same-repository `main` CI run starts the documentation rollout verification
+workflow. It checks out the exact commit that passed CI and makes read-only requests to
+`https://docs.clank.run`: the full Getting Started Markdown must match that source, and the home
+page must expose its copyable setup prompt. Requests have ten-second timeouts and retries stop
+after 270 seconds. A newer verification run cancels the preceding one. The workflow does not
+rebuild, deploy, prune releases, or use deployment credentials. Pull requests, forks, failed CI
+runs, and other branches cannot start its verification job.
 
 ## Failure handling
 

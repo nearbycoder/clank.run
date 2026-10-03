@@ -1,5 +1,14 @@
+import { agentSetupPrompt } from "./agent-setup-prompt.js";
+import { installMarketingPromptCopy } from "./platform-marketing-copy.ts";
+
+const promptScript = `(${installMarketingPromptCopy.toString()})();`;
+let promptScriptHash: Promise<string> | undefined;
+
 /** Renders Clank's public, dependency-free marketing homepage. */
-export function platformMarketingPage(publicUrl: string): Response {
+export async function platformMarketingPage(publicUrl: string): Promise<Response> {
+  promptScriptHash ??= crypto.subtle.digest("SHA-256", new TextEncoder().encode(promptScript))
+    .then((digest) => btoa(String.fromCharCode(...new Uint8Array(digest))));
+  const scriptHash = await promptScriptHash;
   const canonicalUrl = escapeHtml(new URL("/", publicUrl).href);
   const body = `<!doctype html>
 <html lang="en">
@@ -34,6 +43,7 @@ export function platformMarketingPage(publicUrl: string): Response {
     @media(max-width:760px){.shell{width:min(calc(100% - 28px),var(--max))}.desktop-nav{display:none}.mobile-nav{display:block}.site-header{height:68px}.wordmark small{display:none}.hero{padding:58px 0 60px}.hero-grid{gap:45px}.hero h1{font-size:clamp(48px,16vw,69px)}.hero-lede{font-size:17px}.product-stage{min-height:440px;width:100%}.product-window{border-radius:18px;transform:none}.window-body{grid-template-columns:82px 1fr}.mock-nav{padding-inline:7px}.mock-brand{font-size:0}.mock-label{font-size:6px}.mock-link{font-size:0}.mock-main{padding:13px}.mock-stats{grid-template-columns:1fr 1fr}.mock-stat:nth-child(3){display:none}.mock-project{grid-template-columns:1fr 57px}.mock-project>span:last-child{display:none}.live-card{left:-6px;top:64px}.agent-card{right:-5px;bottom:15px;width:220px}.proof-grid{grid-template-columns:1fr 1fr;padding:14px 0}.proof-item{padding:15px;border-bottom:1px solid var(--line)}.proof-item:nth-child(2){border-right:0}.proof-item:nth-child(3),.proof-item:nth-child(4){border-bottom:0}.section{padding:78px 0}.section-head{margin-bottom:32px}.bento{grid-template-columns:1fr}.feature,.feature:nth-child(3){grid-column:auto;min-height:0;padding:24px}.feature:nth-child(3){display:flex}.contract-copy{width:100%}.contract-viz{width:100%;height:185px;margin-top:24px}.interface-grid{grid-template-columns:1fr}.interface{padding:28px 22px}.interface:first-child{border-right:0;border-bottom:1px solid #cad0c5}.flow-grid{grid-template-columns:1fr}.flow-step,.flow-step:first-child{padding:25px 2px}.flow-step{border-right:0!important;border-bottom:1px solid var(--line)!important}.flow-step:last-child{border-bottom:0!important}.flow-step:after{display:none!important}.resource:nth-child(n){grid-column:span 12;min-height:190px}.closing{padding-bottom:85px}.closing-card{padding:58px 22px}.closing-card h2{font-size:36px;line-height:.98}.closing-card h2 br{display:none}.footer-grid{flex-wrap:wrap}.footer-grid .wordmark{flex-basis:100%}}
     @media(max-width:430px){.hero-actions .button{width:100%}.install{font-size:10px;gap:7px}.product-stage{min-height:408px}.mock-project{height:47px}.mock-project:nth-child(4){display:none}.agent-card{width:205px}.live-card{display:none}.proof-item strong{font-size:18px}.feature h3{font-size:24px}.contract-viz{font-size:8px}.resource.large h3{font-size:24px}.closing-card .button{width:100%}.footer-grid>a{width:calc(50% - 12px)}}
     @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation:none!important;transition:none!important}}
+    .agent-setup{padding:0 0 68px}.agent-setup-card{border:1px solid var(--line-bright);border-radius:20px;background:var(--surface);padding:28px;display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:28px;align-items:start}.agent-setup h2{font-size:32px;line-height:1.1;letter-spacing:-.04em;margin:12px 0}.agent-setup p{color:var(--muted);margin:12px 0;font-size:14px}.agent-setup a{color:var(--lime)}.agent-setup figure{margin:0;min-width:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}.agent-setup figcaption{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}.agent-setup figcaption button{color:var(--paper);background:var(--surface-3);border:1px solid var(--line-bright);border-radius:7px;padding:8px 12px;cursor:pointer;font-weight:700}.agent-setup pre{margin:0;padding:18px;max-height:290px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;color:#c9d0c7}.agent-setup pre:focus-visible,.agent-setup button:focus-visible,.hero-actions button:focus-visible{outline:2px solid var(--lime);outline-offset:3px}.hero-actions button{cursor:pointer}.copy-status{min-height:1.6em}.agent-setup .copy-status{color:var(--lime)}@media(max-width:760px){.agent-setup-card{grid-template-columns:1fr;padding:22px;gap:18px}.agent-setup h2{font-size:28px}.agent-setup figcaption{flex-wrap:wrap}.agent-setup pre{max-height:240px}}
   </style>
 </head>
 <body>
@@ -52,7 +62,7 @@ export function platformMarketingPage(publicUrl: string): Response {
           <span class="kicker"><i></i> Open source · zero dependencies</span>
           <h1>One app.<span>Two intelligences.</span></h1>
           <p class="hero-lede">Clank is the AI-first full-stack TypeScript framework. Build a fast, reactive interface for people and a secure, discoverable MCP interface for agents—from the same typed server actions.</p>
-          <div class="hero-actions"><a class="button primary" href="https://docs.clank.run/docs/getting-started">Build your first app <span aria-hidden="true">→</span></a><a class="button secondary" href="/login">Open control plane</a></div>
+          <div class="hero-actions"><button class="button primary" type="button" data-copy-setup-prompt aria-describedby="agent-prompt-copy-status">Copy setup prompt</button><a class="button secondary" href="#agent-setup">Read the prompt <span aria-hidden="true">↓</span></a><a class="button secondary" href="https://docs.clank.run/docs/getting-started">Get started</a></div>
           <div class="install"><span>$</span><code>npm i -g @clank.run/framework</code></div>
         </div>
         <div class="product-stage" aria-label="Clank control plane and agent protocol preview">
@@ -66,6 +76,12 @@ export function platformMarketingPage(publicUrl: string): Response {
           <div class="live-card"><strong><i></i>Live revision 142</strong><span>Synced across 3 clients</span></div>
           <div class="agent-card"><div class="agent-card-head"><span class="agent-pulse"></span> Agent connected · OAuth scoped</div><strong>Server actions discovered</strong><p>The MCP contract stays in lockstep with your typed queries and mutations.</p><div class="tool-call">✓ todos.create({ title })<br>↳ revision 143 published</div></div>
         </div>
+      </div>
+    </section>
+    <section class="agent-setup shell" id="agent-setup" aria-labelledby="agent-setup-title">
+      <div class="agent-setup-card">
+        <div><span class="kicker">Your idea. A working app.</span><h2 id="agent-setup-title">Build with your agent</h2><p>Copy the complete setup prompt into your coding agent. It checks your environment, installs Clank, creates your app, and tests the first useful flow.</p><p>Replace the three bracketed values with your app name, directory, and idea before sending.</p><a href="https://docs.clank.run/docs/getting-started#set-up-with-an-agent">Read the setup walkthrough →</a><p class="copy-status" id="agent-prompt-copy-status" role="status" aria-live="polite" aria-atomic="true"></p></div>
+        <figure><figcaption><span>Make it your app</span><button type="button" data-copy-setup-prompt>Copy setup prompt</button></figcaption><pre tabindex="0" aria-label="Agent setup prompt"><code id="agent-setup-prompt-text">${escapeHtml(agentSetupPrompt)}</code></pre></figure>
       </div>
     </section>
     <section class="proof-strip" aria-label="Framework facts"><div class="shell proof-grid"><div class="proof-item"><strong>0</strong><span>runtime dependencies</span></div><div class="proof-item"><strong>39</strong><span>headless UI families</span></div><div class="proof-item"><strong>1:1</strong><span>UI and agent contracts</span></div><div class="proof-item"><strong>SQLite</strong><span>isolated data per app</span></div></div></section>
@@ -118,6 +134,7 @@ export function platformMarketingPage(publicUrl: string): Response {
     <section class="closing"><div class="shell"><div class="closing-card"><h2>Make the whole app<br> the intelligent interface.</h2><p>Start with a secure full-stack foundation, then give people and agents the same power to get real work done.</p><div class="hero-actions"><a class="button primary" href="https://docs.clank.run/docs/getting-started">Read the getting started guide →</a><a class="button secondary" href="/login">Sign in to Clank</a></div></div></div></section>
   </main>
   <footer class="site-footer"><div class="shell"><div class="footer-grid"><a class="wordmark" href="/"><img src="/brand/clank-mark-64.png" width="25" height="25" alt="">Clank</a><a href="https://docs.clank.run">Docs</a><a href="https://design.clank.run">Design</a><a href="https://github.com/nearbycoder/clank.run">GitHub</a><a href="https://www.npmjs.com/package/@clank.run/framework">npm</a><a href="/login">Control plane</a></div><div class="footer-note">Open source under the MIT License · Built with Clank</div></div></footer>
+<script>${promptScript}</script>
 </body>
 </html>`;
   return new Response(body, {
@@ -125,7 +142,7 @@ export function platformMarketingPage(publicUrl: string): Response {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "public, max-age=0, must-revalidate",
       "vary": "cookie",
-      "content-security-policy": "default-src 'self'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+      "content-security-policy": `default-src 'self'; script-src 'sha256-${scriptHash}'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'`,
       "x-content-type-options": "nosniff",
       "x-frame-options": "DENY",
       "referrer-policy": "strict-origin-when-cross-origin",

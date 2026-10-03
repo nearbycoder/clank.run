@@ -1,6 +1,11 @@
 # Clank documentation site
 
-This is the canonical documentation application for Clank. It is itself a zero-dependency Clank application and deploys through the public Clank CLI.
+This is the canonical documentation application for Clank. It is itself a zero-dependency Clank application. Production documentation ships in the platform Docker image; standalone installations can deploy it through the public Clank CLI.
+
+The platform serves its bundled documentation only when `CLANK_DOCUMENTATION_HOST` is explicitly
+set to the exact documentation hostname (`docs.clank.run` in production). Route that hostname to
+the platform service. The docs rollout workflow verifies the public content after main CI; it
+does not create an application release or require a documentation deployment token.
 
 ## Commands
 
@@ -8,7 +13,7 @@ This is the canonical documentation application for Clank. It is itself a zero-d
 - `npm run dev` starts the built site at `http://127.0.0.1:4300`.
 - `npm run doctor` checks the deployment contract.
 - `npm run deploy:check` creates and verifies an offline deployment artifact.
-- `npm run deploy` publishes through the linked Clank platform project.
+- `npm run deploy` publishes a standalone installation through its linked Clank platform project.
 
 ## Source boundaries
 

@@ -32,10 +32,8 @@ for (const name of ["server.tsx", "search.tsx", "markdown.ts", "highlight.ts"]) 
   const filename = fileURLToPath(new URL(`src/${name}`, docsRoot));
   let source = await readFile(filename, "utf8");
   if (name === "server.tsx") {
-    // Expose the actual page component without opening a listening socket.
-    const startup = source.indexOf("\nconst server = await serve(app, {");
-    assert.ok(startup > 0);
-    source = `${source.slice(0, startup)}\nexport { SearchPage };\n`;
+    // Importing the server is side-effect free; only its direct entry starts a listener.
+    source += "\nexport { SearchPage };\n";
   }
   await writeFile(join(directory, "dist", name.replace(/\.tsx?$/u, ".js")), compile(source, {
     filename, jsxImportSource: "../vendor/dom.js", sourceMap: false,
