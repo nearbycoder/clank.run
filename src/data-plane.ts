@@ -411,6 +411,7 @@ export function createManagedIngress(options: {
             redirect: "manual",
           });
           output[route.id] = { ok: response.ok, status: response.status };
+          await response.body?.cancel().catch(() => undefined);
         } catch (error) {
           output[route.id] = {
             ok: false,
@@ -829,7 +830,12 @@ export function createHttpDatabaseProvisioner(options: {
         },
         body: JSON.stringify(body),
       });
-      const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
+      const bytes = await readResponseBytes(response, 1024 * 1024);
+      let payload: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(new TextDecoder().decode(bytes));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed;
+      } catch { /* Preserve the status fallback for non-JSON upstream errors. */ }
       if (!response.ok) throw new Error(String(payload.error ?? `Provisioner returned ${response.status}.`));
       return payload;
     } finally {

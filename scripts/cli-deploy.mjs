@@ -1047,10 +1047,10 @@ async function doctor(args) {
   };
 
   const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
-  if (major > 22 || (major === 22 && minor >= 16)) {
-    check("node", "pass", `Node ${process.versions.node} satisfies >=22.16.`);
+  if (major < 26 && (major > 22 || (major === 22 && minor >= 16))) {
+    check("node", "pass", `Node ${process.versions.node} satisfies >=22.16 <26.`);
   } else {
-    check("node", "fail", `Node ${process.versions.node} is too old.`, "Install Node 22.16 or newer.");
+    check("node", "fail", `Node ${process.versions.node} is outside the supported compiler range.`, "Install Node 24 LTS or Node 22.16+ below Node 26.");
   }
 
   let config;

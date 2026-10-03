@@ -1031,8 +1031,10 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     const changes = changesForTransaction();
     let value!: Value;
     let committedVersion: number | undefined;
-    native.exec("BEGIN IMMEDIATE");
+    let began = false;
     try {
+      native.exec("BEGIN IMMEDIATE");
+      began = true;
       value = handler(changes);
       assertSynchronous(value, "mutation");
       if (changes.records.size > 0) {
@@ -1101,7 +1103,9 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       }
       native.exec("COMMIT");
     } catch (error) {
-      try { native.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
+      if (began) {
+        try { native.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
+      }
       throw error;
     } finally {
       transactionActive = false;
@@ -1118,11 +1122,14 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     for (let attempt = 0; attempt < 8; attempt++) {
       synchronizeChanges(undefined, true);
       readActive = true;
-      native.exec("BEGIN DEFERRED");
+      let began = false;
       try {
+        native.exec("BEGIN DEFERRED");
+        began = true;
         const snapshotVersion = readGlobalRevision(prepared);
         if (snapshotVersion !== version) {
           native.exec("ROLLBACK");
+          began = false;
           readActive = false;
           synchronizeChanges(snapshotVersion, true);
           continue;
@@ -1132,7 +1139,9 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         native.exec("COMMIT");
         return { value, version: snapshotVersion };
       } catch (error) {
-        try { native.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
+        if (began) {
+          try { native.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
+        }
         throw error;
       } finally {
         readActive = false;

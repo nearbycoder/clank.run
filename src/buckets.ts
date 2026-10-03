@@ -1,5 +1,5 @@
 import { McpToolError, type McpTool } from "./mcp.ts";
-import type { ObjectMetadata, ObjectStore } from "./object-storage.ts";
+import type { ObjectStore } from "./object-storage.ts";
 import { readRequestBytes, RequestInputError } from "./security.ts";
 
 export type BucketVisibility = "private" | "public";
@@ -659,13 +659,17 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     ensureOpen();
     if (transactionActive) throw new Error("Nested bucket catalog transactions are not supported.");
     transactionActive = true;
-    native.exec("BEGIN IMMEDIATE");
+    let began = false;
     try {
+      native.exec("BEGIN IMMEDIATE");
+      began = true;
       const value = handler();
       native.exec("COMMIT");
       return value;
     } catch (error) {
-      try { native.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
+      if (began) {
+        try { native.exec("ROLLBACK"); } catch { /* SQLite may already have rolled back. */ }
+      }
       throw error;
     } finally {
       transactionActive = false;
@@ -732,7 +736,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       FROM clank_bucket_objects WHERE ${filter}`).get(...values)!;
     const reserved = statement(`SELECT
         coalesce(sum(CASE WHEN replaces_size IS NULL THEN 1 ELSE 0 END), 0) AS objects,
-        coalesce(sum(size - coalesce(replaces_size, 0)), 0) AS bytes
+        coalesce(sum(max(0, size - coalesce(replaces_size, 0))), 0) AS bytes
       FROM clank_bucket_reservations WHERE ${filter}`).get(...values)!;
     return Object.freeze({
       objects: safeStoredInteger(active.objects, "objects"),
@@ -744,27 +748,58 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     });
   };
 
-  const removeReservation = (id: string): ReservationRow | null => transaction(() => {
+  // Pending shrink operations do not release capacity until their catalog commit.
+  const assertCapacity = (definition: BucketDefinition, owner: string, size: number, objectDelta = 0, byteDelta = 0): void => {
+    const global = usageFor(definition);
+    const scoped = usageFor(definition, owner);
+    const project = statement(`SELECT
+        (SELECT count(*) FROM clank_bucket_objects) AS objects,
+        (SELECT coalesce(sum(size), 0) FROM clank_bucket_objects) AS bytes,
+        (SELECT coalesce(sum(CASE WHEN replaces_size IS NULL THEN 1 ELSE 0 END), 0) FROM clank_bucket_reservations) AS reserved_objects,
+        (SELECT coalesce(sum(max(0, size - coalesce(replaces_size, 0))), 0) FROM clank_bucket_reservations) AS reserved_bytes`)
+      .get()!;
+    if (safeStoredInteger(project.objects, "project objects") + safeStoredInteger(project.reserved_objects, "project reserved objects") + objectDelta > projectMaxObjects
+      || safeStoredInteger(project.bytes, "project bytes") + safeStoredInteger(project.reserved_bytes, "project reserved bytes") + byteDelta > projectMaxBytes) {
+      throw new BucketError(413, "PROJECT_BUCKET_QUOTA_EXCEEDED", "Project bucket quota exceeded.", {
+        maxObjects: projectMaxObjects,
+        maxBytes: projectMaxBytes,
+      });
+    }
+    if (global.objects + global.reservedObjects + objectDelta > definition.maxObjects
+      || global.bytes + global.reservedBytes + byteDelta > definition.maxBytes) {
+      throw quotaError(definition, global, size, false);
+    }
+    if (scoped.objects + scoped.reservedObjects + objectDelta > definition.perOwnerMaxObjects
+      || scoped.bytes + scoped.reservedBytes + byteDelta > definition.perOwnerMaxBytes) {
+      throw quotaError(definition, scoped, size, true);
+    }
+  };
+
+  const removeReservation = (id: string, lock?: string): ReservationRow | null => transaction(() => {
     const row = reservationRow(id);
-    if (!row) return null;
+    if (!row || (lock !== undefined && row.lock_token !== lock)) return null;
     statement("DELETE FROM clank_bucket_reservations WHERE reservation_id = ?").run(id);
     return row;
   });
 
   const queueGarbage = (storageKey: string): void => {
-    statement("INSERT OR IGNORE INTO clank_bucket_garbage (storage_key, created_at) VALUES (?, ?)")
+    // Refresh the SQLite row identity so an older collector cannot acknowledge
+    // a cleanup request issued after its provider deletion started.
+    statement(`INSERT INTO clank_bucket_garbage (rowid, storage_key, created_at) VALUES (random(), ?, ?)
+      ON CONFLICT(storage_key) DO UPDATE SET rowid = excluded.rowid, created_at = excluded.created_at`)
       .run(storageKey, finiteNow(now));
   };
 
   const collectGarbage = async (limit = 100): Promise<number> => {
-    const rows = statement("SELECT storage_key FROM clank_bucket_garbage ORDER BY created_at, storage_key LIMIT ?")
+    const rows = statement("SELECT storage_key, CAST(rowid AS TEXT) AS cleanup_id FROM clank_bucket_garbage ORDER BY created_at, storage_key LIMIT ?")
       .all(limit);
     let removed = 0;
     for (const row of rows) {
       const storageKey = String(row.storage_key);
       try {
         await options.store.delete(storageKey);
-        transaction(() => statement("DELETE FROM clank_bucket_garbage WHERE storage_key = ?").run(storageKey));
+        transaction(() => statement("DELETE FROM clank_bucket_garbage WHERE storage_key = ? AND rowid = ?")
+          .run(storageKey, String(row.cleanup_id)));
         removed++;
       } catch (error) {
         report(error);
@@ -826,31 +861,8 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
         && (!existing || String(existing.sha256) !== storedSha(reserveOptions.ifSha256))) {
         throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Bucket object changed before this write.");
       }
-      const global = usageFor(definition);
-      const scoped = usageFor(definition, owner);
-      const objectDelta = existing ? 0 : 1;
-      const byteDelta = size - (existing ? safeStoredInteger(existing.size, "size") : 0);
-      const project = statement(`SELECT
-          (SELECT count(*) FROM clank_bucket_objects) AS objects,
-          (SELECT coalesce(sum(size), 0) FROM clank_bucket_objects) AS bytes,
-          (SELECT coalesce(sum(CASE WHEN replaces_size IS NULL THEN 1 ELSE 0 END), 0) FROM clank_bucket_reservations) AS reserved_objects,
-          (SELECT coalesce(sum(size - coalesce(replaces_size, 0)), 0) FROM clank_bucket_reservations) AS reserved_bytes`)
-        .get()!;
-      if (safeStoredInteger(project.objects, "project objects") + safeStoredInteger(project.reserved_objects, "project reserved objects") + objectDelta > projectMaxObjects
-        || safeStoredInteger(project.bytes, "project bytes") + safeStoredInteger(project.reserved_bytes, "project reserved bytes") + byteDelta > projectMaxBytes) {
-        throw new BucketError(413, "PROJECT_BUCKET_QUOTA_EXCEEDED", "Project bucket quota exceeded.", {
-          maxObjects: projectMaxObjects,
-          maxBytes: projectMaxBytes,
-        });
-      }
-      if (global.objects + global.reservedObjects + objectDelta > definition.maxObjects
-        || global.bytes + global.reservedBytes + byteDelta > definition.maxBytes) {
-        throw quotaError(definition, global, size, false);
-      }
-      if (scoped.objects + scoped.reservedObjects + objectDelta > definition.perOwnerMaxObjects
-        || scoped.bytes + scoped.reservedBytes + byteDelta > definition.perOwnerMaxBytes) {
-        throw quotaError(definition, scoped, size, true);
-      }
+      assertCapacity(definition, owner, size, existing ? 0 : 1,
+        Math.max(0, size - (existing ? safeStoredInteger(existing.size, "size") : 0)));
       const objectId = existing ? String(existing.object_id) : randomId("bucket_object");
       const storageKey = `app-buckets/${definition.name}/${objectId}/${randomId("generation")}`;
       try {
@@ -917,30 +929,37 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     }
     const definition = definitionFor(String(reservation.bucket));
     const image = validateImage(definition, bytes, String(reservation.content_type));
-    let stored: ObjectMetadata;
-    try {
-      stored = await options.store.put(String(reservation.storage_key), bytes, {
-        contentType: String(reservation.content_type),
-      });
-    } catch (error) {
-      const removed = removeReservation(String(reservation.reservation_id));
-      if (removed) await cleanupReservation(removed);
-      throw error;
-    }
-    if (stored.key !== reservation.storage_key || stored.size !== bytes.byteLength || stored.sha256 !== digest
-      || normalizeContentType(stored.contentType) !== normalizeContentType(String(reservation.content_type))) {
-      const removed = removeReservation(String(reservation.reservation_id));
-      if (removed) await cleanupReservation(removed);
-      throw new BucketError(502, "OBJECT_STORE_MISMATCH", "Object storage returned inconsistent upload metadata.");
-    }
+    const lock = randomId("finalize_lock");
+    transaction(() => {
+      const current = reservationRow(String(reservation.reservation_id));
+      if (!current || Number(current.expires_at) <= finiteNow(now)) {
+        throw new BucketError(409, "UPLOAD_EXPIRED", "Upload capability expired before completion.");
+      }
+      if (current.lock_token !== null) {
+        throw new BucketError(409, "UPLOAD_BUSY", "Another upload operation is in progress.");
+      }
+      statement(`UPDATE clank_bucket_reservations SET lock_token = ?, lock_expires_at = expires_at
+        WHERE reservation_id = ?`).run(lock, current.reservation_id);
+    });
     let row: ObjectRow;
     try {
+      const stored = await options.store.put(String(reservation.storage_key), bytes, {
+        contentType: String(reservation.content_type),
+      });
+      if (stored.key !== reservation.storage_key || stored.size !== bytes.byteLength || stored.sha256 !== digest
+        || normalizeContentType(stored.contentType) !== normalizeContentType(String(reservation.content_type))) {
+        throw new BucketError(502, "OBJECT_STORE_MISMATCH", "Object storage returned inconsistent upload metadata.");
+      }
       row = transaction(() => {
         const current = reservationRow(String(reservation.reservation_id));
-        if (!current || Number(current.expires_at) <= finiteNow(now)) {
+        if (!current || current.lock_token !== lock || Number(current.expires_at) <= finiteNow(now)) {
           throw new BucketError(409, "UPLOAD_EXPIRED", "Upload capability expired before completion.");
         }
         const existing = rowForKey(definition.name, String(current.owner_id), String(current.object_key));
+        if ((existing?.storage_key ?? null) !== current.replaces_storage_key) {
+          throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Bucket object changed before this write.");
+        }
+        assertCapacity(definition, String(current.owner_id), bytes.byteLength);
         const createdAt = existing ? safeStoredInteger(existing.created_at, "createdAt") : finiteNow(now);
         statement(`INSERT INTO clank_bucket_objects
           (bucket, object_id, owner_id, object_key, storage_key, size, sha256, content_type,
@@ -983,10 +1002,14 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
         return rowForKey(definition.name, String(current.owner_id), String(current.object_key))!;
       });
     } catch (error) {
-      await options.store.delete(String(reservation.storage_key)).catch(report);
+      removeReservation(String(reservation.reservation_id), lock);
+      // Cancellation may have collected this key while put was still running.
+      // Queue it again only after put has settled, so late bytes remain reclaimable.
+      await cleanupReservation(reservation);
+      await collectGarbage();
       throw error;
     }
-    await fs.rm(path.join(stagingRoot, `${String(reservation.reservation_id)}.upload`), { force: true });
+    await fs.rm(path.join(stagingRoot, `${String(reservation.reservation_id)}.upload`), { force: true }).catch(report);
     await collectGarbage();
     return objectFromRow(row);
   };
@@ -1006,7 +1029,14 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       variantOf: putOptions.variantOf,
       variant: putOptions.variant,
     });
-    return finalize(reservation, bytes);
+    try {
+      return await finalize(reservation, bytes);
+    } catch (error) {
+      // Server puts have no upload capability with which to retry validation.
+      const removed = removeReservation(String(reservation.reservation_id));
+      if (removed) await cleanupReservation(removed);
+      throw error;
+    }
   };
 
   const stat = (definition: BucketDefinition, keyInput: string, identity: BucketIdentity = {}): BucketObject | null => {
@@ -1077,20 +1107,27 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     ensureOpen();
     const owner = ownerFor(definition, deleteOptions);
     const key = bucketKey(keyInput);
-    const row = transaction(() => {
+    const removed = transaction(() => {
       const current = rowForKey(definition.name, owner, key);
-      if (!current) return null;
-      if (deleteOptions.ifSha256 !== undefined && storedSha(deleteOptions.ifSha256) !== current.sha256) {
+      if (current && deleteOptions.ifSha256 !== undefined && storedSha(deleteOptions.ifSha256) !== current.sha256) {
         throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Bucket object changed before deletion.");
       }
-      statement("DELETE FROM clank_bucket_objects WHERE bucket = ? AND owner_id = ? AND object_key = ?")
-        .run(definition.name, owner, key);
-      queueGarbage(String(current.storage_key));
-      return current;
+      const reservation = statement(`SELECT * FROM clank_bucket_reservations
+        WHERE bucket = ? AND owner_id = ? AND object_key = ?`).get(definition.name, owner, key) as ReservationRow | undefined;
+      if (reservation) {
+        statement("DELETE FROM clank_bucket_reservations WHERE reservation_id = ?").run(reservation.reservation_id);
+        queueGarbage(String(reservation.storage_key));
+      }
+      if (current) {
+        statement("DELETE FROM clank_bucket_objects WHERE bucket = ? AND owner_id = ? AND object_key = ?")
+          .run(definition.name, owner, key);
+        queueGarbage(String(current.storage_key));
+      }
+      return { current, reservation };
     });
-    if (!row) return false;
+    if (removed.reservation) await cleanupReservation(removed.reservation);
     await collectGarbage();
-    return true;
+    return removed.current !== null;
   };
 
   const signCapability = async (capability: Capability): Promise<string> => {
@@ -1319,8 +1356,8 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     if (chunk.byteLength > remaining) throw new BucketError(413, "UPLOAD_TOO_LARGE", "Upload exceeds its declared size.");
     const lock = randomId("upload_lock");
     const claimed = transaction(() => statement(`UPDATE clank_bucket_reservations SET lock_token = ?, lock_expires_at = ?
-      WHERE reservation_id = ? AND received = ? AND (lock_token IS NULL OR lock_expires_at <= ?)`)
-      .run(lock, finiteNow(now) + 30_000, capability.i, suppliedOffset, finiteNow(now)));
+      WHERE reservation_id = ? AND received = ? AND expires_at > ? AND (lock_token IS NULL OR lock_expires_at <= ?)`)
+      .run(lock, finiteNow(now) + 30_000, capability.i, suppliedOffset, finiteNow(now), finiteNow(now)));
     if (Number(claimed.changes) !== 1) throw new BucketError(409, "UPLOAD_BUSY", "Another upload chunk is in progress.");
     try {
       await fs.appendFile(uploadPath, chunk, { mode: 0o600 });
@@ -1536,7 +1573,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
           (SELECT count(*) FROM clank_bucket_objects) AS objects,
           (SELECT coalesce(sum(size), 0) FROM clank_bucket_objects) AS bytes,
           (SELECT coalesce(sum(CASE WHEN replaces_size IS NULL THEN 1 ELSE 0 END), 0) FROM clank_bucket_reservations) AS reserved_objects,
-          (SELECT coalesce(sum(size - coalesce(replaces_size, 0)), 0) FROM clank_bucket_reservations) AS reserved_bytes`)
+          (SELECT coalesce(sum(max(0, size - coalesce(replaces_size, 0))), 0) FROM clank_bucket_reservations) AS reserved_bytes`)
         .get()!;
       return Object.freeze({
         objects: safeStoredInteger(row.objects, "project objects"),

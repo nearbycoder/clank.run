@@ -762,7 +762,8 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
             if (row && row.consumed_at === null) {
               internal.prepare(`UPDATE clank_auth_mfa_challenges
                 SET attempts = attempts + 1, consumed_at = CASE WHEN attempts + 1 >= 5 THEN ? ELSE NULL END
-                WHERE id = ?`).run(Date.now(), challengeId);
+                WHERE id = ? AND consumed_at IS NULL AND expires_at > ? AND attempts < 5`)
+                .run(Date.now(), challengeId, Date.now());
             }
             throw new AuthError("INVALID_MFA", "The verification code is invalid or expired.", 401);
           }

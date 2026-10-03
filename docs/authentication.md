@@ -44,7 +44,7 @@ Email verification and password-recovery links are expiring and single use. Pass
 
 Required email verification is enforced by backend authorization, not only by UI. `auth.requireVerified()` is also available in custom handlers.
 
-MFA login returns a short-lived challenge only after the password is verified. Codes are hashed, attempt-limited, expiring, and single use. Passkeys use required discoverable credentials, WebAuthn `none` attestation, exact challenge and origin binding, RP ID hashes, user-presence and optional user-verification flags, ES256 or RS256 signature verification, and monotonic authenticator counters. Counterless authenticators may keep returning zero; an authenticator that previously reported a nonzero counter cannot reset it to zero. Authentication starts without an account-specific credential list, preventing the start response from becoming an account-enumeration oracle.
+MFA login returns a short-lived challenge only after the password is verified. Codes are hashed, attempt-limited, expiring, and single use. Consumption and attempt exhaustion are terminal: an overlapping invalid verification cannot reopen a challenge or exceed its attempt budget. Passkeys use required discoverable credentials, WebAuthn `none` attestation, exact challenge and origin binding, RP ID hashes, user-presence and optional user-verification flags, ES256 or RS256 signature verification, and monotonic authenticator counters. Counterless authenticators may keep returning zero; an authenticator that previously reported a nonzero counter cannot reset it to zero. Authentication starts without an account-specific credential list, preventing the start response from becoming an account-enumeration oracle.
 
 The browser client includes:
 
@@ -96,8 +96,10 @@ only as a digest and bound to the authenticated session, registered client,
 exact redirect URI, PKCE challenge, scopes, state, and MCP resource. Approval
 requires that proof plus the session's CSRF token, consumes the proof
 atomically, and rejects expiry, replay, parameter changes, or another session.
-This preserves CSRF protection when an OAuth client supplies an opaque or
-missing `Origin`.
+Approval and grant-management mutations recheck the current browser session at
+the database transaction, so revocation or expiry during request parsing or
+cryptographic work blocks the mutation. This preserves CSRF protection when an
+OAuth client supplies an opaque or missing `Origin`.
 
 The consent page also includes the exact validated callback origin in its
 `form-action` Content Security Policy. Without that source Chromium blocks the

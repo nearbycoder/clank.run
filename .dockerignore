@@ -2,8 +2,12 @@
 .github
 .clank
 .clank-platform
+.clank-runner
+.clank-provider
 .proact
 .proact-platform
+.proact-runner
+.proact-provider
 dist
 node_modules
 test

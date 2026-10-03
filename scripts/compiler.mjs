@@ -5,6 +5,9 @@ export { transformTSX } from "./tsx.mjs";
 
 /** Compile one TypeScript or TSX module without a package dependency. */
 export function compile(source, options = {}) {
+  if (Number(process.versions.node.split(".")[0]) >= 26) {
+    throw new Error("Clank compilation requires Node 22.16+ or Node 24 LTS (below Node 26). Node 26 removed the built-in TypeScript transform API. Use the version in .node-version.");
+  }
   const filename = options.filename ?? "module.ts";
   const transformed = filename.endsWith(".tsx")
     ? transformTSX(source, { importSource: options.jsxImportSource }).code

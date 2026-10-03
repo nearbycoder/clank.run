@@ -49,7 +49,7 @@ if (packageJson.bin?.clank !== "scripts/clank.mjs") fail("The clank CLI entry po
 if (packageJson.bin?.["clank-platform"] !== "scripts/clank-platform.mjs") {
   fail("The clank-platform CLI entry point is missing or unexpected.");
 }
-if (packageJson.engines?.node !== ">=22.16") fail("The minimum supported Node release must remain exactly >=22.16.");
+if (packageJson.engines?.node !== ">=22.16 <26") fail("The supported Node range must be >=22.16 <26; Node 26 removed the compiler transform API.");
 if (packageJson.packageManager !== "npm@11.18.0") fail("The release npm version must remain pinned to 11.18.0.");
 pass("zero-dependency package metadata is constrained");
 
@@ -151,17 +151,17 @@ try {
 const files = packResult?.files ?? [];
 if (packResult?.name !== packageJson.name) fail("npm pack changed the scoped package identity.");
 if (packResult?.version !== packageJson.version) fail("npm pack changed the package version.");
-const forbiddenPackagePath = /(?:^|\/)(?:node_modules|\.clank|\.clank-platform|\.proact|\.proact-platform)(?:\/|$)|(?:^|\/)\.env(?:\.|$)|\.(?:sqlite(?:-(?:shm|wal))?|db|pem|p12|pfx|key)$/iu;
+const forbiddenPackagePath = /(?:^|\/)(?:node_modules|\.(?:clank|proact)(?:-(?:platform|runner|provider))?)(?:\/|$)|(?:^|\/)\.env(?:\.|$)|\.(?:sqlite(?:-(?:shm|wal))?|db|pem|p12|pfx|key)$/iu;
 for (const file of files) {
   if (forbiddenPackagePath.test(file.path)) fail(`Sensitive or stateful file would be published: ${file.path}`);
 }
 for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", "dist/index.d.ts"]) {
   if (!files.some((file) => file.path === expected)) fail(`Published package is missing ${expected}.`);
 }
-// The reviewed 100-improvement pass keeps the same 335 published files and no
-// dependencies or public entry points. Allow 128 KiB for the added behavior and
-// starter documentation, while retaining a bounded 5.125 MiB release envelope.
-if ((packResult?.entryCount ?? 0) > 335) fail("Published package unexpectedly exceeds 335 files.");
+// The reviewed security fixes add four internal SQLite worker modules to the
+// prior 335-file package, with no npm dependencies or public entry points.
+// Retain the existing bounded 5.125 MiB release envelope.
+if ((packResult?.entryCount ?? 0) > 339) fail("Published package unexpectedly exceeds 339 files.");
 if ((packResult?.unpackedSize ?? 0) > 5 * 1024 * 1024 + 128 * 1024) fail("Published package unexpectedly exceeds 5.125 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 

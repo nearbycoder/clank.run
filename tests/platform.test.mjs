@@ -2601,6 +2601,14 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
       }],
     );
     providerDiagnosticsFault = "legacy";
+    // Rotating/deleting a stored secret must not reveal the credentials still
+    // consumed by the current runtime generation to a log reader.
+    await payload(platform, jsonRequest(`/api/projects/${created.project.id}/secrets`, {
+      method: "PUT", token: owner.accessToken,
+      body: { values: { PRIVATE_RUNTIME_SECRET: "provider-secret-replacement" } },
+    }));
+    const rotatedLogs = await payload(platform, jsonRequest(`/api/projects/${created.project.id}/logs?limit=100`, { token: owner.accessToken }));
+    assert.equal(rotatedLogs.logs.find((entry) => entry.source === "provider").message, "provider log [REDACTED]");
     const legacyProviderMetrics = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/metrics?range=15m`,
       { cookie: owner.cookie },
@@ -2776,7 +2784,7 @@ test("provider projects freeze runtime inputs, wait for exact observation, route
     assert.equal(
       providerControlRequests.filter((request) =>
         request.url.includes("/diagnostics?")).length,
-      7,
+      8,
     );
     const remoteJobs = await payload(platform, jsonRequest(
       `/api/projects/${created.project.id}/jobs`,

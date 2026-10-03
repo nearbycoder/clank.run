@@ -4,6 +4,7 @@ import { mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createSQLiteDatabase } from "../dist/backend.js";
 import {
   BackendActionError,
   DatabaseConflictError,
@@ -25,6 +26,38 @@ async function waitFor(predicate, timeoutMs = 1_000) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+test("failed SQLite transaction starts release flags without attempting rollback", () => {
+  const native = new DatabaseSync(":memory:");
+  let failBegin;
+  let rollbacks = 0;
+  const database = createSQLiteDatabase(defineDatabase({ records: defineTable({ value: s.string() }) }), {
+    exec(sql) {
+      if (sql === failBegin) {
+        failBegin = undefined;
+        throw new Error("injected BEGIN failure");
+      }
+      if (sql === "ROLLBACK") rollbacks++;
+      native.exec(sql);
+    },
+    prepare: (sql) => native.prepare(sql),
+    close: () => native.close(),
+  });
+  try {
+    for (const operation of ["write", "read", "tracked"]) {
+      failBegin = operation === "write" ? "BEGIN IMMEDIATE" : "BEGIN DEFERRED";
+      const run = () => operation === "write"
+        ? database.transaction((db) => db.table("records").insert({ value: operation }))
+        : database[operation]((db) => db.table("records").collect());
+      assert.throws(run, /injected BEGIN failure/u);
+      assert.equal(rollbacks, 0);
+      assert.doesNotThrow(run);
+    }
+    assert.equal(database.read((db) => db.table("records").collect()).length, 1);
+  } finally {
+    database.close();
+  }
+});
 
 function todoBackend() {
   const schema = defineDatabase({

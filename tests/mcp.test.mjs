@@ -2454,3 +2454,73 @@ for (const recovery of [false, true]) test(`OAuth scope reduction cannot race ${
     runtime.close();
   }
 });
+
+for (const mutation of ["approval", "grant-api", "grant-form"]) {
+  for (const invalidation of ["revocation", "expiry"]) test(`OAuth ${mutation} rejects session ${invalidation} before committing`, { timeout: 10_000 }, async (t) => {
+    const runtime = await openBackend(authenticatedBackend(), { path: ":memory:" });
+    let release;
+    let pending;
+    try {
+      const owner = await registerUser(runtime);
+      const client = await registerClient(runtime);
+      const internal = runtime.database[Symbol.for("clank.sqlite.internal")];
+      let reached;
+      const paused = new Promise((resolve) => { reached = resolve; });
+      let before;
+      if (mutation === "approval") {
+        const parameters = {
+          client_id: client.client_id, redirect_uri: client.redirect_uris[0], response_type: "code",
+          code_challenge: await pkce("security-race-pkce-verifier-01234567890123456789"), code_challenge_method: "S256",
+          scope: "agent:read agent:write", resource,
+        };
+        const consent = await requestConsent(runtime, owner, parameters);
+        const barrier = new Promise((resolve) => { release = resolve; });
+        const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+        let intercept = true;
+        t.mock.method(crypto.subtle, "digest", async (algorithm, data) => {
+          if (intercept && new TextDecoder().decode(data).startsWith("clank_code_")) {
+            intercept = false;
+            reached();
+            await barrier;
+          }
+          return originalDigest(algorithm, data);
+        });
+        pending = runtime.handle(formRequest("/__clank/oauth/authorize", {
+          ...parameters, csrf_token: owner.csrf, consent_token: consent.consentToken, decision: "approve",
+        }, { cookie: owner.cookie, origin }));
+      } else {
+        await authorize(runtime, owner, client);
+        const listed = await runtime.handle(new Request(`${origin}/__clank/oauth/grants`, { headers: { cookie: owner.cookie } }));
+        const grant = (await listed.json()).grants[0];
+        before = internal.prepare("SELECT token_hash, scope, consumed_at FROM clank_oauth_tokens ORDER BY token_hash").all();
+        let controller;
+        const input = mutation === "grant-api"
+          ? JSON.stringify({ scopes: ["agent:read"] })
+          : new URLSearchParams({ grant_id: grant.id, csrf_token: owner.csrf, decision: "revoke" }).toString();
+        release = () => { controller.enqueue(new TextEncoder().encode(input)); controller.close(); };
+        pending = runtime.handle(new Request(`${origin}${mutation === "grant-api" ? `/__clank/oauth/grants/${grant.id}` : "/__clank/oauth/access"}`, {
+          method: mutation === "grant-api" ? "PATCH" : "POST",
+          headers: {
+            origin, cookie: owner.cookie, "x-clank-csrf": owner.csrf,
+            "content-type": mutation === "grant-api" ? "application/json" : "application/x-www-form-urlencoded",
+          },
+          body: new ReadableStream({ start(value) { controller = value; }, pull() { reached(); } }, { highWaterMark: 0 }),
+          duplex: "half",
+        }));
+      }
+      await paused;
+      if (invalidation === "revocation") runtime.auth.revokeUserSessions(owner.user.id);
+      else internal.prepare("UPDATE clank_auth_sessions SET idle_expires_at = 0 WHERE user_id = ?").run(owner.user.id);
+      release();
+      const rejected = await pending;
+      assert.equal(rejected.status, 401, await rejected.text());
+      assert.equal(rejected.headers.get("location"), null);
+      if (mutation === "approval") assert.equal(internal.prepare("SELECT count(*) AS count FROM clank_oauth_codes").get().count, 0);
+      else assert.deepEqual(internal.prepare("SELECT token_hash, scope, consumed_at FROM clank_oauth_tokens ORDER BY token_hash").all(), before);
+    } finally {
+      try { release?.(); } catch {}
+      if (pending) await pending;
+      runtime.close();
+    }
+  });
+}

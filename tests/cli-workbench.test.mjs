@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, truncate } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -54,6 +54,10 @@ test("portable CLI exports omit local credentials and environment files", async 
   await writeFile(join(root, "app.ts"), "export const app = true;\n");
   await writeFile(join(root, ".env.production"), "SECRET=not-exported\n");
   await writeFile(join(root, ".npmrc"), "//registry.npmjs.org/:_authToken=not-exported\n");
+  for (const directory of [".clank-runner", ".clank-provider", ".clank-platform", ".proact-runner", ".proact-provider", ".proact-platform"]) {
+    await mkdir(join(root, directory));
+    await writeFile(join(root, directory, "credentials.json"), JSON.stringify({ credentials: "synthetic-private-value" }));
+  }
   const output = join(root, "portable.json");
   await run(["workbench", "export", root, "--name=test-app", "--framework=0.14.0", `--output=${output}`, "--json"]);
   const bundle = JSON.parse(await readFile(output, "utf8"));
@@ -61,6 +65,19 @@ test("portable CLI exports omit local credentials and environment files", async 
   await run(["workbench", "export", root, "--name=test-app", "--framework=0.14.0", `--output=${output}`, "--force=true", "--json"]);
   const replaced = JSON.parse(await readFile(output, "utf8"));
   assert.deepEqual(replaced.files.map((file) => file.path), ["app.ts"]);
+});
+
+test("portable exports reject aggregate size before buffering the next file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-export-budget-"));
+  try {
+    for (let index = 0; index < 9; index++) {
+      const file = join(root, `${index}.bin`);
+      await writeFile(file, "");
+      await truncate(file, 8 * 1024 * 1024);
+    }
+    await assert.rejects(run(["workbench", "export", root, `--output=${join(root, "result.json")}`]), /exceeds 64 MiB/);
+    await assert.rejects(readFile(join(root, "result.json")), { code: "ENOENT" });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 function run(args) {

@@ -12,6 +12,8 @@ Runner choice changes the code boundary:
 
 Never operate the process runner as a public code sandbox.
 
+The host's SQLite helpers remain a separate isolation limitation: they run in bounded worker processes but retain host filesystem authority when opening application-writable paths and sidecars. Concurrent path substitution is not contained by Docker's application namespace. Until database work is confined to a tenant filesystem namespace, restrict deployers and application data-directory writers to trusted operators, including with the Docker runner. See [SQLite migrations](migrations.md) for worker limits and the Linux util-linux `prlimit` requirement; non-Linux hosts require external native-memory limits too.
+
 The packaged production entry point defaults to `CLANK_HOSTING_PROFILE=isolated`, which selects
 Docker and rejects a process runner. `CLANK_HOSTING_PROFILE=trusted` is an explicit low-cost
 self-hosting acknowledgement: it permits process execution but refuses `CLANK_SIGNUP=public`.
@@ -31,7 +33,9 @@ same-origin, CSRF-protected browser administrator and is bound to one exact node
 expiring, transactionally reserved, and single-use. It must not reuse the master key, CLI
 credentials, project tokens, or application secrets. Registration returns a node credential once
 and stores only its digest. Every subsequent call binds a bearer credential to an exact bounded
-node ID. See [Deployment runner fleet](runner-fleet.md).
+node ID. Node mutations recheck the current credential, and operation claims recheck credential,
+status, and heartbeat expiry when allocating each lease; rotation or revocation during
+cryptographic work cannot authorize a later mutation. See [Deployment runner fleet](runner-fleet.md).
 
 The versioned transport accepts only POST JSON, bounds request and response bytes, refuses
 non-loopback cleartext clients and redirects, emits no-store responses, and returns generic
@@ -178,7 +182,7 @@ Sign-out and an authenticated API `401` reload the console from the server inste
 
 Invitation tokens are email-bound, single-use, expiring, hashed at rest, and returned only by the create response. A valid token is a narrowly scoped account-creation capability even when ordinary registration is closed. Workspace invitations add one explicit role in one existing workspace. Personal invitations create only the recipient account; normal dashboard initialization then provisions that account's isolated personal workspace. Personal invitation creation, listing, and revocation require an allowlisted, non-impersonating platform administrator using a same-origin browser session and CSRF token; bearer credentials are rejected. The assisted route enforces the configured origin policy before token lookup, uses the normal bounded registration, rate-limit, password-validation, and scrypt path, then transactionally rechecks and consumes the invitation before conditionally creating membership. A race or membership failure deletes the new account and its cascaded session before responding; invalid, expired, revoked, mismatched, and replayed tokens receive a generic invitation error.
 
-Reissuing for one scope/email atomically revokes older active tokens, existing workspace members must use the explicit role-change path, and both each workspace and the platform-wide personal scope are capped at 100 active invitations. A personal invitation is rejected when its email already has an account. Pending addresses are returned only to their authorized administrators; developer audit responses also redact workspace-invitation recipient email fields, including for older stored events. Creation, revocation, acceptance, role changes, and removals are audited; removal also revokes organization/project-scoped credentials.
+Reissuing for one scope/email atomically revokes older active tokens, existing workspace members must use the explicit role-change path, and both each workspace and the platform-wide personal scope are capped at 100 active invitations. A personal invitation is rejected when its email already has an account. Pending addresses are returned only to their authorized administrators; developer audit responses also redact workspace-invitation recipient email fields, including for older stored events. Creation, revocation, acceptance, role changes, and removals are audited; removal also revokes organization/project-scoped credentials. Workspace invitation creation/revocation and member changes recheck current credentials and roles in their write transaction; member changes also recheck the target role and last-owner invariant.
 
 Optional invitation email uses a transactional control-database outbox. The ordinary invitation
 record remains hash-only; the outbox holds an AES-256-GCM token envelope only while delivery can
@@ -195,6 +199,8 @@ invalid.
 CLI flow follows [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628/): hashed high-entropy device codes, short expiry, rate limiting, visible client identity/code, same-origin CSRF approval, throttled polling, and single use.
 
 Bearer tokens are returned once and hashed at rest. Follow [RFC 6750](https://www.rfc-editor.org/rfc/rfc6750): TLS, no tokens in URLs/logs, revocation, and rotation. Account tokens can create or administer organizations according to membership; project tokens are restricted to one project and explicit `read`, `deploy`, `rollback`, `jobs`, `secrets`, `tokens`, and `audit` permissions. Delegated project tokens cannot gain permissions, lose a preview-name restriction, or outlive their issuing project token. Workspace project access always requires current membership, including for the original project creator; the ownership fallback applies only to legacy projects without a workspace.
+
+Workspace, project, runtime, domain, and secret mutations recheck the initiating credential and current role after request parsing or waiting for a project lock. Short control-database writes validate authority within their transaction. Deployment and recovery workflows validate authority when admitting a release or queued operation; already admitted external work and its necessary recovery are not retroactively cancelled by logout or revocation. Secret-provider validation and domain DNS verification recheck authority before persisting their result.
 
 ## Billing and entitlements
 

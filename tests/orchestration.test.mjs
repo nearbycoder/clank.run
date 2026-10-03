@@ -905,3 +905,42 @@ test("legacy placement rows migrate to portable mode without losing desired stat
     await rm(root, { recursive: true, force: true });
   }
 });
+
+for (const change of ["rotate", "revoke", "drain", "expire"]) test(`operation claims recheck node authority after ${change} during lease hashing`, { timeout: 10_000 }, async (t) => {
+  const test = await fixture();
+  let release;
+  try {
+    const registration = await test.orchestrator.registerNode({ id: "race-node", region: "us-central" });
+    const queued = await test.orchestrator.enqueue({
+      projectId: "race-project", action: "reconcile", payload: {}, idempotencyKey: "race-operation", nodeId: registration.node.id,
+    });
+    let reached;
+    const paused = new Promise((resolve) => { reached = resolve; });
+    const barrier = new Promise((resolve) => { release = resolve; });
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    let intercept = true;
+    t.mock.method(crypto.subtle, "digest", async (algorithm, data) => {
+      if (intercept && new TextDecoder().decode(data).startsWith("clnko_")) {
+        intercept = false;
+        reached();
+        await barrier;
+      }
+      return originalDigest(algorithm, data);
+    });
+    const claiming = test.orchestrator.claim(registration.node.id, registration.token);
+    await paused;
+    if (change === "rotate") await test.orchestrator.registerNode({ id: registration.node.id, region: "us-central" });
+    else if (change === "revoke") test.orchestrator.revokeNode(registration.node.id);
+    else if (change === "drain") test.orchestrator.setNodeDraining(registration.node.id, true);
+    else test.database[SQLITE_INTERNAL].prepare("UPDATE clank_deployment_nodes SET expires_at = 0 WHERE id = ?").run(registration.node.id);
+    release();
+    if (change === "drain") assert.deepEqual(await claiming, []);
+    else await assert.rejects(claiming, /authentication failed|lease is expired/);
+    assert.equal(test.orchestrator.operation(queued.operation.id).state, "queued");
+    assert.equal(test.orchestrator.operation(queued.operation.id).attempts, 0);
+    assert.equal(test.database[SQLITE_INTERNAL].prepare("SELECT count(*) AS count FROM clank_deployment_project_fences").get().count, 0);
+  } finally {
+    release?.();
+    await test.close();
+  }
+});

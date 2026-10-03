@@ -9,9 +9,13 @@ examples/auth-todo/*.sqlite
 examples/auth-todo/*.sqlite-shm
 examples/auth-todo/*.sqlite-wal
 .clank-platform/
+.clank-runner/
+.clank-provider/
 .clank/
 *.clank.gz
 .proact-platform/
+.proact-runner/
+.proact-provider/
 .proact/
 *.proact.gz
 .env

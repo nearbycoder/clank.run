@@ -131,6 +131,9 @@ type ClankElementProps<ElementType extends Element> =
     | "className"
     | "style"
     | "children"
+    | "innerHTML"
+    | "outerHTML"
+    | "srcdoc"
   >
   & ClankSpecialProps<ElementType>
   & BindProps<ElementType>

@@ -428,20 +428,24 @@ async function authorize<Profile extends object>(
     const rawCode = `clank_code_${randomToken(32)}`;
     const codeHash = await digest(rawCode);
     const now = Date.now();
-    internal.prepare(`INSERT INTO clank_oauth_codes
-      (code_hash, client_id, user_id, redirect_uri, code_challenge, scope, resource, expires_at, consumed_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`)
-      .run(
-        codeHash,
-        parameters.clientId,
-        auth.user.id,
-        parameters.redirectUri,
-        parameters.codeChallenge,
-        parameters.scope,
-        parameters.resource,
-        now + options.codeLifetimeMs,
-        now,
-      );
+    internal.transaction(() => {
+      const currentAuth = requireCurrentOAuthSession(authRuntime, auth);
+      if (authRuntime.definition.emailVerification.required) currentAuth.requireVerified();
+      internal.prepare(`INSERT INTO clank_oauth_codes
+        (code_hash, client_id, user_id, redirect_uri, code_challenge, scope, resource, expires_at, consumed_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`)
+        .run(
+          codeHash,
+          parameters.clientId,
+          currentAuth.requireUser().id,
+          parameters.redirectUri,
+          parameters.codeChallenge,
+          parameters.scope,
+          parameters.resource,
+          now + options.codeLifetimeMs,
+          now,
+        );
+    });
     return authorizationRedirect(parameters, { code: rawCode }, new URL(request.url).origin);
   } catch (error) {
     if (error instanceof OAuthRedirectError) {
@@ -897,7 +901,11 @@ async function agentGrantApi<Profile extends object>(
     }
     await authRuntime.verifyCsrf(request, auth);
     const action = request.method === "DELETE" ? "revoke" : await grantPatchAction(request);
-    if (!mutateAgentGrant(internal, auth.user.id, familyId, action)) {
+    const changed = internal.transaction(() => {
+      requireCurrentOAuthSession(authRuntime, auth);
+      return mutateAgentGrant(internal, auth.user!.id, familyId, action);
+    });
+    if (!changed) {
       return agentGrantProblem(404, "GRANT_NOT_FOUND", "Agent grant not found.");
     }
     return privateJson({
@@ -951,7 +959,11 @@ async function manageAgentAccess<Profile extends object>(
       const decision = requiredString(input.decision, "decision", 32);
       const action = decision === "revoke" ? "revoke" : decision === "read" ? "read" : null;
       if (!familyId || !action) throw new OAuthRequestError("invalid_request", "The agent access action is invalid.");
-      if (!mutateAgentGrant(internal, auth.user.id, familyId, action)) {
+      const changed = internal.transaction(() => {
+        requireCurrentOAuthSession(authRuntime, auth);
+        return mutateAgentGrant(internal, auth.user!.id, familyId, action);
+      });
+      if (!changed) {
         throw new OAuthRequestError("invalid_request", "The agent grant is no longer active.", 404);
       }
       return new Response(null, {
@@ -1041,6 +1053,17 @@ function listAgentGrants(
     managementPath,
     grantsPath,
   };
+}
+
+function requireCurrentOAuthSession<Profile extends object>(
+  authRuntime: AuthRuntime<Profile>,
+  auth: AuthRequest<Profile>,
+): AuthRequest<Profile> {
+  const current = auth.session ? authRuntime.refreshSession(auth.session.id) : null;
+  if (!current?.user || current.user.id !== auth.user?.id) {
+    throw new AuthError("UNAUTHENTICATED", "Sign in to manage agent access.", 401);
+  }
+  return current;
 }
 
 function activeGrantCount(internal: SQLiteInternal, userId: string, now: number): number {
@@ -1906,6 +1929,9 @@ function oauthProblem(
 }
 
 function oauthError(error: unknown): Response {
+  if (error instanceof AuthError) {
+    return oauthProblem(error.status, "access_denied", error.message);
+  }
   if (error instanceof OAuthRequestError) {
     return oauthProblem(error.status, error.oauthCode, error.message);
   }

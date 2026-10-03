@@ -2,7 +2,8 @@ import { rehearseResilience } from "../dist/resilience.js";
 import { compareContracts } from "../dist/contract-compatibility.js";
 import { assessApplicationPerformance } from "../dist/application-performance.js";
 import { rehearseRecovery, rehearseMigrations } from "../dist/rehearsal.js";
-import { lstat, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { lstat, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { inflateSync } from "node:zlib";
@@ -12,7 +13,7 @@ import { checkProductionParity, compareVisuals, diffSchemas, planFrameworkUpgrad
 import { runDeploymentProviderConformance } from "../dist/provider.js";
 
 const MAX_JSON_BYTES = 16 * 1024 * 1024;
-const EXCLUDED = new Set([".git", ".clank", ".proact", "node_modules", ".env", ".envrc", ".dev.vars", ".npmrc", ".yarnrc", ".pypirc", ".netrc", ".ssh", ".aws", "id_rsa", "id_ed25519"]);
+const EXCLUDED = new Set([".git", ".clank", ".proact", ".clank-runner", ".clank-provider", ".clank-platform", ".proact-runner", ".proact-provider", ".proact-platform", "node_modules", ".env", ".envrc", ".dev.vars", ".npmrc", ".yarnrc", ".pypirc", ".netrc", ".ssh", ".aws", "id_rsa", "id_ed25519"]);
 const ARGUMENTS = {
   compatibility: [2, []], performance: [2, ["baseline", "page"]],
   resilience: [1, []], restore: [1, []], migrate: [1, []],
@@ -225,7 +226,45 @@ async function visualFile(path) {
   return pngSignature(bytes) ? decodePng(bytes) : visualImage(parseJson(bytes, path));
 }
 async function importLocal(path) { const target = resolve(path); const stats = await lstat(target); if (!stats.isFile() || stats.isSymbolicLink() || stats.size > MAX_JSON_BYTES) throw new Error("Module must be a bounded regular file."); return import(`${pathToFileURL(target).href}?workbench=${stats.mtimeMs}`); }
-async function exportFiles(root, excludedPath) { const rootStats = await lstat(root); if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) throw new Error("Export root must be a real directory."); const output = []; async function visit(directory) { for (const entry of await readdir(directory, { withFileTypes: true })) { if (excludedExportEntry(entry.name)) continue; const path = join(directory, entry.name); if (resolve(path) === excludedPath) continue; if (entry.isSymbolicLink()) throw new Error(`Project exports reject symbolic links: ${relative(root, path)}`); if (entry.isDirectory()) await visit(path); else if (entry.isFile()) { const stats = await lstat(path); if (stats.size > 8 * 1024 * 1024) throw new Error(`Export file exceeds 8 MiB: ${relative(root, path)}`); output.push({ path: relative(root, path).replaceAll("\\", "/"), bytes: new Uint8Array(await readFile(path)), mode: stats.mode & 0o111 ? 0o755 : 0o644 }); } } } await visit(root); return output; }
+async function exportFiles(root, excludedPath) {
+  const rootStats = await lstat(root);
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink()) throw new Error("Export root must be a real directory.");
+  const output = [];
+  let totalBytes = 0;
+  async function visit(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (excludedExportEntry(entry.name)) continue;
+      const path = join(directory, entry.name);
+      if (resolve(path) === excludedPath) continue;
+      if (entry.isSymbolicLink()) throw new Error(`Project exports reject symbolic links: ${relative(root, path)}`);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile()) {
+        if (output.length >= 20_000) throw new Error("Project export exceeds 20,000 files.");
+        const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        try {
+          const stats = await file.stat();
+          if (!stats.isFile()) throw new Error(`Export requires a regular file: ${relative(root, path)}`);
+          if (stats.size > 8 * 1024 * 1024) throw new Error(`Export file exceeds 8 MiB: ${relative(root, path)}`);
+          if (totalBytes + stats.size > 64 * 1024 * 1024) throw new Error("Project export exceeds 64 MiB.");
+          // Read one byte beyond the observed size, never an unbounded readFile:
+          // a file growing during export must not bypass the aggregate budget.
+          const bytes = Buffer.alloc(stats.size + 1);
+          let length = 0;
+          while (length < bytes.length) {
+            const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
+            if (!bytesRead) break;
+            length += bytesRead;
+          }
+          if (length !== stats.size) throw new Error(`Export file changed while reading: ${relative(root, path)}`);
+          totalBytes += length;
+          output.push({ path: relative(root, path).replaceAll("\\", "/"), bytes: bytes.subarray(0, length), mode: stats.mode & 0o111 ? 0o755 : 0o644 });
+        } finally { await file.close(); }
+      }
+    }
+  }
+  await visit(root);
+  return output;
+}
 function excludedExportEntry(name) { return EXCLUDED.has(name) || name.startsWith(".env.") || name.endsWith(".sqlite") || name.endsWith(".sqlite-wal") || name.endsWith(".sqlite-shm") || name.endsWith(".clank-export.json"); }
 function visualImage(value) {
   if (!value || !Array.isArray(value.rgba)) throw new Error("Visual JSON must contain width, height, and an RGBA byte array.");
