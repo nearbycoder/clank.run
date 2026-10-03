@@ -14,7 +14,7 @@ test("marketing publishes the complete canonical setup prompt with a working cop
   const rendered = html.match(/<code id="agent-setup-prompt-text">([\s\S]*?)<\/code>/u)[1]
     .replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&quot;", '"').replaceAll("&#39;", "'").replaceAll("&amp;", "&");
   assert.equal(rendered, canonical);
-  const script = html.match(/<script>([\s\S]*?)<\/script>/u)[1];
+  const script = html.match(/<script>([\s\S]*?)<\/script>/iu)[1];
 
   for (const clipboardAvailable of [true, false]) {
     let click;

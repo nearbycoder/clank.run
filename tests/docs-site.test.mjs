@@ -20,9 +20,9 @@ function assertSetupPromptCard(page) {
   assert.match(card, /<pre(?=[^>]*tabindex="0")(?=[^>]*aria-label="Agent setup prompt")[^>]*>/u);
   const code = card.match(/<code class="language-text">([\s\S]*?)<\/code>/u)?.[1];
   assert.ok(code, "Clipboard fallback must have rendered, selectable source");
-  assert.equal(code.replace(/<!--[\s\S]*?-->/gu, "")
-    .replaceAll("&lt;", "<").replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"').replaceAll("&#39;", "'").replaceAll("&amp;", "&"), setupPrompt,
+  const escapedPrompt = setupPrompt.replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+  assert.equal(code, `<!--clank:start-->${escapedPrompt}<!--clank:end-->`,
   "The card must render the complete canonical prompt without drift");
   assert.doesNotMatch(card, /\shidden(?:[\s=>])/u);
 }

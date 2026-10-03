@@ -7141,7 +7141,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.doesNotMatch(signedOutHtml, /id="auth-view"|id="app-view"|"authenticated":false/);
     assert.equal(signedOutConsole.headers.get("cache-control"), "public, max-age=0, must-revalidate");
     assert.equal(signedOutConsole.headers.get("vary"), "cookie");
-    const marketingScript = signedOutHtml.match(/<script>([\s\S]*?)<\/script>/u)?.[1];
+    const marketingScript = signedOutHtml.match(/<script>([\s\S]*?)<\/script>/iu)?.[1];
     assert.ok(marketingScript, "the setup prompt copy control must have an authorized script");
     const scriptHash = createHash("sha256").update(marketingScript).digest("base64");
     const marketingPolicy = signedOutConsole.headers.get("content-security-policy");
