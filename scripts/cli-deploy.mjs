@@ -1,5 +1,7 @@
+import { signReleaseAttestation, encodeReleaseAttestation } from "../dist/release-attestation.js";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmod, cp, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { constants as fileConstants } from "node:fs";
 import { homedir, hostname, platform as operatingSystem } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -28,7 +30,8 @@ import {
 } from "../dist/blueprint-registry.js";
 import { applyMigrations, loadMigrations, planMigrations } from "../dist/migrations.js";
 import { readResponseBytes, ResponseBodyLimitError } from "../dist/security.js";
-import { composeApp, ComposeError } from "./cli-compose.mjs";
+import { GENERATED_BASELINE_PATH, generatedBaseline, readGeneratedBaseline, mergeGeneratedDestination } from "./blueprint-regeneration.mjs";
+import { composeApp, ComposeError, transactionalWrite } from "./cli-compose.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
@@ -95,6 +98,10 @@ const COMMANDS = Object.freeze({
   dev: {
     usage: "clank dev [directory] [--host <host>] [--port <port>] [--no-reload] [--json]",
     summary: "Build, supervise, restart, and live-reload a local application.",
+  },
+  editor: {
+    usage: "clank editor [directory]",
+    summary: "Start the Clank language server over standard input and output.",
   },
   plan: {
     usage: "clank plan [clank.app.ts] [--output <file>] [--framework <version|local|spec>]",
@@ -177,7 +184,7 @@ const COMMANDS = Object.freeze({
     summary: "Manage custom domains and DNS verification.",
   },
   deploy: {
-    usage: "clank deploy [directory] [--name <name>] [--slug <slug>] [--org <id>] [--placement <local|provider>] [--dry-run] [--output <file>] [--json]",
+    usage: "clank deploy [directory] [--name <name>] [--slug <slug>] [--org <id>] [--placement <local|provider>] [--dry-run] [--output <file>] [--signing-key <file>] [--builder <id>] [--build-id <id>] [--json]",
     summary: "Build, package, migrate, and atomically deploy in one command.",
   },
   preview: {
@@ -241,7 +248,7 @@ const VALUE_OPTIONS = Object.freeze({
   audit: ["org", "limit", "before"],
   usage: ["org", "month"],
   token: ["permissions", "expires-in", "name"],
-  deploy: ["name", "slug", "org", "placement", "output"],
+  deploy: ["name", "slug", "org", "placement", "output", "signing-key", "builder", "build-id"],
   preview: [
     "fixture",
     "ttl",
@@ -526,6 +533,7 @@ Build and agents:
   clank generate [directory]           Generate from clank.app.ts without executing it
   clank build [src] [dist]             Compile TypeScript and TSX
   clank watch [src] [dist]             Rebuild when source files change
+  clank editor [directory]            Start the Clank language server over stdio
   clank jobs worker [directory]        Run durable jobs outside the web process
   clank jobs scheduler [directory]     Run the leased cron scheduler
   clank jobs status                    Show linked-project queue health
@@ -720,37 +728,43 @@ async function writeBlueprintProject(blueprint, target, generation, options = {}
   if (targetMetadata.isSymbolicLink() || !targetMetadata.isDirectory()) {
     throw new CliError(`Generated target must be a real directory: ${target}`);
   }
+  const baseline = await readGeneratedBaseline(target);
+  const writes = [];
+  const baselineFiles = [];
   for (const file of files) {
     const destination = resolve(target, file.path);
     if (!inside(target, destination)) throw new CliError(`Generated path escaped the target: ${file.path}`);
+    // Check every ancestor before reading, including parent links beneath target.
+    const segments = relative(target, destination).split(/[\\/]/u);
+    let parent = target;
+    for (const segment of segments.slice(0, -1)) {
+      parent = join(parent, segment);
+      let metadata;
+      try { metadata = await lstat(parent); } catch (error) { if (error.code !== "ENOENT") throw error; }
+      if (metadata && (!metadata.isDirectory() || metadata.isSymbolicLink())) throw new CliError(`Unsafe generated parent: ${parent}`);
+    }
     let existing;
-    try { existing = await readFile(destination, "utf8"); }
-    catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    if (existing === file.contents) {
-      unchanged++;
-      continue;
-    }
-    const isSourceBlueprint = options.preserveBlueprintPath !== undefined
-      && resolve(options.preserveBlueprintPath) === destination;
-    if (existing !== undefined && !options.force && !isSourceBlueprint) {
-      throw new CliError(`Refusing to overwrite ${destination}. Re-run with --force after reviewing the plan.`);
-    }
-    if (isSourceBlueprint && existing !== undefined && !options.force) {
-      unchanged++;
-      continue;
-    }
-    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
-    const temporary = `${destination}.clank-generate-${process.pid}`;
-    await writeFile(temporary, file.contents, { mode: file.mode ?? 0o600 });
-    await rename(temporary, destination);
+    try {
+      const metadata = await lstat(destination);
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 8 * 1024 * 1024) throw new CliError(`Unsafe or oversized generated destination: ${destination}`);
+      existing = await readFile(destination, "utf8");
+    } catch (error) { if (error.code !== "ENOENT") throw error; }
+    const isSourceBlueprint = options.preserveBlueprintPath !== undefined && resolve(options.preserveBlueprintPath) === destination;
+    const merged = isSourceBlueprint && existing !== undefined && !options.force
+      ? { contents: existing, conflict: false }
+      : options.force && !file.path.startsWith("migrations/")
+        ? { contents: file.contents, conflict: false }
+        : mergeGeneratedDestination(file.path, baseline[file.path], existing, file.contents);
+    baselineFiles.push(file.path.startsWith("migrations/") && merged.contents !== undefined ? { ...file, contents: merged.contents } : file);
+    if (merged.conflict) throw new CliError(`Refusing to overwrite ${destination}: regeneration conflict. Preserve your changes, resolve the conflict, then generate again.`);
+    if (merged.deleted || merged.contents === existing) { unchanged++; continue; }
+    writes.push({ path: file.path, contents: Buffer.from(merged.contents), mode: file.mode ?? 0o600, expectedSha256: existing === undefined ? null : createHash("sha256").update(existing).digest("hex") });
     created++;
   }
   const plan = await createAppPlan(blueprint, generation);
-  const planPath = join(target, ".clank", "plan.json");
-  await mkdir(dirname(planPath), { recursive: true, mode: 0o700 });
-  await writeFile(planPath, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+  writes.push({ path: ".clank/plan.json", contents: Buffer.from(`${JSON.stringify(plan, null, 2)}\n`), mode: 0o600 });
+  writes.push({ path: GENERATED_BASELINE_PATH, contents: Buffer.from(generatedBaseline(baselineFiles)), mode: 0o600 });
+  await transactionalWrite(target, writes);
   return { created, unchanged, plan };
 }
 
@@ -1047,10 +1061,10 @@ async function doctor(args) {
   };
 
   const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
-  if (major < 26 && (major > 22 || (major === 22 && minor >= 16))) {
-    check("node", "pass", `Node ${process.versions.node} satisfies >=22.16 <26.`);
+  if (major < 27 && (major > 22 || (major === 22 && minor >= 16))) {
+    check("node", "pass", `Node ${process.versions.node} satisfies >=22.16 <27.`);
   } else {
-    check("node", "fail", `Node ${process.versions.node} is outside the supported compiler range.`, "Install Node 24 LTS or Node 22.16+ below Node 26.");
+    check("node", "fail", `Node ${process.versions.node} is outside the supported compiler range.`, "Install Node 22.16+, Node 24 LTS, or Node 26.");
   }
 
   let config;
@@ -1941,6 +1955,15 @@ async function deploy(args) {
   const startedAt = performance.now();
   const json = flag(args, "json");
   const config = await readDeploymentConfig(root);
+  const signingKeyPath = option(args, "signing-key");
+  const signingKey = signingKeyPath ? await readBoundedJsonFile(resolve(signingKeyPath), "Release signing key", 4096) : undefined;
+  if (signingKey) {
+    if (typeof signingKey.privateKey !== "string" || !/^[A-Za-z0-9_-]{40,256}$/.test(signingKey.privateKey)) throw new CliError("Invalid release signing key.");
+    const relativeKey = relative(await realpath(root), await realpath(resolve(signingKeyPath))).replaceAll("\\", "/");
+    if (!isAbsolute(relativeKey) && !relativeKey.startsWith("../") && config.include.some(path => relativeKey === path || relativeKey.startsWith(`${path}/`))) {
+      throw new CliError("The release signing key is inside an included artifact path. Move it outside the application or into .clank/keys.");
+    }
+  }
   const buildStartedAt = performance.now();
   if (config.build) await runBuild(config.build.command, root, { quiet: json });
   const buildMs = performance.now() - buildStartedAt;
@@ -1951,6 +1974,10 @@ async function deploy(args) {
     nodeVersion: process.version,
     sourceRevision: deploymentSourceRevision(),
   });
+  if (signingKey) {
+    const inspected = await decodeDeploymentBundle(artifact);
+    if (inspected.files.some(file => Buffer.from(file.content, "base64").includes(Buffer.from(signingKey.privateKey)))) throw new CliError("The artifact contains release signing key material. Remove it from all included files.");
+  }
   const digest = await deploymentDigest(artifact);
   const packageMs = performance.now() - packageStartedAt;
   let artifactPath;
@@ -2020,6 +2047,11 @@ async function deploy(args) {
     projectId: link.projectId,
     digest,
   });
+  const attestation = signingKey ? await signReleaseAttestation(artifact, signingKey, {
+    projectId: link.projectId,
+    builder: option(args, "builder") ?? "local",
+    buildId: option(args, "build-id") ?? digest,
+  }) : undefined;
   const uploadStartedAt = performance.now();
   const { response, payload } = await fetchPlatformJson(
     `${profile.server}/api/projects/${encodeURIComponent(link.projectId)}/releases`,
@@ -2030,6 +2062,7 @@ async function deploy(args) {
       "content-type": "application/vnd.clank.deploy+gzip",
       "content-length": String(artifact.byteLength),
       "x-clank-content-sha256": digest,
+      ...(attestation ? { "x-clank-release-attestation": encodeReleaseAttestation(attestation) } : {}),
       "x-clank-idempotency-key": idempotencyKey,
     },
     body: artifact,
@@ -3467,10 +3500,15 @@ async function writePrivateJson(path, value) {
 }
 
 async function readBoundedTextFile(path, label, maximum = MAX_LOCAL_CONFIG_BYTES) {
-  const metadata = await lstat(path);
-  if (!metadata.isFile() || metadata.isSymbolicLink()) throw new CliError(`${label} must be a regular non-symbolic-link file: ${path}`);
-  if (metadata.size > maximum) throw new CliError(`${label} exceeds ${maximum} bytes: ${path}`);
-  return readFile(path, "utf8");
+  const handle = await open(path, fileConstants.O_RDONLY | (fileConstants.O_NOFOLLOW ?? 0) | (fileConstants.O_NONBLOCK ?? 0));
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size > maximum) throw new CliError(`${label} must be a regular file of at most ${maximum} bytes.`);
+    const buffer = Buffer.allocUnsafe(maximum + 1); let length = 0;
+    while (length < buffer.length) { const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null); if (!bytesRead) break; length += bytesRead; }
+    if (length > maximum) throw new CliError(`${label} exceeds ${maximum} bytes.`);
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, length));
+  } finally { await handle.close(); }
 }
 
 async function readBoundedJsonFile(path, label, maximum = MAX_LOCAL_CONFIG_BYTES) {

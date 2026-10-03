@@ -1,0 +1,12 @@
+# Namespace grants for disposable CI runners only. This does not change the
+# global AppArmor user-namespace restriction or grant host capabilities.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile clank-ci-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}
+
+profile clank-ci-unshare /usr/bin/unshare flags=(unconfined) {
+  userns,
+}

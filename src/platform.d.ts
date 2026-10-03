@@ -1,3 +1,8 @@
+import type { ManagedCanaryOptions } from "./managed-canary.js";
+import type { ReleaseAttestationPolicy } from "./release-attestation.js";
+import type { PlatformOperationsOptions } from "./operations-monitor.js";
+import type { OrganizationSsoOptions } from "./organization-sso.js";
+import type { AuditExportOptions } from "./audit-export.js";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.js";
 import type { ObjectStore } from "./object-storage.js";
 import type { BackupObjectRepositoryOptions } from "./recovery.js";
@@ -128,6 +133,7 @@ export interface PlatformBillingOptions {
     pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
+  releaseAttestations?: ReleaseAttestationPolicy;
   /** Optional trusted credential probe. Without it, rotation validation checks format/encryption only. */
   validateSecret?: SecretRotationOptions["validate"];
     dataDirectory: string;
@@ -203,6 +209,8 @@ export interface ClankPlatformOptions {
     signup?: boolean | "bootstrap";
     /** Bounded password-hashing admission. Hash strength remains at the framework defaults. */
     authentication?: { concurrency?: number; maxQueue?: number };
+    organizationSso?: Omit<OrganizationSsoOptions, "onProvision" | "onOffboard">;
+    freshAuthentication?: { required?: boolean; maxAgeMs?: number };
     masterKey?: string | Uint8Array;
     maxArtifactBytes?: number;
     /** Operator-only escape hatch for configs that request unrestricted SQLite SQL. */
@@ -211,6 +219,9 @@ export interface ClankPlatformOptions {
     accessTokenLifetimeMs?: number;
     limits?: PlatformLimits;
     backups?: PlatformBackupOptions;
+    auditExport?: AuditExportOptions;
+    operations?: PlatformOperationsOptions;
+    canary?: ManagedCanaryOptions;
     jobs?: PlatformJobOperationsOptions;
     previews?: PlatformPreviewOptions;
     /**

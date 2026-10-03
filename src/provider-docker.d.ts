@@ -1,3 +1,4 @@
+import type { DockerOutboundNetworkPolicy, LinuxProjectDiskQuota } from "./linux-project-isolation.js";
 import type { PreparedDeploymentRuntimeData } from "./provider-data.js";
 
 export declare const DEPLOYMENT_PROVIDER_DOCKER_PROTOCOL: "clank-provider-docker/1";
@@ -25,6 +26,10 @@ export interface DockerDeploymentRuntimeLauncherOptions {
     allowContainerRoot?: boolean;
     /** Docker network selected by the operator. Defaults to bridge. */
     network?: string;
+    /** Privileged fail-closed XFS project quotas; use a unique quota ID for every project. */
+    diskQuota?: LinuxProjectDiskQuota | ((projectId: string) => LinuxProjectDiskQuota);
+    /** Privileged dedicated bridge and nftables outbound policy; cannot be combined with network. */
+    outboundNetwork?: DockerOutboundNetworkPolicy | ((projectId: string) => DockerOutboundNetworkPolicy);
     memory?: string;
     cpus?: string;
     pidsLimit?: number;
@@ -132,6 +137,8 @@ export interface DockerDeploymentRuntimeDiagnostics {
 }
 
 export interface DockerDeploymentRuntimeLauncher {
+    /** Enforces disk quotas before provider extraction, migrations, and application writes. */
+    prepareProject?(projectId: string, signal?: AbortSignal): Promise<void>;
     /**
      * Launches and health-checks an ingress-private candidate. The environment
      * is delivered through container stdin and is not retained by the launcher.

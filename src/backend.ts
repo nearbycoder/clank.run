@@ -1,6 +1,7 @@
 import { createLiveReplayStore, applyLiveSplice, type LiveResumeOptions } from "./live-resume.ts";
 import type { DatabaseQueryDiagnostic } from "./query-advisor.ts";
 import { openAgentActivity, type AgentActivityOptions, type AgentActivityFilter, type AgentActivitySnapshot } from "./agent-activity.ts";
+import { openReviewedActions, type ReviewedActions, type ReviewedActionsOptions, type ReviewedRecordChange } from "./reviewed-actions.ts";
 import { openMutationReceipts, type MutationReceiptOptions } from "./mutation-receipts.ts";
 import type { Tracer } from "./observability.ts";
 import { batch, signal, type Cleanup, type ReactiveSignal } from "./core.ts";
@@ -49,7 +50,7 @@ import {
   type McpAppDefinition,
   type McpAppVisibility,
 } from "./mcp.ts";
-import { createProjectOAuth } from "./oauth.ts";
+import { createProjectOAuth, type AgentActionContext } from "./oauth.ts";
 import {
   jobManifest,
   openJobs,
@@ -138,7 +139,8 @@ export function defineDatabase<const Tables extends Record<string, TableDefiniti
   const safeTables = { ...tables };
   for (const [name, table] of Object.entries(safeTables)) {
     assertIdentifier(name, "table");
-    if (RESERVED_TABLE_NAMES.has(name) || name.startsWith("platform_")) {
+    if (RESERVED_TABLE_NAMES.has(name) || name.startsWith("platform_") || name.startsWith("pitr_")
+      || name === "search_fts" || name.startsWith("search_fts_")) {
       throw new TypeError(`Table name ${name} is reserved for Clank internals.`);
     }
     const finalize = (table as TableDefinition<any, any, any> & { [FINALIZE_TABLE]?: () => void })[FINALIZE_TABLE];
@@ -154,6 +156,11 @@ const RESERVED_TABLE_NAMES = new Set([
   "migrations",
   "auth_users",
   "auth_sessions",
+  "auth_stepup",
+  "sso_identities",
+  "sso_states",
+  "sso_revocations",
+  "sso_events",
   "jobs",
   "job_events",
   "job_schedules",
@@ -162,6 +169,10 @@ const RESERVED_TABLE_NAMES = new Set([
   "workflow_events",
   "analytics_events",
   "analytics_state",
+  "reviewed_plans",
+  "reviewed_receipts",
+  "reviewed_events",
+  "oauth_grant_constraints",
 ]);
 
 export type TableName<Schema extends DatabaseSchema<any>> = keyof Schema["tables"] & string;
@@ -258,17 +269,22 @@ export class DatabaseConflictError extends Error {
   readonly code = "VERSION_CONFLICT";
   readonly status = 409;
 
+  declare readonly table: string;
+  declare readonly id: string;
+  declare readonly expectedVersion: number | null;
+  declare readonly actualVersion: number | null;
   constructor(
-    readonly table: string,
-    readonly id: string,
-    readonly expectedVersion: number | null,
-    readonly actualVersion: number | null,
+    table: string,
+    id: string,
+    expectedVersion: number | null,
+    actualVersion: number | null,
   ) {
     super(expectedVersion === null
       ? `${table}/${id} was created by another writer.`
       : actualVersion === null
         ? `${table}/${id} no longer exists.`
         : `${table}/${id} changed from version ${expectedVersion} to ${actualVersion}.`);
+    this.table = table; this.id = id; this.expectedVersion = expectedVersion; this.actualVersion = actualVersion;
   }
 }
 
@@ -277,12 +293,16 @@ export class DatabaseRevisionNotFoundError extends Error {
   readonly code = "REVISION_NOT_FOUND";
   readonly status = 404;
 
+  declare readonly table: string;
+  declare readonly id: string;
+  declare readonly cursor: Readonly<DocumentRevisionCursor>;
   constructor(
-    readonly table: string,
-    readonly id: string,
-    readonly cursor: Readonly<DocumentRevisionCursor>,
+    table: string,
+    id: string,
+    cursor: Readonly<DocumentRevisionCursor>,
   ) {
     super(`The requested ${table} revision is unavailable.`);
+    this.table = table; this.id = id; this.cursor = cursor;
   }
 }
 
@@ -293,9 +313,11 @@ export class DatabaseRevisionNotFoundError extends Error {
 export class BackendActionError extends Error {
   readonly name = "BackendActionError";
 
+  declare readonly status: 400 | 404 | 409;
+  declare readonly code: string;
   constructor(
-    readonly status: 400 | 404 | 409,
-    readonly code: string,
+    status: 400 | 404 | 409,
+    code: string,
     message: string,
   ) {
     if (status !== 400 && status !== 404 && status !== 409) {
@@ -308,6 +330,7 @@ export class BackendActionError extends Error {
       throw new TypeError("Backend action error messages must be 1-1000 safe text characters.");
     }
     super(message);
+    this.status = status; this.code = code;
   }
 }
 
@@ -368,6 +391,7 @@ interface DatabaseSyncLike {
   prepare(sql: string): StatementLike;
   close(): void;
   enableLoadExtension?(allow: boolean): void;
+  createSession?(options: { table?: string }): { changeset(): Uint8Array; close(): void };
 }
 
 interface DatabaseSyncConstructor {
@@ -551,6 +575,8 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   let version = readGlobalRevision(prepared);
   assertChangeJournalIntegrity(prepared, version);
   let closed = false;
+  const recoveryRequired = !!native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_pitr_state'").get();
+  let capture: import("./sqlite-internal.ts").SQLiteTransactionCapture | undefined;
   let transactionActive = false;
   let readActive = false;
   let synchronizing = false;
@@ -1026,6 +1052,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     if (transactionActive || readActive) {
       throw new Error("Nested database transactions are not supported; call helpers with the current database context.");
     }
+    if (recoveryRequired && !capture) throw new Error("This database requires point-in-time recovery capture before admitting writes.");
     synchronizeChanges(undefined, true);
     transactionActive = true;
     const changes = changesForTransaction();
@@ -1035,6 +1062,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     try {
       native.exec("BEGIN IMMEDIATE");
       began = true;
+      capture?.before();
       value = handler(changes);
       assertSynchronous(value, "mutation");
       if (changes.records.size > 0) {
@@ -1101,6 +1129,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           );
         }
       }
+      capture?.commit();
       native.exec("COMMIT");
     } catch (error) {
       if (began) {
@@ -1108,6 +1137,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       }
       throw error;
     } finally {
+      capture?.after();
       transactionActive = false;
     }
     if (committedVersion !== undefined) synchronizeChanges(committedVersion, false);
@@ -1180,21 +1210,48 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       listeners.clear();
       statements.clear();
       sqlDiagnostics.clear();
+      capture?.close();
       native.close();
     },
     [SQLITE_INTERNAL]: {
+      captureTransactions(factory) {
+        ensureOpen();
+        if (capture || transactionActive || readActive) throw new Error("Recovery capture requires an idle database and can only be installed once.");
+        if (!native.createSession) throw new Error("Point-in-time recovery requires Node SQLite session support.");
+        capture = factory({ path, exec: (sql) => native.exec(sql), prepare: (sql) => native.prepare(sql), createSession: (options) => native.createSession!(options) });
+      },
       get inTransaction() {
         return transactionActive;
       },
       exec(sql) {
         ensureOpen();
-        native.exec(sql);
+        if (capture) {
+          if (/\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|ATTACH|DETACH|PRAGMA|VACUUM)\b/iu.test(sql)) throw new Error("Recovery capture forbids raw transaction controls and connection-changing SQL.");
+          if (transactionActive) native.exec(sql); else runTransaction(() => native.exec(sql));
+        } else {
+          if (recoveryRequired) throw new Error("This database requires point-in-time recovery capture before schema access.");
+          native.exec(sql);
+        }
       },
-      prepare: prepared,
+      prepare(sql) {
+        let statement = prepared(sql);
+        const invoke = <Value>(handler: () => Value): Value => {
+          if ((capture || recoveryRequired) && readActive && !/^\s*(?:SELECT|EXPLAIN)\b/iu.test(sql)) throw new Error("Recovery forbids service writes inside a read snapshot.");
+          if (capture) statement = native.prepare(sql);
+          return (capture || recoveryRequired) && !transactionActive && !readActive ? runTransaction(() => handler()) : handler();
+        };
+        return { all: (...args) => invoke(() => statement.all(...args)), get: (...args) => invoke(() => statement.get(...args)), run: (...args) => invoke(() => statement.run(...args)) };
+      },
       transaction(handler) {
         return runTransaction((changes) => handler({
           record(table, id, ownerId) { recordChange(changes, table, id, ownerId); },
         }));
+      },
+      readScoped(userId, handler) {
+        if (!transactionActive) throw new Error("Scoped internal reads require a write transaction.");
+        const value = handler(makeReader(undefined, userId));
+        assertSynchronous(value, "query");
+        return value;
       },
     },
   };
@@ -1451,7 +1508,7 @@ export interface FunctionReference<Kind extends "query" | "mutation", Input, Out
   readonly __output?: Output;
 }
 
-export type ApiOf<Tree> = {
+export type ApiOf<Tree> = 0 extends (1 & Tree) ? any : {
   readonly [Key in keyof Tree]: Tree[Key] extends BackendFunction<infer Kind, infer Input, infer Output, any, any, any>
     ? FunctionReference<Kind, Input, Output>
     : Tree[Key] extends object
@@ -1482,8 +1539,8 @@ export function createApi<Source extends FunctionTree | BackendDefinition<any, a
   return reference([]) as ApiOf<FunctionsFrom<Source>>;
 }
 
-type InputOf<Reference> = Reference extends FunctionReference<any, infer Input, any> ? Input : never;
-type OutputOf<Reference> = Reference extends FunctionReference<any, any, infer Output> ? Output : never;
+type InputOf<Reference> = 0 extends (1 & Reference) ? any : Reference extends FunctionReference<any, infer Input, any> ? Input : never;
+type OutputOf<Reference> = 0 extends (1 & Reference) ? any : Reference extends FunctionReference<any, any, infer Output> ? Output : never;
 type InputTuple<Input> = {} extends Input ? [args?: Input] : [args: Input];
 
 export interface LiveQuery<Value> {
@@ -1536,8 +1593,10 @@ export interface SyncClientOptions {
 
 export class BackendClientError extends Error {
   readonly name = "BackendClientError";
-  constructor(readonly code: string, message: string, readonly status: number) {
+  declare readonly code: string; declare readonly status: number;
+  constructor(code: string, message: string, status: number) {
     super(message);
+    this.code = code; this.status = status;
   }
 }
 
@@ -1710,6 +1769,7 @@ export interface BackendRuntime<
   readonly jobs: Jobs extends JobSystemDefinition<Schema, any> ? JobRuntime<Jobs> : undefined;
   /** First-class application buckets, when configured for this backend. */
   readonly buckets: BucketManager | undefined;
+  readonly reviewedActions: ReviewedActions | undefined;
   readonly version: number;
   /** Deterministic revision of the MCP-visible backend action contract. */
   readonly contractRevision: string | null;
@@ -1737,10 +1797,11 @@ export interface QueryDiagnostic {
   readonly subscriptions: number;
 }
 
-export interface OpenBackendOptions extends SQLiteOptions {
+export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extends SQLiteOptions {
   /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
   liveResume?: LiveResumeOptions;
   agentActivity?: AgentActivityOptions;
+  reviewedActions?: ReviewedActionsOptions;
   /** Opt in to transactional, authenticated offline mutation receipts. */
   offlineMutations?: MutationReceiptOptions;
   tracer?: Tracer;
@@ -1756,6 +1817,7 @@ export interface OpenBackendOptions extends SQLiteOptions {
   maxLiveArgumentBytes?: number;
   maxLivePayloadBytes?: number;
   maxLiveConnections?: number;
+  /** Maximum retained query results; zero reauthorizes and recomputes every query. */
   maxCacheEntries?: number;
   onError?: (error: unknown) => void;
   /** Queue limits, retention, clock hooks, and job-specific error reporting. */
@@ -1782,6 +1844,8 @@ export interface OpenBackendOptions extends SQLiteOptions {
     browserCors?: boolean;
     /** Maximum simultaneously active OAuth grants for one application user. Defaults to 100. */
     maxUserGrants?: number;
+    /** Map an action's validated business arguments to exact grant workspace/resource identities. */
+    actionContext?: (action: string, input: unknown, auth: AuthRequest<any>, db: ReadDatabase<DB>) => AgentActionContext;
     /**
      * Idempotency window for a client retrying the immediately previous OAuth
      * refresh token. Defaults to 15 minutes and is capped at one hour.
@@ -1803,7 +1867,7 @@ export async function openBackend<
   Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
 >(
   definition: BackendDefinition<Schema, Functions, Auth, Jobs>,
-  options: OpenBackendOptions = {},
+  options: OpenBackendOptions<Schema> = {},
 ): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>> {
   const heartbeatMs = positiveIntegerOption(options.heartbeat ?? 20_000, "heartbeat");
   const maxRequestBytes = positiveIntegerOption(options.maxRequestBytes ?? 64 * 1024, "maxRequestBytes");
@@ -1811,7 +1875,7 @@ export async function openBackend<
   const maxLiveArgumentBytes = positiveIntegerOption(options.maxLiveArgumentBytes ?? 8 * 1024, "maxLiveArgumentBytes");
   const maxLivePayloadBytes = positiveIntegerOption(options.maxLivePayloadBytes ?? 4 * 1024 * 1024, "maxLivePayloadBytes");
   const maxLiveConnections = positiveIntegerOption(options.maxLiveConnections ?? liveConnectionEnvironment(), "maxLiveConnections");
-  const maxCacheEntries = positiveIntegerOption(options.maxCacheEntries ?? 1_000, "maxCacheEntries");
+  const maxCacheEntries = nonNegativeInteger(options.maxCacheEntries ?? 1_000, "maxCacheEntries");
   const prefix = `/${trimBoundarySlashes(options.prefix ?? "__clank")}`;
   const agentOptions = options.agent === false ? null : options.agent ?? {};
   const mcpPath = agentOptions
@@ -1857,7 +1921,8 @@ export async function openBackend<
     : undefined;
   let authRuntime: AuthRuntime<AuthProfileOf<Auth>> | undefined;
   let activity: ReturnType<typeof openAgentActivity> | undefined;
-  const activityRevisions = new WeakMap<Request, { beforeRevision: number; afterRevision: number }>();
+  let reviewedActions: ReviewedActions | undefined;
+  const activityRevisions = new WeakMap<Request, { beforeRevision: number; afterRevision: number; receiptId?: string; changes?: readonly ReviewedRecordChange[]; compensationAvailable?: boolean }>();
   let mutationReceipt: ReturnType<typeof openMutationReceipts> | undefined;
   try {
     activity = options.agentActivity ? openAgentActivity(database, options.agentActivity) : undefined;
@@ -1868,6 +1933,10 @@ export async function openBackend<
           allowedOrigins: options.allowedOrigins,
         }) as AuthRuntime<AuthProfileOf<Auth>>
       : undefined;
+    if (options.reviewedActions) {
+      if (!authRuntime) throw new TypeError("Reviewed actions require application authentication.");
+      reviewedActions = openReviewedActions(database, authRuntime, { allowedOrigins: options.allowedOrigins, ...options.reviewedActions, prefix: options.reviewedActions.prefix ?? `${prefix}/approvals` });
+    }
   } catch (error) {
     jobsRuntime?.close();
     if (!options.database) database.close();
@@ -2116,6 +2185,10 @@ export async function openBackend<
         oauthPrefix,
         applicationName: agentTitle,
         maxUserGrants,
+        actionContext: agentOptions.actionContext ? (action, input, auth, db) => {
+          const fn = registry.get(action);
+          return agentOptions.actionContext!(action, fn ? fn.args.parse(input ?? {}) : input, auth, db);
+        } : undefined,
         refreshTokenRetryLifetimeMs: agentOptions.refreshTokenRetryLifetimeMs,
         refreshTokenRotationMode: agentOptions.refreshTokenRotationMode,
       })
@@ -2218,6 +2291,16 @@ export async function openBackend<
       })
     : [];
   const workflowContract = definition.jobs ? workflowManifest(definition.jobs) : [];
+  const reviewedMcpTools = (reviewedActions?.tools ?? []).map(tool => ({ ...tool, invoke(input, auth, request) {
+    const beforeRevision = database.version;
+    const result = tool.invoke(input, auth, request);
+    if (activity) {
+      const receipt = result as { protocol?: string; id?: string; changes?: readonly ReviewedRecordChange[]; compensationAvailable?: boolean };
+      activityRevisions.set(request, { beforeRevision, afterRevision: database.version,
+        ...(receipt?.protocol === "clank-action-receipt/1" ? { receiptId: receipt.id, changes: receipt.changes, compensationAvailable: receipt.compensationAvailable } : {}) });
+    }
+    return result;
+  } } satisfies McpTool<AuthRequest<any> | null>));
   const agentWorkflowContract = workflowContract.filter((workflow) => workflow.agent !== false);
   const mcp = agentOptions
     ? createMcpServer<AuthRequest<any> | null>({
@@ -2232,7 +2315,8 @@ export async function openBackend<
               ...(options.buckets ? { buckets: options.buckets.manifest() } : {}),
             } }
           : {}),
-        tools: [...mcpTools, ...bucketMcpTools],
+        tools: oauth ? oauth.protectTools([...mcpTools, ...bucketMcpTools, ...reviewedMcpTools])
+          : [...mcpTools, ...bucketMcpTools, ...reviewedMcpTools],
         ...(activity ? { onToolActivity: (event, request) => {
           try { activity!.record(event, activityRevisions.get(request)); } catch (error) { reportError(error); }
         } } : {}),
@@ -2345,6 +2429,7 @@ export async function openBackend<
 
   const runtime: BackendRuntime<Schema, Functions, Auth, Jobs> = {
     definition,
+    reviewedActions,
     database,
     auth: authRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["auth"],
     jobs: jobsRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["jobs"],
@@ -2384,6 +2469,7 @@ export async function openBackend<
     async handle(request) {
       ensureOpen();
       const url = new URL(request.url);
+      if (reviewedActions?.handles(request)) return reviewedActions.handle(request);
       if (oauth?.handles(request)) return oauth.handle(request);
       if (mcp && url.pathname === mcpPath) return mcp.handle(request);
       if (mcp && request.method === "GET" && url.pathname === "/.well-known/clank") {
@@ -2814,15 +2900,19 @@ function functionAt(registry: Map<string, AnyBackendFunction>, path: string, exp
 
 class BackendInvocationError extends Error {
   readonly name = "BackendInvocationError";
-  constructor(readonly code: string, message: string, readonly status: number) {
+  declare readonly code: string; declare readonly status: number;
+  constructor(code: string, message: string, status: number) {
     super(message);
+    this.code = code; this.status = status;
   }
 }
 
 class BackendOutputError extends Error {
   readonly name = "BackendOutputError";
-  constructor(readonly cause: unknown) {
+  declare readonly cause: unknown;
+  constructor(cause: unknown) {
     super("The backend function returned an invalid result.");
+    this.cause = cause;
   }
 }
 

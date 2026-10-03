@@ -11,9 +11,27 @@ export interface SQLiteInternalChangeRecorder {
 }
 
 export interface SQLiteInternal {
+  /** Install once, after schema bootstrap and before admitting requests. */
+  captureTransactions?(factory: (connection: SQLiteCaptureConnection) => SQLiteTransactionCapture): void;
   /** True only while this database instance owns a write transaction. */
   readonly inTransaction: boolean;
   exec(sql: string): void;
   prepare(sql: string): SQLiteStatement;
   transaction<Value>(handler: (changes: SQLiteInternalChangeRecorder) => Value): Value;
+  /** Re-scope reads inside an existing write transaction for independent approval authorization. */
+  readScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").ReadDatabase<any>) => Value): Value;
+}
+
+/** Internal hook used by the point-in-time journal. All callbacks are synchronous. */
+export interface SQLiteCaptureConnection {
+  readonly path: string;
+  exec(sql: string): void;
+  prepare(sql: string): SQLiteStatement;
+  createSession(options: { table?: string }): { changeset(): Uint8Array; close(): void };
+}
+export interface SQLiteTransactionCapture {
+  before(): void;
+  commit(): void;
+  after(): void;
+  close(): void;
 }

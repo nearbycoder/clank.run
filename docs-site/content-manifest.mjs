@@ -26,6 +26,8 @@ export const groups = [
       ["design-system", "docs/design-system.md"],
       ["tailwind", "docs/tailwind.md"],
       ["performance", "docs/performance.md"],
+      ["localization", "docs/localization.md"],
+      ["development-tools", "docs/development-tools.md"],
       ["api-reference", "docs/api-reference.md"]
     ]
   },
@@ -36,6 +38,7 @@ export const groups = [
     entries: [
       ["full-stack", "docs/full-stack.md"],
       ["offline", "docs/offline.md"],
+      ["durable-data-workflows", "docs/durable-data-workflows.md"],
       ["database", "docs/database.md"],
       ["migrations", "docs/migrations.md"],
       ["auth", "docs/auth.md"],
@@ -43,6 +46,7 @@ export const groups = [
       ["server", "docs/server.md"],
       ["durable-objects", "docs/durable-objects.md"],
       ["jobs-and-cron", "docs/jobs-and-cron.md"],
+      ["reminders-and-delivery", "docs/reminders-and-delivery.md"],
       ["services", "docs/services.md"],
       ["object-storage", "docs/object-storage.md"],
       ["buckets", "docs/buckets.md"],
@@ -78,6 +82,7 @@ export const groups = [
       ["deployment-platform", "docs/deployment-platform.md"],
       ["preview-environments", "docs/preview-environments.md"],
       ["release-lifecycle", "docs/release-lifecycle.md"],
+      ["release-attestations", "docs/release-attestations.md"],
       ["usage-and-limits", "docs/usage-and-limits.md"],
       ["hosted-plans-and-billing", "docs/hosted-plans-and-billing.md"],
       ["platform-dashboard", "docs/platform-dashboard.md"],
@@ -91,6 +96,7 @@ export const groups = [
       ["provider-docker-runtime", "docs/provider-docker-runtime.md"],
       ["provider-runtime-ingress", "docs/provider-runtime-ingress.md"],
       ["provider-service", "docs/provider-service.md"],
+      ["planned-node-evacuation", "docs/planned-node-evacuation.md"],
       ["railway", "docs/railway.md"],
       ["self-hosting", "docs/self-hosting.md"],
       ["releases", "docs/releases.md"]
@@ -103,12 +109,16 @@ export const groups = [
     entries: [
       ["security", "docs/security.md"],
       ["platform-security", "docs/platform-security.md"],
+      ["organization-security", "docs/organization-security.md"],
+      ["sqlite-isolation", "docs/sqlite-isolation.md"],
+      ["linux-provider-isolation", "docs/linux-provider-isolation.md"],
       ["threat-model", "docs/threat-model.md"],
       ["security-asvs", "docs/security-asvs.md"],
       ["code-audit", "docs/code-audit.md"],
       ["chaos-testing", "docs/chaos-testing.md"],
       ["conformance", "docs/conformance.md"],
-      ["recovery", "docs/recovery.md"]
+      ["recovery", "docs/recovery.md"],
+      ["operational-recovery", "docs/operational-recovery.md"]
     ]
   },
   {
@@ -117,6 +127,7 @@ export const groups = [
     description: "Maintenance, compatibility, releases, contribution rules, and the open-source project record.",
     entries: [
       ["maintenance", "docs/maintenance.md"],
+      ["runnable-examples", "docs/runnable-examples.md"],
       ["renaming-from-proact", "docs/renaming-from-proact.md"],
       ["overview", "README.md"],
       ["changelog", "CHANGELOG.md"],

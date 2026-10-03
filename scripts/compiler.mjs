@@ -5,24 +5,46 @@ export { transformTSX } from "./tsx.mjs";
 
 /** Compile one TypeScript or TSX module without a package dependency. */
 export function compile(source, options = {}) {
-  if (Number(process.versions.node.split(".")[0]) >= 26) {
-    throw new Error("Clank compilation requires Node 22.16+ or Node 24 LTS (below Node 26). Node 26 removed the built-in TypeScript transform API. Use the version in .node-version.");
-  }
   const filename = options.filename ?? "module.ts";
   const transformed = filename.endsWith(".tsx")
     ? transformTSX(source, { importSource: options.jsxImportSource }).code
     : source;
-  let javascript = withoutStripTypesWarning(() =>
-    stripTypeScriptTypes(transformed, {
-      mode: "transform",
-      sourceMap: options.sourceMap !== false,
-      // A sourceURL without a map renames the emitted module to its source path
-      // in V8, which silently excludes it from coverage of dist/**/*.js.
-      ...(options.sourceMap === false ? {} : { sourceUrl: filename }),
-    }));
+  const stripOnly = Number(process.versions.node.split(".")[0]) >= 26;
+  let javascript;
+  try {
+    javascript = withoutStripTypesWarning(() => stripTypeScriptTypes(transformed, stripOnly
+      ? { mode: "strip" }
+      : {
+        mode: "transform", sourceMap: options.sourceMap !== false,
+        // Do not rename emitted files when measuring dist coverage.
+        ...(options.sourceMap === false ? {} : { sourceUrl: filename }),
+      }));
+  } catch (error) {
+    if (stripOnly && error?.code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX") {
+      throw new SyntaxError(`${filename}: ${error.message}. On Node 26 use erasable TypeScript: explicit constructor fields, object literals instead of enums, and ES modules instead of runtime namespaces. Node 22/24 retain transform support.`, { cause: error });
+    }
+    throw error;
+  }
+  // Strip mode preserves line positions. TSX maps to the lowered module just as
+  // transform mode does; supply line mappings without the removed Node option.
+  if (stripOnly && options.sourceMap !== false) {
+    const map = { version: 3, sources: [filename], sourcesContent: [transformed], names: [],
+      mappings: transformed.split("\n").map((_, index) => index ? "AACA" : "AAAA").join(";") };
+    javascript += `\n//# sourceMappingURL=data:application/json;base64,${Buffer.from(JSON.stringify(map)).toString("base64")}`;
+  }
+  // Match each quoted specifier once. Searching for a .ts extension inside an
+  // open-ended quoted region repeatedly backtracked on hostile editor input.
   javascript = javascript.replace(
-    /(\bfrom\s+|\bimport\s*(?:\(\s*)?)(["'])([^"']+?)\.tsx?([?#][^"']*)?\2/g,
-    (_match, prefix, quote, specifier, suffix = "") => `${prefix}${quote}${specifier}.js${suffix}${quote}`,
+    /(\bfrom\s+|\bimport\s*(?:\(\s*)?)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')/g,
+    (match, prefix, literal) => {
+      const specifier = literal.slice(1, -1);
+      const suffixAt = specifier.search(/[?#]/u);
+      const pathname = suffixAt < 0 ? specifier : specifier.slice(0, suffixAt);
+      const suffix = suffixAt < 0 ? "" : specifier.slice(suffixAt);
+      const extensionLength = pathname.endsWith(".tsx") ? 4 : pathname.endsWith(".ts") ? 3 : 0;
+      if (!extensionLength) return match;
+      return `${prefix}${literal[0]}${pathname.slice(0, -extensionLength)}.js${suffix}${literal[0]}`;
+    },
   );
   return javascript;
 }

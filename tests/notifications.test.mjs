@@ -92,3 +92,80 @@ test("notification email retries retain the provider idempotency key after a del
     assert.equal((await alice.client.list())[0].emailState, "sent");
   } finally { await app.close(); }
 });
+
+test('quiet hours and daily digests follow named-zone calendars across DST', async () => {
+  const { nextNotificationDelivery } = await import('../dist/notifications.js');
+  const quiet = { timeZone: 'America/New_York', quietHours: { start: '22:00', end: '08:00' } };
+  assert.equal(new Date(nextNotificationDelivery(quiet, Date.parse('2026-03-08T04:30:00Z'))).toISOString(), '2026-03-08T12:00:00.000Z');
+  assert.equal(new Date(nextNotificationDelivery({ delivery: 'daily', timeZone: 'America/New_York', digestTime: '02:30' }, Date.parse('2026-03-08T00:00:00Z'))).toISOString(), '2026-03-09T06:30:00.000Z');
+  assert.equal(new Date(nextNotificationDelivery({ delivery: 'daily', timeZone: 'America/New_York', digestTime: '01:30' }, Date.parse('2026-11-01T00:00:00Z'))).toISOString(), '2026-11-01T05:30:00.000Z');
+  for (const value of [{ quietHours: { start: '08:00', end: '08:00' } }, { timeZone: 'bad/zone' }, { delivery: 'never' }, { digestTime: '25:00' }]) assert.throws(() => nextNotificationDelivery(value));
+});
+
+test('hourly digests persist a sealed payload and stable retry identity across restarts', async () => {
+  let now = Date.parse('2026-10-03T10:15:00Z'), failed = true;
+  const sent = [], app = await fixture({ now: () => now, sendEmail: async message => { sent.push({ ...message }); if (failed) throw new Error('temporary failure'); } });
+  try {
+    const alice = await app.register('digest@example.invalid'), bob = await app.register('other@example.invalid');
+    await alice.client.setPreference({ category: 'updates', inApp: true, email: true, delivery: 'hourly', timeZone: 'UTC' });
+    const publish = (key) => app.center.publish({ userId: alice.userId, key, category: 'updates', title: key, body: 'Digest content' });
+    const first = publish('first'), second = publish('second');
+    assert.equal(await app.center.workEmailOnce(), false);
+    assert.equal((await alice.client.list())[0].deliveryAt, Date.parse('2026-10-03T11:00:00Z'));
+    await app.restart(); now = Date.parse('2026-10-03T11:00:00Z');
+    assert.equal(await app.center.workEmailOnce(), true);
+    assert.equal(sent.length, 1); assert.match(sent[0].subject, /^2 updates/);
+    assert.match(sent[0].text, /first/); assert.match(sent[0].text, /second/);
+    assert.equal((await alice.client.list()).find(row => row._id === first).emailAttempts, 1);
+    assert.equal(await bob.client.retryEmail(first), false);
+    publish('third'); failed = false;
+    const db = new DatabaseSync(app.path); db.exec("UPDATE clank_jobs SET run_at = 0 WHERE state = 'retry'"); db.close();
+    await app.restart();
+    for (let turn = 0; turn < 4; turn++) await app.center.workEmailOnce();
+    assert.equal(sent.length, 2); assert.equal(sent[0].text, sent[1].text); assert.equal(sent[0].idempotencyKey, sent[1].idempotencyKey);
+    for (const id of [first, second]) assert.equal((await alice.client.list()).find(row => row._id === id).emailState, 'sent');
+    assert.equal((await alice.client.list()).find(row => row.title === 'third').emailState, 'queued');
+    assert.deepEqual(await bob.client.list(), []);
+  } finally { await app.close(); }
+});
+
+test('delivery rechecks newly enabled quiet hours and account opt-out without sending early', async () => {
+  let now = Date.parse('2026-10-03T23:00:00Z'); const sent = [];
+  const app = await fixture({ now: () => now, sendEmail: async message => { sent.push(message); } });
+  try {
+    const alice = await app.register('quiet@example.invalid');
+    await alice.client.setPreference({ category: 'updates', inApp: true, email: true });
+    const id = app.center.publish({ userId: alice.userId, key: 'quiet', category: 'updates', title: 'Quiet', body: 'Later' });
+    await alice.client.setPreference({ category: 'updates', inApp: true, email: true, timeZone: 'UTC', quietHours: { start: '22:00', end: '08:00' } });
+    assert.equal(await app.center.workEmailOnce(), true); assert.equal(sent.length, 0);
+    assert.equal((await alice.client.list())[0].emailState, 'deferred');
+    assert.equal(await app.center.workEmailOnce(), false);
+    await app.restart(); now = Date.parse('2026-10-04T08:00:00Z');
+    await app.center.workEmailOnce(); assert.equal(sent.length, 1); assert.equal(sent[0].idempotencyKey, `clank-notification:${id}`);
+    const settings = (await alice.client.preferences()).find(row => row.category === 'updates');
+    assert.deepEqual(settings.quietHours, { start: '22:00', end: '08:00' });
+  } finally { await app.close(); }
+});
+
+test('manual retry follows the current delivery job after a sealed digest is deferred for quiet hours', async()=>{
+ let now=Date.parse('2026-10-03T10:00:00Z'),fail=true;const sent=[];
+ const app=await fixture({now:()=>now,sendEmail:async message=>{sent.push(message);if(fail)throw new Error('provider unavailable')}});
+ try{
+  const alice=await app.register('deferred-retry@example.invalid');await alice.client.setPreference({category:'updates',inApp:true,email:true});
+  const id=app.center.publish({userId:alice.userId,key:'deferred-retry',category:'updates',title:'Deferred retry',body:'Stable content'});await app.center.workEmailOnce();
+  await alice.client.setPreference({category:'updates',inApp:true,email:true,timeZone:'UTC',quietHours:{start:'10:00',end:'11:00'}});
+  let db=new DatabaseSync(app.path);db.exec("UPDATE clank_jobs SET run_at=0 WHERE state='retry'");db.close();await app.center.workEmailOnce();assert.equal(sent.length,1);
+  await app.restart();now=Date.parse('2026-10-03T11:00:00Z');await app.center.workEmailOnce();assert.equal(sent.length,2);
+  db=new DatabaseSync(app.path);db.exec("UPDATE clank_jobs SET state='dead' WHERE state='retry'");db.close();
+  assert.equal(await alice.client.retryEmail(id),true);fail=false;await app.center.workEmailOnce();assert.equal(sent.length,3);assert.equal(sent[0].text,sent[2].text);assert.equal(sent[0].idempotencyKey,sent[2].idempotencyKey);assert.equal((await alice.client.list())[0].emailState,'sent');
+ }finally{await app.close()}
+});
+
+
+test('notification rendering escapes malformed attempt counts from custom clients', () => {
+  const payload = '<img src=x onerror="alert(1)">';
+  const html = renderNotificationCenter([{ _id: 'custom', title: 'Safe title', body: 'Safe body', readAt: null, emailState: 'failed', emailAttempts: payload, url: null }]);
+  assert.equal(html.includes(payload), false);
+  assert.ok(html.includes('&lt;img src=x onerror=&quot;alert(1)&quot;&gt; attempt(s)'));
+  assert.ok(renderNotificationCenter([{ _id: 'custom', title: 'Title', body: 'Body', readAt: null, emailState: 'failed', emailAttempts: 2, url: null }]).includes('2 attempt(s)'));
+});

@@ -1,3 +1,11 @@
+import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
+import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
+import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
+import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
+import { rehearseRecovery } from "./rehearsal.ts";
+import { openAuditExporter, type AuditExportOptions } from "./audit-export.ts";
+import { forecastUsage } from "./usage-forecast.ts";
+import { openOrganizationSso, type OrganizationSsoOptions } from "./organization-sso.ts";
 import { captureLogLines, redactLogSecrets } from "./security.ts";
 import { runSQLiteTask } from "./sqlite-task.ts";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
@@ -355,6 +363,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 }>);
 
 export interface ClankPlatformOptions {
+  /** Require signatures from project-scoped build keys before artifact extraction. */
+  releaseAttestations?: ReleaseAttestationPolicy;
   /** Optional trusted credential probe. Without it, rotation validation checks format/encryption only. */
   validateSecret?: SecretRotationOptions["validate"];
   dataDirectory: string;
@@ -430,6 +440,9 @@ export interface ClankPlatformOptions {
   signup?: boolean | "bootstrap";
   /** Bounded password-hashing admission. Hash strength remains at the framework defaults. */
   authentication?: { concurrency?: number; maxQueue?: number };
+  organizationSso?: Omit<OrganizationSsoOptions, "onProvision" | "onOffboard">;
+  /** Opt in to recent passkey/MFA checks for destructive recovery and ownership changes. */
+  freshAuthentication?: { required?: boolean; maxAgeMs?: number };
   masterKey?: string | Uint8Array;
   maxArtifactBytes?: number;
   /** Operator-only escape hatch for configs that request unrestricted SQLite SQL. */
@@ -438,6 +451,12 @@ export interface ClankPlatformOptions {
   accessTokenLifetimeMs?: number;
   limits?: PlatformLimits;
   backups?: PlatformBackupOptions;
+  /** Signed, durable delivery to independently controlled audit storage. */
+  auditExport?: AuditExportOptions;
+  /** Durable operational alerts and scheduled application restore drills. */
+  operations?: PlatformOperationsOptions;
+  /** Traffic and measured health gates for local code-only deployments behind managed ingress. */
+  canary?: ManagedCanaryOptions;
   jobs?: PlatformJobOperationsOptions;
   previews?: PlatformPreviewOptions;
   /**
@@ -497,9 +516,11 @@ export interface PlatformRuntime {
 
 interface NativeChild {
   readonly pid?: number;
+  readonly cleanupFence?: string;
   readonly stdout?: AsyncIterable<Uint8Array> & { setEncoding?(encoding: string): void };
   readonly stderr?: AsyncIterable<Uint8Array> & { setEncoding?(encoding: string): void };
   readonly exitCode?: number | null;
+  readonly signalCode?: string | null;
   kill(signal?: string): boolean;
   once(event: "error" | "exit", listener: (...arguments_: any[]) => void): void;
 }
@@ -620,6 +641,7 @@ interface PlatformImpersonation {
 type OrganizationRole = "owner" | "admin" | "developer" | "viewer";
 type ProjectPermission =
   | "read"
+  | "logs"
   | "deploy"
   | "rollback"
   | "jobs"
@@ -641,13 +663,17 @@ interface PlatformDatabase {
 }
 
 class PlatformError extends Error {
+  declare readonly status: number;
+  declare readonly code: string;
+  declare readonly retryAfter?: number;
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
-    readonly retryAfter?: number,
+    retryAfter?: number,
   ) {
     super(message);
+    this.status = status; this.code = code; this.retryAfter = retryAfter;
   }
 }
 
@@ -741,6 +767,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     ? normalizeHostname(options.ingress.baseDomain)
     : undefined;
   const ingressEnabled = options.ingress?.enabled === true || Boolean(baseDomain);
+  const canaryOptions = options.canary ? validateManagedCanary(options.canary) : undefined;
+  if (canaryOptions && !ingressEnabled) throw new TypeError("Managed canaries require managed ingress.");
   const defaultRuntimePolicy = normalizeRuntimePolicy(
     options.scaleToZero?.defaultPolicy ?? "always_on",
   );
@@ -1011,6 +1039,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     );
   }
   const paths = await prepareDirectories(options.dataDirectory);
+  const runtimeGuardianDirectory = await prepareRuntimeGuardians(paths.root);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
   const signupPolicy = signupMode === true
@@ -1019,10 +1048,36 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       ? "disabled"
       : "bootstrap";
   const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication);
+  const evacuations = openNodeEvacuations(storage.internal);
+  const requireNoEvacuation = (projectId: string) => { if (evacuations.activeForProject(projectId)) throw new PlatformError(409, "PROJECT_EVACUATING", "Resume or cancel the node evacuation before changing this project."); };
+  storage.internal.exec("CREATE TABLE IF NOT EXISTS clank_platform_release_attestations (release_id TEXT PRIMARY KEY REFERENCES clank_platform_releases(id) ON DELETE CASCADE, attestation TEXT NOT NULL, verified_at INTEGER NOT NULL)");
+  const freshAuthenticationAge = integerInRange(options.freshAuthentication?.maxAgeMs ?? 300_000, "freshAuthentication.maxAgeMs", 1000, 3_600_000);
+  const requireFreshPlatformAuthentication = (principal: TokenPrincipal) => {
+    if (!options.freshAuthentication?.required) return;
+    const current = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
+    if (!current || current.user?.id !== principal.userId) throw new PlatformError(403, "FRESH_AUTH_REQUIRED", "A browser passkey or MFA verification is required for this operation.");
+    storage.auth.requireFreshAuthentication(current, freshAuthenticationAge);
+  };
+  const organizationSso = options.organizationSso ? openOrganizationSso(storage.database, storage.auth, {
+    ...options.organizationSso,
+    onProvision(userId, organizationId) {
+      if (!storage.internal.prepare("SELECT id FROM clank_platform_organizations WHERE id = ?").get(organizationId)) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "SSO organization is not configured.");
+      storage.internal.prepare("INSERT OR IGNORE INTO clank_platform_memberships(organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, 'viewer', ?, ?)").run(organizationId, userId, Date.now(), Date.now());
+    },
+    onOffboard(userId, organizationId) {
+      storage.internal.prepare("DELETE FROM clank_platform_memberships WHERE organization_id = ? AND user_id = ?").run(organizationId, userId);
+      storage.internal.prepare("DELETE FROM clank_platform_project_members WHERE user_id = ?").run(userId);
+      storage.internal.prepare("UPDATE clank_platform_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(Date.now(), userId);
+      storage.internal.prepare("UPDATE clank_platform_device_codes SET status = 'denied', consumed_at = ? WHERE user_id = ?").run(Date.now(), userId);
+      audit(storage.internal, userId, null, null, "organization.offboard", { organizationId });
+    },
+  }) : undefined;
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
+  let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
+    if (options.auditExport) auditExporter = await openAuditExporter(storage.internal, options.auditExport);
     invitationDeliveries = createPlatformInvitationDeliveryScheduler({
       internal: storage.internal,
       publicUrl,
@@ -1377,7 +1432,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
     return admitProjectUsage(storage.internal, request, quotaDefaults);
   };
+  const canaries = canaryOptions ? createManagedCanary(storage.internal, canaryOptions) : undefined;
   const recordIngressMetric = (metric: IngressRequestMetric): void => {
+    canaries?.record(metric);
     recordMetric(storage.internal, metric);
     if (metric.admitted) {
       recordUsageResponse(storage.internal, metric);
@@ -1398,14 +1455,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
   const ingress = ingressEnabled
     ? createManagedIngress({
-        routes: () => ingressRoutes(
+        routes: async () => (await ingressRoutes(
           storage.internal,
           baseDomain,
           active,
           masterKey,
           orchestrator,
           runtimeTransitions,
-        ),
+        )).map((route) => ({ ...route, ...(canaries?.route(route.projectId) ? { canary: canaries.route(route.projectId) } : {}) })),
         timeoutMs: options.ingress?.timeoutMs,
         maxBodyBytes: options.ingress?.maxBodyBytes,
         ...(providerPlacement
@@ -1507,6 +1564,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     domainRecheckTimer.unref?.();
   };
 
+  const projectLeaseAssertions = new Map<string, () => void>();
   const withProjectLock = async <Value>(projectId: string, operation: () => Promise<Value>): Promise<Value> => {
     const previous = locks.get(projectId) ?? Promise.resolve();
     let release!: () => void;
@@ -1531,7 +1589,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       throw error;
     }
     let currentLease = distributedLease;
+    const projectLeaseDigest = syncHash(currentLease.token);
     let leaseLost = false;
+    projectLeaseAssertions.set(projectId, () => {
+      if (closed || leaseLost || !storage.internal.prepare(`SELECT 1 FROM clank_distributed_leases
+        WHERE resource=? AND owner=? AND fence=? AND token_hash=? AND expires_at>?`).get(
+          currentLease.resource, currentLease.owner, currentLease.fence, projectLeaseDigest, Date.now(),
+        )) throw new PlatformError(409, "PROJECT_LEASE_LOST", "Project lease or platform availability changed during the operation.");
+    });
     const renewer = setInterval(() => {
       void orchestrator.renewLease(currentLease).then((renewed) => {
         if (renewed) currentLease = renewed;
@@ -1540,11 +1605,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }, 10_000);
     renewer.unref?.();
     try {
+      await assertRuntimeGuardianAdmission(runtimeGuardianDirectory);
       const value = await operation();
       if (leaseLost) throw new PlatformError(409, "PROJECT_LEASE_LOST", "The project lease was lost during the operation.");
       return value;
     } finally {
       clearInterval(renewer);
+      projectLeaseAssertions.delete(projectId);
       await orchestrator.releaseLease(currentLease).catch(() => false);
       release();
       if (locks.get(projectId) === queued) locks.delete(projectId);
@@ -1568,23 +1635,29 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   });
 
   const stopBackgroundProcesses = async (running: ActiveProcess): Promise<void> => {
-    const processes = running.background.splice(0);
+    const processes = [...running.background];
     for (const process of processes) process.expectedStop = true;
-    await Promise.allSettled(processes.map((process) => stopChild(process.child)));
+    const stopped = await Promise.allSettled(processes.map((process) => stopChild(process.child)));
+    const failed = stopped.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) throw failed.reason;
+    running.background.splice(0);
   };
 
   const stopRunning = async (running: ActiveProcess): Promise<void> => {
     running.expectedStop = true;
-    if (active.get(running.projectId) === running) active.delete(running.projectId);
-    await Promise.allSettled([
+    const stopped = await Promise.allSettled([
       stopBackgroundProcesses(running),
       stopChild(running.child),
     ]);
+    const failed = stopped.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) throw failed.reason;
+    if (active.get(running.projectId) === running) active.delete(running.projectId);
   };
 
   const stopProject = async (projectId: string): Promise<void> => {
     const running = active.get(projectId);
     if (running) await stopRunning(running);
+    await waitForRuntimeGuardianCleanup(runtimeGuardianDirectory, projectId);
   };
 
   const cancelRestart = (projectId: string) => {
@@ -1606,6 +1679,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       )`).run(projectId, projectId);
   };
 
+  const requireRuntimeLaunchAuthority = (projectId: string): void => {
+    if (closed) throw new PlatformError(503, "PLATFORM_CLOSED", "Platform closed while the application was starting.");
+    projectLeaseAssertions.get(projectId)?.();
+  };
+
   const launchBackgroundProcesses = async (
     running: ActiveProcess,
     release: ReleaseRow,
@@ -1614,6 +1692,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     environment: Record<string, string>,
     secrets: Record<string, string>,
   ): Promise<void> => {
+    requireRuntimeLaunchAuthority(running.projectId);
     const jobs = release.config.jobs;
     if (!jobs) return;
     running.backgroundFailure = undefined;
@@ -1624,73 +1703,83 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       })),
       ...(jobs.scheduler ? [{ role: "scheduler" as const, instance: 0 }] : []),
     ];
-    for (const launch of launches) {
-      const backgroundEnvironment = {
-        ...environment,
-        CLANK_PROCESS_ROLE: launch.role,
-        ...(launch.role === "worker"
-          ? {
-              CLANK_WORKER_CONCURRENCY: String(jobs.concurrency),
-              CLANK_WORKER_QUEUES: jobs.queues.join(","),
-            }
-          : {}),
-      };
-      const child = await spawnRelease(
-        runner,
-        release,
-        dataRoot,
-        port,
-        backgroundEnvironment,
-        {
-          entry: jobs.entry,
+    try {
+      for (const launch of launches) {
+        requireRuntimeLaunchAuthority(running.projectId);
+        const backgroundEnvironment = {
+          ...environment,
+          CLANK_PROCESS_ROLE: launch.role,
+          ...(launch.role === "worker"
+            ? {
+                CLANK_WORKER_CONCURRENCY: String(jobs.concurrency),
+                CLANK_WORKER_QUEUES: jobs.queues.join(","),
+              }
+            : {}),
+        };
+        const child = await spawnRelease(
+          runner,
+          runtimeGuardianDirectory,
+          release,
+          dataRoot,
+          port,
+          backgroundEnvironment,
+          {
+            entry: jobs.entry,
+            role: launch.role,
+            instance: launch.instance,
+            exposePort: false,
+          },
+          () => requireRuntimeLaunchAuthority(running.projectId),
+        );
+        const background: ActiveBackgroundProcess = {
           role: launch.role,
           instance: launch.instance,
-          exposePort: false,
-        },
+          child,
+          expectedStop: false,
+        };
+        running.background.push(background);
+        const stream = `${launch.role}${launch.role === "worker" ? `[${launch.instance + 1}]` : ""}`;
+        captureOutput(
+          child.stdout,
+          (line) => recordLog(running.projectId, release.id, `${stream}:stdout`, redact(line, secrets)),
+        );
+        captureOutput(
+          child.stderr,
+          (line) => recordLog(running.projectId, release.id, `${stream}:stderr`, redact(line, secrets)),
+        );
+        child.once("error", (error) => {
+          recordLog(running.projectId, release.id, "platform", `${stream} process error: ${safeError(error)}`);
+        });
+        child.once("exit", (code, signal) => {
+          const failure = `${stream} process exited (${String(code ?? signal ?? "unknown")}).`;
+          recordLog(running.projectId, release.id, "platform", failure);
+          if (background.expectedStop || running.expectedStop || closed) return;
+          running.backgroundFailure = failure;
+          if (active.get(running.projectId) === running) {
+            storage.internal.prepare("UPDATE clank_platform_releases SET status = 'crashed', failure = ? WHERE id = ?")
+              .run(failure, release.id);
+            scheduleRestart(running.projectId, release.id);
+          }
+        });
+        requireRuntimeLaunchAuthority(running.projectId);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      requireRuntimeLaunchAuthority(running.projectId);
+      if (running.backgroundFailure || running.background.some((process) =>
+        process.child.exitCode !== null && process.child.exitCode !== undefined)) {
+        throw new Error(running.backgroundFailure ?? "A background process exited during startup.");
+      }
+      recordLog(
+        running.projectId,
+        release.id,
+        "platform",
+        `Started ${jobs.workers} worker process(es) at concurrency ${jobs.concurrency}`
+          + `${jobs.scheduler ? " and one scheduler" : ""}.`,
       );
-      const background: ActiveBackgroundProcess = {
-        role: launch.role,
-        instance: launch.instance,
-        child,
-        expectedStop: false,
-      };
-      running.background.push(background);
-      const stream = `${launch.role}${launch.role === "worker" ? `[${launch.instance + 1}]` : ""}`;
-      captureOutput(
-        child.stdout,
-        (line) => recordLog(running.projectId, release.id, `${stream}:stdout`, redact(line, secrets)),
-      );
-      captureOutput(
-        child.stderr,
-        (line) => recordLog(running.projectId, release.id, `${stream}:stderr`, redact(line, secrets)),
-      );
-      child.once("error", (error) => {
-        recordLog(running.projectId, release.id, "platform", `${stream} process error: ${safeError(error)}`);
-      });
-      child.once("exit", (code, signal) => {
-        const failure = `${stream} process exited (${String(code ?? signal ?? "unknown")}).`;
-        recordLog(running.projectId, release.id, "platform", failure);
-        if (background.expectedStop || running.expectedStop || closed) return;
-        running.backgroundFailure = failure;
-        if (active.get(running.projectId) === running) {
-          storage.internal.prepare("UPDATE clank_platform_releases SET status = 'crashed', failure = ? WHERE id = ?")
-            .run(failure, release.id);
-          scheduleRestart(running.projectId, release.id);
-        }
-      });
+    } catch (error) {
+      await stopBackgroundProcesses(running);
+      throw error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    if (running.backgroundFailure || running.background.some((process) =>
-      process.child.exitCode !== null && process.child.exitCode !== undefined)) {
-      throw new Error(running.backgroundFailure ?? "A background process exited during startup.");
-    }
-    recordLog(
-      running.projectId,
-      release.id,
-      "platform",
-      `Started ${jobs.workers} worker process(es) at concurrency ${jobs.concurrency}`
-        + `${jobs.scheduler ? " and one scheduler" : ""}.`,
-    );
   };
 
   const releaseLaunchContext = async (
@@ -1741,11 +1830,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     secrets: Record<string, string>,
     port: number,
   ): Promise<ActiveProcess> => {
+    requireRuntimeLaunchAuthority(project.id);
     const secretRevisions = secretRotations.revisions(project.id, secrets);
     const { dataRoot, environment } = await releaseLaunchContext(project, release, secrets, port);
     await assertPortAvailable(port);
+    requireRuntimeLaunchAuthority(project.id);
     const child = await spawnRelease(
       runner,
+      runtimeGuardianDirectory,
       release,
       dataRoot,
       port,
@@ -1756,6 +1848,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         instance: 0,
         exposePort: true,
       },
+      () => requireRuntimeLaunchAuthority(project.id),
     );
     const running: ActiveProcess = {
       projectId: project.id,
@@ -1782,12 +1875,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
     });
     try {
+      requireRuntimeLaunchAuthority(project.id);
       await waitForHealth(port, release.config.health.path, release.config.health.timeoutMs, child);
+      requireRuntimeLaunchAuthority(project.id);
       if (child.exitCode !== null && child.exitCode !== undefined) {
         throw new Error("Application exited immediately after its health check passed.");
       }
-      if (closed) throw new Error("Platform closed while the application was starting.");
       await launchBackgroundProcesses(running, release, dataRoot, port, environment, secrets);
+      requireRuntimeLaunchAuthority(project.id);
       consumedSecrets.set(running, secretRevisions);
       return running;
     } catch (error) {
@@ -1803,12 +1898,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     release: ReleaseRow,
     secrets: Record<string, string>,
   ): Promise<ActiveProcess> => {
+    requireRuntimeLaunchAuthority(project.id);
     const current = active.get(project.id);
     if (current) await stopRunning(current);
     const running = await launchRelease(project, release, secrets, project.port);
-    active.set(project.id, running);
-    runtimeActivity.set(project.id, Date.now());
-    return running;
+    try {
+      requireRuntimeLaunchAuthority(project.id);
+      active.set(project.id, running);
+      runtimeActivity.set(project.id, Date.now());
+      return running;
+    } catch (error) {
+      await stopRunning(running);
+      throw error;
+    }
   };
 
   const releaseRequiresContinuousRuntime = (release: ReleaseRow): boolean => Boolean(
@@ -1938,6 +2040,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     project: ProjectRow,
     release: ReleaseRow,
     generation: number,
+    assertCurrent?: () => void,
   ): Record<string, unknown> => {
     const generationState = providerGeneration(
       storage.internal,
@@ -1991,6 +2094,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     );
     const activatedAt = Date.now();
     storage.internal.transaction((changes) => {
+      assertCurrent?.();
       recordDeploymentActivation(storage.internal, project.id, release.id, activatedAt);
       storage.internal.prepare(
         "UPDATE clank_platform_releases SET status = 'active', activated_at = ?, failure = NULL WHERE id = ?",
@@ -2067,10 +2171,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     release: ReleaseRow,
     generation: number,
     intent: "deploy" | "restore" | "failover" = "deploy",
+    assertCurrent?: () => void,
   ): Promise<Record<string, unknown>> => {
     const deadline = Date.now() + providerPlacement!.activationTimeoutMs;
     const operationKey = `reconcile:${project.id}:${generation}`;
     while (!closed && Date.now() < deadline) {
+      assertCurrent?.();
       const currentProject = projectById(storage.internal, project.id);
       if (
         currentProject?.activeReleaseId === release.id
@@ -2091,7 +2197,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           desired.observedState === "running"
           && desired.observedReleaseId === release.id
         ) {
-          return finishProviderRelease(principal, project, release, generation);
+          return finishProviderRelease(principal, project, release, generation, assertCurrent);
         }
         if (intent === "deploy") {
           storage.internal.prepare(
@@ -2164,6 +2270,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     retryFailed = false,
     permission: "deploy" | "rollback" = "deploy",
   ): Promise<Record<string, unknown>> => {
+    requireNoEvacuation(project.id);
     if (!providerPlacement || !deploymentCoordinator) {
       throw new PlatformError(
         409,
@@ -2594,12 +2701,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     release: ReleaseRow,
     backupId: string,
     sourceNodeId: string,
+    assertCurrent?: () => void,
   ): Promise<{
     verification: BackupVerification;
     generation: number;
     sourceNodeId: string;
     targetNodeId: string;
   }> => {
+    assertCurrent?.();
     if (!providerPlacement || !deploymentCoordinator) {
       throw new PlatformError(
         409,
@@ -2656,6 +2765,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         );
       }
       const verification = await verifyEncryptedProjectBackup(project, backupId);
+      assertCurrent?.();
       if (
         verification.databaseSha256 !== pending.restoreDatabaseSha256
         || verification.databaseBytes !== pending.restoreDatabaseBytes
@@ -2690,6 +2800,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         },
         pending.generation,
         "failover",
+        assertCurrent,
       );
       return {
         verification,
@@ -2715,6 +2826,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       );
     }
     const verification = await verifyEncryptedProjectBackup(project, backupId);
+      assertCurrent?.();
     if (verification.databaseBytes > providerPlacement.maxDatabaseBytes) {
       throw new PlatformError(
         413,
@@ -2754,6 +2866,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     );
     const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
     storage.internal.transaction((changes) => {
+      assertCurrent?.();
       storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
         WHERE project_id = ? AND generation = ? AND release_id = ?
           AND recovery_kind = 'failover'`)
@@ -2793,11 +2906,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     });
     let desired;
     try {
+      assertCurrent?.();
       desired = await orchestrator.relocateStateful({
         projectId: project.id,
         sourceNodeId,
         runtimeProtocol: DEPLOYMENT_RUNTIME_PROTOCOL,
       });
+      assertCurrent?.();
       if (
         desired.generation !== generation
         || desired.desiredReleaseId !== currentRelease.id
@@ -2863,6 +2978,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       },
       generation,
       "failover",
+      assertCurrent,
     );
     return {
       verification,
@@ -2932,9 +3048,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const exactProviderOrigin = (
     project: ProjectRow,
     nodeId: string,
+    allowDraining = false,
   ): string => {
     const node = orchestrator.listNodes().find((entry) => entry.id === nodeId);
-    if (!node?.endpoint || node.status !== "active" || !project.providerOrigin) {
+    if (!node?.endpoint || (node.status !== "active" && !(allowDraining && node.status === "draining")) || !project.providerOrigin) {
       throw new PlatformError(
         503,
         "PROVIDER_ENDPOINT_UNAVAILABLE",
@@ -3284,6 +3401,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const fetchProviderSnapshot = async (
     project: ProjectRow,
     release: ReleaseRow,
+    evacuationId?: string,
   ): Promise<{ bytes: Uint8Array; sha256: string }> => {
     if (!providerPlacement) {
       throw new PlatformError(
@@ -3293,9 +3411,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       );
     }
     const runtime = exactProviderRuntime(project, release);
-    const origin = exactProviderOrigin(project, runtime.nodeId);
+    const origin = exactProviderOrigin(project, runtime.nodeId, Boolean(evacuationId));
     const snapshotUrl = new URL(
-      deploymentProviderSnapshotPath(project.id),
+      evacuationId ? `/v1/clank/control/${project.id}/evacuate` : deploymentProviderSnapshotPath(project.id),
       `${origin}/`,
     ).href;
     const maximum = Math.min(
@@ -3310,7 +3428,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     let response: Response | undefined;
     try {
       response = await fetch(snapshotUrl, {
-        method: "GET",
+        method: evacuationId ? "POST" : "GET",
         redirect: "error",
         cache: "no-store",
         credentials: "omit",
@@ -3319,6 +3437,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         headers: {
           accept: DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
           "accept-encoding": "identity",
+          ...(evacuationId ? { "x-clank-evacuation-id": evacuationId } : {}),
           authorization: `Bearer ${providerControlToken(
             masterKey,
             project.id,
@@ -3354,6 +3473,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         || response.headers.get("x-clank-release-id") !== release.id
         || response.headers.get("x-clank-runtime-generation")
           !== String(runtime.generation)
+        || (evacuationId && (response.headers.get("x-clank-evacuation-id") !== evacuationId || response.headers.get("x-clank-writers-stopped") !== "true"))
       ) {
         await response.body?.cancel();
         throw new Error("Provider snapshot response identity is invalid.");
@@ -3375,6 +3495,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const confirmedOrigin = exactProviderOrigin(
         currentProject,
         confirmed.nodeId,
+        Boolean(evacuationId),
       );
       if (
         confirmed.generation !== runtime.generation
@@ -3408,8 +3529,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     project: ProjectRow,
     reason: string,
     protectedBackupIds: readonly string[] = [],
+    evacuationId?: string,
   ): Promise<BackupManifest> => {
     const retainedBackupIds = new Set(protectedBackupIds);
+    for (const row of storage.internal.prepare(`SELECT json_extract(item.value, '$.backupId') AS backup_id
+      FROM clank_platform_evacuations p, json_each(p.projects) item WHERE p.state NOT IN ('completed','cancelled')
+      AND json_extract(item.value, '$.projectId') = ?`).all(project.id)) if (row.backup_id) retainedBackupIds.add(String(row.backup_id));
     if (project.placement === "provider") {
       const desired = orchestrator.desired(project.id);
       if (
@@ -3454,7 +3579,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           "Deploy the project before creating a database backup.",
         );
       }
-      const snapshot = await fetchProviderSnapshot(project, release);
+      const snapshot = await fetchProviderSnapshot(project, release, evacuationId);
       return await manager.createFromSnapshot({
         bytes: snapshot.bytes,
         sha256: snapshot.sha256,
@@ -3465,6 +3590,92 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     } finally {
       manager.close();
     }
+  };
+
+  const evacuationProjects = (nodeId: string) => storage.internal.prepare(`SELECT * FROM clank_platform_projects
+    WHERE placement='provider' AND provider_node_id=? AND active_release_id IS NOT NULL ORDER BY id`).all(nodeId).map(projectRow);
+  const evacuationPrincipal = (auth: AuthRequest<DefaultAuthProfile>): TokenPrincipal => ({
+    tokenId: null, sessionId: auth.session!.id, userId: auth.user!.id, email: auth.user!.email,
+    organizationId: null, projectId: null, permissions: [], previewName: null, impersonation: null,
+  });
+  const assertEvacuationCapacity = (projects: readonly ProjectRow[], nodeId: string) => {
+    const candidates = orchestrator.listNodes().filter(node => node.id !== nodeId && node.status === "active" && node.expiresAt > Date.now() && node.endpoint);
+    const available = new Map(candidates.map(node => [node.id, node.capacity - Number(storage.internal.prepare("SELECT COALESCE(SUM(capacity_units),0) AS units FROM clank_deployment_placements WHERE assigned_node_id=? AND desired_state='running'").get(node.id)!.units)]));
+    for (const project of projects) {
+      const desired = orchestrator.desired(project.id), placement = storage.internal.prepare("SELECT region FROM clank_deployment_placements WHERE project_id=?").get(project.id);
+      if (!desired || desired.assignedNodeId !== nodeId || desired.generation !== project.activeGeneration || desired.observedGeneration !== project.activeGeneration || desired.desiredReleaseId !== project.activeReleaseId || desired.observedState !== "running") throw new PlatformError(409, "EVACUATION_SOURCE_CHANGED", "Every source project must have a stable active generation.");
+      const target = candidates.find(node => (!placement?.region || placement.region === node.region) && Object.entries(desired.nodeRequirements.labels).every(([key,value]) => node.labels[key] === value) && available.get(node.id)! >= desired.capacityUnits);
+      if (!target) throw new PlatformError(409, "EVACUATION_CAPACITY", "Healthy compatible provider capacity is required for every source project before evacuation.");
+      available.set(target.id, available.get(target.id)! - desired.capacityUnits);
+    }
+  };
+  const evacuationHooks = (auth: AuthRequest<DefaultAuthProfile>): NodeEvacuationHooks => {
+    const principal = evacuationPrincipal(auth);
+    const verify = (plan: NodeEvacuationPlan) => {
+      const current = storage.auth.refreshSession(auth.session!.id);
+      if (!current?.user || current.user.id !== auth.user!.id || current.user.role !== PLATFORM_ADMIN_ROLE) throw new PlatformError(403, "PLATFORM_ADMIN_REQUIRED", "Current platform administrator access is required.");
+      requireFreshPlatformAuthentication(principal);
+      if (Date.now() - current.session!.createdAt > IMPERSONATION_RECENT_AUTH_MS && !options.freshAuthentication?.required) throw new PlatformError(403, "RECENT_AUTH_REQUIRED", "Sign in again before evacuating a provider node.");
+      if (plan.state === "completed" || plan.state === "cancelled") return;
+      const source = evacuationProjects(plan.nodeId);
+      if (source.some(project => !plan.projects.some(item => item.projectId === project.id))) throw new PlatformError(409, "EVACUATION_SOURCE_CHANGED", "The source node has a project absent from this plan.");
+      const assigned = storage.internal.prepare("SELECT project_id FROM clank_deployment_placements WHERE assigned_node_id=? AND desired_state='running'").all(plan.nodeId);
+      if (assigned.some(row => !plan.projects.some(item => item.projectId === row.project_id))) throw new PlatformError(409, "EVACUATION_SOURCE_CHANGED", "An unplanned placement is assigned to the source node.");
+      for (const item of plan.projects) {
+        const project = projectById(storage.internal, item.projectId);
+        if (!project || project.activeReleaseId !== item.releaseId) throw new PlatformError(409, "EVACUATION_SOURCE_CHANGED", "A planned release changed.");
+        if (project.providerNodeId === plan.nodeId && project.activeGeneration === item.generation) {
+          const desired = orchestrator.desired(project.id);
+          if (plan.phase === "planned" || plan.phase === "quiescing") {
+            if (desired?.assignedNodeId !== plan.nodeId || desired.generation !== item.generation) throw new PlatformError(409, "EVACUATION_SOURCE_CHANGED", "A source generation is still changing.");
+          }
+          continue;
+        }
+        const generation = project.activeGeneration === null ? null : providerGeneration(storage.internal, project.id, project.activeGeneration, item.releaseId);
+        if (!item.backupId || !generation || generation.recoveryKind !== "failover" || generation.recoverySourceNodeId !== plan.nodeId || generation.restoreBackupId !== item.backupId || !project.providerNodeId || project.providerNodeId === plan.nodeId) throw new PlatformError(409, "EVACUATION_SOURCE_CHANGED", "The source or recovery target changed outside this plan.");
+      }
+    };
+    return {
+      verify,
+      drain(plan) { assertEvacuationCapacity(evacuationProjects(plan.nodeId), plan.nodeId); orchestrator.setNodeDraining(plan.nodeId, true); audit(storage.internal, principal.userId, null, null, "runner.evacuation.start", { id: plan.id, nodeId: plan.nodeId }); },
+      async snapshot(item, plan, assertCurrent) {
+        return withProjectLock(item.projectId, async () => {
+          assertCurrent(); projectLeaseAssertions.get(item.projectId)?.();
+          const project = projectById(storage.internal, item.projectId)!, release = releaseById(storage.internal, item.releaseId)!;
+          exactProviderRuntime(project, release);
+          const backup = await createEncryptedProjectBackup(project, `planned evacuation ${plan.id}`, [], plan.id);
+          projectLeaseAssertions.get(project.id)?.(); assertCurrent();
+          await verifyEncryptedProjectBackup(project, backup.id);
+          projectLeaseAssertions.get(project.id)?.(); assertCurrent();
+          backupScheduler.recordBackup(project.id, backup);
+          audit(storage.internal, principal.userId, null, project.id, "runner.evacuation.snapshot", { id: plan.id, backupId: backup.id, generation: item.generation });
+          return backup.id;
+        });
+      },
+      fence(plan) {
+        verify(plan);
+        if (plan.projects.some(project => !project.backupId)) throw new PlatformError(409, "EVACUATION_BACKUP_REQUIRED", "Every source must have a verified final snapshot before fencing the node.");
+        if (!providerSourceRevoked(plan.nodeId)) orchestrator.revokeNode(plan.nodeId);
+        audit(storage.internal, principal.userId, null, null, "runner.evacuation.fence", { id: plan.id, nodeId: plan.nodeId });
+      },
+      async relocate(item, plan, assertCurrent) {
+        return withProjectLock(item.projectId, async () => {
+          assertCurrent(); projectLeaseAssertions.get(item.projectId)?.();
+          const project = projectById(storage.internal, item.projectId)!, release = releaseById(storage.internal, item.releaseId)!;
+          if (project.providerNodeId !== plan.nodeId && project.activeGeneration! > item.generation) return { nodeId: project.providerNodeId!, generation: project.activeGeneration! };
+          const result = await queueProviderFailover(principal, project, release, item.backupId!, plan.nodeId, () => {
+            assertCurrent(); projectLeaseAssertions.get(project.id)?.();
+          });
+          projectLeaseAssertions.get(project.id)?.(); assertCurrent();
+          return { nodeId: result.targetNodeId, generation: result.generation };
+        });
+      },
+      cancel(plan) {
+        // Cancellation runs inside the plan transaction and is only available before quiescing.
+        if (!plan.wasDraining) storage.internal.prepare("UPDATE clank_deployment_nodes SET status='active',updated_at=? WHERE id=? AND status='draining' AND expires_at>?").run(Date.now(), plan.nodeId, Date.now());
+        audit(storage.internal, principal.userId, null, null, "runner.evacuation.cancel", { id: plan.id, nodeId: plan.nodeId });
+      },
+    };
   };
 
   const restorePreviewFixture = async (principal: TokenPrincipal, parent: ProjectRow, preview: ProjectRow, bytes: Uint8Array, digest: string) => {
@@ -3668,6 +3879,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         );
       } catch (error) {
         try {
+          await stopProject(preview.id);
           await restoreSQLiteBackup(safetyPath, previewDatabase);
           await startRelease(
             preview,
@@ -3830,17 +4042,28 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     bytes: Uint8Array,
     claimedDigest: string,
     idempotencyKey: string,
+    attestationHeader: string | null,
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
     requireCurrentPlatformPrincipal(storage, principal);
     project = accessibleProject(storage.internal, project.id, principal, "deploy").project;
     cancelRestart(project.id);
     const digest = await deploymentDigest(bytes);
     if (claimedDigest !== digest) throw new PlatformError(400, "DIGEST_MISMATCH", "Artifact digest does not match its header.");
+    let attestation: ReleaseAttestation | undefined;
+    if (options.releaseAttestations) {
+      if (!attestationHeader && options.releaseAttestations.required !== false) throw new PlatformError(403, "RELEASE_ATTESTATION_REQUIRED", "A signed release attestation is required.");
+      if (attestationHeader) {
+        try { attestation = await verifyReleaseAttestation(bytes, decodeReleaseAttestation(attestationHeader), options.releaseAttestations, project.id); }
+        catch { throw new PlatformError(403, "INVALID_RELEASE_ATTESTATION", "The release attestation is invalid or is not trusted for this project."); }
+      }
+    }
+
     const existing = storage.internal.prepare(
       "SELECT id, status FROM clank_platform_releases WHERE project_id = ? AND idempotency_key = ?",
     ).get(project.id, idempotencyKey);
     if (existing) {
       const release = releaseById(storage.internal, String(existing.id));
+      if (release?.digest !== digest) throw new PlatformError(409, "IDEMPOTENCY_ARTIFACT_MISMATCH", "This deployment key already names a different artifact.");
       if (project.placement === "provider" && release?.status === "staging") {
         return deployProviderRelease(principal, project, release, release.config);
       }
@@ -3868,6 +4091,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         "Changing database.path would create a second production database. Migrate it explicitly before deploying.",
       );
     }
+    if (canaries && project.placement === "provider") throw new PlatformError(409, "CANARY_PROVIDER_UNSUPPORTED", "Managed canaries require local placement with parallel code-only releases.");
     const bundleStorageBytes = bundle.files.reduce((total, file) => total + file.size, 0);
     const runnerArtifactBytes = options.deploymentAgents ? bytes.byteLength : 0;
     if (runnerArtifactBytes > runnerArtifactLimit) {
@@ -3938,6 +4162,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           idempotencyKey,
           createdAt,
         );
+      if (attestation) storage.internal.prepare("INSERT INTO clank_platform_release_attestations (release_id, attestation, verified_at) VALUES (?, ?, ?)").run(releaseId, JSON.stringify(attestation), Date.now());
     });
     let backupPath: string | null = null;
     let databaseExisted = false;
@@ -4037,6 +4262,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       const requiresExclusiveDatabase = !databaseExisted || migrationPlan.pending.length > 0;
       const rolling = Boolean(previousRuntime && ingress && !requiresExclusiveDatabase);
+      if (canaries && previousRuntime && !rolling) throw new PlatformError(409, "CANARY_EXCLUSIVE_MIGRATION", "Canary releases must keep the existing schema and use managed ingress; deploy migrations in a separate maintenance operation.");
       if (rolling) rolloutPort = await reserveRolloutPort(project);
       if (previousRuntime && !rolling) {
         await stopRunning(previousRuntime);
@@ -4074,6 +4300,29 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         candidateRuntime = await launchRelease(refreshedProject, release, secrets, rolloutPort);
       } finally {
         if (rolling) reservedRolloutPorts.delete(rolloutPort);
+      }
+      if (canaries && rolling && previousRuntime) {
+        const candidate = candidateRuntime;
+        recordLog(project.id, releaseId, "platform", "Candidate entered measured canary traffic stages; the prior release remains available for rollback.");
+        const checkCanaryProcesses = () => {
+          const exited = (child: NativeChild) => child.exitCode != null || child.signalCode != null;
+          if (exited(candidate.child) || exited(previousRuntime.child)) throw new Error("A canary runtime exited during evaluation.");
+          if (candidate.backgroundFailure || candidate.background.some((process) => process.expectedStop || exited(process.child))) throw new Error(candidate.backgroundFailure ?? "A canary background process stopped during evaluation.");
+          const expected = (release.config.jobs?.workers ?? 0) + (release.config.jobs?.scheduler ? 1 : 0);
+          if (candidate.background.length !== expected) throw new Error("Canary background process count does not match the release.");
+        };
+        await canaries.run(project.id, releaseId, `http://127.0.0.1:${candidate.port}`, async () => {
+          projectLeaseAssertions.get(project.id)?.();
+          requireCurrentPlatformPrincipal(storage, principal);
+          accessibleProject(storage.internal, project.id, principal, "deploy");
+          checkCanaryProcesses();
+          await waitForHealth(candidate.port, release.config.health.path, Math.min(2000, release.config.health.timeoutMs), candidate.child);
+          checkCanaryProcesses();
+        });
+        projectLeaseAssertions.get(project.id)?.();
+        requireCurrentPlatformPrincipal(storage, principal);
+        accessibleProject(storage.internal, project.id, principal, "deploy");
+        checkCanaryProcesses();
       }
       active.set(project.id, candidateRuntime);
       if (rolling) {
@@ -4167,6 +4416,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           await stopRunning(candidateRuntime);
         } catch (stopError) {
           options.onError?.(stopError);
+          throw new PlatformError(503, "RUNTIME_CLEANUP_UNRESOLVED", "Candidate cleanup could not be verified. Writer replacement and data rollback remain fenced for operator recovery.");
         }
       }
       if (
@@ -4245,6 +4495,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       try {
         if (databaseChanged) {
+          await stopProject(project.id);
           const dataRoot = await projectDataDirectory(paths.projects, project.id);
           const databasePath = await safeProjectDataPath(dataRoot, bundle.config.database.path);
           if (backupPath) await restoreSQLiteBackup(backupPath, databasePath);
@@ -4281,6 +4532,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
     requireCurrentPlatformPrincipal(storage, principal);
     project = accessibleProject(storage.internal, project.id, principal, "rollback").project;
+    if (restoreData) requireFreshPlatformAuthentication(principal);
     cancelRestart(project.id);
     const current = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
     const target = releaseById(storage.internal, targetId);
@@ -4734,6 +4986,66 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
   };
 
+  let operationsJobCursor = 0;
+  const operationsMonitor = options.operations ? createOperationalMonitor(storage.internal, options.operations, async () => {
+    const signals: OperationalSignal[] = [];
+    const projects = storage.internal.prepare("SELECT * FROM clank_platform_projects ORDER BY id LIMIT 1000").all().map(projectRow);
+    const health = ingress ? await ingress.health() : {};
+    const now = Date.now();
+    for (const project of projects) {
+      const latest = storage.internal.prepare("SELECT status FROM clank_platform_releases WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT 1").get(project.id);
+      const add = (kind: OperationalSignal["kind"], active: boolean, message: string, severity: OperationalSignal["severity"] = "critical") =>
+        signals.push({ key: `${kind}:${project.id}`, kind, active, message, severity, resourceId: project.id });
+      add("deployment_failed", ["failed", "crashed", "rollback_failed"].includes(String(latest?.status)), "The latest application deployment failed or crashed.");
+      const sample = health[`route_${project.id}`];
+      add("application_unhealthy", Boolean(project.activeReleaseId && project.runtimePolicy === "always_on"
+        && (sample ? !sample.ok : project.placement === "local" && !active.has(project.id))), "The application is not passing its runtime health check.");
+      const backup = backupScheduler.status(project.id, Boolean(project.databasePath));
+      add("backup_failed", Boolean(backup.lastError), "The latest scheduled backup failed.");
+      add("backup_overdue", Boolean(backup.enabled && backup.available && backup.nextBackupAt !== null && backup.nextBackupAt < now - 5 * 60_000), "The scheduled backup is overdue.", "warning");
+    }
+    // Inspect bounded batches of application job databases; never let a tenant
+    // create an unbounded control-plane fan-out. Other incident categories are
+    // refreshed for the whole inventory each pass.
+    for (let count = 0; count < Math.min(5, projects.length); count++) {
+      const project = projects[(operationsJobCursor + count) % projects.length]!;
+      const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
+      if (!release || !project.databasePath) continue;
+      try {
+        const snapshot = project.placement === "provider"
+          ? await fetchProviderJobs(project, release, { alertDueAfterMs: jobAlertDueAfterMs, limit: 1 })
+          : await inspectPlatformJobs({ databasePath: await projectJobsDatabasePath(paths.projects, project), alertDueAfterMs: jobAlertDueAfterMs, limit: 1 });
+        signals.push({ key: `jobs_overdue:${project.id}`, kind: "jobs_overdue", resourceId: project.id, severity: "warning",
+          active: snapshot.stats.overdue > 0 || snapshot.stats.dead > 0 || snapshot.stats.expiredLeases > 0,
+          message: "Application jobs are overdue, dead, or have expired execution leases." });
+      } catch (error) { try { options.onError?.(error); } catch {} }
+    }
+    operationsJobCursor = (operationsJobCursor + 5) % Math.max(1, projects.length);
+    const month = { key: usageMonthKey(now), startedAt: utcMonthStart(now), endsAt: addUtcMonths(utcMonthStart(now), 1) };
+    for (const workspace of storage.internal.prepare("SELECT id FROM clank_platform_organizations ORDER BY id LIMIT 1000").all()) {
+      const usage = workspaceUsagePayload(storage.internal, String(workspace.id), month, quotaDefaults, limits.usageRetentionMonths, now) as any;
+      const forecasts = [usage.forecast.requests, usage.forecast.transferBytes];
+      signals.push({ key: `usage_warning:${workspace.id}`, kind: "usage_warning", resourceId: String(workspace.id), severity: "warning",
+        active: forecasts.some((value) => value.percentUsed >= (options.operations?.usageWarningPercent ?? 80)
+          || value.status === "projected_exhaustion" || value.status === "exhausted"),
+        message: "Workspace usage is near its configured limit or projected to exhaust it this period." });
+    }
+    return signals;
+  }, options.operations.restoreDrills ? async (projectId) => {
+    const project = projectById(storage.internal, projectId);
+    if (!project) throw new Error("Restore-drill project no longer exists.");
+    const effective = projectQuotas(storage.internal, project, quotaDefaults);
+    const manager = await projectBackupManager(paths.projects, project, masterKey, { ...backupPolicy, maxBackups: effective.backupsPerProject }, backupObjects);
+    try {
+      const backup = (await manager.list())[0];
+      if (!backup) throw new Error("Restore drill needs an existing verified backup.");
+      const configuration = options.operations!.restoreDrills!;
+      return await rehearseRecovery({ source: { manager, backupId: backup.id },
+        boot: (context) => configuration.boot(projectId, context), checks: configuration.checks,
+        timeoutMs: configuration.timeoutMs, maxDatabaseBytes: Math.min(backupPolicy.maxDatabaseBytes, 512 * 1024 * 1024), onError: options.onError });
+    } finally { manager.close(); }
+  } : undefined, options.onError) : undefined;
+
   const handleRequest = async (request: Request): Promise<Response> => {
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
@@ -4850,6 +5162,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const authPrefix = url.pathname === "/__proact/auth" || url.pathname.startsWith("/__proact/auth/")
         ? "/__proact/auth"
         : "/__clank/auth";
+      if (organizationSso?.handles(request)) return organizationSso.handle(request);
       if (url.pathname === authPrefix || url.pathname.startsWith(`${authPrefix}/`)) {
         const actor = await storage.auth.resolve(request);
         if (actor.user && actor.session && resolvePlatformImpersonation(storage.internal, request, actor)) {
@@ -5664,6 +5977,41 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         });
         return api({ ok: true, enrollmentId, revoked: true });
       }
+      const evacuationMatch = /^\/api\/admin\/runners\/([A-Za-z0-9_-][A-Za-z0-9_.:-]{0,127})\/evacuations(?:\/(evac_[A-Za-z0-9_-]{8,128})(?:\/(run|cancel))?)?$/.exec(url.pathname);
+      if (evacuationMatch) {
+        const auth = await requirePlatformAdmin(storage, request, request.method !== "GET");
+        const nodeId = evacuationMatch[1]!, planId = evacuationMatch[2], operation = evacuationMatch[3];
+        if (request.method === "GET" && !operation) {
+          if (planId) { const plan = evacuations.get(planId); if (plan.nodeId !== nodeId) throw new PlatformError(404, "EVACUATION_NOT_FOUND", "Evacuation not found."); return api({ ok: true, plan }); }
+          const plans = storage.internal.prepare("SELECT id FROM clank_platform_evacuations WHERE node_id=? ORDER BY created_at DESC LIMIT 20").all(nodeId).map(row => evacuations.get(String(row.id)));
+          return api({ ok: true, plans });
+        }
+        if (request.method !== "POST") throw new PlatformError(405, "METHOD_NOT_ALLOWED", "Use POST for evacuation changes.");
+        const input = plainObject(await readJsonRequest(request, 4096)); exact(input, ["confirmation"]);
+        if (!planId) {
+          if (input.confirmation !== `evacuate ${nodeId}`) throw new PlatformError(422, "CONFIRMATION_REQUIRED", `Pass confirmation "evacuate ${nodeId}".`);
+          if (!providerPlacement || !deploymentCoordinator) throw new PlatformError(409, "PROVIDER_PLACEMENT_DISABLED", "Provider placement is required.");
+          const node = orchestrator.listNodes().find(node => node.id === nodeId);
+          if (!node || node.status === "offline" || node.expiresAt <= Date.now()) throw new PlatformError(409, "EVACUATION_SOURCE_UNAVAILABLE", "Planned evacuation requires a reachable active source node.");
+          const projects = evacuationProjects(nodeId);
+          if (!projects.length || projects.length > 100 || projects.some(project => !project.databasePath || project.activeGeneration === null)) throw new PlatformError(409, "EVACUATION_SOURCE_UNAVAILABLE", "Evacuate 1–100 deployed provider projects with databases.");
+          for (const project of projects) exactProviderRuntime(project, releaseById(storage.internal, project.activeReleaseId!)!);
+          assertEvacuationCapacity(projects, nodeId);
+          const planned = { id: "uncreated", nodeId, requestedBy: auth.user!.id, wasDraining: node.status === "draining", state: "planned", phase: "planned", projects: projects.map(project => ({ projectId: project.id, releaseId: project.activeReleaseId!, generation: project.activeGeneration!, backupId: null, targetNodeId: null, targetGeneration: null })), error: null, createdAt: Date.now(), updatedAt: Date.now() } as const;
+          evacuationHooks(auth).verify(planned);
+          const plan = evacuations.create(nodeId, auth.user!.id, node.status === "draining", planned.projects);
+          audit(storage.internal, auth.user!.id, null, null, "runner.evacuation.plan", { id: plan.id, nodeId, projects: projects.length });
+          return api({ ok: true, plan }, 201);
+        }
+        const plan = evacuations.get(planId);
+        if (plan.nodeId !== nodeId) throw new PlatformError(404, "EVACUATION_NOT_FOUND", "Evacuation not found.");
+        if (input.confirmation !== plan.id) throw new PlatformError(422, "CONFIRMATION_REQUIRED", "Pass the exact evacuation plan ID as confirmation.");
+        if (operation === "cancel") return api({ ok: true, plan: evacuations.cancel(plan.id, evacuationHooks(auth)) });
+        if (operation !== "run") throw new PlatformError(404, "NOT_FOUND", "Evacuation operation not found.");
+        const completed = await evacuations.run(plan.id, evacuationHooks(auth));
+        audit(storage.internal, auth.user!.id, null, null, "runner.evacuation.complete", { id: plan.id, nodeId });
+        return api({ ok: true, plan: completed });
+      }
       const adminRunnerDrainMatch =
         /^\/api\/admin\/runners\/([A-Za-z0-9_-][A-Za-z0-9_.:-]{0,127})\/drain$/.exec(url.pathname);
       if (adminRunnerDrainMatch && request.method === "PUT") {
@@ -5903,6 +6251,22 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             runner.kind ?? "process",
           ),
         });
+      }
+      if (url.pathname === "/api/admin/operations" && request.method === "GET") {
+        await requirePlatformAdmin(storage, request);
+        return api({ enabled: Boolean(operationsMonitor), alerts: operationsMonitor?.list() ?? [], restoreDrills: operationsMonitor?.drills() ?? [] });
+      }
+      if (url.pathname === "/api/admin/operations/run" && request.method === "POST") {
+        await requirePlatformAdmin(storage, request, true);
+        exact(plainObject(await readJsonRequest(request, 1024)), []);
+        await requirePlatformAdmin(storage, request, true);
+        if (!operationsMonitor) throw new PlatformError(409, "OPERATIONS_DISABLED", "Operational monitoring is not configured.");
+        await operationsMonitor.runOnce();
+        return api({ ok: true, alerts: operationsMonitor.list(), restoreDrills: operationsMonitor.drills() });
+      }
+      if (url.pathname === "/api/admin/audit-export" && request.method === "GET") {
+        await requirePlatformAdmin(storage, request);
+        return api({ enabled: Boolean(auditExporter), ...(auditExporter?.status() ?? {}) });
       }
       if (url.pathname === "/api/admin/diagnostics/storage" && request.method === "GET") {
         await requirePlatformAdmin(storage, request);
@@ -6380,6 +6744,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               WHERE organization_id = ? AND user_id = ?`).get(organizationId, memberId);
             if (!target) throw new PlatformError(404, "MEMBER_NOT_FOUND", "Organization member not found.");
             const targetRole = validateOrganizationRole(String(target.role), true);
+            if (targetRole === "owner" || nextRole === "owner") requireFreshPlatformAuthentication(principal);
             if (targetRole === "owner" && currentMembership.role !== "owner") {
               throw new PlatformError(403, "ROLE_DENIED", "Only an owner can change another owner.");
             }
@@ -6394,6 +6759,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             if (request.method === "DELETE") {
               storage.internal.prepare("DELETE FROM clank_platform_memberships WHERE organization_id = ? AND user_id = ?")
                 .run(organizationId, memberId);
+              storage.internal.prepare(`DELETE FROM clank_platform_project_members WHERE user_id = ?
+                AND project_id IN (SELECT id FROM clank_platform_projects WHERE organization_id = ?)`)
+                .run(memberId, organizationId);
               storage.internal.prepare(`UPDATE clank_platform_tokens SET revoked_at = ?
                 WHERE user_id = ? AND revoked_at IS NULL
                   AND (organization_id = ? OR project_id IN (
@@ -6427,7 +6795,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ) GROUP BY organization_id`).all(principal.userId);
         return api({
           ok: true,
-          projects: rows.map((row) => projectPayload(projectRow(row))),
+          projects: rows.filter(row => projectMembershipAllows(storage.internal, projectRow(row), principal.userId, "read")).map((row) => projectPayload(projectRow(row))),
           limits: publicLimits(
             accountQuotas(storage.internal, principal.userId, quotaDefaults),
             options.maxArtifactBytes,
@@ -6525,6 +6893,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const operation = matched[2] ?? "";
       const requiredPermission: ProjectPermission = !operation && request.method === "DELETE"
         ? "tokens"
+        : operation === "members" || operation.startsWith("members/")
+          ? "tokens"
+        : operation === "logs"
+          ? "logs"
         : operation.startsWith("previews")
           ? "previews"
         : operation === "github-previews"
@@ -6553,10 +6925,38 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                 : "read";
       const access = accessibleProject(storage.internal, matched[1]!, principal, requiredPermission);
       const project = access.project;
+      if (request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
       const requireCurrentProjectAuthority = () => {
+        if (request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
         requireCurrentPlatformPrincipal(storage, principal);
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
+        if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      if (operation === "members" && request.method === "GET") {
+        requireOrganizationAdministration(access.role);
+        const members = storage.internal.prepare(`SELECT p.user_id, u.email, p.permissions FROM clank_platform_project_members p
+          JOIN clank_auth_users u ON u.id = p.user_id WHERE p.project_id = ? ORDER BY u.email LIMIT 1000`).all(project.id);
+        return api({ ok: true, members: members.map(row => ({ userId: row.user_id, email: row.email, permissions: parseProjectPermissions(row.permissions) })) });
+      }
+      const projectMember = /^members\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
+      if (projectMember && (request.method === "PUT" || request.method === "DELETE")) {
+        requireOrganizationAdministration(access.role);
+        const input = request.method === "PUT" ? plainObject(await readJsonRequest(request, 8192)) : {};
+        exact(input, ["permissions"]);
+        if (request.method === "PUT" && (!Array.isArray(input.permissions) || input.permissions.length > PROJECT_PERMISSIONS.length || input.permissions.some(permission => typeof permission !== "string" || !PROJECT_PERMISSIONS.includes(permission as ProjectPermission)))) throw new PlatformError(422, "INVALID_PERMISSIONS", "Choose exact project permissions.");
+        const permissions = request.method === "PUT" ? parseProjectPermissions(input.permissions) : [];
+        storage.internal.transaction(changes => {
+          requireCurrentProjectAuthority();
+          requireOrganizationAdministration(accessibleProject(storage.internal, project.id, principal, "tokens").role);
+          requireFreshPlatformAuthentication(principal);
+          if (!project.organizationId || !storage.internal.prepare("SELECT 1 FROM clank_platform_memberships WHERE organization_id = ? AND user_id = ?").get(project.organizationId, projectMember[1])) throw new PlatformError(404, "MEMBER_NOT_FOUND", "Workspace member not found.");
+          if (request.method === "DELETE") storage.internal.prepare("DELETE FROM clank_platform_project_members WHERE project_id = ? AND user_id = ?").run(project.id, projectMember[1]);
+          else storage.internal.prepare("INSERT INTO clank_platform_project_members(project_id, user_id, permissions) VALUES (?, ?, ?) ON CONFLICT(project_id, user_id) DO UPDATE SET permissions = excluded.permissions").run(project.id, projectMember[1], JSON.stringify(permissions));
+          audit(storage.internal, principal.userId, principal.tokenId, project.id, "project.permissions", { userId: projectMember[1], permissions, inherited: request.method === "DELETE" });
+          changes.record("__platform", project.id);
+        });
+        return api({ ok: true, userId: projectMember[1], permissions, inherited: request.method === "DELETE" });
+      }
       if (!operation && request.method === "DELETE") {
         const input = plainObject(await readJsonRequest(request, 8 * 1024));
         exact(input, ["confirmation", "acknowledgeDataLoss"]);
@@ -7180,6 +7580,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           }));
         return api({ ok: true, preview: deleted });
       }
+      if (operation === "canary" && request.method === "GET") return api({ ok: true, enabled: Boolean(canaries), canaries: canaries?.reports(project.id) ?? [] });
       if (operation === "releases" && request.method === "GET") {
         const effective = projectQuotas(storage.internal, project, quotaDefaults);
         const availableRows = storage.internal.prepare(
@@ -7217,6 +7618,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             storageBytes: effective.releaseStorageBytesPerProject,
           },
         });
+      }
+      const attestationMatch = /^releases\/([A-Za-z0-9_-]{8,128})\/attestation$/.exec(operation);
+      if (attestationMatch && request.method === "GET") {
+        const release = releaseById(storage.internal, attestationMatch[1]!);
+        if (!release || release.projectId !== project.id) throw new PlatformError(404, "RELEASE_NOT_FOUND", "Release not found.");
+        const receipt = storage.internal.prepare("SELECT attestation, verified_at FROM clank_platform_release_attestations WHERE release_id = ?").get(release.id);
+        return api({ ok: true, attestation: receipt ? JSON.parse(String(receipt.attestation)) : null, verifiedAt: receipt ? Number(receipt.verified_at) : null });
       }
       const releaseCleanupMatch = /^releases\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
       if (releaseCleanupMatch && request.method === "DELETE") {
@@ -7272,7 +7680,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw error;
         }
         requireCurrentProjectAuthority();
-        return api({ ok: true, release: await deploy(principal, project, bytes, claimedDigest, idempotencyKey) }, 201);
+        return api({ ok: true, release: await deploy(principal, project, bytes, claimedDigest, idempotencyKey, request.headers.get("x-clank-release-attestation")) }, 201);
       }
       if (operation === "rollback" && request.method === "POST") {
         const input = plainObject(await readJsonRequest(request, 16 * 1024));
@@ -7345,6 +7753,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           });
           return api({ ok: true, verification });
         }
+        requireFreshPlatformAuthentication(principal);
         const input = plainObject(await readJsonRequest(request, 8 * 1024));
         exact(input, ["confirmation"]);
         const confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
@@ -7404,6 +7813,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               return api({ ok: true, verification, safetyBackupId: safety.id });
             } catch (error) {
               try {
+                await stopProject(project.id);
                 await manager.restore(safety.id, { confirmation: `restore ${safety.id}` });
                 if (activeRelease) {
                   await startRelease(project, activeRelease, decryptProjectSecrets(storage.internal, project.id, masterKey));
@@ -8062,7 +8472,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         AND placement = 'local'
         AND (parent_project_id IS NULL OR preview_expires_at > ?)`,
   ).all(Date.now()).map(projectRow);
-  const startupRecovery = Promise.all(projects.map(async (project) => {
+  const startupRecovery = Promise.allSettled(projects.map(({ id }) => withProjectLock(id, async () => {
+    // Recovery and ingress wakeups must share the same lock. Otherwise both
+    // can launch a runtime before either publishes it in the active map.
+    if (closed || active.has(id)) return;
+    const project = projectById(storage.internal, id);
+    if (!project || project.placement !== "local") return;
+    if (project.parentProjectId && (project.previewExpiresAt ?? 0) <= Date.now()) return;
     const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
     if (!release) return;
     if (project.runtimePolicy === "suspended") return;
@@ -8072,10 +8488,21 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     } catch (error) {
       if (closed) return;
       options.onError?.(error);
+      // A successor may have taken ownership while this runtime was starting.
+      // Only the current lease holder may change the release's durable status.
+      try { requireRuntimeLaunchAuthority(project.id); } catch { return; }
       storage.internal.prepare("UPDATE clank_platform_releases SET status = 'crashed', failure = ? WHERE id = ?")
         .run(`Startup recovery failed: ${safeError(error)}`, release.id);
     }
-  }));
+  }))).then((results) => {
+    // Coordination failures must not let shutdown race still-running sibling
+    // recoveries or mark a release that never started as crashed.
+    for (const result of results) {
+      if (!closed && result.status === "rejected") {
+        try { options.onError?.(result.reason); } catch { /* Reporting cannot abandon recovered runtimes. */ }
+      }
+    }
+  });
   if (options.startupRecovery !== "background") await startupRecovery;
   else void startupRecovery.catch((error) => options.onError?.(error));
   scheduleDomainReconciliation();
@@ -8083,6 +8510,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   scheduleRuntimeSweep();
   backupScheduler.start();
   invitationDeliveries.start();
+  auditExporter?.start();
+  operationsMonitor?.start();
 
   return {
     handle,
@@ -8093,6 +8522,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     async close() {
       if (closed) return;
       closed = true;
+      canaries?.close();
+      if (canaries) await Promise.all([...locks.values()].map((pending) => pending.catch(() => undefined)));
       if (runtimeSweepTimer) clearTimeout(runtimeSweepTimer);
       runtimeSweepTimer = undefined;
       await runtimeSweepFlight?.catch(() => undefined);
@@ -8102,6 +8533,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (previewCleanupTimer) clearTimeout(previewCleanupTimer);
       previewCleanupTimer = undefined;
       await previewCleanupFlight?.catch(() => undefined);
+      await operationsMonitor?.close();
+      await auditExporter?.close();
       await invitationDeliveries.close();
       await backupScheduler.close();
       for (const state of restartState.values()) {
@@ -8415,6 +8848,10 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
     PRIMARY KEY (organization_id, user_id)
   )`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_memberships_user ON clank_platform_memberships (user_id, organization_id)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_project_members (
+    project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
+    permissions TEXT NOT NULL CHECK(json_valid(permissions)), PRIMARY KEY(project_id, user_id))`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_invitations (
     id TEXT PRIMARY KEY,
     token_hash TEXT NOT NULL UNIQUE,
@@ -9324,6 +9761,7 @@ function accessibleProject(
   if (
     principal.projectId
     && !principal.permissions.includes(permission)
+    && !(permission === "logs" && principal.permissions.includes("read"))
     && !(
       scopedPreview
       && principal.permissions.includes("previews")
@@ -9332,10 +9770,20 @@ function accessibleProject(
   ) {
     throw new PlatformError(403, "TOKEN_SCOPE_DENIED", `This token cannot perform ${permission} operations.`);
   }
-  if (!roleAllows(role, permission)) {
+  if (!projectMembershipAllows(internal, project, principal.userId, permission, role)) {
     throw new PlatformError(403, "ROLE_DENIED", `The ${role} role cannot perform ${permission} operations.`);
   }
   return { project, role };
+}
+
+function projectMembershipAllows(internal: SQLiteInternal, project: ProjectRow, userId: string, permission: ProjectPermission, knownRole?: OrganizationRole): boolean {
+  const role = knownRole ?? (project.organizationId
+    ? internal.prepare("SELECT role FROM clank_platform_memberships WHERE organization_id = ? AND user_id = ?").get(project.organizationId, userId)?.role
+    : project.ownerId === userId ? "owner" : undefined);
+  if (!role) return false;
+  if (role === "owner" || role === "admin") return true;
+  const explicit = internal.prepare("SELECT permissions FROM clank_platform_project_members WHERE project_id = ? AND user_id = ?").get(project.parentProjectId ?? project.id, userId);
+  return explicit ? parseProjectPermissions(explicit.permissions).includes(permission) : roleAllows(role as OrganizationRole, permission);
 }
 
 // Enumerate only owned/member project IDs before reading project payloads. A LEFT JOIN
@@ -9398,7 +9846,7 @@ async function ingressRoutes(
   masterKey: Uint8Array,
   orchestrator: DeploymentOrchestrator,
   runtimeTransitions: ReadonlySet<string> = new Set(),
-) {
+): Promise<IngressRoute[]> {
   const projects = internal.prepare(`SELECT * FROM clank_platform_projects
     WHERE active_release_id IS NOT NULL ORDER BY id`).all();
   if (projects.length === 0) return [];
@@ -9419,7 +9867,7 @@ async function ingressRoutes(
   const nodes = new Map(projects.some((row) => row.placement === "provider")
     ? orchestrator.listNodes().map((node) => [node.id, node] as const)
     : []);
-  return projects.map((row) => {
+  return projects.map((row): IngressRoute => {
     const project = projectRow(row);
     const hosts = hostsByProject.get(project.id) ?? [];
     if (baseDomain) hosts.unshift(`${project.slug}.${baseDomain}`);
@@ -9468,6 +9916,7 @@ async function ingressRoutes(
       projectId: project.id,
       hosts,
       upstream: `http://127.0.0.1:${active.get(project.id)?.port ?? project.port}`,
+      releaseId: active.get(project.id)?.releaseId ?? project.activeReleaseId ?? undefined,
       active: hosts.length > 0
         && project.runtimePolicy !== "suspended"
         && active.has(project.id)
@@ -10088,6 +10537,12 @@ function workspaceUsagePayload(
       timezone: "UTC",
     },
     usage: totals,
+    forecast: {
+      requests: forecastUsage({ used: totals.requests, limit: effective.requestsPerMonthPerOrganization,
+        periodStartedAt: month.startedAt, periodEndsAt: month.endsAt, asOf, trackingStartedAt }),
+      transferBytes: forecastUsage({ used: totals.knownTransferBytes, limit: effective.transferBytesPerMonthPerOrganization,
+        periodStartedAt: month.startedAt, periodEndsAt: month.endsAt, asOf, trackingStartedAt }),
+    },
     limits: {
       requests: effective.requestsPerMonthPerOrganization,
       knownTransferBytes: effective.transferBytesPerMonthPerOrganization,
@@ -10113,8 +10568,8 @@ function workspaceUsagePayload(
     retentionMonths,
     metering: {
       requestBoundary: "managed_ingress_admission",
-      transferBoundary: "request_body_and_declared_response_content_length",
-      streamedResponseBytesKnown: false,
+      transferBoundary: "request_body_and_consumed_response_chunks",
+      streamedResponseBytesKnown: true,
       pricingIncluded: false,
     },
   };
@@ -11935,7 +12390,7 @@ function dashboardPayload(
         JOIN clank_platform_memberships m ON m.organization_id = p.organization_id
         WHERE p.id = ? AND m.user_id = ?`).all(principal.projectId, principal.userId)
     : visibleRootProjectRows(internal, principal.userId);
-  const projects = projectRows.map((source) => {
+  const projects = projectRows.filter(source => projectMembershipAllows(internal, projectRow(source), principal.userId, "read")).map((source) => {
     const project = projectRow(source);
     const effective = projectQuotas(internal, project, defaults, quotaSnapshot);
     const release = project.activeReleaseId ? releaseById(internal, project.activeReleaseId) : null;
@@ -12996,6 +13451,7 @@ function decryptProjectSecrets(internal: SQLiteInternal, projectId: string, key:
 
 async function spawnRelease(
   runner: PlatformRunnerOptions,
+  guardianDirectory: string,
   release: ReleaseRow,
   dataRoot: string,
   port: number,
@@ -13006,6 +13462,7 @@ async function spawnRelease(
     instance: number;
     exposePort: boolean;
   },
+  assertCurrent?: () => void,
 ): Promise<NativeChild> {
   const childName = "node:child_process";
   const { spawn } = await import(childName) as unknown as {
@@ -13027,9 +13484,10 @@ async function spawnRelease(
     const environmentEnvelope = base64Url(
       new TextEncoder().encode(JSON.stringify(dockerEnvironment)),
     );
+    const containerName = `clank-${release.projectId.slice(0, 12)}-${release.id.slice(0, 8)}-${launch.role}-${launch.instance}-${crypto.randomUUID().slice(0, 8)}`;
     const args = [
       "run", "--rm",
-      "--name", `clank-${release.projectId.slice(0, 12)}-${release.id.slice(0, 8)}-${launch.role}-${launch.instance}`,
+      "--name", containerName,
       "--read-only",
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
@@ -13051,14 +13509,17 @@ async function spawnRelease(
       DOCKER_RUNTIME_LAUNCHER,
       launch.entry,
     ];
-    return spawn(runner.executable ?? "docker", args, {
+    return spawnGuardedRuntime(spawn, runner.executable ?? "docker", args, {
+      containerName,
+      projectId: release.projectId,
+      guardianDirectory,
+      assertCurrent,
       env: {
         ...(globalThis as any).process.env,
         CLANK_RUNTIME_ENV_B64: environmentEnvelope,
         PATH: (globalThis as any).process.env.PATH ?? "",
         HOME: (globalThis as any).process.env.HOME ?? "",
       },
-      stdio: ["ignore", "pipe", "pipe"],
     });
   }
   const launcher = await writeReleaseLauncher(
@@ -13066,10 +13527,14 @@ async function spawnRelease(
     launch.entry,
     `${launch.role}-${launch.instance}`,
   );
-  return spawn(
+  return spawnGuardedRuntime(
+    spawn,
     (globalThis as any).process.execPath,
     ["--disable-warning=ExperimentalWarning", launcher],
     {
+      guardianDirectory,
+      projectId: release.projectId,
+      assertCurrent,
       cwd: release.directory,
       env: {
         PATH: (globalThis as any).process.env.PATH ?? "",
@@ -13077,10 +13542,186 @@ async function spawnRelease(
         ...environment,
         HOST: "127.0.0.1",
       },
-      stdio: ["ignore", "pipe", "pipe"],
     },
   );
 }
+
+/** Refuse startup until each earlier managed runtime has proved its cleanup. */
+async function prepareRuntimeGuardians(root: string): Promise<string> {
+  const fsName = "node:fs/promises", pathName = "node:path";
+  const fs = await import(fsName), path = await import(pathName);
+  const directory = path.join(root, "runtime-guardians");
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const status = await fs.lstat(directory);
+  if (!status.isDirectory() || status.isSymbolicLink()) throw new Error("Runtime guardian directory must be a private directory.");
+  await fs.chmod(directory, 0o700);
+  const deadline = Date.now() + 8000;
+  while ((await fs.readdir(directory)).some((name: string) => name.endsWith(".json"))) {
+    if (Date.now() >= deadline) throw new Error("Managed runtime cleanup is unresolved. Preserve runtime-guardians fences and verify every recorded process/container is stopped before operator recovery.");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  blockedRuntimeGuardianDirectories.delete(directory);
+  return directory;
+}
+
+/** Keep parent liveness enforcement outside the imported application process. */
+async function spawnGuardedRuntime(
+  spawn: (command: string, args: string[], options: Record<string, unknown>) => NativeChild,
+  command: string,
+  args: string[],
+  options: { cwd?: string; env: Record<string, string>; containerName?: string; guardianDirectory: string; projectId: string; assertCurrent?: () => void },
+): Promise<NativeChild> {
+  const fsName = "node:fs/promises", pathName = "node:path";
+  const fs = await import(fsName), path = await import(pathName);
+  await assertRuntimeGuardianAdmission(options.guardianDirectory);
+  options.assertCurrent?.();
+  const fence = path.join(options.guardianDirectory, `runtime-${crypto.randomUUID()}.json`);
+  runtimeGuardianChildren.set(fence, { projectId: options.projectId, child: null });
+  const file = await fs.open(fence, "wx", 0o600);
+  try { await file.writeFile(JSON.stringify({ controllerPid: (globalThis as any).process.pid, projectId: options.projectId, command, cwd: options.cwd, containerName: options.containerName, createdAt: Date.now() })); await file.sync(); }
+  finally { await file.close(); }
+  const directory = await fs.open(options.guardianDirectory, "r");
+  try { await directory.sync(); } finally { await directory.close(); }
+  const specification = base64Url(new TextEncoder().encode(JSON.stringify({ command, args, cwd: options.cwd, containerName: options.containerName, fence })));
+  let child: NativeChild;
+  try {
+    options.assertCurrent?.();
+    child = spawn((globalThis as any).process.execPath,
+      ["--disable-warning=ExperimentalWarning", "--input-type=module", "--eval", RUNTIME_GUARDIAN], {
+        env: { ...options.env, CLANK_GUARDIAN_SPEC: specification },
+        // Node closes this private IPC channel when the control-plane process dies.
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
+  } catch (error) {
+    // No guardian was spawned, so this preparation fence has no writer to reap.
+    try {
+      await fs.unlink(fence);
+      const cleanupDirectory = await fs.open(options.guardianDirectory, "r");
+      try { await cleanupDirectory.sync(); } finally { await cleanupDirectory.close(); }
+      runtimeGuardianChildren.delete(fence);
+    } catch { blockedRuntimeGuardianDirectories.add(options.guardianDirectory); }
+    throw error;
+  }
+  Object.defineProperty(child, "cleanupFence", { value: fence });
+  runtimeGuardianChildren.set(fence, { projectId: options.projectId, child });
+  child.once("error", () => { blockedRuntimeGuardianDirectories.add(options.guardianDirectory); });
+  child.once("exit", () => {
+    void runtimeFenceExists(fence).then((exists) => { if (!exists) runtimeGuardianChildren.delete(fence); }).catch(() => undefined);
+  });
+  return child;
+}
+
+const blockedRuntimeGuardianDirectories = new Set<string>();
+const runtimeGuardianChildren = new Map<string, { projectId: string; child: NativeChild | null }>();
+async function runtimeFenceExists(fence: string): Promise<boolean> {
+  const fsName = "node:fs/promises", fs = await import(fsName);
+  try { await fs.lstat(fence); return true; } catch (error) { if ((error as { code?: string }).code === "ENOENT") return false; throw error; }
+}
+async function assertRuntimeGuardianAdmission(directory: string): Promise<void> {
+  if (blockedRuntimeGuardianDirectories.has(directory)) throw new Error("Managed runtime cleanup is unresolved; replacement writers are fenced.");
+  const fsName = "node:fs/promises", pathName = "node:path", fs = await import(fsName), path = await import(pathName);
+  for (const name of await fs.readdir(directory)) if (name.endsWith(".json")) {
+    const fence = path.join(directory, name), registered = runtimeGuardianChildren.get(fence);
+    if (!await runtimeFenceExists(fence)) continue;
+    // Actual child handles bind ownership; operating-system PID reuse cannot authorize a writer.
+    if (!registered || (registered.child && (registered.child.exitCode !== null && registered.child.exitCode !== undefined || registered.child.signalCode))) {
+      throw new Error("A managed runtime guardian has not proved cleanup; writes remain fenced.");
+    }
+  }
+}
+async function waitForRuntimeGuardianCleanup(directory: string, projectId: string): Promise<void> {
+  const fsName = "node:fs/promises", pathName = "node:path", fs = await import(fsName), path = await import(pathName);
+  const deadline = Date.now() + 8000;
+  while (true) {
+    await assertRuntimeGuardianAdmission(directory);
+    const remaining = (await fs.readdir(directory)).some((name: string) => {
+      if (!name.endsWith(".json")) return false;
+      const record = runtimeGuardianChildren.get(path.join(directory, name));
+      return !record || record.projectId === projectId;
+    });
+    if (!remaining) return;
+    if (Date.now() >= deadline) throw new Error("Project runtime cleanup is unresolved; data writes remain fenced.");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
+const RUNTIME_GUARDIAN = `
+const { spawn } = await import("node:child_process");
+const { readFileSync, readdirSync, writeFileSync, renameSync, unlinkSync, openSync, closeSync, fsyncSync } = await import("node:fs");
+const { dirname } = await import("node:path");
+const specification = JSON.parse(Buffer.from(process.env.CLANK_GUARDIAN_SPEC, "base64url").toString("utf8"));
+delete process.env.CLANK_GUARDIAN_SPEC;
+const record = JSON.parse(readFileSync(specification.fence, 'utf8'));
+const saveRecord = (failed=false) => { const temporary=specification.fence+'.tmp';writeFileSync(temporary,JSON.stringify({...record,guardianPid:process.pid,cleanupFailed:failed}),{mode:0o600});const fd=openSync(temporary,'r');try{fsyncSync(fd);}finally{closeSync(fd);}renameSync(temporary,specification.fence);const directory=openSync(dirname(specification.fence),'r');try{fsyncSync(directory);}finally{closeSync(directory);} };
+saveRecord();
+let stopping = false, child, childExited = true, containerId = null;
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const clearFence = () => { unlinkSync(specification.fence); const fd=openSync(dirname(specification.fence),'r'); try { fsyncSync(fd); } finally { closeSync(fd); } };
+const kill = signal => { try { if (process.platform !== 'win32' && child?.pid) process.kill(-child.pid,signal); else if(!childExited) child?.kill(signal); } catch {} };
+const liveGroup = () => {
+  if (!child?.pid) return false;
+  if (process.platform === 'linux') {
+    for (const pid of readdirSync('/proc')) if (/^[0-9]+$/.test(pid)) {
+      let data; try { data=readFileSync('/proc/'+pid+'/stat','utf8'); } catch(error) { if(error.code==='ENOENT'||error.code==='ESRCH')continue; throw error; }
+      const fields=data.slice(data.lastIndexOf(')')+2).split(' ');
+      if (Number(fields[2])===child.pid && fields[0]!=='Z' && fields[0]!=='X') return true;
+    }
+    return false;
+  }
+  if (process.platform === 'win32') return !childExited;
+  try { process.kill(-child.pid,0); return true; } catch(error) { if(error.code==='ESRCH')return false; throw error; }
+};
+const command = args => new Promise(resolve => {
+  const operation=spawn(specification.command,args,{env:process.env,stdio:['ignore','pipe','pipe']});
+  let stdout='',stderr='',settled=false;
+  const finish=code=>{if(settled)return;settled=true;clearTimeout(timer);resolve({code,stdout,stderr});};
+  const timer=setTimeout(()=>{operation.kill('SIGKILL');finish(-1);},1200);
+  operation.stdout.on('data',bytes=>{stdout=(stdout+bytes).slice(0,8192);});operation.stderr.on('data',bytes=>{stderr=(stderr+bytes).slice(0,8192);});
+  operation.once('error',()=>finish(-1));operation.once('exit',code=>finish(code??-1));
+});
+const removeContainer = async () => {
+  const target=containerId??specification.containerName;
+  const removed=await command(['rm','--force',target]);
+  if(removed.code===0)return true;
+  const inspected=await command(['container','inspect',target]);
+  // A daemon/transport failure must never be treated as evidence of absence.
+  return inspected.code===1 && (inspected.stderr.includes('No such container: '+target)||inspected.stderr.includes('No such object: '+target));
+};
+const stop = async (abrupt, exitCode=abrupt?70:0) => {
+  if(stopping)return;stopping=true;
+  try {
+    if(!abrupt){kill('SIGTERM');const until=Date.now()+2000;while(!childExited&&Date.now()<until)await pause(20);}
+    kill('SIGKILL');
+    const until=Date.now()+1000;while(liveGroup()&&Date.now()<until)await pause(20);
+    let cleaned=!liveGroup();
+    if(specification.containerName)cleaned=await removeContainer()&&cleaned;
+    if(cleaned)clearFence();
+    else { saveRecord(true); console.error('Managed runtime cleanup could not be verified; its startup fence is retained.'); }
+    process.exit(cleaned?exitCode:72);
+  }catch{try{saveRecord(true);}catch{}console.error('Managed runtime cleanup failed; its startup fence is retained.');process.exit(72);}
+};
+process.once('disconnect',()=>{void stop(true);});process.once('SIGTERM',()=>{void stop(false);});process.once('SIGINT',()=>{void stop(false);});
+const launch = (args,capture=false) => {
+  childExited=false;child=spawn(specification.command,args,{cwd:specification.cwd,env:process.env,detached:process.platform!=='win32',stdio:['ignore',capture?'pipe':'inherit','inherit']});
+  child.once('error',()=>{childExited=true;if(!stopping)void stop(true,71);});
+  return child;
+};
+if(!process.connected)await stop(true);
+else if(specification.containerName){
+  // Creation cannot start writers. Once it succeeds, every later operation uses
+  // this immutable container ID, so a delayed start cannot resurrect a removed container.
+  let output='';const creation=launch(['create',...specification.args.slice(1).filter(argument=>argument!=='--rm')],true);
+  creation.stdout.on('data',bytes=>{output=(output+bytes).slice(0,256);});
+  const code=await new Promise(resolve=>{creation.once('exit',value=>{childExited=true;resolve(value);});creation.once('error',()=>resolve(-1));});
+  if(!stopping){
+    if(code!==0||!/^[a-f0-9]{64}$/.test(output.trim()))await stop(true,71);
+    else{containerId=output.trim();if(!process.connected)await stop(true);else{const runtime=launch(['start','--attach',containerId]);runtime.once('exit',code=>{childExited=true;if(!stopping)void stop(true,code??1);});}}
+  }
+}else{
+  const runtime=launch(specification.args);runtime.once('exit',code=>{childExited=true;if(!stopping)void stop(true,code??1);});
+  if(!process.connected)void stop(true);
+}
+`.trim();
 
 async function writeReleaseLauncher(directory: string, entry: string, suffix = "web-0"): Promise<string> {
   const fsName = "node:fs/promises";
@@ -13114,13 +13755,19 @@ await import(pathToFileURL(entry).href);
 `.trim();
 
 async function stopChild(child: NativeChild): Promise<void> {
-  if (child.exitCode !== null && child.exitCode !== undefined) return;
-  child.kill("SIGTERM");
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-  const timeout = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 5_000));
-  if (await Promise.race([exited.then(() => "exit" as const), timeout]) === "timeout") {
-    child.kill("SIGKILL");
-    await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 2_000))]);
+  if (child.exitCode === null || child.exitCode === undefined) {
+    child.kill("SIGTERM");
+    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    const timeout = new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), child.cleanupFence ? 8000 : 5000));
+    if (await Promise.race([exited.then(() => "exit" as const), timeout]) === "timeout") {
+      child.kill("SIGKILL");
+      await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 2_000))]);
+    }
+  }
+  if (child.cleanupFence && await runtimeFenceExists(child.cleanupFence)) {
+    const pathName = "node:path", path = await import(pathName);
+    blockedRuntimeGuardianDirectories.add(path.dirname(child.cleanupFence));
+    throw new Error("Managed runtime cleanup was not verified; its private fence is retained.");
   }
 }
 
@@ -14408,6 +15055,7 @@ function normalizeHostname(value: string): string {
 
 const PROJECT_PERMISSIONS: readonly ProjectPermission[] = [
   "read",
+  "logs",
   "deploy",
   "rollback",
   "jobs",
@@ -14454,9 +15102,9 @@ function validateOrganizationRole(value: string, allowOwner: boolean): Organizat
 function roleAllows(role: OrganizationRole, permission: ProjectPermission): boolean {
   if (role === "owner" || role === "admin") return true;
   if (role === "developer") {
-    return ["read", "deploy", "rollback", "jobs", "audit", "previews"].includes(permission);
+    return ["read", "logs", "deploy", "rollback", "jobs", "audit", "previews"].includes(permission);
   }
-  return permission === "read";
+  return permission === "read" || permission === "logs";
 }
 
 function organizationMembership(

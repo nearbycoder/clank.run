@@ -290,7 +290,8 @@ test("app blueprints normalize, validate references, remain immutable, and expla
   assert.equal(Object.hasOwn(app.fixtures.default.records.tasks.primary.values, "done"), false);
   assert.equal(Object.isFrozen(app.entities.tasks.fields), true);
   assert.equal(Object.isFrozen(app.fixtures.default.records.tasks.primary.values), true);
-  assert.match(explainApp(app), /Organization ownership requires/);
+  assert.match(explainApp(app), /workspace, live/);
+  assert.doesNotMatch(explainApp(app), /Organization ownership requires/);
   assert.throws(() => {
     app.entities.tasks.fields.title.type = "boolean";
   }, TypeError);
@@ -550,7 +551,7 @@ test("blueprint plans and generated files are deterministic and checksummed", as
   assert.deepEqual(first, second);
   assert.match(first.digest, /^[a-f0-9]{64}$/);
   assert.ok(first.files.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
-  assert.ok(first.warnings.some((warning) => warning.includes("Organization")));
+  assert.equal(first.warnings.some((warning) => warning.includes("Organization")), false);
   assert.equal(first.summary.fixtures, 1);
   assert.equal(first.summary.routes, 2);
   const files = generateAppFiles(todoist, { frameworkVersion: version });

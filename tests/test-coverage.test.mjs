@@ -26,6 +26,14 @@ const truncatedCoverage = {
   ].join("\n"),
 };
 
+const malformedCoverage = {
+  ...truncatedCoverage,
+  outputTail: truncatedCoverage.outputTail.replace(
+    "Unexpected end of JSON input",
+    "Unexpected non-whitespace character after JSON at position 103245 (line 1 column 103246)",
+  ),
+};
+
 const measuredCoverage = {
   code: 0,
   outputTail: [
@@ -38,8 +46,13 @@ const measuredCoverage = {
   ].join("\n"),
 };
 
-test("coverage gate retries only a truncated artifact after every test passed", async () => {
+test("coverage gate retries only a known malformed artifact after every test passed", async () => {
   assert.equal(isRetryableCoverageArtifactFailure(truncatedCoverage), true);
+  assert.equal(isRetryableCoverageArtifactFailure(malformedCoverage), true);
+  assert.equal(isRetryableCoverageArtifactFailure({
+    ...malformedCoverage,
+    outputTail: `${malformedCoverage.outputTail}not ok 12 - failed test\n`,
+  }), false);
   assert.equal(isRetryableCoverageArtifactFailure({
     ...truncatedCoverage,
     outputTail: `${truncatedCoverage.outputTail}not ok 12 - failed test\n`,
@@ -67,7 +80,7 @@ test("coverage gate retries only a truncated artifact after every test passed", 
 });
 
 test("coverage gate performs one bounded retry without masking persistent failures", async () => {
-  const results = [truncatedCoverage, measuredCoverage];
+  const results = [malformedCoverage, measuredCoverage];
   const diagnostics = [];
   let calls = 0;
   await runCoverageGate({
@@ -95,7 +108,7 @@ test("coverage gate performs one bounded retry without masking persistent failur
 
   await assert.rejects(
     runCoverageGate({
-      execute: async () => truncatedCoverage,
+      execute: async () => malformedCoverage,
       writeDiagnostic: () => {},
     }),
     /single coverage-artifact retry/u,

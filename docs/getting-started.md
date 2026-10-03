@@ -4,7 +4,7 @@ Install one npm package, create an authenticated full-stack application, and run
 
 ## Requirements
 
-- Node.js 22.16+ or Node 24 LTS, below Node 26. Node 26 removed the built-in TypeScript transform API used by the zero-dependency compiler. The repository's `.node-version` selects Node 24.
+- Node.js 22.16+, Node 24 LTS, or Node 26. Node 26 uses native type stripping: use erasable TypeScript (explicit constructor fields, objects instead of enums, and ES modules instead of runtime namespaces). Node 22/24 also support transform-only TypeScript syntax. The repository's `.node-version` selects Node 24.
 - npm 10 or newer.
 - A modern browser.
 

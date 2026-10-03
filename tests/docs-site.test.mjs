@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { groups } from "../docs-site/content-manifest.mjs";
 
 const projectRoot = new URL("../", import.meta.url);
 const docsRoot = new URL("../docs-site/", import.meta.url);
@@ -318,7 +319,7 @@ test("documentation manifest covers every canonical guide exactly once", async (
   const packageJson = JSON.parse(await readFile(new URL("package.json", projectRoot), "utf8"));
   assert.equal(manifest.frameworkVersion, packageJson.version);
   assert.equal(manifest.protocol, "clank-docs/1");
-  assert.equal(manifest.docs.length, 77);
+  assert.deepEqual(manifest.docs.map((doc) => doc.source).sort(), groups.flatMap((group) => group.entries.map((entry) => entry[1])).sort());
   assert.equal(new Set(manifest.docs.map((doc) => doc.slug)).size, manifest.docs.length);
   assert.ok(manifest.docs.every((doc) =>
     doc.title

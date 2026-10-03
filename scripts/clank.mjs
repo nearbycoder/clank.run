@@ -27,6 +27,16 @@ if (command === "--version" || command === "-v" || command === "version") {
   process.exit(process.exitCode ?? 0);
 }
 
+if (command === "editor") {
+  if (args.includes("--help") || args.includes("-h")) console.log("clank editor [directory] — Clank Language Server Protocol over stdio (full document synchronization)");
+  else {
+    if (args.length > 1 || args[0]?.startsWith("--")) throw new Error("Usage: clank editor [directory]");
+    const { runEditor } = await import("./editor.mjs");
+    await runEditor({ root: resolve(args[0] ?? ".") });
+  }
+  process.exit(process.exitCode ?? 0);
+}
+
 if (command === "dev") {
   if (args.includes("--help") || args.includes("-h")) {
     const { run } = await import("./cli-deploy.mjs");

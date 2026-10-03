@@ -381,8 +381,10 @@ export interface OpenDurableObjectsOptions {
 
 export class DurableObjectError extends Error {
   readonly name = "DurableObjectError";
-  constructor(readonly code: string, message: string) {
+  declare readonly code: string;
+  constructor(code: string, message: string) {
     super(message);
+    this.code = code;
   }
 }
 

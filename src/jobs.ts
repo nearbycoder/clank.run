@@ -1692,7 +1692,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       ensureOpen();
       const retriedAt = now();
       const runAt = integer(retryOptions.runAt ?? retriedAt, "job retry runAt", 0, Number.MAX_SAFE_INTEGER);
-      return internal.transaction(() => {
+      const retry = () => {
         const result = internal.prepare(`UPDATE clank_jobs
           SET state = 'queued', attempts = 0, run_at = ?, result = NULL, error = NULL,
             completed_at = NULL, lease_token = NULL, lease_owner = NULL, lease_until = NULL,
@@ -1704,7 +1704,8 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         );
         if (Number(result.changes) === 1) event(internal, id, "retried", retriedAt, { runAt });
         return Number(result.changes) === 1;
-      });
+      };
+      return internal.inTransaction ? retry() : internal.transaction(retry);
     },
     purge,
     workOnce,

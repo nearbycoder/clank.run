@@ -151,3 +151,91 @@ because token authentication does not use the application query cache.
 
 Continue with [Agent protocol](agent-protocol.md) for OAuth transport details and [The MCP server
 built into every app](per-app-mcp.md) for UI-to-tool parity and contract freshness.
+
+## Exact action, workspace, resource, and operation limits
+
+The access page also offers **Narrow action limits** for each grant. Its JSON
+counterpart accepts a `constraints` object, optionally combined with the existing
+read-only scope reduction:
+
+```http
+PATCH /__clank/oauth/grants/<grant-id>
+Content-Type: application/json
+X-Clank-Csrf: <current-session-csrf>
+Cookie: <current-session-cookie>
+
+{
+  "constraints": {
+    "actions": ["tasks.finish", "tasks.get"],
+    "workspaceIds": ["workspace-1"],
+    "resourceIds": ["task-42"],
+    "maxOperations": 20
+  }
+}
+```
+
+Action paths are exact original backend paths, such as `tasks.finish`, even when
+MCP exposes a portable name such as `tasks_finish`. No wildcards are accepted.
+Lists contain at most 100 identifiers. An empty list denies every value for that
+dimension. Omitted fields preserve their existing restriction. Every later change
+must be a subset, and an operation budget can only decrease; reducing it below
+already admitted usage blocks further calls immediately. The page uses comma
+separated IDs; blank form fields preserve existing limits.
+
+For workspace and resource restrictions, configure a synchronous resolver that
+uses validated arguments and scoped database reads to derive the actual affected
+identities. All affected resources must be returned; do not trust a supplied
+workspace identifier without checking its association with the affected records.
+Missing mappings fail closed when the grant has that restriction.
+
+```ts
+import { defineAuth, defineBackend, defineDatabase, defineTable, openBackend, s } from "@clank.run/framework";
+
+const schema = defineDatabase({ tasks: defineTable({ workspaceId: s.string(), done: s.boolean() }).owned() });
+const taskArgs = s.object({ id: s.id("tasks") });
+const definition = defineBackend({ schema, auth: defineAuth() }).functions(({ query, mutation }) => ({
+  tasks: {
+    get: query({ args: taskArgs, handler: ({ db }, { id }) => db.table("tasks").get(id) }),
+    finish: mutation({ args: taskArgs, handler: ({ db }, { id }) => db.table("tasks").patch(id, { done: true }) }),
+  },
+}));
+await openBackend(definition, {
+  path: "app.sqlite",
+  agent: {
+    actionContext(action, input, auth, db) {
+      if (action === "tasks.finish" || action === "tasks.get") {
+        const { id } = taskArgs.parse(input);
+        const task = db.table("tasks").get(id);
+        return task
+          ? { workspaceId: task.workspaceId, resourceIds: [task._id] }
+          : {};
+      }
+      return {};
+    },
+  },
+});
+```
+
+The resolver runs inside the current grant-admission transaction. Use the supplied
+read-only `db`, rather than starting another database transaction. Normal backend
+arguments are schema-validated before reaching it. Custom bucket/review tool
+arguments still require resolver validation and authoritative identity lookup;
+return no mapping for an unsupported tool. These restrictions supplement existing
+application ownership and authorization, so handlers must continue checking their
+business permissions.
+
+Each constrained invocation checks the current token, scope, user state, action,
+workspace, resources, and remaining operation count immediately before execution.
+Tool discovery omits disallowed action paths and hides all tools after budget
+exhaustion. Every admitted call counts, including attempts whose handler later
+fails; retries do not reset usage. The counter starts when constraints are first
+attached to that family. Rejected calls do not consume budget. `operationsUsed`
+and `constraints` appear in the grant API response and access page.
+
+Limits live in `clank_oauth_grant_constraints`, keyed by the existing refresh-token
+family, and survive token refresh, retries, process restarts, and multiple backend
+processes. The checks cover normal backend actions, bucket tools, and reviewed
+business-action tools. Existing grants retain their original permissions until
+narrowed. Before rolling back to an older release that does not enforce these
+constraints, revoke every constrained grant; older code cannot interpret this new
+authorization boundary.

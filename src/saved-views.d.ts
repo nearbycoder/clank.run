@@ -18,3 +18,18 @@ export declare function applySavedView<T extends Record<string, unknown>>(record
 export declare function openSavedViews(options: SavedViewsOptions): Promise<SavedViewsService>;
 export declare function createSavedViewsClient(options?: SyncClientOptions): SavedViewsClient;
 export declare function mountSavedViews(container: HTMLElement, client: SavedViewsClient, options: { current(): ViewDefinition; apply(view: ViewDefinition): void }): () => void;
+
+export interface SharedSavedView extends SavedView { readonly workspaceId: string; readonly ownerId: string; readonly editableBy: "owner" | "workspace"; readonly canEdit: boolean; readonly canSetDefault: boolean; }
+export interface SharedViewsOptions<Schema extends import("./backend.js").DatabaseSchema<any> = import("./backend.js").DatabaseSchema<any>> extends SavedViewsOptions {
+  schema?: Schema;
+  authorize(context: { auth: import("./auth.js").AuthRequest<any>; db: import("./backend.js").ReadDatabase<Schema> }, workspaceId: string, operation: "read" | "publish" | "edit" | "default"): boolean;
+}
+export interface SharedViewsClient {
+  list(): Promise<readonly SharedSavedView[]>;
+  save(input: { id?: string; expectedRevision?: number; name: string; definition: ViewDefinition; editableBy?: "owner" | "workspace" }): Promise<SharedSavedView>;
+  remove(id: string, expectedRevision: number): Promise<boolean>;
+  setDefault(id: string | null): Promise<void>;
+}
+export declare function openSharedSavedViews<Schema extends import("./backend.js").DatabaseSchema<any>>(options: SharedViewsOptions<Schema>): Promise<SavedViewsService>;
+export declare function createSharedViewsClient(options: SyncClientOptions & { workspaceId: string }): SharedViewsClient;
+export declare function mountSharedSavedViews(container: HTMLElement, client: SharedViewsClient, options: { current(): ViewDefinition; apply(view: ViewDefinition): void }): () => void;

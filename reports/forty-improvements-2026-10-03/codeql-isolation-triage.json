@@ -1,0 +1,170 @@
+{
+  "scope": "Independent triage of selected findings in /tmp/clank-local-codeql/results.sarif; no repository edits.",
+  "result": "No confirmed remotely exploitable production vulnerability among the assigned findings. Real conditional filesystem hardening gaps remain for locally writable backup/CLI paths and predictable benchmark report files.",
+  "evidence": {
+    "sarif_snapshot": "Read database/src.zip to map generated vendor findings to exact canonical source; current rebuilt vendor line numbers differ.",
+    "runtime_probe": "matchRoutes with duplicate __proto__, constructor, prototype and toString keys preserved Object.prototype and produced only own query properties.",
+    "tests": "node --test tests/dom.test.mjs tests/ssr.test.mjs: 44 passed, 0 failed, 0 skipped; /tmp/clank-codeql-dom-triage.log",
+    "baseline": "git diff shows no changes to recovery.ts, router.ts, dom.ts, ssr.ts or scripts/load files. CLI generation line750 is a new guard around a pre-existing path-based read, not a new remote entry point."
+  },
+  "findings": [
+    {
+      "sarif_indices": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "rule": "js/xss-through-dom",
+      "locations": [
+        "synth-site/vendor/dom.js:248",
+        "synth-site/vendor/dom.js:252",
+        "synth-site/vendor/dom.js:455",
+        "synth-site/vendor/dom.js:1060"
+      ],
+      "canonical": [
+        "src/dom.ts:248",
+        "src/dom.ts:252",
+        "src/dom.ts:455",
+        "src/dom.ts:1060",
+        "src/ssr.ts:85",
+        "synth-site/src/app.tsx:6",
+        "synth-site/src/view.tsx:217",
+        "synth-site/src/server.tsx:15"
+      ],
+      "classification": "false_positive",
+      "production_reachability": "Synth hydration is reachable, but the reported HTML interpretation is not. The server emits only its package-controlled frameworkVersion in boot state.",
+      "reason": "248/252 write Text.data after a Text/nodeType3 check, so strings remain text. 455 inserts only an instanceof Node object; JSON.parse cannot construct DOM instances. 1060 consumes VNode.type only after the Symbol.for(clank.vnode) brand check; JSON cannot create symbol keys. SynthView uses frameworkVersion as a normal span child, never as a tag or dangerouslySetInnerHTML. serializeState escapes <, > and &, and SSR escapes primitive children. The intentional dangerouslySetInnerHTML API is not on the reported synth flow.",
+      "action": "No change required for these flows; generated files should map to canonical source in future scans."
+    },
+    {
+      "sarif_indices": [
+        30,
+        31
+      ],
+      "rule": "js/remote-property-injection",
+      "locations": [
+        "src/router.ts:115",
+        "src/router.ts:117"
+      ],
+      "classification": "false_positive",
+      "production_reachability": "Public URL query names reach queryRecord by design, but cannot invoke prototype setters.",
+      "reason": "The first value uses Object.defineProperty to create an own writable data property, including __proto__. Subsequent assignment is reached only after Object.hasOwn found that property; repeats therefore modify the safe own property. Values are strings or string arrays. Runtime probe confirmed duplicate __proto__ leaves Object.getPrototypeOf(query)===Object.prototype.",
+      "action": "No change required."
+    },
+    {
+      "sarif_indices": [
+        52,
+        53
+      ],
+      "rule": "js/file-system-race",
+      "locations": [
+        "src/recovery.ts:1403",
+        "src/recovery.ts:1495"
+      ],
+      "classification": "conditional_local_hardening_gap",
+      "production_reachability": "Functions are used by production backup read/verify/restore and new restore drills/PITR. Exploitation requires modifying or replacing entries/ancestors in the operator-selected backup repository during the read; an ordinary remote client or supported isolated Docker tenant has no such capability.",
+      "reason": "lstat is followed by open without O_NOFOLLOW/fstat identity binding. decryptFile then closes that handle and reopens the pathname for streaming, adding a second race. A local filesystem adversary could redirect reads or replace with a blocking special file. Platform repositories are projects/<id>/recovery (platform.ts13936), created/chmod0700; Docker runtimes mount the sibling data directory, not recovery. IDs are tightly validated, manifests use HMAC, ciphertext uses AES-GCM with authenticated manifest, and checksum/integrity validation precedes publication. Therefore the race is not evidence of arbitrary plaintext disclosure or forged-restore acceptance. Trusted process mode deliberately has host access and is outside tenant isolation.",
+      "action": "Defense in depth: pin repository ancestors, open once with O_NOFOLLOW|O_NONBLOCK, fstat/bound reads and reuse that descriptor through streaming. Do not classify as remotely exploitable without an attacker-writable repository configuration."
+    },
+    {
+      "sarif_indices": [
+        17
+      ],
+      "rule": "js/file-access-to-http",
+      "locations": [
+        "scripts/cli-deploy.mjs:2734"
+      ],
+      "classification": "false_positive",
+      "production_reachability": "Only an explicit local CLI GitHub repository lookup, not a server endpoint.",
+      "reason": "The SARIF flow is package.json.version -> user-agent: clank-cli/<version>. It does not control the destination or transmit arbitrary file content. Destination is fixed https://api.github.com/repos/ plus URL-encoded repository segments, with redirects rejected, credentials omitted and bounded response/deadline.",
+      "action": "No change required."
+    },
+    {
+      "sarif_indices": [
+        47,
+        48,
+        49,
+        51
+      ],
+      "rule": "js/file-system-race",
+      "locations": [
+        "scripts/cli-deploy.mjs:750",
+        "scripts/cli-deploy.mjs:2189",
+        "scripts/cli-deploy.mjs:2894",
+        "scripts/cli-deploy.mjs:3495"
+      ],
+      "classification": "conditional_local_hardening_gap",
+      "production_reachability": "Installed local CLI commands only; requires an adversary concurrently changing the CLI user's project/fixture/workflow/config path. No HTTP handler invokes these functions.",
+      "reason": "750 regeneration reads after lstat; 2189 preview --fixture reads after lstat and rechecks SQLite header/length afterward (so over-allocation can still precede rejection); 2894 workflow comparison reads after lstat; 3495 local JSON uses stat then readFile. Path replacement can defeat size/type/ancestor prechecks, redirect reads or block on a FIFO. Fixture content is uploaded only by the user-requested preview command to the configured authenticated platform. Config JSON is schema-validated; an attacker already able to modify credentials/config controls that local trust boundary. Regeneration now adds checks where baseline already used readFile.",
+      "action": "Future local hardening: descriptor-bound bounded reads plus pinned ancestors. Use private stable local workspaces/config directories; no confirmed new remote production path."
+    },
+    {
+      "sarif_indices": [
+        50
+      ],
+      "rule": "js/file-system-race",
+      "locations": [
+        "scripts/cli-deploy.mjs:3163"
+      ],
+      "classification": "false_positive_guarded",
+      "production_reachability": "Explicit local clank inspect artifact command.",
+      "reason": "The open uses O_NOFOLLOW|O_NONBLOCK. fstat then checks regular file and dev/ino/size against lstat; reading is bounded to initial size+1 and a second fstat checks size/mtime/ctime. CodeQL reports the syntactic lstat/open pair without accounting for post-open identity and growth validation.",
+      "action": "No change required for the reported race."
+    },
+    {
+      "sarif_indices": [
+        13,
+        14,
+        15,
+        16
+      ],
+      "rule": "js/insecure-temporary-file",
+      "locations": [
+        "scripts/load/reliability.mjs:368",
+        "scripts/load/reliability.mjs:489",
+        "scripts/load/run.mjs:415",
+        "scripts/load/run.mjs:424"
+      ],
+      "classification": "confirmed_local_benchmark_hardening_gap",
+      "production_reachability": "Opt-in development/load-test utilities, absent from the npm files allowlist and not imported by production entry points.",
+      "reason": "Default reports use predictable /tmp/clank-load-<kind>.json and /tmp/clank-load-reliability.json with writeFile truncation and no exclusive/no-follow open. On hosts permitting shared-temp symlink following, a local adversary can redirect report writes to another file writable by the benchmark user. Repeated checkpoints expose the same risk. This does not expose a production HTTP endpoint.",
+      "action": "Use an operator-owned --output directory now; prefer private mkdtemp output or exclusive descriptor-bound creation in a separate maintenance hardening change."
+    },
+    {
+      "sarif_indices": [
+        27,
+        28,
+        29
+      ],
+      "rule": "js/remote-property-injection",
+      "locations": [
+        "scripts/load/run.mjs:250",
+        "scripts/load/run.mjs:252",
+        "scripts/load/reliability.mjs:323"
+      ],
+      "classification": "not_exploitable_as_reported",
+      "production_reachability": "Synthetic benchmark result aggregation only; not shipped production runtime.",
+      "reason": "run.mjs indexes local dictionaries by numeric HTTP status or fixed native error codes/fixed fallback strings. reliability.mjs uses Error.message only as a counter key; remote error bodies occur inside a prefixed assertion message, and values are arithmetic counters, not nested object assignments. Even a magic key cannot mutate Object.prototype through this single-level primitive write. Collisions can corrupt benchmark bookkeeping, not production object prototypes.",
+      "action": "Null-prototype counter dictionaries would be optional robustness hardening."
+    },
+    {
+      "sarif_indices": [
+        65
+      ],
+      "rule": "js/log-injection",
+      "locations": [
+        "scripts/load/staging-server.mjs:201"
+      ],
+      "classification": "not_exploitable_as_reported",
+      "production_reachability": "Explicit synthetic-only staging service, requires CLANK_CAPACITY_ENABLED=synthetic-only and 256-bit token; all routes except health authenticate that token. Not an ordinary production server.",
+      "reason": "Logged value is native ClientRequest error.code or error.name, not response text, request URL, or arbitrary error.message. Current native error names/codes are fixed identifiers. No attacker-controlled newline path established. Fixture warns against co-location with customer data, requires dedicated capacity directory and shuts down after two hours.",
+      "action": "No production security fix required for this reported flow."
+    }
+  ],
+  "limitations": [
+    "No filesystem race exploitation against production was attempted. Conditional local races are source-confirmed and not dismissed as scanner noise.",
+    "Canonical DOM source and exact extracted CodeQL snapshot were inspected; browser-based exploit reproduction was unnecessary for Text.data/instance guards, and existing DOM/SSR security tests passed.",
+    "Other assigned agents own notifications dynamic HTML and editor regex denial-of-service findings; they are intentionally excluded here."
+  ]
+}

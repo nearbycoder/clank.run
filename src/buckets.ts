@@ -250,13 +250,17 @@ export interface BucketMcpOptions<Context = unknown> {
 
 export class BucketError extends Error {
   readonly name = "BucketError";
+  declare readonly status: number;
+  declare readonly code: string;
+  declare readonly details?: Readonly<Record<string, unknown>>;
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
-    readonly details?: Readonly<Record<string, unknown>>,
+    details?: Readonly<Record<string, unknown>>,
   ) {
     super(message);
+    this.status = status; this.code = code; this.details = details;
   }
 }
 
@@ -494,6 +498,7 @@ function ascii(bytes: Uint8Array, start: number, end: number): string {
 }
 
 interface NativeStatement {
+  setReadBigInts(enabled: boolean): void;
   get(...values: unknown[]): Record<string, unknown> | undefined;
   all(...values: unknown[]): Record<string, unknown>[];
   run(...values: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint };
@@ -675,7 +680,21 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       transactionActive = false;
     }
   };
-  const statement = (sql: string) => native.prepare(sql);
+  const statement = (sql: string): Omit<NativeStatement, "setReadBigInts"> => {
+    const prepared = native.prepare(sql);
+    return {
+      get: (...values) => prepared.get(...values),
+      all: (...values) => prepared.all(...values),
+      run(...values) {
+        // Garbage fences use SQLite's full signed 64-bit random rowid. That
+        // lastInsertRowid persists for later UPDATE/DELETE statements too.
+        // Decode run() metadata losslessly without changing catalog reads.
+        prepared.setReadBigInts(true);
+        try { return prepared.run(...values); }
+        finally { prepared.setReadBigInts(false); }
+      },
+    };
+  };
   const definitionFor = (name: string): BucketDefinition => {
     const definition = definitions.get(name);
     if (!definition) throw new BucketError(404, "BUCKET_NOT_FOUND", "Bucket not found.");
@@ -1818,7 +1837,10 @@ interface BucketPath {
 }
 
 class ReadonlyMapView<Key, Value> implements ReadonlyMap<Key, Value> {
-  constructor(private readonly source: Map<Key, Value>) {}
+  declare private readonly source: Map<Key, Value>;
+  constructor(source: Map<Key, Value>) {
+    this.source = source;
+  }
   get size(): number { return this.source.size; }
   get(key: Key): Value | undefined { return this.source.get(key); }
   has(key: Key): boolean { return this.source.has(key); }

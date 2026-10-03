@@ -828,7 +828,7 @@ async function serviceFixture(name) {
       const ingress = fakeIngress(events);
       const service = await openDeploymentProviderService({
         rootDirectory: providerRoot,
-        data,
+        data: runtimeOptions.data ?? data,
         runtimes,
         ingress,
         drainTimeoutMs: 100,
@@ -1193,3 +1193,22 @@ function seedJobsDatabase(filename) {
   );
   database.close();
 }
+
+test("planned evacuation durably stops all writers before its final snapshot and rejects source resurrection", async()=>{
+ const fixture=await serviceFixture('evacuation');try{
+  const runtime=await fixture.runtime({generation:1,releaseId:'release_evacuate_01',mode:'initialize',snapshot:await sqliteSnapshot(fixture.root,'before-evacuation'),jobs:true});const input=providerInput(runtime,1);let first;first=await fixture.open({data:{...fixture.data,snapshot:async project=>{assert.equal(first.runtimes.inspect().length,0,'web, workers and scheduler must be stopped before snapshot');return fixture.data.snapshot(project)}}});await first.service.reconcile(input);
+  const url='https://provider.example/v1/clank/control/project_service_01/evacuate',token='clankc_provider-service-control-token-12345678901234567890',plan='evac_exact_plan_01';const request=(id=plan,credential=token)=>new Request(url,{method:'POST',headers:{authorization:'Bearer '+credential,'x-clank-evacuation-id':id}});
+  assert.equal((await first.service.handle(request(plan,'wrong'))).status,404);assert.equal((await first.service.handle(new Request(url,{headers:{authorization:'Bearer '+token}}))).status,404);
+  const response=await first.service.handle(request());assert.equal(response.status,200,await response.clone().text());const bytes=new Uint8Array(await response.arrayBuffer());assert.equal(response.headers.get('x-clank-writers-stopped'),'true');assert.equal(response.headers.get('x-clank-evacuation-id'),plan);assert.deepEqual(first.events.slice(-2),['ingress-deactivate:1','runtime-stop:1']);assert.equal((await first.service.inspect('project_service_01')).phase,'evacuating');
+  assert.equal((await first.service.handle(request('evac_wrong_plan_01'))).status,409);await assert.rejects(first.service.reconcile(input),/fenced for planned evacuation/);await first.service.close();
+  const restarted=await fixture.open();const replay=await restarted.service.handle(request());assert.equal(replay.status,200);assert.deepEqual(new Uint8Array(await replay.arrayBuffer()),bytes);await assert.rejects(restarted.service.reconcile(input),/fenced for planned evacuation/);assert.equal(restarted.runtimes.inspect().length,0);await restarted.service.close();
+ }finally{await fixture.close()}
+});
+
+test("failed final snapshot leaves a durable source barrier and exact retry completes safely",async()=>{
+ const fixture=await serviceFixture('evacuation-failure');try{
+  const runtime=await fixture.runtime({generation:1,releaseId:'release_evacuate_02',mode:'initialize',snapshot:await sqliteSnapshot(fixture.root,'failure-test'),jobs:true});let fail=true;const wrapped={...fixture.data,snapshot:async project=>{if(fail)throw Error('snapshot storage unavailable');return fixture.data.snapshot(project)}};const first=await fixture.open({data:wrapped});const input=providerInput(runtime,1);await first.service.reconcile(input);
+  const request=()=>new Request('https://provider.example/v1/clank/control/project_service_01/evacuate',{method:'POST',headers:{authorization:'Bearer clankc_provider-service-control-token-12345678901234567890','x-clank-evacuation-id':'evac_failure_plan_01'}});
+  assert.equal((await first.service.handle(request())).status,503);assert.equal(first.runtimes.inspect().length,0);await assert.rejects(first.service.reconcile(input),/fenced for planned evacuation/);await first.service.close();fail=false;const resumed=await fixture.open();assert.equal((await resumed.service.handle(request())).status,200);await resumed.service.close();
+ }finally{await fixture.close()}
+});

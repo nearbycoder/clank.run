@@ -1,3 +1,7 @@
+import {
+  applyLinuxDockerNetworkPolicy, createLinuxDockerNetworkPlan, enforceLinuxProjectDiskQuota, removeLinuxDockerNetworkPolicy,
+  type DockerOutboundNetworkPolicy, type LinuxDockerNetworkPlan, type LinuxProjectDiskQuota,
+} from "./linux-project-isolation.ts";
 import { captureLogLines } from "./security.ts";
 import { parseDeploymentConfig, type DeploymentConfig } from "./deploy.ts";
 import type { PreparedDeploymentRuntimeData } from "./provider-data.ts";
@@ -29,6 +33,10 @@ export interface DockerDeploymentRuntimeLauncherOptions {
   allowContainerRoot?: boolean;
   /** Docker network selected by the operator. Defaults to bridge. */
   network?: string;
+  /** Privileged, fail-closed XFS project quotas. Choose a unique quota ID for each project. */
+  diskQuota?: LinuxProjectDiskQuota | ((projectId: string) => LinuxProjectDiskQuota);
+  /** Privileged, fail-closed dedicated Docker bridge and nftables outbound policy. */
+  outboundNetwork?: DockerOutboundNetworkPolicy | ((projectId: string) => DockerOutboundNetworkPolicy);
   memory?: string;
   cpus?: string;
   pidsLimit?: number;
@@ -137,6 +145,8 @@ export interface DockerDeploymentRuntimeDiagnostics {
 }
 
 export interface DockerDeploymentRuntimeLauncher {
+  /** Enforces disk quotas before provider extraction, migration, and application writes. */
+  prepareProject?(projectId: string, signal?: AbortSignal): Promise<void>;
   /**
    * Launches and health-checks an ingress-private candidate. The environment
    * is delivered through container stdin and is not retained by the launcher.
@@ -197,6 +207,7 @@ interface ContainerProcess {
 }
 
 interface RuntimeRecord {
+  isolationNetwork?: { plan: LinuxDockerNetworkPlan; executable?: string };
   candidate: DockerDeploymentRuntimeCandidate;
   status: "candidate" | "active" | "failed";
   port: number;
@@ -221,6 +232,7 @@ interface PendingBackgroundPlan {
 }
 
 interface DockerCommandResult {
+  code: number | null;
   stdout: string;
   stderr: string;
 }
@@ -318,6 +330,7 @@ export async function openDockerDeploymentRuntimeLauncher(
   const image = dockerImage(options.image, options.allowMutableImage === true);
   const executable = safeCommand(options.executable ?? "docker", "executable");
   const network = stringPattern(options.network ?? "bridge", "network", RESOURCE_VALUE);
+  if (options.outboundNetwork && options.network !== undefined) throw new TypeError("outboundNetwork manages its own project bridge; omit network.");
   const memory = stringPattern(options.memory ?? "512m", "memory", RESOURCE_VALUE);
   const cpus = stringPattern(options.cpus ?? "1", "cpus", RESOURCE_VALUE);
   const pidsLimit = integer(options.pidsLimit ?? 128, "pidsLimit", 16, 32_768);
@@ -437,6 +450,16 @@ export async function openDockerDeploymentRuntimeLauncher(
     }
     await Promise.allSettled(processes.map((process) =>
       waitForChildExit(process.child, 2_000)));
+    if (record.isolationNetwork) {
+      const { plan, executable } = record.isolationNetwork;
+      const removed = await docker(["network", "rm", plan.network], { allowFailure: true });
+      if (removed.code !== 0) {
+        const names = await docker(["network", "ls", "--format", "{{.Name}}"]);
+        if (names.stdout.split(/\r?\n/).includes(plan.network)) throw new Error("Isolated Docker network cleanup did not converge; policy retained.");
+      }
+      await removeLinuxDockerNetworkPolicy(plan, executable);
+      record.isolationNetwork = undefined;
+    }
     const current = records.get(record.candidate.projectId);
     if (current === record) records.delete(record.candidate.projectId);
     candidates.delete(record.candidate);
@@ -494,7 +517,9 @@ export async function openDockerDeploymentRuntimeLauncher(
         "--memory-swap", memory,
         "--cpus", cpus,
         "--user", user,
-        "--network", network,
+        "--network", record.isolationNetwork?.plan.network ?? network,
+        ...(record.isolationNetwork ? ["--dns", "127.0.0.1", "--dns-option", "attempts:1", "--dns-option", "timeout:1",
+          ...Object.entries(record.isolationNetwork.plan.hosts).flatMap(([name, address]) => ["--add-host", `${name}:${address}`])] : []),
         "--stop-timeout", String(Math.ceil(stopTimeoutMs / 1_000)),
         "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777",
         "--tmpfs", "/run:rw,noexec,nosuid,nodev,size=8m,mode=755",
@@ -631,7 +656,16 @@ export async function openDockerDeploymentRuntimeLauncher(
     return publicState(record);
   };
 
+  const prepareProject = async (projectId: string, signal?: AbortSignal): Promise<void> => {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(projectId)) throw new TypeError("Invalid project isolation identifier.");
+    if (closed) throw new Error("Docker deployment runtime launcher is closed.");
+    if (!options.diskQuota) return;
+    const quota = typeof options.diskQuota === "function" ? options.diskQuota(projectId) : options.diskQuota;
+    await enforceLinuxProjectDiskQuota(quota, path.join(root, "projects", projectId), path.join(root, ".isolation-quotas"), projectId, signal);
+  };
+
   const launcher: DockerDeploymentRuntimeLauncher = {
+    prepareProject,
     async launch(input) {
       if (closed) throw new Error("Docker deployment runtime launcher is closed.");
       if (!(input?.signal instanceof AbortSignal)) {
@@ -723,6 +757,29 @@ export async function openDockerDeploymentRuntimeLauncher(
         };
         input.signal.addEventListener("abort", abortRuntime, { once: true });
         try {
+          await prepareProject(prepared.projectId, record.controller.signal);
+          if (options.outboundNetwork) {
+            const policy = typeof options.outboundNetwork === "function" ? options.outboundNetwork(prepared.projectId) : options.outboundNetwork;
+            const plan = await createLinuxDockerNetworkPlan(owner, prepared.projectId, policy);
+            const existing = await docker(["network", "inspect", plan.network], { allowFailure: true });
+            if (existing.code === 0) {
+              const state = JSON.parse(existing.stdout)[0];
+              if (state?.Labels?.["run.clank.owner"] !== owner || state?.Labels?.["run.clank.project"] !== prepared.projectId || Object.keys(state?.Containers ?? {}).length) {
+                throw new Error("Refusing an existing Docker network without matching empty project ownership.");
+              }
+              await docker(["network", "rm", plan.network]);
+            }
+            await applyLinuxDockerNetworkPolicy(plan, policy.nftExecutable, record.controller.signal);
+            record.isolationNetwork = { plan, executable: policy.nftExecutable };
+            await docker(["network", "create", "--driver", "bridge", "--opt", `com.docker.network.bridge.name=${plan.bridge}`,
+              "--opt", "com.docker.network.bridge.enable_icc=false", "--ipv6=false",
+              "--label", `run.clank.owner=${owner}`, "--label", `run.clank.project=${prepared.projectId}`, plan.network], { signal: record.controller.signal });
+            const inspected = JSON.parse((await docker(["network", "inspect", plan.network])).stdout)[0];
+            if (inspected?.Driver !== "bridge" || inspected?.Options?.["com.docker.network.bridge.name"] !== plan.bridge
+              || inspected?.EnableIPv6 !== false || inspected?.Labels?.["run.clank.owner"] !== owner) {
+              throw new Error("Dedicated Docker network verification failed; runtime launch is refused.");
+            }
+          }
           await launchContainer(record, {
             config,
             releaseDirectory: prepared.releaseDirectory,
@@ -1349,7 +1406,7 @@ async function runCommand(
         + boundedFailure(stderr),
     );
   }
-  return { stdout, stderr };
+  return { stdout, stderr, code: typeof result.code === "number" ? result.code : null };
 }
 
 async function waitForHealth(

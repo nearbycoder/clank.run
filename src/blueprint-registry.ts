@@ -335,8 +335,10 @@ export function createBlueprintTrustPolicy(input: {
 
 export class BlueprintRegistryError extends Error {
   readonly name = "BlueprintRegistryError";
-  constructor(readonly code: string, message: string) {
+  declare readonly code: string;
+  constructor(code: string, message: string) {
     super(message);
+    this.code = code;
   }
 }
 

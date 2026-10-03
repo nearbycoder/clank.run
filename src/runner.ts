@@ -208,22 +208,28 @@ export interface DeploymentAgentRuntime {
 }
 
 class CoordinatorRequestError extends Error {
+  declare readonly status: number;
+  declare readonly code: string;
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
   ) {
     super(message);
+    this.status = status; this.code = code;
   }
 }
 
 export class DeploymentCoordinatorError extends Error {
+  declare readonly status: number;
+  declare readonly code: string;
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
   ) {
     super(message);
+    this.status = status; this.code = code;
     this.name = "DeploymentCoordinatorError";
   }
 }

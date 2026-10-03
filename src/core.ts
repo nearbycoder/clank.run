@@ -218,7 +218,9 @@ export class Computed<T> implements Source, Observer {
   #evaluating = false;
   #value!: T;
 
-  constructor(readonly derive: () => T, readonly name?: string) {}
+  declare readonly derive: () => T; declare readonly name?: string;
+  constructor(derive: () => T, name?: string) {
+    this.derive = derive; this.name = name;}
 
   get value(): T {
     return this.get();
@@ -290,7 +292,9 @@ class ReactiveEffect implements Observer {
   #initialized = false;
   #cleanup: Cleanup | undefined;
 
-  constructor(readonly callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup) {}
+  declare readonly callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup;
+  constructor(callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup) {
+    this.callback = callback;}
 
   schedule(): void {
     if (!this.active) return;

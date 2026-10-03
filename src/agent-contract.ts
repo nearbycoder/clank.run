@@ -76,12 +76,14 @@ export interface VerifyAgentActionParityOptions extends AgentActionParityOptions
 export class AgentActionParityError extends Error {
   readonly name = "AgentActionParityError";
 
-  constructor(readonly report: AgentActionParityReport) {
+  declare readonly report: AgentActionParityReport;
+  constructor(report: AgentActionParityReport) {
     super(
       report.issues.length === 1
         ? report.issues[0].message
         : `UI and agent action contracts differ in ${report.issues.length} places.`,
     );
+    this.report = report;
   }
 }
 

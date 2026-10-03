@@ -59,7 +59,8 @@ export interface DeploymentProviderServiceState {
     | "stopped"
     | "rolling-back"
     | "rolled-back"
-    | "deleting";
+    | "deleting"
+    | "evacuating";
   readonly updatedAt: number;
 }
 
@@ -122,6 +123,15 @@ export interface DeploymentProviderService extends DeploymentProvider {
 }
 
 interface StoredServiceState extends DeploymentProviderServiceState {}
+
+interface ProviderEvacuationHold {
+  id: string;
+  projectId: string;
+  releaseId: string;
+  generation: number;
+  tokenDigest: number[];
+  writersStopped: boolean;
+}
 
 interface ProviderControlBinding {
   projectId: string;
@@ -283,6 +293,18 @@ export async function openDeploymentProviderService(
     await syncDirectory(fs, serviceDirectory);
   };
 
+  const evacuationPath = (projectId: string) => path.join(serviceDirectory, `${identifier(projectId, "projectId")}.evacuation.json`);
+  const readEvacuation = async (projectId: string): Promise<ProviderEvacuationHold | null> => {
+    const value = await readPrivateJson(fs, evacuationPath(projectId));
+    if (value === null) return null;
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid provider evacuation barrier.");
+    const row = value as Record<string, unknown>;
+    if (row.projectId !== projectId || typeof row.id !== "string" || !/^evac_[A-Za-z0-9_-]{8,128}$/u.test(row.id)
+      || typeof row.releaseId !== "string" || !IDENTIFIER.test(row.releaseId) || !Number.isSafeInteger(row.generation) || Number(row.generation) < 1
+      || typeof row.writersStopped !== "boolean" || !Array.isArray(row.tokenDigest) || row.tokenDigest.length !== 32 || row.tokenDigest.some(byte => !Number.isInteger(byte) || Number(byte) < 0 || Number(byte) > 255)) throw new Error("Invalid provider evacuation barrier.");
+    return { id: row.id, projectId, releaseId: row.releaseId, generation: Number(row.generation), tokenDigest: row.tokenDigest as number[], writersStopped: row.writersStopped };
+  };
+
   const quiesce = async (projectId: string): Promise<void> => {
     controls.delete(projectId);
     const bindings = ingress.inspect()
@@ -357,6 +379,7 @@ export async function openDeploymentProviderService(
       return exclusive(request.operation.projectId, async () => {
         if (closed) throw new Error("Deployment provider service is closed.");
         throwIfAborted(request.signal);
+        if (await readEvacuation(request.operation.projectId)) throw new Error("Project is fenced for planned evacuation; source writers must remain stopped.");
         const prior = await readProjectState(request.operation.projectId);
         assertAccepted(prior, request);
         let bootstrapData: DeploymentProviderDataState | null = null;
@@ -411,6 +434,7 @@ export async function openDeploymentProviderService(
         let prepared: PreparedDeploymentRuntimeData | null = null;
         let candidate: DockerDeploymentRuntimeCandidate | null = null;
         try {
+          await runtimes.prepareProject?.(request.operation.projectId, request.signal);
           const committed = await data.apply({
             operation: request.operation,
             desired: request.desired,
@@ -481,7 +505,7 @@ export async function openDeploymentProviderService(
     async handle(request) {
       const url = new URL(request.url);
       const control = new RegExp(
-        `^${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/([A-Za-z0-9_-]{1,128})/(snapshot|diagnostics|jobs(?:/(job_[a-f0-9]{32})/(cancel|retry))?)$`,
+        `^${DEPLOYMENT_PROVIDER_CONTROL_PREFIX}/([A-Za-z0-9_-]{1,128})/(evacuate|snapshot|diagnostics|jobs(?:/(job_[a-f0-9]{32})/(cancel|retry))?)$`,
         "u",
       ).exec(url.pathname);
       if (!control) {
@@ -560,13 +584,14 @@ export async function openDeploymentProviderService(
       }
       const jobMutation = operation.startsWith("jobs/");
       if (
-        (jobMutation ? request.method !== "POST" : request.method !== "GET")
-        || ((operation === "snapshot" || jobMutation) && url.search)
+        ((jobMutation || operation === "evacuate") ? request.method !== "POST" : request.method !== "GET")
+        || ((operation === "snapshot" || operation === "evacuate" || jobMutation) && url.search)
       ) {
         return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
       }
       const projectId = control[1]!;
-      const binding = controls.get(projectId);
+      const held = operation === "evacuate" ? await readEvacuation(projectId) : null;
+      const binding = controls.get(projectId) ?? (held ? { projectId, releaseId: held.releaseId, generation: held.generation, tokenDigest: new Uint8Array(held.tokenDigest) } : undefined);
       const credential = bearerCredential(request.headers.get("authorization"));
       if (
         !binding
@@ -575,6 +600,32 @@ export async function openDeploymentProviderService(
       ) {
         return controlProblem(404, "CONTROL_NOT_FOUND", "Provider control endpoint not found.");
       }
+      if (operation === "evacuate") return exclusive(projectId, async () => {
+        try {
+          if (closed) return controlProblem(503, "PROVIDER_UNAVAILABLE", "Provider is unavailable.");
+          const id = request.headers.get("x-clank-evacuation-id") ?? "";
+          if (!/^evac_[A-Za-z0-9_-]{8,128}$/u.test(id)) return controlProblem(422, "EVACUATION_ID_REQUIRED", "An exact evacuation plan is required.");
+          const prior = await readEvacuation(projectId), state = await readProjectState(projectId);
+          if (prior ? prior.id !== id || prior.releaseId !== binding.releaseId || prior.generation !== binding.generation
+            : controls.get(projectId) !== binding || !state || state.phase !== "running" || state.releaseId !== binding.releaseId || state.generation !== binding.generation) {
+            return controlProblem(409, "PROVIDER_GENERATION_STALE", "Provider generation or evacuation changed.");
+          }
+          if (!prior) await atomicWriteJson(fs, path, evacuationPath(projectId), { id, projectId, releaseId: binding.releaseId, generation: binding.generation, tokenDigest: [...binding.tokenDigest], writersStopped: false });
+          // The durable barrier is written first. Failed stops and restarts stay
+          // fenced until this exact evacuation is retried; reconciliation cannot restart writers.
+          await quiesce(projectId);
+          await atomicWriteJson(fs, path, evacuationPath(projectId), { id, projectId, releaseId: binding.releaseId, generation: binding.generation, tokenDigest: [...binding.tokenDigest], writersStopped: true });
+          const snapshot = await data.snapshot(projectId);
+          if (!snapshot || snapshot.releaseId !== binding.releaseId || snapshot.generation !== binding.generation
+            || snapshot.bytes.byteLength > maxDatabaseBytes || snapshot.sha256 !== await deploymentRuntimeDigest(snapshot.bytes)) throw new Error("Final evacuation snapshot is unavailable.");
+          return new Response(new Uint8Array(snapshot.bytes).buffer, { headers: {
+            "cache-control": "private, no-store", "content-type": DEPLOYMENT_PROVIDER_SNAPSHOT_MEDIA_TYPE,
+            "content-length": String(snapshot.bytes.byteLength), "x-clank-content-sha256": snapshot.sha256,
+            "x-clank-release-id": snapshot.releaseId, "x-clank-runtime-generation": String(snapshot.generation),
+            "x-clank-evacuation-id": id, "x-clank-writers-stopped": "true", "x-content-type-options": "nosniff",
+          } });
+        } catch (error) { report(error); return controlProblem(503, "EVACUATION_PAUSED", "Source evacuation is fenced and must be retried."); }
+      });
       return exclusive(projectId, async () => {
         try {
           if (closed) {
@@ -724,6 +775,8 @@ export async function openDeploymentProviderService(
       return exclusive(projectId, async () => {
         if (closed) throw new Error("Deployment provider service is closed.");
         const state = await readProjectState(projectId);
+        const held = await readEvacuation(projectId);
+        if (state && held) return { ...publicState(state), ...(held.writersStopped ? { state: "stopped" as const, releaseId: null, capsuleSha256: null } : {}), phase: "evacuating" };
         return state ? publicState(state) : null;
       });
     },
@@ -751,6 +804,7 @@ export async function openDeploymentProviderService(
       if (closed) throw new Error("Deployment provider service is closed.");
       const request = lifecycleRequest(requestInput, "rollback");
       return exclusive(request.operation.projectId, async () => {
+        if (await readEvacuation(request.operation.projectId)) throw new Error("Project is fenced for planned evacuation.");
         if (closed) throw new Error("Deployment provider service is closed.");
         throwIfAborted(request.signal);
         const prior = await readProjectState(request.operation.projectId);

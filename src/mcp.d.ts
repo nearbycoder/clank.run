@@ -7,6 +7,7 @@ export type McpScope = "agent:read" | "agent:write";
 export interface McpAuthentication<Context = unknown> {
     readonly context: Context;
     readonly scopes: ReadonlySet<string>;
+    readonly allowedActions?: ReadonlySet<string>;
 }
 export interface McpToolAnnotations {
     title?: string;

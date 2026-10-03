@@ -1,0 +1,837 @@
+{
+  "branch": "codex/forty-improvements-2026-10-03",
+  "base": "d6baafca5016c66641baf3ecedcd5e59657242fa",
+  "workflow": "one local branch; local tests only during development; no remote CI iterations",
+  "constraints": [
+    "zero runtime/dev npm dependencies",
+    "preserve original untracked reports and verify-daily-log-oauth.mjs",
+    "do not claim completion for helpers without runtime wiring",
+    "root owns full-suite build/test and public export integration"
+  ],
+  "items": [
+    {
+      "id": 1,
+      "title": "Tenant filesystem isolation",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/sqlite-sandbox.ts",
+        "src/sqlite-task.ts",
+        "src/migrations.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)",
+        "verification.json: privilegedProofs"
+      ],
+      "tests": [
+        "tests/sqlite-sandbox.test.mjs",
+        "tests/sqlite-isolation.test.mjs"
+      ],
+      "documentation": "docs/sqlite-isolation.md"
+    },
+    {
+      "id": 2,
+      "title": "Complete disk quotas",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/linux-project-isolation.ts",
+        "src/provider-docker.ts",
+        "src/provider-service.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)",
+        "verification.json: privilegedProofs"
+      ],
+      "tests": [
+        "tests/linux-project-isolation.test.mjs",
+        "tests/provider-docker-integration.test.mjs"
+      ],
+      "documentation": "docs/linux-provider-isolation.md"
+    },
+    {
+      "id": 3,
+      "title": "Fair database scheduling",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/sqlite-sandbox.ts",
+        "src/sqlite-task.ts",
+        "src/migrations.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)",
+        "verification.json: privilegedProofs"
+      ],
+      "tests": [
+        "tests/sqlite-sandbox.test.mjs",
+        "tests/sqlite-isolation.test.mjs"
+      ],
+      "documentation": "docs/sqlite-isolation.md"
+    },
+    {
+      "id": 4,
+      "title": "Outbound network policies",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/linux-project-isolation.ts",
+        "src/provider-docker.ts",
+        "src/provider-service.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)",
+        "verification.json: privilegedProofs"
+      ],
+      "tests": [
+        "tests/linux-project-isolation.test.mjs",
+        "tests/provider-docker-integration.test.mjs"
+      ],
+      "documentation": "docs/linux-provider-isolation.md"
+    },
+    {
+      "id": 5,
+      "title": "Real isolation tests",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/sqlite-sandbox.ts",
+        "src/sqlite-task.ts",
+        "src/migrations.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)",
+        "verification.json: privilegedProofs"
+      ],
+      "tests": [
+        "tests/sqlite-sandbox.test.mjs",
+        "tests/sqlite-isolation.test.mjs"
+      ],
+      "documentation": "docs/sqlite-isolation.md"
+    },
+    {
+      "id": 6,
+      "title": "Automated restore drills",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/operations-monitor.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/operational-foundations.test.mjs"
+      ],
+      "documentation": "docs/operational-recovery.md"
+    },
+    {
+      "id": 7,
+      "title": "Point-in-time recovery",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/point-in-time.ts",
+        "src/point-in-time-worker.ts",
+        "src/point-in-time-state.ts",
+        "src/backend.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/point-in-time.test.mjs"
+      ],
+      "documentation": "docs/operational-recovery.md"
+    },
+    {
+      "id": 8,
+      "title": "Planned node evacuation",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_agent_governance",
+      "files": [
+        "src/node-evacuation.ts",
+        "src/provider-service.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)",
+        "verification.json: privilegedProofs"
+      ],
+      "tests": [
+        "tests/node-evacuation.test.mjs",
+        "tests/platform-evacuation.test.mjs"
+      ],
+      "documentation": "docs/planned-node-evacuation.md"
+    },
+    {
+      "id": 9,
+      "title": "Managed canary deployments",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/managed-canary.ts",
+        "src/platform.ts",
+        "src/data-plane.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)",
+        "verification.json: privilegedProofs"
+      ],
+      "tests": [
+        "tests/platform.test.mjs",
+        "tests/data-plane.test.mjs"
+      ],
+      "documentation": "docs/operational-recovery.md"
+    },
+    {
+      "id": 10,
+      "title": "Operational alerts",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/operations-monitor.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/operational-foundations.test.mjs"
+      ],
+      "documentation": "docs/operational-recovery.md"
+    },
+    {
+      "id": 11,
+      "title": "Accurate streaming usage",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/data-plane.ts",
+        "src/usage-forecast.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/data-plane.test.mjs",
+        "tests/operational-foundations.test.mjs"
+      ],
+      "documentation": "docs/operational-recovery.md"
+    },
+    {
+      "id": 12,
+      "title": "Usage forecasts",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/data-plane.ts",
+        "src/usage-forecast.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/data-plane.test.mjs",
+        "tests/operational-foundations.test.mjs"
+      ],
+      "documentation": "docs/operational-recovery.md"
+    },
+    {
+      "id": 13,
+      "title": "Tamper-evident audit exports",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_isolation",
+      "files": [
+        "src/audit-export.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/operational-foundations.test.mjs"
+      ],
+      "documentation": "docs/operational-recovery.md"
+    },
+    {
+      "id": 14,
+      "title": "Organization SSO and offboarding",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_agent_governance",
+      "files": [
+        "src/organization-sso.ts",
+        "src/auth.ts",
+        "src/account-security.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/organization-security.test.mjs"
+      ],
+      "documentation": "docs/organization-security.md"
+    },
+    {
+      "id": 15,
+      "title": "Fresh authentication for sensitive actions",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_agent_governance",
+      "files": [
+        "src/organization-sso.ts",
+        "src/auth.ts",
+        "src/account-security.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/organization-security.test.mjs"
+      ],
+      "documentation": "docs/organization-security.md"
+    },
+    {
+      "id": 16,
+      "title": "Project-level team permissions",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_agent_governance",
+      "files": [
+        "src/organization-sso.ts",
+        "src/auth.ts",
+        "src/account-security.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/organization-security.test.mjs"
+      ],
+      "documentation": "docs/organization-security.md"
+    },
+    {
+      "id": 17,
+      "title": "Workspace-aware app generation",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/blueprint.ts",
+        "src/blueprint-workspaces.ts",
+        "scripts/blueprint-regeneration.mjs",
+        "scripts/cli-compose.mjs"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/blueprint-roadmap.test.mjs",
+        "tests/blueprint-regeneration.test.mjs"
+      ],
+      "documentation": "docs/blueprints.md"
+    },
+    {
+      "id": 18,
+      "title": "Generated dynamic detail pages",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/blueprint.ts",
+        "src/blueprint-workspaces.ts",
+        "scripts/blueprint-regeneration.mjs",
+        "scripts/cli-compose.mjs"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/blueprint-roadmap.test.mjs",
+        "tests/blueprint-regeneration.test.mjs"
+      ],
+      "documentation": "docs/blueprints.md"
+    },
+    {
+      "id": 19,
+      "title": "Explicit public-page generation",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/blueprint.ts",
+        "src/blueprint-workspaces.ts",
+        "scripts/blueprint-regeneration.mjs",
+        "scripts/cli-compose.mjs"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/blueprint-roadmap.test.mjs",
+        "tests/blueprint-regeneration.test.mjs"
+      ],
+      "documentation": "docs/blueprints.md"
+    },
+    {
+      "id": 20,
+      "title": "Enforced relationship cardinality",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/blueprint.ts",
+        "src/blueprint-workspaces.ts",
+        "scripts/blueprint-regeneration.mjs",
+        "scripts/cli-compose.mjs"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/blueprint-roadmap.test.mjs",
+        "tests/blueprint-regeneration.test.mjs"
+      ],
+      "documentation": "docs/blueprints.md"
+    },
+    {
+      "id": 21,
+      "title": "Safe regeneration of edited apps",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/blueprint.ts",
+        "src/blueprint-workspaces.ts",
+        "scripts/blueprint-regeneration.mjs",
+        "scripts/cli-compose.mjs"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/blueprint-roadmap.test.mjs",
+        "tests/blueprint-regeneration.test.mjs"
+      ],
+      "documentation": "docs/blueprints.md"
+    },
+    {
+      "id": 22,
+      "title": "Preview business actions before execution",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_agent_governance",
+      "files": [
+        "src/reviewed-actions.ts",
+        "src/backend.ts",
+        "src/oauth.ts",
+        "src/mcp.ts",
+        "src/agent-activity.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/reviewed-actions.test.mjs",
+        "type-tests/reviewed-action.ts",
+        "type-tests/agent-action.ts"
+      ],
+      "documentation": "docs/governance.md"
+    },
+    {
+      "id": 23,
+      "title": "Granular agent grants",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_agent_governance",
+      "files": [
+        "src/reviewed-actions.ts",
+        "src/backend.ts",
+        "src/oauth.ts",
+        "src/mcp.ts",
+        "src/agent-activity.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/reviewed-actions.test.mjs",
+        "type-tests/reviewed-action.ts",
+        "type-tests/agent-action.ts"
+      ],
+      "documentation": "docs/governance.md"
+    },
+    {
+      "id": 24,
+      "title": "Durable approval inbox",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_agent_governance",
+      "files": [
+        "src/reviewed-actions.ts",
+        "src/backend.ts",
+        "src/oauth.ts",
+        "src/mcp.ts",
+        "src/agent-activity.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/reviewed-actions.test.mjs",
+        "type-tests/reviewed-action.ts",
+        "type-tests/agent-action.ts"
+      ],
+      "documentation": "docs/governance.md"
+    },
+    {
+      "id": 25,
+      "title": "Agent receipts with undo options",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_agent_governance",
+      "files": [
+        "src/reviewed-actions.ts",
+        "src/backend.ts",
+        "src/oauth.ts",
+        "src/mcp.ts",
+        "src/agent-activity.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/reviewed-actions.test.mjs",
+        "type-tests/reviewed-action.ts",
+        "type-tests/agent-action.ts"
+      ],
+      "documentation": "docs/governance.md"
+    },
+    {
+      "id": 26,
+      "title": "Offline conflict-resolution UI",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/offline.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/durable-features-ui.test.mjs"
+      ],
+      "documentation": "docs/offline.md"
+    },
+    {
+      "id": 27,
+      "title": "Persistent collaborative editing",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/collaborative-documents.ts",
+        "src/search.ts",
+        "src/bulk-edit.ts",
+        "src/saved-views.ts",
+        "src/durable-import.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/durable-features.test.mjs",
+        "tests/durable-features-ui.test.mjs",
+        "type-tests/durable-services.ts"
+      ],
+      "documentation": "docs/durable-data-workflows.md"
+    },
+    {
+      "id": 28,
+      "title": "Authorized full-text search",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/collaborative-documents.ts",
+        "src/search.ts",
+        "src/bulk-edit.ts",
+        "src/saved-views.ts",
+        "src/durable-import.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/durable-features.test.mjs",
+        "tests/durable-features-ui.test.mjs",
+        "type-tests/durable-services.ts"
+      ],
+      "documentation": "docs/durable-data-workflows.md"
+    },
+    {
+      "id": 29,
+      "title": "Transactional bulk editing",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/collaborative-documents.ts",
+        "src/search.ts",
+        "src/bulk-edit.ts",
+        "src/saved-views.ts",
+        "src/durable-import.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/durable-features.test.mjs",
+        "tests/durable-features-ui.test.mjs",
+        "type-tests/durable-services.ts"
+      ],
+      "documentation": "docs/durable-data-workflows.md"
+    },
+    {
+      "id": 30,
+      "title": "Shared saved views",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/collaborative-documents.ts",
+        "src/search.ts",
+        "src/bulk-edit.ts",
+        "src/saved-views.ts",
+        "src/durable-import.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/durable-features.test.mjs",
+        "tests/durable-features-ui.test.mjs",
+        "type-tests/durable-services.ts"
+      ],
+      "documentation": "docs/durable-data-workflows.md"
+    },
+    {
+      "id": 31,
+      "title": "Resumable large imports",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_blueprints",
+      "files": [
+        "src/collaborative-documents.ts",
+        "src/search.ts",
+        "src/bulk-edit.ts",
+        "src/saved-views.ts",
+        "src/durable-import.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/durable-features.test.mjs",
+        "tests/durable-features-ui.test.mjs",
+        "type-tests/durable-services.ts"
+      ],
+      "documentation": "docs/durable-data-workflows.md"
+    },
+    {
+      "id": 32,
+      "title": "Localization contracts",
+      "status": "implemented_and_locally_verified",
+      "owner": "root",
+      "files": [
+        "src/i18n.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/i18n.test.mjs"
+      ],
+      "documentation": "docs/localization.md"
+    },
+    {
+      "id": 33,
+      "title": "Complete account-security screens",
+      "status": "implemented_and_locally_verified",
+      "owner": "forty_agent_governance",
+      "files": [
+        "src/organization-sso.ts",
+        "src/auth.ts",
+        "src/account-security.ts",
+        "src/platform.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/organization-security.test.mjs"
+      ],
+      "documentation": "docs/organization-security.md"
+    },
+    {
+      "id": 34,
+      "title": "Recurring schedules with time zones",
+      "status": "implemented_and_locally_verified",
+      "owner": "root",
+      "files": [
+        "src/schedules.ts",
+        "src/reminders.ts",
+        "src/notifications.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/schedules.test.mjs",
+        "tests/recurrence-ui.test.mjs",
+        "tests/notifications.test.mjs"
+      ],
+      "documentation": "docs/reminders-and-delivery.md"
+    },
+    {
+      "id": 35,
+      "title": "Notification delivery controls",
+      "status": "implemented_and_locally_verified",
+      "owner": "root",
+      "files": [
+        "src/schedules.ts",
+        "src/reminders.ts",
+        "src/notifications.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/schedules.test.mjs",
+        "tests/recurrence-ui.test.mjs",
+        "tests/notifications.test.mjs"
+      ],
+      "documentation": "docs/reminders-and-delivery.md"
+    },
+    {
+      "id": 36,
+      "title": "Node 26 compiler compatibility",
+      "status": "implemented_and_locally_verified",
+      "owner": "root",
+      "files": [
+        "scripts/compiler.mjs",
+        "src/buckets.ts"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/compiler-runtime.test.mjs",
+        "tests/compiler-cli.test.mjs",
+        "tests/buckets.test.mjs"
+      ],
+      "documentation": "docs/development-tools.md"
+    },
+    {
+      "id": 37,
+      "title": "State-preserving development updates",
+      "status": "implemented_and_locally_verified",
+      "owner": "root",
+      "files": [
+        "src/dev-updates.ts",
+        "scripts/dev-browser.mjs",
+        "scripts/clank-dev.mjs"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/dev-updates.test.mjs"
+      ],
+      "documentation": "docs/development-tools.md"
+    },
+    {
+      "id": 38,
+      "title": "Clank editor integration",
+      "status": "implemented_and_locally_verified",
+      "owner": "root",
+      "files": [
+        "scripts/editor.mjs",
+        "scripts/clank.mjs"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/editor.test.mjs"
+      ],
+      "documentation": "docs/development-tools.md"
+    },
+    {
+      "id": 39,
+      "title": "Signed release attestations",
+      "status": "implemented_and_locally_verified",
+      "owner": "root",
+      "files": [
+        "src/release-attestation.ts",
+        "src/platform.ts",
+        "scripts/cli-deploy.mjs"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "tests/release-attestation.test.mjs"
+      ],
+      "documentation": "docs/release-attestations.md"
+    },
+    {
+      "id": 40,
+      "title": "Runnable documentation examples",
+      "status": "implemented_and_locally_verified",
+      "owner": "root",
+      "files": [
+        "scripts/docs-examples.mjs",
+        "scripts/check.mjs"
+      ],
+      "verification": [
+        "verification.json: releaseChecks (Node22,24,26)"
+      ],
+      "tests": [
+        "docs/runnable-examples.md"
+      ],
+      "documentation": "docs/runnable-examples.md"
+    }
+  ],
+  "verification": {
+    "state": "final runtime matrix and crash-guardian review in progress",
+    "developmentRemoteCiRuns": 0,
+    "privilegedLocalVm": {
+      "os": "Debian 13",
+      "node": "24.21.0",
+      "docker": "26.1.5",
+      "tests": 5,
+      "passed": 5,
+      "skipped": 0,
+      "scope": [
+        "real Docker isolation and cleanup",
+        "real packet filtering",
+        "real XFS byte/WAL/inode enforcement"
+      ]
+    },
+    "ubuntuCompatibility": {
+      "os": "Ubuntu 24.04",
+      "node": "24.21.0",
+      "tests": 20,
+      "passed": 19,
+      "skipped": 1,
+      "skipReason": "XFS proven separately in privileged VM",
+      "globalAppArmorNamespaceRestriction": 1,
+      "profile": "scripts/ci-linux.apparmor"
+    },
+    "publicTypeConsumers": {
+      "typescript": "5.9.3",
+      "newFixtures": 4,
+      "passed": true
+    },
+    "wholeSourceTypecheck": {
+      "baselineDiagnostics": 444,
+      "currentDiagnostics": 321,
+      "introducedDiagnostics": 0,
+      "note": "Pre-existing whole-source errors remain; not an existing CI gate."
+    }
+  },
+  "verificationRecord": "verification.json",
+  "staticAnalysisRecord": "codeql-findings.json",
+  "completionScope": "All40 features implemented within their documented opt-in/bounded operating contracts. See verification.json for limitations and remaining baseline findings."
+}

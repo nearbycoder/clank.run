@@ -36,7 +36,8 @@ try {
     "--pack-destination",
     packageDirectory,
   ], { cwd: repository });
-  const packResult = JSON.parse(packed.stdout);
+  const parsedPackResult = JSON.parse(packed.stdout);
+  const packResult = Array.isArray(parsedPackResult) ? parsedPackResult : Object.values(parsedPackResult);
   assert.equal(packResult.length, 1);
   const tarball = join(packageDirectory, packResult[0].filename);
 

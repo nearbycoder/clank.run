@@ -16,6 +16,8 @@ export interface IngressRoute {
   hosts: readonly string[];
   upstream: string;
   active: boolean;
+  releaseId?: string;
+  canary?: { readonly upstream: string; readonly releaseId: string; readonly trafficPercent: number };
   /** Binds a remote provider origin to one exact application generation. */
   runtime?: IngressRuntimeRoute;
 }
@@ -41,6 +43,11 @@ export interface IngressRequestMetric {
   durationMs: number;
   requestBytes: number;
   responseBytes: number;
+  /** Terminal body outcome; bytes count chunks handed to the downstream reader. */
+  responseOutcome: "complete" | "cancelled" | "error";
+  /** Exact selected target, present only after routing. */
+  upstream?: string;
+  releaseId?: string;
   recordedAt: number;
   /** True only when the request passed the configured admission policy. */
   admitted: boolean;
@@ -93,6 +100,7 @@ export function createManagedIngress(options: {
   const retries = integerRange(options.retries ?? 1, "retries", 0, 3);
   const circuitFailures = integerRange(options.circuitFailures ?? 5, "circuitFailures", 1, 100);
   const circuitResetMs = integerRange(options.circuitResetMs ?? 30_000, "circuitResetMs", 100, 60 * 60_000);
+  const trafficOrdinals = new Map<string, number>();
   const circuits = new Map<string, { failures: number; openedAt: number; target: string }>();
   const inFlight = new Map<string, {
     leases: Set<symbol>;
@@ -144,6 +152,12 @@ export function createManagedIngress(options: {
         hosts: Object.freeze(route.hosts.map(domainName)),
         upstream: upstreamUrl(route.upstream, options.allowedUpstreamHosts),
         active: route.active === true,
+        ...(route.releaseId ? { releaseId: opaque(route.releaseId, "release ID") } : {}),
+        ...(route.canary ? { canary: {
+          upstream: upstreamUrl(route.canary.upstream, options.allowedUpstreamHosts),
+          releaseId: opaque(route.canary.releaseId, "canary release ID"),
+          trafficPercent: integerRange(route.canary.trafficPercent, "canary traffic percent", 0, 100),
+        } } : {}),
         ...(route.runtime === undefined
           ? {}
           : { runtime: normalizeIngressRuntimeRoute(route.runtime) }),
@@ -184,75 +198,76 @@ export function createManagedIngress(options: {
       if (!route) return ingressProblem(404, "ROUTE_NOT_FOUND", "No application is assigned to this host.");
       const metricRoute = route;
       let release = (): void => undefined;
-      const finish = (response: Response, trackBody = false): Response => {
-        if (!trackBody || !response.body) {
-          release();
-          return response;
-        }
-        const reader = response.body.getReader();
-        const body = new ReadableStream<Uint8Array>({
-          async pull(controller) {
-            try {
-              const chunk = await reader.read();
-              if (chunk.done) {
-                release();
-                controller.close();
-              } else {
-                controller.enqueue(chunk.value);
-              }
-            } catch (error) {
-              release();
-              controller.error(error);
-            }
-          },
-          async cancel(reason) {
-            try {
-              await reader.cancel(reason);
-            } finally {
-              release();
-            }
-          },
-        });
-        return new Response(body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        });
-      };
-      try {
       const startedAt = performance.now();
       const recordedAt = Date.now();
       let requestBytes = 0;
       let admitted = options.admitRequest === undefined;
-      const observed = (response: Response): Response => {
-        const declaredResponseBytes = request.method === "HEAD"
-          || response.status === 204
-          || response.status === 304
-          ? 0
-          : Number(response.headers.get("content-length"));
+      let statusCode = 500;
+      let responseBytes = 0;
+      let metricSent = false;
+      let selectedUpstream: string | undefined, selectedReleaseId: string | undefined;
+      const report = (responseOutcome: IngressRequestMetric["responseOutcome"]): void => {
+        if (metricSent) return;
+        metricSent = true;
         const metric: IngressRequestMetric = {
-          projectId: metricRoute.projectId,
-          routeId: metricRoute.id,
-          method: knownHttpMethod(request.method),
-          statusCode: response.status,
+          projectId: metricRoute.projectId, routeId: metricRoute.id,
+          method: knownHttpMethod(request.method), statusCode,
           durationMs: Math.max(0, performance.now() - startedAt),
-          requestBytes,
-          responseBytes: Number.isSafeInteger(declaredResponseBytes) && declaredResponseBytes >= 0
-            ? declaredResponseBytes
-            : 0,
-          recordedAt,
-          admitted,
+          requestBytes, responseBytes, responseOutcome, recordedAt, admitted,
+          ...(selectedUpstream ? { upstream: selectedUpstream, releaseId: selectedReleaseId } : {}),
         };
         try {
           const pending = options.onRequest?.(Object.freeze(metric));
-          if (pending && typeof (pending as Promise<void>).catch === "function") {
-            void (pending as Promise<void>).catch(() => undefined);
-          }
-        } catch {
-          // Observability must never affect application traffic.
-        }
-        return response;
+          if (pending && typeof (pending as Promise<void>).catch === "function") void pending.catch(() => undefined);
+        } catch { /* Observability must never affect application traffic. */ }
       };
+      const observed = (response: Response): Response => { statusCode = response.status; return response; };
+      const finish = (response: Response, _trackBody = false): Response => {
+        if (!response.body || request.method === "HEAD" || response.status === 204 || response.status === 304) {
+          void response.body?.cancel().catch(() => undefined);
+          report("complete"); release();
+          return response.body ? new Response(null, { status: response.status, statusText: response.statusText, headers: response.headers }) : response;
+        }
+        const reader = response.body.getReader();
+        let streamController: ReadableStreamDefaultController<Uint8Array>;
+        let ended = false;
+        const settle = (outcome: IngressRequestMetric["responseOutcome"]): void => {
+          if (ended) return;
+          ended = true;
+          request.signal.removeEventListener("abort", abort);
+          report(outcome); release();
+        };
+        const abort = (): void => {
+          if (ended) return;
+          settle("cancelled");
+          void reader.cancel(request.signal.reason).catch(() => undefined);
+          streamController.error(request.signal.reason ?? new Error("Request aborted."));
+        };
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller;
+            request.signal.addEventListener("abort", abort, { once: true });
+            if (request.signal.aborted) abort();
+          },
+          async pull(controller) {
+            try {
+              const chunk = await reader.read();
+              if (ended) return;
+              if (chunk.done) { settle("complete"); controller.close(); }
+              else {
+                responseBytes = Math.min(Number.MAX_SAFE_INTEGER, responseBytes + chunk.value.byteLength);
+                controller.enqueue(chunk.value);
+              }
+            } catch (error) { if (!ended) { settle("error"); controller.error(error); } }
+          },
+          async cancel(reason) {
+            settle("cancelled");
+            await reader.cancel(reason);
+          },
+        }, { highWaterMark: 0 });
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      };
+      try {
       const declared = Number(request.headers.get("content-length"));
       if (Number.isFinite(declared) && declared > maxBodyBytes) {
         requestBytes = Math.max(0, declared);
@@ -331,11 +346,22 @@ export function createManagedIngress(options: {
           )));
         }
       }
+      let circuitKey = route.id;
+      if (route.canary) {
+        if (route.runtime) throw new Error("Provider runtime canaries require generation-aware routing.");
+        const ordinal = trafficOrdinals.get(route.id) ?? 0;
+        trafficOrdinals.set(route.id, (ordinal + 1) % 100);
+        if (ordinal < route.canary.trafficPercent) {
+          route = { ...route, upstream: route.canary.upstream, releaseId: route.canary.releaseId, canary: undefined };
+          circuitKey += ":canary";
+        }
+      }
+      selectedUpstream = route.upstream; selectedReleaseId = route.releaseId;
       const targetIdentity = ingressRouteIdentity(route);
       release = retain(route.upstream);
-      let circuit = circuits.get(route.id);
+      let circuit = circuits.get(circuitKey);
       if (circuit && circuit.target !== targetIdentity) {
-        circuits.delete(route.id);
+        circuits.delete(circuitKey);
         circuit = undefined;
       }
       if (circuit && circuit.failures >= circuitFailures && Date.now() - circuit.openedAt < circuitResetMs) {
@@ -364,14 +390,14 @@ export function createManagedIngress(options: {
             redirect: "manual",
           });
           if (response.status >= 500) {
-            recordCircuitFailure(route.id, targetIdentity);
+            recordCircuitFailure(circuitKey, targetIdentity);
             if (attempt + 1 < attempts) {
               await response.body?.cancel().catch(() => undefined);
               await backoff(attempt);
               continue;
             }
           } else {
-            clearCircuit(route.id, targetIdentity);
+            clearCircuit(circuitKey, targetIdentity);
           }
           return finish(observed(new Response(response.body, {
             status: response.status,
@@ -381,7 +407,7 @@ export function createManagedIngress(options: {
         } catch (error) {
           lastError = error;
           if (request.signal.aborted) break;
-          recordCircuitFailure(route.id, targetIdentity);
+          recordCircuitFailure(circuitKey, targetIdentity);
           if (attempt + 1 < attempts) await backoff(attempt);
         } finally {
           clearTimeout(timeout);
@@ -482,8 +508,10 @@ export interface DomainManager {
 }
 
 export class DomainVerificationError extends Error {
-  constructor(readonly code: "INVALID_CHALLENGE" | "DNS_TXT_MISSING", message: string) {
+  declare readonly code: "INVALID_CHALLENGE" | "DNS_TXT_MISSING";
+  constructor(code: "INVALID_CHALLENGE" | "DNS_TXT_MISSING", message: string) {
     super(message);
+    this.code = code;
     this.name = "DomainVerificationError";
   }
 }
@@ -907,7 +935,7 @@ function ingressTarget(route: IngressRoute, pathname: string, search: string): U
 }
 
 function ingressRouteIdentity(route: IngressRoute): string {
-  if (!route.runtime) return route.upstream;
+  if (!route.runtime) return route.releaseId ? `${route.upstream}\n${route.releaseId}` : route.upstream;
   return [
     route.upstream,
     route.runtime.protocol,

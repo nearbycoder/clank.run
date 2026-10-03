@@ -62,8 +62,10 @@ interface HttpModule {
 }
 
 class NodeRequestError extends Error {
-  constructor(readonly status: number, message: string) {
+  declare readonly status: number;
+  constructor(status: number, message: string) {
     super(message);
+    this.status = status;
   }
 }
 

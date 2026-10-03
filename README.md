@@ -300,6 +300,18 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 <details>
 <summary><strong>Complete documentation index</strong></summary>
 
+- [Development updates and editor integration](docs/development-tools.md)
+- [Durable data workflows](docs/durable-data-workflows.md)
+- [Linux provider disk and outbound policies](docs/linux-provider-isolation.md)
+- [Planned provider node evacuation](docs/planned-node-evacuation.md)
+- [Localization](docs/localization.md)
+- [Organization and account security](docs/organization-security.md)
+- [Operational recovery, canaries, and alerts](docs/operational-recovery.md)
+- [Signed application releases](docs/release-attestations.md)
+- [Recurring reminders and notification delivery](docs/reminders-and-delivery.md)
+- [Runnable documentation examples](docs/runnable-examples.md)
+- [SQLite worker isolation](docs/sqlite-isolation.md)
+
 - [Documentation site source](docs-site/README.md)
 - [Typed tasks, failures, and services](docs/task.md)
 - [Headless UI behavior](https://docs.clank.run/docs/ui)

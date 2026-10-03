@@ -34,6 +34,8 @@ export interface AppRelationshipDefinition {
      * either endpoint that targets the other endpoint. Clank infers it when
      * exactly one unambiguous reference exists.
      */
+    /** Generated join entity for many-to-many edges. */
+    join?: string;
     reference?: {
         entity: string;
         field: string;
@@ -183,7 +185,7 @@ export interface AppBlueprint extends Omit<AppBlueprintInput, "protocol" | "slug
     slug: string;
     version: number;
     auth: {
-        required: boolean;
+        required: true;
         organizations: boolean;
         roles: Record<string, AppRoleDefinition>;
     };

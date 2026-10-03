@@ -82,8 +82,10 @@ export const Exit = Object.freeze({
 /** Rejection produced by runPromise. Inspect `cause` instead of parsing the message. */
 export class TaskExecutionError<E = unknown> extends Error {
   readonly name = "TaskExecutionError";
-  constructor(readonly cause: Cause<E>) {
+  declare readonly cause: Cause<E>;
+  constructor(cause: Cause<E>) {
     super(Cause.pretty(cause), { cause: causeValue(cause) });
+    this.cause = cause;
   }
 }
 
@@ -91,7 +93,9 @@ export class TaskExecutionError<E = unknown> extends Error {
 export class Service<Value> {
   readonly key = Symbol();
   readonly _Value!: (_: Value) => Value;
-  constructor(readonly name: string) {
+  declare readonly name: string;
+  constructor(name: string) {
+    this.name = name;
     if (!name.trim() || name.length > 128) throw new TypeError("A service name must contain 1 to 128 characters.");
     Object.freeze(this);
   }
@@ -208,7 +212,10 @@ export interface ScheduleContext<E> {
 
 /** A reusable retry policy. `next` returns the delay before the next attempt, or null to stop. */
 export class Schedule<E = unknown> {
-  constructor(readonly next: (context: ScheduleContext<E>) => number | null) {}
+  declare readonly next: (context: ScheduleContext<E>) => number | null;
+  constructor(next: (context: ScheduleContext<E>) => number | null) {
+    this.next = next;
+  }
 
   while(predicate: (error: E, attempt: number) => boolean): Schedule<E> {
     return new Schedule((context) => predicate(context.error, context.attempt) ? this.next(context) : null);
@@ -333,7 +340,10 @@ export class Task<A, E = never, R = never> {
   readonly _E!: () => E;
   readonly _R!: (_: R) => void;
 
-  constructor(readonly evaluate: Evaluator<A, E>) {}
+  declare readonly evaluate: Evaluator<A, E>;
+  constructor(evaluate: Evaluator<A, E>) {
+    this.evaluate = evaluate;
+  }
 
   map<B>(mapper: (value: A) => B): Task<B, E, R> {
     return new Task(async (context) => {
@@ -708,10 +718,13 @@ export class Task<A, E = never, R = never> {
 
 export class Fiber<A, E> {
   #done = false;
+  declare readonly exit: Promise<Exit<A, E>>;
+  declare private readonly controller: AbortController;
   constructor(
-    readonly exit: Promise<Exit<A, E>>,
-    private readonly controller: AbortController,
+    exit: Promise<Exit<A, E>>,
+    controller: AbortController,
   ) {
+    this.exit = exit; this.controller = controller;
     void exit.finally(() => { this.#done = true; });
   }
 
@@ -734,15 +747,19 @@ export class Fiber<A, E> {
 
 export class TimeoutError extends Error {
   readonly name = "TimeoutError";
-  constructor(readonly milliseconds: number) {
+  declare readonly milliseconds: number;
+  constructor(milliseconds: number) {
     super(`Task timed out after ${milliseconds}ms.`);
+    this.milliseconds = milliseconds;
   }
 }
 
 export class MissingServiceError extends Error {
   readonly name = "MissingServiceError";
-  constructor(readonly serviceName: string) {
+  declare readonly serviceName: string;
+  constructor(serviceName: string) {
     super(`Task service is not provided: ${serviceName}`);
+    this.serviceName = serviceName;
   }
 }
 
@@ -753,7 +770,10 @@ export class Layer<Provides, E = never, R = never> {
   readonly _Provides!: () => Provides;
   readonly _E!: () => E;
   readonly _R!: (_: R) => void;
-  constructor(readonly buildLayer: LayerBuilder<E>) {}
+  declare readonly buildLayer: LayerBuilder<E>;
+  constructor(buildLayer: LayerBuilder<E>) {
+    this.buildLayer = buildLayer;
+  }
 
   merge<P2, E2, R2>(other: Layer<P2, E2, R2>): Layer<Provides | P2, E | E2, R | Exclude<R2, Provides>> {
     return new Layer(async (context) => {
@@ -953,7 +973,10 @@ function neverAbortedSignal(): AbortSignal {
 
 class TaskInterruption {
   readonly _tag = "TaskInterruption";
-  constructor(readonly reason: unknown) {}
+  declare readonly reason: unknown;
+  constructor(reason: unknown) {
+    this.reason = reason;
+  }
 }
 
 function interruption(reason: unknown): TaskInterruption {

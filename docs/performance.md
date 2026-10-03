@@ -74,19 +74,22 @@ npm test -- tests/dom.test.mjs
 ## CI performance budgets
 
 `npm run performance` builds the framework and prints a JSON budget report. The same budget
-checks run in `npm test` and the complete release gate on both supported Node versions.
+checks run in `npm test` and the complete release gate on supported Node 22.16, 24 and 26 runtimes.
 Budgets fail CI for excess work or bytes, including missing or non-finite measurements:
 
 | Measurement | Maximum |
 | --- | --- |
 | Effect executions for 1,000 writes through 100 computed branches | 1,000 |
 | Obsolete effect executions after 100 completed SSR requests | 0 |
-| Gzipped core / DOM / router / forms module bytes | 4,500 / 12,000 / 3,500 / 5,500 |
+| Gzipped core / DOM / router / forms module bytes, Node 22/24 | 4,500 / 12,000 / 3,500 / 5,500 |
+| Gzipped core / DOM / router / forms module bytes, Node 26 | 5,250 / 12,000 / 3,500 / 6,000 |
 
 The byte limits cover each compiled module separately, not its transitive imports or a complete
 application bundle. Compression uses gzip level 9. Wall-clock timings are reported for local
 comparison but do not fail CI on shared runners. The existing real ingress test separately
 enforces one domain query and zero fleet queries for a local-only installation.
+
+Node 26 uses native type stripping, which preserves source layout and comments instead of printing transformed code. Its measured core/forms baselines are 5,088 and 5,746 compressed bytes. The additional byte allowance covers that compiler representation; runtime work limits and the published Node 24 build envelope remain unchanged.
 
 Change a budget in `scripts/performance-budgets.mjs` only with a reviewed explanation of the
 additional work or payload. To reproduce ingress and HTTP transfer regressions alongside these

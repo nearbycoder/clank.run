@@ -12,7 +12,7 @@ Runner choice changes the code boundary:
 
 Never operate the process runner as a public code sandbox.
 
-The host's SQLite helpers remain a separate isolation limitation: they run in bounded worker processes but retain host filesystem authority when opening application-writable paths and sidecars. Concurrent path substitution is not contained by Docker's application namespace. Until database work is confined to a tenant filesystem namespace, restrict deployers and application data-directory writers to trusted operators, including with the Docker runner. See [SQLite migrations](migrations.md) for worker limits and the Linux util-linux `prlimit` requirement; non-Linux hosts require external native-memory limits too.
+On Linux, the host's SQLite helpers run in bounded Bubblewrap namespaces with pinned, per-tenant filesystem capabilities. Concurrent path substitution cannot redirect those mounts or backup publication to another host directory. Install and permit the required namespace tools before upgrading; missing or denied isolation fails closed. See [SQLite worker isolation](sqlite-isolation.md) for the exact boundary, host requirements and verification. Non-Linux helpers lack this filesystem boundary and require trusted deployers or an external sandbox.
 
 The packaged production entry point defaults to `CLANK_HOSTING_PROFILE=isolated`, which selects
 Docker and rejects a process runner. `CLANK_HOSTING_PROFILE=trusted` is an explicit low-cost

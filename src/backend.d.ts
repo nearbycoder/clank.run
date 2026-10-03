@@ -1,6 +1,7 @@
 import { createLiveReplayStore, applyLiveSplice, type LiveResumeOptions } from "./live-resume.js";
 import type { DatabaseQueryDiagnostic } from "./query-advisor.js";
 import type { AgentActivityOptions, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
+import type { ReviewedActions, ReviewedActionsOptions } from "./reviewed-actions.js";
 import type { MutationReceiptOptions } from "./mutation-receipts.js";
 import type { Tracer } from "./observability.js";
 import { type Cleanup, type ReactiveSignal } from "./core.js";
@@ -164,6 +165,7 @@ interface DatabaseSyncLike {
     prepare(sql: string): StatementLike;
     close(): void;
     enableLoadExtension?(allow: boolean): void;
+    createSession?(options: { table?: string }): { changeset(): Uint8Array; close(): void };
 }
 export interface SQLiteOptions {
   /** Opt-in metadata-only SQL plans and execution statistics, bounded to 500 shapes. */
@@ -292,7 +294,7 @@ export interface FunctionReference<Kind extends "query" | "mutation", Input, Out
     readonly __input?: Input;
     readonly __output?: Output;
 }
-export type ApiOf<Tree> = {
+export type ApiOf<Tree> = 0 extends (1 & Tree) ? any : {
     readonly [Key in keyof Tree]: Tree[Key] extends BackendFunction<infer Kind, infer Input, infer Output, any, any, any, any> ? FunctionReference<Kind, Input, Output> : Tree[Key] extends object ? ApiOf<Tree[Key]> : never;
 };
 export declare function functionPath(reference: FunctionReference<any, any, any>): string;
@@ -301,8 +303,8 @@ type FunctionsFrom<Source> = Source extends {
     readonly functions: infer Functions extends FunctionTree;
 } ? Functions : Source;
 export declare function createApi<Source extends FunctionTree | BackendDefinition<any, any, any, any>>(): ApiOf<FunctionsFrom<Source>>;
-type InputOf<Reference> = Reference extends FunctionReference<any, infer Input, any> ? Input : never;
-type OutputOf<Reference> = Reference extends FunctionReference<any, any, infer Output> ? Output : never;
+type InputOf<Reference> = 0 extends (1 & Reference) ? any : Reference extends FunctionReference<any, infer Input, any> ? Input : never;
+type OutputOf<Reference> = 0 extends (1 & Reference) ? any : Reference extends FunctionReference<any, any, infer Output> ? Output : never;
 type InputTuple<Input> = {} extends Input ? [args?: Input] : [args: Input];
 export interface LiveQuery<Value> {
     readonly data: ReactiveSignal<Value | undefined>;
@@ -411,12 +413,14 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
     inspectQueries(): readonly QueryDiagnostic[];
   inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
     inspectAgentActivity(filter?: AgentActivityFilter): AgentActivitySnapshot;
+    readonly reviewedActions: ReviewedActions | undefined;
     close(): void;
 }
-export interface OpenBackendOptions extends SQLiteOptions {
+export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extends SQLiteOptions {
   /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
   liveResume?: LiveResumeOptions;
     agentActivity?: AgentActivityOptions;
+    reviewedActions?: ReviewedActionsOptions;
     offlineMutations?: MutationReceiptOptions;
     tracer?: Tracer;
     diagnostics?: boolean;
@@ -430,6 +434,7 @@ export interface OpenBackendOptions extends SQLiteOptions {
     maxLiveArgumentBytes?: number;
     maxLivePayloadBytes?: number;
     maxLiveConnections?: number;
+    /** Maximum retained query results; zero reauthorizes and recomputes every query. */
     maxCacheEntries?: number;
     onError?: (error: unknown) => void;
     jobs?: Omit<OpenJobsOptions, "database">;
@@ -450,6 +455,7 @@ export interface OpenBackendOptions extends SQLiteOptions {
         browserCors?: boolean;
         /** Maximum simultaneously active OAuth grants for one application user. Defaults to 100. */
         maxUserGrants?: number;
+        actionContext?: (action: string, input: unknown, auth: AuthRequest<any>, db: ReadDatabase<DB>) => { workspaceId?: string; resourceIds?: readonly string[] };
         /**
          * Idempotency window for a client retrying the immediately previous OAuth
          * refresh token. Defaults to 15 minutes and is capped at one hour.
@@ -463,7 +469,7 @@ export interface OpenBackendOptions extends SQLiteOptions {
         refreshTokenRotationMode?: "adaptive" | "strict";
     };
 }
-export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>, options?: OpenBackendOptions): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>>;
+export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>, options?: OpenBackendOptions<Schema>): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>>;
 export declare function functionKey(path: string, args: unknown): string;
 export declare function stableStringify(value: unknown): string;
 export {};

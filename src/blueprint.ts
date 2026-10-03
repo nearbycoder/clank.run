@@ -1,4 +1,5 @@
 import { defineBucket } from "./buckets.ts";
+import { workspaceTablesSource, workspaceFunctionsSource, guardedDatabaseSource } from "./blueprint-workspaces.ts";
 
 export type AppFieldType =
   | "string"
@@ -50,6 +51,8 @@ export interface AppRelationshipDefinition {
    * either endpoint that targets the other endpoint. Clank infers it when
    * exactly one unambiguous reference exists.
    */
+  /** Generated join entity for many-to-many edges; defaults to <name>Links. */
+  join?: string;
   reference?: {
     entity: string;
     field: string;
@@ -226,7 +229,7 @@ export interface AppBlueprint extends Omit<
   slug: string;
   version: number;
   auth: {
-    required: boolean;
+    required: true;
     organizations: boolean;
     roles: Record<string, AppRoleDefinition>;
   };
@@ -594,7 +597,7 @@ function generatedTestSource(app: AppBlueprint): string {
       label: humanize(route.view),
       roles: typeof route.access === "object" ? route.access.roles ?? [] : [],
       entities: route.entity ? [route.entity] : [],
-      allowMutations: true,
+      allowMutations: route.access !== "public" && !route.path.includes(":"),
       admin: false,
     })),
     ...(app.admin ? [{
@@ -802,6 +805,26 @@ for (const fixtureContract of contract.fixtures) {
           entity.ownership === "public" ? fixtureCount : 0,
           \`\${entityName} ownership visibility\`,
         );
+      }
+      for (const [entityName, entity] of Object.entries(contract.entities)) {
+        if (entity.ownership !== "workspace") continue;
+        const ownerAlias = Object.values(fixture.records[entityName] ?? {})[0]?.owner;
+        if (!ownerAlias) continue;
+        const owner = users[ownerAlias];
+        const action = actionFor(entityName, "list");
+        setActionRole(runtime, owner.user.id, action, contract.app.defaultRole);
+        const caller = await runtime.caller(authRequest("/", owner.cookie));
+        const before = caller.query(action.path, {}).value;
+        const workspace = caller.mutation("workspaces.create", { name: "Isolation verification" }).value;
+        assert.deepEqual(caller.query(action.path, {}).value, [], "new workspace cannot see personal workspace data");
+        const stranger = await runtime.caller(authRequest("/", outsider.cookie));
+        assert.throws(() => stranger.mutation("workspaces.select", { id: workspace }), { code: "WORKSPACE_NOT_FOUND" });
+        caller.mutation("workspaces.addMember", { workspaceId: workspace, userId: outsider.user.id });
+        stranger.mutation("workspaces.select", { id: workspace });
+        caller.mutation("workspaces.removeMember", { workspaceId: workspace, userId: outsider.user.id });
+        assert.equal(stranger.query("workspaces.list", {}).value.active, outsider.user.id);
+        caller.mutation("workspaces.select", { id: owner.user.id });
+        assert.deepEqual(caller.query(action.path, {}).value, before, "switching back retains personal data");
       }
     } finally {
       runtime.close();
@@ -1099,7 +1122,7 @@ Run \`npm test\`, \`npm run doctor\`, and \`npm run deploy:check\`. With the dev
 }
 
 function routeAccessLabel(access: AppRouteDefinition["access"]): string {
-  if (access === "public") return "public shell";
+  if (access === "public") return "public read-only page";
   if (access === "authenticated") return "authenticated";
   return `roles ${access.roles?.map((role) => `\`${role}\``).join(", ")}`;
 }
@@ -1146,12 +1169,23 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     throw new TypeError("App blueprint protocol must be clank-app/1.");
   }
 
-  const sourceEntities = record(input.entities, "entities");
+  const sourceEntities = { ...record(input.entities, "entities") };
+  for (const relation of input.relationships ?? []) {
+    if (relation.kind !== "many-to-many") continue;
+    const join = identifier(relation.join ?? `${relation.name}Links`, "join entity");
+    const from = sourceEntities[relation.from] as AppEntityDefinition;
+    const to = sourceEntities[relation.to] as AppEntityDefinition;
+    if (!from || !to || (from.ownership ?? "user") !== (to.ownership ?? "user")) throw new TypeError("Many-to-many endpoints must exist and share ownership.");
+    if (relation.onDelete === "nullify") throw new TypeError("Many-to-many edges support restrict or cascade deletion.");
+    const existing = sourceEntities[join] as AppEntityDefinition | undefined;
+    if (existing && (existing.fields?.fromId?.entity !== relation.from || existing.fields?.toId?.entity !== relation.to || existing.fields?.fromId?.type !== "reference" || existing.fields?.toId?.type !== "reference" || existing.fields?.fromId?.required === false || existing.fields?.toId?.required === false || existing.fields?.fromId?.nullable || existing.fields?.toId?.nullable || existing.ownership !== (from.ownership ?? "user"))) throw new TypeError(`Join entity ${join} conflicts with the relationship contract.`);
+    sourceEntities[join] ??= { description: `Links ${relation.from} to ${relation.to}.`, ownership: from.ownership ?? "user", displayField: "label", fields: { label: { type: "string", default: "Relationship" }, fromId: { type: "reference", entity: relation.from }, toId: { type: "reference", entity: relation.to } }, indexes: { by_pair: { fields: ["fromId", "toId"] }, by_to: { fields: ["toId"] } } };
+  }
   if (Object.keys(sourceEntities).length === 0) throw new TypeError("App blueprint requires at least one entity.");
   const entities: Record<string, AppEntityDefinition> = {};
   for (const [entityName, raw] of Object.entries(sourceEntities)) {
     identifier(entityName, "entity");
-    if (RESERVED_API_SEGMENTS.has(entityName)) {
+    if (RESERVED_API_SEGMENTS.has(entityName) || ["workspaces", "clankWorkspaces", "clankMemberships", "clankWorkspaceSelection"].includes(entityName)) {
       throw new TypeError(`Entity name ${entityName} conflicts with the typed API reference protocol.`);
     }
     const entity = object(raw, `entities.${entityName}`);
@@ -1160,6 +1194,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     const fields: Record<string, AppFieldDefinition> = {};
     for (const [fieldName, fieldRaw] of Object.entries(fieldsInput)) {
       identifier(fieldName, "field");
+      if (fieldName === "workspaceId" && entity.ownership === "workspace") throw new TypeError("workspaceId is managed by generated workspace authorization.");
       fields[fieldName] = normalizeField(fieldRaw, `${entityName}.${fieldName}`);
     }
     const displayField = text(entity.displayField, `${entityName}.displayField`, 1, 100);
@@ -1176,6 +1211,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     const indexes: Record<string, AppIndexDefinition> = {};
     for (const [indexName, indexRaw] of Object.entries(record(entity.indexes ?? {}, `${entityName}.indexes`))) {
       identifier(indexName, "index");
+      if (indexName === "by_clank_workspace" && entity.ownership === "workspace") throw new TypeError("by_clank_workspace is reserved for workspace scoping.");
       const index = object(indexRaw, `${entityName}.indexes.${indexName}`);
       const fieldsForIndex = stringArray(index.fields, `${entityName}.indexes.${indexName}.fields`, 1);
       unique(fieldsForIndex, `${entityName}.indexes.${indexName}.fields`);
@@ -1271,6 +1307,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     const to = text(relation.to, `relationships.${index}.to`, 1, 100);
     if (!Object.hasOwn(entities, from) || !Object.hasOwn(entities, to)) throw new TypeError(`Relationship ${index} references an unknown entity.`);
     const onDelete = enumValue(relation.onDelete ?? "restrict", ["restrict", "cascade", "nullify"], `relationships.${index}.onDelete`);
+    if (relation.kind === "many-to-many") return { name: identifier(text(relation.name, `relationships.${index}.name`, 1, 100), "relationship"), from, to, kind: "many-to-many", onDelete, join: relation.join ?? `${relation.name}Links` } as AppRelationshipDefinition;
     const reference = normalizeRelationshipReference(relation.reference, entities, from, to, `relationships.${index}.reference`);
     if (!reference) {
       throw new TypeError(`Relationship ${index} requires an explicit reference because no single reference field can be inferred.`);
@@ -1296,7 +1333,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
   if (!Array.isArray(input.routes) || input.routes.length === 0) throw new TypeError("App blueprint requires at least one route.");
   const routes = input.routes.map((raw, index) => {
     const route = object(raw, `routes.${index}`);
-    const path = routePath(route.path, `routes.${index}.path`);
+    const path = routePath(route.path, `routes.${index}.path`, true);
     if (
       path === "/app.js"
       || path === "/view.js"
@@ -1311,6 +1348,8 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     const entity = route.entity === undefined ? undefined : text(route.entity, `routes.${index}.entity`, 1, 100);
     if (entity && !Object.hasOwn(entities, entity)) throw new TypeError(`Route ${path} references unknown entity ${entity}.`);
     const access = normalizeAccess(route.access ?? "authenticated", roles, `routes.${index}.access`);
+    if (path.includes(":") && !entity) throw new TypeError(`Detail route ${path} requires an entity.`);
+    if (access === "public" && entity && entities[entity].ownership !== "public") throw new TypeError(`Public route ${path} requires an explicitly public entity.`);
     return {
       path,
       view: text(route.view, `routes.${index}.view`, 1, 100),
@@ -1319,7 +1358,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
       access,
     } as AppRouteDefinition;
   });
-  unique(routes.map((route) => route.path), "route paths");
+  unique(routes.map((route) => route.path.replace(/:[A-Za-z][A-Za-z0-9_]*/gu, ":id")), "route paths");
 
   const actions: Record<string, AppActionDefinition> = {};
   for (const [actionName, actionRaw] of Object.entries(record(input.actions ?? {}, "actions"))) {
@@ -1337,7 +1376,7 @@ function normalizeApp(input: AppBlueprintInput): AppBlueprint {
     if (entity && !ACTION_SEGMENT.test(localActionName)) {
       throw new TypeError(`Action ${actionName} must end with a non-empty action identifier.`);
     }
-    if (RESERVED_API_SEGMENTS.has(localActionName)) {
+    if (RESERVED_API_SEGMENTS.has(localActionName) || (localActionName === "detail" && routes.some((route) => route.entity === entity && route.path.includes(":"))) || (localActionName === "publicList" && routes.some((route) => route.entity === entity && route.access === "public"))) {
       throw new TypeError(`Action ${actionName} conflicts with the typed API reference protocol.`);
     }
     const operation = enumValue(action.operation, ["create", "read", "update", "delete", "custom"], `${actionName}.operation`);
@@ -2083,28 +2122,15 @@ function normalizeActionBehavior(
 
 function appWarnings(app: AppBlueprint): string[] {
   const warnings: string[] = [];
-  if (app.auth.organizations) warnings.push("Organization ownership requires the platform organization/RBAC capability.");
-  if (Object.values(app.entities).some((entity) => entity.ownership === "workspace")) {
-    warnings.push("Workspace-owned entities require an organization context; generated baseline storage uses signed-in ownership until configured.");
-  }
+
   if (app.deployment.database === "postgres") warnings.push("PostgreSQL requires an installed external database driver.");
   if (app.deployment.scale === "horizontal" && app.deployment.database === "sqlite") {
     warnings.push("Horizontal application writes require an external database; SQLite remains single-host.");
   }
   if (app.deployment.isolation === "process") warnings.push("Process isolation is for trusted applications only.");
-  for (const relationship of app.relationships) {
-    if (relationship.kind === "one-to-one" || relationship.kind === "many-to-many") {
-      warnings.push(`Relationship ${relationship.name} declares ${relationship.kind} cardinality; the generated reference and deletion policy are enforced, but cardinality needs an explicit unique or join-entity model.`);
-    }
-  }
   for (const [name, action] of Object.entries(app.actions)) {
     if (!action.behavior) {
       warnings.push(`Custom action ${name} needs an application implementation before it can appear in HTTP or MCP.`);
-    }
-  }
-  for (const route of app.routes) {
-    if (route.access === "public") {
-      warnings.push(`Public route ${route.path} still uses the generated authenticated application shell; add an explicit public data contract before exposing data.`);
     }
   }
   for (const [name, service] of Object.entries(app.services)) {
@@ -2128,7 +2154,8 @@ function backendSource(app: AppBlueprint): string {
   const tables = Object.entries(app.entities).map(([name, entity]) => {
     let chain = `defineTable({\n${Object.entries(entity.fields).map(([fieldName, field]) =>
       `      ${property(fieldName)}: ${schemaSource(field)},`).join("\n")}\n    })`;
-    if (entity.ownership !== "public") chain += ".owned()";
+    if (entity.ownership === "workspace") chain = chain.replace("defineTable({", "defineTable({\n      workspaceId: s.string(),") + '.index("by_clank_workspace", ["workspaceId"])';
+    if (entity.ownership === "user") chain += ".owned()";
     for (const [indexName, index] of Object.entries(entity.indexes ?? {})) {
       chain += `.index(${sourceLiteral(indexName)}, ${sourceLiteral(index.fields)})`;
     }
@@ -2150,18 +2177,21 @@ function backendSource(app: AppBlueprint): string {
 
 ${auth}export const schema = defineDatabase({
 ${tables}
+${workspaceTablesSource(app)}
 });
 
 ${Object.keys(app.entities).map((name) =>
     `export type ${typeName(name)} = DocumentFor<typeof schema, ${sourceLiteral(name)}>;`).join("\n")}
 
 const documentVersion = s.number({ integer: true, min: 1 });
+${guardedDatabaseSource(app)}
 ${deleteHelpersSource(app)}
 
 export const backend = defineBackend({
   schema,
   ${app.auth.required ? "auth," : ""}
-}).functions(({ query, mutation }) => ({
+}).functions(({ query, mutation, publicQuery }) => ({
+${workspaceFunctionsSource(app)}
 ${groups}
 }));
 `;
@@ -2286,9 +2316,9 @@ function entityFunctions(app: AppBlueprint, name: string, entity: AppEntityDefin
           );
         }`).join("\n");
   const actions = generatedEntityActions(app, name, entity).map((action) => {
-    const guard = action.roles.length
+    const guard = `        db = guardDatabase(db, auth.user!.id);\n` + (action.roles.length
       ? `        auth.requireRole(${action.roles.map((role) => sourceLiteral(role)).join(", ")});\n`
-      : "";
+      : "");
     const agent = `{
         title: ${sourceLiteral(humanize(action.localName))},
         description: ${sourceLiteral(action.description)},
@@ -2405,6 +2435,20 @@ ${guard}        return deleteEntity_${name}(db, id, version, {
       },
     })`;
   });
+  const detailRoutes = app.routes.filter((route) => route.entity === name && route.path.includes(":"));
+  const detailRoles = detailRoutes.some((route) => typeof route.access === "string") ? [] : [...new Set(detailRoutes.flatMap((route) => typeof route.access === "object" ? route.access.roles ?? [] : []))];
+  const hasPublic = app.routes.some((route) => route.entity === name && route.access === "public");
+  if (hasPublic) actions.push(`    publicList: publicQuery({ args: {}, agent: false, handler: ({ db }) => db.table(${sourceLiteral(name)}).query().orderBy("_creationTime", "asc").collect() })`);
+  if (app.routes.some((route) => route.entity === name && route.path.includes(":"))) actions.push(`    detail: ${hasPublic ? "publicQuery" : "query"}({
+      args: { id: s.id(${sourceLiteral(name)}) }, agent: false,
+      handler: ({ db, auth }, { id }) => {
+        ${hasPublic || !detailRoles.length ? "" : `auth.requireRole(${detailRoles.map((role) => sourceLiteral(role)).join(", ")});`}
+        ${hasPublic ? "" : "db = guardDatabase(db, auth.user!.id);"}
+        const document = db.table(${sourceLiteral(name)}).get(id);
+        if (!document) throw new BackendActionError(404, "RECORD_NOT_FOUND", "Record not found.");
+        return document;
+      },
+    })`);
   return `  ${property(name)}: {
 ${actions.join(",\n")}
   }`;
@@ -2412,7 +2456,9 @@ ${actions.join(",\n")}
 
 function deleteHelpersSource(app: AppBlueprint): string {
   const helpers = Object.keys(app.entities).map((name) => {
-    const relationships = app.relationships.filter((relationship) =>
+    const relationships = app.relationships.flatMap((relationship) => relationship.kind === "many-to-many"
+      ? [{ ...relationship, reference: { entity: relationship.join!, field: "fromId" } }, { ...relationship, reference: { entity: relationship.join!, field: "toId" } }]
+      : [relationship]).filter((relationship) =>
       relationship.reference
       && referenceTarget(app.entities, relationship.reference) === name);
     const operations = relationships.map((relationship) => {
@@ -2497,7 +2543,7 @@ function viewSource(app: AppBlueprint): string {
   }).join("\n");
   const panels = entityNames.map((name) => entityPanelSource(app, name, app.entities[name])).join("\n\n");
   const studio = adminStudioSource(app);
-  const navigation = app.routes.map((route) => {
+  const navigation = app.routes.filter((route) => !route.path.includes(":" )).map((route) => {
     const routeAgentId = route.path === "/"
       ? "route-home"
       : `route-${route.path.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-|-$/gu, "")}`;
@@ -2555,6 +2601,11 @@ export interface AppViewProps {
   connected: boolean;
   pending: boolean;
   error: string;
+  workspaceState?: { active: string; userId: string; workspaces: Array<{ id: string; name: string; owner: boolean }> };
+  selectWorkspace?(id: string): Promise<void>;
+  createWorkspace?(name: string): Promise<void>;
+  addMember?(userId: string): Promise<void>;
+  removeMember?(userId: string): Promise<void>;
   studioReadOnly?: boolean;
   showHistory?: boolean;
 ${props}
@@ -2575,6 +2626,20 @@ ${panels}
 
 ${studio}
 
+function WorkspaceSwitcher(props: AppViewProps) {
+  const name = signal("");
+  const member = signal("");
+  const state = props.workspaceState;
+  if (!state) return null;
+  const owner = state.workspaces.find((workspace) => workspace.id === state.active)?.owner && state.active !== state.userId;
+  return <section aria-label="Workspace" class="my-5 flex flex-wrap items-end gap-3">
+    <label>Workspace<select class="block rounded border p-2" value={state.active} onChange={(event: Event) => props.selectWorkspace?.((event.target as HTMLSelectElement).value)}>{state.workspaces.map((workspace) => <option value={workspace.id}>{workspace.name}</option>)}</select></label>
+    <form class="flex gap-2" onSubmit={(event: Event) => { event.preventDefault(); void props.createWorkspace?.(name.value); }}><label>New workspace<input class="block rounded border p-2" required maxlength={100} value={name.value} onInput={(event: Event) => { name.value = (event.target as HTMLInputElement).value; }} /></label><button type="submit">Create workspace</button></form>
+    <p class="w-full text-sm">Your member ID: {state.userId}</p>
+    {owner ? <form class="flex gap-2" onSubmit={(event: Event) => { event.preventDefault(); void props.addMember?.(member.value); }}><label>Member ID<input class="block rounded border p-2" required value={member.value} onInput={(event: Event) => { member.value = (event.target as HTMLInputElement).value; }} /></label><button type="submit">Add member</button><button type="button" onClick={() => props.removeMember?.(member.value)}>Remove member</button></form> : null}
+  </section>;
+}
+
 export function AppView(props: AppViewProps) {
   return (
     <main class="mx-auto min-h-screen max-w-6xl px-4 py-8 text-slate-950 sm:px-6 sm:py-12">
@@ -2593,6 +2658,7 @@ export function AppView(props: AppViewProps) {
           <button class="shrink-0 rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-white" onClick={props.logout} agentId="auth-sign-out">Sign out</button>
         </div>
       </header>
+      <WorkspaceSwitcher {...props} />
       <nav class="my-6 flex flex-wrap gap-2" aria-label="Application">
         ${navigation}
         ${adminNavigation}
@@ -2711,6 +2777,7 @@ ${controls}
         <For each={props.${name}Records} by="_id" fallback={<p class="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-slate-500">{${sourceLiteral(`No ${title.toLowerCase()} yet.`)}}</p>}>
           {(record) => (
             <article class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" agentId={\`${name}-\${record._id}\`} agentLabel={String(record.${entity.displayField})}>
+              ${app.routes.filter((route) => route.entity === name && route.path.includes(":" )).map((route) => `<a class="text-sm underline" href={${sourceLiteral(route.path.slice(0, route.path.lastIndexOf(":")))} + encodeURIComponent(record._id)}>View details</a>`).join("")}
               <div class="flex items-start gap-3">
                 ${toggle && entity.completionField ? `{canToggle ? <button
                   class="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-slate-400 text-xs hover:border-emerald-600 disabled:opacity-50"
@@ -2995,6 +3062,7 @@ import { AppView } from "./view.tsx";
 interface PageState {
   auth: AuthState<DefaultAuthProfile>;
   route: string;
+  workspaceState?: { active: string; userId: string; workspaces: Array<{ id: string; name: string; owner: boolean }> };
   entities: {
 ${state}
   };
@@ -3051,6 +3119,11 @@ ${historyDispose}
   return (
     <AppView
       route={boot.route}
+      ${Object.values(app.entities).some((entity) => entity.ownership === "workspace") ? `workspaceState={boot.workspaceState}
+      selectWorkspace={async (id) => { if (await mutate(() => client.mutate(client.api.workspaces.select, { id }))) location.reload(); }}
+      createWorkspace={async (name) => { if (await mutate(() => client.mutate(client.api.workspaces.create, { name }))) location.reload(); }}
+      addMember={async (userId) => { await mutate(() => client.mutate(client.api.workspaces.addMember, { workspaceId: boot.workspaceState!.active, userId })); }}
+      removeMember={async (userId) => { await mutate(() => client.mutate(client.api.workspaces.removeMember, { workspaceId: boot.workspaceState!.active, userId })); }}` : ""}
       user={user}
       version={Math.max(boot.version, ${version})}
       connected={${connected}}
@@ -3113,7 +3186,7 @@ function serverSource(app: AppBlueprint): string {
     .concat(app.admin ? [`${sourceLiteral(app.admin.path)}: ${sourceLiteral(app.admin.roles)}`] : [])
     .join(",\n  ");
   const routeRegistrations = app.routes.map((route) =>
-    `  .get(${sourceLiteral(route.path)}, ({ request }) => renderRoute(request, ${sourceLiteral(route.path)}))`)
+    `  .get(${sourceLiteral(route.path)}, ({ request, params }) => renderRoute(request, ${sourceLiteral(route.path)}${route.path.includes(":") ? `, params[${sourceLiteral(route.path.slice(route.path.lastIndexOf(":") + 1))}]` : ""}))`)
     .concat(app.admin
       ? [`  .get(${sourceLiteral(app.admin.path)}, ({ request }) => renderRoute(request, ${sourceLiteral(app.admin.path)}))`]
       : [])
@@ -3183,7 +3256,9 @@ const routeRoles: Readonly<Record<string, readonly string[]>> = {
   ${access}
 };
 
-async function renderRoute(request: Request, route: string): Promise<Response> {
+${readPageSource(app)}
+
+async function renderRoute(request: Request, route: string, detailId?: string): Promise<Response> {
   const caller = await runtime.caller(request);
   if (!caller.auth) throw new Error("Auth runtime is unavailable.");
   const requiredRoles = routeRoles[route] ?? [];
@@ -3193,7 +3268,10 @@ async function renderRoute(request: Request, route: string): Promise<Response> {
       headers: { "cache-control": "no-store", "content-type": "text/plain; charset=utf-8" },
     });
   }
+  const readPage = await renderReadPage(caller, route, detailId);
+  if (readPage) return readPage;
   const bootAuth = authState(caller.auth);
+  ${Object.values(app.entities).some((entity) => entity.ownership === "workspace") ? 'const workspaceState = caller.auth.user ? caller.query(api.workspaces.list).value : undefined;' : 'const workspaceState = undefined;'}
 ${initials}
   const version = Math.max(runtime.version, ${versions});
   const authClient = createAuthClient({ initial: bootAuth, immediate: false });
@@ -3202,6 +3280,7 @@ ${initials}
     <AuthGate auth={authClient}>
       <AppView
           route={route}
+          workspaceState={workspaceState}
           user={bootAuth.user!}
           version={version}
           connected={true}
@@ -3223,6 +3302,7 @@ ${props}
       ),
       state: {
         auth: bootAuth,
+        workspaceState,
         route,
         entities: {
 ${stateEntities}
@@ -3287,6 +3367,31 @@ processRef?.once?.("SIGINT", closeForSignal);
 processRef?.once?.("SIGTERM", closeForSignal);
 observability.logger.info("Application started.", { url: server.url });
 `;
+}
+
+function readPageSource(app: AppBlueprint): string {
+  const routes = app.routes.filter((route) => route.access === "public" || route.path.includes(":"));
+  const cases = routes.map((route) => {
+    const isDetail = route.path.includes(":");
+    const entity = route.entity ? app.entities[route.entity] : null;
+    return `  if (route === ${sourceLiteral(route.path)}) {
+    ${route.access !== "public" ? 'if (!caller.auth?.user) return new Response("Sign in to view this record.", { status: 401 });' : ""}
+    try {
+      const records = ${route.entity ? isDetail ? `[caller.query(api[${sourceLiteral(route.entity)}].detail, { id: detailId }).value]` : `caller.query(api[${sourceLiteral(route.entity)}].publicList).value` : "[]"};
+      const page = await renderDocument(<main class="mx-auto max-w-4xl p-8"><a href="/">{${sourceLiteral(app.name)}}</a><h1>{${sourceLiteral(humanize(route.view))}}</h1><p>{${sourceLiteral(route.description ?? "")}}</p>{records.length === 0 ? <p>No records found.</p> : null}{records.map((record) => <article><h2>{${entity ? `String(record[${sourceLiteral(entity.displayField)}])` : '""'}}</h2><dl>${entity ? Object.keys(entity.fields).map((field) => `<dt>{${sourceLiteral(humanize(field))}}</dt><dd>{String(record[${sourceLiteral(field)}] ?? "")}</dd>`).join("") : ""}</dl></article>)}</main>, { title: ${sourceLiteral(app.name)}, head: <link rel="stylesheet" href="/styles.css" /> });
+      return html(page, { headers: { "cache-control": "no-store", "content-security-policy": "default-src 'self'; frame-ancestors 'none'; object-src 'none'" } });
+    } catch (error) {
+      const status = (error as { status?: number }).status;
+      if (status === 404 || status === 400 || (error instanceof Error && error.name === "ValidationError")) return new Response("Record not found.", { status: 404 });
+      if (status === 403) return new Response("Access denied.", { status: 403 });
+      throw error;
+    }
+  }`;
+  }).join("\n");
+  return `async function renderReadPage(caller: Awaited<ReturnType<typeof runtime.caller>>, route: string, detailId?: string): Promise<Response | null> {
+${cases}
+  return null;
+}`;
 }
 
 function schemaSource(field: AppFieldDefinition, wrappers = true): string {
@@ -3366,7 +3471,9 @@ function isWhitespaceCharacter(character: string | undefined): boolean {
 
 class DataModuleParser {
   private index = 0;
-  constructor(private readonly source: string, private readonly filename: string) {}
+  declare private readonly source: string; declare private readonly filename: string;
+  constructor(source: string, filename: string) {
+    this.source = source; this.filename = filename;}
 
   parse(): unknown {
     const match = /\bexport\s+default\b/gu.exec(this.source);
@@ -3551,12 +3658,12 @@ function slugify(value: string): string {
   return trimBoundaryCode(value.toLowerCase().replace(/[^a-z0-9]+/gu, "-"), 45).slice(0, 63) || "clank-app";
 }
 
-function routePath(value: unknown, path: string): string {
+function routePath(value: unknown, path: string, dynamic = false): string {
   if (
     typeof value !== "string"
-    || !/^(?:\/|\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)$/u.test(value)
+    || !(dynamic ? /^(?:\/|\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*(?:\/:[A-Za-z][A-Za-z0-9_]*)?)$/u : /^(?:\/|\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*)$/u).test(value)
   ) {
-    throw new TypeError(`${path} must be a static absolute path without parameters, a trailing slash, query, or hash.`);
+    throw new TypeError(`${path} must be an absolute path without a trailing slash, query, or hash; detail routes allow one final named parameter.`);
   }
   return value;
 }

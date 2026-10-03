@@ -19,9 +19,11 @@ Typographical fixes, tests for existing behavior, and narrow bug fixes do not re
 
 Requirements:
 
-- Node 22.16+ or Node 24 LTS (below Node 26; see `.node-version`);
+- Node 22.16+, Node 24 LTS, or Node 26 (see `.node-version` and [compiler compatibility](docs/development-tools.md));
 - no runtime or development NPM dependencies; and
 - a filesystem that supports normal SQLite locking and atomic rename semantics.
+
+Linux checks also require Bubblewrap, util-linux, nftables, iproute2, procps and permission to create user/mount/network namespaces. See [SQLite worker isolation](docs/sqlite-isolation.md) for Ubuntu AppArmor setup. Privileged Docker/XFS enforcement tests are opt-in and must run only on an explicitly disposable host; see [Linux provider verification](docs/linux-provider-isolation.md).
 
 Run:
 

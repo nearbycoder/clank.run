@@ -585,17 +585,18 @@ async function verifyDatabaseFile(path: string): Promise<void> {
 
 export async function publishSQLiteReplacement(temporary: string, destinationPath: string): Promise<void> {
   const destination = await resolveDatabaseDestination(destinationPath);
-  const fsName = "node:fs/promises";
-  const fs = await import(fsName) as unknown as {
-    rename(source: string, destination: string): Promise<void>;
-    rm(path: string, options: { force: true }): Promise<void>;
-  };
-  await Promise.all([
-    fs.rm(`${destination}-wal`, { force: true }),
-    fs.rm(`${destination}-shm`, { force: true }),
-  ]);
-  await fs.rename(temporary, destination);
-  await hardenDatabaseFile(destination);
+  const fsName = "node:fs/promises", constantsName = "node:fs";
+  const [fs, { constants }] = await Promise.all([import(fsName), import(constantsName)]);
+  // Never chmod the published pathname: an application can replace it with a
+  // symlink immediately after rename. Harden through a no-follow descriptor.
+  const handle = await fs.open(temporary, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) throw new Error("SQLite staging output must be a regular file.");
+    await handle.chmod(0o600);
+    await Promise.all([fs.rm(`${destination}-wal`, { force: true }), fs.rm(`${destination}-shm`, { force: true })]);
+    await fs.rename(temporary, destination);
+  } finally { await handle.close(); }
 }
 
 async function removeFile(path: string): Promise<void> {

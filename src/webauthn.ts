@@ -374,7 +374,9 @@ function decodeCbor(bytes: Uint8Array): unknown {
 
 class CborDecoder {
   offset = 0;
-  constructor(private readonly input: Uint8Array) {}
+  declare private readonly input: Uint8Array;
+  constructor(input: Uint8Array) {
+    this.input = input;}
 
   value(depth = 0): unknown {
     if (depth > 64) throw new TypeError("CBOR nesting exceeds the supported limit.");

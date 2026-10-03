@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "./build.mjs";
+import { runDocumentationExamples } from "./docs-examples.mjs";
 import { runCoverageGate } from "./coverage-gate.mjs";
 
 await build();
@@ -48,6 +49,8 @@ for (const [script, label] of [["build.mjs", "build"], ["tests/app.contract.mjs"
       : reject(new Error(`Synth demo ${label} exited with ${code}.`)));
   });
 }
+
+await runDocumentationExamples();
 
 await runCoverageGate();
 

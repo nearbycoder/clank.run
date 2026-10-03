@@ -20,6 +20,19 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./point-in-time": { "types": "./dist/point-in-time.d.ts", "import": "./dist/point-in-time.js" },
+    "./i18n": { "types": "./dist/i18n.d.ts", "import": "./dist/i18n.js" },
+    "./schedules": { "types": "./dist/schedules.d.ts", "import": "./dist/schedules.js" },
+    "./reviewed-actions": { "types": "./dist/reviewed-actions.d.ts", "import": "./dist/reviewed-actions.js" },
+    "./organization-sso": { "types": "./dist/organization-sso.d.ts", "import": "./dist/organization-sso.js" },
+    "./account-security": { "types": "./dist/account-security.d.ts", "import": "./dist/account-security.js" },
+    "./search": { "types": "./dist/search.d.ts", "import": "./dist/search.js" },
+    "./bulk-edit": { "types": "./dist/bulk-edit.d.ts", "import": "./dist/bulk-edit.js" },
+    "./collaborative-documents": { "types": "./dist/collaborative-documents.d.ts", "import": "./dist/collaborative-documents.js" },
+    "./durable-import": { "types": "./dist/durable-import.d.ts", "import": "./dist/durable-import.js" },
+    "./dev-updates": { "types": "./dist/dev-updates.d.ts", "import": "./dist/dev-updates.js" },
+    "./release-attestation": { "types": "./dist/release-attestation.d.ts", "import": "./dist/release-attestation.js" },
+    "./usage-forecast": { "types": "./dist/usage-forecast.d.ts", "import": "./dist/usage-forecast.js" },
     "./bookmarks": { "types": "./dist/bookmarks.d.ts", "import": "./dist/bookmarks.js" },
 
     "./activity": { "types": "./dist/activity.d.ts", "import": "./dist/activity.js" },
@@ -186,6 +199,9 @@
     "!examples/**/*.sqlite",
     "!examples/**/*.sqlite-shm",
     "!examples/**/*.sqlite-wal",
+    "scripts/editor.mjs",
+    "scripts/dev-browser.mjs",
+    "scripts/blueprint-regeneration.mjs",
     "scripts/compiler.mjs",
     "scripts/compiler.d.mts",
     "scripts/clank.mjs",
@@ -208,6 +224,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "docs:examples": "node scripts/build.mjs && node scripts/docs-examples.mjs",
     "performance": "node --disable-warning=ExperimentalWarning scripts/build.mjs && node --disable-warning=ExperimentalWarning scripts/performance-budgets.mjs",
     "build": "node --disable-warning=ExperimentalWarning scripts/build.mjs",
     "build:design": "node --disable-warning=ExperimentalWarning design-site/build.mjs",
@@ -224,7 +241,7 @@
     "check": "node --disable-warning=ExperimentalWarning scripts/check.mjs"
   },
   "engines": {
-    "node": ">=22.16 <26"
+    "node": ">=22.16 <27"
   },
   "publishConfig": {
     "access": "public",

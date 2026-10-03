@@ -16,7 +16,7 @@ concurrency:
 jobs:
   runtime:
     name: Node ${{ matrix.node }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -42,6 +42,12 @@ jobs:
           test ! -f npm-shrinkwrap.json
           node -e 'const p=require("./package.json"); for (const k of ["dependencies","devDependencies","peerDependencies","optionalDependencies"]) if (p[k] && Object.keys(p[k]).length) process.exit(1)'
 
+      - name: Install Linux isolation prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap util-linux nftables iproute2 procps apparmor
+          sudo apparmor_parser --replace scripts/ci-linux.apparmor
+
       - name: Build and run unit/integration tests
         run: npm test
 
@@ -50,7 +56,7 @@ jobs:
 
   conformance:
     name: Packaged-release conformance
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out source
@@ -65,4 +71,10 @@ jobs:
           package-manager-cache: false
 
       - name: Run complete release gate
-        run: npm run check
+        # Kernel isolation is exercised locally by the suite, including real
+        # user/network namespaces; unavailable enforcement must fail the gate.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap util-linux nftables iproute2 procps apparmor
+          sudo apparmor_parser --replace scripts/ci-linux.apparmor
+          npm run check
