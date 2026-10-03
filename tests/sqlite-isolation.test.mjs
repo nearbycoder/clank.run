@@ -110,10 +110,11 @@ test("oversized migration results are rejected before pending SQL or ledger rows
     await mkdir(directory);
     await writeFile(join(directory, "0001_initial.sql"), "CREATE TABLE state(value INTEGER); INSERT INTO state VALUES(0);");
     await applyMigrations({ path, directory });
-    // Every file is below the ordinary 1 MiB file limit, but together their
-    // pending[] response would exceed the fixed 16 MiB transport envelope.
-    const sql = `-- ${"x".repeat(1024 * 1024 - 100)}\nUPDATE state SET value = value + 1;`;
-    for (let index = 2; index <= 18; index++) {
+    // JSON escapes these comment bytes to six characters each. Three files
+    // exceed the 16 MiB response limit without first exhausting native memory,
+    // so this specifically exercises the precommit response-size guard.
+    const sql = `-- ${"\u0001".repeat(1024 * 1024 - 100)}\nUPDATE state SET value = value + 1;`;
+    for (let index = 2; index <= 4; index++) {
       await writeFile(join(directory, `${String(index).padStart(4, "0")}_large.sql`), sql);
     }
     await assert.rejects(applyMigrations({ path, directory }), /response exceeds its limit/u);
