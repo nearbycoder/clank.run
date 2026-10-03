@@ -20,7 +20,7 @@ first, then starts the loop without autoplaying on page load.
 - Change the preset, tempo, swing, master level, and individual track levels.
 - Use **Randomize**, **Clear**, and the JSON copy/export controls to explore ideas. Your current
   pattern is saved automatically in the browser and can be downloaded with **Export JSON**.
-- Mute or solo tracks while the sequencer is running. The active step is announced to assistive
+- Use the instrument rack below the sequencer to mute, solo, or adjust the volume of each voice while the sequencer is running. The active step is announced to assistive
   technology and highlighted in the grid.
 - Import a saved version-1 JSON pattern file. Imports are validated as a
   complete pattern, limited to 16 KiB, and stop playback without starting audio automatically.
@@ -30,6 +30,8 @@ first, then starts the loop without autoplaying on page load.
   master levels and clears mute/solo choices while keeping the pattern, tempo, and swing.
 - Use **Tap tempo** to average recent taps, bounded to 60–180 BPM. A pause longer than two seconds
   begins a new sequence.
+
+The sequencer keeps instrument names visible while you scroll through all 16 steps on a small screen. Mix controls stay outside that scrollable area, and the ten themes share readable text, controls, and focus states.
 
 The sequencer has one keyboard tab stop. Arrow keys move between cells, Home/End move within a
 track, Ctrl+Home/End move to the first/last cell, and Enter or Space toggles the focused step.

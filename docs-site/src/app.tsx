@@ -1,5 +1,4 @@
 /* @clankImportSource ../vendor/dom.js */
-import { effect, signal } from "../vendor/core.js";
 import { hydrate } from "../vendor/dom.js";
 import { readState } from "../vendor/ssr.js";
 import { handleSearchShortcut, SearchBox, type SearchEntry } from "./search.tsx";
@@ -13,6 +12,7 @@ import { installCodeWrap } from "./enhancements/code-wrap.ts";
 import { installPrintGuide } from "./enhancements/print-guide.ts";
 import { installCopyControls } from "./enhancements/clipboard.ts";
 import { installCurrentSection } from "./enhancements/current-section.ts";
+import { installNavigation } from "./enhancements/navigation.ts";
 
 interface BootState {
   search: SearchEntry[];
@@ -33,29 +33,10 @@ installPrintGuide(boot.search, boot.activeSlug);
 const searchRoot = document.getElementById("docs-search");
 if (searchRoot) hydrate(searchRoot, <SearchBox entries={boot.search} initialQuery={boot.initialQuery} searchGroup={boot.searchGroup} />);
 
-const navOpen = signal(false);
-const navToggle = document.getElementById("nav-toggle");
-const navScrim = document.getElementById("nav-scrim") as HTMLButtonElement | null;
-effect(() => {
-  document.body.toggleAttribute("data-nav-open", navOpen.value);
-  navToggle?.setAttribute("aria-expanded", String(navOpen.value));
-  navToggle?.setAttribute("aria-label", navOpen.value ? "Close documentation navigation" : "Open documentation navigation");
-  if (navScrim) navScrim.hidden = !navOpen.value;
-});
-navToggle?.addEventListener("click", () => { navOpen.value = !navOpen.peek(); });
-navScrim?.addEventListener("click", () => { navOpen.value = false; });
-document.getElementById("docs-sidebar")?.addEventListener("click", (event) => {
-  if (event.target instanceof Element && event.target.closest("a")) navOpen.value = false;
-});
-installFocusMode(boot.search, boot.activeSlug, () => { navOpen.value = false; });
-
+const navigation = installNavigation();
+installFocusMode(boot.search, boot.activeSlug, () => { navigation.close(false); });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && navOpen.peek()) {
-    navOpen.value = false;
-    navToggle?.focus();
-    return;
-  }
-  handleSearchShortcut(event);
+  if (!navigation.isOpen()) handleSearchShortcut(event);
 });
 
 installCopyControls();

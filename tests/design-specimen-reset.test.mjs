@@ -118,6 +118,11 @@ function browser(t) {
   document.querySelector = () => null;
   const url = "https://design.example/components/input?theme=midnight&width=523&grid=1&outlines=1&panel=code";
   Object.assign(view, { document, location: new URL(url), history: { pushState() { throw new Error("reset must not write history"); }, replaceState() { throw new Error("reset must not write history"); } } });
+  const mediaQueries = new Map();
+  view.matchMedia = (query) => {
+    if (!mediaQueries.has(query)) mediaQueries.set(query, Object.assign(new EventTarget(), { matches: false, media: query }));
+    return mediaQueries.get(query);
+  };
   for (const [name, value] of Object.entries({ document, window: view, Node, Element, HTMLElement: Element, Text, Comment })) {
     const previous = Object.getOwnPropertyDescriptor(globalThis, name);
     Object.defineProperty(globalThis, name, { configurable: true, value });

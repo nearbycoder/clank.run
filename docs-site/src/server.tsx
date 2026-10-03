@@ -118,8 +118,13 @@ function Navigation(props: { activeSlug?: string }) {
         <span class="nav-home-mark" aria-hidden="true">↗</span>
         <span><strong>Documentation</strong><small>Clank {manifest.frameworkVersion}</small></span>
       </a>
-      <section id="docs-reader-history" class="reader-history" hidden />
-      <section id="docs-bookmarks" class="reader-history" hidden />
+      <details class="reader-library">
+        <summary>Your library</summary>
+        <div>
+          <section id="docs-reader-history" class="reader-history" hidden />
+          <section id="docs-bookmarks" class="reader-history" hidden />
+        </div>
+      </details>
       <For each={manifest.groups} by="id">
         {(group) => (
           <section class="nav-group">
@@ -205,9 +210,15 @@ function SiteChrome(props: {
         </div>
       </header>
       <div class="docs-shell">
-        <aside class="sidebar" id="docs-sidebar"><Navigation activeSlug={props.activeSlug} /></aside>
-        <button class="nav-scrim" id="nav-scrim" type="button" aria-label="Close documentation navigation" hidden />
-        <main class="main-content" id="main-content">{props.children}</main>
+        <aside class="sidebar" id="docs-sidebar" tabindex="-1">
+          <div class="sidebar-heading">
+            <strong>Browse documentation</strong>
+            <button id="nav-close" type="button" aria-label="Close documentation navigation">×</button>
+          </div>
+          <Navigation activeSlug={props.activeSlug} />
+        </aside>
+        <button class="nav-scrim" id="nav-scrim" type="button" tabindex="-1" aria-label="Close documentation navigation" hidden />
+        <main class="main-content" id="main-content" tabindex="-1">{props.children}</main>
         <TableOfContents entries={props.toc ?? []} />
       </div>
       <footer class="site-footer">

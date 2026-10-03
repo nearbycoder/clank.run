@@ -218,6 +218,22 @@ export function DesignStudio(props: DesignStudioProps) {
   const grid = signal(initial.grid);
   const outlines = signal(initial.outlines);
   const navOpen = signal(false);
+  let navigation: HTMLElement | null = null;
+  let navigationTrigger: HTMLButtonElement | null = null;
+  let componentSearch: HTMLInputElement | null = null;
+  let mainContent: HTMLElement | null = null;
+  function closeNavigation(restoreFocus = false) {
+    navOpen.value = false;
+    if (restoreFocus) navigationTrigger?.focus();
+  }
+  function toggleNavigation() {
+    if (navOpen.peek()) return closeNavigation(true);
+    navOpen.value = true;
+    window.requestAnimationFrame(() => {
+      if (!navOpen.peek() || !navigation?.isConnected) return;
+      (navigation.querySelector<HTMLElement>('a[aria-current="page"]') ?? navigation.querySelector<HTMLElement>(".sidebar-primary a"))?.focus();
+    });
+  }
   const favorites = signal<string[]>([]);
   const favoriteNotice = signal("");
   const favoriteEntries = computed(() => favorites.value.flatMap((id) => UI_COMPONENT_CATALOG.filter((entry) => entry.slug === id)));
@@ -258,9 +274,12 @@ export function DesignStudio(props: DesignStudioProps) {
   }
   function selectView(next: StudioView) {
     view.value = next;
-    navOpen.value = false;
+    closeNavigation();
     writeLocation();
-    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "auto" });
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "auto" });
+      mainContent?.focus({ preventScroll: true });
+    }
   }
   function selectTheme(id: string) {
     const theme = getClankTheme(id);
@@ -289,6 +308,18 @@ export function DesignStudio(props: DesignStudioProps) {
     try { localStorage.setItem("clank-design-theme", theme.id); } catch {}
   });
 
+  effect(() => {
+    const currentView = view.value;
+    if (typeof document !== "undefined") document.title = currentView === "overview" ? "Clank Design Studio" : `${titleFor(currentView)} · Clank Design Studio`;
+  });
+
+  effect(() => {
+    if (!navOpen.value || typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previousOverflow; };
+  });
+
   onMount(() => {
     favorites.value = readFavoriteComponents(UI_COMPONENT_CATALOG);
     const restoreFavorites = (event: StorageEvent) => {
@@ -307,23 +338,52 @@ export function DesignStudio(props: DesignStudioProps) {
       view.value = studioViewFromPath(window.location.pathname);
       navOpen.value = false;
     };
+    const handleKeyboard = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      if (event.key === "Escape" && navOpen.peek()) {
+        event.preventDefault();
+        closeNavigation(true);
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey || event.getModifierState?.("AltGraph") || target?.isContentEditable || target?.closest('input, textarea, select, [role="textbox"], [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') || document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      componentSearch?.focus();
+      if (window.matchMedia("(max-width: 760px)").matches) navOpen.value = true;
+    };
+    const handleFocus = (event: FocusEvent) => {
+      if (!navOpen.peek()) return;
+      const target = event.target as Node;
+      if (!navigation?.contains(target) && target !== componentSearch && target !== navigationTrigger) closeNavigation();
+    };
+    const mobileLayout = window.matchMedia("(max-width: 760px)");
+    const restoreDesktopNavigation = () => { if (!mobileLayout.matches) closeNavigation(); };
     window.addEventListener("popstate", restoreLocation);
     window.addEventListener("storage", restoreFavorites);
-    return () => { window.removeEventListener("popstate", restoreLocation); window.removeEventListener("storage", restoreFavorites); };
+    window.addEventListener("keydown", handleKeyboard);
+    window.addEventListener("focusin", handleFocus);
+    mobileLayout.addEventListener("change", restoreDesktopNavigation);
+    return () => {
+      window.removeEventListener("popstate", restoreLocation);
+      window.removeEventListener("storage", restoreFavorites);
+      window.removeEventListener("keydown", handleKeyboard);
+      window.removeEventListener("focusin", handleFocus);
+      mobileLayout.removeEventListener("change", restoreDesktopNavigation);
+    };
   });
 
   return (
     <div class="studio-shell" data-theme={themeId}>
-      <a class="skip-link" href="#studio-main">Skip to component preview</a>
+      <a class="skip-link" href="#studio-main">Skip to content</a>
       <header class="studio-header">
-        <button class="mobile-nav-trigger" type="button" aria-label="Open component navigation" aria-expanded={navOpen} onClick={() => { navOpen.value = !navOpen.peek(); }}><Icon name="menu" /></button>
+        <button class="mobile-nav-trigger" ref={(element: HTMLButtonElement | null) => { navigationTrigger = element; }} type="button" aria-label={navOpen.value ? "Close component navigation" : "Open component navigation"} aria-controls="studio-navigation" aria-expanded={navOpen} onClick={toggleNavigation}><Icon name="menu" /></button>
         <a class="studio-wordmark" href={previewHref("overview")} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("overview"); }}><img src="/brand/clank-mark-64.png" width="25" height="25" alt="" aria-hidden="true" /><strong>Clank</strong><span>Design</span></a>
-        <label class="studio-search"><Icon name="search" /><input type="search" aria-label="Search components" value={query} onInput={(event: InputEvent) => { query.value = (event.currentTarget as HTMLInputElement).value; if (window.matchMedia("(max-width: 760px)").matches) navOpen.value = true; }} placeholder={`Search ${UI_COMPONENT_COUNT} components…`} /><kbd>/</kbd></label>
+        <label class="studio-search"><Icon name="search" /><input ref={(element: HTMLInputElement | null) => { componentSearch = element; }} type="search" aria-label="Search components" aria-keyshortcuts="/" aria-controls="component-catalog" value={query} onFocus={() => { if (window.matchMedia("(max-width: 760px)").matches) navOpen.value = true; }} onInput={(event: InputEvent) => { query.value = (event.currentTarget as HTMLInputElement).value; if (window.matchMedia("(max-width: 760px)").matches) navOpen.value = true; }} onKeyDown={(event: KeyboardEvent) => { if (event.defaultPrevented || event.isComposing) return; if (event.key === "ArrowDown") { event.preventDefault(); navigation?.querySelector<HTMLElement>(".component-nav section a")?.focus(); } else if (event.key === "Enter" && filtered.value.count === 1) { event.preventDefault(); selectView(filtered.value.entries[0].slug); } }} placeholder={`Search ${UI_COMPONENT_COUNT} components…`} /><kbd aria-hidden="true">/</kbd></label>
         <nav class="studio-header-links" aria-label="Project"><a href="https://docs.clank.run/docs/ui">Docs</a><a href="https://github.com/nearbycoder/clank.run" target="_blank" rel="noreferrer">GitHub ↗</a></nav>
       </header>
-      <aside class="studio-sidebar" classList={{ open: navOpen }}>
-        <div class="sidebar-primary"><a href={previewHref("overview")} classList={{ active: view.value === "overview" }} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("overview"); }}><Icon name="grid" />Overview</a><a href={previewHref("themes")} classList={{ active: view.value === "themes" }} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("themes"); }}><Icon name="palette" />Themes <span>10</span></a></div>
-        <nav class="component-nav" aria-label="Component catalog">
+      <aside class="studio-sidebar" id="studio-navigation" ref={(element: HTMLElement | null) => { navigation = element; }} classList={{ open: navOpen }} aria-label="Design studio navigation">
+        <div class="sidebar-primary"><a href={previewHref("overview")} classList={{ active: view.value === "overview" }} aria-current={view.value === "overview" ? "page" : undefined} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("overview"); }}><Icon name="grid" />Overview</a><a href={previewHref("themes")} classList={{ active: view.value === "themes" }} aria-current={view.value === "themes" ? "page" : undefined} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView("themes"); }}><Icon name="palette" />Themes <span>10</span></a></div>
+        <nav class="component-nav" id="component-catalog" aria-label="Component catalog">
           <details class="favorite-navigation" open><summary>Favorites ({favoriteEntries.value.length})</summary><For each={favoriteEntries} by="slug" fallback={<p>Use a component’s Favorite button to save it here.</p>}>{(entry) => <a href={previewHref(entry.slug)} aria-current={view.value === entry.slug ? "page" : undefined} onClick={(event: MouseEvent) => { if (!shouldNavigatePreview(event)) return; event.preventDefault(); selectView(entry.slug); }}>{entry.name}</a>}</For></details>
           <p class="favorite-status" role="status" aria-live="polite">{favoriteNotice}</p>
           <details class="catalog-filters">
@@ -344,8 +404,8 @@ export function DesignStudio(props: DesignStudioProps) {
         </nav>
         <div class="sidebar-footer"><span>Framework</span><strong>v{props.frameworkVersion}</strong><a href="/__clank/mcp">MCP ↗</a></div>
       </aside>
-      <button type="button" class="sidebar-scrim" aria-label="Close navigation" hidden={!navOpen.value} onClick={() => { navOpen.value = false; }} />
-      <main class="studio-main" id="studio-main">
+      <button type="button" class="sidebar-scrim" aria-label="Close navigation" tabindex="-1" hidden={!navOpen.value} onClick={() => closeNavigation(true)} />
+      <main class="studio-main" id="studio-main" tabindex="-1" ref={(element: HTMLElement | null) => { mainContent = element; }}>
         <div class="context-bar">
           <div><span>Clank Design</span><i>/</i><strong>{() => titleFor(view.value)}</strong></div>
           <label class="theme-picker"><span class="theme-dot" /><span class="theme-picker-label">Theme</span><select aria-label="Theme" value={themeId} onChange={(event: Event) => selectTheme((event.currentTarget as HTMLSelectElement).value)}><For each={CLANK_THEME_PRESETS} by="id">{(theme) => <option value={theme.id} selected={theme.id === themeId.value}>{theme.name}</option>}</For></select></label>

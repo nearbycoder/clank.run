@@ -39,7 +39,6 @@ export function browser(t, { url = "https://design.example/components/input?them
   const history = [];
   f.view.history.pushState = (_state, _title, path) => { history.push(path); f.view.location = new URL(path, f.view.location); };
   f.view.scrollTo = () => {};
-  f.view.matchMedia = () => ({ matches: false });
   const localStorage = { getItem: (key) => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: (key) => stored.delete(key) };
   const prior = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorage });
