@@ -26,10 +26,10 @@
       "command": "node --disable-warning=ExperimentalWarning scripts/check.mjs",
       "result": "passed",
       "counts": {
-        "tests": 1,
-        "pass": 1,
+        "tests": 1590,
+        "pass": 1587,
         "fail": 0,
-        "skipped": 0
+        "skipped": 3
       },
       "coverage": {
         "lines": 87.5,

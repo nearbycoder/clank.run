@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,11 +83,11 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
   await mkdir(join(root, "migrations"), { recursive: true });
   await writeFile(join(root, "dist", "server.js"), `
     import { createServer } from "node:http";
-    import { existsSync, writeFileSync } from "node:fs";
+    import { appendFileSync, existsSync } from "node:fs";
     await new Promise((resolve) => setTimeout(resolve, ${Number(options.startupDelayMs ?? 0)}));
     const startupGate = ${JSON.stringify(options.startupGate ?? null)};
+    if (startupGate) appendFileSync(startupGate.entered, process.pid + "\\n");
     if (startupGate && existsSync(startupGate.hold)) {
-      writeFileSync(startupGate.entered, "waiting");
       while (existsSync(startupGate.hold)) await new Promise((resolve) => setTimeout(resolve, 10));
     }
     const server = createServer(async (request, response) => {
@@ -1762,7 +1762,7 @@ test("deployments supervise independent worker and scheduler processes beside th
   }
 });
 
-test("background startup recovery exposes the control plane before slow applications finish", async () => {
+test("background startup recovery exposes the control plane before slow applications finish", { timeout: 30_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-background-recovery-"));
   const dataDirectory = join(root, "platform");
   const errors = [];
@@ -1782,6 +1782,9 @@ test("background startup recovery exposes the control plane before slow applicat
     onError: (error) => errors.push(error instanceof Error ? error.message : String(error)),
   };
   let platform = await openPlatform(options);
+  let ingressResponse;
+  const runtimeFences = async () => (await readdir(join(dataDirectory, "runtime-guardians")))
+    .filter((name) => name.endsWith(".json"));
   try {
     const owner = await authorizeCli(platform, "background-recovery@example.com");
     const created = await payload(platform, jsonRequest("/api/projects", {
@@ -1808,6 +1811,7 @@ test("background startup recovery exposes the control plane before slow applicat
 
     // Keep application recovery pending until the control plane proves it can
     // serve requests. Scheduler load cannot accidentally complete this gate.
+    await rm(startupGate.entered, { force: true });
     await writeFile(startupGate.hold, "hold");
     platform = await openPlatform({ ...options, startupRecovery: "background" });
     await waitFor(async () => {
@@ -1818,24 +1822,46 @@ test("background startup recovery exposes the control plane before slow applicat
     assert.equal((await platform.handle(new Request(
       "https://healthcheck.railway.app/_clank/readyz",
     ))).status, 200);
+
+    // A zero-buffered request body is consumed only after ingress selects this
+    // application's inactive route. Keep startup held until that has happened,
+    // so this request must join recovery rather than start another runtime.
+    let requestBodyRead;
+    const ingressSelectedRoute = new Promise((resolve) => { requestBodyRead = resolve; });
+    ingressResponse = platform.handle(new Request("https://slow-recovery.apps.example.test/", {
+      method: "POST",
+      body: new ReadableStream({
+        pull(controller) { requestBodyRead(); controller.close(); },
+      }, { highWaterMark: 0 }),
+      duplex: "half",
+    })).then(async (response) => ({ status: response.status, body: await response.text() }));
+    // Attach the rejection handler immediately, including if an earlier assertion fails.
+    void ingressResponse.catch(() => undefined);
+    await Promise.race([
+      ingressSelectedRoute,
+      ingressResponse.then((response) => assert.fail(`Ingress returned before selecting the held route: ${JSON.stringify(response)}`)),
+    ]);
+    // Let admission and the project-lock continuation run while startup is held.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal((await runtimeFences()).length, 1, "ingress must share the pending recovery runtime");
     await unlink(startupGate.hold);
-    let lastRecoveryResponse = "none";
-    try {
-      await waitFor(async () => {
-        const response = await platform.handle(new Request("https://slow-recovery.apps.example.test/"));
-        const body = await response.text();
-        lastRecoveryResponse = `${response.status} ${body}`;
-        return body === "recovered";
-      });
-    } catch (error) {
-      assert.fail(
-        `${error.message} Last response: ${lastRecoveryResponse}. Recovery errors: ${errors.join(" | ") || "none"}`,
-      );
-    }
+    assert.deepEqual(await ingressResponse, { status: 200, body: "recovered" },
+      `Recovery errors: ${errors.join(" | ") || "none"}`);
+    assert.deepEqual(errors, []);
+    assert.equal((await runtimeFences()).length, 1, "recovery must publish exactly one runtime");
+    assert.equal((await readFile(startupGate.entered, "utf8")).trim().split("\n").length, 1,
+      "the application must launch only once during recovery");
   } finally {
     await rm(startupGate.hold, { force: true });
-    await platform.close();
-    await rm(root, { recursive: true, force: true });
+    // Settle an admitted request before closing: it may still be waiting for
+    // the same startup lock when an assertion above fails.
+    await ingressResponse?.catch(() => undefined);
+    try {
+      await platform.close();
+      assert.deepEqual(await runtimeFences(), [], "closing must stop every recovery runtime");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 

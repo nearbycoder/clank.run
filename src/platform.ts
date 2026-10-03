@@ -1679,6 +1679,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       )`).run(projectId, projectId);
   };
 
+  const requireRuntimeLaunchAuthority = (projectId: string): void => {
+    if (closed) throw new PlatformError(503, "PLATFORM_CLOSED", "Platform closed while the application was starting.");
+    projectLeaseAssertions.get(projectId)?.();
+  };
+
   const launchBackgroundProcesses = async (
     running: ActiveProcess,
     release: ReleaseRow,
@@ -1687,6 +1692,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     environment: Record<string, string>,
     secrets: Record<string, string>,
   ): Promise<void> => {
+    requireRuntimeLaunchAuthority(running.projectId);
     const jobs = release.config.jobs;
     if (!jobs) return;
     running.backgroundFailure = undefined;
@@ -1697,74 +1703,83 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       })),
       ...(jobs.scheduler ? [{ role: "scheduler" as const, instance: 0 }] : []),
     ];
-    for (const launch of launches) {
-      const backgroundEnvironment = {
-        ...environment,
-        CLANK_PROCESS_ROLE: launch.role,
-        ...(launch.role === "worker"
-          ? {
-              CLANK_WORKER_CONCURRENCY: String(jobs.concurrency),
-              CLANK_WORKER_QUEUES: jobs.queues.join(","),
-            }
-          : {}),
-      };
-      const child = await spawnRelease(
-        runner,
-        runtimeGuardianDirectory,
-        release,
-        dataRoot,
-        port,
-        backgroundEnvironment,
-        {
-          entry: jobs.entry,
+    try {
+      for (const launch of launches) {
+        requireRuntimeLaunchAuthority(running.projectId);
+        const backgroundEnvironment = {
+          ...environment,
+          CLANK_PROCESS_ROLE: launch.role,
+          ...(launch.role === "worker"
+            ? {
+                CLANK_WORKER_CONCURRENCY: String(jobs.concurrency),
+                CLANK_WORKER_QUEUES: jobs.queues.join(","),
+              }
+            : {}),
+        };
+        const child = await spawnRelease(
+          runner,
+          runtimeGuardianDirectory,
+          release,
+          dataRoot,
+          port,
+          backgroundEnvironment,
+          {
+            entry: jobs.entry,
+            role: launch.role,
+            instance: launch.instance,
+            exposePort: false,
+          },
+          () => requireRuntimeLaunchAuthority(running.projectId),
+        );
+        const background: ActiveBackgroundProcess = {
           role: launch.role,
           instance: launch.instance,
-          exposePort: false,
-        },
+          child,
+          expectedStop: false,
+        };
+        running.background.push(background);
+        const stream = `${launch.role}${launch.role === "worker" ? `[${launch.instance + 1}]` : ""}`;
+        captureOutput(
+          child.stdout,
+          (line) => recordLog(running.projectId, release.id, `${stream}:stdout`, redact(line, secrets)),
+        );
+        captureOutput(
+          child.stderr,
+          (line) => recordLog(running.projectId, release.id, `${stream}:stderr`, redact(line, secrets)),
+        );
+        child.once("error", (error) => {
+          recordLog(running.projectId, release.id, "platform", `${stream} process error: ${safeError(error)}`);
+        });
+        child.once("exit", (code, signal) => {
+          const failure = `${stream} process exited (${String(code ?? signal ?? "unknown")}).`;
+          recordLog(running.projectId, release.id, "platform", failure);
+          if (background.expectedStop || running.expectedStop || closed) return;
+          running.backgroundFailure = failure;
+          if (active.get(running.projectId) === running) {
+            storage.internal.prepare("UPDATE clank_platform_releases SET status = 'crashed', failure = ? WHERE id = ?")
+              .run(failure, release.id);
+            scheduleRestart(running.projectId, release.id);
+          }
+        });
+        requireRuntimeLaunchAuthority(running.projectId);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      requireRuntimeLaunchAuthority(running.projectId);
+      if (running.backgroundFailure || running.background.some((process) =>
+        process.child.exitCode !== null && process.child.exitCode !== undefined)) {
+        throw new Error(running.backgroundFailure ?? "A background process exited during startup.");
+      }
+      recordLog(
+        running.projectId,
+        release.id,
+        "platform",
+        `Started ${jobs.workers} worker process(es) at concurrency ${jobs.concurrency}`
+          + `${jobs.scheduler ? " and one scheduler" : ""}.`,
       );
-      const background: ActiveBackgroundProcess = {
-        role: launch.role,
-        instance: launch.instance,
-        child,
-        expectedStop: false,
-      };
-      running.background.push(background);
-      const stream = `${launch.role}${launch.role === "worker" ? `[${launch.instance + 1}]` : ""}`;
-      captureOutput(
-        child.stdout,
-        (line) => recordLog(running.projectId, release.id, `${stream}:stdout`, redact(line, secrets)),
-      );
-      captureOutput(
-        child.stderr,
-        (line) => recordLog(running.projectId, release.id, `${stream}:stderr`, redact(line, secrets)),
-      );
-      child.once("error", (error) => {
-        recordLog(running.projectId, release.id, "platform", `${stream} process error: ${safeError(error)}`);
-      });
-      child.once("exit", (code, signal) => {
-        const failure = `${stream} process exited (${String(code ?? signal ?? "unknown")}).`;
-        recordLog(running.projectId, release.id, "platform", failure);
-        if (background.expectedStop || running.expectedStop || closed) return;
-        running.backgroundFailure = failure;
-        if (active.get(running.projectId) === running) {
-          storage.internal.prepare("UPDATE clank_platform_releases SET status = 'crashed', failure = ? WHERE id = ?")
-            .run(failure, release.id);
-          scheduleRestart(running.projectId, release.id);
-        }
-      });
+    } catch (error) {
+      await stopBackgroundProcesses(running);
+      throw error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    if (running.backgroundFailure || running.background.some((process) =>
-      process.child.exitCode !== null && process.child.exitCode !== undefined)) {
-      throw new Error(running.backgroundFailure ?? "A background process exited during startup.");
-    }
-    recordLog(
-      running.projectId,
-      release.id,
-      "platform",
-      `Started ${jobs.workers} worker process(es) at concurrency ${jobs.concurrency}`
-        + `${jobs.scheduler ? " and one scheduler" : ""}.`,
-    );
   };
 
   const releaseLaunchContext = async (
@@ -1815,9 +1830,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     secrets: Record<string, string>,
     port: number,
   ): Promise<ActiveProcess> => {
+    requireRuntimeLaunchAuthority(project.id);
     const secretRevisions = secretRotations.revisions(project.id, secrets);
     const { dataRoot, environment } = await releaseLaunchContext(project, release, secrets, port);
     await assertPortAvailable(port);
+    requireRuntimeLaunchAuthority(project.id);
     const child = await spawnRelease(
       runner,
       runtimeGuardianDirectory,
@@ -1831,6 +1848,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         instance: 0,
         exposePort: true,
       },
+      () => requireRuntimeLaunchAuthority(project.id),
     );
     const running: ActiveProcess = {
       projectId: project.id,
@@ -1857,12 +1875,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
     });
     try {
+      requireRuntimeLaunchAuthority(project.id);
       await waitForHealth(port, release.config.health.path, release.config.health.timeoutMs, child);
+      requireRuntimeLaunchAuthority(project.id);
       if (child.exitCode !== null && child.exitCode !== undefined) {
         throw new Error("Application exited immediately after its health check passed.");
       }
-      if (closed) throw new Error("Platform closed while the application was starting.");
       await launchBackgroundProcesses(running, release, dataRoot, port, environment, secrets);
+      requireRuntimeLaunchAuthority(project.id);
       consumedSecrets.set(running, secretRevisions);
       return running;
     } catch (error) {
@@ -1878,12 +1898,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     release: ReleaseRow,
     secrets: Record<string, string>,
   ): Promise<ActiveProcess> => {
+    requireRuntimeLaunchAuthority(project.id);
     const current = active.get(project.id);
     if (current) await stopRunning(current);
     const running = await launchRelease(project, release, secrets, project.port);
-    active.set(project.id, running);
-    runtimeActivity.set(project.id, Date.now());
-    return running;
+    try {
+      requireRuntimeLaunchAuthority(project.id);
+      active.set(project.id, running);
+      runtimeActivity.set(project.id, Date.now());
+      return running;
+    } catch (error) {
+      await stopRunning(running);
+      throw error;
+    }
   };
 
   const releaseRequiresContinuousRuntime = (release: ReleaseRow): boolean => Boolean(
@@ -8445,7 +8472,13 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         AND placement = 'local'
         AND (parent_project_id IS NULL OR preview_expires_at > ?)`,
   ).all(Date.now()).map(projectRow);
-  const startupRecovery = Promise.all(projects.map(async (project) => {
+  const startupRecovery = Promise.allSettled(projects.map(({ id }) => withProjectLock(id, async () => {
+    // Recovery and ingress wakeups must share the same lock. Otherwise both
+    // can launch a runtime before either publishes it in the active map.
+    if (closed || active.has(id)) return;
+    const project = projectById(storage.internal, id);
+    if (!project || project.placement !== "local") return;
+    if (project.parentProjectId && (project.previewExpiresAt ?? 0) <= Date.now()) return;
     const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
     if (!release) return;
     if (project.runtimePolicy === "suspended") return;
@@ -8455,10 +8488,21 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     } catch (error) {
       if (closed) return;
       options.onError?.(error);
+      // A successor may have taken ownership while this runtime was starting.
+      // Only the current lease holder may change the release's durable status.
+      try { requireRuntimeLaunchAuthority(project.id); } catch { return; }
       storage.internal.prepare("UPDATE clank_platform_releases SET status = 'crashed', failure = ? WHERE id = ?")
         .run(`Startup recovery failed: ${safeError(error)}`, release.id);
     }
-  }));
+  }))).then((results) => {
+    // Coordination failures must not let shutdown race still-running sibling
+    // recoveries or mark a release that never started as crashed.
+    for (const result of results) {
+      if (!closed && result.status === "rejected") {
+        try { options.onError?.(result.reason); } catch { /* Reporting cannot abandon recovered runtimes. */ }
+      }
+    }
+  });
   if (options.startupRecovery !== "background") await startupRecovery;
   else void startupRecovery.catch((error) => options.onError?.(error));
   scheduleDomainReconciliation();
@@ -13418,6 +13462,7 @@ async function spawnRelease(
     instance: number;
     exposePort: boolean;
   },
+  assertCurrent?: () => void,
 ): Promise<NativeChild> {
   const childName = "node:child_process";
   const { spawn } = await import(childName) as unknown as {
@@ -13468,6 +13513,7 @@ async function spawnRelease(
       containerName,
       projectId: release.projectId,
       guardianDirectory,
+      assertCurrent,
       env: {
         ...(globalThis as any).process.env,
         CLANK_RUNTIME_ENV_B64: environmentEnvelope,
@@ -13488,6 +13534,7 @@ async function spawnRelease(
     {
       guardianDirectory,
       projectId: release.projectId,
+      assertCurrent,
       cwd: release.directory,
       env: {
         PATH: (globalThis as any).process.env.PATH ?? "",
@@ -13522,11 +13569,12 @@ async function spawnGuardedRuntime(
   spawn: (command: string, args: string[], options: Record<string, unknown>) => NativeChild,
   command: string,
   args: string[],
-  options: { cwd?: string; env: Record<string, string>; containerName?: string; guardianDirectory: string; projectId: string },
+  options: { cwd?: string; env: Record<string, string>; containerName?: string; guardianDirectory: string; projectId: string; assertCurrent?: () => void },
 ): Promise<NativeChild> {
   const fsName = "node:fs/promises", pathName = "node:path";
   const fs = await import(fsName), path = await import(pathName);
   await assertRuntimeGuardianAdmission(options.guardianDirectory);
+  options.assertCurrent?.();
   const fence = path.join(options.guardianDirectory, `runtime-${crypto.randomUUID()}.json`);
   runtimeGuardianChildren.set(fence, { projectId: options.projectId, child: null });
   const file = await fs.open(fence, "wx", 0o600);
@@ -13535,12 +13583,25 @@ async function spawnGuardedRuntime(
   const directory = await fs.open(options.guardianDirectory, "r");
   try { await directory.sync(); } finally { await directory.close(); }
   const specification = base64Url(new TextEncoder().encode(JSON.stringify({ command, args, cwd: options.cwd, containerName: options.containerName, fence })));
-  const child = spawn((globalThis as any).process.execPath,
-    ["--disable-warning=ExperimentalWarning", "--input-type=module", "--eval", RUNTIME_GUARDIAN], {
-      env: { ...options.env, CLANK_GUARDIAN_SPEC: specification },
-      // Node closes this private IPC channel when the control-plane process dies.
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-    });
+  let child: NativeChild;
+  try {
+    options.assertCurrent?.();
+    child = spawn((globalThis as any).process.execPath,
+      ["--disable-warning=ExperimentalWarning", "--input-type=module", "--eval", RUNTIME_GUARDIAN], {
+        env: { ...options.env, CLANK_GUARDIAN_SPEC: specification },
+        // Node closes this private IPC channel when the control-plane process dies.
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
+  } catch (error) {
+    // No guardian was spawned, so this preparation fence has no writer to reap.
+    try {
+      await fs.unlink(fence);
+      const cleanupDirectory = await fs.open(options.guardianDirectory, "r");
+      try { await cleanupDirectory.sync(); } finally { await cleanupDirectory.close(); }
+      runtimeGuardianChildren.delete(fence);
+    } catch { blockedRuntimeGuardianDirectories.add(options.guardianDirectory); }
+    throw error;
+  }
   Object.defineProperty(child, "cleanupFence", { value: fence });
   runtimeGuardianChildren.set(fence, { projectId: options.projectId, child });
   child.once("error", () => { blockedRuntimeGuardianDirectories.add(options.guardianDirectory); });

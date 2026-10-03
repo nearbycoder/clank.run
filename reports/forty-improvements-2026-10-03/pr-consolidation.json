@@ -19,26 +19,26 @@
       "action": "actions/attest",
       "version": "4.2.2",
       "sha": "1e69f48acb82d1966a394da916b4c1698aa569d6",
-      "reason": "Reviewed dependency-only patch; action metadata, inputs, application source and Node24 runtime unchanged.",
+      "reason": "Reviewed dependency-only patch; action metadata, inputs, application source and Node 24 runtime unchanged.",
       "source": "https://github.com/actions/attest/releases/tag/v4.2.2"
     }
   ],
   "prevention": "Dependabot groups all CodeQL steps together and batches other minor/patch action updates. The local security gate rejects absent or mismatched CodeQL steps.",
   "validation": {
-    "actionlint": "1.7.12: all5 workflows passed",
+    "actionlint": "1.7.12: all 5 workflows passed",
     "dependabotYaml": "Parsed successfully with js-yaml4.1.1; group patterns and ordering reviewed against GitHub documentation.",
     "securityAudit": "Passed",
     "pairingGuard": "Actual guard accepts aligned pins, rejects mismatched pins and missing analyze step.",
     "independentReviews": "CodeQL pair, attestation update and final consolidation diff reviewed separately.",
-    "applicationChecks": "No application source changed after the complete Node22/24/26 gates recorded in verification.json.",
+    "applicationChecks": "The original Node 22/24/26 gates are recorded in verification.json. Subsequent runtime recovery fixes and their final gates are recorded below.",
     "hostedFollowUp": {
       "firstHead": "71d677bbc6ab981fea4ac3067feeddf22c94f2c8",
       "ciRun": 37134609969,
-      "findings": "Node22 and conformance exposed default-zero SQLite busy timeout on concurrent crash-test reader connections. Node24 and CodeQL passed.",
-      "fix": "Test readers and generated writers explicitly configure5000ms busy handling; positive writer checks poll within10s. No lock errors are swallowed; all cleanup, ordering, data-preservation and deletion assertions remain.",
-      "stress": "20/20 affected tests passed under forced exclusive write locks on Node22.16.0 and24.21.0. Removing only reader busy handling reproduced both failures.",
-      "coverageArtifact": "All1590 tests completed with0 failures, but one local Node coverage run produced trailing non-whitespace JSON data. Added this exact malformed-artifact error to the existing single bounded retry. Final valid measured coverage and unchanged80/65/80 thresholds remain required.",
-      "coverageGuardTests": "5/5 passed on Node22,24,26; independent review found no bypass.",
+      "findings": "Node 22 and conformance exposed default-zero SQLite busy timeout on concurrent crash-test reader connections. Node 24 and CodeQL passed.",
+      "fix": "Test readers and generated writers explicitly configure 5000ms busy handling; positive writer checks poll within 10s. No lock errors are swallowed; all cleanup, ordering, data-preservation and deletion assertions remain.",
+      "stress": "20/20 affected tests passed under forced exclusive write locks on Node 22.16.0 and24.21.0. Removing only reader busy handling reproduced both failures.",
+      "coverageArtifact": "All 1590 tests completed with 0 failures, but one local Node coverage run produced trailing non-whitespace JSON data. Added this exact malformed-artifact error to the existing single bounded retry. Final valid measured coverage and unchanged 80/65/80 thresholds remain required.",
+      "coverageGuardTests": "5/5 passed on Node 22,24,26; independent review found no bypass.",
       "finalLocalGate": {
         "node": "22.16.0",
         "passed": 1587,
@@ -52,6 +52,94 @@
         "result": "Full scripts/check.mjs passed including documentation, conformance, security and dependency checks.",
         "logSha256": "a8ba2d525144d1608074d795534bcdf088e03ff39d4505d79894d4648ec6ebb8"
       }
+    },
+    "runtimeRecovery": {
+      "observedHead": "31311f941526b3a094f0ab9a532984846888dacf",
+      "ciRun": 37135458871,
+      "observation": "Node 22, conformance and CodeQL passed. Node 24 reported a background startup recovery test failure, then retained a live test process; the stalled run was cancelled to retrieve logs.",
+      "confirmedCause": "Background recovery and ingress wakeup could both launch the same project before either published its active runtime. Isolated reproduction produced two same-release guardian fences, EADDRINUSE and ingress 503. The exact hosted orphan ordering was not reproduced.",
+      "fixes": [
+        "Serialize recovery with ingress using the existing project lock and reload current project state inside that lock.",
+        "Wait for all sibling recovery operations before reporting coordination failures; do not mark an unstarted release crashed.",
+        "Check current lease and shutdown state immediately before spawn, after health and background startup, and before publication; clean rejected runtimes and unspawned fences.",
+        "Prevent stale controllers from overwriting successor release status.",
+        "Synchronize the ingress regression with a held application and verify exactly one runtime, a successful queued response and zero fences after close.",
+        "Allow the unchanged 30s crashed-controller lease to expire in the crash regression while continuously proving all old writer PID counts stay fixed."
+      ],
+      "proofs": [
+        {
+          "case": "Concurrent recovery/ingress",
+          "result": "10/10 repeated natural exits across Node 22/24. Identical test against baseline fails with 503. Fixed isolated reproduction has one runtime and returns 200."
+        },
+        {
+          "case": "Lease acquisition failure with recovering sibling",
+          "result": "Sibling recovery completes; one coordination failure is reported, unstarted release status remains unchanged, and close while a sibling is held clears every guardian fence."
+        },
+        {
+          "case": "Lease takeover during application health",
+          "result": "Node 24 regression passes. Disabling launch guard starts a forbidden worker; disabling status guard overwrites successor active/null status. Both negative controls fail."
+        },
+        {
+          "case": "Immediate restart after controller SIGKILL",
+          "result": "Node 22 focused regression passes naturally in 31.61s, including real lease expiry, no old-writer progress and successful stable recovery."
+        }
+      ],
+      "finalReleaseChecks": [
+        {
+          "node": "22.16.0",
+          "result": "Full local scripts/check.mjs passed",
+          "counts": {
+            "tests": 1591,
+            "pass": 1588,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 3,
+            "todo": 0
+          },
+          "coverage": {
+            "lines": 87.49,
+            "branches": 79.34,
+            "functions": 89.69
+          },
+          "logSha256": "48ce35f9e5f0abb9d6f3f33c2c3ebc08c9ae00f549b75add5bb572c2e7dc1cd3"
+        },
+        {
+          "node": "24.21.0",
+          "result": "Full local scripts/check.mjs passed",
+          "counts": {
+            "tests": 1591,
+            "pass": 1588,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 3,
+            "todo": 0
+          },
+          "coverage": {
+            "lines": 87.5,
+            "branches": 79.31,
+            "functions": 89.66
+          },
+          "logSha256": "7a04d1d713fe54dda8978358fb63fbe00818a6b3b342ccab97e143a864e383ea"
+        },
+        {
+          "node": "26.10.0",
+          "result": "Full local scripts/check.mjs passed",
+          "counts": {
+            "tests": 1591,
+            "pass": 1588,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 3,
+            "todo": 0
+          },
+          "coverage": {
+            "lines": 91.92,
+            "branches": 79.29,
+            "functions": 89.66
+          },
+          "logSha256": "375415c27d6fb1341d950ec6ad65af89b47ebf7fff42dc9ef70fe64a39748869"
+        }
+      ]
     }
   },
   "constraints": "The release-only OIDC attestation operation is not invoked by PR CI and was not tested by publishing a release. No package was published.",
