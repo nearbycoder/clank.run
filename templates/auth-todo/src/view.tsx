@@ -72,9 +72,9 @@ export function TodoView(props: TodoViewProps) {
     }
   };
   return (
-    <main class="mx-auto min-h-screen max-w-3xl px-6 py-12 text-slate-950">
-      <header class="flex items-start justify-between gap-6">
-        <div>
+    <main class="mx-auto min-h-screen max-w-3xl px-4 py-8 sm:px-6 sm:py-12 text-slate-950">
+      <header class="flex flex-col items-start justify-between gap-4 sm:flex-row sm:gap-6">
+        <div class="min-w-0">
           <p class="text-xs font-bold uppercase tracking-[.2em] text-emerald-600">Clank deployed app</p>
           <h1 class="mt-2 text-4xl font-semibold tracking-tight">{projectTitle}</h1>
           <p class="mt-3 text-slate-500">
@@ -83,12 +83,12 @@ export function TodoView(props: TodoViewProps) {
             <span class="sr-only"> Database snapshot {props.version}.</span>
           </p>
         </div>
-        <button class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold" onClick={props.logout}>
+        <button class="min-h-11 shrink-0 rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold" onClick={props.logout}>
           Sign out
         </button>
       </header>
       <p role="alert" class="mt-4 text-sm text-rose-700" hidden={!(props.error || localError.value)}>{props.error || localError.value}</p>
-      <form class="mt-10 flex gap-3" onSubmit={submit} aria-busy={adding.value}>
+      <form class="mt-8 flex flex-col gap-3 sm:flex-row" onSubmit={submit} aria-busy={adding.value}>
         <input
           class="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-3 shadow-sm"
           placeholder="What needs doing?"
@@ -112,11 +112,11 @@ export function TodoView(props: TodoViewProps) {
       </form>
       <div class="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div class="flex flex-wrap gap-2" role="group" aria-label="Todo completion filter">
-          <For each={filters} by="value">{(filter) => <button type="button" class="rounded-lg border border-slate-300 px-3 py-2 text-sm" aria-pressed={status.value === filter.value} onClick={() => { status.value = filter.value; }} agentId={`todos-${filter.value}`}>
+          <For each={filters} by="value">{(filter) => <button type="button" class="min-h-11 rounded-lg border border-slate-300 px-3 py-2 text-sm" aria-pressed={status.value === filter.value} onClick={() => { status.value = filter.value; }} agentId={`todos-${filter.value}`}>
             {filter.label} ({counts.value[filter.value]})
           </button>}</For>
         </div>
-        <label class="flex items-center gap-2 text-sm">Search todos<input type="search" class="min-w-0 rounded-lg border border-slate-300 px-3 py-2" maxlength={160} bind:value={search} agentId="todo-search" /></label>
+        <label class="flex w-full min-w-0 flex-col gap-2 text-sm sm:w-auto sm:flex-row sm:items-center">Search todos<input type="search" class="min-h-11 w-full min-w-0 rounded-lg border border-slate-300 px-3 py-2 sm:w-auto" maxlength={160} bind:value={search} agentId="todo-search" /></label>
       </div>
       <p class="mt-3 text-sm text-slate-500" role="status">Showing {visible.value.length} of {counts.value.all} todos.</p>
       <section class="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -126,7 +126,7 @@ export function TodoView(props: TodoViewProps) {
           {(todo) => (
             <article class="flex items-center gap-3 border-b border-slate-100 p-4 last:border-0" aria-busy={pending.value.has(todo._id)}>
               <button
-                class="h-6 w-6 rounded-full border border-slate-400 text-xs"
+                class="h-11 w-11 shrink-0 rounded-full border border-slate-400 text-sm"
                 disabled={pending.value.has(todo._id)}
                 onClick={() => mutateRow(todo._id, () => props.setDone(todo._id, !todo.done, todo._version))}
                 agentId={`todo-${todo._id}-toggle`}
@@ -135,9 +135,9 @@ export function TodoView(props: TodoViewProps) {
               >
                 {todo.done ? "✓" : ""}
               </button>
-              <span classList={{ "flex-1": true, "line-through text-slate-400": todo.done }}>{todo.title}</span>
+              <span classList={{ "min-w-0 flex-1": true, "line-through text-slate-400": todo.done }}>{todo.title}</span>
               <button
-                class="text-sm font-medium text-rose-600"
+                class="min-h-11 shrink-0 px-1 text-sm font-medium text-rose-600"
                 disabled={pending.value.has(todo._id)}
                 onClick={() => mutateRow(todo._id, () => props.remove(todo._id, todo._version))}
                 agentId={`todo-${todo._id}-remove`}

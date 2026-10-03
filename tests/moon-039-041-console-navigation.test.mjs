@@ -244,8 +244,9 @@ test("041: reduced motion disables animation, transitions and smooth scrolling a
   assert.doesNotMatch(html, /behavior:\s*["']smooth["']/);
 });
 
-test("039/041: existing mobile zoom and touch scrolling policy remains intact", () => {
-  assert.match(html, /content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/);
-  assert.match(html, /html,body,body \*\{touch-action:pan-x pan-y\}/);
+test("039/041: mobile controls stay readable while browser zoom remains available", () => {
+  assert.match(html, /content="width=device-width,initial-scale=1"/);
+  assert.doesNotMatch(html, /maximum-scale=1|user-scalable=no/);
+  assert.doesNotMatch(html, /html,body,body \*\{touch-action:pan-x pan-y\}/);
   assert.match(html, /body input,body select,body textarea\{font-size:16px!important\}/);
 });

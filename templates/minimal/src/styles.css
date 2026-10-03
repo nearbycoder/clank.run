@@ -1,2 +1,5 @@
 @import "tailwindcss";
 @source "./**/*.{ts,tsx}";
+
+h1 { overflow-wrap: anywhere; }
+button:focus-visible { outline: 3px solid #059669; outline-offset: 3px; }
