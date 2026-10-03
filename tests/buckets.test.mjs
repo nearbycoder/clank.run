@@ -648,3 +648,42 @@ test("an older garbage collector cannot acknowledge cleanup requeued by a cancel
     await environment.close();
   }
 });
+
+test("bucket cleanup preserves full-range SQLite rowids without changing numeric catalog reads", async (t) => {
+  const prepare = DatabaseSync.prototype.prepare;
+  let garbageStatements = 0;
+  t.mock.method(DatabaseSync.prototype, "prepare", function (sql) {
+    if (sql.includes("INSERT INTO clank_bucket_garbage (rowid, storage_key, created_at)")) {
+      // Make SQLite's random() boundary deterministic: this value cannot be
+      // represented as a JS number, and remains lastInsertRowid after DELETE.
+      sql = sql.replace("random()", String(9223372036854775806n - BigInt(garbageStatements++)));
+    }
+    return prepare.call(this, sql);
+  });
+  let failDelete = true;
+  const environment = await fixture([defineBucket({ name: "files", ownership: "app", allowedContentTypes: ["text/plain"] })], {
+    wrapStore: store => ({ ...store, async delete(key) {
+      if (failDelete) throw new Error("Provider cleanup is temporarily unavailable.");
+      return store.delete(key);
+    } }),
+  });
+  try {
+    const bucket = environment.manager.bucket("files");
+    await bucket.put("first", text("first"), { contentType: "text/plain" });
+    assert.equal(await bucket.delete("first"), true);
+    assert.equal(garbageStatements, 1);
+    const catalog = new DatabaseSync(join(environment.root, "catalog.sqlite"));
+    try {
+      assert.equal(catalog.prepare("SELECT CAST(rowid AS TEXT) AS id FROM clank_bucket_garbage").get().id, "9223372036854775806");
+    } finally { catalog.close(); }
+    failDelete = false;
+    assert.deepEqual(await environment.manager.sweep(), { reservations: 0, objects: 1 });
+    assert.equal(typeof environment.manager.usage().objects, "number");
+    assert.equal(environment.manager.usage().bytes, 0);
+    await bucket.put("second", text("second"), { contentType: "text/plain" });
+    assert.equal(typeof bucket.stat("second").size, "number");
+    assert.equal(await bucket.delete("second"), true);
+    assert.equal(garbageStatements, 2);
+    assert.deepEqual(await environment.manager.sweep(), { reservations: 0, objects: 0 });
+  } finally { await environment.close(); }
+});

@@ -6,13 +6,17 @@ import { h } from "../dist/dom.js";
 import { renderToString } from "../dist/ssr.js";
 
 // Work and byte budgets are portable across machines. Timing is diagnostic only.
+// Node 26's native strip mode preserves source layout/comments instead of the
+// earlier transform printer. Measured gzip baselines are 5,088 / 5,746 bytes
+// for core/forms; keep the tighter published Node 22/24 envelope unchanged.
+const nativeStripOutput = Number(process.versions.node.split(".")[0]) >= 26;
 export const performanceBudgets = Object.freeze({
   signalEffectRuns: 1_000,
   retainedSsrEffectRuns: 0,
-  coreGzipBytes: 4_500,
+  coreGzipBytes: nativeStripOutput ? 5_250 : 4_500,
   domGzipBytes: 12_000,
   routerGzipBytes: 3_500,
-  formsGzipBytes: 5_500,
+  formsGzipBytes: nativeStripOutput ? 6_000 : 5_500,
 });
 
 export function evaluatePerformanceBudgets(measurements, budgets = performanceBudgets) {

@@ -718,7 +718,7 @@ test("SQLite paths are private, reject symlinks, detect corruption, and reserve 
       () => openBackend(todoBackend(), { path: corrupt }),
       /database|SQLite|file is not a database/i,
     );
-    for (const name of ["meta", "changes", "migrations", "auth_users", "auth_sessions", "platform_secrets"]) {
+    for (const name of ["meta", "changes", "migrations", "auth_users", "auth_sessions", "platform_secrets", "search_fts", "search_fts_data", "search_fts_idx", "search_fts_content", "search_fts_docsize", "search_fts_config"]) {
       assert.throws(
         () => defineDatabase({ [name]: defineTable({ value: s.string() }) }),
         /reserved/,
@@ -737,11 +737,11 @@ test("backend resource limits reject invalid configuration before opening storag
     { maxLiveArgumentBytes: 0 },
     { maxLivePayloadBytes: 0 },
     { maxLiveConnections: 0 },
-    { maxCacheEntries: 0 },
+    { maxCacheEntries: -1 },
   ]) {
     await assert.rejects(
       () => openBackend(todoBackend(), { path: ":memory:", ...options }),
-      /positive integer/,
+      /(?:positive|non-negative) integer/,
     );
   }
 });
@@ -830,4 +830,20 @@ test("reused document encodings preserve output limits and transaction rollback"
   } finally {
     runtime.close();
   }
+});
+
+
+test("zero query cache rechecks external authorization without a database revision", async () => {
+  let allowed = true, calls = 0;
+  const definition = defineBackend({ schema: defineDatabase({ rows: defineTable({ value: s.string() }) }) }).functions(({ query }) => ({
+    gated: query({ args: {}, handler: () => { calls++; if (!allowed) throw new Error("revoked"); return "visible"; } }),
+  }));
+  const runtime = await openBackend(definition, { path: ":memory:", maxCacheEntries: 0 });
+  try {
+    const client = createSyncClient({ url: "https://cache.test", fetch: (url, init) => runtime.handle(new Request(url, init)) });
+    assert.equal(await client.query(createApi().gated, {}), "visible");
+    allowed = false;
+    await assert.rejects(client.query(createApi().gated, {}));
+    assert.equal(calls, 2);
+  } finally { runtime.close(); }
 });

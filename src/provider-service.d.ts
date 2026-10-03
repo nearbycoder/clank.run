@@ -40,7 +40,8 @@ export interface DeploymentProviderServiceState {
     | "stopped"
     | "rolling-back"
     | "rolled-back"
-    | "deleting";
+    | "deleting"
+    | "evacuating";
   readonly updatedAt: number;
 }
 

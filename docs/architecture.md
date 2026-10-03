@@ -62,7 +62,7 @@ An agent may choose a named action directly or operate an explicit semantic cont
 
 ## Build strategy
 
-Clank's compiler parses TSX directly, lowers elements to `jsx()` calls, and lowers dynamic expression sites to lazy `expression()` markers. Node's `stripTypeScriptTypes(..., { mode: "transform" })` then removes TypeScript syntax. The build changes local `.ts`/`.tsx` import suffixes to `.js` and emits source maps. No bundling means browser module boundaries remain visible and debuggable.
+Clank's compiler parses TSX directly, lowers elements to `jsx()` calls, and lowers dynamic expression sites to lazy `expression()` markers. Node's `stripTypeScriptTypes` then removes TypeScript syntax: transform mode on Node 22/24 and native strip mode on Node 26. Framework sources use erasable syntax so every supported runtime compiles them. Strip mode preserves line positions and the compiler emits line-level source maps. Non-erasable user syntax on Node 26 produces an actionable diagnostic rather than a silent rewrite. The build changes local `.ts`/`.tsx` import suffixes to `.js` and emits source maps. No bundling means browser module boundaries remain visible and debuggable.
 
 The checked-in declaration files are the stable consumer contract. Type tests instantiate real schemas and backend functions to ensure errors appear at call sites without generated types. The repository's strict `tsconfig.json` validates source and the examples when a TypeScript compiler is available, while the normal build itself remains package-free.
 

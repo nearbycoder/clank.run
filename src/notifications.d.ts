@@ -5,8 +5,16 @@ export interface NotificationItem {
   readonly _id: string; readonly _creationTime: number; readonly category: string; readonly title: string;
   readonly body: string; readonly url: string | null; readonly readAt: number | null;
   readonly emailState: string;
+  readonly deliveryAt?: number; readonly emailAttempts?: number;
 }
-export interface NotificationPreferences { category: string; inApp: boolean; email: boolean; }
+export interface NotificationDeliveryPolicy {
+  delivery?: "immediate" | "hourly" | "daily";
+  timeZone?: string;
+  digestTime?: string;
+  quietHours?: { start: string; end: string } | null;
+}
+export declare function nextNotificationDelivery(input: NotificationDeliveryPolicy, now?: number): number;
+export interface NotificationPreferences extends NotificationDeliveryPolicy { category: string; inApp: boolean; email: boolean; }
 export interface NotificationCenterOptions {
   path: string;
   auth: AuthDefinition<any>;
@@ -15,6 +23,7 @@ export interface NotificationCenterOptions {
   maxPerUser?: number;
   sendEmail?: (message: { to: string; subject: string; text: string; url: string | null; idempotencyKey: string; signal: AbortSignal }) => Promise<void>;
   onError?: OpenBackendOptions["onError"];
+  now?: () => number;
 }
 export interface NotificationCenter {
   handle(request: Request): Promise<Response>;
@@ -30,6 +39,7 @@ export interface NotificationClient {
   markRead(id: string, read?: boolean): Promise<boolean>;
   markAllRead(): Promise<number>;
   preferences(): Promise<readonly NotificationPreferences[]>;
+  retryEmail(id: string): Promise<boolean>;
   setPreference(preferences: NotificationPreferences): Promise<NotificationPreferences>;
 }
 

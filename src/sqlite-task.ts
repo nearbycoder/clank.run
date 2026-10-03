@@ -1,16 +1,84 @@
 // Tenant-controlled schemas, triggers and SQL must never execute on the shared
-// control-plane event loop. This is resource isolation, not a filesystem sandbox.
+// control-plane event loop. Linux workers additionally have a private filesystem namespace.
+import { prepareSQLiteSandbox, type PinnedSQLiteDirectory } from "./sqlite-sandbox.ts";
 const MAX_ACTIVE_TASKS = 2;
 const MAX_WAITING_TASKS = 16;
 export const SQLITE_TASK_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 const MAX_MESSAGE_BYTES = SQLITE_TASK_MAX_MESSAGE_BYTES;
 const TASK_TIMEOUT_MS = 10_000;
-let activeTasks = 0;
-const waitingTasks: Array<() => void> = [];
+/** Round-robin admission with one active task per tenant and bounded queue wait. */
+export class SQLiteTaskScheduler {
+  private active = new Set<string>();
+  private waiting = new Map<string, Array<{ resolve(release: () => void): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>>();
+  private capacity: number;
+  private queueLimit: number;
+  private tenantQueueLimit: number;
+  private queueTimeoutMs: number;
+  constructor(capacity = MAX_ACTIVE_TASKS, queueLimit = MAX_WAITING_TASKS,
+    tenantQueueLimit = 4, queueTimeoutMs = TASK_TIMEOUT_MS) {
+    this.capacity = capacity; this.queueLimit = queueLimit;
+    this.tenantQueueLimit = tenantQueueLimit; this.queueTimeoutMs = queueTimeoutMs;
+  }
+  acquire(tenant: string): Promise<() => void> {
+    if (!this.active.has(tenant) && this.active.size < this.capacity && this.waiting.size === 0) {
+      this.active.add(tenant);
+      return Promise.resolve(this.release(tenant));
+    }
+    const queue = this.waiting.get(tenant) ?? [];
+    if (queue.length >= this.tenantQueueLimit || [...this.waiting.values()].reduce((sum, entries) => sum + entries.length, 0) >= this.queueLimit) {
+      return Promise.reject(new Error("SQLite task capacity is exhausted. Retry after current operations finish."));
+    }
+    return new Promise((resolve, reject) => {
+      const entry = { resolve, reject, timer: setTimeout(() => {
+        const entries = this.waiting.get(tenant);
+        if (!entries) return;
+        const index = entries.indexOf(entry);
+        if (index < 0) return;
+        entries.splice(index, 1);
+        if (!entries.length) this.waiting.delete(tenant);
+        reject(new Error(`SQLite task exceeded its ${this.queueTimeoutMs}ms queue deadline.`));
+        this.drain();
+      }, this.queueTimeoutMs) };
+      queue.push(entry);
+      this.waiting.set(tenant, queue);
+      this.drain();
+    });
+  }
+  private release(tenant: string): () => void {
+    let released = false;
+    return () => { if (!released) { released = true; this.active.delete(tenant); this.drain(); } };
+  }
+  private drain(): void {
+    for (const [tenant, entries] of this.waiting) {
+      if (this.active.size >= this.capacity) break;
+      if (this.active.has(tenant)) continue;
+      const next = entries.shift()!;
+      this.waiting.delete(tenant);
+      if (entries.length) this.waiting.set(tenant, entries);
+      clearTimeout(next.timer);
+      this.active.add(tenant);
+      next.resolve(this.release(tenant));
+    }
+  }
+}
+const scheduler = new SQLiteTaskScheduler();
 
-type SQLiteTaskModule = "migrations" | "jobs" | "inspection";
+async function taskTenant(module: string, operation: string, args: readonly any[]): Promise<string> {
+  const pathName = "node:path";
+  const path = await import(pathName);
+  const input = module === "jobs" ? args[0]?.databasePath
+    : operation === "applyMigrations" ? args[0]?.path
+    : operation === "inspectProjectBucketUsage" ? path.join(args[0], args[1].id, "data", "catalog.sqlite") : args[0];
+  if (!input || input === ":memory:") return `memory-${globalThis.crypto.randomUUID()}`;
+  const resolved = path.resolve(input);
+  const match = /^(.*\/(?:projects|deployments)\/[^/]+)(?:\/|$)/.exec(resolved);
+  return match ? match[1]! : path.dirname(resolved);
+}
+
+type SQLiteTaskModule = "migrations" | "jobs" | "inspection" | "recovery";
 const WORKER_MODULES: Record<SQLiteTaskModule, string> = {
   migrations: "./migrations-worker.js",
+  recovery: "./point-in-time-worker.js",
   jobs: "./platform-jobs-worker.js",
   inspection: "./sqlite-inspection-worker.js",
 };
@@ -47,46 +115,31 @@ export async function runSQLiteTask<T>(
   module: SQLiteTaskModule,
   operation: string,
   args: readonly unknown[],
+  directories: readonly PinnedSQLiteDirectory[] = [],
 ): Promise<T> {
-  if (activeTasks >= MAX_ACTIVE_TASKS) {
-    if (waitingTasks.length >= MAX_WAITING_TASKS) {
-      throw new Error("SQLite task capacity is exhausted. Retry after current operations finish.");
-    }
-    await new Promise<void>((resolve) => waitingTasks.push(resolve));
-  } else {
-    activeTasks++;
-  }
+  const release = await scheduler.acquire(await taskTenant(module, operation, args));
+  let sandbox: Awaited<ReturnType<typeof prepareSQLiteSandbox>> | undefined;
   try {
-    const request = JSON.stringify({
-      module: new URL(WORKER_MODULES[module], import.meta.url).href,
-      operation,
-      arguments: args,
-    });
-    if (new TextEncoder().encode(request).byteLength > MAX_MESSAGE_BYTES) {
-      throw new Error("SQLite task request exceeds its limit.");
-    }
     const moduleName = "node:child_process";
     const { spawn } = await import(moduleName);
     const process = (globalThis as any).process;
     let executable = process.execPath;
     const childArguments = ["--jitless", "--max-old-space-size=128", "--input-type=module", "--eval", BOOTSTRAP];
     if (process.platform === "linux") {
-      // Official Node builds disable SQLite memory accounting, so its heap
-      // pragma cannot be the native-allocation security boundary. Linux limits
-      // must be imposed before loading any tenant data. Jitless mode avoids V8's
-      // large executable code reservation under the address-space/data limits.
-      const fsName = "node:fs/promises";
-      const fs = await import(fsName);
-      executable = "";
-      for (const candidate of ["/usr/bin/prlimit", "/bin/prlimit"]) {
-        try { await fs.access(candidate, 1); executable = candidate; break; } catch { /* Try the next trusted system path. */ }
-      }
-      if (!executable) throw new Error("Bounded SQLite tasks on Linux require the util-linux prlimit executable.");
-      childArguments.unshift("--data=268435456:268435456", "--as=1073741824:1073741824",
-        "--cpu=10:10", "--core=0:0", "--", process.execPath);
+      sandbox = await prepareSQLiteSandbox(module, operation, args, childArguments, directories);
+      executable = sandbox.executable;
+      childArguments.splice(0, childArguments.length, ...sandbox.arguments);
+    }
+    const request = JSON.stringify({
+      module: sandbox?.moduleUrl ?? new URL(WORKER_MODULES[module], import.meta.url).href,
+      operation,
+      arguments: sandbox?.argumentsValue ?? args,
+    });
+    if (new TextEncoder().encode(request).byteLength > MAX_MESSAGE_BYTES) {
+      throw new Error("SQLite task request exceeds its limit.");
     }
     const child = spawn(executable, childArguments, {
-      stdio: ["pipe", "pipe", "ignore"],
+      stdio: ["pipe", "pipe", "ignore", ...(sandbox?.descriptors ?? [])],
       windowsHide: true,
       env: {
         NODE_NO_WARNINGS: "1",
@@ -139,8 +192,6 @@ export async function runSQLiteTask<T>(
       child.stdin.end(request);
     });
   } finally {
-    const next = waitingTasks.shift();
-    if (next) next();
-    else activeTasks--;
+    try { await sandbox?.close(); } finally { release(); }
   }
 }

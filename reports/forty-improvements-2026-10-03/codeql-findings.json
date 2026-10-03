@@ -1,0 +1,785 @@
+{
+  "scope": "Final repository source snapshot; reports and pre-existing untracked helper excluded; generated ignored output excluded. Raw scanner results are not all vulnerabilities. See triage files for reachability and remaining local hardening gaps.",
+  "findings": [
+    {
+      "rule": "js/server-side-unvalidated-url-redirection",
+      "path": "tests/organization-security.test.mjs",
+      "line": 68,
+      "message": "Untrusted URL redirection depends on a [user-provided value](1)."
+    },
+    {
+      "rule": "js/bad-tag-filter",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 88,
+      "message": "This regular expression does not match upper case <SCRIPT> tags."
+    },
+    {
+      "rule": "js/bad-code-sanitization",
+      "path": "scripts/tsx.mjs",
+      "line": 197,
+      "message": "Code construction depends on an [improperly sanitized value](1).\nCode construction depends on an [improperly sanitized value](2).\nCode construction depends on an [improperly sanitized value](3).\nCode construction depends on an [improperly sanitized value](4).\nCode construction depends on an [improperly sanitized value](5).\nCode construction depends on an [improperly sanitized value](6).\nCode construction depends on an [improperly sanitized value](7).\nCode construction depends on an [improperly sanitized value](8).\nCode construction depends on an [improperly sanitized value](9).\nCode construction depends on an [improperly sanitized value](10).\nCode construction depends on an [improperly sanitized value](11).\nCode construction depends on an [improperly sanitized value](12)."
+    },
+    {
+      "rule": "js/bad-code-sanitization",
+      "path": "scripts/tsx.mjs",
+      "line": 202,
+      "message": "Code construction depends on an [improperly sanitized value](1).\nCode construction depends on an [improperly sanitized value](2).\nCode construction depends on an [improperly sanitized value](3).\nCode construction depends on an [improperly sanitized value](4).\nCode construction depends on an [improperly sanitized value](5).\nCode construction depends on an [improperly sanitized value](6).\nCode construction depends on an [improperly sanitized value](7).\nCode construction depends on an [improperly sanitized value](8).\nCode construction depends on an [improperly sanitized value](9).\nCode construction depends on an [improperly sanitized value](10).\nCode construction depends on an [improperly sanitized value](11).\nCode construction depends on an [improperly sanitized value](12)."
+    },
+    {
+      "rule": "js/bad-code-sanitization",
+      "path": "tests/fixtures/platform-crash-controller.mjs",
+      "line": 24,
+      "message": "Code construction depends on an [improperly sanitized value](1)."
+    },
+    {
+      "rule": "js/bad-code-sanitization",
+      "path": "tests/fixtures/platform-crash-controller.mjs",
+      "line": 25,
+      "message": "Code construction depends on an [improperly sanitized value](1)."
+    },
+    {
+      "rule": "js/insecure-temporary-file",
+      "path": "scripts/load/reliability.mjs",
+      "line": 368,
+      "message": "Insecure creation of file in [the os temp dir](1)."
+    },
+    {
+      "rule": "js/insecure-temporary-file",
+      "path": "scripts/load/run.mjs",
+      "line": 415,
+      "message": "Insecure creation of file in [the os temp dir](1)."
+    },
+    {
+      "rule": "js/insecure-temporary-file",
+      "path": "scripts/load/run.mjs",
+      "line": 424,
+      "message": "Insecure creation of file in [the os temp dir](1)."
+    },
+    {
+      "rule": "js/insecure-temporary-file",
+      "path": "scripts/load/reliability.mjs",
+      "line": 489,
+      "message": "Insecure creation of file in [the os temp dir](1)."
+    },
+    {
+      "rule": "js/file-access-to-http",
+      "path": "scripts/cli-deploy.mjs",
+      "line": 2734,
+      "message": "Outbound network request depends on [file data](1)."
+    },
+    {
+      "rule": "js/file-access-to-http",
+      "path": "tests/design-site.test.mjs",
+      "line": 64,
+      "message": "Outbound network request depends on [file data](1)."
+    },
+    {
+      "rule": "js/file-access-to-http",
+      "path": "tests/docs-search-category.test.mjs",
+      "line": 99,
+      "message": "Outbound network request depends on [file data](1)."
+    },
+    {
+      "rule": "js/file-access-to-http",
+      "path": "tests/docs-site.test.mjs",
+      "line": 118,
+      "message": "Outbound network request depends on [file data](1)."
+    },
+    {
+      "rule": "js/remote-property-injection",
+      "path": "scripts/load/run.mjs",
+      "line": 250,
+      "message": "A property name to write to depends on a [user-provided value](1)."
+    },
+    {
+      "rule": "js/remote-property-injection",
+      "path": "scripts/load/run.mjs",
+      "line": 252,
+      "message": "A property name to write to depends on a [user-provided value](1)."
+    },
+    {
+      "rule": "js/remote-property-injection",
+      "path": "scripts/load/reliability.mjs",
+      "line": 323,
+      "message": "A property name to write to depends on a [user-provided value](1)."
+    },
+    {
+      "rule": "js/remote-property-injection",
+      "path": "src/router.ts",
+      "line": 115,
+      "message": "A property name to write to depends on a [user-provided value](1)."
+    },
+    {
+      "rule": "js/remote-property-injection",
+      "path": "src/router.ts",
+      "line": 117,
+      "message": "A property name to write to depends on a [user-provided value](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/cli-compose.mjs",
+      "line": 314,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/cli-compose.mjs",
+      "line": 517,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/cli-workbench.mjs",
+      "line": 219,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/cli-workbench.mjs",
+      "line": 225,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/dev.mjs",
+      "line": 75,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/platform-billing.mjs",
+      "line": 38,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/cli-deploy.mjs",
+      "line": 750,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/cli-deploy.mjs",
+      "line": 2189,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/cli-deploy.mjs",
+      "line": 2894,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/cli-deploy.mjs",
+      "line": 3163,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "scripts/cli-deploy.mjs",
+      "line": 3495,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "src/recovery.ts",
+      "line": 1403,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "src/recovery.ts",
+      "line": 1495,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "tests/compiler-cli.test.mjs",
+      "line": 258,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "tests/object-storage.test.mjs",
+      "line": 58,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "tests/object-storage.test.mjs",
+      "line": 60,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "tests/preview-fixtures.test.mjs",
+      "line": 23,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "tests/preview-fixtures.test.mjs",
+      "line": 25,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "tests/runner.test.mjs",
+      "line": 1334,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "tests/runner.test.mjs",
+      "line": 1345,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "tests/runner.test.mjs",
+      "line": 1348,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/file-system-race",
+      "path": "tests/runner.test.mjs",
+      "line": 1351,
+      "message": "The file may have changed since it [was checked](1)."
+    },
+    {
+      "rule": "js/log-injection",
+      "path": "scripts/load/staging-server.mjs",
+      "line": 201,
+      "message": "Log entry depends on a [user-provided value](1)."
+    },
+    {
+      "rule": "js/useless-expression",
+      "path": "type-tests/agent-action.ts",
+      "line": 21,
+      "message": "This expression has no effect."
+    },
+    {
+      "rule": "js/useless-expression",
+      "path": "type-tests/durable-services.ts",
+      "line": 51,
+      "message": "This expression has no effect."
+    },
+    {
+      "rule": "js/useless-expression",
+      "path": "type-tests/reviewed-action.ts",
+      "line": 17,
+      "message": "This expression has no effect."
+    },
+    {
+      "rule": "js/useless-expression",
+      "path": "type-tests/reviewed-action.ts",
+      "line": 23,
+      "message": "This expression has no effect."
+    },
+    {
+      "rule": "js/useless-expression",
+      "path": "type-tests/reviewed-action.ts",
+      "line": 29,
+      "message": "This expression has no effect."
+    },
+    {
+      "rule": "js/missing-await",
+      "path": "src/github-oidc.ts",
+      "line": 90,
+      "message": "Missing await. The value 'flight' is always a promise."
+    },
+    {
+      "rule": "js/missing-await",
+      "path": "src/github-oidc.ts",
+      "line": 90,
+      "message": "Missing await. The value 'pending' is always a promise."
+    },
+    {
+      "rule": "js/missing-await",
+      "path": "src/platform.ts",
+      "line": 1341,
+      "message": "Missing await. The value 'storageDiagnosticsFlight' is always a promise."
+    },
+    {
+      "rule": "js/missing-await",
+      "path": "src/platform.ts",
+      "line": 1341,
+      "message": "Missing await. The value 'flight' is always a promise."
+    },
+    {
+      "rule": "js/missing-await",
+      "path": "src/platform.ts",
+      "line": 1963,
+      "message": "Missing await. The value 'runtimeSweepFlight' is always a promise."
+    },
+    {
+      "rule": "js/missing-await",
+      "path": "src/platform.ts",
+      "line": 1963,
+      "message": "Missing await. The value 'flight' is always a promise."
+    },
+    {
+      "rule": "js/whitespace-contradicts-precedence",
+      "path": "src/error-inbox.ts",
+      "line": 37,
+      "message": "Whitespace around nested operators contradicts precedence."
+    },
+    {
+      "rule": "js/invalid-prototype-value",
+      "path": "tests/ai.test.mjs",
+      "line": 62,
+      "message": "Values of type boolean cannot be used as prototypes."
+    },
+    {
+      "rule": "js/invalid-prototype-value",
+      "path": "tests/forms.test.mjs",
+      "line": 98,
+      "message": "Values of type string cannot be used as prototypes."
+    },
+    {
+      "rule": "js/superfluous-trailing-arguments",
+      "path": "scripts/cli-deploy.mjs",
+      "line": 319,
+      "message": "Superfluous argument passed to [function whoami](1)."
+    },
+    {
+      "rule": "js/superfluous-trailing-arguments",
+      "path": "scripts/cli-deploy.mjs",
+      "line": 331,
+      "message": "Superfluous argument passed to [function status](1)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/csv-import.test.mjs",
+      "line": 29,
+      "message": "Avoid automated semicolon insertion (90% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/error-inbox.test.mjs",
+      "line": 24,
+      "message": "Avoid automated semicolon insertion (96% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/error-inbox.test.mjs",
+      "line": 32,
+      "message": "Avoid automated semicolon insertion (92% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/live-resume.test.mjs",
+      "line": 33,
+      "message": "Avoid automated semicolon insertion (93% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/notifications.test.mjs",
+      "line": 161,
+      "message": "Avoid automated semicolon insertion (96% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/organization-security.test.mjs",
+      "line": 31,
+      "message": "Avoid automated semicolon insertion (93% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/organization-security.test.mjs",
+      "line": 46,
+      "message": "Avoid automated semicolon insertion (93% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/organization-security.test.mjs",
+      "line": 59,
+      "message": "Avoid automated semicolon insertion (93% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/organization-security.test.mjs",
+      "line": 68,
+      "message": "Avoid automated semicolon insertion (90% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/organization-security.test.mjs",
+      "line": 70,
+      "message": "Avoid automated semicolon insertion (90% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/organization-security.test.mjs",
+      "line": 90,
+      "message": "Avoid automated semicolon insertion (94% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/organization-security.test.mjs",
+      "line": 130,
+      "message": "Avoid automated semicolon insertion (94% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/organization-security.test.mjs",
+      "line": 143,
+      "message": "Avoid automated semicolon insertion (94% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/organization-security.test.mjs",
+      "line": 156,
+      "message": "Avoid automated semicolon insertion (96% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/platform-evacuation.test.mjs",
+      "line": 41,
+      "message": "Avoid automated semicolon insertion (97% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/platform-evacuation.test.mjs",
+      "line": 49,
+      "message": "Avoid automated semicolon insertion (97% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/provider-service.test.mjs",
+      "line": 1205,
+      "message": "Avoid automated semicolon insertion (96% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/provider-service.test.mjs",
+      "line": 1213,
+      "message": "Avoid automated semicolon insertion (94% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/recurrence-ui.test.mjs",
+      "line": 33,
+      "message": "Avoid automated semicolon insertion (98% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 53,
+      "message": "Avoid automated semicolon insertion (95% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 68,
+      "message": "Avoid automated semicolon insertion (95% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 79,
+      "message": "Avoid automated semicolon insertion (90% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 93,
+      "message": "Avoid automated semicolon insertion (91% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 129,
+      "message": "Avoid automated semicolon insertion (94% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 140,
+      "message": "Avoid automated semicolon insertion (93% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 153,
+      "message": "Avoid automated semicolon insertion (94% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 165,
+      "message": "Avoid automated semicolon insertion (91% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 181,
+      "message": "Avoid automated semicolon insertion (92% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 223,
+      "message": "Avoid automated semicolon insertion (90% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/reviewed-actions.test.mjs",
+      "line": 235,
+      "message": "Avoid automated semicolon insertion (95% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/saved-views.test.mjs",
+      "line": 25,
+      "message": "Avoid automated semicolon insertion (96% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/webhook-outbox.test.mjs",
+      "line": 21,
+      "message": "Avoid automated semicolon insertion (94% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/webhook-outbox.test.mjs",
+      "line": 26,
+      "message": "Avoid automated semicolon insertion (95% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "path": "tests/webhook-outbox.test.mjs",
+      "line": 31,
+      "message": "Avoid automated semicolon insertion (95% of all statements in [the enclosing function](1) have an explicit semicolon)."
+    },
+    {
+      "rule": "js/trivial-conditional",
+      "path": "scripts/cli-workbench.mjs",
+      "line": 303,
+      "message": "This use of variable 'ended' always evaluates to false."
+    },
+    {
+      "rule": "js/unused-loop-variable",
+      "path": "tests/moon-025-028-030-resource-lifecycle.test.mjs",
+      "line": 206,
+      "message": "For loop variable item is not used in the loop body."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "examples/booking/app.tsx",
+      "line": 1,
+      "message": "Unused import Show."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "examples/dashboard/app.tsx",
+      "line": 1,
+      "message": "Unused import Show."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "scripts/build.mjs",
+      "line": 2,
+      "message": "Unused import extname."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "src/buckets.ts",
+      "line": 873,
+      "message": "Unused variable createdAt."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "src/blueprint.ts",
+      "line": 3759,
+      "message": "Unused function escapeTemplate."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "src/recovery.ts",
+      "line": 524,
+      "message": "Unused variable maxDatabaseBytes."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "src/router.ts",
+      "line": 1,
+      "message": "Unused import batch."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "src/platform.ts",
+      "line": 1413,
+      "message": "Unused variable domains."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "src/ui-popups.ts",
+      "line": 3,
+      "message": "Unused import dataState."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "templates/booking/src/backend.ts",
+      "line": 1,
+      "message": "Unused import AuthError."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "templates/booking/src/view.tsx",
+      "line": 31,
+      "message": "Unused variable note."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/blueprint-roadmap.test.mjs",
+      "line": 3,
+      "message": "Unused import readFile."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/buckets.test.mjs",
+      "line": 8,
+      "message": "Unused import BucketError."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/data-plane.test.mjs",
+      "line": 896,
+      "message": "Unused variable mode."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/migrations-deploy.test.mjs",
+      "line": 3,
+      "message": "Unused import readFile."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-013-015-native-form-controls.test.mjs",
+      "line": 3,
+      "message": "Unused import expression."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-025-028-030-resource-lifecycle.test.mjs",
+      "line": 206,
+      "message": "Unused variable item."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-035-log-wrap.test.mjs",
+      "line": 36,
+      "message": "Unused variable tick."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-036-037-activity-retention.test.mjs",
+      "line": 22,
+      "message": "Unused variable filterConsoleLogSearch."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-038-runtime-draft.test.mjs",
+      "line": 22,
+      "message": "Unused variable filterConsoleLogSearch."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-052-053-request-refresh.test.mjs",
+      "line": 22,
+      "message": "Unused variable sortConsoleProjects."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-052-053-request-refresh.test.mjs",
+      "line": 23,
+      "message": "Unused variable filterConsoleProjectStatus."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-052-053-request-refresh.test.mjs",
+      "line": 24,
+      "message": "Unused variable filterConsoleProjectWorkspace."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-043-051-dashboard-lists.test.mjs",
+      "line": 22,
+      "message": "Unused variable sortConsoleProjects."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-043-051-dashboard-lists.test.mjs",
+      "line": 23,
+      "message": "Unused variable filterConsoleProjectStatus."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-043-051-dashboard-lists.test.mjs",
+      "line": 24,
+      "message": "Unused variable filterConsoleProjectWorkspace."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/moon-068-copy-usage.test.mjs",
+      "line": 3,
+      "message": "Unused import elements."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/schedules.test.mjs",
+      "line": 8,
+      "message": "Unused import mountSchedulePreview."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "tests/tsx.test.mjs",
+      "line": 3,
+      "message": "Unused import stripTypeScriptTypes."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "path": "type-tests/reviewed-action.ts",
+      "line": 35,
+      "message": "Unused variable backend."
+    },
+    {
+      "rule": "js/useless-assignment-to-local",
+      "path": "src/command-palette.ts",
+      "line": 11,
+      "message": "The initial value of enabled is unused, since it is always overwritten."
+    },
+    {
+      "rule": "js/useless-assignment-to-local",
+      "path": "src/recovery.ts",
+      "line": 847,
+      "message": "The value assigned to catalog here is unused."
+    },
+    {
+      "rule": "js/useless-assignment-to-local",
+      "path": "src/recovery.ts",
+      "line": 852,
+      "message": "The value assigned to catalog here is unused."
+    },
+    {
+      "rule": "js/useless-assignment-to-local",
+      "path": "src/recovery.ts",
+      "line": 855,
+      "message": "The value assigned to catalog here is unused."
+    },
+    {
+      "rule": "js/useless-assignment-to-local",
+      "path": "src/recovery.ts",
+      "line": 930,
+      "message": "The value assigned to catalog here is unused."
+    },
+    {
+      "rule": "js/useless-assignment-to-property",
+      "path": "tests/moon-001-store-append.test.mjs",
+      "line": 32,
+      "message": "This write to property '1' is useless, since [another property write](1) always overrides it."
+    }
+  ]
+}

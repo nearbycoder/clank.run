@@ -13,6 +13,8 @@ export interface IngressRoute {
     hosts: readonly string[];
     upstream: string;
     active: boolean;
+    releaseId?: string;
+    canary?: { readonly upstream: string; readonly releaseId: string; readonly trafficPercent: number };
     /** Binds a remote provider origin to one exact application generation. */
     runtime?: IngressRuntimeRoute;
 }
@@ -39,6 +41,11 @@ export interface IngressRequestMetric {
     durationMs: number;
     requestBytes: number;
     responseBytes: number;
+    /** Terminal body outcome; bytes count chunks handed to the downstream reader. */
+    responseOutcome: "complete" | "cancelled" | "error";
+    /** Exact selected target, present only after routing. */
+    upstream?: string;
+    releaseId?: string;
     recordedAt: number;
     /** True only when the request passed the configured admission policy. */
     admitted: boolean;

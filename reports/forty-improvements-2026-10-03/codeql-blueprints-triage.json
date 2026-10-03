@@ -1,0 +1,84 @@
+{
+  "base": "d6baafc",
+  "scope": "Assigned CodeQL findings only; no assertion that shared writable workspaces are a filesystem isolation boundary.",
+  "findings": [
+    {
+      "rule": "js/file-system-race",
+      "location": "scripts/blueprint-regeneration.mjs:18",
+      "baseline": false,
+      "classification": "confirmed-new-local-race",
+      "reachability": "CLI generate/compose reads workspace .clank/generated-baseline.json. A concurrent local writer could swap the checked pathname or grow it after its size check. No HTTP route or proposal-only input grants that filesystem authority.",
+      "resolution": "fixed",
+      "change": "Read a single O_NOFOLLOW/nonblocking opened handle; fstat regular-file check; at most16MiB+1 bytes; reject final/parent identity, size, mtime or ctime changes before returning parsed data.",
+      "tests": [
+        "tests/blueprint-baseline.test.mjs: regular file and final/parent symlinks",
+        "tests/blueprint-baseline.test.mjs: concurrent growth bound",
+        "tests/blueprint-baseline.test.mjs: inode replacement during read"
+      ]
+    },
+    {
+      "rule": "js/file-system-race",
+      "location": "scripts/cli-compose.mjs:314",
+      "baseline": true,
+      "baselineLocation": "scripts/cli-compose.mjs:312",
+      "classification": "baseline-local-concurrency-limitation",
+      "reachability": "CLI compose reads a target file after lstat. Exploitation requires concurrent direct write authority to the same target; proposal JSON alone cannot swap files. Exact lstat/readFile sequence predates this branch.",
+      "resolution": "unchanged-baseline",
+      "neededFix": "No introduced remote/security-boundary regression. Optional future descriptor-based snapshot reads and filesystem transaction redesign; not changed under narrow review scope."
+    },
+    {
+      "rule": "js/file-system-race",
+      "location": "scripts/cli-compose.mjs:517",
+      "baseline": true,
+      "baselineLocation": "scripts/cli-compose.mjs:499",
+      "classification": "baseline-local-concurrency-limitation",
+      "reachability": "Local transactionalWrite backups use preexisting lstat/readFile sequence. New generator reuses this helper; trusted current-user process can race a writable workspace, but untrusted blueprint input cannot. Added expectedSha256 detects stale snapshots and is not a shared-host filesystem isolation claim.",
+      "resolution": "unchanged-baseline",
+      "neededFix": "Optional descriptor-based backup snapshots plus broader parent-directory write/rollback race design; a read-only patch would not establish isolation for same-user concurrent writers."
+    },
+    {
+      "rule": "js/polynomial-redos",
+      "location": "scripts/compiler.mjs:35",
+      "baseline": true,
+      "baselineLocation": "scripts/compiler.mjs:24",
+      "classification": "confirmed-new-editor-reachability-of-baseline-regex",
+      "reachability": "New stdio editor synchronously compiles accepted documents up to1MiB. Valid TS comment containing an unterminated import-like quote and repeated !.ts# forces repeated suffix backtracking. No network listener is required to stall the language-server process on a repository document.",
+      "evidence": {
+        "50033bytesMsBefore": 434,
+        "pattern": "// import \" + !.ts# repeated + newline + valid export"
+      },
+      "resolution": "fixed",
+      "change": "Match each complete quoted literal once with disjoint escaped-character branches; find query/hash and .ts/.tsx suffix in linear callback operations.",
+      "tests": [
+        "tests/compiler-runtime.test.mjs: imports, reexports, dynamic imports, query/hash preservation",
+        "tests/compiler-runtime.test.mjs: near1MiB hostile document compiled in subprocess with5s hard timeout"
+      ]
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "location": "scripts/editor.mjs:2",
+      "baseline": false,
+      "classification": "new-style-only",
+      "securityImpact": "none",
+      "resolution": "fixed",
+      "change": "Removed unused dirname import."
+    },
+    {
+      "rule": "js/unused-local-variable",
+      "location": "src/blueprint.ts:3759",
+      "baseline": true,
+      "baselineLocation": "src/blueprint.ts:3652",
+      "classification": "baseline-style-only",
+      "securityImpact": "none",
+      "resolution": "unchanged-baseline",
+      "neededFix": "No functional/security fix required; function was already unused at base."
+    }
+  ],
+  "validation": {
+    "node26CompilerEditor": "7/7 passed; /tmp/clank-compiler-editor-linear26.log",
+    "node24CompilerEditor": "7/7 passed; /tmp/clank-compiler-editor-linear24.log",
+    "node26Baseline": "3/3 passed; /tmp/clank-blueprint-baseline26.log",
+    "node24BaselineRegeneration": "5/5 passed; /tmp/clank-blueprint-baseline24.log",
+    "distWrites": false
+  }
+}

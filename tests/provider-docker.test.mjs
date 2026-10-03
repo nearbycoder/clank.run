@@ -976,3 +976,18 @@ if (operation === "rm") {
 process.stderr.write("unsupported fake Docker command: " + args.join(" "));
 process.exit(92);
 `;
+
+test("provider Docker refuses launches when required disk or outbound isolation cannot be applied", async () => {
+  const fixture = await dockerFixture("isolation-refusal");
+  try {
+    const quota = await fixture.open({ diskQuota: { mountDirectory: fixture.root, quotaId: 0, hardBytes: 1024 * 1024, hardFiles: 100 } });
+    await assert.rejects(quota.prepareProject("project_docker_01"), /quota ID/);
+    await assert.rejects(quota.launch({ prepared: await fixture.prepared(), signal: new AbortController().signal }), /quota ID/);
+    assert.deepEqual(quota.inspect(), []);
+    const outbound = await fixture.open({ outboundNetwork: { allowCidrs: ["1.1.1.1/24"] } });
+    await assert.rejects(outbound.launch({ prepared: await fixture.prepared(), signal: new AbortController().signal }), /canonical/);
+    assert.deepEqual(outbound.inspect(), []);
+    await assert.rejects(fixture.open({ network: "bridge", outboundNetwork: { allowCidrs: [] } }), /omit network/);
+    assert.equal((await fixture.audit()).some((entry) => entry.command === "create"), false);
+  } finally { await fixture.close(); }
+});

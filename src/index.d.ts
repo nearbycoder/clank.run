@@ -54,3 +54,24 @@ export * from "./devtools.js";
 export * from "./trace-timeline.js";
 export * from "./preview-fixtures.js";
 export * from "./rehearsal.js";
+
+export * from "./i18n.js";
+
+export * from "./schedules.js";
+
+export * from "./reviewed-actions.js";
+export * from "./organization-sso.js";
+export * from "./account-security.js";
+export * from "./search.js";
+export * from "./bulk-edit.js";
+export * from "./collaborative-documents.js";
+export * from "./durable-import.js";
+export * from "./dev-updates.js";
+export * from "./release-attestation.js";
+export * from "./usage-forecast.js";
+export { verifyAuditExport } from "./audit-export.js";
+export type { SignedAuditEntry, AuditExportCheckpoint, AuditExportOptions } from "./audit-export.js";
+export type { PlatformOperationsOptions, OperationalAlert, OperationalSignal } from "./operations-monitor.js";
+export type { LinuxProjectDiskQuota, DockerOutboundNetworkPolicy } from "./linux-project-isolation.js";
+export * from "./point-in-time.js";
+export type { ManagedCanaryStage, ManagedCanaryOptions, ManagedCanaryReport } from "./managed-canary.js";

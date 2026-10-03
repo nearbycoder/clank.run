@@ -1,9 +1,10 @@
+import type { RecurrenceRule } from "./schedules.js";
 import type { AuthDefinition } from "./auth.js";
 import type { SyncClientOptions } from "./backend.js";
-export interface Reminder { id: string; title: string; dueAt: number; completed: boolean; version: number; }
+export interface Reminder { id: string; title: string; dueAt: number; completed: boolean; version: number; recurrence?: Readonly<RecurrenceRule> | null; }
 export interface ReminderClient {
   list(): Promise<readonly Reminder[]>;
-  save(input: { id?: string; expectedVersion?: number; title: string; dueAt: number; key?: string }): Promise<Reminder>;
+  save(input: { id?: string; expectedVersion?: number; title: string; dueAt: number; key?: string; recurrence?: RecurrenceRule | null }): Promise<Reminder>;
   complete(id: string, completed: boolean, expectedVersion: number): Promise<void>;
   snooze(id: string, minutes: number, expectedVersion: number): Promise<void>;
   remove(id: string, expectedVersion: number): Promise<void>;

@@ -19,11 +19,14 @@ export interface AuthUser<Profile extends object = DefaultAuthProfile> {
     createdAt: number;
     updatedAt: number;
 }
+export interface AuthSessionRecord extends AuthSession { readonly current: boolean; }
 export interface AuthSession {
     id: string;
     createdAt: number;
     lastSeenAt: number;
     expiresAt: number;
+    authenticatedAt?: number;
+    authenticationMethod?: "password" | "passkey" | "mfa" | "sso";
 }
 export interface AuthState<Profile extends object = DefaultAuthProfile> {
     user: AuthUser<Profile> | null;
@@ -197,6 +200,8 @@ export interface AuthRuntime<Profile extends object = DefaultAuthProfile> {
     disableUser(userId: AuthUserId, disabled?: boolean): void;
     revokeUserSessions(userId: AuthUserId): void;
     verifyCsrf(request: Request, auth: AuthRequest<Profile>): Promise<void>;
+    requireFreshAuthentication(auth: AuthRequest<Profile>, maxAgeMs?: number): AuthRequest<Profile>;
+    issueFederatedSession(userId: AuthUserId, request: Request): Promise<Response>;
     isSessionActive(sessionId: string): boolean;
     refreshSession(sessionId: string): AuthRequest<Profile> | null;
     subscribeSession(sessionId: string, listener: () => void): () => void;
@@ -227,6 +232,11 @@ export interface AuthClient<Profile extends object = DefaultAuthProfile> {
     requestPasswordReset(email: string, botToken?: string): Promise<void>;
     resetPassword(token: string, password: string): Promise<AuthUser<Profile> | null>;
     listPasskeys(): Promise<readonly AuthPasskeyRecord[]>;
+    listSessions(): Promise<readonly AuthSessionRecord[]>;
+    revokeSession(id: string): Promise<void>;
+    reauthenticateWithPasskey(): Promise<void>;
+    startMfaReauthentication(password: string): Promise<{ challengeId: string; expiresAt: number }>;
+    finishMfaReauthentication(challengeId: string, code: string): Promise<void>;
     registerPasskey(name?: string): Promise<AuthPasskeyRecord>;
     loginWithPasskey(email?: string): Promise<AuthUser<Profile> | null>;
     deletePasskey(id: string): Promise<void>;

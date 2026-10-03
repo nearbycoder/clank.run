@@ -154,6 +154,7 @@ test("managed ingress routes by verified host, strips hop headers, bounds bodies
     }),
   }));
   assert.equal(tooLarge.status, 413);
+  await tooLarge.body.cancel();
   assert.equal(metrics.at(-1).statusCode, 413);
   const unknown = await ingress.handle(new Request("https://other.example.com/"));
   assert.equal(unknown.status, 404);
@@ -888,4 +889,50 @@ test("ingress health cancels response streams it does not consume", async () => 
   const result = await ingress.health();
   assert.equal(result.route_health.ok, true);
   assert.equal(cancelled, 1);
+});
+
+test("managed ingress meters actual chunks and records cancellation/errors exactly once", async () => {
+  const metrics = [];
+  let mode = "cancel";
+  let source;
+  const ingress = createManagedIngress({
+    routes: () => [{ id: "meter_route", projectId: "meter_project", hosts: ["meter.example.com"], upstream: "http://127.0.0.1:4500", active: true }],
+    onRequest: (metric) => metrics.push(metric),
+    fetch: async () => new Response(new ReadableStream({ start(controller) { source = controller; controller.enqueue(new Uint8Array([1, 2, 3])); } }), { headers: { "content-length": "999999" } }),
+  });
+  const response = await ingress.handle(new Request("https://meter.example.com/"));
+  assert.equal(metrics.length, 0, "headers do not count declared bytes");
+  const reader = response.body.getReader();
+  assert.equal((await reader.read()).value.byteLength, 3);
+  await reader.cancel();
+  assert.equal(metrics.length, 1);
+  assert.equal(metrics[0].responseBytes, 3);
+  assert.equal(metrics[0].responseOutcome, "cancelled");
+  const failed = await ingress.handle(new Request("https://meter.example.com/"));
+  const failedReader = failed.body.getReader();
+  await failedReader.read();
+  source.error(new Error("interrupted upstream"));
+  await assert.rejects(failedReader.read(), /interrupted/);
+  assert.equal(metrics.length, 2);
+  assert.equal(metrics[1].responseBytes, 3);
+  assert.equal(metrics[1].responseOutcome, "error");
+  const complete = await ingress.handle(new Request("https://meter.example.com/"));
+  source.enqueue(new Uint8Array([4, 5])); source.close();
+  assert.equal((await complete.arrayBuffer()).byteLength, 5);
+  assert.equal(metrics.length, 3);
+  assert.equal(metrics[2].responseBytes, 5);
+  assert.equal(metrics[2].responseOutcome, "complete");
+});
+
+test('managed ingress resets a local circuit when a new release reuses its port', async () => {
+  let releaseId = 'old-release', calls = 0;
+  const ingress = createManagedIngress({
+    routes: () => [{ id: 'same-route', projectId: 'same-project', hosts: ['reuse.example.test'], upstream: 'http://127.0.0.1:4811', active: true, releaseId }],
+    retries: 0, circuitFailures: 1,
+    fetch: async () => { calls++; return new Response(releaseId, { status: releaseId === 'old-release' ? 500 : 200 }); },
+  });
+  const first = await ingress.handle(new Request('https://reuse.example.test/')); assert.equal(first.status, 500); await first.text();
+  releaseId = 'new-release';
+  const replacement = await ingress.handle(new Request('https://reuse.example.test/'));
+  assert.equal(replacement.status, 200); assert.equal(await replacement.text(), 'new-release'); assert.equal(calls, 2);
 });

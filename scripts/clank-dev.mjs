@@ -1,3 +1,4 @@
+import { DEVELOPMENT_CLIENT_SOURCE } from "./dev-browser.mjs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { watch } from "node:fs/promises";
@@ -28,9 +29,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
-const DEV_CLIENT_SOURCE = `const events = new EventSource(${JSON.stringify(DEV_EVENTS_PATH)});
-events.addEventListener("reload", () => globalThis.location.reload());
-`;
+const DEV_CLIENT_SOURCE = DEVELOPMENT_CLIENT_SOURCE;
 
 export async function runDev(rawArguments) {
   const options = parseArguments(rawArguments);
@@ -60,6 +59,7 @@ export async function runDev(rawArguments) {
   let stopping = false;
   let pending = false;
   let pendingCause = "change";
+  const pendingChanges = new Set();
   let rebuilding = false;
   let debounce;
   let drainPromise = Promise.resolve();
@@ -100,7 +100,7 @@ export async function runDev(rawArguments) {
   process.once("SIGINT", onSigint);
   process.once("SIGTERM", onSigterm);
 
-  const runCycle = async ({ initial = false, cause = "change" } = {}) => {
+  const runCycle = async ({ initial = false, cause = "change", stylesOnly = false } = {}) => {
     let nextConfig;
     try {
       nextConfig = await readDeploymentConfig(root);
@@ -133,7 +133,7 @@ export async function runDev(rawArguments) {
       if (initial) emit("ready", { url: publicUrl, revision, pid: launched.child.pid });
       else {
         emit("restarted", { url: publicUrl, revision, pid: launched.child.pid, cause });
-        broadcastReload(browserClients, revision);
+        broadcastReload(browserClients, revision, stylesOnly ? "styles" : "reload");
       }
       if (previous) await terminate(previous.child);
       observeActiveExit(launched);
@@ -156,8 +156,10 @@ export async function runDev(rawArguments) {
       while (pending && !stopping) {
         pending = false;
         const cause = pendingCause;
+        const stylesOnly = pendingChanges.size > 0 && [...pendingChanges].every(name => name.endsWith(".css"));
+        pendingChanges.clear();
         pendingCause = "change";
-        await runCycle({ cause });
+        await runCycle({ cause, stylesOnly });
       }
     } finally {
       rebuilding = false;
@@ -168,6 +170,7 @@ export async function runDev(rawArguments) {
     if (stopping) return;
     pending = true;
     pendingCause = cause;
+    pendingChanges.add(cause);
     clearTimeout(debounce);
     debounce = setTimeout(() => {
       drainPromise = drainPromise.then(() => drain()).catch((error) => {
@@ -575,8 +578,8 @@ function shouldRebuild(filename, config) {
   return true;
 }
 
-function broadcastReload(clients, revision) {
-  const payload = `event: reload\ndata: ${JSON.stringify({ revision })}\n\n`;
+function broadcastReload(clients, revision, kind) {
+  const payload = `event: reload\ndata: ${JSON.stringify({ revision, kind })}\n\n`;
   for (const response of clients) response.write(payload);
 }
 

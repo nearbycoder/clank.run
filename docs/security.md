@@ -152,12 +152,12 @@ do not sandbox handler code. See [Durable jobs, workflow graphs, and cron](jobs-
 - Managed ingress uses exact unique hosts, constrained upstreams, bounded bodies/timeouts, hop-header stripping, safe retries, and circuits.
 - Managed-ingress admission fails closed and receives no path, headers, cookies, IP, query, or body
   content. Its fixed monthly ledger retains only aggregate workspace/project counts and known
-  bytes; streamed response bytes remain an explicit edge responsibility.
+  bytes, including response chunks consumed from ingress. Hard network-cost ceilings still require edge controls.
 - Client disconnects abort proxied upstream work and cancel streamed Node responses.
 
 See [Platform security](platform-security.md) for the runner trust boundary.
 
-The database workers still retain host filesystem authority. Application-writable database paths and sidecars are not protected from concurrent substitution by a filesystem namespace. Treat deployment access as trusted-operator access until that boundary is isolated; Docker application limits and worker resource limits alone do not resolve it. Non-Linux hosts also need external native-memory limits for these workers.
+Linux database workers use pinned tenant directories inside bounded Bubblewrap namespaces, including descriptor-based backup publication. Hosts must provide the required namespace permissions and tools; failed setup refuses database work. See [SQLite worker isolation](sqlite-isolation.md). Non-Linux hosts still need an external filesystem/native-memory sandbox or trusted deployers.
 
 ## Recommended production setup
 

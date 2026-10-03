@@ -6,8 +6,8 @@ import {
   type AuthUserId,
   type DefaultAuthProfile,
 } from "./auth.ts";
-import type { SQLiteDatabase } from "./backend.ts";
-import type { McpAuthentication, McpScope } from "./mcp.ts";
+import type { SQLiteDatabase, ReadDatabase } from "./backend.ts";
+import { McpToolError, type McpAuthentication, type McpScope, type McpTool } from "./mcp.ts";
 import {
   RequestInputError,
   readRequestBytes,
@@ -46,6 +46,17 @@ export interface ProjectOAuthOptions<Profile extends object = DefaultAuthProfile
   authorizationCodeLifetimeMs?: number;
   maxClients?: number;
   maxUserGrants?: number;
+  /** Resolve business identity from validated arguments; missing identity fails restricted grants closed. */
+  actionContext?: (action: string, input: unknown, auth: AuthRequest<Profile>, db: ReadDatabase<any>) => AgentActionContext;
+}
+
+export interface AgentActionContext { workspaceId?: string; resourceIds?: readonly string[]; }
+export interface AgentGrantConstraints {
+  readonly actions?: readonly string[];
+  readonly workspaceIds?: readonly string[];
+  readonly resourceIds?: readonly string[];
+  /** Total admitted tool operations for this family, including failed attempts. */
+  readonly maxOperations?: number;
 }
 
 export interface AgentOAuthGrant {
@@ -56,6 +67,8 @@ export interface AgentOAuthGrant {
   readonly createdAt: number;
   readonly lastUsedAt: number | null;
   readonly expiresAt: number;
+  readonly constraints?: AgentGrantConstraints;
+  readonly operationsUsed?: number;
 }
 
 export interface AgentOAuthGrantList {
@@ -74,6 +87,7 @@ export interface ProjectOAuth<Profile extends object = DefaultAuthProfile> {
   handles(request: Request): boolean;
   handle(request: Request): Promise<Response>;
   authenticate(request: Request): Promise<McpAuthentication<AuthRequest<Profile>> | null>;
+  protectTools(tools: readonly McpTool<AuthRequest<Profile> | null>[]): McpTool<AuthRequest<Profile> | null>[];
   challenge(request: Request, scope: McpScope): Response;
   forbidden(request: Request, scope: McpScope): Response;
   protectedResourceMetadata(request: Request): Record<string, unknown>;
@@ -107,6 +121,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
   const grantsPath = `${oauthPrefix}/grants`;
   createOAuthTables(internal);
   pruneOAuthState(internal);
+  const authenticatedRequests = new WeakMap<Request, string>();
 
   const resourceFor = (request: Request) => `${new URL(request.url).origin}${mcpPath}`;
   const resourceMetadataUrl = (request: Request) =>
@@ -224,7 +239,7 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
       const tokenHash = await digest(matched[1]);
       const now = Date.now();
       const row = internal.prepare(`SELECT
-          t.client_id, t.scope, t.resource, t.expires_at, t.last_used_at,
+          t.client_id, t.family_id, t.scope, t.resource, t.expires_at, t.last_used_at,
           u.id AS user_id, u.email, u.email_verified_at, u.role, u.profile, u.disabled,
           u.created_at AS user_created_at, u.updated_at
         FROM clank_oauth_tokens t
@@ -241,10 +256,49 @@ export function createProjectOAuth<Profile extends object = DefaultAuthProfile>(
         internal.prepare("UPDATE clank_oauth_tokens SET last_used_at = ? WHERE token_hash = ?")
           .run(now, tokenHash);
       }
+      authenticatedRequests.set(request, tokenHash);
+      const restricted = grantConstraintSnapshot(internal, String(row.family_id));
+      const exhausted = restricted.constraints?.maxOperations !== undefined && (restricted.operationsUsed ?? 0) >= restricted.constraints.maxOperations;
       return {
         context: oauthAuthFromRow(options.auth, row),
         scopes: new Set(parseScopes(String(row.scope))),
+        ...(exhausted || restricted.constraints?.actions ? { allowedActions: new Set(exhausted ? [] : restricted.constraints!.actions) } : {}),
       };
+    },
+    protectTools(tools) {
+      return tools.map(tool => ({ ...tool, invoke(input, _auth, request) {
+        const tokenHash = authenticatedRequests.get(request);
+        if (!tokenHash) throw new McpToolError("UNAUTHENTICATED", "Authenticate before invoking an action.");
+        const auth = internal.transaction(() => {
+          const row = internal.prepare(`SELECT t.family_id, t.scope,
+            u.id AS user_id, u.email, u.email_verified_at, u.role, u.profile, u.disabled,
+            u.created_at AS user_created_at, u.updated_at
+            FROM clank_oauth_tokens t JOIN clank_auth_users u ON u.id = t.user_id
+            WHERE t.token_hash = ? AND t.kind = 'access' AND t.consumed_at IS NULL
+              AND t.expires_at > ? AND t.resource = ? AND u.disabled = 0`)
+            .get(tokenHash, Date.now(), resourceFor(request));
+          if (!row || !parseScopes(String(row.scope)).includes(tool.requiredScope ?? "agent:read")) {
+            throw new McpToolError("FORBIDDEN", "This agent grant no longer permits the action.");
+          }
+          const current = oauthAuthFromRow(options.auth, row);
+          const stored = internal.prepare("SELECT constraints, operations_used FROM clank_oauth_grant_constraints WHERE family_id = ?").get(row.family_id);
+          if (stored) {
+            const constraints = parseGrantConstraints(JSON.parse(String(stored.constraints)));
+            const action = tool.actionPath ?? tool.name;
+            const context = options.actionContext ? internal.readScoped(current.user!.id, db => options.actionContext!(action, input, current, db)) : {};
+            if (context && typeof (context as any).then === "function") throw new TypeError("Agent action context must be synchronous.");
+            if ((constraints.actions && !constraints.actions.includes(action))
+              || (constraints.workspaceIds && (!context.workspaceId || !constraints.workspaceIds.includes(context.workspaceId)))
+              || (constraints.resourceIds && (!context.resourceIds?.length || context.resourceIds.some(id => !constraints.resourceIds!.includes(id))))
+              || (constraints.maxOperations !== undefined && Number(stored.operations_used) >= constraints.maxOperations)) {
+              throw new McpToolError("GRANT_RESTRICTED", "This action exceeds the agent grant's limits.");
+            }
+            internal.prepare("UPDATE clank_oauth_grant_constraints SET operations_used = operations_used + 1 WHERE family_id = ?").run(row.family_id);
+          }
+          return current;
+        });
+        return tool.invoke(input, auth, request);
+      } }));
     },
     challenge(request, scope) {
       const metadata = resourceMetadataUrl(request);
@@ -900,10 +954,12 @@ async function agentGrantApi<Profile extends object>(
       return agentGrantMethodNotAllowed("PATCH, DELETE");
     }
     await authRuntime.verifyCsrf(request, auth);
-    const action = request.method === "DELETE" ? "revoke" : await grantPatchAction(request);
+    const patch = request.method === "DELETE" ? { action: "revoke" as const } : await grantPatchAction(request);
     const changed = internal.transaction(() => {
       requireCurrentOAuthSession(authRuntime, auth);
-      return mutateAgentGrant(internal, auth.user!.id, familyId, action);
+      const changed = mutateAgentGrant(internal, auth.user!.id, familyId, patch.action);
+      if (changed && "constraints" in patch && patch.constraints) narrowGrantConstraints(internal, familyId, patch.constraints);
+      return changed;
     });
     if (!changed) {
       return agentGrantProblem(404, "GRANT_NOT_FOUND", "Agent grant not found.");
@@ -912,7 +968,7 @@ async function agentGrantApi<Profile extends object>(
       ...listAgentGrants(internal, auth.user.id, options.grantManagementPath, options.grantsPath),
       updated: {
         grantId: grantId(familyId),
-        action: action === "read" ? "reduced_to_read_only" : "revoked",
+        action: patch.action === "read" ? "reduced_to_read_only" : patch.action === "restrict" ? "restricted" : "revoked",
       },
     });
   } catch (error) {
@@ -957,11 +1013,19 @@ async function manageAgentAccess<Profile extends object>(
       }
       const familyId = agentGrantFamily(requiredString(input.grant_id, "grant_id", 256));
       const decision = requiredString(input.decision, "decision", 32);
-      const action = decision === "revoke" ? "revoke" : decision === "read" ? "read" : null;
+      const action = decision === "revoke" ? "revoke" : decision === "read" ? "read" : decision === "restrict" ? "restrict" : null;
       if (!familyId || !action) throw new OAuthRequestError("invalid_request", "The agent access action is invalid.");
+      const constraints = action === "restrict" ? parseGrantConstraints({
+        ...Object.fromEntries([["actions", "actions"], ["workspaceIds", "workspace_ids"], ["resourceIds", "resource_ids"]]
+          .filter(([, field]) => String(input[field!] ?? "").trim())
+          .map(([key, field]) => [key, String(input[field!] ?? "").split(",").map(value => value.trim())])),
+        ...(String(input.max_operations ?? "").trim() ? { maxOperations: Number(input.max_operations) } : {}),
+      }) : undefined;
       const changed = internal.transaction(() => {
         requireCurrentOAuthSession(authRuntime, auth);
-        return mutateAgentGrant(internal, auth.user!.id, familyId, action);
+        const changed = mutateAgentGrant(internal, auth.user!.id, familyId, action);
+        if (changed && constraints) narrowGrantConstraints(internal, familyId, constraints);
+        return changed;
       });
       if (!changed) {
         throw new OAuthRequestError("invalid_request", "The agent grant is no longer active.", 404);
@@ -969,7 +1033,7 @@ async function manageAgentAccess<Profile extends object>(
       return new Response(null, {
         status: 303,
         headers: oauthHeaders({
-          location: `${options.grantManagementPath}?updated=${action === "read" ? "read" : "revoked"}`,
+          location: `${options.grantManagementPath}?updated=${action === "read" ? "read" : action === "restrict" ? "restricted" : "revoked"}`,
         }),
       });
     }
@@ -986,6 +1050,7 @@ async function manageAgentAccess<Profile extends object>(
       options.applicationName,
       notice === "read" ? "Grant reduced to read-only access."
         : notice === "revoked" ? "Agent access revoked."
+          : notice === "restricted" ? "Agent limits narrowed."
           : undefined,
     ));
   } catch (error) {
@@ -1048,6 +1113,7 @@ function listAgentGrants(
         ? null
         : Number(row.last_used_at),
       expiresAt: Number(row.expires_at),
+      ...grantConstraintSnapshot(internal, String(row.family_id)),
     })),
     hasMore: rows.length > MAX_VISIBLE_AGENT_GRANTS,
     managementPath,
@@ -1076,7 +1142,7 @@ function mutateAgentGrant(
   internal: SQLiteInternal,
   userId: string,
   familyId: string,
-  action: "read" | "revoke",
+  action: "read" | "revoke" | "restrict",
 ): boolean {
   const now = Date.now();
   const active = internal.prepare(`SELECT 1 AS active FROM clank_oauth_tokens
@@ -1086,29 +1152,71 @@ function mutateAgentGrant(
   if (action === "read") {
     internal.prepare(`UPDATE clank_oauth_tokens SET scope = 'agent:read'
       WHERE family_id = ? AND user_id = ? AND consumed_at IS NULL`).run(familyId, userId);
-  } else {
+  } else if (action === "revoke") {
     internal.prepare(`UPDATE clank_oauth_tokens SET consumed_at = ?
       WHERE family_id = ? AND user_id = ? AND consumed_at IS NULL`).run(now, familyId, userId);
   }
   return true;
 }
 
-async function grantPatchAction(request: Request): Promise<"read"> {
+async function grantPatchAction(request: Request): Promise<{ action: "read" | "restrict"; constraints?: AgentGrantConstraints }> {
   const input = await readBoundedJson(request, 8 * 1024);
   if (
     !isRecord(input)
-    || Object.keys(input).length !== 1
-    || !Array.isArray(input.scopes)
-    || input.scopes.length !== 1
-    || input.scopes[0] !== "agent:read"
+    || Object.keys(input).some(key => key !== "scopes" && key !== "constraints")
+    || (input.scopes === undefined && input.constraints === undefined)
+    || (input.scopes !== undefined && (!Array.isArray(input.scopes) || input.scopes.length !== 1 || input.scopes[0] !== "agent:read"))
   ) {
     throw new OAuthRequestError(
       "invalid_request",
-      "A grant can only be reduced with scopes set to [\"agent:read\"].",
+      "Only read-only scopes and narrower constraints are permitted.",
       422,
     );
   }
-  return "read";
+  return { action: input.scopes ? "read" : "restrict", ...(input.constraints === undefined ? {} : { constraints: parseGrantConstraints(input.constraints) }) };
+}
+
+function parseGrantConstraints(input: unknown): AgentGrantConstraints {
+  if (!isRecord(input) || Object.keys(input).some(key => !["actions", "workspaceIds", "resourceIds", "maxOperations"].includes(key))) {
+    throw new OAuthRequestError("invalid_request", "Invalid agent constraints.", 422);
+  }
+  const output: Record<string, unknown> = {};
+  for (const key of ["actions", "workspaceIds", "resourceIds"] as const) {
+    if (input[key] === undefined) continue;
+    const values = input[key];
+    if (!Array.isArray(values) || values.length > 100 || values.some(value => typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/u.test(value))) {
+      throw new OAuthRequestError("invalid_request", `Invalid ${key} constraint.`, 422);
+    }
+    output[key] = [...new Set(values)].sort();
+  }
+  if (input.maxOperations !== undefined) {
+    if (!Number.isSafeInteger(input.maxOperations) || Number(input.maxOperations) < 0 || Number(input.maxOperations) > 1_000_000) {
+      throw new OAuthRequestError("invalid_request", "Invalid operation budget.", 422);
+    }
+    output.maxOperations = input.maxOperations;
+  }
+  return output;
+}
+
+function narrowGrantConstraints(internal: SQLiteInternal, familyId: string, next: AgentGrantConstraints): void {
+  const row = internal.prepare("SELECT constraints FROM clank_oauth_grant_constraints WHERE family_id = ?").get(familyId);
+  const previous = row ? parseGrantConstraints(JSON.parse(String(row.constraints))) : {};
+  for (const key of ["actions", "workspaceIds", "resourceIds"] as const) {
+    if (previous[key] && next[key]?.some(value => !previous[key]!.includes(value))) {
+      throw new OAuthRequestError("invalid_request", "Agent constraints cannot be expanded.", 422);
+    }
+  }
+  if (previous.maxOperations !== undefined && next.maxOperations !== undefined && next.maxOperations > previous.maxOperations) {
+    throw new OAuthRequestError("invalid_request", "The operation budget cannot be expanded.", 422);
+  }
+  internal.prepare(`INSERT INTO clank_oauth_grant_constraints(family_id, constraints, operations_used) VALUES (?, ?, 0)
+    ON CONFLICT(family_id) DO UPDATE SET constraints = excluded.constraints`)
+    .run(familyId, JSON.stringify({ ...previous, ...next }));
+}
+
+function grantConstraintSnapshot(internal: SQLiteInternal, familyId: string): { constraints?: AgentGrantConstraints; operationsUsed?: number } {
+  const row = internal.prepare("SELECT constraints, operations_used FROM clank_oauth_grant_constraints WHERE family_id = ?").get(familyId);
+  return row ? { constraints: parseGrantConstraints(JSON.parse(String(row.constraints))), operationsUsed: Number(row.operations_used) } : {};
 }
 
 function agentGrantFamily(value: string): string | null {
@@ -1143,6 +1251,18 @@ function agentAccessPage<Profile extends object>(
               <button class="button danger" name="decision" value="revoke" type="submit">Revoke</button>
             </div>
           </form>
+          <p class="meta">${grant.constraints ? `Limits: ${escapeHtml(JSON.stringify(grant.constraints))}. Operations used: ${grant.operationsUsed ?? 0}.` : "No additional action limits."}</p>
+          <details><summary>Narrow action limits</summary><form method="post">
+            <input type="hidden" name="csrf_token" value="${escapeAttribute(auth.csrfToken ?? "")}">
+            <input type="hidden" name="grant_id" value="${escapeAttribute(grant.id)}">
+            <input type="hidden" name="decision" value="restrict">
+            <label>Exact action paths, comma separated<input name="actions" maxlength="4096" placeholder="todos.add,todos.list"></label>
+            <label>Workspace IDs, comma separated<input name="workspace_ids" maxlength="4096"></label>
+            <label>Resource IDs, comma separated<input name="resource_ids" maxlength="4096"></label>
+            <label>Total operation budget<input name="max_operations" type="number" min="0" max="1000000" step="1"></label>
+            <p class="meta">Blank fields preserve existing limits. Limits cannot be expanded.</p>
+            <button class="button" type="submit">Narrow limits</button>
+          </form></details>
         </article>`;
       }).join("")}</div>`;
   return pageShell(
@@ -1455,6 +1575,8 @@ function oauthAuthFromRow<Profile extends object>(
 }
 
 function createOAuthTables(internal: SQLiteInternal): void {
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_oauth_grant_constraints (
+    family_id TEXT PRIMARY KEY, constraints TEXT NOT NULL CHECK(json_valid(constraints)), operations_used INTEGER NOT NULL DEFAULT 0)`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_oauth_clients (
     client_id TEXT PRIMARY KEY,
     client_name TEXT NOT NULL,
@@ -1520,6 +1642,7 @@ function pruneOAuthState(internal: SQLiteInternal): void {
   // Retain rotated refresh-token digests until their original expiry. Reuse can
   // then revoke the active family for the full lifetime of the old credential.
   internal.prepare("DELETE FROM clank_oauth_tokens WHERE expires_at <= ?").run(now);
+  internal.prepare("DELETE FROM clank_oauth_grant_constraints WHERE family_id NOT IN (SELECT family_id FROM clank_oauth_tokens)").run();
 }
 
 const MAX_PENDING_CONSENTS = 5_000;
@@ -1939,20 +2062,26 @@ function oauthError(error: unknown): Response {
 }
 
 class OAuthRequestError extends Error {
+  declare readonly oauthCode: string;
+  declare readonly status: number;
   constructor(
-    readonly oauthCode: string,
+    oauthCode: string,
     message: string,
-    readonly status = 400,
+    status = 400,
   ) {
     super(message);
+    this.oauthCode = oauthCode; this.status = status;
   }
 }
 
 class OAuthRedirectError extends Error {
+  declare readonly oauthCode: string;
+  declare readonly parameters: AuthorizationParameters;
   constructor(
-    readonly oauthCode: string,
-    readonly parameters: AuthorizationParameters,
+    oauthCode: string,
+    parameters: AuthorizationParameters,
   ) {
     super(oauthCode);
+    this.oauthCode = oauthCode; this.parameters = parameters;
   }
 }

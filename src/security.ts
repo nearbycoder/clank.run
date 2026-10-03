@@ -109,19 +109,24 @@ export function requestOriginAllowed(request: Request, options: RequestOriginOpt
 
 export class RequestInputError extends Error {
   readonly name = "RequestInputError";
+  declare readonly status: number;
+  declare readonly code: string;
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
   ) {
     super(message);
+    this.status = status; this.code = code;
   }
 }
 
 export class ResponseBodyLimitError extends Error {
   readonly name = "ResponseBodyLimitError";
-  constructor(readonly maxBytes: number) {
+  declare readonly maxBytes: number;
+  constructor(maxBytes: number) {
     super(`Response body exceeds ${maxBytes} bytes.`);
+    this.maxBytes = maxBytes;
   }
 }
 

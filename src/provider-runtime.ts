@@ -420,12 +420,15 @@ export function createDeploymentRuntimeIngress(
 }
 
 class RuntimeIngressRequestError extends Error {
+  declare readonly status: number;
+  declare readonly code: string;
   constructor(
-    readonly status: number,
-    readonly code: string,
+    status: number,
+    code: string,
     message: string,
   ) {
     super(message);
+    this.status = status; this.code = code;
   }
 }
 

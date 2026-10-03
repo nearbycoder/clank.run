@@ -134,7 +134,7 @@ test("public compiler CLI builds TSX and copies static assets", async () => {
 
   const javascript = await readFile(join(output, "app.js"), "utf8");
   assert.match(javascript, /__clankJSX\("button"/);
-  assert.match(javascript, /__clankExpression\(\(\)=>count\.value\)/);
+  assert.match(javascript, /__clankExpression\(\(\)\s*=>\s*\(?count\.value\)?\)/);
   assert.equal(await readFile(join(output, "index.html"), "utf8"), `<main id="app"></main>`);
   await rm(root, { recursive: true, force: true });
 });

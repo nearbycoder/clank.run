@@ -49,7 +49,7 @@ if (packageJson.bin?.clank !== "scripts/clank.mjs") fail("The clank CLI entry po
 if (packageJson.bin?.["clank-platform"] !== "scripts/clank-platform.mjs") {
   fail("The clank-platform CLI entry point is missing or unexpected.");
 }
-if (packageJson.engines?.node !== ">=22.16 <26") fail("The supported Node range must be >=22.16 <26; Node 26 removed the compiler transform API.");
+if (packageJson.engines?.node !== ">=22.16 <27") fail("The supported Node range must be >=22.16 <27; Node 26 uses native type stripping.");
 if (packageJson.packageManager !== "npm@11.18.0") fail("The release npm version must remain pinned to 11.18.0.");
 pass("zero-dependency package metadata is constrained");
 
@@ -142,9 +142,11 @@ const packed = await command(process.platform === "win32" ? "npm.cmd" : "npm", [
 ]);
 let packResult;
 try {
-  const start = packed.stdout.indexOf("[");
-  const end = packed.stdout.lastIndexOf("]");
-  packResult = JSON.parse(packed.stdout.slice(start, end + 1))[0];
+  const parsed = JSON.parse(packed.stdout);
+  // npm 12 keys results by package name; npm 11 returns an array.
+  const results = Array.isArray(parsed) ? parsed : Object.values(parsed);
+  if (results.length !== 1) throw new Error("Expected one packed package.");
+  packResult = results[0];
 } catch {
   fail(`npm pack did not return valid JSON: ${packed.stderr || packed.stdout}`);
 }
@@ -158,11 +160,12 @@ for (const file of files) {
 for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", "dist/index.d.ts"]) {
   if (!files.some((file) => file.path === expected)) fail(`Published package is missing ${expected}.`);
 }
-// The reviewed security fixes add four internal SQLite worker modules to the
-// prior 335-file package, with no npm dependencies or public entry points.
-// Retain the existing bounded 5.125 MiB release envelope.
-if ((packResult?.entryCount ?? 0) > 339) fail("Published package unexpectedly exceeds 339 files.");
-if ((packResult?.unpackedSize ?? 0) > 5 * 1024 * 1024 + 128 * 1024) fail("Published package unexpectedly exceeds 5.125 MiB unpacked.");
+// The forty-feature release adds reviewed public APIs, declarations, internal
+// workers, and CLI helpers while preserving the zero-dependency contract.
+// Keep a bounded envelope around 383 files (about 5.5 MiB on Node 22/24;
+// Node 26 retains more source whitespace through native type stripping).
+if ((packResult?.entryCount ?? 0) > 390) fail("Published package unexpectedly exceeds 390 files.");
+if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 
 const secretPatterns = [

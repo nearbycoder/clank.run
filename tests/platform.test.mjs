@@ -103,7 +103,7 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
         }));
         return;
       }
-      response.writeHead(200, { "content-type": "text/plain" });
+      response.writeHead(request.url === "/healthz" ? 200 : ${Number(options.responseStatus ?? 200)}, { "content-type": "text/plain" });
       response.end(request.url === "/healthz" ? "ok" : ${JSON.stringify(label)});
       if (request.url === "/crash") setImmediate(() => process.exit(17));
     });
@@ -133,6 +133,7 @@ async function appArtifact(root, label, migrations, allowUnsafeMigrations = fals
         ${JSON.stringify(label)},
       );
       console.log("background-ready:" + process.env.CLANK_PROCESS_ROLE);
+      if (${Number(options.jobs.failAfterMs ?? 0)} > 0) setTimeout(() => process.exit(23), ${Number(options.jobs.failAfterMs ?? 0)});
       const keepAlive = setInterval(() => {}, 60_000);
       await new Promise((resolve) => {
         process.once("SIGTERM", resolve);
@@ -990,7 +991,7 @@ test("workspace usage is durable, transparent, deletion-safe, and admission-enfo
     assert.equal(usage.projects[0].id, created.project.id);
     assert.equal(usage.projects[0].deleted, false);
     assert.equal(usage.projects[0].requests, 2);
-    assert.equal(usage.metering.streamedResponseBytesKnown, false);
+    assert.equal(usage.metering.streamedResponseBytesKnown, true);
     assert.equal(usage.metering.pricingIncluded, false);
     assert.equal(usage.retentionMonths, 12);
     assert.equal(Object.hasOwn(usage.workspace, "ownerId"), false);
@@ -4432,8 +4433,14 @@ test("Docker runner prevents application environment from controlling the host D
   const invocationPath = join(root, "docker-invocation.json");
   await writeFile(runnerPath, `#!/usr/bin/env node
     import { spawn } from "node:child_process";
-    import { writeFile } from "node:fs/promises";
-    const arguments_ = process.argv.slice(2);
+    import { readFile, writeFile } from "node:fs/promises";
+    let arguments_ = process.argv.slice(2);
+    if (arguments_[0] === "rm") process.exit(0);
+    if (arguments_[0] === "container") { console.error("Error: No such container: " + arguments_.at(-1)); process.exit(1); }
+    if (arguments_[0] === "start") arguments_ = JSON.parse(await readFile(${JSON.stringify(join(root, "docker-created.json"))}, "utf8"));
+    else if (arguments_[0] === "create") {
+      await writeFile(${JSON.stringify(join(root, "docker-created.json"))}, JSON.stringify(arguments_));
+    } else throw new Error("Unsupported Docker command");
     const encoded = process.env.CLANK_RUNTIME_ENV_B64;
     const runtimeEnvironment = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
     await writeFile(${JSON.stringify(invocationPath)}, JSON.stringify({
@@ -4446,6 +4453,7 @@ test("Docker runner prevents application environment from controlling the host D
       runtimeDockerHostPresent: runtimeEnvironment.DOCKER_HOST === "tcp://attacker.example:2375",
       runtimePreloadPresent: runtimeEnvironment.LD_PRELOAD === "/app/evil.so",
     }));
+    if (process.argv[2] === "create") { console.log("a".repeat(64)); process.exit(0); }
     const mount = arguments_.find((value) => value.endsWith(":/app:ro"));
     if (!mount) throw new Error("Missing application mount.");
     const applicationRoot = mount.slice(0, -":/app:ro".length);
@@ -8076,5 +8084,51 @@ test("secret rotations validate candidates, fence activation/rollback, track run
     assert.doesNotMatch(JSON.stringify(control.prepare("SELECT * FROM clank_platform_secret_rotations").all()), /valid-new-fixture-key|valid-old-fixture-key/); control.close();
     await call("/PARTNER_KEY", "DELETE"); assert.equal((await call("/rotations")).rotations.length, 0);
     await call(`/rotations/${staged.id}/rollback`, "POST", {}, 409);
+  } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+
+test("managed canaries route real traffic, promote measured stages and roll back failing or under-sampled candidates", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-canary-"));
+  const platform = await openPlatform({ dataDirectory: join(root, "platform"), publicUrl: "http://127.0.0.1:4200", signup: true,
+    appPortStart: 4820, appPortEnd: 4823, ingress: { enabled: true, baseDomain: "apps.example.test", domainRecheckIntervalMs: false },
+    backups: { intervalMs: false }, canary: { stages: [{ trafficPercent: 50, durationMs: 400, minimumSamples: 2 }, { trafficPercent: 100, durationMs: 200, minimumSamples: 2 }], maximumErrorRate: 0.1, maximumP95Ms: 1000 } });
+  try {
+    const owner = await authorizeCli(platform, "canary@example.com");
+    const { project } = await payload(platform, jsonRequest("/api/projects", { method: "POST", token: owner.accessToken, body: { name: "Canary", slug: "canary-app" } }), 201);
+    const migrations = [["0001_create_items.sql", "CREATE TABLE items(id INTEGER PRIMARY KEY,value TEXT NOT NULL);"]];
+    const first = await appArtifact(join(root, "first"), "stable", migrations, false, { jobs: { workers: 1, scheduler: false } });
+    assert.equal((await deploy(platform, project.id, owner.accessToken, first, "canary-initial-0001")).response.status, 201);
+    const drive = async (artifact, id) => {
+      let finished = false;
+      const pending = deploy(platform, project.id, owner.accessToken, artifact, id).finally(() => { finished = true; });
+      const observed = [];
+      while (!finished) {
+        const responses = await Promise.all(Array.from({ length: 10 }, () => platform.handle(new Request("https://canary-app.apps.example.test/"))));
+        for (const response of responses) observed.push({ status: response.status, body: await response.text() });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return { result: await pending, observed };
+    };
+    const good = await drive(await appArtifact(join(root, "good"), "candidate", migrations, false, { jobs: { workers: 1, scheduler: false } }), "canary-good-0002");
+    assert.equal(good.result.response.status, 201, JSON.stringify(good.result.body));
+    assert.ok(good.observed.some((value) => value.body === "stable")); assert.ok(good.observed.some((value) => value.body === "candidate"));
+    assert.equal(await platform.handle(new Request("https://canary-app.apps.example.test/")).then((response) => response.text()), "candidate");
+    const failed = await drive(await appArtifact(join(root, "bad"), "broken", migrations, false, { responseStatus: 500 }), "canary-bad-release-0003");
+    assert.equal(failed.result.response.status, 422, JSON.stringify(failed.result.body)); assert.match(failed.result.body.error.message, /Canary guardrail/);
+    assert.equal(await platform.handle(new Request("https://canary-app.apps.example.test/")).then((response) => response.text()), "candidate");
+    const workerFailure = await drive(await appArtifact(join(root, "worker-broken"), "worker-broken", migrations, false, { jobs: { workers: 1, scheduler: false, failAfterMs: 250 } }), "canary-worker-broken-0004");
+    assert.equal(workerFailure.result.response.status, 422, JSON.stringify(workerFailure.result.body));
+    assert.match(workerFailure.result.body.error.message, /worker.*exited|background process/);
+    assert.equal(await platform.handle(new Request("https://canary-app.apps.example.test/")).then((response) => response.text()), "candidate");
+    const restoredWorkers = new DatabaseSync(join(root, "platform", "projects", project.id, "data", "app.sqlite"), { readOnly: true });
+    try { assert.equal(restoredWorkers.prepare("SELECT count(*) AS n FROM background_processes WHERE release='candidate' AND stopped_at IS NULL").get().n, 1); }
+    finally { restoredWorkers.close(); }
+    const insufficient = await deploy(platform, project.id, owner.accessToken, await appArtifact(join(root, "quiet"), "quiet", migrations), "canary-quiet-0004");
+    assert.equal(insufficient.response.status, 422); assert.match(insufficient.body.error.message, /lacked required evidence/);
+    const reports = await payload(platform, jsonRequest(`/api/projects/${project.id}/canary`, { token: owner.accessToken }));
+    assert.equal(reports.canaries.filter((report) => report.state === "passed").length, 1);
+    assert.equal(reports.canaries.filter((report) => report.state === "failed").length, 3);
+    assert.ok(reports.canaries.some((report) => report.errorRate >= 0.9));
   } finally { await platform.close(); await rm(root, { recursive: true, force: true }); }
 });

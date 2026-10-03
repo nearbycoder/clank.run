@@ -60,3 +60,37 @@ Use `client.mutateOnce(reference, args, { key, userId })` for custom queue imple
 are `<13-digit epoch milliseconds>.<UUID v4>`. Deduplication covers the transactional database
 mutation and transactionally enqueued jobs. Keep external effects in durable jobs; arbitrary
 synchronous external side effects cannot be rolled back with SQLite.
+
+## Resolve field conflicts in the browser
+
+Include the original and locally edited field values when enqueueing edits that use optimistic
+versions, then mount the conflict resolver:
+
+```ts
+import { mountOfflineConflictResolver } from "@clank.run/framework/offline";
+await queue.enqueue(api.todos.update, { id, title: localTitle, ifVersion: originalVersion }, {
+  original: { title: originalTitle }, local: { title: localTitle },
+});
+const disposeResolver = mountOfflineConflictResolver(conflictContainer, queue, {
+  async loadServer(item) {
+    const record = await client.query(api.todos.get, { id: item.input.id });
+    return { values: { title: record.title }, version: record._version };
+  },
+  buildInput(values, server, item) {
+    return { id: item.input.id, ...values, ifVersion: server.version };
+  },
+});
+```
+
+Use your actual typed query/mutation references and validate/narrow `item.input` in TypeScript;
+it is `unknown` because one queue may contain different operations. The mutation must enforce
+the supplied version on the server. The resolver displays original, local, and server values and
+requires a choice for fields changed differently on both sides. Before replacing the queued input,
+it fetches the server again and rejects a comparison whose version or values changed. Use
+“Refresh comparison” to review newer state. Resolved input and new reconciliation snapshots get a
+fresh receipt key; call `queue.flush()` explicitly to send it.
+
+`compareOfflineConflict(original, local, server)` provides the same field comparison for custom
+controls. Comparison is bounded to 100 fields. Reconciliation snapshots share the queue's storage
+limits and protections and display the selected field values, so include only data appropriate for
+that browser/account. Dispose the resolver along with the queue on logout.

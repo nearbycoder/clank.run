@@ -1,6 +1,7 @@
 import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
 import type { SQLiteDatabase } from "./backend.ts";
 import type { McpToolActivity } from "./mcp.ts";
+import type { ReviewedRecordChange } from "./reviewed-actions.ts";
 
 export interface AgentActivityOptions { maxEntries?: number; maxAgeMs?: number; }
 export interface AgentActivity extends McpToolActivity {
@@ -8,6 +9,9 @@ export interface AgentActivity extends McpToolActivity {
   /** Revisions observed around this call; concurrent processes may contribute within the range. */
   readonly beforeRevision: number | null;
   readonly afterRevision: number | null;
+  readonly receiptId?: string;
+  readonly changes?: readonly ReviewedRecordChange[];
+  readonly compensationAvailable?: boolean;
 }
 export interface AgentActivityFilter { tool?: string; outcome?: McpToolActivity["outcome"]; scope?: string; since?: number; }
 export interface AgentActivitySnapshot { readonly protocol: "clank-agent-activity/1"; readonly events: readonly AgentActivity[]; readonly retainedLimit: number; }
@@ -24,11 +28,12 @@ export function openAgentActivity(database: SQLiteDatabase<any>, options: AgentA
     sql.prepare("DELETE FROM clank_agent_activity WHERE id NOT IN (SELECT id FROM clank_agent_activity ORDER BY id DESC LIMIT ?)").run(maximum);
   };
   return {
-    record(event: McpToolActivity, revisions?: { beforeRevision: number; afterRevision: number }) {
+    record(event: McpToolActivity, revisions?: { beforeRevision: number; afterRevision: number; receiptId?: string; changes?: readonly ReviewedRecordChange[]; compensationAvailable?: boolean }) {
       // Copy only the public event schema; never serialize request/context/arguments by accident.
       const record = { tool: event.tool, requiredScope: event.requiredScope, scopes: [...event.scopes],
         outcome: event.outcome, startedAt: event.startedAt, durationMs: event.durationMs,
-        beforeRevision: revisions?.beforeRevision ?? null, afterRevision: revisions?.afterRevision ?? null };
+        beforeRevision: revisions?.beforeRevision ?? null, afterRevision: revisions?.afterRevision ?? null,
+        ...(revisions?.receiptId ? { receiptId: revisions.receiptId, changes: revisions.changes?.map(change => ({ table: change.table, id: change.id, beforeVersion: change.beforeVersion, afterVersion: change.afterVersion })), compensationAvailable: revisions.compensationAvailable ?? false } : {}) };
       sql.transaction(() => { sql.prepare("INSERT INTO clank_agent_activity(at, event) VALUES (?, ?)").run(event.startedAt, JSON.stringify(record)); prune(); });
     },
     snapshot(filter: AgentActivityFilter = {}): AgentActivitySnapshot {
@@ -46,5 +51,5 @@ export function openAgentActivity(database: SQLiteDatabase<any>, options: AgentA
 
 export function renderAgentActivity(snapshot: AgentActivitySnapshot): string {
   const escape = (value: unknown) => String(value).replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!);
-  return `<section aria-label="Agent activity"><h2>Agent activity</h2><p>${escape(snapshot.events.length)} retained calls · newest first · limit ${escape(snapshot.retainedLimit)}</p><p>Revision ranges show changes observed around a call and may include concurrent writers. Arguments, results, identities, and error messages are excluded.</p><div class="scroll"><table><thead><tr><th>Tool</th><th>Required scope</th><th>Granted scopes</th><th>Outcome</th><th>Started</th><th>Duration (ms)</th><th>Observed revisions</th></tr></thead><tbody>${snapshot.events.map(event => `<tr>${[event.tool, event.requiredScope, event.scopes.join(", ") || "None", event.outcome, new Date(event.startedAt).toISOString(), event.durationMs.toFixed(2), event.beforeRevision === null ? "—" : `${event.beforeRevision} → ${event.afterRevision}`].map(value => `<td>${escape(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>`;
+  return `<section aria-label="Agent activity"><h2>Agent activity</h2><p>${escape(snapshot.events.length)} retained calls · newest first · limit ${escape(snapshot.retainedLimit)}</p><p>Revision ranges show changes observed around a call and may include concurrent writers. Arguments, results, user identities, and error messages are excluded. Reviewed actions include record IDs, exact versions, and receipt references.</p><div class="scroll"><table><thead><tr><th>Tool</th><th>Required scope</th><th>Granted scopes</th><th>Outcome</th><th>Started</th><th>Duration (ms)</th><th>Observed revisions</th><th>Receipt</th></tr></thead><tbody>${snapshot.events.map(event => `<tr>${[event.tool, event.requiredScope, event.scopes.join(", ") || "None", event.outcome, new Date(event.startedAt).toISOString(), event.durationMs.toFixed(2), event.beforeRevision === null ? "—" : `${event.beforeRevision} → ${event.afterRevision}`, event.receiptId ? `${event.receiptId}${event.compensationAvailable ? " · Undo available" : ""}` : "—"].map(value => `<td>${escape(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>`;
 }

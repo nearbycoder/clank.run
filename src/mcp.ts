@@ -25,6 +25,8 @@ export type McpScope = "agent:read" | "agent:write";
 export interface McpAuthentication<Context = unknown> {
   readonly context: Context;
   readonly scopes: ReadonlySet<string>;
+  /** Optional exact original action paths visible to this principal. */
+  readonly allowedActions?: ReadonlySet<string>;
 }
 
 export interface McpToolAnnotations {
@@ -183,12 +185,15 @@ export interface McpServer<Context = unknown> {
 
 export class McpToolError extends Error {
   readonly name = "McpToolError";
+  declare readonly code: string;
+  declare readonly details?: unknown;
   constructor(
-    readonly code: string,
+    code: string,
     message: string,
-    readonly details?: unknown,
+    details?: unknown,
   ) {
     super(message);
+    this.code = code; this.details = details;
   }
 }
 
@@ -336,8 +341,9 @@ export function createMcpServer<Context = unknown>(
     registry.set(publicName, registered);
   }
 
-  const visibleTools = (scopes?: ReadonlySet<string>) => [...registry.values()]
+  const visibleTools = (scopes?: ReadonlySet<string>, allowedActions?: ReadonlySet<string>) => [...registry.values()]
     .filter((tool) => !scopes || scopes.has(tool.requiredScope ?? "agent:read"))
+    .filter((tool) => !allowedActions || allowedActions.has(tool.actionPath ?? tool.name))
     .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
 
   const baseVersion = options.version ?? "1.0.0";
@@ -369,7 +375,7 @@ export function createMcpServer<Context = unknown>(
   const sessions = new Map<string, McpSession>();
   let closed = false;
 
-  const manifest = (scopes?: ReadonlySet<string>) => ({
+  const manifest = (scopes?: ReadonlySet<string>, allowedActions?: ReadonlySet<string>) => ({
     protocol: "mcp" as const,
     protocolVersion: MCP_PROTOCOL_VERSION as typeof MCP_PROTOCOL_VERSION,
     revision,
@@ -381,7 +387,7 @@ export function createMcpServer<Context = unknown>(
       ...(options.description ? { description: options.description } : {}),
     },
     ...(metadata ? { metadata } : {}),
-    tools: visibleTools(scopes).map((tool) => ({
+    tools: visibleTools(scopes, allowedActions).map((tool) => ({
       name: tool.name,
       ...(tool.actionPath ? { actionPath: tool.actionPath } : {}),
       ...(tool.title ? { title: tool.title } : {}),
@@ -720,12 +726,12 @@ export function createMcpServer<Context = unknown>(
           message.method,
           message.params,
           requestedProtocol,
-          visibleTools(authenticated?.scopes),
+          visibleTools(authenticated?.scopes, authenticated?.allowedActions),
           registry,
           appRegistry,
           authenticated?.context as Context,
           request,
-          manifest(authenticated?.scopes),
+          manifest(authenticated?.scopes, authenticated?.allowedActions),
           options.instructions,
           Boolean(sessionOptions),
           revision,
@@ -854,6 +860,7 @@ async function dispatch<Context>(
       });
     }
     try {
+      if (!visible.some(candidate => candidate.name === tool.name)) throw new McpToolError("GRANT_RESTRICTED", "This action exceeds the agent grant's limits.");
       const output = await tool.invoke(input.arguments ?? {}, context, request);
       const structuredContent = isRecord(output)
         ? output
@@ -1649,12 +1656,16 @@ function canonicalJson(value: unknown): string {
 }
 
 class RpcDispatchError extends Error {
+  declare readonly rpcCode: number;
+  declare readonly status: number;
+  declare readonly data?: unknown;
   constructor(
-    readonly rpcCode: number,
+    rpcCode: number,
     message: string,
-    readonly status = 200,
-    readonly data?: unknown,
+    status = 200,
+    data?: unknown,
   ) {
     super(message);
+    this.rpcCode = rpcCode; this.status = status; this.data = data;
   }
 }

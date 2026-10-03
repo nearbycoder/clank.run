@@ -1,0 +1,126 @@
+{
+  "base": "d6baafc",
+  "sarif": "/tmp/clank-local-codeql/results.sarif",
+  "scope": [
+    "src/auth.ts",
+    "src/oauth.ts",
+    "src/agent-activity.ts",
+    "src/reviewed-actions.ts",
+    "src/organization-sso.ts",
+    "src/account-security.ts",
+    "src/node-evacuation.ts",
+    "src/platform.ts (owned integrations and guardian)",
+    "src/provider-service.ts (evacuation)",
+    "src/backend.ts (owned integrations)",
+    "src/mcp.ts",
+    "src/notifications.ts",
+    "src/schedules.ts",
+    "src/reminders.ts",
+    "src/i18n.ts",
+    "src/jobs.ts (retry integration)"
+  ],
+  "actionable": [
+    {
+      "resultIndex": 5,
+      "rule": "js/html-constructed-from-input",
+      "file": "src/notifications.ts",
+      "line": 244,
+      "priority": "P2",
+      "introduced": true,
+      "status": "fixed_source_pending_rebuilt_matrix",
+      "finding": "renderNotificationCenter interpolated emailAttempts into HTML without escaping.",
+      "reachability": "Built-in SQLite schema enforces numeric attempts and jobs write numeric counts. Exported renderer and custom NotificationClient accept runtime JavaScript or unvalidated response data that can supply markup; mountNotificationCenter assigns the result to innerHTML.",
+      "fix": "Escape emailAttempts using the same HTML encoder as the remaining dynamic text.",
+      "baseline": "d6baafc renderer has no email-attempt markup; preceding id/title/body/url values are escaped.",
+      "regression": "tests/notifications.test.mjs: notification rendering escapes malformed attempt counts from custom clients",
+      "verification": "Source-only exact renderer extraction via native TypeScript stripping passed on Node 24: malicious img/onerror markup escaped and numeric rendering preserved. No dist writes; rebuilt suite delegated to root final matrix."
+    }
+  ],
+  "nonActionable": [
+    {
+      "resultIndices": [
+        91,
+        92,
+        93,
+        94
+      ],
+      "rule": "js/missing-await",
+      "files": [
+        "src/platform.ts:1341",
+        "src/platform.ts:1963"
+      ],
+      "introduced": false,
+      "classification": "intentional Promise identity comparisons",
+      "reason": "Both finally blocks execute after awaiting flight and clear the shared in-flight slot only if it still references the same Promise. Awaiting the compared values would compare resolutions instead of identities and break deduplication cleanup.",
+      "baselineLines": [
+        1286,
+        1888
+      ],
+      "generatedDuplicateIndices": [
+        73,
+        74,
+        75,
+        76,
+        79,
+        80,
+        81,
+        82,
+        85,
+        86,
+        87,
+        88,
+        97,
+        98,
+        99,
+        100
+      ]
+    },
+    {
+      "resultIndex": 8,
+      "rule": "js/bad-tag-filter",
+      "file": "tests/reviewed-actions.test.mjs:88",
+      "classification": "test assertion, not sanitizer",
+      "reason": "A doesNotMatch assertion checks a fixed lowercase script payload. Production renderer escapes angle brackets without relying on tag case or this regex."
+    },
+    {
+      "resultIndices": [
+        11,
+        12
+      ],
+      "rule": "js/bad-code-sanitization",
+      "file": "tests/fixtures/platform-crash-controller.mjs:24-25",
+      "classification": "fixed-literal Node fixture source generation",
+      "reason": "Only internal stable/candidate label literals reach JSON.stringify. It emits a quoted JavaScript string in a Node .mjs file, not HTML; no untrusted caller or script-element terminator boundary exists."
+    },
+    {
+      "resultIndex": 172,
+      "rule": "js/unused-local-variable",
+      "file": "src/platform.ts:1413",
+      "introduced": false,
+      "classification": "baseline style finding",
+      "reason": "domains assignment already exists at d6baafc:1358. No security boundary change. Generated copies repeat the same finding."
+    },
+    {
+      "rule": "js/automatic-semicolon-insertion",
+      "classification": "test style findings",
+      "files": [
+        "tests/notifications.test.mjs",
+        "tests/platform-evacuation.test.mjs",
+        "tests/provider-service.test.mjs",
+        "tests/reviewed-actions.test.mjs"
+      ],
+      "reason": "Valid compact JavaScript in tests; no production execution or escaping issue."
+    }
+  ],
+  "preservedOutOfScope": [
+    {
+      "resultIndex": 7,
+      "rule": "js/double-escaping",
+      "file": "verify-daily-log-oauth.mjs:15",
+      "reason": "Preexisting untracked user verification script; preserved without edits. Parent responsible for remaining scan scope."
+    }
+  ],
+  "conclusion": "One introduced production-library escaping gap fixed with a regression. No additional actionable CodeQL finding in the owned source modules. This triage does not claim that a clean static scan proves absence of vulnerabilities.",
+  "sourceFrozen": true,
+  "distWritten": false
+}

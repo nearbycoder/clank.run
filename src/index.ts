@@ -52,3 +52,24 @@ export * from "./devtools.ts";
 export * from "./trace-timeline.ts";
 export * from "./preview-fixtures.ts";
 export * from "./rehearsal.ts";
+
+export * from "./i18n.ts";
+
+export * from "./schedules.ts";
+
+export * from "./reviewed-actions.ts";
+export * from "./organization-sso.ts";
+export * from "./account-security.ts";
+export * from "./search.ts";
+export * from "./bulk-edit.ts";
+export * from "./collaborative-documents.ts";
+export * from "./durable-import.ts";
+export * from "./dev-updates.ts";
+export * from "./release-attestation.ts";
+export * from "./usage-forecast.ts";
+export { verifyAuditExport } from "./audit-export.ts";
+export type { SignedAuditEntry, AuditExportCheckpoint, AuditExportOptions } from "./audit-export.ts";
+export type { PlatformOperationsOptions, OperationalAlert, OperationalSignal } from "./operations-monitor.ts";
+export type { LinuxProjectDiskQuota, DockerOutboundNetworkPolicy } from "./linux-project-isolation.ts";
+export * from "./point-in-time.ts";
+export type { ManagedCanaryStage, ManagedCanaryOptions, ManagedCanaryReport } from "./managed-canary.ts";

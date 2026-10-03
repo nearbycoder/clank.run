@@ -1,6 +1,7 @@
 import { createApi, createSyncClient, defineBackend, defineDatabase, defineTable, openBackend, type SyncClientOptions } from "./backend.ts";
 import type { AuthDefinition } from "./auth.ts";
 import { s } from "./ai.ts";
+import { featureTables, requireFeatureAccess, type FeatureMutation, type FeatureQuery } from "./feature-service.ts";
 
 export type ViewValue = string | number | boolean | null;
 export interface ViewFilter { field: string; operator: "eq" | "neq" | "contains" | "gt" | "lt" | "empty"; value: ViewValue; }
@@ -102,7 +103,12 @@ export async function openSavedViews(options: SavedViewsOptions): Promise<SavedV
 }
 
 export function createSavedViewsClient(options: SyncClientOptions = {}): SavedViewsClient {
-  const api = createApi<any>(), prefix = (options.url ?? "/__clank/views").replace(/\/$/, "");
+  const api = createApi<{
+    list: FeatureQuery<{}, readonly SavedView[]>;
+    save: FeatureMutation<Omit<Parameters<SavedViewsClient["save"]>[0], "definition"> & { definition: string }, SavedView>;
+    remove: FeatureMutation<{ id: string; expectedRevision: number }, boolean>;
+    setDefault: FeatureMutation<{ id: string | null }, void>;
+  }>(), prefix = (options.url ?? "/__clank/views").replace(/\/$/, "");
   const transport = createSyncClient({ ...options, url: "", fetch: (url, init) => (options.fetch ?? fetch)(`${prefix}${String(url).replace(/^\/__clank/, "")}`, init) });
   return { list: () => transport.query(api.list), save: input => transport.mutate(api.save, { ...input, definition: JSON.stringify(validateView(input.definition)) }), remove: (id, expectedRevision) => transport.mutate(api.remove, { id, expectedRevision }), setDefault: id => transport.mutate(api.setDefault, { id }) };
 }
@@ -133,4 +139,80 @@ export function mountSavedViews(container: HTMLElement, client: SavedViewsClient
   };
   panel.append(name, button("Save current view", async () => { await client.save({ name: name.value, definition: options.current() }); if (!closed) { name.value = ""; status.textContent = "View saved."; } await refresh(); }), button("Refresh views", refresh), status, list); container.append(panel); void run(refresh);
   return () => { closed = true; panel.remove(); };
+}
+
+export interface SharedSavedView extends SavedView { readonly workspaceId: string; readonly ownerId: string; readonly editableBy: "owner" | "workspace"; readonly canEdit: boolean; readonly canSetDefault: boolean; }
+export interface SharedViewsOptions<Schema extends import("./backend.ts").DatabaseSchema<any> = import("./backend.ts").DatabaseSchema<any>> extends SavedViewsOptions {
+  schema?: Schema;
+  authorize(context: { auth: import("./auth.ts").AuthRequest<any>; db: import("./backend.ts").ReadDatabase<Schema> }, workspaceId: string, operation: "read" | "publish" | "edit" | "default"): boolean;
+}
+export interface SharedViewsClient {
+  list(): Promise<readonly SharedSavedView[]>;
+  save(input: { id?: string; expectedRevision?: number; name: string; definition: ViewDefinition; editableBy?: "owner" | "workspace" }): Promise<SharedSavedView>;
+  remove(id: string, expectedRevision: number): Promise<boolean>;
+  setDefault(id: string | null): Promise<void>;
+}
+/** Workspace views use live server membership policy; a shared filter never grants underlying record access. */
+export async function openSharedSavedViews<Schema extends import("./backend.ts").DatabaseSchema<any>>(options: SharedViewsOptions<Schema>): Promise<SavedViewsService>;
+export async function openSharedSavedViews(options: SharedViewsOptions): Promise<SavedViewsService> {
+  const { BackendActionError } = await import("./backend.ts");
+  const fields = [...options.fields], maximum = options.maxViews ?? 50;
+  if (!fields.length || fields.length > 100 || fields.some(field => !fieldName(field)) || new Set(fields).size !== fields.length || !Number.isSafeInteger(maximum) || maximum < 1 || maximum > 200 || typeof options.authorize !== "function") throw new TypeError("Shared views need bounded fields/counts and a workspace authorization policy.");
+  if (options.schema?.tables.sharedSavedViews) throw new TypeError("sharedSavedViews is reserved.");
+  const schema = defineDatabase(featureTables(options.schema, { sharedSavedViews: defineTable({ workspaceId: s.string(), ownerId: s.string(), name: s.string({ min: 1, max: 100 }), definition: s.string({ max: 65536 }), revision: s.number({ integer: true, min: 1 }), isDefault: s.boolean(), editableBy: s.enum(["owner", "workspace"] as const) }).index("by_workspace", ["workspaceId"]) }));
+  const allowed = (context: any, workspaceId: string, operation: "read" | "publish" | "edit" | "default") => options.authorize(context, workspaceId, operation) === true;
+  const edit = (context: any, row: any) => row.ownerId === context.auth.user.id || row.editableBy === "workspace" && allowed(context, row.workspaceId, "edit");
+  const output = (context: any, row: any): SharedSavedView => ({ id: row._id, name: row.name, definition: JSON.parse(row.definition), revision: row.revision, isDefault: row.isDefault, workspaceId: row.workspaceId, ownerId: row.ownerId, editableBy: row.editableBy, canEdit: edit(context, row), canSetDefault: allowed(context, row.workspaceId, "default") });
+  const scope = s.string({ min: 1, max: 200 });
+  const backend = defineBackend({ schema, auth: options.auth }).functions(({ query, mutation }) => ({
+    list: query({ args: { workspaceId: scope }, agent: false, handler: (context, { workspaceId }) => { requireFeatureAccess(allowed(context, workspaceId, "read")); return context.db.table("sharedSavedViews").query().where("workspaceId", workspaceId).orderBy("name", "asc").collect().map(row => output(context, row)); } }),
+    save: mutation({ args: { workspaceId: scope, id: s.optional(s.id("sharedSavedViews")), expectedRevision: s.optional(s.number({ integer: true, min: 1 })), name: s.string({ min: 1, max: 100 }), definition: s.string({ max: 65536 }), editableBy: s.optional(s.enum(["owner", "workspace"] as const)) }, agent: false, handler: (context, input) => {
+      requireFeatureAccess(allowed(context, input.workspaceId, "read"));
+      const table = context.db.table("sharedSavedViews"), name = input.name.trim(), definition = JSON.stringify(validateView(JSON.parse(input.definition), fields));
+      if (!name) throw new BackendActionError(400, "INVALID_VIEW", "A view needs a name.");
+      const rows = table.query().where("workspaceId", input.workspaceId).collect();
+      if (rows.some(row => row._id !== input.id && row.name.toLowerCase() === name.toLowerCase())) throw new BackendActionError(409, "VIEW_NAME_EXISTS", "A view with this name already exists.");
+      if (input.id) {
+        const row = table.get(input.id); requireFeatureAccess(Boolean(row && row.workspaceId === input.workspaceId && edit(context, row)));
+        if (row!.revision !== input.expectedRevision) throw new BackendActionError(409, "VIEW_CHANGED", "View changed. Refresh before saving.");
+        const editableBy = input.editableBy ?? row!.editableBy;
+        if (editableBy !== row!.editableBy) requireFeatureAccess(row!.ownerId === context.auth.user!.id);
+        table.patch(input.id, { name, definition, editableBy, revision: row!.revision + 1 }); return output(context, table.get(input.id));
+      }
+      requireFeatureAccess(allowed(context, input.workspaceId, "publish"));
+      if (input.expectedRevision !== undefined || rows.length >= maximum) throw new BackendActionError(409, "VIEW_LIMIT", "Cannot create this view with the supplied revision or workspace limit.");
+      const id = table.insert({ workspaceId: input.workspaceId, ownerId: context.auth.user!.id, name, definition, editableBy: input.editableBy ?? "owner", revision: 1, isDefault: false }); return output(context, table.get(id));
+    } }),
+    remove: mutation({ args: { workspaceId: scope, id: s.id("sharedSavedViews"), expectedRevision: s.number({ integer: true, min: 1 }) }, agent: false, handler: (context, input) => {
+      requireFeatureAccess(allowed(context, input.workspaceId, "read")); const table = context.db.table("sharedSavedViews"), row = table.get(input.id); requireFeatureAccess(Boolean(row && row.workspaceId === input.workspaceId && edit(context, row)));
+      if (row!.revision !== input.expectedRevision) throw new BackendActionError(409, "VIEW_CHANGED", "View changed. Refresh before deleting."); return table.delete(input.id);
+    } }),
+    setDefault: mutation({ args: { workspaceId: scope, id: s.nullable(s.id("sharedSavedViews")) }, agent: false, handler: (context, input) => {
+      requireFeatureAccess(allowed(context, input.workspaceId, "read") && allowed(context, input.workspaceId, "default")); const table = context.db.table("sharedSavedViews");
+      if (input.id !== null) requireFeatureAccess(table.get(input.id)?.workspaceId === input.workspaceId);
+      for (const row of table.query().where("workspaceId", input.workspaceId).collect()) if (row.isDefault !== (row._id === input.id)) table.patch(row._id, { isDefault: row._id === input.id, revision: row.revision + 1 });
+    } }),
+  }));
+  const runtime = await openBackend(backend, { path: options.path, prefix: options.prefix ?? "/__clank/shared-views", maxCacheEntries: 0, agent: false });
+  return { handle: request => runtime.handle(request), close: () => runtime.close() };
+}
+export function createSharedViewsClient(options: SyncClientOptions & { workspaceId: string }): SharedViewsClient {
+  const api = createApi<{
+    list: FeatureQuery<{ workspaceId: string }, readonly SharedSavedView[]>;
+    save: FeatureMutation<Omit<Parameters<SharedViewsClient["save"]>[0], "definition"> & { definition: string; workspaceId: string }, SharedSavedView>;
+    remove: FeatureMutation<{ workspaceId: string; id: string; expectedRevision: number }, boolean>;
+    setDefault: FeatureMutation<{ workspaceId: string; id: string | null }, void>;
+  }>(), prefix = (options.url ?? "/__clank/shared-views").replace(/\/$/u, ""), workspaceId = options.workspaceId;
+  const transport = createSyncClient({ ...options, url: "", fetch: (url, init) => (options.fetch ?? fetch)(`${prefix}${String(url).replace(/^\/__clank/u, "")}`, init) });
+  return { list: () => transport.query(api.list, { workspaceId }), save: input => transport.mutate(api.save, { ...input, workspaceId, definition: JSON.stringify(validateView(input.definition)) }), remove: (id, expectedRevision) => transport.mutate(api.remove, { workspaceId, id, expectedRevision }), setDefault: id => transport.mutate(api.setDefault, { workspaceId, id }) };
+}
+export function mountSharedSavedViews(container: HTMLElement, client: SharedViewsClient, options: { current(): ViewDefinition; apply(view: ViewDefinition): void }): () => void {
+  const document = container.ownerDocument, panel = document.createElement("section"), status = document.createElement("p"), list = document.createElement("ul"), name = document.createElement("input"), editable = document.createElement("select");
+  panel.setAttribute("aria-label", "Workspace saved views"); status.setAttribute("role", "status"); name.setAttribute("aria-label", "Shared view name"); name.maxLength = 100; editable.setAttribute("aria-label", "Who may edit this view");
+  for (const [value, title] of [["owner", "Only me"], ["workspace", "Authorized workspace editors"]]) { const item = document.createElement("option"); item.value = value!; item.textContent = title!; editable.append(item); }
+  let closed = false, busy = false;
+  const run = async (action: () => Promise<void>) => { if (busy || closed) return; busy = true; try { await action(); } catch { if (!closed) { list.replaceChildren(); status.textContent = "View unavailable, changed, or permission denied. Refresh before retrying."; } } finally { busy = false; } };
+  const button = (label: string, action: () => Promise<void>) => { const node = document.createElement("button"); node.type = "button"; node.textContent = label; node.addEventListener("click", () => { void run(action); }); return node; };
+  const refresh = async () => { const views = await client.list(); if (closed) return; list.replaceChildren(); for (const view of views) { const row = document.createElement("li"); row.append(button(`${view.name}${view.isDefault ? " (workspace default)" : ""}`, async () => { options.apply(view.definition); })); if (view.canEdit) row.append(button("Update from current view", async () => { await client.save({ id: view.id, expectedRevision: view.revision, name: view.name, definition: options.current() }); await refresh(); }), button("Delete shared view", async () => { await client.remove(view.id, view.revision); await refresh(); })); if (view.canSetDefault) row.append(button(view.isDefault ? "Clear workspace default" : "Set workspace default", async () => { await client.setDefault(view.isDefault ? null : view.id); await refresh(); })); list.append(row); } };
+  panel.append(name, editable, button("Publish current view", async () => { await client.save({ name: name.value, definition: options.current(), editableBy: editable.value as "owner" | "workspace" }); await refresh(); }), button("Refresh shared views", refresh), status, list); container.append(panel); void run(refresh); return () => { closed = true; panel.remove(); };
 }

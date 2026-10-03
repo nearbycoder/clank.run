@@ -1,3 +1,4 @@
+import { GENERATED_BASELINE_PATH, generatedBaseline, readGeneratedBaseline, mergeGeneratedDestination } from "./blueprint-regeneration.mjs";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -298,6 +299,7 @@ function safeAgentEnvironment() {
 
 async function inspectChanges(target, files) {
   const changes = [];
+  const baseline = await readGeneratedBaseline(target).catch((error) => { throw new ComposeError(error.message, error.code ?? "COMPOSE_BASELINE_INVALID"); });
   for (const file of files) {
     const destination = destinationFor(target, file.path);
     let existing;
@@ -313,13 +315,16 @@ async function inspectChanges(target, files) {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
-    const next = Buffer.from(file.contents);
+    const merged = mergeGeneratedDestination(file.path, baseline[file.path], existing?.toString("utf8"), file.contents);
+    const next = merged.contents === undefined ? undefined : Buffer.from(merged.contents);
     changes.push({
       path: file.path,
-      status: existing === undefined ? "create" : existing.equals(next) ? "unchanged" : "update",
+      status: merged.conflict ? "conflict" : existing === undefined && next === undefined ? "unchanged" : existing === undefined ? "create" : existing.equals(next) ? "unchanged" : "update",
+      ...(merged.preserved ? { preserved: true } : {}),
+      ...(merged.range ? { conflictRange: merged.range } : {}),
       beforeSha256: existing === undefined ? null : digest(existing),
-      afterSha256: digest(next),
-      bytes: next.length,
+      afterSha256: next === undefined ? null : digest(next),
+      bytes: next?.length ?? 0,
     });
   }
   return changes;
@@ -424,6 +429,17 @@ async function applyReview(target, review) {
   const files = generateAppFiles(blueprint, review.generation);
   const currentChanges = await inspectChanges(target, files);
   assertChangeBaseline(review.changes, currentChanges);
+  const conflicts = currentChanges.filter((change) => change.status === "conflict");
+  if (conflicts.length) throw new ComposeError(`Resolve regeneration conflicts before applying: ${conflicts.map((change) => change.path).join(", ")}`, "COMPOSE_REGENERATION_CONFLICT");
+  const baseline = await readGeneratedBaseline(target).catch((error) => { throw new ComposeError(error.message, error.code ?? "COMPOSE_BASELINE_INVALID"); });
+  const mergedFiles = [];
+  for (const file of files) {
+    let current;
+    try { current = await readFile(destinationFor(target, file.path), "utf8"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    const merged = mergeGeneratedDestination(file.path, baseline[file.path], current, file.contents);
+    if (merged.conflict) throw new ComposeError(`Regeneration conflict: ${file.path}`, "COMPOSE_REGENERATION_CONFLICT");
+    if (!merged.deleted) mergedFiles.push({ ...file, contents: merged.contents });
+  }
   const appliedAt = new Date().toISOString();
   const session = {
     protocol: "clank-compose-session/1",
@@ -439,12 +455,14 @@ async function applyReview(target, review) {
     turns: review.turns,
     changes: summarizeChanges(currentChanges),
   };
-  const writes = files.map((file) => ({
+  const writes = mergedFiles.map((file) => ({
     path: file.path,
     contents: Buffer.from(file.contents),
     mode: file.mode ?? 0o600,
+    expectedSha256: currentChanges.find((change) => change.path === file.path).beforeSha256,
   }));
   writes.push(
+    { path: GENERATED_BASELINE_PATH, contents: Buffer.from(generatedBaseline(files.map((file) => file.path.startsWith("migrations/") ? mergedFiles.find((merged) => merged.path === file.path) ?? file : file))), mode: 0o600 },
     {
       path: ".clank/plan.json",
       contents: Buffer.from(`${JSON.stringify({
@@ -484,7 +502,7 @@ async function applyReview(target, review) {
   };
 }
 
-async function transactionalWrite(target, writes) {
+export async function transactionalWrite(target, writes) {
   const backups = [];
   try {
     for (const write of writes) {
@@ -500,6 +518,7 @@ async function transactionalWrite(target, writes) {
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
       }
+      if (Object.hasOwn(write, "expectedSha256") && (previous ? digest(previous.contents) : null) !== write.expectedSha256) throw new ComposeError(`Generated file changed during apply: ${write.path}`, "COMPOSE_REVIEW_STALE");
       const temporary = `${destination}.clank-compose-${process.pid}-${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, write.contents, { mode: write.mode });
@@ -678,6 +697,7 @@ function summarizeChanges(changes) {
     created: changes.filter((entry) => entry.status === "create").length,
     updated: changes.filter((entry) => entry.status === "update").length,
     unchanged: changes.filter((entry) => entry.status === "unchanged").length,
+    conflicts: changes.filter((entry) => entry.status === "conflict").length,
   };
 }
 

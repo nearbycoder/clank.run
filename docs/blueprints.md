@@ -195,8 +195,11 @@ length, SHA-256 checksum, aggregate digest, and warning. Identical blueprints on
 version produce identical plans.
 
 `generate` writes an authenticated full-stack application, human and agent operating guides, and
-`.clank/plan.json`. It refuses to replace a changed file unless `--force` is supplied. The source
-blueprint is preserved when generating into its own directory. `--framework=local` points the app
+`.clank/plan.json`. It saves the exact generated source in owner-readable
+`.clank/generated-baseline.json`. Subsequent runs compare that baseline, your current files, and
+the proposed source. Independent edits merge; overlapping edits stop the entire write before any
+application file changes. `--force` explicitly replaces source changes, but applied SQL migration
+files remain immutable. The source blueprint is preserved when generating into its own directory. `--framework=local` points the app
 at the current Clank checkout without requiring a registry release.
 
 Then use the ordinary app loop:
@@ -222,15 +225,18 @@ npm run test:watch
 
 Generation is no longer a single-table mock-up. The baseline includes:
 
-- every declared static route, with server rendering, hydration state, navigation, and server-side
+- every declared static route, plus typed record detail routes with a final named parameter;
+- authenticated application navigation and explicit read-only public pages with server-side
   route-role checks;
 - an optional generated admin studio with schema summaries and backend-authorized data controls;
 - every entity, field constraint, index, ownership scope, field-aware create form, list, and safe
   delete/toggle controls;
 - exact declared action names, descriptions, roles, confirmation hints, browser bindings, and MCP
   tool metadata;
+- workspace creation, switching, owner-managed membership, and scoped records, references, history,
+  and restores;
 - relationship-aware transactional deletion with bounded `restrict`, `nullify`, and `cascade`
-  behavior;
+  behavior, one-to-one uniqueness, and many-to-many join entities;
 - live subscriptions for `realtime: true` entities and mutation-triggered request/response refresh
   for `realtime: false` entities;
 - service requirement validation, local development drivers, health checks, and a fail-closed
@@ -344,25 +350,46 @@ value. Number fields may set `integer: true`; enum fields require `values`; refe
 require `entity`.
 
 Ownership is `public`, `user`, or `workspace`. The generated database enforces user ownership
-directly. Workspace ownership is called out in the plan until the app wires its organization
-context; generation never pretends that user scoping is workspace isolation.
+directly. Workspace-owned tables receive a server-managed `workspaceId` field. Every generated
+handler resolves the signed-in user's selected workspace and current membership inside the same
+read or write transaction, then scopes queries, record lookups, mutations, references, history,
+and restores. Input schemas never accept a caller-supplied workspace ID for entity writes.
+
+Each account starts in a private personal workspace. The generated workspace control can create
+and select shared workspaces. Its owner can add or remove members using their registered user
+IDs, shown in the same control. Membership does not confer the global application roles required
+by an action. Removing a member immediately invalidates tracked queries and returns their next
+operation to their personal workspace. Shared records do not become personal records.
+
+The internal `workspaces` action group and `clankWorkspaces`, `clankMemberships`, and
+`clankWorkspaceSelection` tables are reserved. Membership management actions are authenticated
+and excluded from MCP; entity CRUD remains available through the normal authorized MCP surface.
+The generated handlers are the authorization boundary: trusted server code must use their scoped
+view rather than directly exposing the underlying workspace tables. Workspace history only
+returns permitted snapshots; a bounded history page can contain fewer results after filtering.
 
 ## Routes and roles
 
-Blueprint version 1 accepts static paths such as `/`, `/tasks`, and `/settings/profile`. Parameters,
-queries, hashes, and trailing slashes are rejected because the generator cannot invent a safe
-parameter-loading contract. Use the framework [router](routing.md) when adding a deliberately
-implemented dynamic route.
+Blueprint version 1 accepts static paths such as `/`, `/tasks`, and `/settings/profile`, plus a
+single final named parameter such as `/tasks/:id`. A detail route must declare an `entity`.
+Generation adds a typed `<entity>.detail` query whose ID schema and ownership checks come from
+that entity. The detail page returns 401 for a signed-out visitor, 403 for a disallowed route
+role, and 404 for an absent, malformed, or inaccessible record. Detail pages are read-only server
+renders; generated record cards link to them. Queries, hashes, trailing slashes, and multiple or
+non-final parameters remain invalid.
 
 Route access is:
 
 - `"authenticated"` for any signed-in user;
 - `{ roles: ["owner", "member"] }` for a non-empty role allowlist; or
-- `"public"` as an explicit planning marker.
+- `"public"` for a read-only page that can be rendered without signing in.
 
-Generated apps currently require auth. A public route therefore generates a warning and remains
-inside the authenticated shell until application code defines which data is safe to expose. This
-fail-closed behavior avoids accidentally making an owned query public.
+A public entity route requires `ownership: "public"`; it never silently widens a private entity.
+It exposes the entity's declared fields through an anonymous `<entity>.publicList` query and,
+when a detail route exists, a typed detail query. Publish only fields intended for all visitors.
+Public informational routes may omit `entity`. These pages contain no mutation controls, private
+hydration payloads, or application scripts. Mutations still require authentication. The names
+`detail` and `publicList` are reserved when the corresponding generated loader exists.
 
 The server rejects a signed-in user who lacks a route role before it queries route data. Navigation
 and action controls hide unavailable choices as a usability feature, but the backend action
@@ -452,9 +479,17 @@ caller's scoped database view. A missing, deleted, or other-owner target returns
 `404 REFERENCE_NOT_FOUND`, preventing dangling and cross-owner edges even if somebody bypasses the
 generated form and calls browser RPC or MCP directly.
 
-`one-to-one` and `many-to-many` labels communicate intended cardinality, but a reference alone
-cannot enforce uniqueness or create a join table. The plan warns until the app models a unique
-constraint or explicit join entity.
+`one-to-one` checks uniqueness of its non-null reference inside the same transaction as create,
+sparse update, and historical restore. Duplicate writes fail with `409 RELATIONSHIP_CARDINALITY`.
+Uniqueness follows the entity's user or workspace scope; public entities enforce it globally.
+
+`many-to-many` creates `<relationshipName>Links` (or the explicitly named `join` entity), with
+`fromId` and `toId` references and a defaulted `label` field. The endpoint pair is unique within
+its scope. Both endpoints must share ownership. Deleting either endpoint applies `restrict` or
+`cascade` to its join rows; it never deletes the opposite endpoint. `nullify` is not supported for
+join edges. Generated join entities have ordinary typed CRUD, forms when routed, reference
+validation, deterministic fixtures, and MCP actions. Existing explicit join entities must use
+required non-null references to the declared endpoints.
 
 ## Services
 
@@ -521,8 +556,31 @@ review, authorization, conformance, and deployment controls.
 ## Honest boundaries
 
 The generator creates a deterministic full-stack baseline, not domain truth. Custom business
-rules, payments, legal or medical decisions, workspace membership resolution, public data
-contracts, production service credentials, PostgreSQL drivers, and horizontal state coordination
+rules, payments, legal or medical decisions, public-field selection, production service
+credentials, PostgreSQL drivers, and horizontal state coordination
 need explicit implementation and review.
 
 Read every `clank plan` warning. A warning is an unresolved boundary, not decorative output.
+
+## Upgrade and rollback
+
+Source regeneration does not migrate a live database. Back up the database and test its restore
+before deploying changed ownership or relationship contracts. Existing generated user-owned
+entities remain compatible. Earlier workspace blueprints used user ownership; upgrading those
+requires a new numbered migration that fills each existing row's JSON `workspaceId` from its
+`_owner_id`, and does the same for retained `clank_document_revisions.snapshot_data` using that
+revision's `owner_id`. Preserve those original owner IDs. Review all affected tables and fail the
+migration on rows without an owner. A database with missing required workspace IDs fails schema
+validation at startup; it is not opened with an unscoped fallback.
+
+Remove duplicate one-to-one references before enabling their new guards, and migrate old
+many-to-many representations into the explicit join entity. Existing SQL migration files are
+preserved during regeneration; add a new migration ID for each data change.
+
+Before shared-workspace writes, rollback can restore the backed-up database and previous source.
+After shared writes, reverting to the old user-owned schema is unsafe because shared records have
+no single user owner. Use a reviewed reverse migration or restore the backup with the explicit
+loss of subsequent writes. Keep `.clank/generated-baseline.json` with local development state;
+older projects without a baseline conservatively report conflicts for changed destinations.
+Restore the exact original generator output as the baseline from a known clean revision before
+merging older hand-edited projects; do not adopt current hand edits as generated source.

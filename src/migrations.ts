@@ -30,6 +30,7 @@ export interface ApplyMigrationsOptions extends LoadMigrationsOptions {
   restrictToDatabase?: boolean;
 }
 
+import { pinSQLiteDirectory } from "./sqlite-sandbox.ts";
 import { runSQLiteTask } from "./sqlite-task.ts";
 import { publishSQLiteReplacement } from "./migrations-worker.ts";
 export { loadMigrations, assertSafeMigrationSql } from "./migrations-worker.ts";
@@ -58,16 +59,25 @@ async function runSQLiteReplacement(operation: string, sourcePath: string, desti
   // The parent must know which private files to clean: a SIGKILL or native OOM
   // skips every worker finally block. Only this attempt's unpredictable paths
   // are removed, and runSQLiteTask settles only after the child has closed.
-  const temporary = `${destinationPath}.tmp-${globalThis.crypto.randomUUID()}`;
+  const pathName = "node:path";
+  const path = await import(pathName);
+  const destination = path.resolve(destinationPath);
+  const pinned = (globalThis as any).process.platform === "linux"
+    ? await pinSQLiteDirectory(path.dirname(destination), true) : undefined;
+  const temporary = `${destination}.tmp-${globalThis.crypto.randomUUID()}`;
+  const anchoredTemporary = pinned ? `${pinned.anchor}/${path.basename(temporary)}` : temporary;
+  const anchoredDestination = pinned ? `${pinned.anchor}/${path.basename(destination)}` : destination;
   try {
-    await runSQLiteTask("migrations", operation, [sourcePath, destinationPath, temporary]);
+    await runSQLiteTask("migrations", operation, [sourcePath, destination, temporary], pinned ? [pinned] : []);
     // Publish only after successful worker completion. A forced worker exit can
     // never delete destination sidecars or replace the caller's live database.
-    await publishSQLiteReplacement(temporary, destinationPath);
+    await publishSQLiteReplacement(anchoredTemporary, anchoredDestination);
   } finally {
     const moduleName = "node:fs/promises";
     const fs = await import(moduleName);
-    await Promise.all([temporary, `${temporary}-journal`, `${temporary}-wal`, `${temporary}-shm`]
-      .map((path) => fs.rm(path, { force: true })));
+    try {
+      await Promise.all([anchoredTemporary, `${anchoredTemporary}-journal`, `${anchoredTemporary}-wal`, `${anchoredTemporary}-shm`]
+        .map((path) => fs.rm(path, { force: true })));
+    } finally { await pinned?.close(); }
   }
 }

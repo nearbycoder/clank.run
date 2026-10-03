@@ -58,7 +58,10 @@ export interface AuthSession {
   createdAt: number;
   lastSeenAt: number;
   expiresAt: number;
+  authenticatedAt?: number;
+  authenticationMethod?: "password" | "passkey" | "mfa" | "sso";
 }
+export interface AuthSessionRecord extends AuthSession { readonly current: boolean; }
 
 export interface AuthState<Profile extends object = DefaultAuthProfile> {
   user: AuthUser<Profile> | null;
@@ -306,8 +309,12 @@ export interface AuthPasskeyRecord {
 
 export class AuthError extends Error {
   readonly name = "AuthError";
-  constructor(readonly code: string, message: string, readonly status = 400, readonly retryAfter?: number) {
+  readonly code: string;
+  readonly status: number;
+  readonly retryAfter?: number;
+  constructor(code: string, message: string, status = 400, retryAfter?: number) {
     super(message);
+    this.code = code; this.status = status; this.retryAfter = retryAfter;
   }
 }
 
@@ -333,6 +340,9 @@ export interface AuthRuntime<Profile extends object = DefaultAuthProfile> {
   disableUser(userId: AuthUserId, disabled?: boolean): void;
   revokeUserSessions(userId: AuthUserId): void;
   verifyCsrf(request: Request, auth: AuthRequest<Profile>): Promise<void>;
+  requireFreshAuthentication(auth: AuthRequest<Profile>, maxAgeMs?: number): AuthRequest<Profile>;
+  /** Trusted server integration only; never expose arbitrary user IDs to an HTTP caller. */
+  issueFederatedSession(userId: AuthUserId, request: Request): Promise<Response>;
   /** @internal Issues a browser-bound, one-time proof for an OAuth sign-in form. */
   issueBrowserLoginProof(request: Request, returnTo: string): Promise<{ token: string; setCookie: string }>;
   isSessionActive(sessionId: string): boolean;
@@ -425,7 +435,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     return current;
   };
 
-  const createSession = async (userId: AuthUserId, passwordHash?: string): Promise<{ rawToken: string; auth: StoredSession<Profile> }> => {
+  const createSession = async (userId: AuthUserId, passwordHash?: string, method: AuthSession["authenticationMethod"] = "password"): Promise<{ rawToken: string; auth: StoredSession<Profile> }> => {
     const now = Date.now();
     const rawToken = await randomToken(32);
     const csrfToken = await randomToken(24);
@@ -436,9 +446,9 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     internal.transaction((changes) => {
       requireActiveUser(userId, passwordHash);
       internal.prepare(`INSERT INTO clank_auth_sessions
-        (id, token_hash, user_id, csrf_token, created_at, last_seen_at, idle_expires_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(id, tokenHash, userId, csrfToken, now, now, idleExpiresAt, expiresAt);
+        (id, token_hash, user_id, csrf_token, created_at, last_seen_at, idle_expires_at, expires_at, authenticated_at, authentication_method)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, tokenHash, userId, csrfToken, now, now, idleExpiresAt, expiresAt, now, method);
       changes.record("__auth", userId, userId);
     });
     const row = sessionRow(internal, tokenHash);
@@ -531,9 +541,9 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
     const challengeHash = await digest(challenge);
     const userId = registrationAuth ? requireCurrentSession(registrationAuth).requireVerified().id : undefined;
     internal.prepare(`INSERT INTO clank_auth_passkey_challenges
-      (id, type, challenge_hash, user_id, origin, rp_id, expires_at, consumed_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`)
-      .run(id, type, challengeHash, userId ?? null, origin, rpId, expiresAt, Date.now());
+      (id, type, challenge_hash, user_id, origin, rp_id, expires_at, consumed_at, created_at, session_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`)
+      .run(id, type, challengeHash, userId ?? null, origin, rpId, expiresAt, Date.now(), registrationAuth?.session?.id ?? null);
     return { id, challenge, expiresAt, origin, rpId };
   };
 
@@ -702,6 +712,13 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
             passkeys: rows.map(passkeyRecordFromRow),
           });
         }
+        if (request.method === "GET" && operation === "sessions") {
+          const auth = await resolve(request); auth.requireUser();
+          const rows = internal.prepare(`SELECT id, created_at, last_seen_at, expires_at, authenticated_at, authentication_method
+            FROM clank_auth_sessions WHERE user_id = ? AND expires_at > ? AND idle_expires_at > ? ORDER BY last_seen_at DESC LIMIT 100`)
+            .all(auth.user!.id, Date.now(), Date.now());
+          return authJson({ ok: true, sessions: rows.map(row => ({ id: String(row.id), createdAt: Number(row.created_at), lastSeenAt: Number(row.last_seen_at), expiresAt: Number(row.expires_at), authenticatedAt: Number(row.authenticated_at), authenticationMethod: row.authentication_method, current: row.id === auth.session?.id })) });
+        }
         if (request.method !== "POST") return authProblem(405, "METHOD_NOT_ALLOWED", "Method not allowed.", undefined, { allow: "GET, POST" });
         const browserForm = operation === "login"
           && request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase()
@@ -773,7 +790,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           if (Number(consumed.changes) !== 1) {
             throw new AuthError("INVALID_MFA", "The verification code is invalid or expired.", 401);
           }
-          const result = await createSession(String(row.user_id) as AuthUserId, String(row.password_hash));
+          const result = await createSession(String(row.user_id) as AuthUserId, String(row.password_hash), "mfa");
           return sessionResponse(definition, request, result.rawToken, result.auth);
         }
         if (operation === "email/verify") {
@@ -844,11 +861,15 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           });
           return authJson({ ok: true, challengeId: challenge.id, expiresAt: challenge.expiresAt, options });
         }
-        if (operation === "passkeys/authenticate/finish") {
+        if (operation === "passkeys/authenticate/finish" || operation === "reauthenticate/passkey/finish") {
+          const stepUp = operation === "reauthenticate/passkey/finish";
+          const stepAuth = stepUp ? await resolve(request) : undefined;
+          if (stepAuth) { await runtime.verifyCsrf(request, stepAuth); requireCurrentSession(stepAuth); }
           if (!definition.passkeys.enabled) throw new AuthError("PASSKEYS_DISABLED", "Passkeys are disabled.", 404);
           const input = objectInput(await readJsonRequest(request, 96 * 1024), "Invalid passkey input.");
           const credential = input.credential as PasskeyAuthenticationCredential;
           const challengeRow = await consumePasskeyChallenge(input.challengeId, input.challenge, "authentication");
+          if (stepUp ? !stepAuth?.session || challengeRow.session_id !== stepAuth.session.id : challengeRow.session_id !== null) throw new AuthError("INVALID_PASSKEY", "Passkey challenge belongs to another session.", 401);
           if (!credential || typeof credential.rawId !== "string") {
             throw new AuthError("INVALID_PASSKEY", "Passkey authentication failed.", 401);
           }
@@ -866,7 +887,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
               origin: String(challengeRow.origin),
               rpId: String(challengeRow.rp_id),
               stored: storedPasskeyFromRow(passkey),
-              requireUserVerification: definition.passkeys.requireUserVerification,
+              requireUserVerification: stepUp || definition.passkeys.requireUserVerification,
             });
           } catch {
             throw new AuthError("INVALID_PASSKEY", "Passkey authentication failed.", 401);
@@ -883,13 +904,74 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
           if (Number(advanced.changes) !== 1) {
             throw new AuthError("INVALID_PASSKEY", "Passkey authentication failed.", 401);
           }
-          const result = await createSession(String(passkey.user_id) as AuthUserId);
+          if (stepAuth) {
+            internal.transaction((changes) => {
+              const current = requireCurrentSession(stepAuth);
+              if (current.user!.id !== passkey.user_id) throw new AuthError("INVALID_PASSKEY", "Passkey identity changed.", 401);
+              internal.prepare("UPDATE clank_auth_sessions SET authenticated_at = ?, authentication_method = 'passkey' WHERE id = ?").run(Date.now(), current.session!.id);
+              changes.record("__auth", current.user!.id, current.user!.id);
+            });
+            return authJson({ ok: true, ...authState(requireCurrentSession(stepAuth)) });
+          }
+          const result = await createSession(String(passkey.user_id) as AuthUserId, undefined, definition.passkeys.requireUserVerification ? "passkey" : "password");
           return sessionResponse(definition, request, result.rawToken, result.auth);
         }
         const auth = await resolve(request);
         if (!auth.user || !auth.session) throw new AuthError("UNAUTHENTICATED", "Authentication is required.", 401);
         await runtime.verifyCsrf(request, auth);
         requireCurrentSession(auth);
+        if (operation === "reauthenticate/passkey/start") {
+          if (!definition.passkeys.enabled) throw new AuthError("PASSKEYS_DISABLED", "Passkeys are disabled.", 404);
+          await enforceRateLimit(limiter, definition.rateLimit, request, auth.user.email, "step-up");
+          const challenge = await createPasskeyChallenge("authentication", request, auth);
+          const ids = internal.prepare("SELECT credential_id, transports FROM clank_auth_passkeys WHERE user_id = ?").all(auth.user.id).map(row => ({ id: String(row.credential_id), transports: JSON.parse(String(row.transports)) as string[] }));
+          return authJson({ ok: true, challengeId: challenge.id, expiresAt: challenge.expiresAt, options: passkeyAuthenticationOptions({ challenge: challenge.challenge, rpId: challenge.rpId, credentialIds: ids, timeoutMs: definition.passkeys.challengeLifetimeMs, requireUserVerification: true }) });
+        }
+        if (operation === "reauthenticate/mfa/start") {
+          if (!definition.mfa.send) throw new AuthError("MFA_UNAVAILABLE", "MFA delivery is not configured.", 409);
+          const input = objectInput(await readJsonRequest(request, 16 * 1024), "Invalid reauthentication input.");
+          await enforceRateLimit(limiter, definition.rateLimit, request, auth.user.email, "step-up");
+          const row = internal.prepare("SELECT password_hash FROM clank_auth_users WHERE id = ?").get(auth.user.id);
+          if (typeof input.password !== "string" || !row || !await passwordQueue(() => verifyPassword(input.password as string, String(row.password_hash), definition.password))) throw new AuthError("INVALID_CREDENTIALS", "Current password is incorrect.", 401);
+          const id = await randomToken(18), code = String(await randomInteger(0, 1_000_000)).padStart(6, "0"), expiresAt = Date.now() + definition.mfa.codeLifetimeMs;
+          const hash = await digest(`${id}:${code}`);
+          internal.transaction(() => {
+            requireCurrentSession(auth); requireActiveUser(auth.user!.id, String(row.password_hash));
+            internal.prepare("DELETE FROM clank_auth_stepup WHERE session_id = ? OR expires_at <= ?").run(auth.session!.id, Date.now());
+            internal.prepare("INSERT INTO clank_auth_stepup(id, session_id, password_hash, code_hash, attempts, expires_at) VALUES (?, ?, ?, ?, 0, ?)").run(id, auth.session!.id, row.password_hash, hash, expiresAt);
+          });
+          await definition.mfa.send({ userId: auth.user.id, email: auth.user.email, token: id, code, expiresAt });
+          return authJson({ ok: true, challengeId: id, expiresAt });
+        }
+        if (operation === "reauthenticate/mfa/finish") {
+          const input = objectInput(await readJsonRequest(request, 8192), "Invalid reauthentication input.");
+          const id = boundedString(input.challengeId, "Challenge required.", 512), code = boundedString(input.code, "Code required.", 16);
+          const digestValue = await digest(`${id}:${code}`);
+          const row = internal.prepare("SELECT * FROM clank_auth_stepup WHERE id = ? AND session_id = ?").get(id, auth.session.id);
+          const valid = row && Number(row.expires_at) > Date.now() && Number(row.attempts) < 5 && await timingSafeStringEqual(String(row.code_hash), digestValue);
+          if (!valid) {
+            internal.prepare("UPDATE clank_auth_stepup SET attempts = attempts + 1 WHERE id = ? AND session_id = ? AND attempts < 5").run(id, auth.session.id);
+            throw new AuthError("INVALID_MFA", "The verification code is invalid or expired.", 401);
+          }
+          internal.transaction((changes) => {
+            const current = requireCurrentSession(auth); requireActiveUser(current.user!.id, String(row.password_hash));
+            if (Number(internal.prepare("DELETE FROM clank_auth_stepup WHERE id = ? AND session_id = ? AND expires_at > ? AND attempts < 5").run(id, current.session!.id, Date.now()).changes) !== 1) throw new AuthError("INVALID_MFA", "The verification code is invalid or expired.", 401);
+            internal.prepare("UPDATE clank_auth_sessions SET authenticated_at = ?, authentication_method = 'mfa' WHERE id = ?").run(Date.now(), current.session!.id);
+            changes.record("__auth", current.user!.id, current.user!.id);
+          });
+          return authJson({ ok: true, ...authState(requireCurrentSession(auth)) });
+        }
+        if (operation === "sessions/revoke") {
+          const input = objectInput(await readJsonRequest(request, 8192), "Invalid session input.");
+          const id = boundedString(input.id, "Session ID is required.", 512);
+          internal.transaction((changes) => {
+            const current = requireCurrentSession(auth);
+            if (Number(internal.prepare("DELETE FROM clank_auth_sessions WHERE id = ? AND user_id = ?").run(id, current.user!.id).changes) !== 1) throw new AuthError("SESSION_NOT_FOUND", "Session not found.", 404);
+            changes.record("__auth", current.user!.id, current.user!.id);
+          });
+          notifySession(id);
+          return id === auth.session.id ? clearSessionResponse(definition, request) : authJson({ ok: true, revoked: true });
+        }
         if (operation === "email/resend") {
           if (auth.user.emailVerified) return authJson({ ok: true, accepted: true });
           await enforceRateLimit(limiter, definition.rateLimit, request, auth.user.email, "verify");
@@ -1088,6 +1170,16 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
         throw new AuthError("INVALID_CSRF", "The request could not be verified.", 403);
       }
     },
+    requireFreshAuthentication(auth, maxAgeMs = 300_000) {
+      if (!Number.isSafeInteger(maxAgeMs) || maxAgeMs < 1000 || maxAgeMs > 3_600_000) throw new TypeError("Fresh authentication window must be 1 second–1 hour.");
+      const current = requireCurrentSession(auth), session = current.session!;
+      if (!session.authenticatedAt || session.authenticatedAt > Date.now() || session.authenticatedAt <= Date.now() - maxAgeMs || !["passkey", "mfa"].includes(session.authenticationMethod ?? "")) throw new AuthError("FRESH_AUTH_REQUIRED", "Verify with a passkey or MFA before this sensitive action.", 403);
+      return current;
+    },
+    async issueFederatedSession(userId, request) {
+      const result = await createSession(userId, undefined, "sso");
+      return sessionResponse(definition, request, result.rawToken, result.auth);
+    },
     async issueBrowserLoginProof(request, returnTo) {
       ensureOpen();
       return issueBrowserLoginProof(internal, request, validateBrowserLoginReturn(returnTo, request));
@@ -1164,6 +1256,11 @@ export interface AuthClient<Profile extends object = DefaultAuthProfile> {
   requestPasswordReset(email: string, botToken?: string): Promise<void>;
   resetPassword(token: string, password: string): Promise<AuthUser<Profile> | null>;
   listPasskeys(): Promise<readonly AuthPasskeyRecord[]>;
+  listSessions(): Promise<readonly AuthSessionRecord[]>;
+  revokeSession(id: string): Promise<void>;
+  reauthenticateWithPasskey(): Promise<void>;
+  startMfaReauthentication(password: string): Promise<{ challengeId: string; expiresAt: number }>;
+  finishMfaReauthentication(challengeId: string, code: string): Promise<void>;
   registerPasskey(name?: string): Promise<AuthPasskeyRecord>;
   loginWithPasskey(email?: string): Promise<AuthUser<Profile> | null>;
   deletePasskey(id: string): Promise<void>;
@@ -1295,6 +1392,17 @@ export function createAuthClient<Profile extends object = DefaultAuthProfile>(
     async listPasskeys() {
       const payload = await requestPayload("passkeys");
       return (payload.passkeys ?? []) as readonly AuthPasskeyRecord[];
+    },
+    async listSessions() { return ((await requestPayload("sessions")).sessions ?? []) as readonly AuthSessionRecord[]; },
+    async revokeSession(id) { await requestPayload("sessions/revoke", { id }, true); if (id === session.value?.id) apply({ user: null, session: null }); },
+    async startMfaReauthentication(password) { const payload = await requestPayload("reauthenticate/mfa/start", { password }, true); return { challengeId: String(payload.challengeId), expiresAt: Number(payload.expiresAt) }; },
+    async finishMfaReauthentication(challengeId, code) { await requestPayload("reauthenticate/mfa/finish", { challengeId, code }, true); },
+    async reauthenticateWithPasskey() {
+      const start = await requestPayload("reauthenticate/passkey/start", {}, true);
+      const options = start.options as PublicKeyCredentialRequestOptionsJSON;
+      const credential = await browserCredentials().get({ publicKey: authenticationOptionsForBrowser(options) }) as PublicKeyCredential | null;
+      if (!credential) throw new AuthError("PASSKEY_CANCELLED", "Passkey verification was cancelled.", 400);
+      await requestPayload("reauthenticate/passkey/finish", { challengeId: start.challengeId, challenge: options.challenge, credential: serializeAuthenticationCredential(credential) }, true);
     },
     async registerPasskey(name) {
       const start = await requestPayload("passkeys/register/start", {}, true);
@@ -1474,6 +1582,12 @@ function createAuthTables(internal: SQLiteInternal): void {
     consumed_at INTEGER,
     created_at INTEGER NOT NULL
   ) WITHOUT ROWID`);
+  const sessionColumns = internal.prepare("PRAGMA table_info(clank_auth_sessions)").all();
+  if (!sessionColumns.some(column => column.name === "authenticated_at")) internal.exec("ALTER TABLE clank_auth_sessions ADD COLUMN authenticated_at INTEGER NOT NULL DEFAULT 0");
+  if (!sessionColumns.some(column => column.name === "authentication_method")) internal.exec("ALTER TABLE clank_auth_sessions ADD COLUMN authentication_method TEXT NOT NULL DEFAULT 'password'");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_auth_stepup (
+    id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES clank_auth_sessions(id) ON DELETE CASCADE,
+    password_hash TEXT NOT NULL, code_hash TEXT NOT NULL, attempts INTEGER NOT NULL, expires_at INTEGER NOT NULL)`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_auth_mfa_challenges (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
@@ -1514,6 +1628,7 @@ function createAuthTables(internal: SQLiteInternal): void {
     consumed_at INTEGER,
     created_at INTEGER NOT NULL
   ) WITHOUT ROWID`);
+  if (!internal.prepare("PRAGMA table_info(clank_auth_passkey_challenges)").all().some(column => column.name === "session_id")) internal.exec("ALTER TABLE clank_auth_passkey_challenges ADD COLUMN session_id TEXT");
   internal.exec("DROP INDEX IF EXISTS proact_auth_sessions_user");
   internal.exec("DROP INDEX IF EXISTS proact_auth_sessions_expiry");
   internal.exec("CREATE INDEX IF NOT EXISTS clank_auth_sessions_user ON clank_auth_sessions (user_id)");
@@ -1528,6 +1643,7 @@ function createAuthTables(internal: SQLiteInternal): void {
   internal.prepare("DELETE FROM clank_auth_sessions WHERE expires_at <= ? OR idle_expires_at <= ?").run(Date.now(), Date.now());
   internal.prepare("DELETE FROM clank_auth_tokens WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(Date.now());
   internal.prepare("DELETE FROM clank_auth_mfa_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(Date.now());
+  internal.prepare("DELETE FROM clank_auth_stepup WHERE expires_at <= ?").run(Date.now());
   internal.prepare("DELETE FROM clank_auth_passkey_challenges WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(Date.now());
   internal.prepare("DELETE FROM clank_auth_browser_login_proofs WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(Date.now());
 }
@@ -1535,7 +1651,7 @@ function createAuthTables(internal: SQLiteInternal): void {
 function sessionRow(internal: SQLiteInternal, tokenHash: string): Record<string, unknown> | undefined {
   return internal.prepare(`SELECT
       s.id AS session_id, s.token_hash, s.csrf_token, s.created_at AS session_created_at,
-      s.last_seen_at, s.idle_expires_at, s.expires_at,
+      s.last_seen_at, s.idle_expires_at, s.expires_at, s.authenticated_at, s.authentication_method,
       u.id AS user_id, u.email, u.email_verified_at, u.role, u.profile, u.disabled,
       u.created_at AS user_created_at, u.updated_at
     FROM clank_auth_sessions s
@@ -1547,7 +1663,7 @@ function sessionRow(internal: SQLiteInternal, tokenHash: string): Record<string,
 function sessionRowById(internal: SQLiteInternal, sessionId: string): Record<string, unknown> | undefined {
   return internal.prepare(`SELECT
       s.id AS session_id, s.token_hash, s.csrf_token, s.created_at AS session_created_at,
-      s.last_seen_at, s.idle_expires_at, s.expires_at,
+      s.last_seen_at, s.idle_expires_at, s.expires_at, s.authenticated_at, s.authentication_method,
       u.id AS user_id, u.email, u.email_verified_at, u.role, u.profile, u.disabled,
       u.created_at AS user_created_at, u.updated_at
     FROM clank_auth_sessions s
@@ -1574,6 +1690,8 @@ function authFromRow<Profile extends object>(
     createdAt: Number(row.session_created_at),
     lastSeenAt: Number(row.last_seen_at),
     expiresAt: Number(row.expires_at),
+    authenticatedAt: Number(row.authenticated_at ?? 0),
+    authenticationMethod: String(row.authentication_method ?? "password") as AuthSession["authenticationMethod"],
   };
   return {
     user,

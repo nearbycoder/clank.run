@@ -146,3 +146,12 @@ state either way.
 Call `hub.diagnostics()` for aggregate room, participant, and stream counts. It returns no room
 names, participant identities, presence, connection IDs, or signal payloads. Call `hub.close()`
 during graceful application shutdown.
+
+## Durable collaborative text
+
+For shared text that survives restart, use
+[`openCollaborativeDocuments` and `mountCollaborativeEditor`](durable-data-workflows.md#persist-collaborative-document-edits).
+The SQLite service stores document revisions and deduplicated edit operations, transforms disjoint
+concurrent edits, and exposes overlapping edits for explicit reconciliation. Its browser editor
+polls through fresh authorization checks and preserves local drafts while remote text changes.
+The presence service above remains suitable for cursors, selections, and typing indicators.

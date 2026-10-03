@@ -24,7 +24,7 @@ test("TSX compiles elements, components, fragments, spreads, and reactive sites"
   assert.match(result.code, /__clankExpression\(\(\) => \(state\.value\.ready/);
   assert.match(result.code, /"onClick": \(\) => state\.value\.ready = false/);
   assert.match(result.code, /__clankFragment/);
-  assert.doesNotThrow(() => stripTypeScriptTypes(result.code, { mode: "transform" }));
+  assert.doesNotThrow(() => compile(result.code, { sourceMap: false }));
 });
 
 test("TSX transform leaves generic arrow syntax intact", () => {

@@ -1,0 +1,144 @@
+{
+  "date": "2026-10-03",
+  "branch": "codex/forty-improvements-2026-10-03",
+  "base": "d6baafca5016c66641baf3ecedcd5e59657242fa",
+  "workflow": "One branch; all development testing performed locally. Protected main additionally requires GitHub Actions checks before merge.",
+  "releaseChecks": [
+    {
+      "node": "26.10.0",
+      "command": "node --disable-warning=ExperimentalWarning scripts/check.mjs",
+      "result": "passed",
+      "counts": {
+        "tests": 1590,
+        "pass": 1587,
+        "fail": 0,
+        "skipped": 3
+      },
+      "coverage": {
+        "lines": 91.93,
+        "branches": 79.31,
+        "functions": 89.65
+      },
+      "logSha256": "d73cd50f96058652ada7d4600158110d1adf3d6eb065a18b74ee447ad0c0fda6"
+    },
+    {
+      "node": "22.16.0",
+      "command": "node --disable-warning=ExperimentalWarning scripts/check.mjs",
+      "result": "passed",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "skipped": 0
+      },
+      "coverage": {
+        "lines": 87.5,
+        "branches": 79.35,
+        "functions": 89.68
+      },
+      "logSha256": "1ea51fa3d7e30bacc7bb3d0158dcf1df1e6031b7e0c0975d6fbf9b9e1b361e95"
+    },
+    {
+      "node": "24.21.0",
+      "command": "node --disable-warning=ExperimentalWarning scripts/check.mjs",
+      "result": "passed",
+      "counts": {
+        "tests": 1590,
+        "pass": 1587,
+        "fail": 0,
+        "skipped": 3
+      },
+      "coverage": {
+        "lines": 87.51,
+        "branches": 79.33,
+        "functions": 89.65
+      },
+      "logSha256": "d362a4a1ba8feb46529ce32ad754f087f6af7d4835cc333bf16fc97574a29ebc"
+    }
+  ],
+  "privilegedProofs": [
+    {
+      "environment": "Disposable Debian 13 KVM guest; Node24; real XFS project quotas, Docker26.1.5, nftables",
+      "tests": 5,
+      "passed": 5,
+      "skipped": 0,
+      "coverage": "Byte and inode quotas with capacity positive controls; real Docker filesystem/process/network isolation; provider cleanup."
+    },
+    {
+      "environment": "Same disposable Docker guest",
+      "tests": 1,
+      "passed": 1,
+      "skipped": 0,
+      "coverage": "Actual controller SIGKILL and immediate restart; exact old web/worker containers removed, candidate writes stop before authoritative writers resume."
+    },
+    {
+      "environment": "Disposable Ubuntu24.04 KVM guest with global AppArmor user-namespace restriction retained and narrowly scoped CI profiles",
+      "tests": 20,
+      "passed": 19,
+      "skipped": 1,
+      "coverage": "Real Bubblewrap namespace and SQLite isolation; XFS opt-in case proven separately."
+    }
+  ],
+  "typescript": {
+    "compiler": "5.9.3 installed only outside repository",
+    "publicConsumerFixtures": "agent-action, api-erasure, durable-services, reviewed-action: passed with positive and negative assertions",
+    "wholeSourceBaselineDiagnostics": 444,
+    "wholeSourceFinalDiagnostics": 321,
+    "introducedNormalizedDiagnostics": 0,
+    "wholeSourceTypecheckIsGreen": false
+  },
+  "documentation": {
+    "testsPassed": 104,
+    "doctorChecksPassed": 7,
+    "offlineDeploymentArtifact": "verified; nothing uploaded",
+    "newGuidesVerified": 11,
+    "browsers": [
+      "Chromium1440x1000",
+      "Chromium390x844"
+    ],
+    "surfaces": "Home links, guide pages, search by title, raw Markdown, JSON, LLM maps/full text, MCP discovery/list/search/read, phone navigation; no browser errors."
+  },
+  "codeql": {
+    "cli": "2.27.1",
+    "queryPack": "codeql/javascript-queries@2.4.6",
+    "suite": "javascript-security-and-quality",
+    "queries": 203,
+    "javascriptTypescriptFilesScanned": 600,
+    "javascriptTypescriptFilesDetected": 619,
+    "rawFinalResults": 130,
+    "resultCounts": {
+      "js/server-side-unvalidated-url-redirection": 1,
+      "js/bad-tag-filter": 1,
+      "js/bad-code-sanitization": 4,
+      "js/insecure-temporary-file": 4,
+      "js/file-access-to-http": 4,
+      "js/remote-property-injection": 5,
+      "js/file-system-race": 22,
+      "js/log-injection": 1,
+      "js/useless-expression": 5,
+      "js/missing-await": 6,
+      "js/whitespace-contradicts-precedence": 1,
+      "js/invalid-prototype-value": 2,
+      "js/superfluous-trailing-arguments": 2,
+      "js/automatic-semicolon-insertion": 34,
+      "js/trivial-conditional": 1,
+      "js/unused-loop-variable": 1,
+      "js/unused-local-variable": 30,
+      "js/useless-assignment-to-local": 5,
+      "js/useless-assignment-to-property": 1
+    },
+    "resolved": "Notification custom-client numeric-field HTML injection; newly editor-reachable compiler regex denial of service; generated-baseline checked-path/bounded-read race. All three findings absent from final scan.",
+    "sourceManifestSha256": "f9498d03dee309a91a68ecd8169bcb011bd3c6c1dd14d4c2fbb6818452ef750a",
+    "sarifSha256": "52800e94c07fb449e08ec9b7e373124a0a0b928ff67eccadc5b56588bb000c3a",
+    "limitations": "Remaining results include test fixtures, style findings, intentional Promise identity checks, guarded flows, and pre-existing local filesystem hardening gaps. This is not a zero-finding scan or a security guarantee."
+  },
+  "operationalLimits": [
+    "Linux namespace prerequisites must be validated on the deployment host; the disposable VM does not establish that a hosted nested-container policy permits Bubblewrap. Missing or denied enforcement fails closed.",
+    "Process runner remains for trusted applications; Docker provider isolation requires the documented host policy and quota configuration.",
+    "Managed canaries currently support local code-only releases; no provider canaries or concurrent schema migration.",
+    "PITR uses a bounded, schema-sealed, single-writer epoch and needs independently retained encrypted exports/checkpoints.",
+    "Node evacuation is planned maintenance with downtime; unresolved writer-cleanup fences block admission, restore and deletion.",
+    "Existing docs search misses hyphenated queries when the index normalized those words to spaces.",
+    "Pre-existing backup/CLI pathname races require a concurrent local filesystem adversary; private stable operator-owned paths remain required. Benchmark utilities retain predictable temporary report defaults; use --output in an operator-owned directory. See detailed triage."
+  ]
+}

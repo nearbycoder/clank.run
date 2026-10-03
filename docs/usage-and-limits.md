@@ -140,16 +140,14 @@ Known transfer is:
 
 ```text
 admitted request-body bytes
-+ Content-Length declared by admitted responses that can carry a body
++ actual response-body chunks consumed from managed ingress
 ```
 
 `HEAD`, `204`, and `304` responses contribute zero response bytes even if a representation-length
-header is present. Clank does not buffer application responses merely to count them. A streamed,
-compressed-on-the-fly, or otherwise undeclared response therefore contributes zero known response
-bytes.
+header is present. Clank counts chunks while streaming rather than buffering the response or trusting its declared length. Completion, cancellation and stream errors settle the consumed-byte metric once. This counts application payload rather than TCP/TLS overhead or proof of remote receipt; process death before stream termination can lose an unfinished metric.
 
 The transfer check can include the complete request body before upstream work begins. Response
-length becomes known only after upstream response headers arrive, so one or more already-admitted
+usage is settled when the response stream terminates, so one or more already-admitted
 concurrent responses can move the ledger past the monthly limit. Later requests are blocked.
 Operators that need a hard network-cost ceiling must additionally bound response sizes and
 concurrency at the application or edge.

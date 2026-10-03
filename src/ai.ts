@@ -16,8 +16,10 @@ export interface ValidationIssue {
 
 export class ValidationError extends Error {
   readonly name = "ValidationError";
-  constructor(readonly issues: ValidationIssue[]) {
+  declare readonly issues: ValidationIssue[];
+  constructor(issues: ValidationIssue[]) {
     super(issues.map((issue) => `${issue.path.length ? issue.path.join(".") : "value"}: ${issue.message}`).join("; "));
+    this.issues = issues;
   }
 }
 
@@ -34,11 +36,10 @@ export type DocumentId<Table extends string> = string & { readonly [DOCUMENT_ID_
 type Parser<T> = (input: unknown, path: Array<string | number>) => T;
 
 class SchemaValue<T> implements Schema<T> {
-  constructor(
-    private readonly parser: Parser<T>,
-    private readonly json: Record<string, unknown>,
-    readonly description?: string,
-  ) {}
+  declare private readonly parser: Parser<T>;
+  declare private readonly json: Record<string, unknown>;
+  declare readonly description?: string;
+  constructor(parser: Parser<T>, json: Record<string, unknown>, description?: string) { this.parser = parser; this.json = json; this.description = description; }
 
   parse(input: unknown): T {
     return this.parser(input, []);
@@ -458,15 +459,19 @@ export function defineAction<I, O>(definition: ActionDefinition<I, O>): Action<I
 
 class ActionOutputError extends Error {
   readonly name = "ActionOutputError";
-  constructor(readonly cause: unknown) {
+  declare readonly cause: unknown;
+  constructor(cause: unknown) {
     super("The action returned an invalid result.");
+    this.cause = cause;
   }
 }
 
 export class ActionError extends Error {
   readonly name = "ActionError";
-  constructor(readonly code: string, message: string, readonly status = 400, readonly details?: unknown) {
+  declare readonly code: string; declare readonly status: number; declare readonly details?: unknown;
+  constructor(code: string, message: string, status = 400, details?: unknown) {
     super(message);
+    this.code = code; this.status = status; this.details = details;
   }
 }
 
