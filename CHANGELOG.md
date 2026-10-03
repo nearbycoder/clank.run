@@ -4,6 +4,59 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+## 0.24.0 - 2026-10-03
+
+- Add forty framework and platform improvements covering tenant isolation, recovery, governance,
+  generated applications, durable data workflows, and developer tools. The implementation and
+  validation ledger is in `reports/forty-improvements-2026-10-03/` in the source repository.
+- Add bounded point-in-time recovery, automated restore drills, planned node evacuation, local
+  code-only managed canaries, operational alerts, streaming usage accounting, usage forecasts,
+  and tamper-evident audit exports. Fence background runtime recovery and old-writer cleanup.
+- Add organization SSO/offboarding, fresh authentication for sensitive actions, project-level
+  permissions, account-security screens, granular agent grants, durable action previews and
+  approvals, and execution receipts with explicit undo options.
+- Add workspace-aware blueprints, dynamic detail pages, explicit public pages, enforced
+  relationship cardinality, and conflict-aware regeneration of edited applications.
+- Add persistent collaborative editing, authorized full-text search, transactional bulk edits,
+  shared saved views, resumable imports, offline conflict-resolution controls, localization,
+  time-zone-aware recurrence, and notification delivery controls.
+- Add Node 26 compiler support, state-preserving development updates, editor integration,
+  signed application-release attestations, and runnable documentation examples. The framework,
+  public API subpaths, and all four CLIs ship together in `@clank.run/framework`.
+- Harden delegated OAuth scopes, current-session and tenant authorization, bucket/storage path
+  handling, bounded SQLite execution, sanitized diagnostics, artifact handling, and runtime
+  ownership. Linux workers use pinned filesystem capabilities and fair per-project admission;
+  configured provider policies add disk quotas and outbound network restrictions.
+- Improve responsive layouts across the core applications and starters.
+- Reduce keyed-list DOM movement and bulk live-query invalidation work while preserving identity,
+  cleanup, ownership, and fresh authority. Local alternating trials measured 17–27% lower desktop
+  update time for large rotations/prepends and 66% lower time for the bulk live-reader fixture.
+  Dashboard authorization and domain/release reads are batched; populated metric scans remain
+  a bottleneck. See `reports/performance-2026-10-03/` for raw measurements and limitations.
+- Keep zero runtime dependencies and existing performance budgets; extend security, regression,
+  package, browser, load, and crash/recovery verification. Correct a bulk-edit test's assumption
+  about insertion order when creation timestamps tie.
+
+Upgrade requirements:
+
+- Supported Node versions are `>=22.16 <27`. Node 22, 24, and 26 are covered by local release checks.
+- Before regenerating a blueprint, review its explicit public routes and public entity fields:
+  generated public pages now expose those declared fields anonymously through read-only queries.
+- Revoke constrained agent grants before rolling back to a version that does not enforce their
+  workspace, action, resource, or operation-budget restrictions.
+- Typed ingress metric producers must supply `responseOutcome` (`complete`, `cancelled`, or
+  `error`); provider-phase consumers must handle `evacuating`. Normalized blueprints require
+  `auth.required: true` while supporting explicitly declared public read-only routes.
+- Before upgrading a Linux control plane, install `bubblewrap` and `util-linux` and verify that
+  its actual user/container/security profile permits the required namespaces. Database helpers
+  refuse work when isolation is unavailable; installing binaries alone is insufficient. Use
+  dedicated per-application database directories. See
+  [SQLite worker isolation](https://github.com/nearbycoder/clank.run/blob/v0.24.0/docs/sqlite-isolation.md).
+- The existing Railway host denies the required nested namespaces, so database-worker deployment
+  operations there remain blocked. This release does not bypass that boundary or claim that the
+  hosted documentation/Design Studio deployments have been updated. Non-Linux hosts require an
+  external sandbox for equivalent tenant isolation; otherwise restrict them to trusted deployers.
+
 ## 0.23.0 - 2026-09-20
 
 - Deliver 100 practical framework, dashboard, documentation, Studio, Synth, starter, and CLI
