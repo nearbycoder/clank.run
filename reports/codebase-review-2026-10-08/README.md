@@ -6,6 +6,18 @@ Clank 0.24.0 has a broad, well-tested runtime and a substantial deployment platf
 
 This document preserves the findings and validation at the reviewed main commit. The [implementation ledger](IMPLEMENTATION.md) records the subsequent fixes, new features, current verification and hosting limitation. The [40 feature plan](FEATURE_PLAN.md) describes new capabilities separately from the fixes below. [Structured verification](verification.json), [reproduction output](reproduction.json), and a [disposable reproduction script](reproduce.mjs) accompany this review.
 
+## Follow-up review of merged main
+
+The maintenance pass starts from `1e6e62acbf2e59400c023bd3a33125fe1fc2c7d4`, after PRs #245–247 merged. Fresh fetches confirmed that the checkout matched remote main. It reviews Task cancellation and cleanup, auth guards and account changes, delivery retries/revocation, Fetch/Node error handling, and selected data, storage, recovery and release boundaries. Whole-source semantic analysis and the complete release gate supplement these targeted manual reads; this is not a claim that every implementation line was independently audited.
+
+Confirmed fixes preserve the first `Task.all` failure, await timed-task cleanup during parent cancellation, retain timeout cleanup defects, and release completed child cancellation listeners. Webhook and notification keys now reject changed content instead of silently discarding a different event. Webhook dispatch rechecks owner availability after asynchronous signing-key resolution. Account security clears private inventory and form state on account/session changes and discards stale replies. Anonymous in-process callers implement `requireVerified()`, and failed synchronous or asynchronous error observers cannot prevent Fetch/Node error responses.
+
+The type baseline is reduced from 290 to 278 diagnostics by retaining the webhook schema type, correcting optional history ownership, and preserving performance-resource types through freezing. No new baseline allowances, dependencies, wire formats or database migrations are introduced. Existing identical delivery retries remain valid; applications that reuse a retained key for different content now receive an error and must choose distinct event keys. Final validation and the remaining source-type backlog are recorded in [maintenance review](maintenance-review.json).
+
+Full-suite fault checks also exposed two fixture timing defects. Canary rollback verification now waits for the restored worker's initialization marker before requiring exactly one active worker. Real network namespace probes use the same two-second observation window for allowed and denied destinations, with an enclosing forty-second test budget. Baseline reachability, public allowlisting, private/host blocking and policy cleanup must all still pass; neither isolation enforcement nor privileged-test admission is bypassed.
+
+Final local verification passed: 1,657 tests reported, 1,654 passed, zero failures/cancellations and three expected privileged-host skips. Coverage is 91.96% lines, 79.69% branches and 89.86% functions. All 126 focused tests passed, as did the pinned semantic gate with 278 existing diagnostics and all 13 packed consumer fixtures. Documentation, package conformance, the unchanged dependency contract and package/tree/history security checks passed. The publish allowlist remains 393 files within the existing 394-file / 6 MiB limits. The current Railway host's namespace restriction still prevents deployment certification.
+
 ## Current implementation
 
 | Area | Implemented capability | Remaining boundary |

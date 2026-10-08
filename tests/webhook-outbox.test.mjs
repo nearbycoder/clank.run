@@ -33,3 +33,37 @@ test('transient retries survive restart and pending work cannot be evicted or re
 test('webhook console escapes event and destination metadata',()=>{
  const html=renderWebhookConsole([{id:'x',endpoint:'<img>',event:'<SCRIPT>',state:'failed',attempts:2,status:400,jobId:'job',secretVersion:'one'}]);assert.doesNotMatch(html,/<script\b|<img\b/iu);assert.match(html,/Retry failed delivery/);
 });
+
+test('retained delivery keys reject changed payloads, events and endpoints across restart',async()=>{
+ const app=await fixture({endpoints:{partner:{url:'https://partner.example.invalid/webhook',secret:()=>({version:'one',value:'a-long-private-signing-secret-12345'})},other:{url:'https://other.example.invalid/webhook',secret:()=>({version:'one',value:'a-long-private-signing-secret-12345'})}}});
+ try{
+  const alice=await app.register('alice-key@example.invalid'),bob=await app.register('bob-key@example.invalid');
+  const original=input(alice.userId),id=app.outbox.publish(original);
+  await app.restart();
+  assert.equal(app.outbox.publish(original),id);
+  for(const change of [{payload:{private:'changed'}},{event:'ticket.updated'},{endpoint:'other'}]){
+   assert.throws(()=>app.outbox.publish({...original,...change}),/key was already used for a different delivery/);
+  }
+  assert.equal((await alice.client.list()).length,1);
+  const db=new DatabaseSync(app.path);
+  try{assert.equal(db.prepare('SELECT COUNT(*) AS count FROM clank_jobs').get().count,1)}finally{db.close()}
+  assert.notEqual(app.outbox.publish(input(bob.userId)),id);
+  assert.equal((await bob.client.list()).length,1);
+ }finally{await app.close()}
+});
+
+test('revoking an owner during secret resolution prevents external dispatch',async()=>{
+ let resolving,release,requests=0;
+ const started=new Promise(resolve=>{resolving=resolve}),key=new Promise(resolve=>{release=resolve});
+ const app=await fixture({endpoints:{partner:{url:'https://partner.example.invalid/webhook',secret:async()=>{resolving();await key;return{version:'one',value:'a-long-private-signing-secret-12345'}}}},fetch:async()=>{requests++;return new Response('',{status:200})}});
+ try{
+  const alice=await app.register('alice-revoked@example.invalid');app.outbox.publish(input(alice.userId));
+  const work=app.outbox.workOnce();await started;
+  const db=new DatabaseSync(app.path);
+  try{db.prepare('UPDATE clank_auth_users SET disabled = 1 WHERE id = ?').run(alice.userId)}finally{db.close()}
+  release();await work;
+  assert.equal(requests,0);
+  const stored=new DatabaseSync(app.path);
+  try{assert.equal(stored.prepare('SELECT COUNT(*) AS count FROM clank_webhookAttempts').get().count,0)}finally{stored.close()}
+ }finally{release();await app.close()}
+});

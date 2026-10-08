@@ -18,7 +18,9 @@ async function namespace(server) {
 }
 const inside = (pid, ...args) => command('/usr/bin/nsenter', ['--target', String(pid), '--net', ...args]);
 async function request(pid, address) {
-  const source = `fetch('http://${address}:40219',{signal:AbortSignal.timeout(500)}).then(r=>r.text()).then(v=>process.stdout.write(v+'\\n',()=>process.exit(0))).catch(()=>process.stdout.write('blocked\\n',()=>process.exit(0)))`;
+  // Every probe starts a Node process. Leave room for scheduling under the full coverage suite;
+  // the same longer observation window also strengthens the denied-destination checks.
+  const source = `fetch('http://${address}:40219',{signal:AbortSignal.timeout(2000)}).then(r=>r.text()).then(v=>process.stdout.write(v+'\\n',()=>process.exit(0))).catch(()=>process.stdout.write('blocked\\n',()=>process.exit(0)))`;
   return inside(pid, process.execPath, '--eval', source).trim();
 }
 try {

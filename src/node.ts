@@ -97,7 +97,8 @@ export async function serve(app: FetchApplication | ((request: Request) => Respo
     keepAliveTimeout: options.keepAliveTimeout ?? 5_000,
   }, (incoming, outgoing) => {
     void dispatch(incoming, outgoing, handler, effectiveOptions).catch((error) => {
-      effectiveOptions.onError?.(error);
+      try { void Promise.resolve(effectiveOptions.onError?.(error)).catch(() => undefined); }
+      catch { /* Private logging must not prevent a response from reaching the socket. */ }
       try {
         const status = error instanceof NodeRequestError ? error.status : 500;
         outgoing.statusCode = status;

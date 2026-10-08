@@ -842,7 +842,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           const encoded = stringifyStoredData(value);
           let id: Id<Name> | undefined;
           const now = Date.now();
-          const storedOwner = definition.ownership === "user" ? ownerId : undefined;
+          const storedOwner = definition.ownership === "user" ? ownerId ?? undefined : undefined;
           const insert = prepared(`INSERT OR IGNORE INTO ${tableIdentifier(name)}
             (_id, _owner_id, _creation_time, _version, _data) VALUES (?, ?, ?, 1, ?)`);
           for (let attempt = 0; attempt < 4 && !id; attempt++) {
@@ -3002,6 +3002,9 @@ function anonymousBackendAuth<Profile extends object>(): AuthRequest<Profile> {
     user: null,
     session: null,
     requireUser() {
+      throw new AuthError("UNAUTHENTICATED", "Authentication is required.", 401);
+    },
+    requireVerified() {
       throw new AuthError("UNAUTHENTICATED", "Authentication is required.", 401);
     },
     requireRole() {

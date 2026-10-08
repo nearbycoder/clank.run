@@ -217,7 +217,8 @@ delivery. The two compose naturally inside a job handler.
 ## Structured concurrency
 
 `Task.all` runs child scopes concurrently, retains input ordering, limits concurrency, and
-interrupts siblings after the first failure:
+interrupts siblings after the first failure. Sibling interruption does not replace that failure;
+the call waits for sibling cleanup and releases its cancellation listener on completion:
 
 ```ts
 const [account, todos, limits] = await Task.runPromise(Task.all(
@@ -253,7 +254,9 @@ closes child scopes, and suppresses late results, but the external operation nee
 support to stop consuming resources.
 
 `task.timeout(milliseconds)` adds `TimeoutError` to the typed failure channel. It interrupts the
-child, waits for cleanup, and only then returns the timeout failure.
+child, waits for cleanup, and only then returns the timeout failure. Parent cancellation also waits
+for child cleanup before releasing parent services. Cleanup defects remain in the returned cause
+alongside the timeout failure.
 
 ## Observability
 

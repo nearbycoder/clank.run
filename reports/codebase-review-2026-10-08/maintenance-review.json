@@ -1,0 +1,379 @@
+{
+  "date": "2026-10-08",
+  "baseCommit": "1e6e62acbf2e59400c023bd3a33125fe1fc2c7d4",
+  "branch": "codex/runtime-review-fixes-2026-10-08",
+  "status": "local-validation-passed",
+  "repository": {
+    "implementationFiles": 143,
+    "implementationLines": 96521,
+    "declarationFiles": 120,
+    "packageExports": 148,
+    "testFiles": 220,
+    "dependencies": 0
+  },
+  "review": {
+    "method": "Targeted manual reads and deterministic reproductions, whole-source semantic analysis, focused integration tests and complete release validation.",
+    "filesWithSelectedManualReads": [
+      "src/task.ts",
+      "src/core.ts",
+      "src/server.ts",
+      "src/node.ts",
+      "src/security.ts",
+      "src/backend.ts",
+      "src/auth.ts",
+      "src/account-security.ts",
+      "src/webhook-outbox.ts",
+      "src/notifications.ts",
+      "src/offline.ts",
+      "src/resilience.ts",
+      "src/jobs.ts",
+      "src/object-storage.ts",
+      "src/recovery.ts",
+      "src/reviewed-actions.ts",
+      "src/collaborative-documents.ts",
+      "src/translation-review.ts",
+      "src/openapi.ts",
+      "src/application-performance.ts",
+      "src/platform.ts"
+    ],
+    "limitation": "Selected boundaries in larger modules were reviewed; no independent line-by-line audit of all 96,521 implementation lines is claimed."
+  },
+  "fixes": [
+    {
+      "id": "webhook-revocation",
+      "file": "src/webhook-outbox.ts",
+      "problem": "An owner disabled while asynchronous signing-key resolution was pending still caused external dispatch.",
+      "fix": "Recheck owner availability after signing and immediately before fetch.",
+      "regression": "tests/webhook-outbox.test.mjs",
+      "status": "fixed",
+      "priority": 1
+    },
+    {
+      "id": "account-security-state",
+      "file": "src/account-security.ts",
+      "problem": "Account switches retained private session/passkey metadata and late replies could restore it.",
+      "fix": "Clear inventory, form state and challenge on identity changes; fence async writes and follow-up fetches; unsubscribe on disposal.",
+      "regression": "tests/dom.test.mjs",
+      "status": "fixed",
+      "priority": 1
+    },
+    {
+      "id": "task-first-failure",
+      "file": "src/task.ts",
+      "problem": "Task.all sibling interruption replaced the original typed failure.",
+      "fix": "First recorded failure is preserved while child finalizers finish.",
+      "regression": "tests/task.test.mjs",
+      "status": "fixed",
+      "priority": 2
+    },
+    {
+      "id": "task-parent-cleanup",
+      "file": "src/task.ts",
+      "problem": "Parent cancellation of a timed task returned before child cleanup, allowing parent services to close early.",
+      "fix": "Await the child scope before returning interruption.",
+      "regression": "tests/task.test.mjs",
+      "status": "fixed",
+      "priority": 2
+    },
+    {
+      "id": "task-timeout-defects",
+      "file": "src/task.ts",
+      "problem": "Timeout discarded defects from nested finalizers.",
+      "fix": "Replace only timeout interruption with TimeoutError and retain other causes.",
+      "regression": "tests/task.test.mjs",
+      "status": "fixed",
+      "priority": 2
+    },
+    {
+      "id": "task-listener-retention",
+      "file": "src/task.ts",
+      "problem": "Successful Task.all calls retained cancellation listeners on a live parent.",
+      "fix": "Abort the completed child controller to detach its listener.",
+      "regression": "tests/task.test.mjs",
+      "status": "fixed",
+      "priority": 2
+    },
+    {
+      "id": "webhook-key-reuse",
+      "file": "src/webhook-outbox.ts",
+      "problem": "Changed events, destinations or payloads reused a retained key and were silently dropped.",
+      "fix": "Identical retries return the original ID; changed retries throw before any write.",
+      "regression": "tests/webhook-outbox.test.mjs",
+      "status": "fixed",
+      "priority": 2
+    },
+    {
+      "id": "notification-key-reuse",
+      "file": "src/notifications.ts",
+      "problem": "Changed notification content under a retained key was silently dropped.",
+      "fix": "Compare immutable publication fields, preserving identical retries and read state.",
+      "regression": "tests/notifications.test.mjs",
+      "status": "fixed",
+      "priority": 2
+    },
+    {
+      "id": "anonymous-verified-guard",
+      "file": "src/backend.ts",
+      "problem": "Anonymous in-process auth omitted requireVerified and threw TypeError instead of AuthError.",
+      "fix": "Implement the existing guard contract with UNAUTHENTICATED/401.",
+      "regression": "tests/backend.test.mjs",
+      "status": "fixed",
+      "priority": 2
+    },
+    {
+      "id": "fetch-error-observer",
+      "file": "src/server.ts",
+      "problem": "A throwing error observer prevented the redacted 500; asynchronous rejection was unhandled.",
+      "fix": "Contain synchronous throws and rejected observer promises while preserving safe headers and response.",
+      "regression": "tests/router-server.test.mjs",
+      "status": "fixed",
+      "priority": 2
+    },
+    {
+      "id": "node-error-observer",
+      "file": "src/node.ts",
+      "problem": "A failed Node error observer could leave the socket unanswered or reject without a handler.",
+      "fix": "Contain observer failures before writing the existing redacted response.",
+      "regression": "tests/node.test.mjs",
+      "status": "fixed",
+      "priority": 2
+    },
+    {
+      "id": "canary-readiness-race",
+      "file": "tests/platform.test.mjs",
+      "problem": "The full gate sometimes checked the restored worker database marker before application initialization completed.",
+      "fix": "Use the existing bounded waitFor helper for the marker; retain the exact one-worker assertion.",
+      "regression": "tests/platform.test.mjs",
+      "status": "fixed",
+      "priority": 3
+    },
+    {
+      "id": "kernel-probe-deadline",
+      "file": "tests/fixtures/linux-egress-kernel.mjs",
+      "problem": "Under full coverage load the 500 ms deadline classified allowed baseline or restored routing as blocked.",
+      "fix": "Use a bounded 2 second observation for every allowed/denied probe and a 40 second enclosing test budget; retain all baseline, filtering and cleanup assertions.",
+      "regression": "tests/linux-project-isolation.test.mjs",
+      "status": "fixed",
+      "priority": 3
+    }
+  ],
+  "typeDebt": {
+    "before": 290,
+    "after": 278,
+    "resolved": 12,
+    "resolvedDiagnostics": [
+      {
+        "key": "src/application-performance.ts|TS2322|Type 'Readonly<{ protocol: \"clank-application-performance/1\"; ok: boolean; measurements: Readonly<{ requests: number; bodyBytes: number; javascriptBytes: number; cssBytes: number; }>; checks: readonly Readonly<...>[]; resources: readonly Readonly<...>[]; changes: readonly Readonly<...>[]; issues: readonly string[]; }>' is not assignable to type 'ApplicationPerformanceReport'. Types of property 'resources' are incompatible. Type 'readonly Readonly<unknown>[]' is not assignable to type 'readonly ApplicationResource[]'. Type 'Readonly<unknown>' is missing the following properties from type 'ApplicationResource': resource, requests, bodyBytes, javascriptBytes, cssBytes",
+        "removed": 1
+      },
+      {
+        "key": "src/application-performance.ts|TS2339|Property 'bodyBytes' does not exist on type 'Readonly<unknown>'.",
+        "removed": 2
+      },
+      {
+        "key": "src/application-performance.ts|TS2339|Property 'resource' does not exist on type 'Readonly<unknown>'.",
+        "removed": 2
+      },
+      {
+        "key": "src/application-performance.ts|TS2339|Property 'resource' does not exist on type 'Readonly<{ previousBytes: any; deltaBytes: number; }>'.",
+        "removed": 2
+      },
+      {
+        "key": "src/backend.ts|TS2345|Argument of type '{ documentVersion: number; creationTime: number; operation: \"create\"; snapshotData: string; recordedAt: number; ownerId?: string | null | undefined; table: Name; id: Id<Name>; }' is not assignable to parameter of type 'PendingDocumentRevision'. Types of property 'ownerId' are incompatible. Type 'string | null | undefined' is not assignable to type 'string | undefined'. Type 'null' is not assignable to type 'string | undefined'.",
+        "removed": 1
+      },
+      {
+        "key": "src/backend.ts|TS2741|Property 'requireVerified' is missing in type '{ user: null; session: null; requireUser(): never; requireRole(): never; }' but required in type 'AuthRequest<Profile>'.",
+        "removed": 1
+      },
+      {
+        "key": "src/task.ts|TS2345|Argument of type '(context: RuntimeContext) => Promise<{ readonly _tag: \"Success\"; readonly value: A; } | { readonly _tag: \"Failure\"; readonly cause: Cause<E>; } | { readonly _tag: \"Failure\"; readonly cause: Cause<...>; }>' is not assignable to parameter of type 'Evaluator<A, E>'. Type 'Promise<{ readonly _tag: \"Success\"; readonly value: A; } | { readonly _tag: \"Failure\"; readonly cause: Cause<E>; } | { readonly _tag: \"Failure\"; readonly cause: Cause<TimeoutError>; }>' is not assignable to type 'Promise<Exit<A, E>>'. Type '{ readonly _tag: \"Success\"; readonly value: A; } | { readonly _tag: \"Failure\"; readonly cause: Cause<E>; } | { readonly _tag: \"Failure\"; readonly cause: Cause<TimeoutError>; }' is not assignable to type 'Exit<A, E>'. Type '{ readonly _tag: \"Failure\"; readonly cause: Cause<TimeoutError>; }' is not assignable to type 'Exit<A, E>'. Type '{ readonly _tag: \"Failure\"; readonly cause: Cause<TimeoutError>; }' is not assignable to type '{ readonly _tag: \"Failure\"; readonly cause: Cause<E>; }'. Types of property 'cause' are incompatible. Type 'Cause<TimeoutError>' is not assignable to type 'Cause<E>'. Type '{ readonly _tag: \"Failure\"; readonly error: TimeoutError; }' is not assignable to type 'Cause<E>'. Type '{ readonly _tag: \"Failure\"; readonly error: TimeoutError; }' is not assignable to type '{ readonly _tag: \"Failure\"; readonly error: E; }'. Types of property 'error' are incompatible. Type 'TimeoutError' is not assignable to type 'E'. 'E' could be instantiated with an arbitrary type which could be unrelated to 'TimeoutError'.",
+        "removed": 1
+      },
+      {
+        "key": "src/webhook-outbox.ts|TS2345|Argument of type '\"deliveryId\"' is not assignable to parameter of type 'QueryField<DatabaseSchema<any>, \"webhookAttempts\">'.",
+        "removed": 1
+      },
+      {
+        "key": "src/webhook-outbox.ts|TS2345|Argument of type '\"key\"' is not assignable to parameter of type 'QueryField<DatabaseSchema<any>, \"webhookDeliveries\">'.",
+        "removed": 1
+      }
+    ],
+    "largestRemainingFiles": [
+      {
+        "file": "src/buckets.ts",
+        "count": 34
+      },
+      {
+        "file": "src/runner.ts",
+        "count": 34
+      },
+      {
+        "file": "src/jobs.ts",
+        "count": 32
+      },
+      {
+        "file": "src/object-storage.ts",
+        "count": 15
+      },
+      {
+        "file": "src/task.ts",
+        "count": 13
+      },
+      {
+        "file": "src/analytics.ts",
+        "count": 10
+      },
+      {
+        "file": "src/bookmarks.ts",
+        "count": 9
+      },
+      {
+        "file": "src/provider-service.ts",
+        "count": 9
+      },
+      {
+        "file": "src/blueprint.ts",
+        "count": 8
+      },
+      {
+        "file": "src/error-inbox.ts",
+        "count": 8
+      }
+    ],
+    "baselinePolicy": "Only removed resolved allowances; no added keys or increased counts.",
+    "compiler": "5.9.3",
+    "nodeTypes": "26.6.4",
+    "packedConsumerFixtures": 13,
+    "skipConsumerLibCheck": false
+  },
+  "compatibility": {
+    "publicApisAdded": 0,
+    "persistentSchemaChanges": 0,
+    "wireFormatChanges": 0,
+    "migrationsRequired": false,
+    "deliveryKeys": "Reusing a retained per-owner key with changed content now throws. Existing identical retries retain stable IDs; a distinct event requires a distinct key.",
+    "rollback": "Code rollback requires no database migration; reverting removes these runtime protections."
+  },
+  "validation": {
+    "fullReleaseGate": {
+      "status": "passed",
+      "tests": 1657,
+      "passed": 1654,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 91.96,
+        "branches": 79.69,
+        "functions": 89.86
+      },
+      "node": "26.10.0",
+      "cpuAffinity": 4,
+      "scope": "Final runtime, regression, documentation and type-baseline changes; only this review metadata was updated after completion.",
+      "log": "/tmp/clank-review-2026-10-08/maintenance-check.log"
+    },
+    "firstFullRun": {
+      "tests": 1656,
+      "passed": 1652,
+      "failed": 1,
+      "skipped": 3,
+      "reason": "Canary fixture checked worker initialization immediately after rollback; source behavior was unchanged.",
+      "log": "/tmp/clank-review-2026-10-08/maintenance-check-canary-race.log"
+    },
+    "focused": {
+      "status": "passed",
+      "tests": 126,
+      "passed": 126,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "log": "/tmp/clank-review-2026-10-08/maintenance-focused.log"
+    },
+    "canaryRegression": {
+      "status": "passed",
+      "tests": 1
+    },
+    "semanticContracts": {
+      "status": "passed",
+      "existingSourceDiagnostics": 278,
+      "newSourceDiagnostics": 0,
+      "packedConsumerFixtures": 13
+    },
+    "secondFullRun": {
+      "tests": 1656,
+      "passed": 1652,
+      "failed": 1,
+      "skipped": 3,
+      "reason": "Kernel fixture cleanup probe exceeded its 500 ms deadline; the canary readiness fix passed.",
+      "log": "/tmp/clank-review-2026-10-08/maintenance-check-kernel-deadline.log"
+    },
+    "kernelRegression": {
+      "status": "passed",
+      "tests": 4,
+      "passed": 3,
+      "failed": 0,
+      "skipped": 1,
+      "scope": "Real network namespace enforcement ran. XFS test skipped without a disposable mount.",
+      "log": "/tmp/clank-review-2026-10-08/maintenance-kernel.log"
+    },
+    "accountScreenRegression": {
+      "status": "passed",
+      "tests": 2,
+      "scope": "Cached inventory, late session/passkey replies, late MFA challenge, pending-operation ownership and disposal.",
+      "log": "/tmp/clank-review-2026-10-08/maintenance-account-ui.log"
+    },
+    "publishAllowance": {
+      "files": 393,
+      "maximumFiles": 394,
+      "maximumBytes": 6291456,
+      "newDependencies": 0
+    }
+  },
+  "remaining": {
+    "strictSourceTyping": "278 existing diagnostics remain, especially buckets, runner and jobs; the baseline gate does not establish zero source errors.",
+    "roadmap": {
+      "implemented": 6,
+      "planned": 34,
+      "issue": "https://github.com/nearbycoder/clank.run/issues/244"
+    },
+    "host": "Current Railway host denies the Linux namespaces required by isolated SQLite workers. Production rollout and disposable Docker/XFS host certification remain unverified.",
+    "coverage": "Privileged provider tests require an explicitly disposable host; none was provisioned in this pass."
+  },
+  "sourceHashes": {
+    "src/task.ts": "cbf06023ac1533ef7c9bc9df477c68fbe22c507430aa75500fd6135902e683c8",
+    "src/account-security.ts": "ad1c6100d2ff52bcbc54f836a211089f517799542c6c2764bd2fe96b09157a60",
+    "src/backend.ts": "1c88b55635301558a04723c53ad2008823d67952f46add688aa254acdbcd3c15",
+    "src/server.ts": "0354abee599485fc06a6b64c5f73527f06e7b1ecfa25674e921ac21514015ba3",
+    "src/node.ts": "338300af8cc5fa78b12b371ec0064b5cd25ab4c9af52652d4b0c15f59670cb20",
+    "src/webhook-outbox.ts": "fce33c8e56fe97c418506289afb87f7cf151cb548d513cb903eeb1e68155641a",
+    "src/notifications.ts": "4a8bcc9690113c08572287f187a985e6249cbe4f1725a10d2c9a8ea3b188e76d",
+    "src/application-performance.ts": "ce0a7aa01fc2215e473c0dfd8c319fe258fed70992b3db554aab03ffe83c34d2",
+    "tests/task.test.mjs": "023422cc3968dfa225c3ef217347f60dafc2f26874eef96e3f137b375a851019",
+    "tests/dom.test.mjs": "04228299af82b27c3626630dfc3ea4f760fb7852a024b395d4fe233b442880fb",
+    "tests/backend.test.mjs": "b053d6e8cca72b6cc34893ba7e43fd1627a39ba471392339ca23725adfe59183",
+    "tests/router-server.test.mjs": "b38093509155f15d4b7cffc3ffa195c4f41f815a6d876171fed3b27ab4b77762",
+    "tests/node.test.mjs": "4b0035e109adbbaec228b4c104d8f61486ff05e69dcb3cad35ec6db6c176198d",
+    "tests/webhook-outbox.test.mjs": "c74320bd9eaccf67355f4d0ba9b8b3f8836a6e85bc9e9c37d5663601a34cea5e",
+    "tests/notifications.test.mjs": "961557f97b92a462a1181f3158366f1bda440b445e83037e636dc152cba53371",
+    "tests/platform.test.mjs": "2943a642aaafe28b016eeeccb2799158dc53c238d198fc7492f5736699b5a05a",
+    "type-tests/semantic-baseline.json": "91013b254a19d5379c986c627c027486a14f5164c57fc54e602029ee5125582c",
+    "tests/fixtures/linux-egress-kernel.mjs": "bf13e46cea0ddb4bd3340a19ed73863363adedb7d5c1a4c5d990784316cc67c9",
+    "tests/linux-project-isolation.test.mjs": "375e15a945099a35cdaa49fdf44dd962d00f6d8b95661e5664ad916a087cf5bd"
+  },
+  "logHashes": {
+    "maintenance-check.log": "33f8e805497b73add4889591a3d91fa30d96f16deb9397e56576e90731e4e9bc",
+    "maintenance-check-canary-race.log": "bd6a34582873ac9896d8e64eb6ca92d878937d87ac029f472fce3e7627e22da9",
+    "maintenance-check-kernel-deadline.log": "16106c2b7fee217091fadcf19a50fd7dd5f9c64175c0a9ce5346bc9854251d91",
+    "maintenance-focused.log": "33ef66f0bc74cb647c2f4e19b09e9463ca3bc94f3ab34f906d84ea46228d0695",
+    "maintenance-types.log": "ca02dcdafd313943650dd4d87359514625502e0ff741efa672139b5a6fd13951",
+    "maintenance-canary.log": "6b4672f3d5a1236e03ada0ab0fed7ba1b44ca87d1f7a09a602543c3a1b922765",
+    "maintenance-kernel.log": "e975699194f0527a89c74457e6a0ef5c15fdadc9a814e1c9464d518920a5a2b4",
+    "maintenance-account-ui.log": "e1bdc397ea295c9c4be6a1fee934ed9d06789a9634afe5a025457ac18a34ddd6",
+    "task-before.log": "2b6842d6374e5a5db17e5750dc430ca8ae47957a3baf7b4579ca4ab268dc5ef8",
+    "task-listener-before.log": "0ff4ecebe66c53674722764a5f1943e7326a5e80ee1f410798e444096b79de39",
+    "delivery-before.log": "f7d5d11537d89852e9930dc02f225eefad3e2c13381b5b99999065d1f5af466c",
+    "node-before.log": "ba485521d9a70a301bc37b1e27ef0668c5e49271776e10f06c7956fd0f9028f6",
+    "notification-before.log": "4061fe67da71067251d071d693ffeec3e40d938f05e104c0b5067deafba4c11a"
+  }
+}

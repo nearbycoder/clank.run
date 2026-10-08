@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import {
   Cause,
   Exit,
@@ -161,6 +162,51 @@ test("timeouts interrupt work and are typed failures", async () => {
   assert.equal(clock.pending, 0);
 });
 
+test("cancelling a timeout waits for child cleanup before releasing parent services", async () => {
+  const clock = new TestClock(), controller = new AbortController(), events = [];
+  const Parent = service("Parent");
+  let release;
+  const cleanup = new Promise((resolve) => { release = resolve; });
+  const operation = Task.addFinalizer(Task.fromPromise(async () => {
+    events.push("child:closing");
+    await cleanup;
+    events.push("child:closed");
+  })).flatMap(() => Task.sleep(1_000));
+  const result = Task.runExit(operation.timeout(2_000), {
+    clock, signal: controller.signal,
+    layer: Layer.effect(Parent, Task.succeed({}), () => Task.sync(() => { events.push("parent:closed"); })),
+  });
+  let settled = false;
+  void result.then(() => { settled = true; });
+  await settle();
+  controller.abort("cancel");
+  await settle();
+  try {
+    assert.equal(settled, false, "the child still owns resources while cleanup is pending");
+    assert.deepEqual(events, ["child:closing"]);
+  } finally { release(); await result; }
+  assert.deepEqual(events, ["child:closing", "child:closed", "parent:closed"]);
+  assert.deepEqual(await result, Exit.failCause(Cause.interrupted("cancel")));
+  assert.equal(clock.pending, 0);
+});
+
+test("timeouts preserve cleanup defects from nested child scopes", async () => {
+  const clock = new TestClock(), defect = new Error("release failed");
+  const operation = Task.scoped(Task.addFinalizer(Task.sync(() => { throw defect; }))
+    .flatMap(() => Task.sleep(1_000)));
+  const result = Task.runExit(operation.timeout(50), { clock });
+  await settle();
+  clock.advance(50);
+  const exit = await result;
+  assert.equal(exit.cause._tag, "Sequential");
+  assert.equal(exit.cause.causes[0]._tag, "Failure");
+  assert.ok(exit.cause.causes[0].error instanceof TimeoutError);
+  assert.equal(exit.cause.causes[1]._tag, "Defect");
+  assert.ok(exit.cause.causes[1].defect instanceof TaskExecutionError);
+  assert.deepEqual(exit.cause.causes[1].defect.cause, Cause.defect(defect));
+  assert.equal(clock.pending, 0);
+});
+
 test("Task.all bounds concurrency, preserves order, and interrupts siblings", async () => {
   let active = 0;
   let maximum = 0;
@@ -198,8 +244,38 @@ test("Task.all bounds concurrency, preserves order, and interrupts siblings", as
   const delayedFailure = Task.fromPromise(() => new Promise((resolve) => setImmediate(resolve)))
     .flatMap(() => Task.fail("failed"));
   const failed = await Task.runExit(Task.all([delayedFailure, sibling]));
-  assert.equal(failed._tag, "Failure");
+  assert.deepEqual(failed, Exit.fail("failed"));
   assert.equal(siblingInterrupted, true);
+});
+
+test("Task.all preserves its first failure while waiting for sibling finalizers", async () => {
+  const clock = new TestClock();
+  let release, closing = false, settled = false;
+  const cleanup = new Promise((resolve) => { release = resolve; });
+  const sibling = Task.addFinalizer(Task.fromPromise(async () => { closing = true; await cleanup; }))
+    .flatMap(() => Task.sleep(1_000));
+  const failure = Task.sleep(10).flatMap(() => Task.fail({ code: "original" }));
+  const result = Task.runExit(Task.all([failure, sibling, Task.sync(() => assert.fail("queued work must not run"))], { concurrency: 2 }), { clock });
+  void result.then(() => { settled = true; });
+  await settle();
+  clock.advance(10);
+  await settle();
+  try { assert.equal(closing, true); assert.equal(settled, false); }
+  finally { release(); await result; }
+  assert.deepEqual(await result, Exit.fail({ code: "original" }));
+  assert.equal(clock.pending, 0);
+});
+
+test("completed Task.all calls release their parent cancellation listeners", async () => {
+  const operation = Task.gen(function* () {
+    for (let index = 0; index < 5; index++) {
+      yield* Task.all([Task.succeed(index)]);
+      yield* Task.fromPromise(async (signal) => {
+        assert.equal(getEventListeners(signal, "abort").length, 0);
+      });
+    }
+  });
+  await Task.runPromise(operation);
 });
 
 test("race and fibers use child scopes and structured cancellation", async () => {
