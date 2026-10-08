@@ -1251,7 +1251,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         }));
       },
       readScoped(userId, handler) {
-        if (!transactionActive) throw new Error("Scoped internal reads require a write transaction.");
+        if (!transactionActive && !readActive) throw new Error("Scoped internal reads require an active database transaction.");
         const value = handler(makeReader(undefined, userId));
         assertSynchronous(value, "query");
         return value;

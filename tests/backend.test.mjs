@@ -28,6 +28,19 @@ async function waitFor(predicate, timeoutMs = 1_000) {
   }
 }
 
+test("internal scoped reads require an active transaction and preserve independent owned scopes", async () => {
+  const schema = defineDatabase({ records: defineTable({ text: s.string() }).owned() });
+  const database = await openSQLite(schema, { path: ":memory:" }), native = database[SQLITE_INTERNAL];
+  try {
+    database.transaction(db => db.table("records").insert({ text: "Alice" }), { userId: "alice" });
+    database.transaction(db => db.table("records").insert({ text: "Bob" }), { userId: "bob" });
+    assert.throws(() => native.readScoped("alice", db => db.table("records").collect()), /active database transaction/u);
+    const result = database.read(db => ({ own: db.table("records").collect().map(row => row.text), participant: native.readScoped("alice", scoped => scoped.table("records").collect().map(row => row.text)) }), { userId: "bob" });
+    assert.deepEqual(result, { own: ["Bob"], participant: ["Alice"] });
+    assert.throws(() => database.read(() => native.readScoped("alice", async () => []), { userId: "bob" }), /synchronous/u);
+  } finally { database.close(); }
+});
+
 test("internal payload history retirement requires a transactional deletion and rolls back with it", async () => {
   const schema = defineDatabase({ payloads: defineTable({ text: s.string() }).owned() });
   const database = await openSQLite(schema, { path: ":memory:" }), native = database[SQLITE_INTERNAL], scope = { userId: "alice" };
