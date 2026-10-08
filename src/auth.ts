@@ -380,7 +380,7 @@ export async function openAuth<Profile extends object, DB extends DatabaseSchema
   const userListeners = new Map<string, Set<() => void>>();
   let closed = false;
   const reportError = (error: unknown) => {
-    try { options.onError?.(error); } catch { /* Observability hooks cannot affect auth behavior. */ }
+    try { void Promise.resolve(options.onError?.(error)).catch(() => undefined); } catch { /* Observability hooks cannot affect auth behavior. */ }
   };
 
   const ensureOpen = () => {
@@ -1291,14 +1291,38 @@ export function createAuthClient<Profile extends object = DefaultAuthProfile>(
   const prefix = `/${trimBoundarySlashes(options.prefix ?? "__clank/auth")}`;
   const base = trimTrailingSlashes(options.url ?? "");
   let csrfToken = options.initial?.csrfToken;
+  let intentRevision = 0;
+  let snapshotRevision = 0;
+  let identityRevision = 0;
+  let pendingIntent: number | undefined;
+  let requestRevision = 0;
+  type RequestOwner = { intent: number; snapshot?: number; blocked?: boolean; identity?: number };
+  const isCurrent = (owner: RequestOwner) => owner.intent === intentRevision
+    && (owner.identity === undefined || owner.identity === identityRevision)
+    && !owner.blocked
+    && (owner.snapshot === undefined || (owner.snapshot === snapshotRevision && pendingIntent === undefined));
+  const changeState = async <Value>(run: (owner: RequestOwner) => Promise<Value>): Promise<Value> => {
+    const owner = { intent: ++intentRevision };
+    pendingIntent = owner.intent;
+    loading.value = true;
+    try { return await run(owner); }
+    finally {
+      if (owner.intent === intentRevision) {
+        pendingIntent = undefined;
+        loading.value = false;
+      }
+    }
+  };
 
   const apply = (state: AuthState<Profile>) => {
+    const identityChanged = state.user?.id !== user.value?.id || state.session?.id !== session.value?.id;
+    if (identityChanged) identityRevision++;
     batch(() => {
+      if (identityChanged) mfa.value = null;
       user.value = state.user;
       session.value = state.session;
       csrfToken = state.csrfToken;
       error.value = undefined;
-      loading.value = false;
     });
     return state;
   };
@@ -1310,8 +1334,12 @@ export function createAuthClient<Profile extends object = DefaultAuthProfile>(
     [key: string]: unknown;
   };
 
-  const requestPayload = async (operation: string, input?: unknown, csrf = false): Promise<Payload> => {
+  const requestPayload = async (operation: string, input?: unknown, csrf = false, owner: RequestOwner = { intent: intentRevision, identity: identityRevision }): Promise<Payload> => {
     if (!fetcher) throw new Error("fetch is not available in this runtime.");
+    if (owner.intent !== intentRevision || (owner.identity !== undefined && owner.identity !== identityRevision)) {
+      throw new AuthError("AUTH_FAILED", "Authentication changed before the operation completed.", 409);
+    }
+    const revision = ++requestRevision;
     loading.value = true;
     try {
       const response = await fetcher(`${base}${prefix}/${operation}`, {
@@ -1327,20 +1355,18 @@ export function createAuthClient<Profile extends object = DefaultAuthProfile>(
       });
       const payload = await response.json() as Payload;
       if (!response.ok || payload.ok === false) throw new AuthError(payload.error?.code ?? "AUTH_FAILED", payload.error?.message ?? "Authentication failed.", response.status);
-      if ("user" in payload && "session" in payload) apply(payload as AuthState<Profile>);
-      else loading.value = false;
+      if (isCurrent(owner) && "user" in payload && "session" in payload) apply(payload as AuthState<Profile>);
       return payload;
     } catch (reason) {
-      batch(() => {
-        error.value = reason;
-        loading.value = false;
-      });
+      if (isCurrent(owner)) error.value = reason;
       throw reason;
+    } finally {
+      if (isCurrent(owner) && pendingIntent === undefined && revision === requestRevision) loading.value = false;
     }
   };
 
-  const request = async (operation: string, input?: unknown, csrf = false): Promise<AuthState<Profile>> => {
-    const payload = await requestPayload(operation, input, csrf);
+  const request = async (operation: string, input?: unknown, csrf = false, owner?: RequestOwner): Promise<AuthState<Profile>> => {
+    const payload = await requestPayload(operation, input, csrf, owner);
     return payload as AuthState<Profile>;
   };
 
@@ -1358,54 +1384,64 @@ export function createAuthClient<Profile extends object = DefaultAuthProfile>(
     loading,
     error,
     authenticated,
-    reload: () => request("session"),
-    async register(input) { return (await request("register", input)).user; },
+    reload: () => request("session", undefined, false, { intent: intentRevision, snapshot: ++snapshotRevision, blocked: pendingIntent !== undefined }),
+    register: input => changeState(async owner => (await request("register", input, false, owner)).user),
     async login(input) {
-      const payload = await requestPayload("login", input);
-      if (payload.mfa) {
-        mfa.value = payload.mfa;
-        return null;
-      }
-      mfa.value = null;
-      return payload.user ?? null;
+      return changeState(async owner => {
+        const payload = await requestPayload("login", input, false, owner);
+        if (isCurrent(owner)) mfa.value = payload.mfa ?? null;
+        return payload.mfa ? null : payload.user ?? null;
+      });
     },
     async verifyMfa(code, challengeId) {
       const id = challengeId ?? mfa.value?.challengeId;
       if (!id) throw new AuthError("MFA_REQUIRED", "Start a password sign-in before verifying MFA.", 400);
-      const payload = await request("mfa/verify", { challengeId: id, code });
-      mfa.value = null;
-      return payload.user;
+      return changeState(async owner => {
+        const payload = await request("mfa/verify", { challengeId: id, code }, false, owner);
+        if (isCurrent(owner)) mfa.value = null;
+        return payload.user;
+      });
     },
     async requestEmailVerification() {
       await requestPayload("email/resend", {}, true);
     },
     async verifyEmail(token) {
-      await requestPayload("email/verify", { token });
-      await client.reload();
+      await changeState(async owner => {
+        await requestPayload("email/verify", { token }, false, owner);
+        await request("session", undefined, false, owner);
+      });
     },
     async requestPasswordReset(email, botToken) {
       await requestPayload("password/recover", { email, ...(botToken ? { botToken } : {}) });
     },
     async resetPassword(token, password) {
-      return (await request("password/reset", { token, password })).user;
+      return changeState(async owner => (await request("password/reset", { token, password }, false, owner)).user);
     },
     async listPasskeys() {
       const payload = await requestPayload("passkeys");
       return (payload.passkeys ?? []) as readonly AuthPasskeyRecord[];
     },
     async listSessions() { return ((await requestPayload("sessions")).sessions ?? []) as readonly AuthSessionRecord[]; },
-    async revokeSession(id) { await requestPayload("sessions/revoke", { id }, true); if (id === session.value?.id) apply({ user: null, session: null }); },
+    async revokeSession(id) {
+      if (id !== session.value?.id) { await requestPayload("sessions/revoke", { id }, true); return; }
+      await changeState(async owner => {
+        await requestPayload("sessions/revoke", { id }, true, owner);
+        if (isCurrent(owner)) { apply({ user: null, session: null }); mfa.value = null; }
+      });
+    },
     async startMfaReauthentication(password) { const payload = await requestPayload("reauthenticate/mfa/start", { password }, true); return { challengeId: String(payload.challengeId), expiresAt: Number(payload.expiresAt) }; },
     async finishMfaReauthentication(challengeId, code) { await requestPayload("reauthenticate/mfa/finish", { challengeId, code }, true); },
     async reauthenticateWithPasskey() {
-      const start = await requestPayload("reauthenticate/passkey/start", {}, true);
+      const owner = { intent: intentRevision, identity: identityRevision };
+      const start = await requestPayload("reauthenticate/passkey/start", {}, true, owner);
       const options = start.options as PublicKeyCredentialRequestOptionsJSON;
       const credential = await browserCredentials().get({ publicKey: authenticationOptionsForBrowser(options) }) as PublicKeyCredential | null;
       if (!credential) throw new AuthError("PASSKEY_CANCELLED", "Passkey verification was cancelled.", 400);
-      await requestPayload("reauthenticate/passkey/finish", { challengeId: start.challengeId, challenge: options.challenge, credential: serializeAuthenticationCredential(credential) }, true);
+      await requestPayload("reauthenticate/passkey/finish", { challengeId: start.challengeId, challenge: options.challenge, credential: serializeAuthenticationCredential(credential) }, true, owner);
     },
     async registerPasskey(name) {
-      const start = await requestPayload("passkeys/register/start", {}, true);
+      const owner = { intent: intentRevision, identity: identityRevision };
+      const start = await requestPayload("passkeys/register/start", {}, true, owner);
       const options = start.options as PublicKeyCredentialCreationOptionsJSON;
       const credential = await browserCredentials().create({
         publicKey: registrationOptionsForBrowser(options),
@@ -1416,48 +1452,50 @@ export function createAuthClient<Profile extends object = DefaultAuthProfile>(
         challenge: options.challenge,
         credential: serializeRegistrationCredential(credential),
         ...(name ? { name } : {}),
-      }, true);
+      }, true, owner);
       return finish.passkey as AuthPasskeyRecord;
     },
     async loginWithPasskey(email) {
-      const start = await requestPayload("passkeys/authenticate/start", email === undefined ? {} : { email });
-      const options = start.options as PublicKeyCredentialRequestOptionsJSON;
-      const credential = await browserCredentials().get({
-        publicKey: authenticationOptionsForBrowser(options),
-      }) as PublicKeyCredential | null;
-      if (!credential) throw new AuthError("PASSKEY_CANCELLED", "Passkey sign-in was cancelled.", 400);
-      const finish = await request("passkeys/authenticate/finish", {
-        challengeId: start.challengeId,
-        challenge: options.challenge,
-        credential: serializeAuthenticationCredential(credential),
+      return changeState(async owner => {
+        const start = await requestPayload("passkeys/authenticate/start", email === undefined ? {} : { email }, false, owner);
+        const options = start.options as PublicKeyCredentialRequestOptionsJSON;
+        const credential = await browserCredentials().get({
+          publicKey: authenticationOptionsForBrowser(options),
+        }) as PublicKeyCredential | null;
+        if (!credential) throw new AuthError("PASSKEY_CANCELLED", "Passkey sign-in was cancelled.", 400);
+        const finish = await request("passkeys/authenticate/finish", {
+          challengeId: start.challengeId,
+          challenge: options.challenge,
+          credential: serializeAuthenticationCredential(credential),
+        }, false, owner);
+        if (isCurrent(owner)) mfa.value = null;
+        return finish.user;
       });
-      return finish.user;
     },
     async deletePasskey(id) {
       await requestPayload("passkeys/delete", { id }, true);
     },
     async logout() {
-      await request("logout", {}, true);
-      apply({ user: null, session: null });
-      mfa.value = null;
+      await changeState(async owner => {
+        await request("logout", {}, true, owner);
+        if (isCurrent(owner)) { apply({ user: null, session: null }); mfa.value = null; }
+      });
     },
     async logoutAll() {
-      await request("logout-all", {}, true);
-      apply({ user: null, session: null });
-      mfa.value = null;
+      await changeState(async owner => {
+        await request("logout-all", {}, true, owner);
+        if (isCurrent(owner)) { apply({ user: null, session: null }); mfa.value = null; }
+      });
     },
-    async changePassword(input) { await request("change-password", input, true); },
+    async changePassword(input) { await changeState(async owner => { await request("change-password", input, true, owner); }); },
     csrfHeader(): Record<string, string> {
       return csrfToken ? { "x-clank-csrf": csrfToken } : {};
     },
   };
   if (options.initial === undefined && options.immediate !== false) {
-    void client.reload().catch(() => batch(() => {
-      user.value = null;
-      session.value = null;
-      csrfToken = undefined;
-      loading.value = false;
-    }));
+    // Initial signals are already signed out. A stale failure must not clear a
+    // sign-in that completed while the initial session request was pending.
+    void client.reload().catch(() => undefined);
   }
   return client;
 }

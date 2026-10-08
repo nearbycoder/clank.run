@@ -89,6 +89,11 @@ The handler context contains:
 Jobs created by a signed-in mutation retain that user's owner scope. A handler cannot use its
 database context to cross an `.owned()` table boundary.
 
+Database transactions and durable fan-out through the handler context also check the current
+attempt's lease under SQLite's write lock. A timed-out, cancelled, replaced or completed attempt
+cannot use that context to commit new writes, enqueue children or start workflows. Keep passing
+`signal` to external services: Clank cannot fence an unrelated remote API's side effects.
+
 ## Enqueue atomically from a mutation
 
 Attach the definition to the backend, then enqueue through the mutation context:

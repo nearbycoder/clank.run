@@ -406,6 +406,27 @@ test("invalid backend output is redacted as an internal failure", async () => {
   runtime.close();
 });
 
+test("rejected backend observers preserve redacted HTTP errors", async () => {
+  const schema = defineDatabase({ values: defineTable({ value: s.string() }) });
+  const definition = defineBackend({ schema }).functions(({ query }) => ({
+    broken: query({ args: {}, handler: () => { throw new Error("private failure"); } }),
+  }));
+  const reported = [];
+  const runtime = await openBackend(definition, { path: ":memory:", onError: async error => {
+    reported.push(error.message);
+    throw new Error("observer failure");
+  } });
+  try {
+    const response = await runtime.handle(new Request("https://app.test/__clank/query/broken", {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    }));
+    assert.equal(response.status, 500);
+    assert.doesNotMatch(await response.text(), /private failure|observer failure/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(reported, ["private failure"]);
+  } finally { runtime.close(); }
+});
+
 test("invalid mutation output, failed handlers, and listener faults cannot escape commit atomicity", async () => {
   const schema = defineDatabase({
     values: defineTable({ value: s.string() }),

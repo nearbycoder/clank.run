@@ -255,6 +255,187 @@ test("auth client includes credentials only when a remote API URL is explicit", 
   assert.equal(requests[1].init.credentials, "include");
 });
 
+function controlledAuthClient(initial, immediate = false) {
+  const requests = [];
+  const client = createAuthClient({ initial, immediate, fetch: (url, init) => new Promise((resolve, reject) => {
+    requests.push({ operation: url.split("/__clank/auth/")[1], init, reject,
+      reply: (payload, status = 200) => resolve(Response.json({ ok: status < 400, ...payload }, { status })) });
+  }) });
+  return { client, requests };
+}
+
+const aliceClientState = { user: { id: "alice", email: "alice@example.com" }, session: { id: "alice-session" }, csrfToken: "alice-csrf" };
+const bobClientState = { user: { id: "bob", email: "bob@example.com" }, session: { id: "bob-session" }, csrfToken: "bob-csrf" };
+
+test("delayed auth snapshots cannot restore an account after logout", async () => {
+  const { client, requests } = controlledAuthClient(aliceClientState);
+  const reload = client.reload();
+  const logout = client.logout();
+  requests[1].reply({ user: null, session: null });
+  await logout;
+  requests[0].reply(aliceClientState);
+  await reload;
+  assert.equal(client.user.value, null);
+  assert.equal(client.session.value, null);
+  assert.deepEqual(client.csrfHeader(), {});
+});
+
+test("failed initial auth lookup cannot clear a later successful login", async () => {
+  const { client, requests } = controlledAuthClient(undefined, true);
+  const login = client.login({ email: "bob@example.com", password: "secret" });
+  requests[1].reply(bobClientState);
+  await login;
+  requests[0].reject(new Error("old session lookup failed"));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(client.user.value.id, "bob");
+  assert.equal(client.error.value, undefined);
+  assert.equal(client.loading.value, false);
+  assert.deepEqual(client.csrfHeader(), { "x-clank-csrf": "bob-csrf" });
+});
+
+test("auth intents and MFA challenges follow invocation order", async () => {
+  const { client, requests } = controlledAuthClient(aliceClientState);
+  const oldLogin = client.login({ email: "alice@example.com", password: "secret" });
+  const newLogin = client.login({ email: "bob@example.com", password: "secret" });
+  requests[1].reply(bobClientState);
+  await newLogin;
+  requests[0].reply({ mfa: { challengeId: "old-alice-challenge", expiresAt: 1000 } });
+  await oldLogin;
+  assert.equal(client.user.value.id, "bob");
+  assert.equal(client.mfa.value, null);
+
+  const oldLogout = client.logout();
+  const nextLogin = client.login({ email: "alice@example.com", password: "secret" });
+  requests[3].reply(aliceClientState);
+  await nextLogin;
+  requests[2].reply({ user: null, session: null });
+  await oldLogout;
+  assert.equal(client.user.value.id, "alice");
+  assert.deepEqual(client.csrfHeader(), { "x-clank-csrf": "alice-csrf" });
+});
+
+test("metadata and reload requests cannot supersede an in-flight sign-in", async () => {
+  const { client, requests } = controlledAuthClient(aliceClientState);
+  const login = client.login({ email: "bob@example.com", password: "secret" });
+  const sessions = client.listSessions();
+  const reload = client.reload();
+  requests[1].reply({ sessions: [] });
+  requests[2].reply(aliceClientState);
+  await Promise.all([sessions, reload]);
+  assert.equal(client.loading.value, true, "the sign-in is still pending");
+  requests[0].reply(bobClientState);
+  await login;
+  assert.equal(client.user.value.id, "bob");
+  assert.equal(client.loading.value, false);
+});
+
+test("a snapshot started during sign-in remains stale when it arrives afterward", async () => {
+  const { client, requests } = controlledAuthClient(aliceClientState);
+  const login = client.login({ email: "bob@example.com", password: "secret" });
+  const reload = client.reload();
+  requests[0].reply(bobClientState);
+  await login;
+  requests[1].reply(aliceClientState);
+  await reload;
+  assert.equal(client.user.value.id, "bob");
+  assert.equal(client.loading.value, false);
+});
+
+test("overlapping session reloads apply only the newest snapshot", async () => {
+  const { client, requests } = controlledAuthClient(aliceClientState);
+  const first = client.reload();
+  const second = client.reload();
+  requests[1].reply(bobClientState);
+  await second;
+  requests[0].reply(aliceClientState);
+  await first;
+  assert.equal(client.user.value.id, "bob");
+});
+
+test("session identity changes clear MFA state and ignore old metadata failures", async () => {
+  const { client, requests } = controlledAuthClient(aliceClientState);
+  const login = client.login({ email: "alice@example.com", password: "secret" });
+  requests[0].reply({ mfa: { required: true, challengeId: "alice-challenge", expiresAt: 1000 } });
+  await login;
+  const sessions = client.listSessions();
+  const rejected = assert.rejects(sessions, /old metadata failure/);
+  const reload = client.reload();
+  requests[2].reply(bobClientState);
+  await reload;
+  requests[1].reject(new Error("old metadata failure"));
+  await rejected;
+  assert.equal(client.user.value.id, "bob");
+  assert.equal(client.mfa.value, null);
+  assert.equal(client.error.value, undefined);
+  assert.equal(client.loading.value, false);
+});
+
+test("a failed current auth request still exposes its error and releases loading", async () => {
+  const { client, requests } = controlledAuthClient(aliceClientState);
+  const login = client.login({ email: "bob@example.com", password: "bad" });
+  const rejected = assert.rejects(login, /Wrong password/);
+  requests[0].reply({ error: { code: "INVALID_CREDENTIALS", message: "Wrong password" } }, 401);
+  await rejected;
+  assert.equal(client.user.value.id, "alice");
+  assert.equal(client.error.value.code, "INVALID_CREDENTIALS");
+  assert.equal(client.loading.value, false);
+});
+
+for (const method of ["loginWithPasskey", "registerPasskey", "reauthenticateWithPasskey"]) {
+  test(`${method} cannot finish against another account after a browser prompt`, async t => {
+    const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    let release;
+    let opened;
+    const prompt = new Promise(resolve => { release = resolve; });
+    const promptOpened = new Promise(resolve => { opened = resolve; });
+    const credentials = { get: () => { opened(); return prompt; }, create: () => { opened(); return prompt; } };
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { credentials } });
+    t.after(() => {
+      if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+      else delete globalThis.navigator;
+    });
+    const { client, requests } = controlledAuthClient(aliceClientState);
+    const operation = client[method]();
+    const rejected = assert.rejects(operation, /Authentication changed/);
+    requests[0].reply({ challengeId: "alice-challenge", options: {
+      challenge: "AQID", rp: { name: "App" }, user: { id: "AQID", name: "alice", displayName: "Alice" }, pubKeyCredParams: [],
+    } });
+    await promptOpened;
+    // A session reload can also change identity without an explicit login.
+    const change = method === "loginWithPasskey"
+      ? client.login({ email: "bob@example.com", password: "secret" }) : client.reload();
+    requests[1].reply(bobClientState);
+    await change;
+    const bytes = new Uint8Array([1, 2, 3]).buffer;
+    release({ id: "credential", rawId: bytes, response: {
+      clientDataJSON: bytes, attestationObject: bytes, authenticatorData: bytes, signature: bytes, userHandle: null,
+    } });
+    await rejected;
+    assert.equal(requests.length, 2, "no finish request may use the new account's CSRF token");
+    assert.equal(client.user.value.id, "bob");
+    assert.equal(client.loading.value, false);
+  });
+}
+
+test("a rejected auth observer cannot interrupt session revocation", async () => {
+  const reported = [];
+  const fixture = await createFixture({}, { onError: async error => {
+    reported.push(error.message);
+    throw new Error("observer failed");
+  } });
+  try {
+    const alice = await register(fixture.runtime, "alice@example.com");
+    fixture.runtime.auth.subscribeSession(alice.session.id, () => { throw new Error("listener failed"); });
+    const response = await fixture.runtime.handle(request("/__clank/auth/logout", {
+      method: "POST", body: {}, cookie: alice.cookie, csrf: alice.csrf,
+    }));
+    assert.equal(response.status, 200, await response.clone().text());
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(fixture.runtime.auth.isSessionActive(alice.session.id), false);
+    assert.deepEqual(reported, ["listener failed"]);
+  } finally { await fixture.close(); }
+});
+
 test("owned data, query caches, SSR callers, and sessions remain isolated by user", async () => {
   const fixture = await createFixture();
   try {

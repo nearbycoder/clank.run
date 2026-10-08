@@ -1,0 +1,239 @@
+{
+  "date": "2026-10-08",
+  "baseCommit": "59bf25908864112ab733ba09a01cb9fea34b904d",
+  "branch": "codex/auth-job-review-2026-10-08",
+  "status": "local-release-validation-passed",
+  "scope": {
+    "manual": [
+      "auth client response ownership, snapshots, MFA, passkey continuation",
+      "job context lifetime, current claim, atomic publication, cancellation and timeout",
+      "auth, backend database/request and job error observers",
+      "workflow graph/publisher contextual types and runtime registry step shape"
+    ],
+    "wholeSource": "Pinned semantic analysis and complete release gate; no claim of an independent line-by-line review of every implementation file."
+  },
+  "findings": [
+    {
+      "priority": "P1",
+      "state": "fixed",
+      "title": "Stale auth replies overwrite newer account state",
+      "files": [
+        "src/auth.ts",
+        "tests/auth.test.mjs"
+      ],
+      "evidence": "Nine of ten initial controlled regressions fail before the auth/job fixes; the current-request failure control passes. Delayed lookup restores Alice after logout; a failed initial lookup clears Bob after a successful sign-in; older sign-in sets an Alice MFA challenge."
+    },
+    {
+      "priority": "P1",
+      "state": "fixed",
+      "title": "Obsolete job attempts retain durable write capabilities",
+      "files": [
+        "src/jobs.ts",
+        "tests/jobs.test.mjs"
+      ],
+      "evidence": "Timeout, cancellation and replacement each permit both a stale database insert and child enqueue before the fix. Retained completed contexts also accept writes. Checks now validate signal, local lifetime, claim token/owner/state, cancellation and lease deadline inside the write transaction."
+    },
+    {
+      "priority": "P2",
+      "state": "fixed",
+      "title": "Asynchronous error observers escape failure containment",
+      "files": [
+        "src/auth.ts",
+        "src/backend.ts",
+        "src/jobs.ts"
+      ],
+      "evidence": "Two isolated backend/job regressions fail with unhandled rejections before the observer fix. Synchronous and asynchronous composite observer regressions verify that the backend observer still runs after the job observer fails."
+    },
+    {
+      "priority": "P2",
+      "state": "fixed",
+      "title": "Workflow graph and publisher types lose their step contracts",
+      "files": [
+        "src/jobs.ts",
+        "type-tests/semantic-baseline.json"
+      ],
+      "evidence": "Runtime registries retain the workflow step shape; frozen builders and publishers keep contextual generic types. All 32 job-module diagnostics are removed with no new diagnostic keys/counts."
+    }
+  ],
+  "validation": {
+    "before": {
+      "authAndJobs": {
+        "tests": 10,
+        "passed": 1,
+        "failed": 9,
+        "path": "/tmp/clank-review-2026-10-08/continuation-before.log",
+        "sha256": "4687d9ceb6f433e2dfa28be9c28eaf39da5d754c190b4e7b91f499a15d1b4cb7"
+      },
+      "observers": {
+        "tests": 2,
+        "passed": 0,
+        "failed": 2,
+        "path": "/tmp/clank-review-2026-10-08/continuation-observers-before.log",
+        "sha256": "0aeacf6a49ccfb933ee129f3ba7750725171f20eb8f07748df03d865798baace"
+      }
+    },
+    "focused": {
+      "tests": 88,
+      "passed": 88,
+      "failed": 0,
+      "path": "/tmp/clank-review-2026-10-08/continuation-focused.log",
+      "sha256": "f5a7304c532f2d893ccaec7b69106aae9a06d476a07fd551ca938ffdf07a7173"
+    },
+    "types": {
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnosticsBefore": 278,
+      "sourceDiagnosticsAfter": 246,
+      "resolvedJobDiagnostics": 32,
+      "newDiagnostics": 0,
+      "packedConsumerFixtures": 13,
+      "skipLibCheck": false,
+      "packedOpenApiExamples": "passed",
+      "path": "/tmp/clank-review-2026-10-08/continuation-types.log",
+      "sha256": "376ca5a86d8b4fe7962a7cf6568dc5c5b9b161284755dbd21734df3d41f76f28"
+    },
+    "release": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1679,
+      "pass": 1676,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 92.07,
+        "branches": 79.72,
+        "functions": 90.03
+      },
+      "publishFiles": 393,
+      "publishFileLimit": 394,
+      "publishByteLimit": 6291456,
+      "dependencyContract": "passed, zero npm dependencies",
+      "documentation": "passed",
+      "packedReleaseConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "path": "/tmp/clank-review-2026-10-08/continuation-check.log",
+      "sha256": "feeac6958a07bc8c9915a155bd1d86f5c03ae7f4928143be0b878d77779efffa"
+    },
+    "latestDocumentation": {
+      "status": "passed",
+      "path": "/tmp/clank-review-2026-10-08/continuation-docs.log",
+      "sha256": "bc7003702a53899417919752a81034f278664cc1c7f35e8a3d0b6862bc2f52eb"
+    }
+  },
+  "compatibility": {
+    "publicSignatures": "unchanged",
+    "wireFormats": "unchanged",
+    "persistentSchema": "unchanged",
+    "dependencies": "none added",
+    "behavior": "Older operations may resolve their own responses but cannot overwrite newer client state. A stale passkey continuation fails with existing AUTH_FAILED/409 before its finish HTTP request. Obsolete job attempts receive an error when using context writes or durable publishers; active atomic fan-out remains supported."
+  },
+  "remaining": {
+    "sourceDiagnostics": 246,
+    "largestSourceBacklogs": [
+      [
+        "src/buckets.ts",
+        34
+      ],
+      [
+        "src/runner.ts",
+        34
+      ],
+      [
+        "src/object-storage.ts",
+        15
+      ],
+      [
+        "src/task.ts",
+        13
+      ],
+      [
+        "src/analytics.ts",
+        10
+      ],
+      [
+        "src/bookmarks.ts",
+        9
+      ],
+      [
+        "src/provider-service.ts",
+        9
+      ],
+      [
+        "src/blueprint.ts",
+        8
+      ],
+      [
+        "src/error-inbox.ts",
+        8
+      ],
+      [
+        "src/journey.ts",
+        8
+      ]
+    ],
+    "roadmap": {
+      "implemented": 6,
+      "planned": 34
+    },
+    "productionHost": "Current Railway host denies required Linux namespaces; no deployment certification or isolation bypass performed.",
+    "privilegedTests": "XFS/Docker certification requires an explicitly disposable compatible host.",
+    "externalEffects": "Client state guards do not serialize browser cookie handling. SQLite claim fences do not make unrelated remote APIs exactly once. Pass cancellation signals and idempotency keys to remote services.",
+    "otherObservers": "This batch contains auth/backend/jobs observers. Other modules remain separate review targets."
+  },
+  "sources": {
+    "src/auth.ts": "f00a8904625bbdc2606215c38bece8fea992b19adb328e89ea411d4f301e802d",
+    "src/backend.ts": "e413b57e4b5a827fd83ff943466d307b43cbe3dc986c4f2826869f975a12a9a1",
+    "src/jobs.ts": "9b2a4341e8e4aa03170d848bc3e7731988a1c2eeca797c40616ad448f60b05f9",
+    "tests/auth.test.mjs": "106130b41d61420df2a41ba11219778b3cd44b40683764886ceeb33f769ad970",
+    "tests/backend.test.mjs": "99e3aee2f5a8e9bf65660a2d23c93d946de02fa4addc88bfe2503c4856469b81",
+    "tests/jobs.test.mjs": "a80bb30eb6138096a046b61742b079d3338fd2f1313dd7d772935ad624babd7e",
+    "type-tests/semantic-baseline.json": "38914e85eb1073cdf6ebb67d49e513f625621bb63b4217ec48ff858e33d4cc97"
+  },
+  "resolvedDiagnostics": [
+    {
+      "key": "src/jobs.ts|TS18046|'step' is of type 'unknown'.",
+      "removed": 18
+    },
+    {
+      "key": "src/jobs.ts|TS2322|Type 'Map<unknown, string>' is not assignable to type 'Map<AnyWorkflowStepDefinition, string>'. Type 'unknown' is not assignable to type 'AnyWorkflowStepDefinition'.",
+      "removed": 1
+    },
+    {
+      "key": "src/jobs.ts|TS2322|Type 'Readonly<{ step(job: any, stepDefinition: any): WorkflowStepDefinition<InferJobArgs<Args>, typeof job>; }>' is not assignable to type 'WorkflowGraphBuilder<InferJobArgs<Args>>'. The types returned by 'step(...)' are incompatible between these types. Type 'WorkflowStepDefinition<InferJobArgs<Args>, AnyJobDefinition>' is not assignable to type 'WorkflowStepDefinition<InferJobArgs<Args>, Job>'. Type 'AnyJobDefinition' is not assignable to type 'Job'. 'AnyJobDefinition' is assignable to the constraint of type 'Job', but 'Job' could be instantiated with a different subtype of constraint 'AnyJobDefinition'.",
+      "removed": 1
+    },
+    {
+      "key": "src/jobs.ts|TS2345|Argument of type 'unknown' is not assignable to parameter of type 'AnyWorkflowStepDefinition'.",
+      "removed": 2
+    },
+    {
+      "key": "src/jobs.ts|TS7006|Parameter 'dependency' implicitly has an 'any' type.",
+      "removed": 4
+    },
+    {
+      "key": "src/jobs.ts|TS7006|Parameter 'input' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/jobs.ts|TS7006|Parameter 'job' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/jobs.ts|TS7006|Parameter 'name' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/jobs.ts|TS7006|Parameter 'startOptions' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/jobs.ts|TS7006|Parameter 'stepDefinition' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/jobs.ts|TS7006|Parameter 'workflow' implicitly has an 'any' type.",
+      "removed": 1
+    }
+  ]
+}
