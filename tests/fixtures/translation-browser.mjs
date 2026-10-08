@@ -1,8 +1,9 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createI18n } from '../../dist/i18n.js';
 import { fileURLToPath } from 'node:url';
 const repository = fileURLToPath(new URL('../../', import.meta.url));
+const assets = new Map(await Promise.all((await readdir(repository+'dist')).filter(name=>/^[a-z0-9-]+\.js$/.test(name)).map(async name=>['/dist/'+name, await readFile(repository+'dist/'+name)])));
 const messages = { greeting: 'Hello {name}', count: { plural: 'count', forms: { one: '{count} item', other: '{count} items' } } };
 const french = { greeting: 'Bonjour {name}', count: { plural: 'count', forms: { one: '{count} article', other: '{count} articles' } } };
 const locale = createI18n({ defaultLocale: 'en', messages, translations: { fr: french }, locale: 'fr' });
@@ -16,5 +17,5 @@ document.querySelector('#translation').addEventListener('input',()=>{review=null
 document.querySelector('#review').addEventListener('click',async()=>{try{const bundle=await exportTranslationBundle(messages,options); for(const entry of bundle.entries)entry.translation=entry.key==='greeting'?document.querySelector('#translation').value:french[entry.key]; review=await reviewTranslationBundle(messages,bundle,options);document.querySelector('#status').textContent=review.ok?'Review valid: '+review.changes.map(change=>change.key).join(', '):'Review rejected: '+review.issues.map(issue=>issue.code).join(', ');document.querySelector('#accept').disabled=!review.ok}catch(error){document.querySelector('#status').textContent=error.message}});
 document.querySelector('#accept').addEventListener('click',async()=>{try{const accepted=await acceptTranslationReview(messages,review,options);const locale=createI18n({defaultLocale:'en',messages,translations:{fr:accepted},locale:'fr'});document.querySelector('#rendered').textContent=locale.t('greeting',{name:'Ada'})+' · '+locale.t('count',{count:2});document.querySelector('#comparison').textContent='Browser/server revision match: '+((await locale.revision())===${JSON.stringify(expected)});document.querySelector('#status').textContent='Accepted French catalog'}catch(error){document.querySelector('#status').textContent=error.message}});
 </script></html>`;
-const server=createServer(async(req,res)=>{if(req.url==='/'){res.setHeader('content-type','text/html');res.end(html);return}if(/^\/dist\/[a-z0-9-]+\.js$/.test(req.url)){try{res.setHeader('content-type','text/javascript');res.end(await readFile(repository+req.url.slice(1)));return}catch{}}res.statusCode=404;res.end('Not found')});
+const server=createServer(async(req,res)=>{if(req.url==='/'){res.setHeader('content-type','text/html');res.end(html);return}if(assets.has(req.url)){res.setHeader('content-type','text/javascript');res.end(assets.get(req.url));return}res.statusCode=404;res.end('Not found')});
 server.listen(43171,'127.0.0.1',()=>console.log('Translation verification at http://127.0.0.1:43171'));
