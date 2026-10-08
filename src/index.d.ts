@@ -1,9 +1,10 @@
+/// <reference path="./jsx.d.ts" />
+
 export { renderAgentActivity } from "./agent-activity.js";
 export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
 export * from "./offline.js";
 export type { MutationReceiptOptions } from "./mutation-receipts.js";
 export * from "./notifications.js";
-/// <reference path="./jsx.d.ts" />
 
 export * from "./core.js";
 export * from "./task.js";
@@ -75,3 +76,6 @@ export type { PlatformOperationsOptions, OperationalAlert, OperationalSignal } f
 export type { LinuxProjectDiskQuota, DockerOutboundNetworkPolicy } from "./linux-project-isolation.js";
 export * from "./point-in-time.js";
 export type { ManagedCanaryStage, ManagedCanaryOptions, ManagedCanaryReport } from "./managed-canary.js";
+
+export * from "./openapi.js";
+export * from "./translation-review.js";

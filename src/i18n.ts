@@ -25,6 +25,8 @@ export interface I18n<C extends MessageCatalog> {
   date(value: Date | number, options?: Intl.DateTimeFormatOptions): string;
   relative(value: number, unit: Intl.RelativeTimeFormatUnit, options?: Intl.RelativeTimeFormatOptions): string;
   manifest(): readonly { readonly key: string; readonly parameters: readonly string[]; readonly message: Message }[];
+  /** SHA-256 of the selected locale and canonical catalog, excluding interpolation values. */
+  revision(): Promise<string>;
 }
 
 const PARAMETER = /^[A-Za-z][A-Za-z0-9_]{0,63}$/u;
@@ -70,6 +72,18 @@ export function defineMessages<const C extends MessageCatalog>(catalog: C): C {
 function canonical(locale: string): string {
   if (typeof locale !== "string" || locale.length > 100) throw new TypeError("A bounded locale is required.");
   return Intl.getCanonicalLocales(locale)[0]!;
+}
+
+/** Shared browser/server content identity for a validated catalog. */
+export async function messageCatalogRevision(catalog: MessageCatalog, locale: string): Promise<string> {
+  const messages = defineMessages(catalog);
+  const entries = Object.keys(messages).sort().map(key => {
+    const message = messages[key]!;
+    return [key, typeof message === "string" ? message : { plural: message.plural, forms: Object.fromEntries(Object.entries(message.forms).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) }];
+  });
+  const bytes = new TextEncoder().encode(JSON.stringify(["clank-message-catalog/1", canonical(locale), entries]));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return `sha256:${[...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 /** Request-local locale state shared by UI text, formatters and agent descriptions. */
@@ -128,5 +142,6 @@ export function createI18n<const C extends MessageCatalog>(options: I18nOptions<
     date(value: Date | number, format?: Intl.DateTimeFormatOptions) { return new Intl.DateTimeFormat(current.value, { timeZone, ...format }).format(finite(value instanceof Date ? value.getTime() : value)); },
     relative(value: number, unit: Intl.RelativeTimeFormatUnit, format?: Intl.RelativeTimeFormatOptions) { return new Intl.RelativeTimeFormat(current.value, format).format(finite(value), unit); },
     manifest() { return Object.freeze(Object.entries(catalogs.get(current.value)!).map(([key, message]) => Object.freeze({ key, parameters: Object.freeze(parameters(message)), message }))); },
+    revision() { const locale = current.value; return messageCatalogRevision(catalogs.get(locale)!, locale); },
   }) as I18n<C>;
 }

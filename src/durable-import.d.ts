@@ -6,6 +6,7 @@ export interface DurableImportIssue { readonly row: number; readonly code: "INVA
 export interface DurableImportJob { readonly id: string; readonly name: string; readonly state: DurableImportState; readonly uploadedRows: number; readonly processedRows: number; readonly insertedRows: number; readonly skippedRows: number; readonly chunks: number; readonly issues: readonly DurableImportIssue[]; }
 export interface DurableImportOptions<Schema extends DatabaseSchema<any> = DatabaseSchema<any>> {
   path: string; auth: AuthDefinition<any>; schema: Schema; table: string; fields: readonly string[]; uniqueBy?: readonly string[]; duplicates?: "error" | "skip"; prefix?: string; maxRows?: number; batchSize?: number;
+  maxJobs?: number; maxChunks?: number; maxStagedBytes?: number;
   authorize?(context: { auth: AuthRequest<any>; db: ReadDatabase<Schema> }, record: Readonly<Record<string, unknown>>, operation: "upload" | "apply"): boolean;
 }
 export interface DurableImportService { handle(request: Request): Promise<Response>; close(): void; }

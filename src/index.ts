@@ -73,3 +73,6 @@ export type { PlatformOperationsOptions, OperationalAlert, OperationalSignal } f
 export type { LinuxProjectDiskQuota, DockerOutboundNetworkPolicy } from "./linux-project-isolation.ts";
 export * from "./point-in-time.ts";
 export type { ManagedCanaryStage, ManagedCanaryOptions, ManagedCanaryReport } from "./managed-canary.ts";
+
+export * from "./openapi.ts";
+export * from "./translation-review.ts";

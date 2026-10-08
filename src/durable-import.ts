@@ -1,6 +1,7 @@
 import { BackendActionError, defineBackend, defineDatabase, defineTable, openBackend, type DatabaseSchema, type ReadDatabase, type SyncClientOptions } from "./backend.ts";
 import type { AuthDefinition, AuthRequest } from "./auth.ts";
 import { s } from "./ai.ts";
+import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
 import { planCsvImport, type CsvColumn } from "./csv-import.ts";
 import { featureInput, featureTables, featureTransport, requireFeatureAccess, type FeatureMutation, type FeatureQuery } from "./feature-service.ts";
 
@@ -9,6 +10,7 @@ export interface DurableImportIssue { readonly row: number; readonly code: "INVA
 export interface DurableImportJob { readonly id: string; readonly name: string; readonly state: DurableImportState; readonly uploadedRows: number; readonly processedRows: number; readonly insertedRows: number; readonly skippedRows: number; readonly chunks: number; readonly issues: readonly DurableImportIssue[]; }
 export interface DurableImportOptions<Schema extends DatabaseSchema<any> = DatabaseSchema<any>> {
   path: string; auth: AuthDefinition<any>; schema: Schema; table: string; fields: readonly string[]; uniqueBy?: readonly string[]; duplicates?: "error" | "skip"; prefix?: string; maxRows?: number; batchSize?: number;
+  maxJobs?: number; maxChunks?: number; maxStagedBytes?: number;
   authorize?(context: { auth: AuthRequest<any>; db: ReadDatabase<Schema> }, record: Readonly<Record<string, unknown>>, operation: "upload" | "apply"): boolean;
 }
 export interface DurableImportService { handle(request: Request): Promise<Response>; close(): void; }
@@ -28,6 +30,8 @@ export interface DurableImportClient {
 export async function openDurableImport<Schema extends DatabaseSchema<any>>(options: DurableImportOptions<Schema>): Promise<DurableImportService>;
 export async function openDurableImport(options: DurableImportOptions): Promise<DurableImportService> {
   const target = options.schema.tables[options.table], maximum = options.maxRows ?? 1000000, batchSize = options.batchSize ?? 100, unique = [...options.uniqueBy ?? []];
+  const maxJobs = options.maxJobs ?? 10000, maxChunks = options.maxChunks ?? 2000, maxStagedBytes = options.maxStagedBytes ?? 1024 * 1024 * 1024;
+  if (!Number.isSafeInteger(maxJobs) || maxJobs < 1 || maxJobs > 100000 || !Number.isSafeInteger(maxChunks) || maxChunks < 1 || maxChunks > 10000 || !Number.isSafeInteger(maxStagedBytes) || maxStagedBytes < 1 || maxStagedBytes > 4 * 1024 * 1024 * 1024) throw new TypeError("Declare bounded import job, chunk, and staging byte limits.");
   if (!target || !options.fields.length || options.fields.some(field => !Object.hasOwn(target.fields, field)) || new Set(options.fields).size !== options.fields.length || unique.some(field => !options.fields.includes(field)) || unique.length > 10 || !Number.isSafeInteger(maximum) || maximum < 1 || maximum > 1000000 || !Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 500 || options.duplicates && !["error", "skip"].includes(options.duplicates)) throw new TypeError("Declare a target table, mapped fields, and bounded row/batch limits.");
   if (target.ownership !== "user" && !options.authorize) throw new TypeError("Unowned import targets need explicit record authorization.");
   if (options.schema.tables.durableImportJobs || options.schema.tables.durableImportChunks) throw new TypeError("Import metadata table names are reserved.");
@@ -41,22 +45,37 @@ export async function openDurableImport(options: DurableImportOptions): Promise<
     if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(field => !options.fields.includes(field))) return featureInput("Import contains undeclared fields.");
     return target.schema.parse(value) as Record<string, unknown>;
   };
+  let native: SQLiteInternal;
+  const retirePayload = (context: any, id: string) => {
+    const chunks = context.db.table("durableImportChunks");
+    // Page IDs instead of materializing every payload. Legacy jobs may have
+    // exceeded today's admission limit; every page still has bounded memory.
+    while (true) {
+      const rows = native.prepare("SELECT _id FROM clank_durableImportChunks WHERE _owner_id = ? AND json_extract(_data, '$.jobId') = ? LIMIT 100").all(context.auth.user!.id, id);
+      if (!rows.length) break;
+      for (const row of rows) { chunks.delete(row._id); native.purgeDeletedHistory("durableImportChunks", row._id as string); }
+    }
+  };
   const backend = defineBackend({ schema, auth: options.auth }).functions(({ query, mutation }) => ({
     create: mutation({ args: { name: s.string({ min: 1, max: 200 }), key: s.string({ min: 1, max: 100 }) }, agent: false, handler: ({ db }, input) => {
       const table = db.table("durableImportJobs"), existing = table.query().where("key", input.key).first();
       if (existing) { if (existing.name !== input.name) throw new BackendActionError(409, "IMPORT_KEY_REUSED", "Import key belongs to another source."); return output(existing); }
+      if (Number(native.prepare("SELECT count(*) AS count FROM clank_durableImportJobs").get()?.count ?? 0) >= maxJobs) throw new BackendActionError(503, "IMPORT_JOB_CAPACITY", "Import job receipt capacity reached; review retention before admitting new jobs.");
       if (table.query().where("state", "neq", "completed").where("state", "neq", "cancelled").limit(21).collect().length >= 20) throw new BackendActionError(409, "IMPORT_LIMIT", "Finish or cancel an existing import first.");
       const id = table.insert({ ...input, state: "uploading", uploadedRows: 0, processedRows: 0, insertedRows: 0, skippedRows: 0, chunks: 0, nextChunk: 0, nextOffset: 0, issues: "[]" }); return output(table.get(id));
     } }),
     inspect: query({ args: { id: s.id("durableImportJobs") }, agent: false, handler: (context, { id }) => output(getJob(context, id)) }),
     append: mutation({ args: { id: s.id("durableImportJobs"), sequence: s.number({ integer: true, min: 0 }), records: s.string({ max: 4 * 1024 * 1024 }) }, agent: false, handler: (context, input) => {
       const job = getJob(context, input.id), chunks = context.db.table("durableImportChunks");
+      if (["completed", "cancelled"].includes(job.state)) throw new BackendActionError(410, "IMPORT_PAYLOAD_RETIRED", "Import source payload has been retired; inspect the retained job receipt.");
       let values: unknown; try { values = JSON.parse(input.records); } catch { return featureInput("Chunk must be JSON records."); }
       if (!Array.isArray(values) || !values.length || values.length > 500) return featureInput("A chunk must contain 1–500 rows.");
       const records = values.map(value => { const record = normalize(value); requireFeatureAccess(!options.authorize || options.authorize(context as any, record, "upload")); return record; }), contents = JSON.stringify(records);
       const existing = chunks.query().where("jobId", input.id).where("sequence", input.sequence).first();
       if (existing) { if (existing.contents !== contents) throw new BackendActionError(409, "IMPORT_CHUNK_CHANGED", "Previously uploaded rows differ from this chunk."); return output(job); }
       if (job.state !== "uploading" || job.chunks !== input.sequence || job.uploadedRows + records.length > maximum) throw new BackendActionError(409, "IMPORT_UPLOAD_STATE", "Import is sealed, out of sequence, or exceeds its row limit.");
+      const capacity = native.prepare("SELECT count(*) AS count, coalesce(sum(length(CAST(json_extract(_data, '$.contents') AS BLOB))), 0) AS bytes FROM clank_durableImportChunks").get()!;
+      if (job.chunks >= maxChunks || Number(capacity.count) >= 10000 || Number(capacity.bytes) + new TextEncoder().encode(contents).length > maxStagedBytes) throw new BackendActionError(503, "IMPORT_STAGING_CAPACITY", "Import staging capacity reached; finish or cancel staged jobs.");
       chunks.insert({ jobId: input.id, sequence: input.sequence, contents, rows: records.length });
       context.db.table("durableImportJobs").patch(input.id, { chunks: job.chunks + 1, uploadedRows: job.uploadedRows + records.length }); return output(context.db.table("durableImportJobs").get(input.id));
     } }),
@@ -91,12 +110,14 @@ export async function openDurableImport(options: DurableImportOptions): Promise<
       for (const record of records) if (!record.skip) context.db.table(options.table).insert(record.value);
       const skipped = records.filter(record => record.skip).length, processedRows = job.processedRows + records.length;
       context.db.table("durableImportJobs").patch(id, { processedRows, insertedRows: job.insertedRows + records.length - skipped, skippedRows: job.skippedRows + skipped, nextChunk, nextOffset, state: processedRows === job.uploadedRows ? "completed" : "running", issues: "[]" });
+      if (processedRows === job.uploadedRows) retirePayload(context, id);
       return output(context.db.table("durableImportJobs").get(id));
     } }),
     retry: mutation({ args: { id: s.id("durableImportJobs") }, agent: false, handler: (context, { id }) => { const job = getJob(context, id); if (job.state !== "failed") throw new BackendActionError(409, "IMPORT_RETRY_STATE", "Only a failed batch may be retried."); context.db.table("durableImportJobs").patch(id, { state: "ready", issues: "[]" }); return output(context.db.table("durableImportJobs").get(id)); } }),
-    cancel: mutation({ args: { id: s.id("durableImportJobs") }, agent: false, handler: (context, { id }) => { const job = getJob(context, id); if (job.state !== "completed") context.db.table("durableImportJobs").patch(id, { state: "cancelled" }); return output(context.db.table("durableImportJobs").get(id)); } }),
+    cancel: mutation({ args: { id: s.id("durableImportJobs") }, agent: false, handler: (context, { id }) => { const job = getJob(context, id); if (job.state !== "completed") context.db.table("durableImportJobs").patch(id, { state: "cancelled" }); retirePayload(context, id); return output(context.db.table("durableImportJobs").get(id)); } }),
   }));
   const runtime = await openBackend(backend, { path: options.path, prefix: options.prefix ?? "/__clank/imports", maxCacheEntries: 0, agent: false, maxRequestBytes: 8 * 1024 * 1024 });
+  native = (runtime.database as any)[SQLITE_INTERNAL];
   return { handle: request => runtime.handle(request), close: () => runtime.close() };
 }
 

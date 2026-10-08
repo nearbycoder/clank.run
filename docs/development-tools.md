@@ -37,3 +37,26 @@ The server implements initialization, full-document synchronization, live compil
 Node 22.16 and 24 support transform-only TypeScript syntax. Node 26 compiles erasable TypeScript using its native stripping API. Explicit constructor fields and assignments, objects instead of enums, and ES modules instead of runtime namespaces work on every supported version. Node 26 source maps preserve line positions in the lowered TSX module.
 
 Rollback: remove `preserveDevelopmentState` registrations and `data-dev-preserve` attributes, or use `clank dev --no-reload`. Stop the LSP process to disable editor integration. No database migration is involved.
+
+## Semantic type-contract verification
+
+The runtime package still has no npm dependencies. CI provisions an external, pinned TypeScript
+5.9.3 compiler and `@types/node` 26.6.4 in a temporary tools directory. To use a separately
+provisioned trusted copy locally, build first, then run:
+
+```sh
+node scripts/type-contracts.mjs --typescript /trusted/typescript/lib/typescript.js --type-roots /trusted/node_modules/@types
+```
+
+The source check uses the normal strict `tsconfig.json`. Its normalized baseline records the
+290 diagnostics present at main commit `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`. Any new
+file/code/message occurrence fails, including additional occurrences of an existing error.
+Line movements do not create new errors. Decreasing debt passes without expanding the baseline;
+remove resolved entries during a reviewed cleanup. Never regenerate the baseline from a failing
+change to hide its diagnostics. The check reports the actual remaining count.
+
+The second check packs the built framework, installs that exact tarball in a clean temporary
+consumer without lifecycle scripts, and compiles every positive/negative consumer fixture with
+`skipLibCheck: false`. This checks actual published declarations and ensures `@ts-expect-error`
+assertions remain meaningful. Temporary consumers are removed even after failure. The full
+runtime/release gate remains `npm run check`; semantic verification is a separate required CI job.

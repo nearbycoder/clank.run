@@ -1,0 +1,56 @@
+{
+  "searchCandidateCap": {
+    "maximum": 1,
+    "hiddenThenVisible": {
+      "hits": [],
+      "total": 0,
+      "truncated": true
+    },
+    "visibleOnly": {
+      "hits": [
+        {
+          "id": "visible",
+          "title": "classified launch",
+          "snippet": "visible launch",
+          "score": 5
+        }
+      ],
+      "total": 1,
+      "truncated": false
+    },
+    "oneDenied": {
+      "hits": [],
+      "total": 0,
+      "truncated": false
+    },
+    "twoDenied": {
+      "hits": [],
+      "total": 0,
+      "truncated": true
+    }
+  },
+  "searchDiacritics": {
+    "hits": [
+      {
+        "id": "accent",
+        "title": "Café",
+        "snippet": "padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding padding ",
+        "score": 0
+      }
+    ],
+    "total": 1,
+    "truncated": false
+  },
+  "collaborativeReceiptRetention": {
+    "retainedOperations": 2,
+    "edits": 8,
+    "operations": 2,
+    "receipts": 8
+  },
+  "terminalImportRetention": {
+    "maxRows": 1,
+    "activeJobLimit": 20,
+    "jobs": 22,
+    "chunks": 22
+  }
+}

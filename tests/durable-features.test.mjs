@@ -12,6 +12,7 @@ import { openCollaborativeDocuments, createCollaborativeDocumentsClient, textEdi
 import { openSharedSavedViews, createSharedViewsClient } from "../dist/saved-views.js";
 import { openDurableImport, createDurableImportClient } from "../dist/durable-import.js";
 import { featureTables } from "../dist/feature-service.js";
+import { SQLITE_INTERNAL } from "../dist/sqlite-internal.js";
 
 test("service metadata cannot replace an application table definition", () => {
   const application = defineTable({ privateValue: s.string() }).owned();
@@ -180,5 +181,81 @@ test("CSV upload streams files larger than the original 5 MiB parser ceiling and
     await app.restart(); assert.equal((await client.uploadCsv(file, columns, { id: uploaded.id })).uploadedRows, 2000);
     await client.cancel(uploaded.id);
     const quoted = await client.uploadCsv(new Blob(['title,score\r\n"Two\nlines and ""quotes""",1\r\n']), columns, { name: "Quoted" }); const done = await client.run(quoted.id); assert.equal(done.insertedRows, 1); assert.equal((await app.caller(alice)).query("list").value[0].title, 'Two\nlines and "quotes"');
+  } finally { await app.close(); }
+});
+
+test("search budgets ignore denied matches and preserve accent match coordinates", async () => {
+  const allowed = new Set(["visible"]);
+  const app = await fixture(openSearch, { maxCandidates: 1, maxScopeRecords: 5, authorize: () => true, authorizeRecord: (_context, record) => allowed.has(record.id) });
+  try {
+    const user = await app.user("search-budget@example.invalid"), client = createSearchClient(app.clientOptions("search", user));
+    for (let i = 0; i < 3; i++) app.service.upsert({ scope: "team", id: `hidden-${i}`, title: "Cafe", body: "cafe" });
+    assert.deepEqual(await client.search("team", "cafe"), { hits: [], total: 0, truncated: false });
+    const body = `${"e\u0301".repeat(180)} A Café for everyone.`;
+    app.service.upsert({ scope: "team", id: "visible", title: "Café", body });
+    const result = await client.search("team", "cafe");
+    assert.deepEqual(result.hits.map(hit => hit.id), ["visible"]);
+    assert.equal(result.total, 1); assert.equal(result.truncated, false); assert.equal(result.hits[0].score, 5);
+    assert.match(result.hits[0].snippet, /Café for everyone/u);
+    app.service.upsert({ scope: "greek", id: "visible", title: "Άλφα", body: "άλφα" });
+    assert.equal((await client.search("greek", "άλφα")).hits[0].score, 5, "unicode61 retains non-Latin diacritics");
+    app.service.upsert({ scope: "team", id: "also-visible", title: "Cafe", body: "cafe" }); allowed.add("also-visible");
+    assert.equal((await client.search("team", "cafe")).truncated, true);
+    assert.throws(() => app.service.upsert({ scope: "team", id: "overflow", title: "Cafe", body: "cafe" }), /capacity/u);
+    app.service.upsert({ scope: "team", id: "visible", title: "Updated Café", body });
+    await app.restart(); allowed.clear(); assert.deepEqual(await client.search("team", "cafe"), { hits: [], total: 0, truncated: false });
+  } finally { await app.close(); }
+});
+
+test("collaboration accepts the largest declared history window without exceeding query limits", async () => {
+  const app = await fixture(openCollaborativeDocuments, { retainedOperations: 10000, authorize: () => true });
+  try {
+    const user = await app.user("largest-history@example.invalid"), client = createCollaborativeDocumentsClient(app.clientOptions("documents", user));
+    await client.create("shared", "");
+    assert.equal((await client.edit({ documentId: "shared", operationId: "first", baseRevision: 1, start: 0, deleteCount: 0, insert: "ok" })).text, "ok");
+  } finally { await app.close(); }
+});
+
+test("collaboration prunes replay receipts only beyond the rebase window and rejects expired retries", async () => {
+  const app = await fixture(openCollaborativeDocuments, { retainedOperations: 2, retainedReceipts: 2, maxReceipts: 2, authorize: () => true });
+  try {
+    const user = await app.user("receipt-window@example.invalid"), client = createCollaborativeDocumentsClient(app.clientOptions("documents", user));
+    await client.create("shared", "");
+    const first = { documentId: "shared", operationId: "edit-1", baseRevision: 1, start: 0, deleteCount: 0, insert: "x" };
+    await client.edit(first);
+    for (let revision = 2; revision <= 12; revision++) await client.edit({ ...first, operationId: `edit-${revision}`, baseRevision: revision, start: revision - 1 });
+    const native = app.runtime.database[SQLITE_INTERNAL];
+    assert.equal(Number(native.prepare("SELECT count(*) AS count FROM clank_collaborativeReceipts").get().count), 2);
+    assert.equal(Number(native.prepare("SELECT count(*) AS count FROM clank_document_revisions WHERE table_name IN ('collaborativeReceipts', 'collaborativeOperations')").get().count), 4, "expired operations and receipts do not survive in document history");
+    await app.restart();
+    await assert.rejects(client.edit(first), error => error.code === "COLLAB_EDIT_CONFLICT");
+    const duplicate = await client.edit({ ...first, operationId: "edit-12", baseRevision: 12, start: 11 });
+    assert.equal(duplicate.acceptedRevision, 13); assert.equal(duplicate.text, "x".repeat(12));
+    await client.create("second", "");
+    await assert.rejects(client.edit({ ...first, documentId: "second" }), error => error.code === "COLLAB_RECEIPT_CAPACITY");
+    assert.equal((await client.read("second")).revision, 1);
+  } finally { await app.close(); }
+});
+
+test("imports retire terminal source/history while preserving replay identity and enforcing global capacity", async () => {
+  const app = await fixture(openDurableImport, { maxJobs: 2, maxChunks: 1, maxStagedBytes: 1000 });
+  try {
+    const user = await app.user("import-retention@example.invalid"), client = createDurableImportClient(app.clientOptions("imports", user));
+    const job = await client.create("Completed", "first-key");
+    await assert.rejects(client.append(job.id, 0, [{ title: "x".repeat(1500), score: 1 }]), error => error.code === "IMPORT_STAGING_CAPACITY");
+    await client.append(job.id, 0, [{ title: "Keep imported target", score: 1 }]);
+    await assert.rejects(client.append(job.id, 1, [{ title: "Overflow", score: 2 }]), error => error.code === "IMPORT_STAGING_CAPACITY");
+    await client.seal(job.id, 1); assert.equal((await client.run(job.id)).state, "completed");
+    await assert.rejects(client.append(job.id, 0, [{ title: "Keep imported target", score: 1 }]), error => error.code === "IMPORT_PAYLOAD_RETIRED");
+    const cancelled = await client.create("Cancelled", "second-key"); await client.append(cancelled.id, 0, [{ title: "Discard source", score: 2 }]); await client.cancel(cancelled.id);
+    const native = app.runtime.database[SQLITE_INTERNAL];
+    assert.equal(Number(native.prepare("SELECT count(*) AS count FROM clank_durableImportChunks").get().count), 0);
+    assert.equal(Number(native.prepare("SELECT count(*) AS count FROM clank_document_revisions WHERE table_name = 'durableImportChunks'").get().count), 0);
+    await app.restart();
+    assert.equal((await client.create("Completed", "first-key")).id, job.id);
+    assert.equal((await client.step(job.id, 0)).insertedRows, 1);
+    assert.equal((await client.step(cancelled.id, 0)).state, "cancelled");
+    await assert.rejects(client.create("Overflow", "third-key"), error => error.code === "IMPORT_JOB_CAPACITY");
+    assert.deepEqual((await app.caller(user)).query("list").value.map(row => row.title), ["Keep imported target"]);
   } finally { await app.close(); }
 });

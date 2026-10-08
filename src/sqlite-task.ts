@@ -139,7 +139,7 @@ export async function runSQLiteTask<T>(
       throw new Error("SQLite task request exceeds its limit.");
     }
     const child = spawn(executable, childArguments, {
-      stdio: ["pipe", "pipe", "ignore", ...(sandbox?.descriptors ?? [])],
+      stdio: ["pipe", "pipe", "pipe", ...(sandbox?.descriptors ?? [])],
       windowsHide: true,
       env: {
         NODE_NO_WARNINGS: "1",
@@ -151,6 +151,7 @@ export async function runSQLiteTask<T>(
     return await new Promise<T>((resolve, reject) => {
       let output = "";
       let outputBytes = 0;
+      let diagnostics = "";
       let failure: Error | undefined;
       const terminate = (error: Error) => {
         failure ??= error;
@@ -168,12 +169,20 @@ export async function runSQLiteTask<T>(
         }
         output += chunk;
       });
+      // Drain a bounded diagnostic prefix. Never expose worker stderr: it may
+      // contain tenant input. Recognize only fixed pre-bootstrap host failures.
+      child.stderr.setEncoding("utf8");
+      child.stderr.on("data", (chunk: string) => { if (diagnostics.length < 4096) diagnostics += chunk.slice(0, 4096 - diagnostics.length); });
       child.on("error", (error: Error) => { failure ??= error; });
       // EPIPE is expected if the worker hits its memory/deadline bound while
       // reading. Rejection waits for close so rollback cannot race a live worker.
       child.stdin.on("error", (error: Error) => { failure ??= error; });
       child.on("close", (code: number | null) => {
         clearTimeout(timeout);
+        if (sandbox && code !== 0 && !output && (!failure || (failure as Error & { code?: string }).code === "EPIPE")
+          && /^bwrap: (?:Creating new namespace failed: (?:Permission denied|Operation not permitted)|No permissions to create new namespace[^\n]*)$/mu.test(diagnostics)) {
+          reject(Object.assign(new Error("SQLite worker isolation is unavailable: host policy denied Linux namespaces. Configure a host with Bubblewrap namespace support."), { code: "SQLITE_ISOLATION_UNAVAILABLE" })); return;
+        }
         if (failure) { reject(failure); return; }
         if (code !== 0) { reject(new Error("SQLite task exited before completing (resource limit or worker failure).")); return; }
         try {

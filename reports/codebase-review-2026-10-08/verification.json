@@ -1,0 +1,299 @@
+{
+  "reviewDate": "2026-10-08",
+  "timezone": "America/Chicago",
+  "baseCommit": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+  "originMain": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+  "branch": "codex/codebase-review-forty-features-2026-10-08",
+  "frameworkVersion": "0.24.0",
+  "inventory": {
+    "implementationFiles": 140,
+    "implementationLines": 95732,
+    "declarations": 117,
+    "packageExports": 145,
+    "testFiles": 218,
+    "largestModules": [
+      {
+        "file": "platform.ts",
+        "lines": 16059
+      },
+      {
+        "file": "blueprint.ts",
+        "lines": 3773
+      },
+      {
+        "file": "backend.ts",
+        "lines": 3477
+      },
+      {
+        "file": "jobs.ts",
+        "lines": 3174
+      },
+      {
+        "file": "ui-fields.ts",
+        "lines": 3056
+      },
+      {
+        "file": "ui-collections.ts",
+        "lines": 2927
+      },
+      {
+        "file": "auth.ts",
+        "lines": 2396
+      },
+      {
+        "file": "buckets.ts",
+        "lines": 2289
+      },
+      {
+        "file": "ui-controls.ts",
+        "lines": 2177
+      },
+      {
+        "file": "oauth.ts",
+        "lines": 2087
+      }
+    ]
+  },
+  "releaseGate": {
+    "command": "npm run check",
+    "node": "v26.10.0",
+    "exitCode": 0,
+    "tests": 1607,
+    "passed": 1604,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 3,
+    "coverage": {
+      "lines": 91.89,
+      "branches": 79.37,
+      "functions": 89.69
+    },
+    "skippedScopes": [
+      "Disposable XFS hard-limit enforcement",
+      "Real Docker controller-crash cleanup",
+      "Real Docker filesystem/process/outbound isolation"
+    ],
+    "log": "/tmp/clank-review-2026-10-08/check.log",
+    "logSha256": "f7a1685fe49b51bbde8040785ee702ed2af4339924bc358bb65007e6c2e57cd6"
+  },
+  "semanticTypecheck": {
+    "compiler": "TypeScript 5.9.3 installed outside repository",
+    "typeRoots": "/home/nearby/.local/lib/node_modules/cline/node_modules/@types",
+    "compilerPath": "/home/nearby/.local/lib/node_modules/vercel/node_modules/typescript/lib/tsc.js",
+    "command": "node /home/nearby/.local/lib/node_modules/vercel/node_modules/typescript/lib/tsc.js --pretty false --typeRoots /home/nearby/.local/lib/node_modules/cline/node_modules/@types",
+    "exitCode": 2,
+    "diagnostics": 290,
+    "byCode": {
+      "TS2345": 86,
+      "TS7006": 101,
+      "TS2352": 6,
+      "TS2339": 36,
+      "TS2322": 17,
+      "TS2741": 1,
+      "TS18048": 6,
+      "TS2367": 1,
+      "TS2769": 8,
+      "TS4104": 1,
+      "TS18046": 21,
+      "TS2362": 2,
+      "TS18047": 1,
+      "TS2304": 2,
+      "TS7053": 1
+    },
+    "byFile": {
+      "src/buckets.ts": 34,
+      "src/runner.ts": 34,
+      "src/jobs.ts": 32,
+      "src/object-storage.ts": 15,
+      "src/task.ts": 14,
+      "src/analytics.ts": 10,
+      "src/bookmarks.ts": 9,
+      "src/provider-service.ts": 9,
+      "src/blueprint.ts": 8,
+      "src/error-inbox.ts": 8,
+      "src/journey.ts": 8,
+      "src/platform.ts": 8,
+      "src/recycle-bin.ts": 8,
+      "src/application-performance.ts": 7,
+      "src/services.ts": 7,
+      "src/dashboard-layouts.ts": 6,
+      "src/lifecycle.ts": 6,
+      "src/data-plane.ts": 5,
+      "src/labels.ts": 5,
+      "src/availability.ts": 4,
+      "src/billing.ts": 4,
+      "src/checklists.ts": 4,
+      "src/collaboration.ts": 4,
+      "src/feedback.ts": 4,
+      "src/record-history.ts": 4,
+      "src/blueprint-registry.ts": 3,
+      "src/comments.ts": 3,
+      "src/github-oidc.ts": 3,
+      "src/provider-data.ts": 3,
+      "src/activity.ts": 2,
+      "src/backend.ts": 2,
+      "src/platform-storage.ts": 2,
+      "src/provider-runtime.ts": 2,
+      "src/query-advisor.ts": 2,
+      "src/recovery.ts": 2,
+      "src/webauthn.ts": 2,
+      "src/webhook-outbox.ts": 2,
+      "src/command-palette.ts": 1,
+      "src/governance.ts": 1,
+      "src/oauth.ts": 1,
+      "src/rehearsal.ts": 1,
+      "src/runtime-placement.ts": 1
+    },
+    "diagnosticsFile": "typecheck.txt",
+    "logSha256": "5541323f687749d772917f4128f4e1df4f98b9db490e8de57d961eb8a3575e2c",
+    "initialOlderNodeTypesDiagnostics": 293
+  },
+  "reproductions": {
+    "command": "node --disable-warning=ExperimentalWarning reports/codebase-review-2026-10-08/reproduce.mjs",
+    "exitCode": 0,
+    "resultFile": "reproduction.json",
+    "resultSha256": "db6291fba6cabd322ead6173217151432b3e7cf33257e94486fd60fc97445087",
+    "observations": [
+      "Denied FTS candidates exclude a later readable match and influence truncation metadata",
+      "An accent-insensitive FTS hit has zero score and misses the matching snippet",
+      "Eight collaborative edits retain eight receipts with a two-operation history cap",
+      "Twenty-two cancelled one-row imports retain twenty-two chunks despite a twenty-active-job cap"
+    ]
+  },
+  "github": {
+    "runs": [
+      {
+        "conclusion": "success",
+        "createdAt": "2026-10-05T08:50:10Z",
+        "databaseId": 37286115756,
+        "headSha": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+        "status": "completed",
+        "url": "https://github.com/nearbycoder/clank.run/actions/runs/37286115756",
+        "workflowName": "CodeQL"
+      },
+      {
+        "conclusion": "success",
+        "createdAt": "2026-10-03T20:04:22Z",
+        "databaseId": 37150204514,
+        "headSha": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+        "status": "completed",
+        "url": "https://github.com/nearbycoder/clank.run/actions/runs/37150204514",
+        "workflowName": "Verify documentation rollout"
+      },
+      {
+        "conclusion": "failure",
+        "createdAt": "2026-10-03T20:04:22Z",
+        "databaseId": 37150204531,
+        "headSha": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+        "status": "completed",
+        "url": "https://github.com/nearbycoder/clank.run/actions/runs/37150204531",
+        "workflowName": "Deploy Design Studio"
+      },
+      {
+        "conclusion": "success",
+        "createdAt": "2026-10-03T20:00:35Z",
+        "databaseId": 37149966835,
+        "headSha": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+        "status": "completed",
+        "url": "https://github.com/nearbycoder/clank.run/actions/runs/37149966835",
+        "workflowName": "CI"
+      },
+      {
+        "conclusion": "success",
+        "createdAt": "2026-10-03T20:00:35Z",
+        "databaseId": 37149966811,
+        "headSha": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+        "status": "completed",
+        "url": "https://github.com/nearbycoder/clank.run/actions/runs/37149966811",
+        "workflowName": "CodeQL"
+      }
+    ],
+    "latestRelease": {
+      "publishedAt": "2026-10-03T18:33:07Z",
+      "tagName": "v0.24.0",
+      "url": "https://github.com/nearbycoder/clank.run/releases/tag/v0.24.0"
+    },
+    "designStudioFailure": {
+      "code": "DEPLOYMENT_FAILED",
+      "message": "SQLite task exited before completing (resource limit or worker failure).",
+      "logSha256": "f2674db2a7c1e64479b5798a70f905a0780f9edf2377bc079cde31b3de5a5dbb"
+    }
+  },
+  "roadmap": {
+    "features": 40,
+    "stages": [
+      {
+        "name": "First ten",
+        "ids": [
+          1,
+          2,
+          16,
+          18,
+          23,
+          25,
+          28,
+          33,
+          34,
+          39
+        ]
+      },
+      {
+        "name": "Team and workflow operations",
+        "ids": [
+          3,
+          4,
+          5,
+          11,
+          12,
+          13,
+          15,
+          19,
+          36
+        ]
+      },
+      {
+        "name": "Availability and guardrails",
+        "ids": [
+          6,
+          8,
+          10,
+          17,
+          20,
+          29,
+          37
+        ]
+      },
+      {
+        "name": "Advanced application capability",
+        "ids": [
+          7,
+          9,
+          14,
+          21,
+          22,
+          24,
+          26,
+          27
+        ]
+      },
+      {
+        "name": "Experience and reporting",
+        "ids": [
+          30,
+          31,
+          32,
+          35,
+          38,
+          40
+        ]
+      }
+    ]
+  },
+  "limitations": [
+    "No fresh Node 22/24 local rerun; current-commit GitHub CI supplies its own supported-runtime evidence.",
+    "Three disposable-host tests skipped in this local run.",
+    "No fresh standalone CodeQL analysis, production load run, infrastructure mutation, or production restore.",
+    "Semantic diagnostic count is tied to the recorded external compiler and Node declarations.",
+    "This pass creates review and planning artifacts only; reported bugs and new features are not implemented."
+  ]
+}

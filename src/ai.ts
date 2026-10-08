@@ -323,7 +323,7 @@ export const s = {
     return schemaValue((input, path) => {
       const value = parseAt(inner, input, path);
       return predicate(value) ? value : issue(path, message);
-    }, inner.toJSONSchema(), description ?? inner.description);
+    }, { ...inner.toJSONSchema(), "x-clank-refinement": true }, description ?? inner.description);
   },
 
   union<T extends readonly Schema[]>(members: T, description?: string): Schema<Infer<T[number]>> {

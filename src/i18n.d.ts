@@ -23,8 +23,11 @@ export interface I18n<C extends MessageCatalog> {
   number(value: number, options?: Intl.NumberFormatOptions): string;
   date(value: Date | number, options?: Intl.DateTimeFormatOptions): string;
   relative(value: number, unit: Intl.RelativeTimeFormatUnit, options?: Intl.RelativeTimeFormatOptions): string;
+  revision(): Promise<string>;
   manifest(): readonly { readonly key: string; readonly parameters: readonly string[]; readonly message: Message }[];
 }
 
 export declare function defineMessages<const C extends MessageCatalog>(catalog: C): C;
 export declare function createI18n<const C extends MessageCatalog>(options: I18nOptions<C>): I18n<C>;
+
+export declare function messageCatalogRevision(catalog: MessageCatalog, locale: string): Promise<string>;

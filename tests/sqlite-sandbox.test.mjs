@@ -4,12 +4,40 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, rename } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+import { EventEmitter } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import { applyMigrations, backupSQLite } from '../dist/migrations.js';
 import { runSQLiteTask, SQLiteTaskScheduler } from '../dist/sqlite-task.js';
 import { pinSQLiteDirectory, prepareSQLiteSandbox } from '../dist/sqlite-sandbox.js';
 
 const linux = { skip: process.platform !== 'linux' };
+
+test('SQLite host namespace denial is actionable without exposing arbitrary worker stderr', linux, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'clank-sandbox-diagnostic-'));
+  try {
+    for (const [diagnostics, expected] of [
+      ['bwrap: Creating new namespace failed: Permission denied\n', 'SQLITE_ISOLATION_UNAVAILABLE'],
+      ['private-tenant-data '+ 'x'.repeat(10000), undefined],
+    ]) {
+      const mocked = t.mock.method(childProcess, 'spawn', () => {
+        const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+        child.stdin = new Writable({ write(_chunk, _encoding, callback) { callback(); } }); child.kill = () => true;
+        setImmediate(() => { child.stderr.end(diagnostics); child.stdout.end(); child.emit('close', 1); }); return child;
+      });
+      syncBuiltinESMExports();
+      try {
+        await assert.rejects(runSQLiteTask('inspection', 'inspectSQLite', [join(root, 'app.sqlite')]), error => {
+          assert.equal(error.code, expected); assert.doesNotMatch(error.message, /private-tenant-data/u);
+          if (expected) assert.match(error.message, /host policy denied Linux namespaces/u);
+          return true;
+        });
+      } finally { mocked.mock.restore(); syncBuiltinESMExports(); }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 function execute(sandbox) {
   return new Promise((resolve, reject) => {
     const child = spawn(sandbox.executable, sandbox.arguments, { stdio: ['ignore', 'pipe', 'pipe', ...sandbox.descriptors], env: {} });

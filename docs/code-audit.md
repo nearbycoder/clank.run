@@ -1,6 +1,6 @@
 # Code and product audit
 
-Audit date: 2026-08-01
+Historical audit: 2026-08-01. Current capability and release-gate refresh: 2026-10-08.
 
 This document records what was inspected, what changed, and what remains intentionally out of scope. It is evidence for maintainers, not a claim that any framework can make every application correct automatically.
 
@@ -113,14 +113,15 @@ These examples demonstrate framework breadth. They do not replace domain-specifi
 
 - Form paths are intentionally top-level. Compose controllers for nested editors and independent wizard steps.
 - A capability-gated local file store and upload endpoint are included for trusted single-host deployments; production object storage, CDN delivery, and image transformation remain provider integrations.
-- No virtualized list is included yet; large datasets should page server-side.
+- Virtualized collections are included; combine them with authorized server paging for datasets that exceed bounded client memory.
 - Dialogs are rendered in place rather than through a portal.
 - The built-in process supervisor remains single-leader even though durable distributed coordination primitives and verified remote release transfer are available.
 - The trusted process runner is not a sandbox; use the Docker runner for stronger isolation.
 - Clank now provides verified domain eligibility for Caddy On-Demand TLS and a complete generic
   remote-agent lifecycle, but certificate/key custody, WAF/DDoS service, WebSocket ingress,
-  infrastructure-specific remote execution, scoped remote secret/data delivery, and globally
-  distributed control storage remain external or future platform work.
+  globally distributed control storage remain external or future platform work. Provider runtime
+  execution and scoped secret/data delivery are implemented behind their configured provider
+  contracts; successful deployment still requires verified host isolation capabilities.
 - Tailwind's browser build is suitable for examples and zero-install prototyping; production applications should serve compiled CSS.
 
 ## Release gate
@@ -137,6 +138,9 @@ A release is acceptable only after:
 8. `npm run security:audit` verifies dependency, package-content, current-tree and reachable-history credential patterns, governance, least-privilege, immutable-action, OIDC, and evidence requirements; and
 9. deterministic chaos tests prove worker reclaim/fencing, corrupt-backup fail-closed behavior, and ingress recovery.
 
-Clank deliberately does not install a TypeScript package. Its built-in compiler validates syntax lowering, while the checked-in declarations define the consumer contract. Run `tsc --noEmit` as an additional semantic type check when a separately provisioned, trusted TypeScript compiler is available; do not describe that optional external tool as part of the zero-dependency gate.
+Clank deliberately does not install a TypeScript package. Its built-in compiler validates syntax lowering, while the checked-in declarations define the consumer contract. CI separately provisions TypeScript 5.9.3 and Node declarations outside the framework, enforces
+a normalized no-new-diagnostics baseline, and checks positive/negative fixtures against a packed
+consumer with declaration checking enabled. The 290 pre-existing source diagnostics remain
+tracked debt, not a claim of strict semantic correctness. See [type-contract verification](development-tools.md#semantic-type-contract-verification).
 
 See `docs/security.md` and `docs/platform-security.md` for the separate security checklists.

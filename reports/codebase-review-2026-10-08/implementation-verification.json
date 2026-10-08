@@ -1,0 +1,78 @@
+{
+  "date": "2026-10-08",
+  "baseCommit": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+  "originMain": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+  "completedFeatureIds": [
+    18,
+    33,
+    35
+  ],
+  "plannedFeatureCount": 37,
+  "fullReleaseGate": {
+    "status": "passed",
+    "tests": 1622,
+    "passed": 1619,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 3,
+    "coverage": {
+      "lines": 91.92,
+      "branches": 79.47,
+      "functions": 89.73
+    },
+    "scope": "Full gate before the final collaboration history-retirement change; subsequent focused tests verify that change."
+  },
+  "finalFocusedTests": {
+    "tests": 68,
+    "passed": 68,
+    "failed": 0
+  },
+  "semanticContracts": {
+    "existingSourceDiagnostics": 290,
+    "newSourceDiagnostics": 0,
+    "packedConsumerFixtures": 11,
+    "skipConsumerLibCheck": false
+  },
+  "railway": {
+    "projectId": "382f4bc3-8831-4cbf-8a45-964d41bec3fb",
+    "environmentId": "fc2fb797-ceab-40d3-92e4-016e457528c9",
+    "serviceId": "92d457ac-15db-4b1d-bb2f-d242cbd4a9f4",
+    "probe": "Read-only namespace creation with empty commands",
+    "unshare": "Permission denied",
+    "bubblewrap": "Permission denied",
+    "isolationBypassed": false,
+    "productionChanged": false,
+    "disposableHostCertification": "not performed; host required"
+  },
+  "browser": {
+    "fixture": "tests/fixtures/translation-browser.mjs",
+    "keyboardReviewAndAcceptance": "passed",
+    "invalidPlaceholderRejection": "passed",
+    "browserAndServerRevision": "sha256:a4df3e19aa723ed9ab91344b33cbb8e36ced3d1571e28d708bdd0faef3df9134",
+    "revisionMatches": true,
+    "mobileViewport": {
+      "width": 390,
+      "height": 844,
+      "contentWidth": 390
+    },
+    "consoleWarningsAndErrors": []
+  },
+  "logs": {
+    "implementation-check.log": {
+      "path": "/tmp/clank-review-2026-10-08/implementation-check.log",
+      "sha256": "f411dd9d4c3c58725b24b6e02db4bfc2641dcddfffdff2d6ba34676280b40dde"
+    },
+    "implementation-final-focused.log": {
+      "path": "/tmp/clank-review-2026-10-08/implementation-final-focused.log",
+      "sha256": "0237ad3da316160f3aad12400fe2e056c1bace82dc6dfcadff8168f556f869ad"
+    },
+    "type-contract-gate.log": {
+      "path": "/tmp/clank-review-2026-10-08/type-contract-gate.log",
+      "sha256": "35e1824393dd32ef63ab9187ca639136418eb78617a788d1d45f749c777850fd"
+    },
+    "railway-isolation-probe.log": {
+      "path": "/tmp/clank-review-2026-10-08/railway-isolation-probe.log",
+      "sha256": "df44c77ed95a1088839dd397893d4e4d49b878bb1a6f29ccdb9533dc0a0e2cce"
+    }
+  }
+}

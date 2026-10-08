@@ -58,7 +58,7 @@ export interface BucketClientOptions { readonly basePath?: string; readonly fetc
 export interface BucketUploadOptions { readonly key: string; readonly value: Uint8Array | ArrayBuffer | Blob; readonly contentType?: string; readonly resumable?: boolean; readonly expectedSha256?: string; readonly onProgress?: (uploadedBytes: number, totalBytes: number) => void; }
 export interface BucketClient { list(options?: Omit<BucketListOptions, "userId">): Promise<BucketListResult>; stat(key: string): Promise<BucketObject | null>; upload(options: BucketUploadOptions): Promise<BucketObject>; delete(key: string, ifSha256?: string): Promise<boolean>; createReadIntent(key: string, expiresInMs?: number): Promise<BucketReadIntent>; }
 export interface BucketMcpOptions<Context = unknown> { readonly identity?: (context: Context) => BucketIdentity; readonly maxInlineBytes?: number; }
-export class BucketError extends Error { readonly name: "BucketError"; constructor(readonly status: number, readonly code: string, message: string, readonly details?: Readonly<Record<string, unknown>>); }
+export class BucketError extends Error { readonly name: "BucketError"; readonly status: number; readonly code: string; readonly details?: Readonly<Record<string, unknown>>; constructor(status: number, code: string, message: string, details?: Readonly<Record<string, unknown>>); }
 export function defineBucket(input: BucketDefinitionInput): BucketDefinition;
 export function inspectBucketImage(value: Uint8Array | ArrayBuffer, claimedContentType?: string): BucketImageMetadata;
 export function openBucketManager(options: OpenBucketManagerOptions): Promise<BucketManager>;

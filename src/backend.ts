@@ -313,15 +313,15 @@ export class DatabaseRevisionNotFoundError extends Error {
 export class BackendActionError extends Error {
   readonly name = "BackendActionError";
 
-  declare readonly status: 400 | 404 | 409;
+  declare readonly status: 400 | 404 | 409 | 410 | 503;
   declare readonly code: string;
   constructor(
-    status: 400 | 404 | 409,
+    status: 400 | 404 | 409 | 410 | 503,
     code: string,
     message: string,
   ) {
-    if (status !== 400 && status !== 404 && status !== 409) {
-      throw new TypeError("Backend action error status must be 400, 404, or 409.");
+    if (![400, 404, 409, 410, 503].includes(status)) {
+      throw new TypeError("Backend action error status must be 400, 404, 409, 410, or 503.");
     }
     if (!/^[A-Z][A-Z0-9_]{2,63}$/u.test(code)) {
       throw new TypeError("Backend action error codes must be 3-64 uppercase letters, digits, or underscores.");
@@ -578,6 +578,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   const recoveryRequired = !!native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_pitr_state'").get();
   let capture: import("./sqlite-internal.ts").SQLiteTransactionCapture | undefined;
   let transactionActive = false;
+  let activeChanges: ReturnType<typeof changesForTransaction> | undefined;
   let readActive = false;
   let synchronizing = false;
   const listeners = new Set<(change: DatabaseChange) => void>();
@@ -1056,6 +1057,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     synchronizeChanges(undefined, true);
     transactionActive = true;
     const changes = changesForTransaction();
+    activeChanges = changes;
     let value!: Value;
     let committedVersion: number | undefined;
     let began = false;
@@ -1139,6 +1141,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     } finally {
       capture?.after();
       transactionActive = false;
+      activeChanges = undefined;
     }
     if (committedVersion !== undefined) synchronizeChanges(committedVersion, false);
     return value;
@@ -1252,6 +1255,20 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         const value = handler(makeReader(undefined, userId));
         assertSynchronous(value, "query");
         return value;
+      },
+      readTrackedScoped(userId, handler) {
+        if (!transactionActive) throw new Error("Tracked internal reads require a write transaction.");
+        const dependencies = new Map<string, ReadDependency>();
+        const value = handler(makeReader(dependencies, userId));
+        assertSynchronous(value, "query");
+        return { value, dependencies: [...dependencies.values()], version: readGlobalRevision(prepared) };
+      },
+      purgeDeletedHistory(table, id) {
+        ensureOpen();
+        const entries = activeChanges?.history.filter(entry => entry.table === table && entry.id === id);
+        if (!transactionActive || !entries?.length || entries.at(-1)?.operation !== "delete") throw new Error("History retirement requires a record deleted in the current write transaction.");
+        prepared("DELETE FROM clank_document_revisions WHERE table_name = ? AND document_id = ?").run(table, id);
+        activeChanges!.history = activeChanges!.history.filter(entry => entry.table !== table || entry.id !== id);
       },
     },
   };

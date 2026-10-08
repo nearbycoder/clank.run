@@ -14,6 +14,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  type-contracts:
+    name: Semantic and packed consumer types
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Provision pinned external type tools
+        run: npm install --prefix "$RUNNER_TEMP/clank-type-tools" --ignore-scripts --no-package-lock --no-audit --no-fund typescript@5.9.3 @types/node@26.6.4
+      - name: Verify semantic baseline and packed consumers
+        run: |
+          npm run build
+          node scripts/type-contracts.mjs --typescript "$RUNNER_TEMP/clank-type-tools/node_modules/typescript/lib/typescript.js" --type-roots "$RUNNER_TEMP/clank-type-tools/node_modules/@types"
+
   runtime:
     name: Node ${{ matrix.node }}
     runs-on: ubuntu-24.04

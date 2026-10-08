@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createSQLiteDatabase } from "../dist/backend.js";
+import { SQLITE_INTERNAL } from "../dist/sqlite-internal.js";
 import {
   BackendActionError,
   DatabaseConflictError,
@@ -26,6 +27,24 @@ async function waitFor(predicate, timeoutMs = 1_000) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+test("internal payload history retirement requires a transactional deletion and rolls back with it", async () => {
+  const schema = defineDatabase({ payloads: defineTable({ text: s.string() }).owned() });
+  const database = await openSQLite(schema, { path: ":memory:" }), native = database[SQLITE_INTERNAL], scope = { userId: "alice" };
+  try {
+    const id = database.transaction(db => db.table("payloads").insert({ text: "Staged source" }), scope);
+    assert.throws(() => native.purgeDeletedHistory("payloads", id), /current write transaction/u);
+    assert.throws(() => database.transaction(() => native.purgeDeletedHistory("payloads", id), scope), /current write transaction/u);
+    const version = database.version;
+    assert.throws(() => database.transaction(db => { db.table("payloads").delete(id); native.purgeDeletedHistory("payloads", id); throw new Error("Crash before commit"); }, scope), /Crash/u);
+    assert.equal(database.version, version);
+    assert.equal(database.read(db => db.table("payloads").get(id), scope).text, "Staged source");
+    assert.equal(database.read(db => db.table("payloads").history(id), scope).length, 1);
+    database.transaction(db => { db.table("payloads").delete(id); native.purgeDeletedHistory("payloads", id); }, scope);
+    assert.equal(database.read(db => db.table("payloads").get(id), scope), null);
+    assert.deepEqual(database.read(db => db.table("payloads").history(id), scope), []);
+  } finally { database.close(); }
+});
 
 test("failed SQLite transaction starts release flags without attempting rollback", () => {
   const native = new DatabaseSync(":memory:");
@@ -273,7 +292,7 @@ test("Fetch RPC validates calls and exposes an SSE initial snapshot", async () =
 test("intentional backend action failures are bounded, public, and atomic", async () => {
   assert.throws(
     () => new BackendActionError(500, "SAFE_CODE", "No"),
-    /status must be 400, 404, or 409/u,
+    /status must be 400, 404, 409, 410, or 503/u,
   );
   assert.throws(
     () => new BackendActionError(409, "bad-code", "No"),
