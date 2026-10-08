@@ -85,14 +85,15 @@ export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any
 
 function exactSchema(source: Record<string, unknown>, label: string): Record<string, unknown> {
   if (source.optional) throw new TypeError(`${label}: optional root schemas cannot guarantee a JSON result.`);
-  const walk = (schema: unknown, depth: number): unknown => {
+  const walk = (schema: unknown, depth: number, objectField = false): unknown => {
     if (depth > 32 || !schema || typeof schema !== "object" || Array.isArray(schema)) throw new TypeError(`${label}: unsupported schema shape.`);
+    if ((schema as Record<string, unknown>).optional && !objectField) throw new TypeError(`${label}: optional values outside object fields cannot guarantee JSON representation.`);
     const result: Record<string, unknown> = Object.create(null);
     for (const [key, value] of Object.entries(schema)) {
       if (key === "optional") continue; // optional object fields are represented by required[]
       if (key === "table" && typeof value === "string") { result["x-clank-table"] = value; continue; }
       if (!KEYWORDS.has(key)) throw new TypeError(`${label}: unsupported schema keyword ${key}; coercion and custom refinements require an explicit adapter contract.`);
-      if (key === "properties") result[key] = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, property]) => [name, walk(property, depth + 1)]));
+      if (key === "properties") result[key] = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, property]) => [name, walk(property, depth + 1, true)]));
       else if (key === "anyOf") result[key] = (value as unknown[]).map(member => walk(member, depth + 1));
       else if (key === "items" || key === "additionalProperties" && typeof value === "object") result[key] = walk(value, depth + 1);
       else result[key] = structuredClone(value);

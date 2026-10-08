@@ -44,6 +44,7 @@ test("OpenAPI rejects unspecified, coercing, refined, optional and unsupported c
   for (const [returns, args, message] of [
     [undefined, s.number(), /explicit returns/u],
     [s.optional(s.number()), s.number(), /defined JSON/u],
+    [s.array(s.optional(s.number())), s.number(), /optional values/u],
     [s.number(), s.coerce.number(), /coercion/u],
     [s.number(), s.refine(s.number(), n => n % 2 === 0, "Even values only"), /refinement/u],
     [s.number(), s.url(), /unsupported schema/u],
