@@ -143,7 +143,7 @@ globalThis.document = {
 };
 
 const { For, Portal, expression, h, hydrate, onMount, render, useId } = await import("../dist/dom.js");
-const { signal } = await import("../dist/core.js");
+const { signal, effect, createRoot, onCleanup } = await import("../dist/core.js");
 const { createApi } = await import("../dist/backend.js");
 const { createCheckbox } = await import("../dist/ui-controls.js");
 const { mergeProps } = await import("../dist/ui-foundation.js");
@@ -754,4 +754,98 @@ test("removing reflected properties does not recreate false-valued attributes", 
   attributes.value = { id: undefined, role: null, title: false, disabled: false };
   for (const name of ["id", "role", "title", "disabled"]) assert.equal(button.hasAttribute(name), false, name);
   assert.equal(button.disabled, false);
+});
+
+const { observeHydration, withHydrationSource } = await import('../dist/hydration-inspection.js');
+const { createDevtools, exportHydrationSnapshot } = await import('../dist/devtools.js');
+function inspectHydration(run) {
+  const inspector = createDevtools({ hydration: true }), warn = console.warn;
+  const warnings = []; console.warn = (...args) => warnings.push(args);
+  try { return run(inspector, warnings); } finally { inspector.dispose(); console.warn = warn; }
+}
+
+test('hydration inspection locates the original nested mismatch and component source before cleanup', () => inspectHydration(inspector => {
+  const root = new FakeElement('main'), section = new FakeElement('section'), old = new FakeElement('span');
+  old.setAttribute('data-private', 'private tenant attribute'); old.insertBefore(new FakeText('private SSR text'), null); section.insertBefore(old, null); root.insertBefore(section, null);
+  function Greeting() { return h('section', {}, withHydrationSource(h('button', {}, 'private client text'), { file: '/private/workspace/Greeting.tsx', line: 13, column: 7 })); }
+  const dispose = hydrate(root, h(Greeting));
+  const [event] = inspector.snapshot().hydration;
+  assert.equal(event.reason, 'element-type'); assert.equal(event.outcome, 'remount'); assert.deepEqual(event.path, [0, 0]); assert.equal(event.pathTruncated, false);
+  assert.equal(event.component, 'Greeting'); assert.deepEqual(event.source, { file: 'Greeting.tsx', line: 13, column: 7 });
+  assert.deepEqual(event.expected, { kind: 'element', tag: 'button' }); assert.deepEqual(event.actual, { kind: 'element', tag: 'span' });
+  assert.ok(Object.isFrozen(event) && Object.isFrozen(event.path) && Object.isFrozen(event.source));
+  const exported = exportHydrationSnapshot(inspector.snapshot()); assert.doesNotMatch(exported, /private|tenant|SSR text|client text|workspace|data-private/);
+  assert.equal(JSON.parse(exported).protocol, 'clank-hydration-snapshot/1'); assert.equal(root.getAttribute('data-clank-hydration'), 'remounted'); dispose();
+}));
+
+test('text patch inspection preserves node identity and throwing listeners cannot track application signals', () => inspectHydration(inspector => {
+  const unrelated = signal('private listener value'); const stop = observeHydration(() => { unrelated.value; throw new Error('private observer failure'); });
+  let runs = 0;
+  try {
+    createRoot(dispose => {
+      effect(() => {
+        runs++; const root = new FakeElement('main'), p = new FakeElement('p'), text = new FakeText('private server value'); p.insertBefore(text, null); root.insertBefore(p, null);
+        const cleanup = hydrate(root, h('p', {}, 'private client value'));
+        assert.equal(root.children[0], p); assert.equal(p.childNodes[0], text); assert.equal(text.data, 'private client value'); assert.equal(root.getAttribute('data-clank-hydration'), 'attached'); onCleanup(cleanup);
+      });
+      unrelated.value = 'changed'; assert.equal(runs, 1); dispose();
+    });
+    const [event] = inspector.snapshot().hydration; assert.equal(event.reason, 'text-content'); assert.equal(event.outcome, 'patch'); assert.deepEqual(event.path, [0, 0]); assert.doesNotMatch(exportHydrationSnapshot(inspector.snapshot()), /private/);
+  } finally { stop(); }
+}));
+
+test('marker and trailing-node diagnostics never expose private comment or markup contents', () => inspectHydration((inspector, warnings) => {
+  const root = new FakeElement('main'), p = new FakeElement('p'); p.insertBefore(new FakeComment('private SSR marker contents'), null); root.insertBefore(p, null);
+  let dispose = hydrate(root, h('p', {}, expression(() => 'private text')));
+  let event = inspector.snapshot().hydration.at(-1); assert.equal(event.reason, 'marker'); assert.deepEqual(event.path, [0, 0]); assert.deepEqual(event.actual, { kind: 'comment' }); dispose();
+  root.insertBefore(new FakeElement('p'), null); root.insertBefore(new FakeElement('private-customer'), null);
+  dispose = hydrate(root, h('p')); event = inspector.snapshot().hydration.at(-1); assert.equal(event.reason, 'trailing-nodes'); assert.deepEqual(event.path, [1]); assert.deepEqual(event.actual, { kind: 'element', tag: 'custom' }); dispose();
+  assert.doesNotMatch(JSON.stringify(warnings), /private/); assert.doesNotMatch(exportHydrationSnapshot(inspector.snapshot()), /private/);
+}));
+
+test('hydration history and deeply nested paths are bounded, clearable, and disposable', () => {
+  const inspector = createDevtools({ hydration: true, maxEvents: 2 }), warn = console.warn; console.warn = () => {};
+  try {
+    for (let i = 0; i < 4; i++) { const root = new FakeElement('main'); root.insertBefore(new FakeElement('span'), null); hydrate(root, h('button'))(); }
+    assert.equal(inspector.snapshot().hydration.length, 2); assert.equal(inspector.snapshot().truncated, true); inspector.clear(); assert.equal(inspector.snapshot().hydration.length, 0); assert.equal(inspector.snapshot().truncated, false);
+    const root = new FakeElement('main'); let parent = root, view = h('button');
+    for (let i = 0; i < 40; i++) { const div = new FakeElement('div'); parent.insertBefore(div, null); parent = div; view = h('div', {}, view); }
+    parent.insertBefore(new FakeElement('span'), null); hydrate(root, view)();
+    assert.equal(inspector.snapshot().hydration[0].path.length, 32); assert.equal(inspector.snapshot().hydration[0].pathTruncated, true); assert.equal(inspector.snapshot().truncated, true);
+    inspector.dispose(); const other = new FakeElement('main'); other.insertBefore(new FakeElement('span'), null); hydrate(other, h('button'))(); assert.equal(inspector.snapshot().hydration.length, 0);
+    assert.equal(createDevtools().snapshot().hydration, undefined); assert.throws(() => createDevtools({ hydration: 'yes' }), /boolean/);
+  } finally { inspector.dispose(); console.warn = warn; }
+});
+
+test('hydration inspection preserves application exceptions and ignores invalid optional VNode metadata', () => inspectHydration(inspector => {
+  const root = new FakeElement('main'); root.insertBefore(new FakeElement('button'), null);
+  assert.throws(() => hydrate(root, h('button', { onClick: 'invalid' })), /expects an event listener/); assert.equal(inspector.snapshot().hydration.length, 0);
+  const view = h('button'); Object.defineProperty(view, 'source', { get() { throw new Error('optional metadata'); } });
+  const dispose = hydrate(root, view); assert.equal(root.getAttribute('data-clank-hydration'), 'attached'); dispose();
+  assert.throws(() => withHydrationSource(h('button'), { file: 'x.tsx', line: 0, column: 1 }), /source location/);
+}));
+
+test('hydration export selects explicit fields and rejects oversized or invalid snapshots', () => inspectHydration(inspector => {
+  const root = new FakeElement('main'); root.insertBefore(new FakeElement('span'), null); hydrate(root, h('button'))();
+  const snapshot = inspector.snapshot(), event = snapshot.hydration[0];
+  const encoded = exportHydrationSnapshot({ ...snapshot, secret: 'private query', hydration: [{ ...event, secret: 'private state', expected: { ...event.expected, secret: 'private markup' } }] });
+  assert.doesNotMatch(encoded, /private|secret|queries|events/); assert.equal(encoded, exportHydrationSnapshot(snapshot));
+  assert.throws(() => exportHydrationSnapshot({ ...snapshot, hydration: Array(5001).fill(event) }), /at most 5000/);
+  assert.throws(() => exportHydrationSnapshot({ ...snapshot, hydration: [{ ...event, path: [-1] }] }), /snapshot entry/);
+  assert.throws(() => exportHydrationSnapshot({ ...snapshot, hydration: [{ ...event, source: { file: '/private/x.tsx', line: 1, column: 1 } }] }), /source location/);
+}));
+
+test('missing text, absent elements, client nodes and asynchronous views retain accurate fallback reasons', async () => {
+  const inspector = createDevtools({ hydration: true }), warn = console.warn; console.warn = () => {};
+  try {
+    const root = new FakeElement('main'); root.insertBefore(new FakeElement('span'), null); hydrate(root, 'private expected text')();
+    let event = inspector.snapshot().hydration.at(-1); assert.equal(event.reason, 'text-node'); assert.deepEqual(event.path, [0]);
+    hydrate(root, h('button'))(); event = inspector.snapshot().hydration.at(-1); assert.equal(event.reason, 'element-type'); assert.deepEqual(event.actual, { kind: 'missing' }); assert.deepEqual(event.path, [0]);
+    root.insertBefore(new FakeElement('span'), null); hydrate(root, new FakeElement('button'))(); assert.equal(inspector.snapshot().hydration.at(-1).reason, 'client-node');
+    const cleanup = hydrate(root, Promise.resolve(h('button'))); assert.equal(inspector.snapshot().hydration.at(-1).reason, 'async-view'); await Promise.resolve(); cleanup();
+    root.insertBefore(new FakeComment('clank:for'), null);
+    assert.throws(() => hydrate(root, For({ each: 'invalid', children: () => h('p') })));
+    assert.equal(inspector.snapshot().hydration.at(-1).reason, 'keyed-value');
+    assert.doesNotMatch(exportHydrationSnapshot(inspector.snapshot()), /private expected text/);
+  } finally { inspector.dispose(); console.warn = warn; }
 });

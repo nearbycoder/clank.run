@@ -60,3 +60,59 @@ consumer without lifecycle scripts, and compiles every positive/negative consume
 `skipLibCheck: false`. This checks actual published declarations and ensures `@ts-expect-error`
 assertions remain meaningful. Temporary consumers are removed even after failure. The full
 runtime/release gate remains `npm run check`; semantic verification is a separate required CI job.
+
+## Hydration mismatch inspection
+
+Capture lives in the optional `@clank.run/framework/hydration-inspection` module. Importing
+`@clank.run/framework/dom` alone loads no capture implementation. DevTools installs its small
+renderer hook only while an observer is registered. Create local DevTools before hydration and
+explicitly enable structural capture:
+
+```ts
+import { createDevtools, hydrate, mountDevtools, exportHydrationSnapshot } from "@clank.run/framework";
+const inspector = createDevtools({ hydration: true, maxEvents: 100 });
+const disposeApp = hydrate(document.getElementById("app")!, view);
+const disposePanel = mountDevtools(document.getElementById("tools")!, inspector);
+const report = exportHydrationSnapshot(inspector.snapshot());
+// Dispose both mounts and inspector when the development page closes.
+```
+
+The Hydration mismatches table distinguishes text corrections (`patch`, preserving node identity)
+from structural failures (`remount`, using the existing root fallback). Paths are zero-based child
+indices from the hydration root, captured before abandoned listeners/components are cleaned up.
+They include SSR comment/text nodes. Missing-node paths identify the expected insertion position;
+a partial path is marked `pathTruncated`. An event contains no node references, rendered text,
+attribute names/values, DOM IDs, props, raw HTML, SSR state, or application error messages. Unknown
+custom tags appear as `custom`. Existing mismatch warnings contain a static message. Binding and
+component exceptions still propagate; inspection does not reinterpret them as hydration failures.
+
+To associate locations with original TSX rather than the lowered source-map module, opt into
+compiler annotations in your local build adapter:
+
+```ts
+import { compile } from "@clank.run/framework/compiler";
+const javascript = compile(source, { filename: "Greeting.tsx", hydrationDiagnostics: true });
+```
+
+The dependency-free transform annotates each JSX element/component/fragment with the original
+1-based line/column and a bounded file basename. Directory paths are removed. Annotations are
+VNode metadata; they do not become component props or HTML. Plain builds omit them. For hand-built
+views, `withHydrationSource(h("button", {}, "Save"), { file: "Button.tsx", line: 8, column: 3 })`
+provides equivalent explicit metadata. Unannotated locations remain visible as Unannotated; no
+source location is guessed. Component names refer to the nearest named component function.
+
+`observeHydration(listener)` offers the same immutable events to a local adapter. Observers run
+without reactive dependency tracking; thrown observer errors cannot interrupt attachment. Do not
+mutate the application or DOM in diagnostic callbacks. At most 100 listeners may be registered.
+Each inspector retains at most `maxEvents` hydration entries (1–5000) and marks a partial history
+when entries are dropped or a path exceeds 32 levels/10,000 sibling positions. `clear()` removes
+history; `dispose()` removes both inspection listeners and retained events. Instrumentation is
+inactive after the initial synchronous hydration and when no observers are registered.
+
+The keyboard-accessible Export hydration snapshot button reveals a read-only JSON textarea and
+focuses/selects it for copying. The deterministic `clank-hydration-snapshot/1` export contains only
+hydration metadata and its partial-history flag; query, error, agent and timeline sources are
+excluded. Extra object fields are discarded and malformed/oversized reports are rejected. A report
+is a structural reproduction aid, not a saved application or automatic replay of private data.
+Keep inspection inside the local/authorized workbench. No telemetry or public endpoint is added.
+Rollback removes the capture/compiler options; no persistent migration is involved.

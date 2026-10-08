@@ -6,6 +6,7 @@ export * from "./notifications.ts";
 export * from "./core.ts";
 export * from "./task.ts";
 export * from "./dom.ts";
+export * from "./hydration-inspection.ts";
 export * from "./router.ts";
 export * from "./ai.ts";
 export * from "./agent-contract.ts";

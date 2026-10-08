@@ -1,3 +1,4 @@
+import type { HydrationSource } from "./hydration-inspection.ts";
 import {
   batch,
   computed,
@@ -33,7 +34,19 @@ export interface VNode {
   type: ElementType;
   props: Record<string, unknown>;
   key?: PropertyKey;
+  readonly source?: HydrationSource;
 }
+
+/** @internal Optional inspection hook. */
+export interface HydrationInspection {
+  active: boolean;
+  report(parent: Node, node: Node | null, reason: number, detail?: string, source?: HydrationSource, component?: string): void;
+  source(vnode: VNode): HydrationSource | undefined;
+  component(type: Function): string | undefined;
+}
+let hydrationInspectionFactory: ((root: Element) => HydrationInspection) | undefined;
+/** @internal Inspector registration. */
+export function setHydrationInspectionFactory(factory: ((root: Element) => HydrationInspection) | undefined): void { hydrationInspectionFactory = factory; }
 
 export interface ReactiveExpression<T = unknown> {
   readonly [EXPRESSION]: true;
@@ -71,6 +84,9 @@ interface Mounted {
 interface MountContext {
   namespace?: string;
   contexts: Map<symbol, unknown>;
+  inspection?: HydrationInspection;
+  source?: HydrationSource;
+  component?: string;
 }
 
 interface ComponentFrame {
@@ -156,20 +172,24 @@ export function render(root: Element | DocumentFragment, view: Renderable): Clea
 /** Attaches reactive bindings and events to Clank SSR markers without recreating matching DOM. */
 export function hydrate(root: Element, view: Renderable): Cleanup {
   let disposeRoot: Cleanup = () => {};
+  const inspection = hydrationInspectionFactory?.(root);
+  const context: MountContext = { contexts: createRenderContexts(), inspection };
   try {
     createRoot((dispose) => {
       disposeRoot = dispose;
       const cursor: HydrationCursor = { node: root.firstChild };
-      const mounted = hydrateValue(root, view, cursor, { contexts: createRenderContexts() });
+      const mounted = hydrateValue(root, view, cursor, context);
       onCleanup(() => mounted.dispose());
-      if (cursor.node !== null) throw new HydrationMismatch("Unexpected trailing server-rendered nodes.");
+      if (cursor.node !== null) throw hydrationMismatch(root, cursor.node, context, 4);
     });
   } catch (error) {
     disposeRoot();
     if (!(error instanceof HydrationMismatch)) throw error;
     root.setAttribute("data-clank-hydration", "remounted");
-    console.warn("Clank hydration mismatch; remounting the root.", error);
+    console.warn("Clank hydration mismatch; remounting the root.");
     return render(root, view);
+  } finally {
+    if (inspection) inspection.active = false;
   }
   root.setAttribute("data-clank-hydration", "attached");
   return () => {
@@ -184,6 +204,11 @@ interface HydrationCursor {
 
 class HydrationMismatch extends Error {
   readonly name = "HydrationMismatch";
+}
+
+function hydrationMismatch(parent: Node, node: Node | null, context: MountContext, reason: number, detail?: string): HydrationMismatch {
+  context.inspection?.report(parent, node, reason, detail, context.source, context.component);
+  return new HydrationMismatch("Hydration mismatch.");
 }
 
 function ownerDocumentFor(node: Node): Document {
@@ -223,24 +248,23 @@ function hydrateValue(parent: Node, input: Renderable, cursor: HydrationCursor, 
   if (isKeyedBlock(input)) return hydrateKeyed(parent, input, cursor, context);
   if (isPortalBlock(input)) return hydratePortal(parent, input, cursor, context);
   if (typeof input === "function") return hydrateDynamic(parent, input as () => Renderable, cursor, context);
-  if (input instanceof Promise) throw new HydrationMismatch("Promises cannot be synchronously hydrated.");
+  if (input instanceof Promise) throw hydrationMismatch(parent, cursor.node, context, 6);
   if (Array.isArray(input)) return hydrateFragment(parent, input, cursor, context);
   if (isVNode(input)) return hydrateVNode(parent, input, cursor, context);
   if (isNodeValue(parent, input)) {
-    if (cursor.node !== input) throw new HydrationMismatch("Client Node does not match the server Node.");
+    if (cursor.node !== input) throw hydrationMismatch(parent, cursor.node, context, 5);
     cursor.node = input.nextSibling;
     return simpleMount([input]);
   }
   if (input === null || input === undefined || input === false || input === true) {
-    const marker = expectComment(cursor, "clank");
+    const marker = expectComment(parent, cursor, "clank", context);
     return simpleMount([marker]);
   }
   const node = cursor.node;
   const value = String(input);
   if (value === "") return simpleMount([]);
   if (!isTextNode(parent, node)) {
-    const found = isCommentNode(parent, node) ? `<!--${(node as Comment).data}-->` : isElementNode(parent, node) ? `<${(node as Element).localName}>` : String(node);
-    throw new HydrationMismatch(`Expected server-rendered text ${JSON.stringify(value)}; found ${found}.`);
+    throw hydrationMismatch(parent, node, context, 1);
   }
   if (node.data !== value && node.data.startsWith(value)) {
     const remainder = ownerDocumentFor(parent).createTextNode(node.data.slice(value.length));
@@ -248,7 +272,7 @@ function hydrateValue(parent: Node, input: Renderable, cursor: HydrationCursor, 
     parent.insertBefore(remainder, node.nextSibling);
     cursor.node = remainder;
   } else {
-    if (node.data !== value) node.data = value;
+    if (node.data !== value) { context.inspection?.report(parent, node, 2, undefined, context.source, context.component); node.data = value; }
     cursor.node = node.nextSibling;
   }
   return simpleMount([node]);
@@ -270,7 +294,7 @@ function hydrateFragment(parent: Node, values: Renderable[], cursor: HydrationCu
 }
 
 function hydrateDynamic(parent: Node, read: () => Renderable, cursor: HydrationCursor, context: MountContext): Mounted {
-  const start = expectComment(cursor, "clank:start");
+  const start = expectComment(parent, cursor, "clank:start", context);
   const initial = unwrapReactive(read());
   let current: Mounted | undefined;
   let end: Comment;
@@ -282,7 +306,7 @@ function hydrateDynamic(parent: Node, read: () => Renderable, cursor: HydrationC
     } else {
       current = hydrateValue(parent, initial, cursor, context);
     }
-    end = expectComment(cursor, "clank:end");
+    end = expectComment(parent, cursor, "clank:end", context);
   } catch (error) {
     cleanupAfterError(error, current ? [() => current?.dispose(false)] : []);
   }
@@ -329,6 +353,9 @@ function hydrateDynamic(parent: Node, read: () => Renderable, cursor: HydrationC
 }
 
 function hydrateVNode(parent: Node, vnode: VNode, cursor: HydrationCursor, context: MountContext): Mounted {
+  if (context.inspection?.active) {
+    const source = context.inspection.source(vnode); if (source) context = { ...context, source };
+  }
   if (vnode.type === Fragment) return hydrateFragment(parent, vnode.props.children as Renderable[], cursor, context);
   if (typeof vnode.type === "function") return hydrateComponent(parent, vnode, cursor, context);
   return hydrateElement(parent, vnode, cursor, context);
@@ -342,7 +369,9 @@ function hydrateComponent(parent: Node, vnode: VNode, cursor: HydrationCursor, p
     createRoot((dispose) => {
       disposeScope = dispose;
       const evaluation = evaluateComponent(vnode, parentContext.contexts);
-      mounted = hydrateValue(parent, evaluation.output, cursor, { ...parentContext, contexts: evaluation.contexts });
+      let component = parentContext.component;
+      if (parentContext.inspection?.active) component = parentContext.inspection.component(vnode.type as Function) ?? component;
+      mounted = hydrateValue(parent, evaluation.output, cursor, { ...parentContext, contexts: evaluation.contexts, component });
       onCleanup(() => mounted.dispose(removeOnDispose));
       for (const callback of evaluation.mounts) {
         const cleanup = callback();
@@ -371,7 +400,7 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
   const namespace = context.namespace === "svg" || tag === "svg" ? "svg" : undefined;
   const expectedTag = namespace === "svg" ? tag : tag.toLowerCase();
   if (!isElementNode(parent, node) || (node as Element).localName !== expectedTag) {
-    throw new HydrationMismatch(`Expected server-rendered <${tag}>.`);
+    throw hydrationMismatch(parent, node, context, 0, expectedTag);
   }
   cursor.node = node.nextSibling;
   const childNamespace = namespace === "svg" && tag === "foreignObject" ? undefined : namespace;
@@ -403,7 +432,7 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
     if (rawHTML === undefined && !hasTextareaValue(node, vnode.props)) {
       const childCursor: HydrationCursor = { node: node.firstChild };
       children = hydrateFragment(node, vnode.props.children as Renderable[], childCursor, { ...context, namespace: childNamespace });
-      if (childCursor.node !== null) throw new HydrationMismatch(`Unexpected children in server-rendered <${tag}>.`);
+      if (childCursor.node !== null) throw hydrationMismatch(node, childCursor.node, context, 4);
     }
     for (const [name, value] of deferred) {
       const cleanup = bindProperty(node, name, value);
@@ -432,11 +461,11 @@ function hydrateElement(parent: Node, vnode: VNode, cursor: HydrationCursor, con
   });
 }
 
-function expectComment(cursor: HydrationCursor, data: string): Comment {
+function expectComment(parent: Node, cursor: HydrationCursor, data: string, context: MountContext): Comment {
   const node = cursor.node;
   const document = node?.ownerDocument ?? globalThis.document;
   const CommentClass = document?.defaultView?.Comment ?? globalThis.Comment;
-  if (!node || !((CommentClass && node instanceof CommentClass) || node.nodeType === 8) || (node as Comment).data !== data) throw new HydrationMismatch(`Expected <!--${data}--> hydration marker.`);
+  if (!node || !((CommentClass && node instanceof CommentClass) || node.nodeType === 8) || (node as Comment).data !== data) throw hydrationMismatch(parent, node, context, 3, data);
   cursor.node = node.nextSibling;
   return node as Comment;
 }
@@ -629,9 +658,9 @@ function hydratePortal(
   cursor: HydrationCursor,
   context: MountContext,
 ): Mounted {
-  const start = expectComment(cursor, "clank:portal");
+  const start = expectComment(parent, cursor, "clank:portal", context);
   const children = hydrateFragment(parent, portal.children, cursor, context);
-  const end = expectComment(cursor, "clank:/portal");
+  const end = expectComment(parent, cursor, "clank:/portal", context);
   if (!portal.disabled) {
     const destination = portalTarget(parent, portal.target);
     for (const node of children.nodes) destination.appendChild(node);
@@ -792,7 +821,7 @@ function mountKeyed<T>(parent: Node, block: KeyedBlock<T>, before: Node | null, 
 }
 
 function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCursor, context: MountContext): Mounted {
-  const start = expectComment(cursor, "clank:for");
+  const start = expectComment(parent, cursor, "clank:for", context);
   const keyOf = (item: T, index: number): unknown => {
     if (typeof block.by === "function") return block.by(item, index);
     if (block.by !== undefined) return (item as Record<PropertyKey, unknown>)[block.by as PropertyKey] as PropertyKey;
@@ -800,7 +829,7 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
     return `${typeof item}:${String(item)}:${index}`;
   };
   const initial = resolve(block.each) as T[];
-  if (!Array.isArray(initial)) throw new HydrationMismatch("For did not resolve to an array during hydration.");
+  if (!Array.isArray(initial)) throw hydrationMismatch(parent, cursor.node, context, 7);
   const initialKeys = new Set<unknown>();
   for (let index = 0; index < initial.length; index++) {
     const key = keyOf(initial[index], index);
@@ -830,7 +859,7 @@ function hydrateKeyed<T>(parent: Node, block: KeyedBlock<T>, cursor: HydrationCu
         ordered.push(entry);
       });
     }
-    end = expectComment(cursor, "clank:/for");
+    end = expectComment(parent, cursor, "clank:/for", context);
   } catch (error) {
     cleanupAfterError(error, [
       () => fallback?.dispose(false),
@@ -1533,10 +1562,7 @@ function sanitizeIdPrefix(prefix: string): { token: string; hasLetter: boolean }
   return { token: output.slice(start, end).join(""), hasLetter };
 }
 
-/**
- * Returns a deterministic ID scoped to the current render root. Server rendering and hydration
- * produce the same sequence as long as the component tree is structurally identical.
- */
+/** Stable IDs require matching SSR/hydration component trees. */
 export function useId(prefix = "ui"): string {
   if (!currentFrame) throw new Error("useId() must run while a component is being created.");
   const state = currentFrame.contexts.get(RENDER_ID_CONTEXT) as RenderIdState | undefined;
@@ -1573,11 +1599,7 @@ export function For<T>(props: {
   };
 }
 
-/**
- * Renders children into another node while preserving their Clank ownership and context.
- * During SSR the children remain at the declaration site between hydration markers and are
- * moved into the target when hydration attaches.
- */
+/** Preserves ownership; SSR children move to the target during hydration. */
 export function Portal(props: PortalProps): PortalBlock {
   const children = Array.isArray(props.children) ? props.children : [props.children];
   return {

@@ -7,7 +7,7 @@ export { transformTSX } from "./tsx.mjs";
 export function compile(source, options = {}) {
   const filename = options.filename ?? "module.ts";
   const transformed = filename.endsWith(".tsx")
-    ? transformTSX(source, { importSource: options.jsxImportSource }).code
+    ? transformTSX(source, { importSource: options.jsxImportSource, filename, hydrationDiagnostics: options.hydrationDiagnostics }).code
     : source;
   const stripOnly = Number(process.versions.node.split(".")[0]) >= 26;
   let javascript;

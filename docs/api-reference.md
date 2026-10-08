@@ -69,6 +69,9 @@ and security contract.
 - `Fragment`: groups children without an element.
 - `render(root, view)` → disposer: mounts an application.
 - `hydrate(root, view)` → disposer: attaches to marker-compatible SSR DOM; warns and remounts on a structural mismatch.
+- `observeHydration(listener)` → disposer: opt-in immutable structural mismatch metadata; paths, patch/remount reason and optional source/component location exclude rendered values and attributes.
+- `withHydrationSource(vnode, { file, line, column })`: copy a VNode with bounded basename/source metadata without changing props or HTML.
+- `createDevtools({ hydration: true, maxEvents? })`, `exportHydrationSnapshot(snapshot)`: bounded local inspection and deterministic redacted JSON; see [development tools](development-tools.md#hydration-mismatch-inspection).
 - `isVNode(value)`: VNode detection.
 - `onMount(callback)`: post-mount lifecycle with optional cleanup.
 - `createContext(defaultValue)`, `provideContext(context, value)`, `useContext(context)`.

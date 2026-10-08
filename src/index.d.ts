@@ -9,6 +9,7 @@ export * from "./notifications.js";
 export * from "./core.js";
 export * from "./task.js";
 export * from "./dom.js";
+export * from "./hydration-inspection.js";
 export * from "./router.js";
 export * from "./ai.js";
 export * from "./agent-contract.js";

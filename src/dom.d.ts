@@ -1,3 +1,4 @@
+import type { HydrationSource } from "./hydration-inspection.js";
 import { type Cleanup, type Computed, type ReactiveSignal } from "./core.js";
 export declare const VNODE: unique symbol;
 export declare const Fragment: unique symbol;
@@ -16,7 +17,18 @@ export interface VNode {
     type: ElementType;
     props: Record<string, unknown>;
     key?: PropertyKey;
+    readonly source?: HydrationSource;
 }
+/** @internal Optional inspection hook. */
+export interface HydrationInspection {
+  active: boolean;
+  report(parent: Node, node: Node | null, reason: number, detail?: string, source?: HydrationSource, component?: string): void;
+  source(vnode: VNode): HydrationSource | undefined;
+  component(type: Function): string | undefined;
+}
+/** @internal Used only by the optional hydration inspector. */
+export declare function setHydrationInspectionFactory(factory: ((root: Element) => HydrationInspection) | undefined): void;
+
 export interface ReactiveExpression<T = unknown> {
     readonly [EXPRESSION]: true;
     readonly read: () => T;
