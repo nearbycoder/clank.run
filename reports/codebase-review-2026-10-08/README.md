@@ -18,6 +18,30 @@ Full-suite fault checks also exposed two fixture timing defects. Canary rollback
 
 Final local verification passed: 1,657 tests reported, 1,654 passed, zero failures/cancellations and three expected privileged-host skips. Coverage is 91.96% lines, 79.69% branches and 89.86% functions. All 126 focused tests passed, as did the pinned semantic gate with 278 existing diagnostics and all 13 packed consumer fixtures. Documentation, package conformance, the unchanged dependency contract and package/tree/history security checks passed. The publish allowlist remains 393 files within the existing 394-file / 6 MiB limits. The current Railway host's namespace restriction still prevents deployment certification.
 
+## Auth and job continuation
+
+The next maintenance pass starts from merged main `59bf25908864112ab733ba09a01cb9fea34b904d` (PR #248).
+Controlled regressions reproduce delayed auth snapshots restoring a logged-out account, an initial
+lookup failure clearing a later login, stale MFA challenges, and job contexts writing/enqueuing
+after timeout, cancellation, lease replacement or completion. Separate regressions reproduce
+unhandled rejections from backend and job error observers.
+
+The fixes fence client state by the newest auth intent, eligible snapshot and account/session;
+passkey flows stop before finishing against another identity. Job database writes and child/workflow
+publication validate the current claim under SQLite's write lock, preserving atomic rollback with
+application writes. Auth, backend and job error observers contain synchronous throws and rejected
+promises; a failed job observer no longer suppresses the backend observer. These are local state
+and SQLite safeguards; browser cookies and external API effects remain separate boundaries.
+
+All 88 focused checks pass. The pinned semantic gate drops from 278 to 246 existing diagnostics,
+removing all 32 diagnostics in `jobs.ts` while preserving public declarations and all 13 packed
+consumer fixtures. No allowances, dependencies, wire formats or database migrations are added.
+The complete release gate passes with 1,679 tests reported, 1,676 passed, zero failures/cancellations
+and three expected privileged-host skips. Coverage is 92.07% lines, 79.72% branches and 90.03%
+functions. Package, dependency, documentation, conformance and security checks pass. The
+[continuation review](continuation-review.json) records complete release results and scope.
+This pass adds no new roadmap feature; six remain implemented and thirty-four planned.
+
 ## Current implementation
 
 | Area | Implemented capability | Remaining boundary |

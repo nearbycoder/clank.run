@@ -290,6 +290,8 @@ export interface WorkflowDefinition<
 }
 
 export type AnyWorkflowDefinition = WorkflowDefinition<any, any, any>;
+// Runtime graphs retain their step shape even when input/output types are erased.
+type RuntimeWorkflowDefinition = Omit<AnyWorkflowDefinition, "steps"> & { readonly steps: WorkflowStepTree };
 export type WorkflowTree = {
   readonly [key: string]: AnyWorkflowDefinition | WorkflowTree;
 };
@@ -330,7 +332,7 @@ export function defineWorkflow<
 }): WorkflowDefinition<InferJobArgs<Args>, Output, Steps> {
   const args = toSchema(definition.args);
   const created = new Set<AnyWorkflowStepDefinition>();
-  const builder: WorkflowGraphBuilder<InferJobArgs<Args>> = Object.freeze({
+  const builder = Object.freeze<WorkflowGraphBuilder<InferJobArgs<Args>>>({
     step(job, stepDefinition) {
       if (!isJobDefinition(job)) throw new TypeError("Workflow steps require a job from defineJobs().");
       if (typeof stepDefinition?.args !== "function") throw new TypeError("Workflow steps require an args mapper.");
@@ -816,7 +818,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
   };
 
   const report = (error: unknown, row?: JobRow) => {
-    try { options.onError?.(error, row ? storedJob(row) : undefined); } catch { /* Reporting must not change queue state. */ }
+    try { void Promise.resolve(options.onError?.(error, row ? storedJob(row) : undefined)).catch(() => undefined); } catch { /* Reporting must not change queue state. */ }
   };
 
   const enqueue = (
@@ -889,7 +891,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
 
   const startWorkflow = (
     scope: DatabaseScope | undefined,
-    workflow: AnyWorkflowDefinition,
+    workflow: RuntimeWorkflowDefinition,
     rawInput: unknown,
     startOptions: WorkflowStartOptions = {},
   ): WorkflowHandle => {
@@ -953,12 +955,15 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     return internal.inTransaction ? create() : internal.transaction(create);
   };
 
-  const publisher = (scope?: DatabaseScope): JobPublisher<Definition> => Object.freeze({
+  const publisher = (
+    scope?: DatabaseScope,
+    run: <Value>(handler: () => Value) => Value = handler => handler(),
+  ): JobPublisher<Definition> => Object.freeze<JobPublisher<Definition>>({
     enqueue<Job extends JobOfTree<Definition["jobs"]>>(job: Job, args: JobInput<Job>, enqueueOptions?: EnqueueOptions) {
-      return enqueue(scope, job, args, enqueueOptions);
+      return run(() => enqueue(scope, job, args, enqueueOptions));
     },
     startWorkflow(workflow, input, startOptions) {
-      return startWorkflow(scope, workflow, input, startOptions);
+      return run(() => startWorkflow(scope, workflow, input, startOptions));
     },
   });
 
@@ -1366,6 +1371,22 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       return;
     }
     const controller = new AbortController();
+    let active = true;
+    const assertClaim = () => {
+      ensureOpen();
+      controller.signal.throwIfAborted();
+      if (!active || !internal.prepare(`SELECT id FROM clank_jobs
+        WHERE id = ? AND state = 'running' AND lease_token = ? AND lease_owner = ?
+          AND cancel_requested = 0 AND lease_until > ?`).get(claimed.row.id, claimed.token, workerId, now())) {
+        throw new Error("Job attempt no longer owns an active lease.");
+      }
+    };
+    // The claim check and durable effect share SQLite's write lock. Checking
+    // outside the transaction would let another worker replace the claim first.
+    const publish = <Value>(handler: () => Value): Value => {
+      const run = () => { assertClaim(); const value = handler(); assertClaim(); return value; };
+      return internal.inTransaction ? run() : internal.transaction(run);
+    };
     const heartbeatMs = Math.max(250, Math.floor(leaseMs / 3));
     let stale = false;
     const heartbeat = setInterval(() => {
@@ -1396,14 +1417,19 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     }, definition.timeoutMs);
     (timeout as any).unref?.();
     const scope = claimed.row.owner_id === null ? undefined : { userId: claimed.row.owner_id };
-    const scopedPublisher = publisher(scope);
+    const scopedPublisher = publisher(scope, publish);
     const context: JobHandlerContext<any, any> = Object.freeze({
       db: Object.freeze({
         read<Value>(handler: (db: ReadDatabase<any>) => Value): Value {
           return database.read(handler, scope);
         },
         transaction<Value>(handler: (db: WriteDatabase<any>) => Value): Value {
-          return database.transaction(handler, scope);
+          return database.transaction(db => {
+            assertClaim();
+            const value = handler(db);
+            assertClaim();
+            return value;
+          }, scope);
         },
       }),
       job: jobMetadata(claimed.row),
@@ -1471,6 +1497,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         report(error, claimed.row);
       }
     } finally {
+      active = false;
       clearInterval(heartbeat);
       clearTimeout(timeout);
       span?.end();
@@ -2611,9 +2638,9 @@ function freezeJobTree(tree: JobTree): JobTree {
 function flattenWorkflows(
   tree: WorkflowTree,
   prefix: string[] = [],
-  output = new Map<string, AnyWorkflowDefinition>(),
+  output = new Map<string, RuntimeWorkflowDefinition>(),
   stack = new Set<object>(),
-): Map<string, AnyWorkflowDefinition> {
+): Map<string, RuntimeWorkflowDefinition> {
   if (!tree || typeof tree !== "object" || Array.isArray(tree)) {
     throw new TypeError(`Workflow namespace ${prefix.join(".") || "<root>"} must be an object.`);
   }
@@ -2659,11 +2686,11 @@ function freezeWorkflowTree(tree: WorkflowTree): WorkflowTree {
   ));
 }
 
-function workflowStepNames(workflow: AnyWorkflowDefinition): Map<AnyWorkflowStepDefinition, string> {
+function workflowStepNames(workflow: RuntimeWorkflowDefinition): Map<AnyWorkflowStepDefinition, string> {
   return new Map(Object.entries(workflow.steps).map(([name, step]) => [step, name]));
 }
 
-function workflowDefinitionRevision(workflow: AnyWorkflowDefinition): string {
+function workflowDefinitionRevision(workflow: RuntimeWorkflowDefinition): string {
   const names = workflowStepNames(workflow);
   const source = JSON.stringify({
     args: workflow.args.toJSONSchema(),
@@ -2690,7 +2717,7 @@ function workflowDefinitionRevision(workflow: AnyWorkflowDefinition): string {
 
 function workflowStepContext(
   input: unknown,
-  workflow: AnyWorkflowDefinition,
+  workflow: RuntimeWorkflowDefinition,
   currentStep: AnyWorkflowStepDefinition,
   rows: ReadonlyMap<string, WorkflowStepRow>,
 ): WorkflowStepContext<any> {
@@ -2713,7 +2740,7 @@ function workflowStepContext(
 
 function workflowOutputContext(
   input: unknown,
-  workflow: AnyWorkflowDefinition,
+  workflow: RuntimeWorkflowDefinition,
   rows: ReadonlyMap<string, WorkflowStepRow>,
 ): WorkflowOutputContext<any, any> {
   const names = workflowStepNames(workflow);

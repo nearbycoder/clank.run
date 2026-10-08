@@ -119,6 +119,13 @@ await client.auth.reload();
 
 The session credential is never exposed to JavaScript. The browser stores it only as an `HttpOnly` cookie. The CSRF token is held in memory and may be included in script-safe SSR boot state.
 
+Overlapping sign-in, sign-out and other auth state changes update the client's signals in invocation
+order: an older response cannot replace a newer intent's state or MFA challenge. Session reloads
+cannot overwrite a pending auth change, and only the newest eligible reload applies. An older
+call may still resolve its response for its caller. Passkey registration and reauthentication stop
+before sending their finish request if the account or session changed during the browser prompt.
+These guards protect client state; they do not serialize the browser's handling of HTTP cookies.
+
 `AccountSecurity({ auth })` clears its session/passkey inventory, password fields, MFA challenge,
 and status when the user or session changes. Replies from a previous account or a disposed screen
 cannot repopulate those controls. In-process anonymous backend callers expose all auth guards;

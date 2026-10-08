@@ -668,6 +668,165 @@ test("expired visibility leases are reclaimed and stale workers cannot settle", 
   }
 });
 
+for (const invalidation of ["timeout", "cancellation", "lease replacement"]) {
+  test(`job contexts cannot write or enqueue after ${invalidation}`, async () => {
+    let current = 10_000;
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let attempts = 0;
+    let finished;
+    const handlerFinished = new Promise(resolve => { finished = resolve; });
+    const rejected = [];
+    const app = await fixture(job => ({
+      slow: job({ args: {}, timeoutMs: 100, retry: { maxAttempts: 3, initialDelayMs: 0, jitter: 0 },
+        handler: async ({ db, jobs }) => {
+          if (++attempts !== 1) return "replacement";
+          await gate;
+          try {
+            for (const effect of [
+              () => db.transaction(tx => tx.table("events").insert({ value: "stale write" })),
+              () => jobs.enqueue(app.definition.jobs.child, {}),
+            ]) {
+              try { effect(); rejected.push(false); } catch { rejected.push(true); }
+            }
+          } finally { finished(); }
+          return "old attempt";
+        } }),
+      child: job({ args: {}, handler: () => "child" }),
+    }), { now: () => current });
+    let replacementDatabase;
+    let replacement;
+    // Keep the test alive while the runtime's intentionally unref'ed timeout runs.
+    const keepAlive = setInterval(() => {}, 1000);
+    try {
+      const handle = app.runtime.enqueue(app.definition.jobs.slow, {});
+      const work = app.runtime.workOnce({ workerId: "original", leaseMs: 1_000 });
+      if (invalidation === "timeout") await work;
+      else if (invalidation === "cancellation") app.runtime.cancel(handle.id);
+      else {
+        current += 1_001;
+        replacementDatabase = await openSQLite(app.schema, { path: app.path, changePollIntervalMs: 0 });
+        replacement = openJobs(app.definition, { database: replacementDatabase, now: () => current });
+        await replacement.workOnce({ workerId: "replacement", leaseMs: 1_000 });
+      }
+      release();
+      await Promise.all([work, handlerFinished]);
+      assert.deepEqual(rejected, [true, true]);
+      assert.equal(app.database.read(db => db.table("events").collect()).length, 0);
+      assert.equal(app.runtime.list({ name: "child" }).length, 0);
+      assert.equal(app.runtime.get(handle.id).state, invalidation === "timeout" ? "retry" : invalidation === "cancellation" ? "cancelled" : "succeeded");
+    } finally {
+      clearInterval(keepAlive);
+      release();
+      replacement?.close();
+      replacementDatabase?.close();
+      await app.close();
+    }
+  });
+}
+
+test("completed job contexts cannot be reused for database writes or durable fan-out", async () => {
+  let context;
+  const app = await fixture(job => ({
+    work: job({ args: {}, handler: value => { context = value; return "done"; } }),
+  }));
+  try {
+    app.runtime.enqueue(app.definition.jobs.work, {});
+    await app.runtime.workOnce();
+    assert.throws(() => context.db.transaction(tx => tx.table("events").insert({ value: "late" })));
+    assert.throws(() => context.jobs.enqueue(app.definition.jobs.work, {}));
+    assert.equal(app.runtime.stats().succeeded, 1);
+    assert.equal(app.runtime.stats().queued, 0);
+    assert.equal(app.database.read(db => db.table("events").collect()).length, 0);
+  } finally { await app.close(); }
+});
+
+test("completed job attempts cannot start retained workflow publishers", async () => {
+  const schema = defineDatabase({ events: defineTable({ value: s.string() }) });
+  let context;
+  const jobs = defineJobs({ schema }).jobs(({ job }) => ({
+    work: job({ args: {}, handler: value => { context = value; return "done"; } }),
+  }));
+  const workflow = defineWorkflow({ args: {}, graph: ({ step }) => ({ work: step(jobs.jobs.work, { args: () => ({}) }) }) });
+  const definition = defineWorkflows(jobs, { workflow });
+  const database = await openSQLite(schema, { path: ":memory:" });
+  const runtime = openJobs(definition, { database });
+  try {
+    runtime.enqueue(jobs.jobs.work, {});
+    await runtime.workOnce();
+    assert.throws(() => context.jobs.startWorkflow(workflow, {}), /active lease/);
+    assert.equal(runtime.listWorkflows().length, 0);
+    assert.equal(runtime.stats().queued, 0);
+  } finally { runtime.close(); database.close(); }
+});
+
+test("active job fan-out shares application transactions and rolls back together", async () => {
+  const schema = defineDatabase({ events: defineTable({ value: s.string() }) });
+  let workflow;
+  const jobs = defineJobs({ schema }).jobs(({ job }) => ({
+    child: job({ args: {}, handler: () => "child" }),
+    producer: job({ args: { fail: s.boolean() }, handler: ({ db, jobs: publisher }, { fail }) => db.transaction(tx => {
+      tx.table("events").insert({ value: "producer" });
+      publisher.enqueue(jobs.jobs.child, {});
+      publisher.startWorkflow(workflow, {});
+      if (fail) throw new Error("roll back fan-out");
+    }) }),
+  }));
+  workflow = defineWorkflow({ args: {}, graph: ({ step }) => ({ child: step(jobs.jobs.child, { args: () => ({}) }) }) });
+  const database = await openSQLite(schema, { path: ":memory:" });
+  const runtime = openJobs(defineWorkflows(jobs, { workflow }), { database });
+  try {
+    const failed = runtime.enqueue(jobs.jobs.producer, { fail: true });
+    await runtime.workOnce();
+    assert.equal(runtime.get(failed.id).state, "retry");
+    assert.equal(runtime.list({ name: "child" }).length, 0);
+    assert.equal(runtime.listWorkflows().length, 0);
+    assert.equal(database.read(db => db.table("events").collect()).length, 0);
+    runtime.enqueue(jobs.jobs.producer, { fail: false });
+    await runtime.workOnce();
+    assert.equal(runtime.list({ name: "child" }).length, 2);
+    assert.equal(runtime.listWorkflows().length, 1);
+    assert.equal(database.read(db => db.table("events").collect()).length, 1);
+  } finally { runtime.close(); database.close(); }
+});
+
+test("a rejected asynchronous error observer cannot escape job retry settlement", async () => {
+  const reported = [];
+  const app = await fixture(job => ({
+    work: job({ args: {}, retry: { initialDelayMs: 0, jitter: 0 }, handler: () => { throw new Error("delivery failed"); } }),
+  }), { onError: async (error, job) => { reported.push([error.message, job.id]); throw new Error("observer failed"); } });
+  try {
+    const handle = app.runtime.enqueue(app.definition.jobs.work, {});
+    await app.runtime.workOnce();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(app.runtime.get(handle.id).state, "retry");
+    assert.deepEqual(reported, [["delivery failed", handle.id]]);
+  } finally { await app.close(); }
+});
+
+for (const asynchronous of [false, true]) {
+  test(`backend job observers are independent when the first ${asynchronous ? "rejects" : "throws"}`, async () => {
+    const schema = defineDatabase({ events: defineTable({ value: s.string() }) });
+    const jobs = defineJobs({ schema }).jobs(({ job }) => ({
+      work: job({ args: {}, handler: () => { throw new Error("handler failed"); } }),
+    }));
+    const definition = defineBackend({ schema, jobs }).functions(() => ({}));
+    const reported = [];
+    const firstObserver = error => { reported.push(`jobs:${error.message}`); throw new Error("observer failed"); };
+    const runtime = await openBackend(definition, { path: ":memory:",
+      jobs: { onError: asynchronous ? async error => firstObserver(error) : firstObserver },
+      onError: error => reported.push(`backend:${error.message}`),
+    });
+    try {
+      const handle = runtime.jobs.enqueue(jobs.jobs.work, {});
+      await runtime.jobs.workOnce();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(runtime.jobs.get(handle.id).state, "retry");
+      assert.deepEqual(reported, ["jobs:handler failed", "backend:handler failed"]);
+    } finally { runtime.close(); }
+  });
+}
+
 test("scheduler creates deterministic occurrences once across competing schedulers", async () => {
   let current = Date.UTC(2026, 6, 28, 8, 59);
   const app = await fixture((job) => ({

@@ -12,6 +12,19 @@ PRs #245, #246 and #247 are merged. The subsequent maintenance review starts fro
 
 The complete maintenance gate passes with 1,657 tests reported, 1,654 passed, zero failures/cancellations and three privileged-host skips. Coverage is 91.96% lines, 79.69% branches and 89.86% functions. All 126 focused tests and 13 packed consumer fixtures pass; source diagnostics are reduced from 290 to 278 without increasing baseline allowances. The existing 393-file package, dependency contract, documentation, conformance and security gates pass. Production host certification remains unavailable because the current Railway host denies required Linux namespaces. See [maintenance review](maintenance-review.json) for findings, source/log hashes, reproduction evidence and remaining debt. The earlier sections below preserve their original batch evidence.
 
+## Auth and job continuation from PR #248
+
+PR #248 is merged as `59bf25908864112ab733ba09a01cb9fea34b904d`. The next review fixes auth
+response/MFA/passkey races, prevents stale job attempts from writing or creating durable fan-out,
+and contains rejected auth/backend/job error observers. The current job claim is checked inside
+the database transaction, so active fan-out still commits or rolls back with application writes.
+All 88 focused tests and all 13 packed type fixtures pass. Source diagnostics decrease from
+278 to 246, with all 32 job-module diagnostics resolved and no baseline additions. The full gate
+reports 1,676 passing tests, zero failures and three expected privileged-host skips; coverage,
+documentation, package, conformance and security checks pass. See
+[continuation review](continuation-review.json) for full validation, evidence and remaining limits.
+The roadmap count remains six implemented and thirty-four planned.
+
 ## Review prerequisites
 
 | Item | State | Evidence |

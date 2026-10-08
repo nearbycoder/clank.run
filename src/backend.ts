@@ -477,7 +477,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     "historyRetentionPerDocument",
   );
   const reportError = (error: unknown) => {
-    try { options.onError?.(error); } catch { /* Error reporting must never change database behavior. */ }
+    try { void Promise.resolve(options.onError?.(error)).catch(() => undefined); } catch { /* Error reporting must never change database behavior. */ }
   };
 
   native.enableLoadExtension?.(false);
@@ -1931,8 +1931,8 @@ export async function openBackend<
         tracer: options.jobs?.tracer ?? options.tracer,
         database,
         onError(error, job) {
-          options.jobs?.onError?.(error, job);
-          options.onError?.(error);
+          try { void Promise.resolve(options.jobs?.onError?.(error, job)).catch(() => undefined); } catch { /* Continue notifying other observers. */ }
+          try { void Promise.resolve(options.onError?.(error)).catch(() => undefined); } catch { /* Observers cannot change queue state. */ }
         },
       })
     : undefined;
@@ -1977,7 +1977,7 @@ export async function openBackend<
   let closed = false;
   let liveConnections = 0;
   const reportError = (error: unknown) => {
-    try { options.onError?.(error); } catch { /* Observability hooks cannot affect request or commit behavior. */ }
+    try { void Promise.resolve(options.onError?.(error)).catch(() => undefined); } catch { /* Observability hooks cannot affect request or commit behavior. */ }
   };
 
   const ensureOpen = () => {

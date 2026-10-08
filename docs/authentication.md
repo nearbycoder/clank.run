@@ -163,6 +163,11 @@ trusted, same-site origins such as localhost ports or sibling subdomains;
 Fetch Metadata still rejects genuinely cross-site auth requests. Production
 Clank apps should keep the default same-origin client and need no allowlist.
 
+Auth client state ignores replies from superseded sign-in/sign-out operations and stale session
+reloads. Passkey prompts retain their original account/session and cannot send a finish request
+after that identity changes. See the [auth client API](auth.md#auth-client-api) for concurrency
+semantics and the separate browser-cookie boundary.
+
 For a self-hosted app behind an exclusive trusted reverse proxy:
 
 ```ts
