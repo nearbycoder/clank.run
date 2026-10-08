@@ -25,6 +25,22 @@ documentation, package, conformance and security checks pass. See
 [continuation review](continuation-review.json) for full validation, evidence and remaining limits.
 The roadmap count remains six implemented and thirty-four planned.
 
+## Storage and runner continuation from PR #249
+
+PR #249 is merged as `7aeedc7d8c82575541672f55e853613d5a9fedd9`. The next review preserves
+object-write and browser-upload inputs across asynchronous work, stops malformed resumable
+progress, classifies and redacts S3 body failures, releases rejected unread bodies, and rejects
+non-byte object inputs. Artifact and runtime transfer now hashes and sends a copied buffer
+through lease revalidation. Bucket, coordinator and agent observers contain rejected promises.
+
+All 80 focused tests pass. The semantic baseline drops from 246 to 163, removing all 83
+diagnostics in buckets, object storage and runner modules with no additions. Public declarations,
+wire formats, persistent schemas and dependencies are unchanged. The full gate reports 1,702
+passing tests, zero failures/cancellations and three expected privileged-host skips; documentation,
+coverage, package conformance and security checks pass. Results and remaining limits are recorded
+in [storage and runner review](storage-runner-review.json).
+The roadmap remains six implemented and thirty-four planned.
+
 ## Review prerequisites
 
 | Item | State | Evidence |

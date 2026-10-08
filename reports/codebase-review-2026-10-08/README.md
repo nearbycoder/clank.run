@@ -42,6 +42,24 @@ functions. Package, dependency, documentation, conformance and security checks p
 [continuation review](continuation-review.json) records complete release results and scope.
 This pass adds no new roadmap feature; six remain implemented and thirty-four planned.
 
+## Storage and runner continuation
+
+This review starts from freshly fetched main `7aeedc7d8c82575541672f55e853613d5a9fedd9`,
+after PR #249 merged. It fixes mutable object-write inputs, Blob upload options and CSRF capture,
+invalid resumable progress, S3 body deadlines and transport-error redaction, unread response
+cleanup, non-byte object inputs, and artifact/runtime bytes changing during lease revalidation.
+Bucket, coordinator and runner-agent error observers now contain rejected promises.
+
+All 80 focused tests pass. Source diagnostics decrease from 246 to 163, resolving all 83
+diagnostics in buckets, object storage and runner code without new baseline allowances. Public
+declarations, wire formats, persistent schemas and the zero-dependency contract are preserved.
+The full release gate passes with 1,705 tests reported, 1,702 passed, zero failures/cancellations
+and three expected privileged-host skips. Coverage is 92.09% lines, 79.78% branches and 90.04%
+functions; documentation, package conformance and security checks pass. The
+[storage and runner review](storage-runner-review.json) records validation and remaining limits. This maintenance batch adds no roadmap feature: six remain implemented and
+thirty-four planned. Hosted deployment and disposable Docker/XFS certification remain separate
+requirements.
+
 ## Current implementation
 
 | Area | Implemented capability | Remaining boundary |

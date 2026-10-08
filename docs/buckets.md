@@ -104,7 +104,15 @@ const object = await attachments.upload({
 });
 ```
 
-Large uploads use sequential offset-checked `PATCH` chunks. `HEAD` reports the durable offset, so a
+The browser client captures the upload key, options, progress callback and CSRF header when
+`upload()` is called, before asynchronously buffering a `Blob`. Changing those inputs while the
+file is read cannot redirect the pending upload. The server still validates the initiating session
+and CSRF token.
+
+Large uploads use sequential offset-checked `PATCH` chunks. The client rejects invalid resumable
+state before sending a chunk and requires each intermediate response's `Upload-Offset` to equal
+the end of the chunk just sent; missing, malformed or unexpected offsets stop the upload.
+`HEAD` reports the durable offset, so a
 client can continue after a lost response. A wrong offset cannot overwrite an earlier chunk.
 `DELETE` cancels the reservation. Completion verifies declared length, optional SHA-256, allowed
 media type, image signature and dimensions, and the metadata returned by the object provider before

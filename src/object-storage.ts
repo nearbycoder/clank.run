@@ -176,21 +176,22 @@ export async function openLocalObjectStore(
     }
   };
 
-  return Object.freeze({
+  return Object.freeze<ObjectStore>({
     kind: "local" as const,
     async put(keyInput, value, putOptions = {}) {
-      const target = await location(keyInput);
       const bytes = copyBytes(value);
+      const contentType = mediaType(putOptions.contentType);
       if (bytes.byteLength > maxObjectBytes) {
         throw new ObjectStoreError(413, "OBJECT_TOO_LARGE", `Object exceeds ${maxObjectBytes} bytes.`);
       }
+      const target = await location(keyInput);
       const current = await read(target.key, false) as ObjectMetadata | null;
       const now = Date.now();
       const metadata = Object.freeze({
         key: target.key,
         size: bytes.byteLength,
         sha256: await sha256(bytes),
-        contentType: mediaType(putOptions.contentType),
+        contentType,
         createdAt: current?.createdAt ?? now,
         updatedAt: now,
       });
@@ -291,8 +292,8 @@ export function createS3ObjectStore(options: S3ObjectStoreOptions): ObjectStore 
     method: "GET" | "HEAD" | "PUT" | "DELETE",
     key: string,
     headersInput: Record<string, string> = {},
-    body?: Uint8Array,
-  ): Promise<{ response: Response; release(): void }> => {
+    body?: Uint8Array<ArrayBuffer>,
+  ): Promise<{ response: Response; signal: AbortSignal; release(): void }> => {
     const url = objectUrl(key);
     const signedAt = clock();
     let lastError: unknown;
@@ -327,8 +328,10 @@ export function createS3ObjectStore(options: S3ObjectStoreOptions): ObjectStore 
         }
         return {
           response,
+          signal: controller.signal,
           release() {
             clearTimeout(timer);
+            void response.body?.cancel().catch(() => undefined);
           },
         };
       } catch (error) {
@@ -375,11 +378,12 @@ export function createS3ObjectStore(options: S3ObjectStoreOptions): ObjectStore 
     }
   };
 
-  return Object.freeze({
+  return Object.freeze<ObjectStore>({
     kind: "s3" as const,
     async put(keyInput, value, putOptions = {}) {
       const key = objectKey(keyInput);
       const bytes = copyBytes(value);
+      const contentType = mediaType(putOptions.contentType);
       if (bytes.byteLength > maxObjectBytes) {
         throw new ObjectStoreError(413, "OBJECT_TOO_LARGE", `Object exceeds ${maxObjectBytes} bytes.`);
       }
@@ -389,7 +393,7 @@ export function createS3ObjectStore(options: S3ObjectStoreOptions): ObjectStore 
         key,
         size: bytes.byteLength,
         sha256: await sha256(bytes),
-        contentType: mediaType(putOptions.contentType),
+        contentType,
         createdAt: current?.createdAt ?? now,
         updatedAt: now,
       });
@@ -417,7 +421,13 @@ export function createS3ObjectStore(options: S3ObjectStoreOptions): ObjectStore 
         }
         await requireSuccess(flight.response, [200]);
         const metadata = s3Metadata(key, flight.response.headers, maxObjectBytes);
-        const bytes = await readBounded(flight.response.body, maxObjectBytes);
+        let bytes: Uint8Array<ArrayBuffer>;
+        try { bytes = await readBounded(flight.response.body, maxObjectBytes); }
+        catch (error) {
+          if (flight.signal.aborted) throw new ObjectStoreError(504, "OBJECT_STORE_TIMEOUT", "Object storage request timed out.");
+          if (error instanceof ObjectStoreError) throw error;
+          throw new ObjectStoreError(502, "OBJECT_STORE_UNAVAILABLE", "Object storage is unavailable.");
+        }
         if (bytes.byteLength !== metadata.size || await sha256(bytes) !== metadata.sha256) {
           throw new ObjectStoreError(
             502,
@@ -752,16 +762,16 @@ function mediaType(value?: string): string {
   return normalized;
 }
 
-function copyBytes(value: Uint8Array | ArrayBuffer): Uint8Array {
-  return value instanceof Uint8Array
-    ? new Uint8Array(value)
-    : new Uint8Array(value.slice(0));
+function copyBytes(value: Uint8Array | ArrayBuffer): Uint8Array<ArrayBuffer> {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
+  throw new TypeError("Object value must be a Uint8Array or ArrayBuffer.");
 }
 
 async function readBounded(
   body: ReadableStream<Uint8Array> | null,
   maximum: number,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   if (!body) return new Uint8Array();
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -794,18 +804,24 @@ async function retryDelay(attempt: number): Promise<void> {
 }
 
 async function sha256(value: Uint8Array): Promise<string> {
-  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", value)));
+  return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", cryptoBytes(value))));
+}
+
+function cryptoBytes(value: Uint8Array): Uint8Array<ArrayBuffer> {
+  return value.buffer instanceof ArrayBuffer
+    ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+    : new Uint8Array(value);
 }
 
 async function hmacBytes(value: Uint8Array, key: Uint8Array): Promise<Uint8Array> {
   const imported = await crypto.subtle.importKey(
     "raw",
-    key,
+    cryptoBytes(key),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
-  return new Uint8Array(await crypto.subtle.sign("HMAC", imported, value));
+  return new Uint8Array(await crypto.subtle.sign("HMAC", imported, cryptoBytes(value)));
 }
 
 function hex(value: Uint8Array): string {

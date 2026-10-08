@@ -269,6 +269,9 @@ export function createDeploymentCoordinatorHandler(
     2 * 1024 * 1024 * 1024,
   );
 
+  const report = (error: unknown) => {
+    try { void Promise.resolve(options.onError?.(error)).catch(() => undefined); } catch { /* Diagnostics cannot change coordinator behavior. */ }
+  };
   const handle = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     if (url.pathname !== DEPLOYMENT_COORDINATOR_PREFIX
@@ -323,7 +326,7 @@ export function createDeploymentCoordinatorHandler(
             try {
               await authorization.rollback();
             } catch (rollbackError) {
-              options.onError?.(rollbackError);
+              report(rollbackError);
             }
           }
           throw error;
@@ -424,21 +427,22 @@ export function createDeploymentCoordinatorHandler(
         if (artifact.bytes.byteLength > maxArtifactBytes) {
           throw new CoordinatorRequestError(413, "ARTIFACT_TOO_LARGE", "The deployment artifact is too large.");
         }
+        const bytes = new Uint8Array(artifact.bytes);
         if (!isArtifactDigest(artifact.sha256)) {
           throw new Error("Deployment artifact provider returned an invalid digest.");
         }
         const digest = artifact.sha256;
-        if (await sha256(artifact.bytes) !== digest) {
+        if (await sha256(bytes) !== digest) {
           throw new Error("Deployment artifact provider returned a digest mismatch.");
         }
         if (!await orchestrator.authenticateOperation(claimed)) {
           throw new CoordinatorRequestError(409, "STALE_OPERATION", "The deployment operation lease is stale.");
         }
-        return new Response(artifact.bytes, {
+        return new Response(bytes, {
           status: 200,
           headers: {
             "cache-control": "private, no-store",
-            "content-length": String(artifact.bytes.byteLength),
+            "content-length": String(bytes.byteLength),
             "content-type": "application/vnd.clank.deploy+gzip",
             "x-clank-content-sha256": digest,
             "x-content-type-options": "nosniff",
@@ -463,21 +467,22 @@ export function createDeploymentCoordinatorHandler(
         if (runtime.bytes.byteLength > maxRuntimeBytes) {
           throw new CoordinatorRequestError(413, "RUNTIME_TOO_LARGE", "The deployment runtime capsule is too large.");
         }
+        const bytes = new Uint8Array(runtime.bytes);
         if (!isArtifactDigest(runtime.sha256)) {
           throw new Error("Deployment runtime provider returned an invalid digest.");
         }
         const digest = runtime.sha256;
-        if (await sha256(runtime.bytes) !== digest) {
+        if (await sha256(bytes) !== digest) {
           throw new Error("Deployment runtime provider returned a digest mismatch.");
         }
         if (!await orchestrator.authenticateOperation(claimed)) {
           throw new CoordinatorRequestError(409, "STALE_OPERATION", "The deployment operation lease is stale.");
         }
-        return new Response(runtime.bytes, {
+        return new Response(bytes, {
           status: 200,
           headers: {
             "cache-control": "private, no-store",
-            "content-length": String(runtime.bytes.byteLength),
+            "content-length": String(bytes.byteLength),
             "content-type": DEPLOYMENT_RUNTIME_MEDIA_TYPE,
             "x-clank-content-sha256": digest,
             "x-content-type-options": "nosniff",
@@ -516,7 +521,7 @@ export function createDeploymentCoordinatorHandler(
       if (safeError(error).includes("lease is stale")) {
         return problem(409, "STALE_OPERATION", "The deployment operation lease is stale.");
       }
-      options.onError?.(error);
+      report(error);
       return problem(500, "COORDINATOR_FAILED", "The deployment coordinator operation failed.");
     }
   };
@@ -766,7 +771,7 @@ export function createDeploymentCoordinatorClient(
     }
   };
 
-  return Object.freeze({
+  return Object.freeze<DeploymentCoordinatorClient>({
     async register(token, input) {
       const payload = await call("register", { ...input }, token);
       return {
@@ -836,7 +841,7 @@ export async function openDeploymentAgent(
   const credentials = options.credentials ?? memoryCredentialStore();
   const report = (error: unknown) => {
     try {
-      options.onError?.(error);
+      void Promise.resolve(options.onError?.(error)).catch(() => undefined);
     } catch {
       // Operator diagnostics must never break the runner lifecycle.
     }
@@ -1142,7 +1147,7 @@ export function memoryDeploymentNodeCredentials(
   for (const [nodeId, token] of Object.entries(initial)) {
     values.set(boundedNodeId(nodeId), boundedToken(token, "node token"));
   }
-  return Object.freeze({
+  return Object.freeze<DeploymentNodeCredentialStore>({
     async load(nodeId) {
       return values.get(boundedNodeId(nodeId)) ?? null;
     },
@@ -1284,7 +1289,7 @@ export function fileDeploymentNodeCredentials(pathInput: string): DeploymentNode
       await fs.rm(temporary, { force: true });
     }
   };
-  return Object.freeze({
+  return Object.freeze<DeploymentNodeCredentialStore>({
     async load(nodeId) {
       return serialized(async () => {
         const values = await read();
@@ -1323,7 +1328,10 @@ function isArtifactDigest(value: unknown): value is string {
 }
 
 async function sha256(value: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", value));
+  const bytes = value.buffer instanceof ArrayBuffer
+    ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+    : new Uint8Array(value);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

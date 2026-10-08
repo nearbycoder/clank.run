@@ -158,7 +158,9 @@ same versioned prefix. It requires all three authorities at once:
 3. a provider result for that operation's project and release.
 
 The provider receives a frozen operation snapshot without its lease token. Both sides enforce an
-independent byte ceiling. The coordinator verifies the provider's SHA-256 digest before sending,
+independent byte ceiling. The coordinator copies the bounded provider bytes before checking their
+SHA-256 and revalidating the lease, then sends that same copy. A provider's later mutation cannot
+change the verified artifact or sensitive runtime response. The coordinator verifies the digest before sending,
 and the client requires the exact media type, content length, and digest before returning bytes.
 The response is private, no-store, non-sniffable, HTTPS-only outside loopback, and redirect
 refusing.
@@ -331,6 +333,8 @@ can replace it.
 - Executor failures reach `onError` locally, while the coordinator receives
   `Deployment execution failed.` by default. A custom `failureMessage` must return only bounded,
   non-secret text.
+- Synchronous throws and rejected promises from coordinator or agent error observers are contained;
+  they cannot replace the safe error response or terminate the agent's recovery loop.
 - A missing completion response is an uncertain outcome: the agent reports it locally and leaves
   the lease to expire instead of converting a possibly committed success into an explicit retry.
   Provider mutations must still be idempotent under the operation ID and fence.

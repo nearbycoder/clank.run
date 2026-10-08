@@ -380,7 +380,7 @@ function normalizeImagePolicy(input: false | BucketImagePolicy | undefined): Buc
   for (const [name, raw] of Object.entries(input.variants ?? {})) {
     const variantName = boundedName(name);
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new TypeError(`image variant ${name} must be an object.`);
-    exactKeys(raw as Record<string, unknown>, ["width", "height", "fit", "format", "quality"], `image variant ${name}`);
+    exactKeys(raw, ["width", "height", "fit", "format", "quality"], `image variant ${name}`);
     variants[variantName] = Object.freeze({
       width: integer(raw.width, `${name}.width`, 1, maxWidth),
       height: integer(raw.height, `${name}.height`, 1, maxHeight),
@@ -655,7 +655,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
   let closed = false;
   let transactionActive = false;
   const report = (error: unknown) => {
-    try { options.onError?.(error); } catch { /* Diagnostics cannot alter storage behavior. */ }
+    try { void Promise.resolve(options.onError?.(error)).catch(() => undefined); } catch { /* Diagnostics cannot alter storage behavior. */ }
   };
   const ensureOpen = () => {
     if (closed) throw new BucketError(503, "BUCKET_CLOSED", "Bucket storage is closed.");
@@ -1235,7 +1235,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       key: String(reservation.object_key),
       method: resumable ? "PATCH" as const : "PUT" as const,
       url: `${publicOrigin}${basePath}/${encodeURIComponent(definition.name)}/cap/${token}`,
-      headers: Object.freeze(resumable
+      headers: Object.freeze<Record<string, string>>(resumable
         ? { "upload-offset": "0", "content-type": "application/offset+octet-stream" }
         : { "content-type": String(reservation.content_type) }),
       expiresAt,
@@ -1318,7 +1318,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       throw new BucketError(500, "BUCKET_INTEGRITY_FAILED", "Bucket object failed integrity verification.");
     }
     const headers = objectHeaders(metadata);
-    return new Response(request.method === "HEAD" ? null : stored.bytes, { status: 200, headers });
+    return new Response(request.method === "HEAD" ? null : copyBytes(stored.bytes), { status: 200, headers });
   };
 
   const handleResumable = async (request: Request, capability: Capability): Promise<Response> => {
@@ -1565,7 +1565,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     const definition = definitionFor(name);
     const existing = runtimes.get(name);
     if (existing) return existing;
-    const value: BucketRuntime = Object.freeze({
+    const value = Object.freeze<BucketRuntime>({
       definition,
       put: (key, bytes, putOptions) => put(definition, key, bytes, putOptions),
       get: (key, identity) => get(definition, key, identity),
@@ -1633,7 +1633,7 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
     }
     return body as Value;
   };
-  return Object.freeze({
+  return Object.freeze<BucketClient>({
     async list(listOptions = {}) {
       const query = new URLSearchParams();
       if (listOptions.prefix !== undefined) query.set("prefix", listOptions.prefix);
@@ -1649,21 +1649,23 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
       return result.object;
     },
     async upload(uploadOptions) {
-      const bytes = uploadOptions.value instanceof Blob
-        ? new Uint8Array(await uploadOptions.value.arrayBuffer())
-        : copyBytes(uploadOptions.value);
-      const contentType = uploadOptions.contentType
-        ?? (uploadOptions.value instanceof Blob && uploadOptions.value.type ? uploadOptions.value.type : "application/octet-stream");
+      const { key, value, contentType: requestedContentType, resumable, expectedSha256, onProgress } = uploadOptions;
+      const writeHeaders = { "content-type": "application/json", ...csrfHeaders() };
+      const bytes = value instanceof Blob
+        ? new Uint8Array(await value.arrayBuffer())
+        : copyBytes(value);
+      const contentType = requestedContentType
+        ?? (value instanceof Blob && value.type ? value.type : "application/octet-stream");
       const intent = await json<BucketUploadIntent>(await request(`${endpoint}/uploads`, {
         method: "POST",
         credentials: "same-origin",
-        headers: { "content-type": "application/json", ...csrfHeaders() },
+        headers: writeHeaders,
         body: JSON.stringify({
-          key: uploadOptions.key,
+          key,
           size: bytes.byteLength,
           contentType,
-          resumable: uploadOptions.resumable,
-          expectedSha256: uploadOptions.expectedSha256,
+          resumable,
+          expectedSha256,
         }),
       }));
       if (!intent.resumable) {
@@ -1672,8 +1674,12 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
           headers: intent.headers,
           body: bytes,
         }));
-        uploadOptions.onProgress?.(bytes.byteLength, bytes.byteLength);
+        onProgress?.(bytes.byteLength, bytes.byteLength);
         return result.object;
+      }
+      if (!Number.isSafeInteger(intent.offset) || intent.offset < 0 || intent.offset >= bytes.byteLength
+        || !Number.isSafeInteger(intent.maxChunkBytes) || intent.maxChunkBytes <= 0) {
+        throw new BucketError(502, "UPLOAD_INCOMPLETE", "Upload response contains invalid resumable state.");
       }
       let offset = intent.offset;
       while (offset < bytes.byteLength) {
@@ -1685,12 +1691,16 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
         });
         if (end === bytes.byteLength) {
           const result = await json<{ object: BucketObject }>(response);
-          uploadOptions.onProgress?.(end, bytes.byteLength);
+          onProgress?.(end, bytes.byteLength);
           return result.object;
         }
         if (!response.ok) await json(response);
-        offset = Number(response.headers.get("upload-offset"));
-        uploadOptions.onProgress?.(offset, bytes.byteLength);
+        const nextOffset = response.headers.get("upload-offset");
+        if (nextOffset === null || !/^\d+$/u.test(nextOffset) || Number(nextOffset) !== end) {
+          throw new BucketError(502, "UPLOAD_OFFSET_MISMATCH", "Upload response offset does not match the accepted chunk.");
+        }
+        offset = end;
+        onProgress?.(offset, bytes.byteLength);
       }
       throw new BucketError(500, "UPLOAD_INCOMPLETE", "Upload did not complete.");
     },
@@ -1895,7 +1905,7 @@ function boundedName(value: unknown): string {
   return value;
 }
 
-function exactKeys(value: Record<string, unknown>, allowed: readonly string[], label: string): void {
+function exactKeys(value: object, allowed: readonly string[], label: string): void {
   const accepted = new Set(allowed);
   const unknown = Object.keys(value).find((key) => !accepted.has(key));
   if (unknown) throw new TypeError(`${label} contains unknown field ${unknown}.`);
@@ -2010,7 +2020,7 @@ function deepFreeze<Value>(value: Value): Value {
   return Object.freeze(value);
 }
 
-function copyBytes(value: Uint8Array | ArrayBuffer): Uint8Array {
+function copyBytes(value: Uint8Array | ArrayBuffer): Uint8Array<ArrayBuffer> {
   if (value instanceof Uint8Array) return new Uint8Array(value);
   if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
   throw new TypeError("Object value must be a Uint8Array or ArrayBuffer.");
@@ -2064,7 +2074,10 @@ function randomId(prefix: string): string {
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const input = bytes.buffer instanceof ArrayBuffer
+    ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    : new Uint8Array(bytes);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
   return [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 

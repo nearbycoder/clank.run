@@ -85,6 +85,81 @@ async function waitForAbort(signal) {
   });
 }
 
+for (const transfer of ["artifact", "runtime"]) {
+  for (const shared of [false, true]) {
+    test(`${transfer} snapshots ${shared ? "shared" : "provider-owned"} bytes before lease revalidation`, async () => {
+      const original = new TextEncoder().encode("verified-content");
+      const bytes = shared ? new Uint8Array(new SharedArrayBuffer(original.byteLength)) : new Uint8Array(original);
+      bytes.set(original);
+      const digest = createHash("sha256").update(original).digest("hex");
+      const environment = await fixture();
+      try {
+        const session = await environment.client.register(registrationToken, { id: "runner-snapshot", region: "local" });
+        await environment.orchestrator.setDesired({ projectId: "project_snapshot", releaseId: "release-1", state: "running", region: "local",
+          ...(transfer === "runtime" ? { runtimeProtocol: "clank-runtime/1" } : {}) });
+        const [operation] = await environment.client.claim(session.node.id, session.token, 1);
+        let validations = 0;
+        const orchestrator = new Proxy(environment.orchestrator, { get(target, key) {
+          if (key !== "authenticateOperation") return Reflect.get(target, key);
+          return async claimed => {
+            const canonical = await target.authenticateOperation(claimed);
+            if (++validations === 2) bytes.fill(0);
+            return canonical;
+          };
+        } });
+        const handler = createDeploymentCoordinatorHandler(orchestrator, { registrationToken,
+          [transfer]: { load: async () => ({ bytes, sha256: digest }) } });
+        const client = createDeploymentCoordinatorClient({ baseUrl: "http://127.0.0.1:4200", fetch: (url, init) => handler.handle(new Request(url, init)) });
+        const downloaded = await client[transfer](session.node.id, session.token, operation);
+        assert.equal(validations, 2, "lease revalidation remains required");
+        assert.deepEqual(downloaded.bytes, original);
+        assert.equal(downloaded.sha256, digest);
+      } finally { await environment.close(); }
+    });
+  }
+}
+
+for (const asynchronous of [false, true]) {
+  test(`coordinator failures remain redacted when an observer ${asynchronous ? "rejects" : "throws"}`, async () => {
+    const reported = [];
+    const observer = error => { reported.push(error.message); throw new Error("observer failed"); };
+    const environment = await fixture({}, { artifact: { load: async () => { throw new Error("private provider failure"); } },
+      onError: asynchronous ? async error => observer(error) : observer });
+    try {
+      const session = await environment.client.register(registrationToken, { id: "runner-observer", region: "local" });
+      await environment.orchestrator.setDesired({ projectId: "project_observer", releaseId: "release-1", state: "running", region: "local" });
+      const [operation] = await environment.client.claim(session.node.id, session.token, 1);
+      await assert.rejects(environment.client.artifact(session.node.id, session.token, operation),
+        error => error instanceof DeploymentCoordinatorError && error.code === "COORDINATOR_FAILED" && !error.message.includes("private provider failure"));
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(reported, ["private provider failure"]);
+    } finally { await environment.close(); }
+  });
+}
+
+test("deployment agent diagnostics can reject without stopping claim polling or shutdown", async () => {
+  const environment = await fixture();
+  let agent;
+  let claims = 0;
+  const reported = [];
+  try {
+    agent = await openDeploymentAgent({
+      node: { id: "runner-observer-agent", region: "local" }, registrationToken,
+      client: { ...environment.client, async claim(...args) {
+        if (++claims === 1) throw new Error("temporary claim failure");
+        return environment.client.claim(...args);
+      } },
+      pollIntervalMs: 10, heartbeatIntervalMs: 100,
+      execute: async () => null,
+      onError: async error => { reported.push(error.message); throw new Error("observer failure"); },
+    });
+    await waitFor(() => claims > 1, "claim polling did not recover after diagnostic rejection");
+    assert.deepEqual(reported, ["temporary claim failure"]);
+    await agent.close();
+    await agent.done;
+  } finally { await agent?.close(); await environment.close(); }
+});
+
 test("authenticated deployment nodes coordinate placement and fenced operations over HTTP", async () => {
   const test = await fixture();
   try {
