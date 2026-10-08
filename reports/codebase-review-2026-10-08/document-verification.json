@@ -1,0 +1,86 @@
+{
+  "date": "2026-10-08",
+  "originMain": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+  "parentBatchCommit": "02ff56ece5170885244a161f55ddd02e7107b4ec",
+  "completedFeatureIds": [
+    18,
+    26,
+    27,
+    33,
+    35
+  ],
+  "plannedFeatureCount": 35,
+  "fullReleaseGate": {
+    "node": "26.10.0",
+    "status": "passed",
+    "tests": 1635,
+    "passed": 1632,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 3,
+    "coverage": {
+      "lines": 91.88,
+      "branches": 79.58,
+      "functions": 89.73
+    }
+  },
+  "focusedTests": {
+    "tests": 51,
+    "passed": 51,
+    "failed": 0
+  },
+  "semanticContracts": {
+    "existingSourceDiagnostics": 290,
+    "newSourceDiagnostics": 0,
+    "packedConsumerFixtures": 12,
+    "skipConsumerLibCheck": false
+  },
+  "browser": {
+    "fixture": "tests/fixtures/collaborative-browser.mjs",
+    "twoAuthenticatedSessions": true,
+    "keyboardSelectionAndAcceptance": "passed",
+    "staleReviewRejection": "passed",
+    "persistedDocument": {
+      "text": "!Dear Hello earth",
+      "revision": 4
+    },
+    "revocation": "text, presence and actionable review controls cleared",
+    "mobileViewport": {
+      "width": 390,
+      "height": 844,
+      "clientWidth": 375,
+      "scrollWidth": 375
+    },
+    "consoleWarningsAndErrors": [],
+    "assets": "preloaded framework assets; no request-derived file reads"
+  },
+  "notPerformed": [
+    "production rollout",
+    "merge to main",
+    "disposable Docker/XFS certification",
+    "completion of remaining 35 planned features"
+  ],
+  "sourceFiles": {
+    "src/backend.ts": "f22219c2a02bba8d83c3e40c9c2a8bbc663fc839d5371cd6103c9a5094787fbf",
+    "src/collaborative-documents.ts": "def4a52b80e1d1e844e2155f8f0f400d8ac14b316d65d7c42b63d235365f0c0e",
+    "src/collaborative-documents.d.ts": "aaecdbe6fe10e0e5d699c7f6881ce66cadb0e14839d105a325777dabac42e071",
+    "src/openapi.ts": "517bb2f5a0b5531122716873c9e58c34df3fd678f35ebb9eeb52fe960271d76e",
+    "tests/durable-features.test.mjs": "6e6b8bd664772692365daf1b4904425a0b69709e60052c297a7af7b273005ee5",
+    "tests/fixtures/collaborative-browser.mjs": "7ff3e8034ac5f7963fe82226e97c91ec8894228b8af919da4ea33cc5f51055a2",
+    "type-tests/document-review.ts": "6b8d17ac0a1438f99a80a834568337c9539092ac337bdcb5a8721cd3f5f4a335"
+  },
+  "logs": {
+    "document-final-check.log": {
+      "path": "/tmp/clank-review-2026-10-08/document-final-check.log",
+      "sha256": "ce587c79cbbeb14bc7979ae9d2a29a528eb0bce16f2c36ad8f6775e695e2b207"
+    },
+    "contract-final-tests.log": {
+      "path": "/tmp/clank-review-2026-10-08/contract-final-tests.log",
+      "sha256": "37499e1f4859a61c5de9019f3ba154a650a89478a686a7e12cdbf89f462ce4c7"
+    },
+    "collaboration-types.log": {
+      "path": "/tmp/clank-review-2026-10-08/collaboration-types.log",
+      "sha256": "ce26b309d28ab62a1f2e0d75190395178d839a8daffd630f13be9cfebb6a7063"
+    }
+  }
+}

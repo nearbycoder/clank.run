@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Three of the forty proposed features are implemented in the first review batch; the other thirty-seven remain planned.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Five of the forty proposed features are implemented across two review batches; the other thirty-five remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is on `codex/document-coordination-and-review` and depends on it.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -47,8 +47,8 @@ A feature is complete only when its documented acceptance evidence exists. Propo
 | 23 | Source-linked search indexes | Planned | Pending |
 | 24 | Search facets and stable result cursors | Planned | Pending |
 | 25 | Import correction and upsert workflow | Planned | Pending |
-| 26 | Shared document cursor coordination | Planned | Pending |
-| 27 | Document suggestions and branches | Planned | Pending |
+| 26 | Shared document cursor coordination | Implemented | Revision-aware, session-bound ephemeral cursors; edit/deletion rebasing, expiry/capacity, per-participant owned authorization, session/ACL/email-verification revocation and restart/reconnect tested. Keyboard/browser and mobile checks pass. |
+| 27 | Document suggestions and branches | Implemented | Named durable drafts, immutable proposals, before/after review, author/reviewer policies, document/branch fences, overlap/missing-history rejection, bounded payload/rebase bytes, transactional acceptance and exact restart replay tested. |
 | 28 | Retained file versions and restore | Planned | Pending |
 | 29 | Durable media processing jobs | Planned | Pending |
 | 30 | Offline attachment queue | Planned | Pending |
@@ -73,4 +73,12 @@ The translation browser fixture (`tests/fixtures/translation-browser.mjs`) rejec
 
 Railway's current production runtime has `unshare` and Bubblewrap installed, but its kernel policy rejects namespace creation. This explains the worker startup failure; this branch diagnoses it and preserves fail-closed isolation. No production deployment or host policy change was performed. A disposable Linux host matching the intended Docker/XFS profile is still needed; no green host certificate, provider failover result, or remote recovery certification is claimed.
 
-Next independent implementation batch: revision-aware ephemeral document cursors and persisted suggestions/branches (26 and 27). The roadmap's deployment/identity/backend changes require their documented contracts and acceptance evidence. Planned features do not count as delivered.
+The document batch adds 26 and 27 and passes its own validation below. The remaining deployment/identity/backend changes require their documented contracts and acceptance evidence. Planned features do not count as delivered.
+
+## Document batch verification
+
+The complete local gate passed against the final document and OpenAPI changes with 1,635 tests reported, 1,632 passed, zero failures/cancellations and three privileged cases skipped; coverage 91.88% lines, 79.58% branches, 89.73% functions. The focused run passed all 51 tests, including email-verification revocation, invalid reviewer configuration and OpenAPI resource bounds. The pinned semantic gate has no new diagnostics against 290 existing ones, and all 12 packed consumer fixtures pass with declaration checks enabled. See [document verification](document-verification.json) for exact file and log hashes.
+
+The real HTTP/browser fixture (`tests/fixtures/collaborative-browser.mjs`) uses two synthetic authenticated users and a disposable database. Keyboard selection publishes revision-bound presence. A concurrent server edit makes acceptance fail; refreshing then accepting preserves both edits and persists `!Dear Hello earth` at revision 4. Revocation clears the text, selections and actionable proposal controls. At a 390px viewport, content width equals client width (375px with its vertical scrollbar), so there is no horizontal overflow. Browser warnings/errors were absent. Both browser fixtures serve preloaded assets without request-derived filesystem paths.
+
+PR #245 has passed hosted Node 22.16/24 runtime tests, packed-release conformance, semantic/packed consumer typing, JavaScript/TypeScript CodeQL analysis, and the CodeQL alert gate at `2765ba4`. No production rollout, merge, disposable-host certification or completion of the remaining 35 features is claimed.

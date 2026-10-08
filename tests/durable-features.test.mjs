@@ -27,9 +27,9 @@ test("service metadata cannot replace an application table definition", () => {
   assert.equal(Object.hasOwn(schema.tables, "additionalMetadata"), false);
 });
 
-async function fixture(openService, serviceOptions = {}) {
+async function fixture(openService, serviceOptions = {}, authOptions = {}) {
   const directory = await mkdtemp(join(tmpdir(), "clank-durable-features-"));
-  const path = join(directory, "app.sqlite"), auth = defineAuth({ password: { cost: 1024, maxMemory: 4 * 1024 * 1024 } });
+  const path = join(directory, "app.sqlite"), auth = defineAuth({ password: { cost: 1024, maxMemory: 4 * 1024 * 1024 }, ...authOptions });
   const schema = defineDatabase({ records: defineTable({ title: s.string({ min: 1, max: 5000 }), score: s.number({ integer: true }), active: s.default(s.boolean(), false) }).owned() });
   const backend = defineBackend({ schema, auth }).functions(({ query, mutation }) => ({ list: query({ args: {}, handler: ({ db }) => db.table("records").collect() }), create: mutation({ args: { title: s.string(), score: s.number() }, handler: ({ db }, input) => db.table("records").insert({ ...input, active: false }) }) }));
   let runtime = await openBackend(backend, { path, agent: false });
@@ -258,4 +258,205 @@ test("imports retire terminal source/history while preserving replay identity an
     await assert.rejects(client.create("Overflow", "third-key"), error => error.code === "IMPORT_JOB_CAPACITY");
     assert.deepEqual((await app.caller(user)).query("list").value.map(row => row.title), ["Keep imported target"]);
   } finally { await app.close(); }
+});
+
+test("document cursors rebase through edits, remain session-private, and discard unavailable history", async () => {
+  const members = new Set();
+  const app = await fixture(openCollaborativeDocuments, { retainedOperations: 2, authorize: ({ auth }) => members.has(auth.user.id) });
+  try {
+    const alice = await app.user("cursor-alice@example.invalid"), bob = await app.user("cursor-bob@example.invalid"); members.add(alice.id); members.add(bob.id);
+    const a = createCollaborativeDocumentsClient(app.clientOptions("documents", alice)), b = createCollaborativeDocumentsClient(app.clientOptions("documents", bob));
+    await a.create("shared", "Hello world");
+    const cursor = await a.setCursor("shared", { revision: 1, anchor: 6, head: 11 });
+    const auth = await app.runtime.auth.resolve(new Request("https://features.test/", { headers: { cookie: alice.cookie } }));
+    assert.doesNotMatch(JSON.stringify(await b.cursors("shared")), new RegExp(auth.session.id));
+    await b.clearCursor("shared"); assert.equal((await b.cursors("shared")).length, 1, "another session cannot clear the cursor");
+    await b.edit({ documentId: "shared", operationId: "prefix", baseRevision: 1, start: 0, deleteCount: 0, insert: "X " });
+    assert.deepEqual((await b.cursors("shared")).map(({ revision, anchor, head }) => ({ revision, anchor, head })), [{ revision: 2, anchor: 8, head: 13 }]);
+    assert.equal((await a.setCursor("shared", { revision: 1, anchor: 6, head: 11 })).id, cursor.id, "stale but retained coordinates rebase, without duplicating the participant");
+    await b.edit({ documentId: "shared", operationId: "delete", baseRevision: 2, start: 9, deleteCount: 2, insert: "Y" });
+    assert.deepEqual(await a.setCursor("shared", { revision: 2, anchor: 9, head: 10 }), { ...cursor, revision: 3, anchor: 10, head: 10, expiresAt: (await b.cursors("shared"))[0].expiresAt });
+    await assert.rejects(a.setCursor("shared", { revision: 3, anchor: 100, head: 100 }), error => error.code === "INVALID_INPUT");
+    for (let revision = 3; revision <= 5; revision++) await b.edit({ documentId: "shared", operationId: `advance-${revision}`, baseRevision: revision, start: 0, deleteCount: 0, insert: "x" });
+    assert.deepEqual(await b.cursors("shared"), [], "a cursor outside retained history disappears instead of inventing its location");
+    await a.setCursor("shared", { revision: 6, anchor: 0, head: 0 }); members.delete(alice.id);
+    assert.deepEqual(await b.cursors("shared"), [], "participant ACL revocation removes selection before disclosure");
+    await assert.rejects(a.cursors("shared"), error => error.status === 404);
+    members.add(alice.id); await a.setCursor("shared", { revision: 6, anchor: 0, head: 0 });
+    app.runtime.auth.revokeUserSessions(alice.id); assert.deepEqual(await b.cursors("shared"), [], "revoked sessions are not retained as presence");
+    await b.setCursor("shared", { revision: 6, anchor: 1, head: 1 }); await app.restart();
+    assert.deepEqual(await b.cursors("shared"), [], "restart requires fresh ephemeral presence");
+    await b.setCursor("shared", { revision: 6, anchor: 1, head: 1 }); assert.equal((await b.cursors("shared")).length, 1);
+  } finally { await app.close(); }
+});
+
+test("document cursors enforce expiry, global admission, origin and CSRF", async t => {
+  const app = await fixture(openCollaborativeDocuments, { cursorTtlMs: 1000, maxCursors: 1, authorize: () => true });
+  try {
+    const alice = await app.user("cursor-limits-a@example.invalid"), bob = await app.user("cursor-limits-b@example.invalid");
+    const a = createCollaborativeDocumentsClient(app.clientOptions("documents", alice)), b = createCollaborativeDocumentsClient(app.clientOptions("documents", bob));
+    await a.create("shared", "text");
+    await a.setCursor("shared", { revision: 1, anchor: 0, head: 0 });
+    await assert.rejects(b.setCursor("shared", { revision: 1, anchor: 0, head: 0 }), error => error.code === "CURSOR_CAPACITY");
+    const now = Date.now(), clock = t.mock.method(Date, "now", () => now + 1001);
+    try { assert.deepEqual(await b.cursors("shared"), []); await b.setCursor("shared", { revision: 1, anchor: 0, head: 0 }); } finally { clock.mock.restore(); }
+    const request = (origin, csrf) => new Request("https://features.test/__clank/documents/mutation/setCursor", { method: "POST", headers: { "content-type": "application/json", cookie: alice.cookie, origin, "x-clank-csrf": csrf }, body: JSON.stringify({ documentId: "shared", revision: 1, anchor: 0, head: 0 }) });
+    assert.equal((await app.service.handle(request("https://features.test", ""))).status, 403);
+    assert.equal((await app.service.handle(request("https://evil.invalid", alice.csrf))).status, 403);
+  } finally { await app.close(); }
+});
+
+test("named document branches persist, merge disjoint edits once and preserve reviewed version fences", async () => {
+  const app = await fixture(openCollaborativeDocuments, { authorize: () => true });
+  try {
+    const alice = await app.user("branch-alice@example.invalid"), bob = await app.user("branch-bob@example.invalid");
+    const a = createCollaborativeDocumentsClient(app.clientOptions("documents", alice)), b = createCollaborativeDocumentsClient(app.clientOptions("documents", bob));
+    await a.create("shared", "Hello world");
+    const draft = await a.createBranch("shared", "proposal-1", "Improve greeting", 1);
+    await assert.rejects(b.saveBranch("shared", draft.id, draft.version, "Stolen"), error => error.status === 404);
+    const saved = await a.saveBranch("shared", draft.id, draft.version, "Hello earth");
+    assert.equal((await a.saveBranch("shared", draft.id, draft.version, "Hello earth")).version, saved.version, "lost save response is replay-safe");
+    await assert.rejects(a.saveBranch("shared", draft.id, draft.version, "Changed retry"), error => error.code === "BRANCH_STALE");
+    const proposed = await a.proposeBranch("shared", draft.id, saved.version);
+    assert.equal((await a.proposeBranch("shared", draft.id, saved.version)).version, proposed.version);
+    await b.edit({ documentId: "shared", operationId: "salutation", baseRevision: 1, start: 0, deleteCount: 0, insert: "Dear " });
+    const preview = await b.previewBranch("shared", draft.id); assert.equal(preview.after, "Dear Hello earth"); assert.equal(preview.before, "Dear Hello world");
+    await b.edit({ documentId: "shared", operationId: "prefix", baseRevision: 2, start: 0, deleteCount: 0, insert: "!" });
+    await assert.rejects(b.decideBranch("shared", draft.id, proposed.version, "accept", preview.documentRevision), error => error.code === "BRANCH_STALE");
+    assert.equal((await a.readBranch("shared", draft.id)).status, "proposed");
+    const current = await b.previewBranch("shared", draft.id);
+    const accepted = await b.decideBranch("shared", draft.id, current.branch.version, "accept", current.documentRevision);
+    assert.equal(accepted.acceptedRevision, 4); assert.equal((await a.read("shared")).text, "!Dear Hello earth");
+    await app.restart();
+    assert.equal((await a.readBranch("shared", draft.id)).status, "accepted");
+    assert.equal((await b.decideBranch("shared", draft.id, current.branch.version, "accept", current.documentRevision)).acceptedRevision, 4);
+    assert.equal((await a.read("shared")).revision, 4, "lost acceptance response never applies twice");
+    await assert.rejects(b.decideBranch("shared", draft.id, current.branch.version, "accept", current.documentRevision + 1), error => error.code === "BRANCH_STALE");
+    await assert.rejects(a.createBranch("shared", draft.id, "Different name", 1), error => error.code === "BRANCH_ID_REUSED");
+    assert.equal((await a.createBranch("shared", draft.id, "Improve greeting", 1)).status, "accepted", "creation identity survives subsequent edits and decisions");
+    assert.equal(Object.hasOwn((await a.branches("shared"))[0], "text"), false, "branch listing does not materialize payloads");
+  } finally { await app.close(); }
+});
+
+test("document proposals reject overlap, enforce current permissions and never evict terminal replay identities", async () => {
+  const members = new Set();
+  const app = await fixture(openCollaborativeDocuments, { maxBranches: 1, authorize: ({ auth }) => members.has(auth.user.id) });
+  try {
+    const alice = await app.user("branch-conflict-a@example.invalid"), bob = await app.user("branch-conflict-b@example.invalid"); members.add(alice.id); members.add(bob.id);
+    const a = createCollaborativeDocumentsClient(app.clientOptions("documents", alice)), b = createCollaborativeDocumentsClient(app.clientOptions("documents", bob));
+    await a.create("shared", "hello world");
+    await assert.rejects(a.createBranch("shared", "old", "Old base", 2), error => error.code === "BRANCH_BASE_STALE");
+    const draft = await a.createBranch("shared", "proposal", "Replace hello", 1);
+    const saved = await a.saveBranch("shared", draft.id, draft.version, "hi world"), proposal = await a.proposeBranch("shared", draft.id, saved.version);
+    await b.edit({ documentId: "shared", operationId: "overlap", baseRevision: 1, start: 1, deleteCount: 2, insert: "XX" });
+    await assert.rejects(b.previewBranch("shared", draft.id), error => error.code === "BRANCH_MERGE_CONFLICT");
+    await assert.rejects(b.decideBranch("shared", draft.id, proposal.version, "accept", 2), error => error.code === "BRANCH_MERGE_CONFLICT");
+    assert.equal((await a.read("shared")).text, "hXXlo world");
+    members.delete(bob.id); await assert.rejects(b.readBranch("shared", draft.id), error => error.status === 404);
+    await assert.rejects(b.decideBranch("shared", draft.id, proposal.version, "reject", 2), error => error.status === 404); members.add(bob.id);
+    const rejected = await b.decideBranch("shared", draft.id, proposal.version, "reject", 2); assert.equal(rejected.status, "rejected");
+    await app.restart(); assert.equal((await b.decideBranch("shared", draft.id, proposal.version, "reject", 2)).version, rejected.version);
+    await assert.rejects(a.createBranch("shared", "new", "Another", 2), error => error.code === "BRANCH_CAPACITY");
+  } finally { await app.close(); }
+});
+
+test("cursor participant authorization reads that participant's owned rows rather than the reader's", async () => {
+  const app = await fixture(openCollaborativeDocuments, { authorize: ({ db }) => db.table("records").query().where("title", "Member").first() !== null });
+  try {
+    const alice = await app.user("owned-cursor-a@example.invalid"), bob = await app.user("owned-cursor-b@example.invalid");
+    const ac = await app.caller(alice), bc = await app.caller(bob);
+    const member = ac.mutation("create", { title: "Member", score: 1 }).value; bc.mutation("create", { title: "Member", score: 1 });
+    const a = createCollaborativeDocumentsClient(app.clientOptions("documents", alice)), b = createCollaborativeDocumentsClient(app.clientOptions("documents", bob));
+    await a.create("shared", "safe"); await a.setCursor("shared", { revision: 1, anchor: 1, head: 2 });
+    assert.equal((await b.cursors("shared")).length, 1);
+    app.runtime.database.transaction(db => db.table("records").patch(member, { title: "Revoked" }), { userId: alice.id });
+    assert.deepEqual(await b.cursors("shared"), [], "Bob's remaining Member record must not authorize Alice's presence");
+  } finally { await app.close(); }
+});
+
+test("branch payload byte admission is atomic and obsolete source history never merges", async () => {
+  const app = await fixture(openCollaborativeDocuments, { maxBranchBytes: 6, retainedOperations: 2, authorize: () => true });
+  try {
+    const user = await app.user("branch-capacity@example.invalid"), client = createCollaborativeDocumentsClient(app.clientOptions("documents", user));
+    await client.create("shared", "é"); const draft = await client.createBranch("shared", "one", "Tiny", 1);
+    await assert.rejects(client.createBranch("shared", "two", "Overflow", 1), error => error.code === "BRANCH_CAPACITY");
+    await assert.rejects(client.saveBranch("shared", draft.id, draft.version, "été"), error => error.code === "BRANCH_CAPACITY");
+    assert.equal((await client.readBranch("shared", draft.id)).version, draft.version, "failed byte admission leaves draft untouched");
+    const saved = await client.saveBranch("shared", draft.id, draft.version, "ok"), proposed = await client.proposeBranch("shared", draft.id, saved.version);
+    for (let revision = 1; revision <= 3; revision++) await client.edit({ documentId: "shared", operationId: `edit-${revision}`, baseRevision: revision, start: 0, deleteCount: 0, insert: "x" });
+    await assert.rejects(client.previewBranch("shared", draft.id), error => error.code === "COLLAB_EDIT_CONFLICT");
+    await assert.rejects(client.decideBranch("shared", draft.id, proposed.version, "accept", 4), error => error.code === "COLLAB_EDIT_CONFLICT");
+    assert.equal((await client.read("shared")).text, "xxxé");
+    assert.equal((await client.decideBranch("shared", draft.id, proposed.version, "reject", 4)).status, "rejected");
+  } finally { await app.close(); }
+});
+
+test("branch creation and exact retries require current read access as well as edit access", async () => {
+  let readable = true;
+  const app = await fixture(openCollaborativeDocuments, { authorize: (_context, id, operation) => id === "shared" && (operation !== "read" || readable) });
+  try {
+    const user = await app.user("branch-read-access@example.invalid"), client = createCollaborativeDocumentsClient(app.clientOptions("documents", user));
+    await client.create("shared", "Private source text");
+    const branch = await client.createBranch("shared", "existing", "Existing proposal", 1);
+    readable = false;
+    await assert.rejects(client.createBranch("shared", "new", "New proposal", 1), error => error.status === 404);
+    await assert.rejects(client.createBranch("shared", branch.id, branch.name, branch.baseRevision), error => error.status === 404);
+    await app.restart();
+    await assert.rejects(client.createBranch("shared", branch.id, branch.name, branch.baseRevision), error => error.status === 404);
+    readable = true;
+    assert.deepEqual((await client.branches("shared")).map(row => row.id), ["existing"], "denied creation must not persist a branch");
+    assert.deepEqual(await client.createBranch("shared", branch.id, branch.name, branch.baseRevision), branch);
+  } finally { await app.close(); }
+});
+
+test("document branch decisions enforce a separate current reviewer policy, including receipt replay", async () => {
+  const reviewers = new Set();
+  const app = await fixture(openCollaborativeDocuments, { authorize: () => true, authorizeBranchDecision: ({ auth }, branch) => reviewers.has(auth.user.id) && auth.user.id !== branch.authorId });
+  try {
+    const alice = await app.user("separate-review-a@example.invalid"), bob = await app.user("separate-review-b@example.invalid"); reviewers.add(bob.id);
+    const a = createCollaborativeDocumentsClient(app.clientOptions("documents", alice)), b = createCollaborativeDocumentsClient(app.clientOptions("documents", bob));
+    await a.create("shared", "Original"); let branch = await a.createBranch("shared", "proposal", "Change", 1);
+    branch = await a.saveBranch("shared", branch.id, branch.version, "Reviewed"); branch = await a.proposeBranch("shared", branch.id, branch.version);
+    await assert.rejects(a.decideBranch("shared", branch.id, branch.version, "accept", 1), error => error.status === 404);
+    reviewers.clear(); await assert.rejects(b.decideBranch("shared", branch.id, branch.version, "accept", 1), error => error.status === 404);
+    assert.equal((await a.read("shared")).text, "Original"); reviewers.add(bob.id);
+    assert.equal((await b.decideBranch("shared", branch.id, branch.version, "accept", 1)).acceptedRevision, 2);
+    await app.restart(); reviewers.clear();
+    await assert.rejects(b.decideBranch("shared", branch.id, branch.version, "accept", 1), error => error.status === 404);
+    assert.equal((await a.read("shared")).revision, 2);
+  } finally { await app.close(); }
+});
+
+test("large retained operation payloads cannot make cursor or branch rebasing materialize unbounded text", async () => {
+  const app = await fixture(openCollaborativeDocuments, { maxCharacters: 1000000, authorize: () => true });
+  try {
+    const user = await app.user("bounded-rebase@example.invalid"), client = createCollaborativeDocumentsClient(app.clientOptions("documents", user));
+    await client.create("shared", ""); await client.setCursor("shared", { revision: 1, anchor: 0, head: 0 });
+    let branch = await client.createBranch("shared", "small-proposal", "Insert one character", 1);
+    branch = await client.saveBranch("shared", branch.id, branch.version, "y"); branch = await client.proposeBranch("shared", branch.id, branch.version);
+    const text = "x".repeat(1000000);
+    for (let revision = 1; revision <= 17; revision++) await client.edit({ documentId: "shared", operationId: `large-${revision}`, baseRevision: revision, start: 0, deleteCount: revision === 1 ? 0 : text.length, insert: text });
+    assert.deepEqual(await client.cursors("shared"), [], "oversized old history discards obsolete presence");
+    await assert.rejects(client.edit({ documentId: "shared", operationId: "old-edit", baseRevision: 1, start: 0, deleteCount: 0, insert: "z" }), error => error.code === "COLLAB_EDIT_CONFLICT");
+    await assert.rejects(client.previewBranch("shared", branch.id), error => error.code === "COLLAB_EDIT_CONFLICT");
+    assert.equal((await client.read("shared")).revision, 18);
+    assert.equal((await client.setCursor("shared", { revision: 18, anchor: 10, head: 11 })).revision, 18, "current coordinates do not require old payloads");
+  } finally { await app.close(); }
+});
+
+test("cursor participants must retain required email verification even while their membership remains", async () => {
+  const app = await fixture(openCollaborativeDocuments, { authorize: () => true }, { emailVerification: { required: true, send() {} } });
+  try {
+    const alice = await app.user("verified-cursor-a@example.invalid"), bob = await app.user("verified-cursor-b@example.invalid"), native = app.runtime.database[SQLITE_INTERNAL];
+    const verification = (id, value) => native.transaction(changes => { native.prepare("UPDATE clank_auth_users SET email_verified_at = ? WHERE id = ?").run(value, id); changes.record("__auth", id, id); });
+    verification(alice.id, Date.now()); verification(bob.id, Date.now());
+    const a = createCollaborativeDocumentsClient(app.clientOptions("documents", alice)), b = createCollaborativeDocumentsClient(app.clientOptions("documents", bob));
+    await a.create("shared", "safe"); await a.setCursor("shared", { revision: 1, anchor: 1, head: 2 }); assert.equal((await b.cursors("shared")).length, 1);
+    verification(alice.id, null); assert.deepEqual(await b.cursors("shared"), []);
+    await assert.rejects(a.setCursor("shared", { revision: 1, anchor: 1, head: 2 }), error => error.status === 403);
+  } finally { await app.close(); }
+});
+
+test("invalid optional reviewer policy cannot silently fall back to document edit authorization", async () => {
+  await assert.rejects(openCollaborativeDocuments({ path: ":memory:", auth: defineAuth(), authorize: () => true, authorizeBranchDecision: false }), /synchronous policy function/u);
 });

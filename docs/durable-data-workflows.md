@@ -156,8 +156,87 @@ inactive documents through an explicitly reviewed retention policy rather than e
 `subscribe(id, listener, intervalMs)` polls every second by default and rechecks authorization on
 each read. It calls `listener(null, error)` on denied/unavailable reads; the built-in editor clears
 text and disables editing then. Cleanup cancels further deliveries. There is no instantaneous
-push guarantee for externally managed membership changes. Use the separate
-[presence service](collaboration.md) when cursors or typing indicators are also useful.
+push guarantee for externally managed membership changes. The document service also supports revision-aware cursors and reviewed proposals below.
+Use the separate [presence service](collaboration.md) for generic room signals and typing indicators.
+
+## Coordinate document selections
+
+```ts
+import { mountDocumentCursorPresence } from "@clank.run/framework/collaborative-documents";
+const disposeCursors = mountDocumentCursorPresence(cursorContainer, documents, recordId, () => {
+  // acceptedDocument is the exact revision displayed in your editor.
+  if (hasUnsavedChanges) return null;
+  return { revision: acceptedDocument.revision, anchor: editor.selectionStart, head: editor.selectionEnd };
+});
+```
+
+Custom clients use `setCursor(documentId, selection)`, `cursors(documentId)` and
+`clearCursor(documentId)`. Selections count UTF-16 code units and always carry a text revision.
+Retained disjoint edits shift selections; deletions clamp positions within the removed range to
+the end of the inserted replacement. Missing, noncontiguous or obsolete history discards a peer
+cursor and rejects publication with `COLLAB_EDIT_CONFLICT`. Out-of-range coordinates are rejected.
+
+Cursors are session-bound, have opaque public IDs, and never disclose session identifiers.
+Publishing requires current document read permission plus normal mutation origin/CSRF checks.
+Each cursor-list read also refreshes every participant's session and evaluates their authorization
+using their own database ownership scope. Revoked users/sessions disappear before selections are
+returned. This is ephemeral presence within one service process: route participants to the same
+process when they need to see each other. Restart discards presence; reconnect publishes a fresh
+selection. Text revisions remain durable.
+
+`cursorTtlMs` defaults to 30 seconds (1–120 seconds); `maxCursors` defaults to 1,000 (maximum
+10,000), with at most 100 cursors per document. Expired cursors are swept on publication/read.
+Admission returns `CURSOR_CAPACITY` when full. The DOM helper polls every second, shows current
+revision/selection coordinates, clears results on failure, and clears its cursor after any pending
+request finishes during cleanup. Return `null` while displaying unsaved local text; those positions
+do not describe the accepted server revision. Dispose on logout, navigation and account changes.
+
+## Review named document proposals
+
+```ts
+import { mountDocumentBranchReview } from "@clank.run/framework/collaborative-documents";
+const base = await documents.read(recordId);
+let branch = await documents.createBranch(recordId, crypto.randomUUID(), "Improve greeting", base.revision);
+branch = await documents.saveBranch(recordId, branch.id, branch.version, "Proposed text");
+branch = await documents.proposeBranch(recordId, branch.id, branch.version);
+const disposeReview = mountDocumentBranchReview(reviewContainer, documents, recordId, branch.id);
+```
+
+`branches(documentId)` returns at most 100 metadata summaries without source/proposed payloads;
+`readBranch` resumes a persisted draft. Branches snapshot the exact source text/revision at creation.
+Only the author can save or submit a draft; saving requires its expected version. Any current
+document editor can decide a submitted proposal under the service's existing `authorize(..., "edit")`
+policy. All branch reads require document read access, including creation and exact creation
+retries that return source/proposed text. Creation requires both read and edit access;
+read permission alone cannot accept a proposal.
+Set `authorizeBranchDecision(context, branch, decision)` for reviewer roles, separation of author
+and approver, or decision-specific rules. It must return exactly `true` and is checked again on
+every decision/replay, in addition to document read/edit permission. These routes are not
+automatically exposed to agents.
+
+`previewBranch` produces current before/after text and exact branch/document fences.
+`decideBranch(documentId, id, expectedVersion, "accept" | "reject", documentRevision)` rechecks
+permissions and both fences in the write transaction. A changed review returns `BRANCH_STALE`.
+Disjoint changes rebase through contiguous retained edit history; overlap returns
+`BRANCH_MERGE_CONFLICT`, and old/missing history returns `COLLAB_EDIT_CONFLICT`. The DOM review
+shows before/after text, requires a separate acceptance action, and blocks acceptance on conflict.
+It still offers rejection of an overlapping/obsolete proposal, with the current fences. Resolve
+conflicts explicitly in a fresh branch; the service never silently replaces newer text.
+
+Acceptance records the text operation and terminal branch state atomically. Exact save, submit,
+create and decision retries preserve identity across lost responses and restarts; changed retry
+inputs or reused creation IDs are rejected. Acceptance returns `acceptedRevision`; a repeated
+acceptance never applies another edit. Rejected/accepted branches remain terminal.
+
+The additive `collaborativeBranches` table is reserved service metadata. `maxBranches` bounds live
+branch/receipt entries (default 1,000, maximum 10,000); each document admits at most 100.
+`maxBranchBytes` bounds UTF-8 source/proposed text across live branches (default 64 MiB, maximum
+1 GiB). Admission returns `BRANCH_CAPACITY` without modifying drafts or document text. Terminal
+identities are not silently evicted: use an explicitly reviewed retention policy before purging
+receipts. Historical snapshots, SQLite WAL files and backups follow independent retention rules.
+Each rebase materializes at most 16 MiB of operation JSON; larger histories require a fresh review
+against the current revision. Older binaries leave the added table intact; removing the new UI/routes
+does not undo accepted text.
 
 ## Search authorized records
 

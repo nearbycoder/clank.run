@@ -18,7 +18,7 @@ export interface SQLiteInternal {
   exec(sql: string): void;
   prepare(sql: string): SQLiteStatement;
   transaction<Value>(handler: (changes: SQLiteInternalChangeRecorder) => Value): Value;
-  /** Re-scope reads inside an existing write transaction for independent approval authorization. */
+  /** Re-scope reads inside an active transaction for independent participant/approval authorization. */
   readScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").ReadDatabase<any>) => Value): Value;
   /** Capture selective dependencies inside the current write transaction. */
   readTrackedScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").ReadDatabase<any>) => Value): import("./backend.ts").TrackedResult<Value>;

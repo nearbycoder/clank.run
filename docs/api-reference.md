@@ -768,3 +768,17 @@ alarm-process, authorization, backup, and placement guarantees.
 - `acceptTranslationReview(messages, review, options)` rechecks content and catalog versions before returning accepted typed messages.
 - `messageCatalogRevision(catalog, locale)` and `I18n.revision()` provide the same browser/server content identity.
 - See [localization](localization.md#extract-and-review-translations) for release/rollback boundaries.
+
+## Durable document collaboration
+
+`@clank.run/framework/collaborative-documents` provides `openCollaborativeDocuments`,
+`createCollaborativeDocumentsClient`, `textEdit` and `mountCollaborativeEditor`. See
+[durable data workflows](durable-data-workflows.md) for authorization, replay and capacity policies.
+
+- Cursors: `setCursor`, `cursors`, `clearCursor` and `mountDocumentCursorPresence`; session-bound
+  ephemeral selections at explicit persistent text revisions, with expiry and rebasing.
+- Proposals: `createBranch`, `readBranch`, `branches`, `saveBranch`, `proposeBranch`, `previewBranch`,
+  `decideBranch` and `mountDocumentBranchReview`; durable named drafts, reviewed before/after text,
+  atomic merge decisions and exact retry identities.
+- Types: `DocumentSelection`, `DocumentCursor`, `DocumentBranch`, `DocumentBranchSummary`,
+  `DocumentBranchPreview`.
