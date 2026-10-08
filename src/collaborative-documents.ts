@@ -175,6 +175,7 @@ export async function openCollaborativeDocuments(options: CollaborativeDocuments
     } }),
     createBranch: mutation({ args: { documentId: s.string({ min: 1, max: 200 }), id: s.string({ min: 1, max: 100 }), name: s.string({ min: 1, max: 100 }), baseRevision: s.number({ integer: true, min: 1 }) }, agent: false, handler: (context, input) => {
       const current = document(context, input.documentId, "edit"), table = context.db.table("collaborativeBranches");
+      requireFeatureAccess(options.authorize(context as any, input.documentId, "read"));
       const old = table.query().where("documentId", input.documentId).where("key", input.id).first();
       if (old) {
         if (old.authorId !== context.auth.user!.id || old.name !== input.name || old.baseRevision !== input.baseRevision) throw new BackendActionError(409, "BRANCH_ID_REUSED", "Branch ID already belongs to a different proposal.");

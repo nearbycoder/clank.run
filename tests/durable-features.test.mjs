@@ -391,6 +391,24 @@ test("branch payload byte admission is atomic and obsolete source history never 
   } finally { await app.close(); }
 });
 
+test("branch creation and exact retries require current read access as well as edit access", async () => {
+  let readable = true;
+  const app = await fixture(openCollaborativeDocuments, { authorize: (_context, id, operation) => id === "shared" && (operation !== "read" || readable) });
+  try {
+    const user = await app.user("branch-read-access@example.invalid"), client = createCollaborativeDocumentsClient(app.clientOptions("documents", user));
+    await client.create("shared", "Private source text");
+    const branch = await client.createBranch("shared", "existing", "Existing proposal", 1);
+    readable = false;
+    await assert.rejects(client.createBranch("shared", "new", "New proposal", 1), error => error.status === 404);
+    await assert.rejects(client.createBranch("shared", branch.id, branch.name, branch.baseRevision), error => error.status === 404);
+    await app.restart();
+    await assert.rejects(client.createBranch("shared", branch.id, branch.name, branch.baseRevision), error => error.status === 404);
+    readable = true;
+    assert.deepEqual((await client.branches("shared")).map(row => row.id), ["existing"], "denied creation must not persist a branch");
+    assert.deepEqual(await client.createBranch("shared", branch.id, branch.name, branch.baseRevision), branch);
+  } finally { await app.close(); }
+});
+
 test("document branch decisions enforce a separate current reviewer policy, including receipt replay", async () => {
   const reviewers = new Set();
   const app = await fixture(openCollaborativeDocuments, { authorize: () => true, authorizeBranchDecision: ({ auth }, branch) => reviewers.has(auth.user.id) && auth.user.id !== branch.authorId });

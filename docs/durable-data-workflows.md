@@ -206,7 +206,9 @@ const disposeReview = mountDocumentBranchReview(reviewContainer, documents, reco
 `readBranch` resumes a persisted draft. Branches snapshot the exact source text/revision at creation.
 Only the author can save or submit a draft; saving requires its expected version. Any current
 document editor can decide a submitted proposal under the service's existing `authorize(..., "edit")`
-policy. All branch reads require document read access; read permission alone cannot accept a proposal.
+policy. All branch reads require document read access, including creation and exact creation
+retries that return source/proposed text. Creation requires both read and edit access;
+read permission alone cannot accept a proposal.
 Set `authorizeBranchDecision(context, branch, decision)` for reviewer roles, separation of author
 and approver, or decision-specific rules. It must return exactly `true` and is checked again on
 every decision/replay, in addition to document read/edit permission. These routes are not
