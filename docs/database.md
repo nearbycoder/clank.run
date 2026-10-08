@@ -331,7 +331,9 @@ service and dispose the panel when the host route is removed.
 ## Export the HTTP contract as OpenAPI
 
 `exportBackendOpenAPI(definition, options)` exports a bounded OpenAPI 3.1.1 document for
-Clank's existing POST query/mutation RPC endpoints. Declare a `returns` schema on every
+Clank's existing POST query/mutation RPC endpoints. `serverUrl` must be an HTTP origin; put any mount path in
+`prefix`. A JSON null request body is represented when the runtime accepts its normalized
+empty argument object. Declare a `returns` schema on every
 function before exporting:
 
 ```ts

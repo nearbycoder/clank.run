@@ -70,3 +70,17 @@ test("OpenAPI namespace operation IDs cannot collide and export never mutates so
     assert.equal(response.status, 200); assert.equal((await response.json()).value, 6);
   } finally { runtime.close(); }
 });
+
+test("OpenAPI matches runtime null-body normalization and rejects invalid server/name contracts", async () => {
+  const backend = definition(s.number(), s.default(s.number(), 0));
+  const document = exportBackendOpenAPI(backend, settings);
+  assert.deepEqual(document.components.schemas["query.math.double.input"].anyOf[1], { type: "null" });
+  const runtime = await openBackend(backend, { path: ":memory:", agent: false });
+  try {
+    const response = await runtime.handle(new Request(settings.serverUrl + "/__clank/query/math.double", { method: "POST", headers: { origin: settings.serverUrl, "content-type": "application/json" }, body: "null" }));
+    assert.equal(response.status, 200); assert.equal((await response.json()).value, 0);
+  } finally { runtime.close(); }
+  for (const name of ["$value", "_value", "value$"]) assert.throws(() => exportBackendOpenAPI({ ...backend, functions: { [name]: backend.functions.math.double } }, settings), /function segment/u);
+  assert.throws(() => exportBackendOpenAPI(backend, { ...settings, serverUrl: "https://api.test/nested" }), /origin/u);
+  assert.throws(() => exportBackendOpenAPI(backend, { ...settings, title: 123 }), /title/u);
+});

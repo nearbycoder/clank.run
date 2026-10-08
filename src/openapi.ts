@@ -21,9 +21,9 @@ export interface OpenAPIDocument {
 const KEYWORDS = new Set(["type", "properties", "required", "additionalProperties", "items", "anyOf", "enum", "const", "description", "default", "format", "pattern", "minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems"]);
 /** Export the JSON HTTP query/mutation contract. Live SSE and MCP retain their own contracts. */
 export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any, any>, options: OpenAPIOptions): OpenAPIDocument {
-  if (!options.title || options.title.length > 200 || !options.version || options.version.length > 100) throw new TypeError("OpenAPI requires a bounded title and version.");
+  if (typeof options.title !== "string" || !options.title || options.title.length > 200 || typeof options.version !== "string" || !options.version || options.version.length > 100) throw new TypeError("OpenAPI requires a bounded title and version.");
   const server = new URL(options.serverUrl);
-  if (!["https:", "http:"].includes(server.protocol) || server.username || server.password || server.search || server.hash) throw new TypeError("OpenAPI needs an HTTP deployment URL without credentials, query or fragment.");
+  if (!["https:", "http:"].includes(server.protocol) || server.username || server.password || server.search || server.hash || server.pathname !== "/") throw new TypeError("OpenAPI needs an HTTP deployment origin without credentials, path, query or fragment; use prefix for the mount path.");
   const prefix = options.prefix ?? "/__clank";
   if (!/^\/[A-Za-z0-9_/-]+$/u.test(prefix) || prefix.endsWith("/") || prefix.includes("//")) throw new TypeError("Invalid backend prefix.");
   const functions = new Map<string, AnyBackendFunction>(), stack = new Set<object>();
@@ -31,7 +31,7 @@ export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any
     if (!tree || typeof tree !== "object" || Array.isArray(tree) || stack.has(tree) || path.length > 32) throw new TypeError("Invalid or cyclic backend function tree.");
     stack.add(tree);
     for (const [name, value] of Object.entries(tree)) {
-      if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(name) || ["__proto__", "constructor", "prototype"].includes(name)) throw new TypeError("Invalid backend function segment.");
+      if (!/^[A-Za-z][A-Za-z0-9_]*$/u.test(name) || ["__proto__", "constructor", "prototype"].includes(name)) throw new TypeError("Invalid backend function segment.");
       const segments = [...path, name];
       if (value && (value.kind === "query" || value.kind === "mutation")) functions.set(segments.join("."), value as AnyBackendFunction);
       else visit(value as FunctionTree, segments);
@@ -53,7 +53,8 @@ export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any
     // Preserve the full path in schema keys and operation IDs; flattening dots
     // into underscores could make distinct namespaces collide.
     const key = `${fn.kind}.${name}`;
-    schemas[`${key}.input`] = input;
+    // The runtime normalizes a JSON null body to {} before parsing arguments.
+    schemas[`${key}.input`] = fn.args.safeParse({}).success ? { anyOf: [input, { type: "null" }] } : input;
     schemas[`${key}.output`] = { type: "object", required: ["ok", "value", "version"], properties: { ok: { const: true }, value: output, version: { type: "integer", minimum: 0 } } };
     const mutation = fn.kind === "mutation", required = fn.access === "required";
     if (required && !authentication) throw new TypeError(`Required function ${name} needs authentication.`);
