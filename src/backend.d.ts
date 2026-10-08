@@ -119,10 +119,10 @@ export declare class DatabaseRevisionNotFoundError extends Error {
  * browser RPC and MCP tool responses.
  */
 export declare class BackendActionError extends Error {
-    readonly status: 400 | 404 | 409;
+    readonly status: 400 | 404 | 409 | 410 | 503;
     readonly code: string;
     readonly name = "BackendActionError";
-    constructor(status: 400 | 404 | 409, code: string, message: string);
+    constructor(status: 400 | 404 | 409 | 410 | 503, code: string, message: string);
 }
 export interface ReadDatabase<Schema extends DatabaseSchema<any>> {
     table<Name extends TableName<Schema>>(name: Name): ReadTable<Schema, Name>;

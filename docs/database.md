@@ -327,3 +327,40 @@ content diff. Its inline comparison size limit does not prevent restoring a larg
 History availability follows the existing global and per-document revision retention settings.
 Missing or expired snapshots cannot be restored; another account receives no history. Close the
 service and dispose the panel when the host route is removed.
+
+## Export the HTTP contract as OpenAPI
+
+`exportBackendOpenAPI(definition, options)` exports a bounded OpenAPI 3.1.1 document for
+Clank's existing POST query/mutation RPC endpoints. Declare a `returns` schema on every
+function before exporting:
+
+```ts
+import { exportBackendOpenAPI } from "@clank.run/framework/openapi";
+const description = exportBackendOpenAPI(definition, {
+  title: "Application API", version: "1", serverUrl: "https://app.example.com",
+  // Match the actual runtime prefix and offlineMutations policy if configured.
+});
+```
+
+The document includes exact function paths, argument/result schemas, success/error envelopes,
+secure or custom session cookie names, conditional mutation CSRF headers and explicit agent
+exposure metadata. Exporting an HTTP function does not enable it as an agent tool. Auth routes,
+MCP and live SSE retain their existing separate contracts. Serve or save this developer artifact
+only where exposing the application's function/schema names is appropriate.
+
+Supported schemas include bounded strings/numbers/arrays, objects, records, enums, literals,
+nullable values, unions, optional object fields and defaults. Branded IDs keep their string
+contract and an `x-clank-table` annotation. Undefined root results, omitted result schemas,
+coercion, custom refinement predicates and unsupported keywords reject export instead of
+producing an inaccurate contract. `s.refine` now annotates its JSON Schema with
+`x-clank-refinement`; its runtime validation behavior is unchanged. Format annotations retain
+the runtime schema's documented semantics; the runtime remains authoritative for validation.
+
+Pass `offlineMutations` only when it matches `openBackend`'s actual configuration. The document
+then describes the timestamp/UUID retry key, account binding, retention window, atomic replay
+and rejection of expired/conflicting keys. Otherwise it advertises no idempotency guarantee.
+The exporter does not activate endpoints, authentication, or replay behavior. There is no
+persistent migration; removing this export preserves the application's runtime behavior.
+The exporter is bounded to 1,000 functions, 32 nested schema/namespace levels and a 1 MiB result.
+The packed-consumer gate executes representative valid/invalid exported calls against the exact
+package artifact. The document format follows the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.1.html).

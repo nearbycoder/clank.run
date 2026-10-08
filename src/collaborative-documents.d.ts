@@ -3,7 +3,7 @@ import type { AuthDefinition, AuthRequest } from "./auth.js";
 export interface CollaborativeDocument { readonly id: string; readonly text: string; readonly revision: number; readonly acceptedRevision?: number; }
 export interface CollaborativeEdit { readonly documentId: string; readonly operationId: string; readonly baseRevision: number; readonly start: number; readonly deleteCount: number; readonly insert: string; }
 export interface CollaborativeDocumentsOptions<Schema extends DatabaseSchema<any> = DatabaseSchema<any>> {
-  path: string; auth: AuthDefinition<any>; schema?: Schema; prefix?: string; maxCharacters?: number; retainedOperations?: number;
+  path: string; auth: AuthDefinition<any>; schema?: Schema; prefix?: string; maxCharacters?: number; retainedOperations?: number; retainedReceipts?: number; maxReceipts?: number;
   authorize(context: { auth: AuthRequest<any>; db: ReadDatabase<Schema> }, documentId: string, operation: "read" | "create" | "edit"): boolean;
 }
 export interface CollaborativeDocumentsService { handle(request: Request): Promise<Response>; close(): void; }

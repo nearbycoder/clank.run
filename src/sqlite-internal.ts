@@ -20,6 +20,10 @@ export interface SQLiteInternal {
   transaction<Value>(handler: (changes: SQLiteInternalChangeRecorder) => Value): Value;
   /** Re-scope reads inside an existing write transaction for independent approval authorization. */
   readScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").ReadDatabase<any>) => Value): Value;
+  /** Capture selective dependencies inside the current write transaction. */
+  readTrackedScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").ReadDatabase<any>) => Value): import("./backend.ts").TrackedResult<Value>;
+  /** Retire persisted and pending snapshots of a record deleted in this write transaction. */
+  purgeDeletedHistory(table: string, id: string): void;
 }
 
 /** Internal hook used by the point-in-time journal. All callbacks are synchronous. */

@@ -753,3 +753,18 @@ alarm-process, authorization, backup, and placement guarantees.
 - `serve(app, options?)`: bounded Fetch-standard Node HTTP server with streaming, timeouts, Host allowlists, proxy controls, and redacted errors.
 - `staticFiles(root, options?)`: traversal/symlink-aware static GET/HEAD handler with dotfile policy and weak ETag revalidation through `If-None-Match`.
 - Types: `FetchApplication`, `ServeOptions`, `ServerHandle`, `StaticFilesOptions`.
+
+## Backend OpenAPI export
+
+- `exportBackendOpenAPI(definition, options)` exports OpenAPI 3.1.1 for existing HTTP RPC functions.
+- `OpenAPIOptions` specifies title/version, deployment URL, runtime prefix and optional replay policy.
+- Explicit result schemas are required; unsupported/coercing/refined contracts reject export.
+- See [database contracts](database.md#export-the-http-contract-as-openapi) for auth, retry and compatibility details.
+
+## Translation review
+
+- `exportTranslationBundle(messages, options)` extracts source keys/parameters with source/current fingerprints.
+- `reviewTranslationBundle(messages, json, options)` validates a translator artifact and returns issues and a before/after diff.
+- `acceptTranslationReview(messages, review, options)` rechecks content and catalog versions before returning accepted typed messages.
+- `messageCatalogRevision(catalog, locale)` and `I18n.revision()` provide the same browser/server content identity.
+- See [localization](localization.md#extract-and-review-translations) for release/rollback boundaries.

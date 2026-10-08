@@ -144,8 +144,14 @@ shows the latest server text, and offers explicit discard or rebase before savin
 A retry must reuse the same operation ID and exact input. Reuse with different content is rejected;
 an exact retry returns the current document and the original `acceptedRevision`. The default text
 limit is 200,000 code units (maximum 1,000,000); `retainedOperations` defaults to 1,000 (maximum
-10,000). Operation fingerprints remain durable after transform history is pruned. Plan retention
-and database capacity for this metadata; there is no automatic document/receipt deletion API.
+10,000). `retainedReceipts` defaults to 10,000 revisions and must be at least
+`retainedOperations`. Receipts older than that window are pruned atomically with the next edit.
+Pruning also retires the deleted operation/receipt's document-history copies. Existing archives,
+SQLite WAL files and independent backups require their own reviewed retention policy.
+An expired exact retry has an obsolete base revision and returns `COLLAB_EDIT_CONFLICT`; it
+cannot apply the edit again. `maxReceipts` bounds live receipts across the service (100,000 by
+default, maximum 1,000,000). Admission fails with `COLLAB_RECEIPT_CAPACITY` when full; retire
+inactive documents through an explicitly reviewed retention policy rather than evicting valid receipts.
 
 `subscribe(id, listener, intervalMs)` polls every second by default and rechecks authorization on
 each read. It calls `listener(null, error)` on denied/unavailable reads; the built-in editor clears
@@ -189,9 +195,15 @@ text, not statistics from hidden documents. Queries accept 1–10 literal words,
 user-supplied FTS operators are not executed. Results contain text snippets, rendered using
 `textContent` by the control.
 
-A request returns up to 100 hits (20 by default), scans at most 5,000 candidates by default
-(`maxCandidates` up to 50,000), and stops after 16 MiB of authorized text. `total` counts authorized
-matches within that budget, not the entire corpus; `truncated` tells the UI to narrow the search.
+A request returns up to 100 hits (20 by default), ranks at most 5,000 **authorized** candidates
+by default (`maxCandidates` up to 50,000), and stops after 16 MiB of authorized text. Denied
+matches neither consume that budget nor change `total` or `truncated`. `maxScopeRecords` bounds
+each entire scope to 50,000 entries by default (maximum 50,000, at least `maxCandidates`);
+indexing a new record at capacity rejects atomically. An oversized legacy scope returns
+`SEARCH_SCOPE_CAPACITY` independently of the query phrase; partition or rebuild it before
+serving searches. `total` counts authorized matches within the ranking budget, not the entire
+corpus; `truncated` tells the UI to narrow the search. Ranking folds accents and snippets retain
+the original spelling and text coordinates.
 Indexed titles are limited to 1,000 UTF-8 bytes and bodies to 1 MiB each.
 
 ## Publish shared saved views
@@ -270,8 +282,20 @@ failed job after the underlying permission/duplicate problem is resolved; upload
 immutable. Cancel prevents remaining batches and keeps already imported rows. Aborting or
 unmounting the browser stops future requests, but a dispatched batch may still commit.
 
-At most 20 unfinished imports are allowed per account. Completed/cancelled job data and uploaded
-chunks are retained; include them in normal database capacity, access, backup, and retention plans.
+At most 20 unfinished imports are allowed per account. Completion or cancellation atomically
+retires staged chunks and their document-history snapshots, retaining the small job receipt and
+cursor so create/step retries cannot insert twice. Appending to a terminal job returns
+`IMPORT_PAYLOAD_RETIRED` (410); inspect its receipt instead of reuploading. Cancelling an older
+terminal job also retires any legacy chunks. This does not erase independent backups, WAL
+pages or point-in-time recovery journals; their retention policies still apply.
+
+`maxJobs` bounds all live job receipts (10,000 by default, maximum 100,000); old stable keys remain
+reserved and new creation at capacity returns `IMPORT_JOB_CAPACITY`. `maxChunks` bounds each
+job (2,000 by default, maximum 10,000), with a service-wide limit of 10,000 staged chunks.
+`maxStagedBytes` bounds normalized live source payloads across all accounts (1 GiB by default,
+maximum 4 GiB); staging at capacity returns `IMPORT_STAGING_CAPACITY`. Finish/cancel staged
+jobs or review retention before increasing limits. These bounds include terminal receipt metadata
+and avoid treating a deleted retry key as a new import.
 The existing small-file CSV planner remains available for previews and simpler workflows.
 
 ## Database upgrades and rollback

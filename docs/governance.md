@@ -169,6 +169,18 @@ record versions. Request a new preview and review it again after a conflict. Bum
 the action's `revision` when changing its behavior or permission rules; old plans
 then fail with `ACTION_CHANGED`.
 
+An action may explicitly declare `previewDependencies: "records"` when **all** data read by
+its preview and requester policy goes through `context.db`. In this mode, planning retains
+up to 1,024 read dependencies. A point read fences that record, including a missing record;
+queries and history reads conservatively fence the entire visible table. Unrelated records
+and other owners' writes can proceed without invalidating a point-read review. Relevant
+mutations, deletion/restoration and journal-retention gaps still return `PREVIEW_STALE`.
+The requester and approver policies and live sessions are always checked again at commit.
+Policies that read external state or have undeclared dependencies must keep the default
+`"database"` mode. Bump the action revision when changing the dependency declaration.
+The nullable `dependencies` column is added to the existing plans table; older plans retain
+the global fence. Rolling back restores the conservative global fence for every plan.
+
 The mutation, one-time approval consumption, exact changed record versions, audit
 event, and result receipt commit in one SQLite transaction. Retrying the same
 consumed plan returns the stored receipt after rechecking the requester's current

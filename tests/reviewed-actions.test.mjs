@@ -35,6 +35,56 @@ async function fixture(overrides = {}, extra = {}) {
 }
 async function seed(f, session) { const caller=await f.runtime.caller(request('/',undefined,session));return caller.mutation('add',{}).value; }
 
+test('record-bound reviews survive unrelated writes and restart but reject affected records and retention gaps', async () => {
+  const f = await fixture({ previewDependencies: 'records' });
+  try {
+    const session = await register(f.runtime), id = await seed(f, session);
+    const plan = f.runtime.reviewedActions.plan('done', { id }, session.auth);
+    assert.equal(plan.dependencyMode, 'records');
+    f.runtime.reviewedActions.decide(plan.id, 'approve', session.auth);
+    await seed(f, session); await f.reopen();
+    session.auth = await f.runtime.auth.resolve(request('/', undefined, session));
+    const receipt = f.runtime.reviewedActions.commit(plan.id, session.auth);
+    assert.equal(receipt.changes[0].id, id);
+    assert.deepEqual(f.runtime.reviewedActions.commit(plan.id, session.auth), receipt);
+    const affected = await seed(f, session), stale = f.runtime.reviewedActions.plan('done', { id: affected }, session.auth);
+    f.runtime.reviewedActions.decide(stale.id, 'approve', session.auth);
+    (await f.runtime.caller(request('/', undefined, session))).mutation('change', { id: affected, workspace: 'team' });
+    assert.throws(() => f.runtime.reviewedActions.commit(stale.id, session.auth), error => error.code === 'PREVIEW_STALE');
+    const missing = f.runtime.reviewedActions.plan('done', { id }, session.auth);
+    f.runtime.reviewedActions.decide(missing.id, 'approve', session.auth);
+    await seed(f, session);
+    f.runtime.database[internal].prepare('DELETE FROM clank_changes WHERE revision <= ?').run(missing.databaseRevision + 1);
+    assert.throws(() => f.runtime.reviewedActions.commit(missing.id, session.auth), error => error.code === 'PREVIEW_STALE');
+  } finally { await f.close(); }
+});
+
+test('query-bound reviews include owner-scoped predicate reads and authorization dependencies', async () => {
+  const f = await fixture({ previewDependencies: 'records', authorize: ({ db }) => db.table('items').collect().length > 0 });
+  try {
+    const owner = await register(f.runtime), other = await register(f.runtime, 'unrelated-owner@example.test'), id = await seed(f, owner);
+    const first = f.runtime.reviewedActions.plan('done', { id }, owner.auth);
+    f.runtime.reviewedActions.decide(first.id, 'approve', owner.auth);
+    await seed(f, other);
+    assert.equal(f.runtime.reviewedActions.commit(first.id, owner.auth).changes[0].id, id);
+    const next = f.runtime.reviewedActions.plan('done', { id }, owner.auth);
+    f.runtime.reviewedActions.decide(next.id, 'approve', owner.auth);
+    await seed(f, owner);
+    assert.throws(() => f.runtime.reviewedActions.commit(next.id, owner.auth), error => error.code === 'PREVIEW_STALE');
+  } finally { await f.close(); }
+});
+
+test('record-bound reviews also fence requester identity changes while authorization remains allowed', async () => {
+  const f = await fixture({ previewDependencies: 'records' });
+  try {
+    const owner = await register(f.runtime), id = await seed(f, owner);
+    const plan = f.runtime.reviewedActions.plan('done', { id }, owner.auth);
+    f.runtime.reviewedActions.decide(plan.id, 'approve', owner.auth);
+    f.runtime.auth.setRole(owner.auth.user.id, 'admin');
+    assert.throws(() => f.runtime.reviewedActions.commit(plan.id, owner.auth), error => error.code === 'PREVIEW_STALE');
+  } finally { await f.close(); }
+});
+
 test('reviewed mutations require approval, persist across restart, commit once, and produce exact undo receipts',async()=>{
   const f=await fixture();try{
     let session=await register(f.runtime);const id=await seed(f,session), reviews=f.runtime.reviewedActions;

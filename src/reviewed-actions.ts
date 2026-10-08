@@ -11,6 +11,8 @@ export interface ReviewedRecordChange { readonly table: string; readonly id: str
 export interface ReviewedAction<Input = any, Preview = any, Output = any, DB extends DatabaseSchema<any> = any> {
   /** Change this revision whenever preview, execution, authorization, or undo semantics change. */
   readonly revision: string;
+  /** Opt in only when all preview/authorization data dependencies use context.db. Default: database. */
+  readonly previewDependencies?: "records" | "database";
   readonly args: Schema<Input>;
   readonly title: string;
   readonly authorize: (context: ReviewedActionContext<DB>, input: Input) => boolean;
@@ -28,6 +30,7 @@ export interface ReviewedActionPlan<Preview = unknown> {
   readonly createdAt: number;
   readonly expiresAt: number;
   readonly databaseRevision: number;
+  readonly dependencyMode?: "records";
   readonly status: "pending" | "approved" | "denied" | "expired" | "consumed";
   readonly approvedBy: string | null;
   readonly preview: Preview;
@@ -93,12 +96,14 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
   for (const [name, action] of actions) {
     token(name); token(action.revision);
     if (!action.title || action.title.length > 200 || !action.args?.parse || !action.args?.toJSONSchema || !action.authorize || !action.authorizeApproval || !action.preview || !action.execute) throw new TypeError("Invalid reviewed action.");
+    if (action.previewDependencies !== undefined && !["records", "database"].includes(action.previewDependencies)) throw new TypeError("Invalid preview dependency mode.");
   }
   sql.exec(`CREATE TABLE IF NOT EXISTS clank_reviewed_plans (
     id TEXT PRIMARY KEY, owner TEXT NOT NULL, action TEXT NOT NULL, definition TEXT NOT NULL,
     input TEXT NOT NULL, preview TEXT NOT NULL, revision INTEGER NOT NULL, status TEXT NOT NULL,
     created INTEGER NOT NULL, expires INTEGER NOT NULL, approved_by TEXT, approved_session TEXT)`);
   if (!sql.prepare("PRAGMA table_info(clank_reviewed_plans)").all().some(column => column.name === "approved_session")) sql.exec("ALTER TABLE clank_reviewed_plans ADD COLUMN approved_session TEXT");
+  if (!sql.prepare("PRAGMA table_info(clank_reviewed_plans)").all().some(column => column.name === "dependencies")) sql.exec("ALTER TABLE clank_reviewed_plans ADD COLUMN dependencies TEXT");
   sql.exec("CREATE INDEX IF NOT EXISTS clank_reviewed_plans_owner ON clank_reviewed_plans(owner, created)");
   sql.exec("CREATE TABLE IF NOT EXISTS clank_reviewed_receipts (id TEXT PRIMARY KEY, plan TEXT NOT NULL UNIQUE, owner TEXT NOT NULL, receipt TEXT NOT NULL)");
   sql.exec("CREATE TABLE IF NOT EXISTS clank_reviewed_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, plan TEXT NOT NULL, actor TEXT NOT NULL, transition TEXT NOT NULL, at INTEGER NOT NULL)");
@@ -147,7 +152,19 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
     requestedBy: String(row.owner), createdAt: Number(row.created), expiresAt: Number(row.expires), databaseRevision: Number(row.revision),
     status: Number(row.expires) <= Date.now() && (row.status === "pending" || row.status === "approved") ? "expired" : row.status as ReviewedActionPlan["status"],
     approvedBy: row.approved_by === null ? null : String(row.approved_by), preview: JSON.parse(String(row.preview)),
+    ...(row.dependencies == null ? {} : { dependencyMode: "records" as const }),
   });
+  const previewIsCurrent = (row: Record<string, unknown>): boolean => {
+    if (row.dependencies == null) return revision() === row.revision;
+    if (definition(row).previewDependencies !== "records") return false;
+    const dependencies = JSON.parse(String(row.dependencies)) as Array<{ table: string; id?: string; ownerId?: string }>;
+    if (revision() === row.revision || !dependencies.length) return true;
+    // A retention gap cannot prove absence of a relevant mutation.
+    const earliest = Number(sql.prepare("SELECT min(revision) AS revision FROM clank_changes").get()?.revision ?? 0);
+    if (!earliest || earliest > Number(row.revision) + 1) return false;
+    return !dependencies.some(dependency => sql.prepare(`SELECT 1 FROM clank_changes WHERE revision > ? AND table_name = ?${dependency.id === undefined ? "" : " AND document_id = ?"}${dependency.ownerId === undefined ? "" : " AND owner_id = ?"} LIMIT 1`)
+      .get(row.revision, dependency.table, ...(dependency.id === undefined ? [] : [dependency.id]), ...(dependency.ownerId === undefined ? [] : [dependency.ownerId])));
+  };
   const context = (db: ReadDatabase<any>, auth: AuthRequest<any>) => ({ db: reader(db), auth });
   const canReview = (row: Record<string, unknown>, db: ReadDatabase<any>, auth: AuthRequest<any>) => {
     const action = actions.get(String(row.action));
@@ -189,12 +206,17 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
         if (!action) throw new AuthError("ACTION_NOT_FOUND", "Reviewed action not found.", 404);
         if (Number(sql.prepare("SELECT COUNT(*) AS count FROM clank_reviewed_plans").get()!.count) >= maximum) throw new AuthError("APPROVAL_CAPACITY", "Approval retention capacity is full.", 503);
         const args = action.args.parse(JSON.parse(encode(input)));
-        if (sync(action.authorize(context(db, auth), args)) !== true) throw new AuthError("FORBIDDEN", "This action is not permitted.", 403);
-        const preview = sync(action.preview(context(db, auth), args));
+        const previewWith = (readDb: ReadDatabase<any>) => {
+          if (sync(action.authorize(context(readDb, auth), args)) !== true) throw new AuthError("FORBIDDEN", "This action is not permitted.", 403);
+          return sync(action.preview(context(readDb, auth), args));
+        };
+        const tracked = action.previewDependencies === "records" ? sql.readTrackedScoped(auth.user!.id, previewWith) : undefined;
+        if (tracked && tracked.dependencies.length > 1024) throw new AuthError("PREVIEW_CAPACITY", "Preview exceeds its dependency limit.", 413);
+        const preview = tracked ? tracked.value : previewWith(db);
         const now = Date.now(), id = `review_${crypto.randomUUID()}`;
-        sql.prepare(`INSERT INTO clank_reviewed_plans(id, owner, action, definition, input, preview, revision, status, created, expires)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`)
-          .run(id, auth.user!.id, name, action.revision, encode(args), encode(preview), revision(), now, now + ttl);
+        sql.prepare(`INSERT INTO clank_reviewed_plans(id, owner, action, definition, input, preview, revision, status, created, expires, dependencies)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`)
+          .run(id, auth.user!.id, name, action.revision, encode(args), encode(preview), revision(), now, now + ttl, tracked ? encode([...tracked.dependencies, { table: "__auth", id: auth.user!.id, ownerId: auth.user!.id }]) : null);
         event = appendEvent(id, auth.user!.id, "requested");
         return view(get(id));
       }, { userId: initial?.user?.id ?? null });
@@ -226,7 +248,7 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
           return JSON.parse(String(old.receipt)) as ReviewedActionReceipt;
         }
         if (row.status !== "approved" || Number(row.expires) <= Date.now()) throw new AuthError("APPROVAL_REQUIRED", "An unexpired approval is required.", 409);
-        if (revision() !== row.revision) throw new AuthError("PREVIEW_STALE", "Data changed after preview; request a new review.", 409);
+        if (!previewIsCurrent(row)) throw new AuthError("PREVIEW_STALE", "Data changed after preview; request a new review.", 409);
         const approver = sql.prepare("SELECT disabled FROM clank_auth_users WHERE id = ?").get(row.approved_by);
         if (!approver || approver.disabled !== 0) throw new AuthError("APPROVAL_REQUIRED", "The approver is no longer active.", 409);
         const approvedSession = row.approved_session ? authRuntime.refreshSession(String(row.approved_session)) : null;

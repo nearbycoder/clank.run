@@ -9,6 +9,8 @@ export interface ReviewedRecordChange { readonly table: string; readonly id: str
 export interface ReviewedAction<Input = any, Preview = any, Output = any, DB extends DatabaseSchema<any> = any> {
   /** Change this revision whenever preview, execution, authorization, or undo semantics change. */
   readonly revision: string;
+  /** Declare that all preview/authorization data dependencies use context.db. */
+  readonly previewDependencies?: "records" | "database";
   readonly args: Schema<Input>;
   readonly title: string;
   readonly authorize: (context: ReviewedActionContext<DB>, input: Input) => boolean;
@@ -26,6 +28,7 @@ export interface ReviewedActionPlan<Preview = unknown> {
   readonly createdAt: number;
   readonly expiresAt: number;
   readonly databaseRevision: number;
+  readonly dependencyMode?: "records";
   readonly status: "pending" | "approved" | "denied" | "expired" | "consumed";
   readonly approvedBy: string | null;
   readonly preview: Preview;

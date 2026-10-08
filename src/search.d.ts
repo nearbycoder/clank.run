@@ -4,7 +4,7 @@ export interface SearchRecord { readonly scope: string; readonly id: string; rea
 export interface SearchHit { readonly id: string; readonly title: string; readonly snippet: string; readonly score: number; }
 export interface SearchResult { readonly hits: readonly SearchHit[]; readonly total: number; readonly truncated: boolean; }
 export interface SearchOptions<Schema extends DatabaseSchema<any> = DatabaseSchema<any>> {
-  path: string; auth: AuthDefinition<any>; schema?: Schema; prefix?: string; maxCandidates?: number;
+  path: string; auth: AuthDefinition<any>; schema?: Schema; prefix?: string; maxCandidates?: number; maxScopeRecords?: number;
   authorize(context: { auth: AuthRequest<any>; db: ReadDatabase<Schema> }, scope: string): boolean;
   /** Optional synchronous per-record policy, evaluated before ranking or snippet creation. */
   authorizeRecord?(context: { auth: AuthRequest<any>; db: ReadDatabase<Schema> }, record: Pick<SearchRecord, "scope" | "id">): boolean;

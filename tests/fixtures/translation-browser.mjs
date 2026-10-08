@@ -1,0 +1,20 @@
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { createI18n } from '../../dist/i18n.js';
+import { fileURLToPath } from 'node:url';
+const repository = fileURLToPath(new URL('../../', import.meta.url));
+const messages = { greeting: 'Hello {name}', count: { plural: 'count', forms: { one: '{count} item', other: '{count} items' } } };
+const french = { greeting: 'Bonjour {name}', count: { plural: 'count', forms: { one: '{count} article', other: '{count} articles' } } };
+const locale = createI18n({ defaultLocale: 'en', messages, translations: { fr: french }, locale: 'fr' });
+const expected = await locale.revision();
+const html = `<!doctype html><html lang="en"><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Translation contract verification</title><style>body{font:16px system-ui;max-width:640px;margin:24px auto;padding:0 20px}p{overflow-wrap:anywhere}textarea{width:100%;box-sizing:border-box}button{margin:8px 8px 8px 0;padding:12px}</style><h1>Translation review verification</h1><p id="rendered">${locale.t('greeting',{name:'Ada'})} · ${locale.t('count',{count:2})}</p><p id="server">Server revision: ${expected}</p><label for="translation">French greeting</label><textarea id="translation">Bonjour {name}</textarea><div><button id="review">Review French translation</button><button id="accept" disabled>Accept reviewed French</button></div><p id="status" role="status">Ready</p><p id="comparison"></p><script type="module">
+import { createI18n } from '/dist/i18n.js';
+import { exportTranslationBundle, reviewTranslationBundle, acceptTranslationReview } from '/dist/translation-review.js';
+const messages=${JSON.stringify(messages)}, french=${JSON.stringify(french)}, options={sourceLocale:'en',targetLocale:'fr'};
+let review=null;
+document.querySelector('#translation').addEventListener('input',()=>{review=null;document.querySelector('#accept').disabled=true;document.querySelector('#status').textContent='Translation changed; review again.'});
+document.querySelector('#review').addEventListener('click',async()=>{try{const bundle=await exportTranslationBundle(messages,options); for(const entry of bundle.entries)entry.translation=entry.key==='greeting'?document.querySelector('#translation').value:french[entry.key]; review=await reviewTranslationBundle(messages,bundle,options);document.querySelector('#status').textContent=review.ok?'Review valid: '+review.changes.map(change=>change.key).join(', '):'Review rejected: '+review.issues.map(issue=>issue.code).join(', ');document.querySelector('#accept').disabled=!review.ok}catch(error){document.querySelector('#status').textContent=error.message}});
+document.querySelector('#accept').addEventListener('click',async()=>{try{const accepted=await acceptTranslationReview(messages,review,options);const locale=createI18n({defaultLocale:'en',messages,translations:{fr:accepted},locale:'fr'});document.querySelector('#rendered').textContent=locale.t('greeting',{name:'Ada'})+' · '+locale.t('count',{count:2});document.querySelector('#comparison').textContent='Browser/server revision match: '+((await locale.revision())===${JSON.stringify(expected)});document.querySelector('#status').textContent='Accepted French catalog'}catch(error){document.querySelector('#status').textContent=error.message}});
+</script></html>`;
+const server=createServer(async(req,res)=>{if(req.url==='/'){res.setHeader('content-type','text/html');res.end(html);return}if(/^\/dist\/[a-z0-9-]+\.js$/.test(req.url)){try{res.setHeader('content-type','text/javascript');res.end(await readFile(repository+req.url.slice(1)));return}catch{}}res.statusCode=404;res.end('Not found')});
+server.listen(43171,'127.0.0.1',()=>console.log('Translation verification at http://127.0.0.1:43171'));
