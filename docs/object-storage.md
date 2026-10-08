@@ -35,7 +35,9 @@ async function retainRelease(
 
 Metadata includes the logical key, size, SHA-256, normalized media type, creation time, and update
 time. Logical keys use bounded portable segments; they are never interpolated as raw filesystem
-paths or unsigned URLs. `put` snapshots a mutable input before returning.
+paths or unsigned URLs. `put` copies the input bytes and captures the normalized content type
+before its first asynchronous operation. Later caller mutations cannot change that write.
+Inputs must be a `Uint8Array` or `ArrayBuffer`; other JavaScript values are rejected.
 
 The low-level contract deliberately buffers one bounded object. It is intended for release archives,
 bounded encrypted-backup chunks, and storage adapters—not multi-gigabyte media ingest as one object.
@@ -96,7 +98,9 @@ Every request:
 
 `get` does not treat an ETag as a content digest. It requires Clank's stored SHA-256, size, media
 type, and timestamps, bounds the response independently, and hashes the bytes again. Objects
-created outside Clank without that metadata fail closed.
+created outside Clank without that metadata fail closed. A deadline during body consumption returns
+`OBJECT_STORE_TIMEOUT`; other body transport failures return `OBJECT_STORE_UNAVAILABLE`, without
+provider error details. Responses rejected before their body is read release that unread body.
 
 The signing behavior follows the official [AWS Signature Version 4 single-chunk
 contract](https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sig-v4-header-based-auth.html).

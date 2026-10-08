@@ -1,0 +1,398 @@
+{
+  "date": "2026-10-08",
+  "baseCommit": "7aeedc7d8c82575541672f55e853613d5a9fedd9",
+  "branch": "codex/storage-runner-review-2026-10-08",
+  "status": "local-release-validation-passed",
+  "scope": {
+    "manual": [
+      "local/S3 write inputs, byte validation, response-body deadlines, redaction and cleanup",
+      "bucket browser upload invocation, CSRF capture, resumable state and progress",
+      "deployment artifact/runtime provider bytes through digest verification and lease revalidation",
+      "bucket/coordinator/runner-agent error observers",
+      "contextual frozen interfaces and WebCrypto/Fetch byte ownership"
+    ],
+    "wholeSource": "Pinned semantic analysis and complete release gate supplement these targeted reads; no independent line-by-line audit of every source file is claimed."
+  },
+  "findings": [
+    {
+      "priority": "P2",
+      "state": "fixed",
+      "title": "Asynchronous writes and Blob buffering read changed caller inputs",
+      "files": [
+        "src/object-storage.ts",
+        "src/buckets.ts"
+      ],
+      "evidence": "Local put copied bytes after asynchronous key lookup; local/S3 put read contentType after asynchronous work. Blob uploads read mutable options and resolve CSRF after file buffering. Inputs are now captured before the first await."
+    },
+    {
+      "priority": "P2",
+      "state": "fixed",
+      "title": "Resumable clients accept invalid state or nonmatching progress",
+      "files": [
+        "src/buckets.ts"
+      ],
+      "evidence": "Malformed chunk sizes and offsets permit invalid/repeated chunks; missing, regressing, fractional, skipped or NaN response offsets cause incorrect progress. Invalid intent state fails before PATCH; intermediate offsets must exactly match the accepted chunk end."
+    },
+    {
+      "priority": "P2",
+      "state": "fixed",
+      "title": "S3 body failures escape stable errors and rejected metadata leaves an unread body",
+      "files": [
+        "src/object-storage.ts"
+      ],
+      "evidence": "A native loopback HTTP response sends valid headers but stalls its body: before the fix its deadline escapes as a raw fetch abort error. Body transport errors now return redacted 502 errors; deadlines return 504. Response release cancels unread bodies."
+    },
+    {
+      "priority": "P2",
+      "state": "fixed",
+      "title": "Object stores coerce unsupported JavaScript values into bytes",
+      "files": [
+        "src/object-storage.ts"
+      ],
+      "evidence": "Strings, arrays and custom slice objects could become empty objects. Local/S3 stores now reject non-Uint8Array/non-ArrayBuffer values before provider or filesystem admission."
+    },
+    {
+      "priority": "P2",
+      "state": "fixed",
+      "title": "Deployment provider bytes change after verification and before transfer",
+      "files": [
+        "src/runner.ts"
+      ],
+      "evidence": "Provider-owned buffers mutate during the required second lease authentication; SharedArrayBuffer views also fail WebCrypto validation before the fix. The coordinator copies bounded bytes, hashes the copy and sends the same copy after authenticating the lease again."
+    },
+    {
+      "priority": "P2",
+      "state": "fixed",
+      "title": "Rejected diagnostics escape bucket/coordinator/agent failure containment",
+      "files": [
+        "src/buckets.ts",
+        "src/runner.ts"
+      ],
+      "evidence": "Observers throwing synchronously or rejecting asynchronously cannot replace safe coordinator/bucket errors or terminate agent polling/recovery."
+    },
+    {
+      "priority": "P2",
+      "state": "fixed",
+      "title": "Frozen storage and runner interfaces lose contextual types",
+      "files": [
+        "src/buckets.ts",
+        "src/object-storage.ts",
+        "src/runner.ts",
+        "type-tests/semantic-baseline.json"
+      ],
+      "evidence": "Explicit freeze interface types and owned Fetch/WebCrypto buffers remove 83 diagnostics: buckets 34, object storage 15 and runner 34. No new diagnostics or baseline allowances."
+    }
+  ],
+  "validation": {
+    "before": {
+      "initialStorageRunner": {
+        "tests": 14,
+        "pass": 0,
+        "fail": 14,
+        "cancelled": 0,
+        "skipped": 0,
+        "path": "/tmp/clank-review-2026-10-08/storage-runner-before.log",
+        "sha256": "7e19773f4b778aa1b183b858ec15cb1b0970571ffa30fe542ea77060734db2da",
+        "scope": "14 isolated regressions against the base build: six progress offsets, local/S3 input snapshots, S3 body timeout/cleanup and four artifact/runtime transfer cases."
+      },
+      "correctedBucketObserver": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "path": "/tmp/clank-review-2026-10-08/storage-bucket-observer-before.log",
+        "sha256": "b9978d1571ac4ea66886b1ce5f5af66044c0ca03a9d648596199d4cb10e906b1",
+        "scope": "One correctly configured app-owned bucket regression with only compiled bucket observer containment reverted; the current build was restored immediately."
+      },
+      "additionalObserversAndInputs": {
+        "tests": 4,
+        "pass": 0,
+        "fail": 4,
+        "cancelled": 0,
+        "skipped": 0,
+        "path": "/tmp/clank-review-2026-10-08/storage-runner-observers-before.log",
+        "sha256": "67d922f8a1bb85ec1298e1e21b6d42bc2fd31e5dbf7ab3b00bab23064554977c",
+        "scope": "Non-byte input and synchronous/asynchronous coordinator observer regressions are genuine (three). Exclude the fourth failure: its bucket fixture lacked app ownership and failed authorization before reaching its observer."
+      },
+      "blobAndIntent": {
+        "tests": 6,
+        "pass": 1,
+        "fail": 5,
+        "cancelled": 0,
+        "skipped": 0,
+        "path": "/tmp/clank-review-2026-10-08/storage-client-before.log",
+        "sha256": "230469f076bdfe2480bd0c6d6f4e5bc773fc11103b68c16622b69db174cc269e",
+        "scope": "Blob capture and four invalid intent states fail before these fixes; the beyond-length offset control already failed closed and passes."
+      }
+    },
+    "focused": {
+      "tests": 80,
+      "pass": 80,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "path": "/tmp/clank-review-2026-10-08/storage-runner-focused.log",
+      "sha256": "8eab29a5c05710b443ce5c2d2e558b88808c6a7ab4e67df1b07c886da6233726"
+    },
+    "types": {
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnosticsBefore": 246,
+      "sourceDiagnosticsAfter": 163,
+      "resolved": {
+        "src/buckets.ts": 34,
+        "src/object-storage.ts": 15,
+        "src/runner.ts": 34
+      },
+      "newDiagnostics": 0,
+      "packedConsumerFixtures": 13,
+      "skipLibCheck": false,
+      "packedOpenApiExamples": "passed",
+      "path": "/tmp/clank-review-2026-10-08/storage-runner-types.log",
+      "sha256": "46b92237d272d9be3a197ed9f50c32ceb0039f0c2f07a003ac09f0a559744922"
+    },
+    "release": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1705,
+      "pass": 1702,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 92.09,
+        "branches": 79.78,
+        "functions": 90.04
+      },
+      "publishFiles": 393,
+      "publishFileLimit": 394,
+      "publishByteLimit": 6291456,
+      "dependencyContract": "passed, zero npm dependencies",
+      "documentation": "passed",
+      "packedReleaseConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "path": "/tmp/clank-review-2026-10-08/storage-runner-check.log",
+      "sha256": "403973fa0bafa5138da4318e090a1029c4d2b5a6cfb51931e7a5d3f11f615f3f"
+    },
+    "latestDocumentation": {
+      "status": "passed",
+      "path": "/tmp/clank-review-2026-10-08/storage-runner-docs.log",
+      "sha256": "0522194768a10db629d7224d7ef46156f397123f6b17b5a4a6a22d963a6b30ff"
+    }
+  },
+  "compatibility": {
+    "publicSignatures": "unchanged",
+    "wireFormats": "unchanged",
+    "persistentSchema": "unchanged",
+    "dependencies": "none added",
+    "behavior": "Valid byte writes and resumable uploads retain their contracts; invalid JavaScript values, malformed resumable state and nonmatching progress fail closed with existing errors. Provider buffers incur one bounded copy before verification/transfer. Lease, node credential, ownership, quota and digest checks remain required."
+  },
+  "remaining": {
+    "sourceDiagnostics": 163,
+    "largestSourceBacklogs": [
+      [
+        "src/task.ts",
+        13
+      ],
+      [
+        "src/analytics.ts",
+        10
+      ],
+      [
+        "src/bookmarks.ts",
+        9
+      ],
+      [
+        "src/provider-service.ts",
+        9
+      ],
+      [
+        "src/blueprint.ts",
+        8
+      ],
+      [
+        "src/error-inbox.ts",
+        8
+      ],
+      [
+        "src/journey.ts",
+        8
+      ],
+      [
+        "src/platform.ts",
+        8
+      ],
+      [
+        "src/recycle-bin.ts",
+        8
+      ],
+      [
+        "src/services.ts",
+        7
+      ]
+    ],
+    "roadmap": {
+      "implemented": 6,
+      "planned": 34
+    },
+    "productionHost": "Current Railway host denies required Linux namespaces; no deployment certification or isolation bypass performed.",
+    "privilegedTests": "XFS/Docker certification requires an explicitly disposable compatible host.",
+    "otherObservers": "This batch contains bucket/coordinator/runner-agent observers; other modules remain separate review targets.",
+    "transferMemory": "Artifact/runtime snapshots allocate one additional bounded byte buffer. Shared memory must still be coordinated by the provider during copying; no atomic cross-thread snapshot is claimed."
+  },
+  "sources": {
+    "src/buckets.ts": "f3d87983a16fb1bf0c9c5fb8c7b421408f0e26c1be2a804c72964ac0eda75978",
+    "src/object-storage.ts": "1162c879f5a7dc9104f59f381ed64b3c250b3c1b1e6d0c77d1f9aa69277521ba",
+    "src/runner.ts": "b58f66e893b011465c7bfeb65ce6929cc47a58b7eab7192b9fe793a6be3b2968",
+    "tests/buckets.test.mjs": "4a2319b7c9400093b7124ab84bc9f706ff8005b58edfe08766844a83a6a4f72f",
+    "tests/object-storage.test.mjs": "d27ef7f071d285309d67a47b7cc5548b13de6df5f737cc305cb33b508771b928",
+    "tests/runner.test.mjs": "ce69b5a11bd25d4ab674a31c02d512a3fd72a5a3765609029cba2d8094bf6cdc",
+    "type-tests/semantic-baseline.json": "0b0a1553f0cadbf3dbf989a6b2316c14c4d3340daf32068b66a16940947a5a6b",
+    "docs/buckets.md": "973f7689f407fcb4c922b024a7683c8782c737c96f4a462f4eb8ff643f1fa2e5",
+    "docs/object-storage.md": "b4401500a71713003f21a3e67066c2eb1419ff3cb56a9b120438717c0450912b",
+    "docs/distributed-deployment.md": "3003982106ccf5fd5c2ad72421dbe85959634fcef4d1b1f28df97bd22f4f54b4"
+  },
+  "resolvedDiagnostics": [
+    {
+      "key": "src/buckets.ts|TS2322|Type 'Readonly<{ protocol: \"clank-bucket-upload/1\"; bucket: string; key: string; method: \"PUT\" | \"PATCH\"; url: `${string}${string}/${string}/cap/${string}`; headers: Readonly<{ \"upload-offset\": \"0\"; \"content-type\": \"application/offset+octet-stream\"; } | { ...; }>; ... 4 more ...; maxChunkBytes: number; }>' is not assignable to type 'BucketUploadIntent'. Types of property 'headers' are incompatible. Type 'Readonly<{ \"upload-offset\": \"0\"; \"content-type\": \"application/offset+octet-stream\"; } | { \"content-type\": string; \"upload-offset\"?: undefined; }>' is not assignable to type 'Readonly<Record<string, string>>'. Type 'Readonly<{ \"content-type\": string; \"upload-offset\"?: undefined; }>' is not assignable to type 'Readonly<Record<string, string>>'. Property '\"upload-offset\"' is incompatible with index signature. Type 'undefined' is not assignable to type 'string'.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS2339|Property 'cursor' does not exist on type '{}'.",
+      "removed": 2
+    },
+    {
+      "key": "src/buckets.ts|TS2339|Property 'limit' does not exist on type '{}'.",
+      "removed": 2
+    },
+    {
+      "key": "src/buckets.ts|TS2339|Property 'prefix' does not exist on type '{}'.",
+      "removed": 2
+    },
+    {
+      "key": "src/buckets.ts|TS2345|Argument of type 'Uint8Array<ArrayBufferLike> | null' is not assignable to parameter of type 'BodyInit | null | undefined'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'BodyInit | null | undefined'. Type 'Uint8Array<ArrayBufferLike>' is missing the following properties from type 'URLSearchParams': size, append, delete, get, and 2 more.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS2345|Argument of type 'Uint8Array<ArrayBufferLike>' is not assignable to parameter of type 'BufferSource'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'. Types of property 'buffer' are incompatible. Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'. Type 'SharedArrayBuffer' is not assignable to type 'ArrayBuffer'. Types of property '[Symbol.toStringTag]' are incompatible. Type '\"SharedArrayBuffer\"' is not assignable to type '\"ArrayBuffer\"'.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS2352|Conversion of type 'BucketImageVariant' to type 'Record<string, unknown>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first. Index signature for type 'string' is missing in type 'BucketImageVariant'.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS2769|No overload matches this call. The last overload gave the following error. Argument of type 'Uint8Array<ArrayBufferLike>' is not assignable to parameter of type 'BufferSource'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'. Types of property 'buffer' are incompatible. Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'. Type 'SharedArrayBuffer' is not assignable to type 'ArrayBuffer'. Types of property '[Symbol.toStringTag]' are incompatible. Type '\"SharedArrayBuffer\"' is not assignable to type '\"ArrayBuffer\"'.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'bytes' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'deleteOptions' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'expiresInMs' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'id' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'identity' implicitly has an 'any' type.",
+      "removed": 3
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'ifSha256' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'input' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'key' implicitly has an 'any' type.",
+      "removed": 9
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'listOptions' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'putOptions' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'readOptions' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'uploadOptions' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/buckets.ts|TS7006|Parameter 'variant' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/object-storage.ts|TS2339|Property 'contentType' does not exist on type '{}'.",
+      "removed": 2
+    },
+    {
+      "key": "src/object-storage.ts|TS2345|Argument of type 'Uint8Array<ArrayBufferLike>' is not assignable to parameter of type 'BufferSource'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'. Types of property 'buffer' are incompatible. Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'. Type 'SharedArrayBuffer' is not assignable to type 'ArrayBuffer'. Types of property '[Symbol.toStringTag]' are incompatible. Type '\"SharedArrayBuffer\"' is not assignable to type '\"ArrayBuffer\"'.",
+      "removed": 2
+    },
+    {
+      "key": "src/object-storage.ts|TS2769|No overload matches this call. Overload 1 of 2, '(input: string | Request | URL, init?: RequestInit | undefined): Promise<Response>', gave the following error. Argument of type '{ body?: Uint8Array<ArrayBufferLike> | undefined; method: \"GET\" | \"DELETE\" | \"PUT\" | \"HEAD\"; headers: Headers; redirect: \"error\"; signal: AbortSignal; }' is not assignable to parameter of type 'RequestInit'. Types of property 'body' are incompatible. Type 'Uint8Array<ArrayBufferLike> | undefined' is not assignable to type 'BodyInit | null | undefined'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'BodyInit | null | undefined'. Type 'Uint8Array<ArrayBufferLike>' is missing the following properties from type 'URLSearchParams': size, append, delete, get, and 2 more. Overload 2 of 2, '(input: URL | RequestInfo, init?: RequestInit | undefined): Promise<Response>', gave the following error. Argument of type '{ body?: Uint8Array<ArrayBufferLike> | undefined; method: \"GET\" | \"DELETE\" | \"PUT\" | \"HEAD\"; headers: Headers; redirect: \"error\"; signal: AbortSignal; }' is not assignable to parameter of type 'RequestInit'. Types of property 'body' are incompatible. Type 'Uint8Array<ArrayBufferLike> | undefined' is not assignable to type 'BodyInit | null | undefined'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'BodyInit | null | undefined'. Type 'Uint8Array<ArrayBufferLike>' is missing the following properties from type 'URLSearchParams': size, append, delete, get, and 2 more.",
+      "removed": 1
+    },
+    {
+      "key": "src/object-storage.ts|TS2769|No overload matches this call. The last overload gave the following error. Argument of type 'Uint8Array<ArrayBufferLike>' is not assignable to parameter of type 'BufferSource'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'. Types of property 'buffer' are incompatible. Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'. Type 'SharedArrayBuffer' is not assignable to type 'ArrayBuffer'. Types of property '[Symbol.toStringTag]' are incompatible. Type '\"SharedArrayBuffer\"' is not assignable to type '\"ArrayBuffer\"'.",
+      "removed": 1
+    },
+    {
+      "key": "src/object-storage.ts|TS7006|Parameter 'key' implicitly has an 'any' type.",
+      "removed": 2
+    },
+    {
+      "key": "src/object-storage.ts|TS7006|Parameter 'keyInput' implicitly has an 'any' type.",
+      "removed": 5
+    },
+    {
+      "key": "src/object-storage.ts|TS7006|Parameter 'value' implicitly has an 'any' type.",
+      "removed": 2
+    },
+    {
+      "key": "src/runner.ts|TS2345|Argument of type 'Uint8Array<ArrayBufferLike>' is not assignable to parameter of type 'BodyInit | null | undefined'. Type 'Uint8Array<ArrayBufferLike>' is missing the following properties from type 'URLSearchParams': size, append, delete, get, and 2 more.",
+      "removed": 2
+    },
+    {
+      "key": "src/runner.ts|TS2345|Argument of type 'Uint8Array<ArrayBufferLike>' is not assignable to parameter of type 'BufferSource'. Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'. Types of property 'buffer' are incompatible. Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'. Type 'SharedArrayBuffer' is not assignable to type 'ArrayBuffer'. Types of property '[Symbol.toStringTag]' are incompatible. Type '\"SharedArrayBuffer\"' is not assignable to type '\"ArrayBuffer\"'.",
+      "removed": 1
+    },
+    {
+      "key": "src/runner.ts|TS7006|Parameter 'error' implicitly has an 'any' type.",
+      "removed": 1
+    },
+    {
+      "key": "src/runner.ts|TS7006|Parameter 'input' implicitly has an 'any' type.",
+      "removed": 2
+    },
+    {
+      "key": "src/runner.ts|TS7006|Parameter 'nodeId' implicitly has an 'any' type.",
+      "removed": 14
+    },
+    {
+      "key": "src/runner.ts|TS7006|Parameter 'operation' implicitly has an 'any' type.",
+      "removed": 3
+    },
+    {
+      "key": "src/runner.ts|TS7006|Parameter 'token' implicitly has an 'any' type.",
+      "removed": 11
+    }
+  ]
+}

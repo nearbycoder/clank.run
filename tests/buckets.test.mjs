@@ -61,6 +61,80 @@ function png(width = 2, height = 3) {
   return bytes;
 }
 
+for (const returnedOffset of [null, "0", "1", "3", "NaN", "1.5"]) {
+  test(`resumable clients reject a nonmatching chunk offset ${returnedOffset}`, async () => {
+    let chunks = 0;
+    const progress = [];
+    const client = createBucketClient("files", { fetch: async (_url, init) => {
+      if (init.method === "POST") return Response.json({ resumable: true, offset: 0, maxChunkBytes: 2, url: "https://app.example/upload", headers: {} });
+      if (++chunks > 1) return Response.json({ error: { code: "SENTINEL", message: "unexpected repeated chunk" } }, { status: 500 });
+      return new Response(null, { status: 204, headers: returnedOffset === null ? {} : { "upload-offset": returnedOffset } });
+    } });
+    await assert.rejects(client.upload({ key: "file", value: text("abcd"), resumable: true, onProgress: (...value) => progress.push(value) }),
+      error => error instanceof BucketError && error.code === "UPLOAD_OFFSET_MISMATCH");
+    assert.equal(chunks, 1);
+    assert.deepEqual(progress, []);
+  });
+}
+
+test("bucket error observer rejections cannot escape redacted storage failures", async () => {
+  const definition = defineBucket({ name: "files", ownership: "app", allowedContentTypes: ["text/plain"] });
+  const reported = [];
+  const environment = await fixture([definition], {
+    wrapStore: store => ({ ...store, get: async () => { throw new Error("private storage failure"); } }),
+    onError: async error => { reported.push(error.message); throw new Error("observer failure"); },
+  });
+  try {
+    const bucket = environment.manager.bucket("files");
+    await bucket.put("file", text("data"), { contentType: "text/plain" });
+    const intent = await bucket.createReadIntent("file");
+    const response = await environment.manager.handle(new Request(intent.url));
+    assert.equal(response.status, 500);
+    assert.doesNotMatch(await response.text(), /private storage failure|observer failure/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(reported, ["private storage failure"]);
+  } finally { await environment.close(); }
+});
+
+test("Blob uploads retain their invocation's key, type and CSRF token", async () => {
+  const ready = barrier();
+  const release = barrier();
+  class DelayedBlob extends Blob {
+    async arrayBuffer() { ready.resolve(); await release.promise; return super.arrayBuffer(); }
+  }
+  let csrf = "original-csrf";
+  const requests = [];
+  const client = createBucketClient("files", { csrfToken: () => csrf, fetch: async (_url, init) => {
+    requests.push(init);
+    return Response.json(init.method === "POST" ? { resumable: false, url: "https://app.example/upload", headers: {} } : { object: { key: "original" } });
+  } });
+  const input = { key: "original", value: new DelayedBlob(["data"], { type: "text/plain" }) };
+  const pending = client.upload(input);
+  await ready.promise;
+  input.key = "changed";
+  input.contentType = "application/octet-stream";
+  csrf = "another-account-csrf";
+  release.resolve();
+  await pending;
+  assert.equal(JSON.parse(requests[0].body).key, "original");
+  assert.equal(JSON.parse(requests[0].body).contentType, "text/plain");
+  assert.equal(requests[0].headers["x-clank-csrf"], "original-csrf");
+});
+
+for (const state of [{ offset: 0, maxChunkBytes: 0 }, { offset: 0, maxChunkBytes: -1 }, { offset: 0, maxChunkBytes: 1.5 }, { offset: -1, maxChunkBytes: 2 }, { offset: 5, maxChunkBytes: 2 }]) {
+  test(`resumable clients reject invalid intent state ${JSON.stringify(state)}`, async () => {
+    let chunks = 0;
+    const client = createBucketClient("files", { fetch: async (_url, init) => {
+      if (init.method === "POST") return Response.json({ resumable: true, ...state, url: "https://app.example/upload", headers: {} });
+      chunks++;
+      return Response.json({ error: { code: "SENTINEL", message: "invalid state reached upload" } }, { status: 500 });
+    } });
+    await assert.rejects(client.upload({ key: "file", value: text("abcd"), resumable: true }),
+      error => error instanceof BucketError && error.code === "UPLOAD_INCOMPLETE");
+    assert.equal(chunks, 0);
+  });
+}
+
 test("bucket definitions are immutable, policy-complete, and verify image signatures", () => {
   const bucket = defineBucket({
     name: "avatars",

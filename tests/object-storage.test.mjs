@@ -13,6 +13,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import { createServer } from "node:http";
 import {
   createS3ObjectStore,
   ObjectStoreError,
@@ -193,6 +194,90 @@ test("S3 object storage supports path style and retries exact transient writes",
   assert.equal(puts[0].url, "http://127.0.0.1:9000/local-clank/backups/project-01/database.enc");
   assert.equal(puts[0].bodySha256, puts[1].bodySha256);
   assert.equal(puts[0].authorization, puts[1].authorization);
+});
+
+test("local puts snapshot bytes and content type before asynchronous key lookup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-local-object-snapshot-"));
+  try {
+    const store = await openLocalObjectStore({ directory: root });
+    const bytes = new TextEncoder().encode("original");
+    const options = { contentType: "text/plain" };
+    const pending = store.put("snapshot", bytes, options);
+    bytes.fill(0);
+    options.contentType = "application/octet-stream";
+    const metadata = await pending;
+    assert.equal(metadata.contentType, "text/plain");
+    assert.equal(new TextDecoder().decode((await store.get("snapshot")).bytes), "original");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("S3 puts snapshot content type before the preliminary HEAD request", async () => {
+  const service = fakeS3({ accessKeyId: "ACCESSKEY", secretAccessKey: "secret-access-key", region: "auto" });
+  const store = createS3ObjectStore({ endpoint: "https://storage.example.test", region: "auto", bucket: "clank-bucket",
+    accessKeyId: service.accessKeyId, secretAccessKey: service.secretAccessKey, fetch: service.fetch, retries: 0 });
+  const bytes = new TextEncoder().encode("original");
+  const options = { contentType: "text/plain" };
+  const pending = store.put("snapshot", bytes, options);
+  bytes.fill(0);
+  options.contentType = "application/octet-stream";
+  const metadata = await pending;
+  assert.equal(metadata.contentType, "text/plain");
+  assert.equal(new TextDecoder().decode((await store.get("snapshot")).bytes), "original");
+});
+
+test("S3 response-body deadlines return a redacted storage timeout", async t => {
+  const bytes = new TextEncoder().encode("abc");
+  const server = createServer((_request, response) => {
+    response.writeHead(200, objectHeaders({ key: "slow", bytes, sha256Value: sha256(bytes), contentType: "text/plain", createdAt: 1, updatedAt: 1 }));
+    response.flushHeaders();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  });
+  const store = createS3ObjectStore({ endpoint: `http://127.0.0.1:${server.address().port}`, region: "auto", bucket: "clank-bucket",
+    accessKeyId: "ACCESSKEY", secretAccessKey: "secret-access-key", pathStyle: true, retries: 0, timeoutMs: 100 });
+  await assert.rejects(store.get("slow"), error => error instanceof ObjectStoreError && error.status === 504 && error.code === "OBJECT_STORE_TIMEOUT");
+});
+
+test("S3 rejects invalid metadata while cancelling its unused response body", async () => {
+  let cancelled = false;
+  const store = createS3ObjectStore({ endpoint: "https://storage.example.test", region: "auto", bucket: "clank-bucket",
+    accessKeyId: "ACCESSKEY", secretAccessKey: "secret-access-key", retries: 0,
+    fetch: async () => new Response(new ReadableStream({ cancel() { cancelled = true; } }), { headers: { "content-length": "3" } }),
+  });
+  await assert.rejects(store.get("invalid"), error => error instanceof ObjectStoreError);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(cancelled, true);
+});
+
+test("S3 response-body failures redact provider transport errors", async () => {
+  const bytes = new TextEncoder().encode("abc");
+  const store = createS3ObjectStore({ endpoint: "https://storage.example.test", region: "auto", bucket: "clank-bucket",
+    accessKeyId: "ACCESSKEY", secretAccessKey: "secret-access-key", retries: 0,
+    fetch: async () => new Response(new ReadableStream({ start(controller) { controller.error(new Error("private provider connection details")); } }),
+      { headers: objectHeaders({ key: "failed", bytes, sha256Value: sha256(bytes), contentType: "text/plain", createdAt: 1, updatedAt: 1 }) }),
+  });
+  await assert.rejects(store.get("failed"), error => error instanceof ObjectStoreError && error.code === "OBJECT_STORE_UNAVAILABLE" && !error.message.includes("private provider"));
+});
+
+test("object stores reject nonbyte upload values before storage admission", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-object-invalid-values-"));
+  let requests = 0;
+  try {
+    const stores = [await openLocalObjectStore({ directory: root }), createS3ObjectStore({
+      endpoint: "https://storage.example.test", region: "auto", bucket: "clank-bucket", accessKeyId: "ACCESSKEY", secretAccessKey: "secret-access-key", retries: 0,
+      fetch: async () => { requests++; return new Response(null, { status: 404 }); },
+    })];
+    for (const store of stores) {
+      for (const value of ["", "123", [], null, { slice: () => new ArrayBuffer(0) }]) {
+        await assert.rejects(store.put("invalid", value), TypeError);
+      }
+    }
+    assert.equal(requests, 0);
+    assert.equal(await stores[0].stat("invalid"), null);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("S3 object storage rejects unsafe configuration and fails closed on corrupt responses", async () => {
