@@ -46,6 +46,20 @@ const measuredCoverage = {
   ].join("\n"),
 };
 
+test("Node 26 wrapped JSON coverage failures allow only the existing bounded artifact retry", async () => {
+  const wrapped = { ...malformedCoverage, outputTail: malformedCoverage.outputTail.replace("SyntaxError: ", "Error [ERR_OPERATION_FAILED]: Operation failed: failed to parse coverage file /tmp/node-coverage-fixture/coverage-2-0.json: ") };
+  assert.equal(isRetryableCoverageArtifactFailure(wrapped), true);
+  for (const outputTail of [wrapped.outputTail + "not ok 12 - failed test\n", wrapped.outputTail + "ERROR: Coverage for lines (79%) does not meet global threshold (80%)\n", wrapped.outputTail.replace("Unexpected non-whitespace character after JSON at position 103245 (line 1 column 103246)", "Permission denied"), wrapped.outputTail.replace("# cancelled 0", "# cancelled 1")]) {
+    assert.equal(isRetryableCoverageArtifactFailure({ ...wrapped, outputTail }), false);
+  }
+  let calls = 0;
+  await runCoverageGate({ execute: async () => ++calls === 1 ? wrapped : measuredCoverage, writeDiagnostic: () => {} });
+  assert.equal(calls, 2);
+  calls = 0;
+  await assert.rejects(runCoverageGate({ execute: async () => { calls++; return wrapped; }, writeDiagnostic: () => {} }), /single coverage-artifact retry/u);
+  assert.equal(calls, 2);
+});
+
 test("coverage gate retries only a known malformed artifact after every test passed", async () => {
   assert.equal(isRetryableCoverageArtifactFailure(truncatedCoverage), true);
   assert.equal(isRetryableCoverageArtifactFailure(malformedCoverage), true);

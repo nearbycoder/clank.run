@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Five of the forty proposed features are implemented across two review batches; the other thirty-five remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is on `codex/document-coordination-and-review` and depends on it.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Six of the forty proposed features are implemented across three review batches; the other thirty-four remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -52,7 +52,7 @@ A feature is complete only when its documented acceptance evidence exists. Propo
 | 28 | Retained file versions and restore | Planned | Pending |
 | 29 | Durable media processing jobs | Planned | Pending |
 | 30 | Offline attachment queue | Planned | Pending |
-| 31 | Hydration mismatch inspector | Planned | Pending |
+| 31 | Hydration mismatch inspector | Implemented | Optional metadata capture, pre-cleanup child paths, original TSX locations, patch/remount reasons, immutable bounded history and redacted JSON. Unit/packed consumer and real keyboard/mobile/cleanup checks pass. DOM gzip budget remains 12,000 bytes. |
 | 32 | Interactive component contract harness | Planned | Pending |
 | 33 | OpenAPI export for backend functions | Implemented | Runtime schemas, cookie/CSRF and replay contracts; unsupported/coercive/refined shapes rejected; actual positive/negative authenticated HTTP requests tested against the packed artifact. `tests/openapi.test.mjs`, `type-tests/openapi.ts`. |
 | 34 | Local provider fleet simulator | Planned | Pending |
@@ -67,7 +67,7 @@ A feature is complete only when its documented acceptance evidence exists. Propo
 
 The complete `npm run check` passed on Node 26.10.0: 1,622 tests reported, 1,619 passed, zero failed/cancelled, three skipped; coverage 91.92% lines, 79.47% branches, 89.73% functions. Documentation/export/declaration audits, zero-dependency enforcement, packed-release conformance, and package/tree/history security checks passed. Subsequent focused tests additionally verify retirement of collaboration history copies. The semantic gate passes with 290 existing source diagnostics and 11 packed consumer fixtures. See `implementation-verification.json` for log hashes and exact scope.
 
-The publish allowlist contains 391 files. Four new distribution files for OpenAPI and translation review raise the bounded allowance from 390 to 394; the 6 MiB byte ceiling remains in force. No framework dependencies were added. Two existing published declaration errors were corrected: JSX ambient inclusion and the bucket error constructor.
+The first batch publish allowlist contains 391 files. Four new distribution files for OpenAPI and translation review raise the bounded allowance from 390 to 394; the 6 MiB byte ceiling remains in force. Hydration inspection adds two distribution files within that same 394-file limit. No framework dependencies were added. Two existing published declaration errors were corrected: JSX ambient inclusion and the bucket error constructor.
 
 The translation browser fixture (`tests/fixtures/translation-browser.mjs`) rejects invalid placeholders, prevents acceptance until review passes, supports keyboard review/acceptance, and renders the accepted catalog with the same SHA-256 revision as the server. At 390 × 844 pixels, horizontal content width equals viewport width. Browser warnings/errors were absent. Screenshots are local review evidence, not package contents.
 
@@ -81,4 +81,14 @@ The complete local gate passed against the final document and OpenAPI changes wi
 
 The real HTTP/browser fixture (`tests/fixtures/collaborative-browser.mjs`) uses two synthetic authenticated users and a disposable database. Keyboard selection publishes revision-bound presence. A concurrent server edit makes acceptance fail; refreshing then accepting preserves both edits and persists `!Dear Hello earth` at revision 4. Revocation clears the text, selections and actionable proposal controls. At a 390px viewport, content width equals client width (375px with its vertical scrollbar), so there is no horizontal overflow. Browser warnings/errors were absent. Both browser fixtures serve preloaded assets without request-derived filesystem paths.
 
-PR #245 has passed hosted Node 22.16/24 runtime tests, packed-release conformance, semantic/packed consumer typing, JavaScript/TypeScript CodeQL analysis, and the CodeQL alert gate at `2765ba4`. No production rollout, merge, disposable-host certification or completion of the remaining 35 features is claimed.
+PR #245 at `02ff56ece5170885244a161f55ddd02e7107b4ec` and PR #246 at `28a79f2cb7f289d482cae2a35112fb205bef478e` have both passed hosted Node 22.16/24 runtime tests, packed-release conformance, semantic/packed consumer typing, JavaScript/TypeScript CodeQL analysis, and the CodeQL alert gate. [First-batch CI](https://github.com/nearbycoder/clank.run/actions/runs/37816448471), [document CI](https://github.com/nearbycoder/clank.run/actions/runs/37816824257). No production rollout, merge, disposable-host certification or completion of the remaining 34 features is claimed.
+
+## Hydration batch verification
+
+Capture is isolated in `hydration-inspection.ts`; ordinary DOM imports load no inspector implementation. Existing SSR attachment, text correction, keyed/portal behavior, partial attachment cleanup and binding-error propagation remain intact. Optional TSX metadata uses original coordinates and bounded basenames, with no props/HTML changes. Public exports and declarations are opt-in.
+
+All 61 focused tests passed, including runtime size/work budgets and the coverage-artifact retry regressions. The semantic gate has no new diagnostics against 290 existing ones, and all 13 packed consumer fixtures pass with declaration checking enabled. The DOM module measures 11,966 bytes gzip against the unchanged 12,000-byte limit; capture logic is loaded through the optional inspector rather than increasing that limit. Concise source comments retain their complete contract documentation in declarations and guides.
+
+The real SSR/browser fixture (`tests/fixtures/hydration-browser.mjs`) preserves the matching button and its Enter-key interaction, locates a nested structural fallback at child path `0.1` with source `HydrationDemo.tsx:8:124`, and records a text correction at `0.0` with source `HydrationDemo.tsx:10:38`. Its JSON export excludes synthetic private SSR text/attributes and directory paths; keyboard export focuses/selects the read-only report. At a 390px viewport, client and content widths are both 375px. Disposal removes both inspected apps, runs the second attachment cleanup and clears retained inspection entries. Expected mismatch warnings are static; browser errors are absent.
+
+An experimental Node 26 coverage artifact was malformed after all runnable tests passed. The existing one-retry detector now recognizes Node 26’s wrapped JSON parse error as well as the prior SyntaxError form. Actual test failures, cancelled tests, inconsistent counts, unrecognized errors and coverage shortfalls remain ineligible for retry; a second artifact failure still fails the gate. Line/branch/function thresholds remain 80/65/80. The final complete `npm run check` passed: 1,644 tests reported, 1,641 passed, no failures/cancellations and three privileged cases skipped; coverage 91.92% lines, 79.65% branches, 89.74% functions. The publish allowlist contains 393 files within the unchanged 394-file / 6 MiB limits. See [hydration verification](hydration-verification.json) for source/log hashes and parent-batch hosted checks.

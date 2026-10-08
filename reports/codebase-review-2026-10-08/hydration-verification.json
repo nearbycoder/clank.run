@@ -1,0 +1,214 @@
+{
+  "date": "2026-10-08",
+  "originMain": "4b990199965204f1200fcd0fb4ca2b7eb0b02bbc",
+  "parentBatchCommit": "28a79f2cb7f289d482cae2a35112fb205bef478e",
+  "completedFeatureIds": [
+    18,
+    26,
+    27,
+    31,
+    33,
+    35
+  ],
+  "plannedFeatureCount": 34,
+  "fullReleaseGate": {
+    "node": "26.10.0",
+    "status": "passed",
+    "tests": 1644,
+    "passed": 1641,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 3,
+    "coverage": {
+      "lines": 91.92,
+      "branches": 79.65,
+      "functions": 89.74
+    }
+  },
+  "focusedTests": {
+    "tests": 61,
+    "passed": 61,
+    "failed": 0
+  },
+  "semanticContracts": {
+    "existingSourceDiagnostics": 290,
+    "newSourceDiagnostics": 0,
+    "packedConsumerFixtures": 13,
+    "skipConsumerLibCheck": false
+  },
+  "performance": {
+    "domGzipBytes": 11966,
+    "domMaximumGzipBytes": 12000,
+    "raisedBudget": false,
+    "captureModule": "opt-in hydration-inspection; not imported by dom runtime"
+  },
+  "publishEnvelope": {
+    "files": 393,
+    "maxFiles": 394,
+    "maxBytes": 6291456,
+    "dependenciesAdded": 0
+  },
+  "browser": {
+    "fixture": "tests/fixtures/hydration-browser.mjs",
+    "keyboardCounter": "incremented to 1 on original SSR button",
+    "matchingNodePreserved": true,
+    "structuralMismatch": {
+      "reason": "element-type",
+      "outcome": "remount",
+      "path": [
+        0,
+        1
+      ],
+      "source": {
+        "file": "HydrationDemo.tsx",
+        "line": 8,
+        "column": 124
+      }
+    },
+    "textMismatch": {
+      "reason": "text-content",
+      "outcome": "patch",
+      "path": [
+        0,
+        0
+      ],
+      "source": {
+        "file": "HydrationDemo.tsx",
+        "line": 10,
+        "column": 38
+      }
+    },
+    "exportProtocol": "clank-hydration-snapshot/1",
+    "exportFocusAndFullSelection": true,
+    "privateSyntheticContentExcluded": true,
+    "mobileViewport": {
+      "width": 390,
+      "height": 844,
+      "clientWidth": 375,
+      "scrollWidth": 375
+    },
+    "cleanup": "two attachments cleaned; zero inspection entries after disposal",
+    "expectedWarning": "Clank hydration mismatch; remounting the root.",
+    "consoleErrors": []
+  },
+  "coverageArtifactCompatibility": "single existing bounded retry recognizes Node 26 wrapped JSON parse failures; all thresholds unchanged and genuine failures remain ineligible",
+  "hostedParentBatches": [
+    {
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/245",
+      "commit": "02ff56ece5170885244a161f55ddd02e7107b4ec",
+      "checks": [
+        {
+          "name": "Semantic and packed consumer types",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816448471/job/113446192560"
+        },
+        {
+          "name": "JavaScript and TypeScript analysis",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816448709/job/113446192947"
+        },
+        {
+          "name": "Node 22.16",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816448471/job/113446192875"
+        },
+        {
+          "name": "Node 24",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816448471/job/113446193236"
+        },
+        {
+          "name": "Packaged-release conformance",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816448471/job/113446192828"
+        },
+        {
+          "name": "CodeQL",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/runs/113447206361"
+        }
+      ]
+    },
+    {
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/246",
+      "commit": "28a79f2cb7f289d482cae2a35112fb205bef478e",
+      "checks": [
+        {
+          "name": "Semantic and packed consumer types",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816824257/job/113447470403"
+        },
+        {
+          "name": "JavaScript and TypeScript analysis",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816824333/job/113447470594"
+        },
+        {
+          "name": "Node 22.16",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816824257/job/113447470763"
+        },
+        {
+          "name": "Node 24",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816824257/job/113447470545"
+        },
+        {
+          "name": "Packaged-release conformance",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/actions/runs/37816824257/job/113447470551"
+        },
+        {
+          "name": "CodeQL",
+          "conclusion": "SUCCESS",
+          "url": "https://github.com/nearbycoder/clank.run/runs/113448156974"
+        }
+      ]
+    }
+  ],
+  "notPerformed": [
+    "production rollout",
+    "merge to main",
+    "disposable Docker/XFS certification",
+    "completion of remaining 34 planned features"
+  ],
+  "sourceFiles": {
+    "src/dom.ts": "713753777d13bfb1eeeac111948acfb36ed56349b1729c03c9adf7919626f5cd",
+    "src/dom.d.ts": "0740184f3f19faf58c329f8893839a3161f7f2cf8fb3f46a719374894d5e1eef",
+    "src/hydration-inspection.ts": "5c574ca6d544ac035dab4bf5a9ad77d9e2411d4d772fe2c714b6ae1a90e164d6",
+    "src/hydration-inspection.d.ts": "50a038217e6163c1d660ee35696b0c09d6f2eb1ae9fb46413e81043cdce47579",
+    "src/devtools.ts": "c4d9ff37d26106fce64101244cfc0003039b5b98d1335cb06141ff2049c3cd6a",
+    "src/devtools.d.ts": "55588228b1baca55963a119939f0d85f4ea10d25cff35f51c8961275b19dd442",
+    "scripts/tsx.mjs": "bad830d8a5782d67573ca3036d0bbeee35e97a67d869fd547669e42238e8ea9f",
+    "scripts/compiler.mjs": "f0aa8faab3cc29859403fe5d0013882e8e763619c7ec76c55053c6a35a43bb5e",
+    "scripts/compiler.d.mts": "17bd2603da13ff63626b0896c7cbbee8416d2ee5dc9ad15dfd16fcc81402d743",
+    "scripts/coverage-gate.mjs": "f1266e7c354e3b0eaed303caa91e983951be3d1ad216efaafc183f791de48e1b",
+    "tests/dom.test.mjs": "aa10583f55fcf48ec7a542013e1104e0245a35bcdcbb79224ae68a07fce88834",
+    "tests/tsx.test.mjs": "604a8c3ac5e36fe0148db8449e9e4a8ddaff2c5e1572fb33357ae7358d93bd07",
+    "tests/test-coverage.test.mjs": "82adccc3ba450ce1df773f84d61e8862731c7e8578abda47ac5022e20ca0c4cf",
+    "tests/fixtures/hydration-browser.mjs": "67de73289d80aca66afb62dfdc91960051f3d996f06a941496f0f009677cee6a",
+    "type-tests/hydration-inspection.ts": "b44d77c48ed6b23fa4246bf12f8e36430636b50a780e3438163128d049a924b3"
+  },
+  "logs": {
+    "hydration-check.log": {
+      "path": "/tmp/clank-review-2026-10-08/hydration-check.log",
+      "sha256": "069468d990aee32987f1f207c67e6a777d24f348d0bda157dbc320f2eabb8aaf"
+    },
+    "hydration-tests.log": {
+      "path": "/tmp/clank-review-2026-10-08/hydration-tests.log",
+      "sha256": "9fd0d8476eef0af8348fac1a94855a403f201a70f3b9afd18057da85df240eee"
+    },
+    "hydration-types.log": {
+      "path": "/tmp/clank-review-2026-10-08/hydration-types.log",
+      "sha256": "121cf9480b4af424854cb4282b43d353af2c4ff0ca8dc81775c6489003629eab"
+    },
+    "pr-245-checks.json": {
+      "path": "/tmp/clank-review-2026-10-08/pr-245-checks.json",
+      "sha256": "c9fb4d7b6eaa529b7829530784110084c34fe756ed3ba028392caeb090b7e7d3"
+    },
+    "pr-246-checks.json": {
+      "path": "/tmp/clank-review-2026-10-08/pr-246-checks.json",
+      "sha256": "eec83cc5a20f14a731b1e7d50ef1d3f47e8e9cfa0b27d0bbe372e38cc71b7f71"
+    }
+  }
+}

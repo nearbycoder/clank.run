@@ -74,3 +74,20 @@ test("numeric literal detection remains linear on long invalid expressions", () 
   assert.match(code, /__clankExpression/);
   assert.match(code, /x\)\)/);
 });
+
+test('opt-in TSX hydration locations refer to original source coordinates and exclude directories', async () => {
+  const runtime = new URL('../dist/index.js', import.meta.url).href;
+  const source = `export function Greeting() {\n  return <section>\n    <button>Private rendered label</button>\n  </section>;\n}\nexport const view = <Greeting />;`;
+  const plain = compile(source, { filename: '/private/project/Greeting.tsx', jsxImportSource: runtime, sourceMap: false });
+  const annotated = compile(source, { filename: '/private/project/Greeting.tsx', jsxImportSource: runtime, sourceMap: false, hydrationDiagnostics: true });
+  assert.doesNotMatch(plain, /__clankSource/); assert.doesNotMatch(annotated, /private\/project/);
+  const module = await import(`data:text/javascript,${encodeURIComponent(annotated)}`), view = module.view, section = view.type(view.props);
+  assert.deepEqual(view.source, { file: 'Greeting.tsx', line: 6, column: 21 });
+  assert.deepEqual(section.source, { file: 'Greeting.tsx', line: 2, column: 10 });
+  assert.deepEqual(section.props.children[0].source, { file: 'Greeting.tsx', line: 3, column: 5 });
+  const original = await import(`data:text/javascript,${encodeURIComponent(plain)}`);
+  const { renderToString } = await import('../dist/ssr.js');
+  assert.equal(await renderToString(view), await renderToString(original.view), 'annotations do not become props, HTML or IDs');
+  assert.throws(() => transformTSX('const v = <p/>', { hydrationDiagnostics: 'true' }), /boolean/);
+  assert.throws(() => transformTSX('const v = <p/>', { hydrationDiagnostics: true, filename: 'bad?token=secret.tsx' }), /basename/);
+});

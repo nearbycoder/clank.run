@@ -2,10 +2,13 @@ export interface CompileOptions {
   filename?: string;
   jsxImportSource?: string;
   sourceMap?: boolean;
+  hydrationDiagnostics?: boolean;
 }
 
 export interface TransformTSXOptions {
   importSource?: string;
+  filename?: string;
+  hydrationDiagnostics?: boolean;
 }
 
 export interface TransformTSXResult {

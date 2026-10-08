@@ -8,6 +8,7 @@
 const JSX = "__clankJSX";
 const FRAGMENT = "__clankFragment";
 const EXPR = "__clankExpression";
+const SOURCE = "__clankSource";
 
 export function transformTSX(source, options = {}) {
   // Use a Clank-specific pragma so TypeScript does not try to resolve the
@@ -15,10 +16,15 @@ export function transformTSX(source, options = {}) {
   const importSource = source.match(/@clankImportSource\s+([^\s*]+)/)?.[1]
     ?? options.importSource
     ?? "@clank.run/framework";
-  const state = { source, transformed: false };
+  if (options.hydrationDiagnostics !== undefined && typeof options.hydrationDiagnostics !== "boolean") throw new TypeError("hydrationDiagnostics must be a boolean.");
+  const file = (options.filename ?? "module.tsx").split(/[\\/]/u).at(-1);
+  if (options.hydrationDiagnostics && !/^[A-Za-z0-9_.-]{1,128}$/u.test(file)) throw new TypeError("Hydration diagnostics require a bounded source basename.");
+  const lineStarts = [0];
+  if (options.hydrationDiagnostics) for (let index = 0; index < source.length; index++) if (source[index] === "\n") lineStarts.push(index + 1);
+  const state = { source, transformed: false, inspection: options.hydrationDiagnostics === true, file, lineStarts };
   const code = transformRegion(state, 0, source.length);
   if (!state.transformed) return { code: source, transformed: false };
-  const runtimeImport = `import { jsx as ${JSX}, Fragment as ${FRAGMENT}, expression as ${EXPR} } from ${JSON.stringify(importSource)};\n`;
+  const runtimeImport = `import { jsx as ${JSX}, Fragment as ${FRAGMENT}, expression as ${EXPR}${state.inspection ? `, withHydrationSource as ${SOURCE}` : ""} } from ${JSON.stringify(importSource)};\n`;
   return { code: runtimeImport + code, transformed: true };
 }
 
@@ -185,8 +191,11 @@ function parseElement(state, start) {
   }
   const type = fragment ? FRAGMENT : tagExpression(tag);
   const props = `{ ${attributes.join(", ")} }`;
+  const vnode = `${JSX}(${type}, ${props}${children.length ? `, ${children.join(", ")}` : ""})`;
+  let low = 0, high = state.lineStarts.length;
+  while (low + 1 < high) { const middle = Math.floor((low + high) / 2); if (state.lineStarts[middle] <= start) low = middle; else high = middle; }
   return {
-    code: `${JSX}(${type}, ${props}${children.length ? `, ${children.join(", ")}` : ""})`,
+    code: state.inspection ? `${SOURCE}(${vnode}, ${JSON.stringify({ file: state.file, line: low + 1, column: start - state.lineStarts[low] + 1 })})` : vnode,
     end: index,
   };
 }

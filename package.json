@@ -87,6 +87,7 @@
     "./notifications": { "types": "./dist/notifications.d.ts", "import": "./dist/notifications.js" },
     "./rehearsal": { "types": "./dist/rehearsal.d.ts", "import": "./dist/rehearsal.js" },
     "./devtools": { "types": "./dist/devtools.d.ts", "import": "./dist/devtools.js" },
+    "./hydration-inspection": { "types": "./dist/hydration-inspection.d.ts", "import": "./dist/hydration-inspection.js" },
     "./core": { "types": "./dist/core.d.ts", "import": "./dist/core.js" },
     "./task": { "types": "./dist/task.d.ts", "import": "./dist/task.js" },
     "./dom": { "types": "./dist/dom.d.ts", "import": "./dist/dom.js" },
