@@ -19,6 +19,10 @@ export interface OpenAPIDocument {
 }
 
 const KEYWORDS = new Set(["type", "properties", "required", "additionalProperties", "items", "anyOf", "enum", "const", "description", "default", "format", "pattern", "minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems"]);
+interface ExportBudget { nodes: number; characters: number; }
+function budgetNode(budget: ExportBudget, text = ""): void {
+  if (++budget.nodes > 100000 || (budget.characters += text.length) > 1024 * 1024) throw new RangeError("OpenAPI schema exceeds its node or text budget.");
+}
 /** Export the JSON HTTP query/mutation contract. Live SSE and MCP retain their own contracts. */
 export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any, any>, options: OpenAPIOptions): OpenAPIDocument {
   if (typeof options.title !== "string" || !options.title || options.title.length > 200 || typeof options.version !== "string" || !options.version || options.version.length > 100) throw new TypeError("OpenAPI requires a bounded title and version.");
@@ -27,11 +31,13 @@ export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any
   const prefix = options.prefix ?? "/__clank";
   if (!/^\/[A-Za-z0-9_/-]+$/u.test(prefix) || prefix.endsWith("/") || prefix.includes("//")) throw new TypeError("Invalid backend prefix.");
   const functions = new Map<string, AnyBackendFunction>(), stack = new Set<object>();
+  const budget: ExportBudget = { nodes: 0, characters: 0 }; let treeNodes = 0;
   const visit = (tree: FunctionTree, path: string[] = []) => {
+    if (++treeNodes > 10000) throw new RangeError("OpenAPI function tree exceeds its node budget.");
     if (!tree || typeof tree !== "object" || Array.isArray(tree) || stack.has(tree) || path.length > 32) throw new TypeError("Invalid or cyclic backend function tree.");
     stack.add(tree);
     for (const [name, value] of Object.entries(tree)) {
-      if (!/^[A-Za-z][A-Za-z0-9_]*$/u.test(name) || ["__proto__", "constructor", "prototype"].includes(name)) throw new TypeError("Invalid backend function segment.");
+      if (name.length > 200 || !/^[A-Za-z][A-Za-z0-9_]*$/u.test(name) || ["__proto__", "constructor", "prototype"].includes(name)) throw new TypeError("Invalid backend function segment.");
       const segments = [...path, name];
       if (value && (value.kind === "query" || value.kind === "mutation")) functions.set(segments.join("."), value as AnyBackendFunction);
       else visit(value as FunctionTree, segments);
@@ -49,7 +55,7 @@ export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any
   for (const [name, fn] of [...functions].sort(([a], [b]) => a.localeCompare(b))) {
     if (!fn.returns) throw new TypeError(`OpenAPI requires an explicit returns schema for ${name}.`);
     if (fn.returns.safeParse(undefined).success) throw new TypeError(`OpenAPI requires a defined JSON result for ${name}.`);
-    const input = exactSchema(fn.args.toJSONSchema(), `${name} arguments`), output = exactSchema(fn.returns.toJSONSchema(), `${name} result`);
+    const input = exactSchema(fn.args.toJSONSchema(), `${name} arguments`, budget), output = exactSchema(fn.returns.toJSONSchema(), `${name} result`, budget);
     // Preserve the full path in schema keys and operation IDs; flattening dots
     // into underscores could make distinct namespaces collide.
     const key = `${fn.kind}.${name}`;
@@ -83,9 +89,10 @@ export function exportBackendOpenAPI(definition: BackendDefinition<any, any, any
   return document;
 }
 
-function exactSchema(source: Record<string, unknown>, label: string): Record<string, unknown> {
+function exactSchema(source: Record<string, unknown>, label: string, budget: ExportBudget): Record<string, unknown> {
   if (source.optional) throw new TypeError(`${label}: optional root schemas cannot guarantee a JSON result.`);
   const walk = (schema: unknown, depth: number, objectField = false): unknown => {
+    budgetNode(budget);
     if (depth > 32 || !schema || typeof schema !== "object" || Array.isArray(schema)) throw new TypeError(`${label}: unsupported schema shape.`);
     if ((schema as Record<string, unknown>).optional && !objectField) throw new TypeError(`${label}: optional values outside object fields cannot guarantee JSON representation.`);
     const result: Record<string, unknown> = Object.create(null);
@@ -93,12 +100,22 @@ function exactSchema(source: Record<string, unknown>, label: string): Record<str
       if (key === "optional") continue; // optional object fields are represented by required[]
       if (key === "table" && typeof value === "string") { result["x-clank-table"] = value; continue; }
       if (!KEYWORDS.has(key)) throw new TypeError(`${label}: unsupported schema keyword ${key}; coercion and custom refinements require an explicit adapter contract.`);
-      if (key === "properties") result[key] = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, property]) => [name, walk(property, depth + 1, true)]));
+      if (key === "properties") result[key] = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, property]) => { budgetNode(budget, name); return [name, walk(property, depth + 1, true)]; }));
       else if (key === "anyOf") result[key] = (value as unknown[]).map(member => walk(member, depth + 1));
       else if (key === "items" || key === "additionalProperties" && typeof value === "object") result[key] = walk(value, depth + 1);
-      else result[key] = structuredClone(value);
+      else result[key] = jsonValue(value, depth + 1, label, budget);
     }
     return result;
   };
   return walk(source, 0) as Record<string, unknown>;
+}
+
+function jsonValue(value: unknown, depth: number, label: string, budget: ExportBudget): unknown {
+  budgetNode(budget, typeof value === "string" ? value : "");
+  if (depth > 32) throw new TypeError(`${label}: JSON schema metadata is too deeply nested.`);
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map(item => jsonValue(item, depth + 1, label, budget));
+  if (value && typeof value === "object" && [Object.prototype, null].includes(Object.getPrototypeOf(value))) return Object.fromEntries(Object.entries(value).map(([key, item]) => { budgetNode(budget, key); return [key, jsonValue(item, depth + 1, label, budget)]; }));
+  throw new TypeError(`${label}: schema metadata contains a value JSON cannot represent faithfully.`);
 }

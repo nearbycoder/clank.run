@@ -45,6 +45,8 @@ test("OpenAPI rejects unspecified, coercing, refined, optional and unsupported c
     [undefined, s.number(), /explicit returns/u],
     [s.optional(s.number()), s.number(), /defined JSON/u],
     [s.array(s.optional(s.number())), s.number(), /optional values/u],
+    [s.literal(NaN), s.number(), /JSON cannot represent/u],
+    [s.number(), s.default(s.number(), Infinity), /JSON cannot represent/u],
     [s.number(), s.coerce.number(), /coercion/u],
     [s.number(), s.refine(s.number(), n => n % 2 === 0, "Even values only"), /refinement/u],
     [s.number(), s.url(), /unsupported schema/u],
@@ -84,4 +86,11 @@ test("OpenAPI matches runtime null-body normalization and rejects invalid server
   for (const name of ["$value", "_value", "value$"]) assert.throws(() => exportBackendOpenAPI({ ...backend, functions: { [name]: backend.functions.math.double } }, settings), /function segment/u);
   assert.throws(() => exportBackendOpenAPI(backend, { ...settings, serverUrl: "https://api.test/nested" }), /origin/u);
   assert.throws(() => exportBackendOpenAPI(backend, { ...settings, title: 123 }), /title/u);
+});
+
+test("OpenAPI bounds shared function/default graphs before exponential expansion", () => {
+  let defaults = "leaf", tree = {};
+  for (let index = 0; index < 20; index++) { defaults = { a: defaults, b: defaults }; tree = { a: tree, b: tree }; }
+  assert.throws(() => exportBackendOpenAPI(definition(s.number(), s.default(s.unknown(), defaults)), settings), /node or text budget/u);
+  assert.throws(() => exportBackendOpenAPI({ ...definition(), functions: tree }, settings), /function tree exceeds/u);
 });
