@@ -49,7 +49,8 @@ node scripts/type-contracts.mjs --typescript /trusted/typescript/lib/typescript.
 ```
 
 The source check uses the normal strict `tsconfig.json`. Its normalized baseline records the
-290 diagnostics present at main commit `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`. Any new
+290 diagnostics originally present at main commit `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`,
+reduced to 278 by subsequent reviewed fixes. Any new
 file/code/message occurrence fails, including additional occurrences of an existing error.
 Line movements do not create new errors. Decreasing debt passes without expanding the baseline;
 remove resolved entries during a reviewed cleanup. Never regenerate the baseline from a failing

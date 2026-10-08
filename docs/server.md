@@ -47,7 +47,7 @@ app.use(async (context, next) => {
 });
 ```
 
-Middleware executes in registration order and unwinds in reverse order. Calling `next()` twice throws. Unhandled errors become a generic JSON 500 response. Use `createApp({ onError })` for private logging; unexpected exception text is never returned to the client.
+Middleware executes in registration order and unwinds in reverse order. Calling `next()` twice throws. Unhandled errors become a generic JSON 500 response. Use `createApp({ onError })` for private logging; unexpected exception text is never returned to the client. Exceptions and rejected promises from `onError` are contained so logging cannot prevent the response. The Node adapter's `serve({ handle }, { onError })` follows the same rule.
 
 Built-ins:
 

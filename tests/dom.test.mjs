@@ -147,6 +147,70 @@ const { signal, effect, createRoot, onCleanup } = await import("../dist/core.js"
 const { createApi } = await import("../dist/backend.js");
 const { createCheckbox } = await import("../dist/ui-controls.js");
 const { mergeProps } = await import("../dist/ui-foundation.js");
+const { AccountSecurity } = await import("../dist/account-security.js");
+
+test("account security clears cached inventory and fences in-flight replies across account switches", async () => {
+  const alice = { id: "alice", emailVerified: true }, bob = { id: "bob", emailVerified: true };
+  const user = signal(alice), session = signal({ id: "alice-session" });
+  let resolveSessions, resolvePasskeys, pending = false, passkeyCalls = 0;
+  const auth = {
+    user, session,
+    listSessions: () => pending ? new Promise((resolve) => { resolveSessions = resolve; }) : Promise.resolve([{ id: "private-session", current: true, lastSeenAt: 0, authenticationMethod: "private-method" }]),
+    listPasskeys: () => { passkeyCalls++; return pending ? new Promise((resolve) => { resolvePasskeys = resolve; }) : Promise.resolve([{ id: "private-key", name: "Alice private passkey" }]); },
+  };
+  const root = new FakeElement("main");
+  const dispose = render(root, h(AccountSecurity, { auth }));
+  const findButton = (node, text) => {
+    if (node.localName === "button" && node.textContent === text) return node;
+    for (const child of node.childNodes) { const found = findButton(child, text); if (found) return found; }
+  };
+  const refresh = () => findButton(root, "Refresh account security").listeners.get("click")({});
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  try {
+    refresh(); await settle();
+    assert.match(root.textContent, /Alice private passkey/);
+    assert.match(root.textContent, /private-method/);
+    user.value = bob; session.value = { id: "bob-session" };
+    assert.doesNotMatch(root.textContent, /Alice private passkey|private-method|Security information refreshed/);
+    user.value = alice; session.value = { id: "alice-session-2" }; pending = true;
+    refresh(); await settle();
+    user.value = bob; session.value = { id: "bob-session-2" };
+    resolveSessions([{ id: "late-session", current: true, lastSeenAt: 0, authenticationMethod: "late-private-method" }]);
+    await settle();
+    assert.equal(passkeyCalls, 1, "a stale refresh cannot request the next account's inventory");
+    assert.doesNotMatch(root.textContent, /late-private-method/);
+    user.value = alice; session.value = { id: "alice-session-3" };
+    refresh(); await settle(); resolveSessions([]); await settle();
+    assert.equal(passkeyCalls, 2);
+    user.value = bob; session.value = { id: "bob-session-3" };
+    resolvePasskeys([{ id: "late-key", name: "Late private passkey" }]); await settle();
+    assert.doesNotMatch(root.textContent, /Late private passkey|Security information refreshed/);
+  } finally { dispose(); }
+});
+
+test("late MFA replies cannot alter the next account's controls or survive screen disposal", async () => {
+  const user = signal({ id: "alice" }), session = signal({ id: "alice-session" }), replies = [];
+  const auth = { user, session, startMfaReauthentication: () => new Promise((resolve) => { replies.push(resolve); }) };
+  const root = new FakeElement("main");
+  const dispose = render(root, h(AccountSecurity, { auth }));
+  const form = () => root.children[0].children.find((node) => node.localName === "form");
+  const submit = () => form().listeners.get("submit")({ preventDefault() {} });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  try {
+    submit();
+    user.value = { id: "bob" }; session.value = { id: "bob-session" };
+    submit();
+    assert.equal(replies.length, 2, "the next account can start its own verification");
+    replies[0]({ challengeId: "private-alice-challenge" }); await settle();
+    assert.doesNotMatch(root.textContent, /Verification code|Verification code sent/);
+    const button = form().children.at(-1);
+    assert.ok(button.disabled || button.hasAttribute("disabled"), "the previous reply cannot unlock Bob's pending operation");
+    dispose();
+    replies[1]({ challengeId: "private-bob-challenge" }); await settle();
+    assert.equal(root.textContent, "");
+    assert.equal(user.observers.size, 0); assert.equal(session.observers.size, 0);
+  } finally { dispose(); }
+});
 
 function elementById(root, id) {
   return root.childNodes.find((node) => node instanceof FakeElement && node.getAttribute("data-id") === id);

@@ -31,7 +31,7 @@ The editor offers frequency, named time zone and exception dates. Advanced API r
 
 ## Delivery preferences and digests
 
-`openNotificationCenter({ path, auth, categories, sendEmail })` stores in-app notifications and queues optional email. `sendEmail` receives an abort signal and stable `idempotencyKey`; pass that key to a provider that supports idempotency. Publication keys deduplicate per account. Workers call `workEmailOnce()` or `startEmailWorker()`; only accounts with verified email, an active account and current opt-in may receive email.
+`openNotificationCenter({ path, auth, categories, sendEmail })` stores in-app notifications and queues optional email. `sendEmail` receives an abort signal and stable `idempotencyKey`; pass that key to a provider that supports idempotency. Publication keys deduplicate per account while the notification remains retained. Identical retries return the original ID without resetting read state; changing the category, title, body or local URL under that key throws without changing the record. Workers call `workEmailOnce()` or `startEmailWorker()`; only accounts with verified email, an active account and current opt-in may receive email.
 
 ```ts
 await notifications.setPreference({

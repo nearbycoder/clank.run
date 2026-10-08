@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createSQLiteDatabase } from "../dist/backend.js";
 import { SQLITE_INTERNAL } from "../dist/sqlite-internal.js";
+import { defineAuth } from "../dist/auth.js";
 import {
   BackendActionError,
   DatabaseConflictError,
@@ -27,6 +28,19 @@ async function waitFor(predicate, timeoutMs = 1_000) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+test("anonymous in-process callers expose the complete auth guard contract", async () => {
+  const definition = defineBackend({ schema: defineDatabase({}), auth: defineAuth() })
+    .functions(({ publicQuery }) => ({
+      verified: publicQuery({ args: {}, handler: ({ auth }) => auth.requireVerified().id }),
+    }));
+  const runtime = await openBackend(definition, { path: ":memory:" });
+  try {
+    assert.throws(() => runtime.query("verified", {}), (error) => error.code === "UNAUTHENTICATED" && error.status === 401);
+    const response = await runtime.handle(new Request("https://example.test/__clank/query/verified", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }));
+    assert.equal(response.status, 401);
+  } finally { runtime.close(); }
+});
 
 test("internal scoped reads require an active transaction and preserve independent owned scopes", async () => {
   const schema = defineDatabase({ records: defineTable({ text: s.string() }).owned() });

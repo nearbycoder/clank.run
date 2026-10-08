@@ -8155,7 +8155,12 @@ test("managed canaries route real traffic, promote measured stages and roll back
     assert.match(workerFailure.result.body.error.message, /worker.*exited|background process/);
     assert.equal(await platform.handle(new Request("https://canary-app.apps.example.test/")).then((response) => response.text()), "candidate");
     const restoredWorkers = new DatabaseSync(join(root, "platform", "projects", project.id, "data", "app.sqlite"), { readOnly: true });
-    try { assert.equal(restoredWorkers.prepare("SELECT count(*) AS n FROM background_processes WHERE release='candidate' AND stopped_at IS NULL").get().n, 1); }
+    try {
+      // Rollback starts the worker process; its application initialization writes this marker later.
+      const active = restoredWorkers.prepare("SELECT count(*) AS n FROM background_processes WHERE release='candidate' AND stopped_at IS NULL");
+      await waitFor(() => Number(active.get().n) === 1);
+      assert.equal(active.get().n, 1);
+    }
     finally { restoredWorkers.close(); }
     const insufficient = await deploy(platform, project.id, owner.accessToken, await appArtifact(join(root, "quiet"), "quiet", migrations), "canary-quiet-0004");
     assert.equal(insufficient.response.status, 422); assert.match(insufficient.body.error.message, /lacked required evidence/);

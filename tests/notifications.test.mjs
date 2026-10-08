@@ -49,6 +49,25 @@ test("notification center isolates accounts, persists read state/preferences, de
   } finally { await app.close(); }
 });
 
+test("notification keys reject changed content while preserving identical retries and account isolation", async () => {
+  const app = await fixture();
+  try {
+    const alice = await app.register("alice-key@example.invalid"), bob = await app.register("bob-key@example.invalid");
+    const input = { userId: alice.userId, key: "stable-event", category: "updates", title: "Ready", body: "Your export is ready", url: "/exports" };
+    const id = app.center.publish(input);
+    await alice.client.markRead(id);
+    await app.restart();
+    assert.equal(app.center.publish(input), id);
+    for (const change of [{ category: "billing" }, { title: "Changed" }, { body: "Changed" }, { url: "/different" }]) {
+      assert.throws(() => app.center.publish({ ...input, ...change }), /key was already used for a different notification/);
+    }
+    const [record] = await alice.client.list();
+    assert.equal(record.title, input.title); assert.equal(record.body, input.body); assert.notEqual(record.readAt, null);
+    assert.notEqual(app.center.publish({ ...input, userId: bob.userId }), id);
+    assert.equal((await alice.client.list()).length, 1); assert.equal((await bob.client.list()).length, 1);
+  } finally { await app.close(); }
+});
+
 test("optional notification email is durable, uses a stable delivery key, and rechecks preferences/verified recipients", async () => {
   const sent = [];
   const app = await fixture({ sendEmail: async message => { sent.push(message); } });

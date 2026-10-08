@@ -140,7 +140,7 @@ A release is acceptable only after:
 
 Clank deliberately does not install a TypeScript package. Its built-in compiler validates syntax lowering, while the checked-in declarations define the consumer contract. CI separately provisions TypeScript 5.9.3 and Node declarations outside the framework, enforces
 a normalized no-new-diagnostics baseline, and checks positive/negative fixtures against a packed
-consumer with declaration checking enabled. The 290 pre-existing source diagnostics remain
+consumer with declaration checking enabled. The remaining 278 pre-existing source diagnostics are
 tracked debt, not a claim of strict semantic correctness. See [type-contract verification](development-tools.md#semantic-type-contract-verification).
 
 See `docs/security.md` and `docs/platform-security.md` for the separate security checklists.

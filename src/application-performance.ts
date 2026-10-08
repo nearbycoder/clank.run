@@ -70,5 +70,5 @@ function capture(input: unknown, pageId?: string) {
   }
   if (!documents) issues.push("No successful HTML document was captured.");
   if (Object.values(measurements).some((value) => !Number.isSafeInteger(value))) issues.push("Capture totals exceed safe integer limits.");
-  return { measurements, resources: [...resources.values()].sort((a, b) => b.bodyBytes - a.bodyBytes || a.resource.localeCompare(b.resource)).map(Object.freeze), issues: [...new Set(issues)] };
+  return { measurements, resources: [...resources.values()].sort((a, b) => b.bodyBytes - a.bodyBytes || a.resource.localeCompare(b.resource)).map(resource => Object.freeze(resource)), issues: [...new Set(issues)] };
 }

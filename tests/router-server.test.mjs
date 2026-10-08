@@ -51,3 +51,19 @@ test("server defaults redact failures and security middleware applies safe heade
   assert.equal(errors.length, 1);
   assert.throws(() => cors({ origin: "*", credentials: true }), /explicit origin/);
 });
+
+test("error observers cannot prevent a redacted response or leak their own failures", async () => {
+  for (const onError of [
+    () => { throw new Error("private-observer-secret"); },
+    async () => { throw new Error("private-observer-secret"); },
+  ]) {
+    const app = createApp({ onError }).get("/fail", () => { throw new Error("private-route-secret"); });
+    const response = await app.handle(new Request("https://example.test/fail"));
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { error: { code: "INTERNAL_ERROR", message: "An internal server error occurred." } });
+    for (const [header, value] of Object.entries({ "cache-control": "no-store", "x-content-type-options": "nosniff", "x-frame-options": "DENY", "referrer-policy": "no-referrer" })) {
+      assert.equal(response.headers.get(header), value);
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+});

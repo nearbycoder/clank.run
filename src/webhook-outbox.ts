@@ -22,7 +22,7 @@ export async function openWebhookOutbox(options: WebhookOutboxOptions): Promise<
  const maximum=options.maxPerUser??1000;
  if(!endpoints.size||endpoints.size>100||!Number.isSafeInteger(maximum)||maximum<1||maximum>10000)throw new TypeError("Declare 1–100 endpoints and a bounded retention limit.");
  for(const[name,endpoint]of endpoints){const url=new URL(endpoint.url);if(!/^[a-z][a-z0-9._-]{0,79}$/.test(name)||url.protocol!=="https:"||url.username||url.password||url.hash||typeof endpoint.secret!=="function")throw new TypeError("Webhook endpoints require trusted HTTPS URLs and secret resolvers.");endpoints.set(name,{url:url.href,secret:endpoint.secret});}
- let runtime: Awaited<ReturnType<typeof openBackend>>;
+ let runtime: Awaited<ReturnType<typeof openBackend<typeof schema, any, AuthDefinition<any>, any>>>;
  const jobs=defineJobs({schema}).jobs(({job})=>({deliver:job({args:{id:s.id("webhookDeliveries")},agent:false,timeoutMs:15000,retry:{maxAttempts:5,initialDelayMs:1000,factor:2,maxDelayMs:60000,jitter:0.2},async handler({db,job,signal},{id}){
    const record=db.read(tx=>tx.table("webhookDeliveries").get(id));
    if(!record||record.jobId!==job.id||record.outcome==="delivered")return;
@@ -33,6 +33,8 @@ export async function openWebhookOutbox(options: WebhookOutboxOptions): Promise<
    if(!secret||typeof secret.version!=="string"||!/^[a-zA-Z0-9._-]{1,128}$/.test(secret.version))throw new Error("WEBHOOK_SECRET_UNAVAILABLE");
    const signed=await signWebhook(record.payload,secret.value);
    signal.throwIfAborted();
+   const currentUser=runtime.database[SQLITE_INTERNAL].prepare("SELECT disabled FROM clank_auth_users WHERE id = ?").get(record._ownerId);
+   if(!currentUser||Number(currentUser.disabled)!==0)throw new Error("WEBHOOK_OWNER_UNAVAILABLE");
    const recordAttempt=(status:number|null,outcome:string)=>db.transaction(tx=>{const current=tx.table("webhookDeliveries").get(id);if(current?.jobId!==job.id)return;
      tx.table("webhookAttempts").insert({deliveryId:id,attempt:job.attempt,generation:record.generation,status,secretVersion:secret.version,outcome});
      for(const old of tx.table("webhookAttempts").query().where("deliveryId",id).orderBy("_creationTime","desc").collect().slice(100))tx.table("webhookAttempts").delete(old._id);
@@ -67,7 +69,11 @@ export async function openWebhookOutbox(options: WebhookOutboxOptions): Promise<
    const payload=JSON.stringify(input.payload);if(payload===undefined||new TextEncoder().encode(payload).length>65536)throw new TypeError("Webhook payload must be bounded JSON.");
    return runtime.database.transaction(db=>{
      const user=runtime.database[SQLITE_INTERNAL].prepare("SELECT disabled FROM clank_auth_users WHERE id = ?").get(input.userId);if(!user||Number(user.disabled)!==0)throw new Error("Webhook owner is unavailable.");
-     const existing=db.table("webhookDeliveries").query().where("key",input.key).first();if(existing)return existing._id;
+     const existing=db.table("webhookDeliveries").query().where("key",input.key).first();
+     if(existing){
+       if(existing.endpoint!==input.endpoint||existing.event!==input.event||existing.payload!==payload)throw new Error("Webhook key was already used for a different delivery.");
+       return existing._id;
+     }
      const records=db.table("webhookDeliveries").query().orderBy("_creationTime","desc").collect();
      if(records.length>=maximum){const removable=[...records].reverse().find(record=>{const state=describe(record).state;return state==="delivered"||state==="failed";});if(!removable)throw new Error("Webhook outbox is full.");for(const attempt of db.table("webhookAttempts").query().where("deliveryId",removable._id).collect())db.table("webhookAttempts").delete(attempt._id);db.table("webhookDeliveries").delete(removable._id);}
      const id=db.table("webhookDeliveries").insert({key:input.key,endpoint:input.endpoint,event:input.event,payload,jobId:"",generation:0,outcome:"pending",status:null,secretVersion:null});

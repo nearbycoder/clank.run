@@ -132,6 +132,10 @@ by inspection. Each user retains up to 1,000 deliveries by default; terminal del
 oldest first and a full queue of pending work rejects new publishes. Idempotency lasts while the
 delivery remains retained. Manual replay requires the current job ID, rejects active or successful
 deliveries, and admits at most 100 replay generations. Missing job evidence fails closed.
+An identical publish with the same owner and retained key returns the original delivery ID. Reusing
+that key with a changed endpoint, event, or exact serialized JSON payload throws without changing
+the delivery or enqueueing another job. Delivery rechecks that the owner is enabled after resolving
+the signing key and immediately before dispatch.
 List/inspect clients use a fresh query key so job state cannot be masked by a cached query result.
 Stop the worker before closing the outbox. `publish()` atomically enqueues its own delivery and job;
 it is not an atomic transaction with an earlier, separate application mutation.

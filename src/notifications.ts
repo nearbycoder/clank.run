@@ -193,7 +193,12 @@ export async function openNotificationCenter(options: NotificationCenterOptions)
         const user = runtime.database[SQLITE_INTERNAL].prepare("SELECT disabled FROM clank_auth_users WHERE id = ?").get(input.userId);
         if (!user || Number(user.disabled) !== 0) throw new Error("Notification recipient is unavailable.");
         const existing = db.table("notifications").query().where("key", input.key).first();
-        if (existing) return existing._id;
+        if (existing) {
+          if (existing.category !== record.category || existing.title !== record.title || existing.body !== record.body || existing.url !== record.url) {
+            throw new Error("Notification key was already used for a different notification.");
+          }
+          return existing._id;
+        }
         const preferences = preference(db, input.category);
         const email = Boolean(options.sendEmail && preferences.email);
         if (!preferences.inApp && !email) return null;

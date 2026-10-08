@@ -17,6 +17,19 @@ import {
 } from "../dist/index.js";
 import { requestOriginAllowed } from "../dist/security.js";
 
+test("Node adapter returns safe failures even when its private error observer fails", async () => {
+  for (const onError of [() => { throw new Error("private-sink-error"); }, async () => { throw new Error("private-sink-error"); }]) {
+    const server = await serve(() => { throw new Error("private-app-error"); }, { port: 0, onError });
+    try {
+      const response = await fetch(server.url, { signal: AbortSignal.timeout(2_000) });
+      assert.equal(response.status, 500);
+      assert.deepEqual(await response.json(), { error: { code: "INTERNAL_ERROR", message: "An internal server error occurred." } });
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    } finally { await server.close(); }
+  }
+});
+
 test("Node adapter serves Fetch apps and streams live SQLite updates over HTTP", async () => {
   const schema = defineDatabase({ counters: defineTable({ value: s.number({ integer: true }) }) });
   const definition = defineBackend({ schema }).functions(({ query, mutation }) => ({

@@ -86,7 +86,9 @@ export function createApp<State extends Record<string, unknown> = Record<string,
         };
         return await dispatch(0);
       } catch (error) {
-        options.onError?.(error, context);
+        // Observability failures must not replace the redacted HTTP response.
+        try { void Promise.resolve(options.onError?.(error, context)).catch(() => undefined); }
+        catch { /* The observer can also throw synchronously. */ }
         return json({
           error: {
             code: "INTERNAL_ERROR",

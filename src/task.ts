@@ -602,11 +602,14 @@ export class Task<A, E = never, R = never> {
         controller.abort("task completed");
         return winner.exit;
       }
-      if (context.signal.aborted) return interruptedExit(context.signal.reason);
+      if (context.signal.aborted) {
+        const exit = await work;
+        return Exit.isFailure(exit) ? exit : interruptedExit(context.signal.reason);
+      }
       const error = new TimeoutError(delay);
       controller.abort(error);
-      await work;
-      return Exit.fail(error);
+      const exit = await work;
+      return timeoutFailure(exit, error);
     });
   }
 
@@ -637,14 +640,17 @@ export class Task<A, E = never, R = never> {
           if (index >= entries.length) return;
           const exit = await runScoped(entries[index], childContext(context, controller.signal));
           if (Exit.isFailure(exit)) {
-            failure = exit;
-            controller.abort("sibling task failed");
+            if (!failure) {
+              failure = exit;
+              controller.abort("sibling task failed");
+            }
             return;
           }
           output[index] = exit.value;
         }
       };
       await Promise.all(Array.from({ length: Math.min(concurrency, entries.length) }, worker));
+      controller.abort("tasks completed");
       return failure ?? Exit.succeed(output as any);
     });
   }
@@ -924,6 +930,24 @@ function appendCleanup<A, E>(exit: Exit<A, E>, cleanup?: Cause<never>): Exit<A, 
   return Exit.failCause(Exit.isFailure(exit)
     ? Cause.sequential([exit.cause, cleanup])
     : cleanup);
+}
+
+function timeoutFailure<A, E>(exit: Exit<A, E>, error: TimeoutError): Exit<never, E | TimeoutError> {
+  if (Exit.isSuccess(exit)) return Exit.fail(error);
+  let replaced = false;
+  const replace = (cause: Cause<E>): Cause<E | TimeoutError> => {
+    switch (cause._tag) {
+      case "Interrupted":
+        if (cause.reason !== error) return cause;
+        replaced = true;
+        return Cause.failure(error);
+      case "Sequential": return Cause.sequential(cause.causes.map(replace));
+      case "Parallel": return Cause.parallel(cause.causes.map(replace));
+      default: return cause;
+    }
+  };
+  const cause = replace(exit.cause);
+  return Exit.failCause(replaced ? cause : Cause.sequential([Cause.failure(error), cause]));
 }
 
 function mapFailure<E, E2>(cause: Cause<E>, mapper: (error: E) => E2): Cause<E2> {

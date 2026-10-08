@@ -119,6 +119,11 @@ await client.auth.reload();
 
 The session credential is never exposed to JavaScript. The browser stores it only as an `HttpOnly` cookie. The CSRF token is held in memory and may be included in script-safe SSR boot state.
 
+`AccountSecurity({ auth })` clears its session/passkey inventory, password fields, MFA challenge,
+and status when the user or session changes. Replies from a previous account or a disposed screen
+cannot repopulate those controls. In-process anonymous backend callers expose all auth guards;
+`auth.requireVerified()` rejects with `UNAUTHENTICATED` (401), like `requireUser()` and `requireRole()`.
+
 ## SSR
 
 Resolve the request before running private queries:

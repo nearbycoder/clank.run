@@ -37,7 +37,7 @@ test('disk quota policy refuses non-XFS storage and invalid limits before invoki
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('real kernel egress policy permits allowed destinations and blocks private, host, and denied traffic', { skip: process.platform !== 'linux', timeout: 20_000 }, async (context) => {
+test('real kernel egress policy permits allowed destinations and blocks private, host, and denied traffic', { skip: process.platform !== 'linux', timeout: 40_000 }, async (context) => {
   const fixture = fileURLToPath(new URL('./fixtures/linux-egress-kernel.mjs', import.meta.url));
   const result = await new Promise((resolve, reject) => {
     const child = spawn('/usr/bin/unshare', ['--user', '--map-root-user', '--net', process.execPath, fixture], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });

@@ -6,6 +6,12 @@ Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Six
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
+## Merged main and follow-up maintenance
+
+PRs #245, #246 and #247 are merged. The subsequent maintenance review starts from main commit `1e6e62acbf2e59400c023bd3a33125fe1fc2c7d4` and fixes Task failure/cleanup/listener behavior, account-screen isolation, anonymous verification guards, HTTP error observers and durable delivery retries/revocation. It also corrects canary worker-readiness and kernel-probe timing fixtures. No additional roadmap feature is counted as delivered.
+
+The complete maintenance gate passes with 1,657 tests reported, 1,654 passed, zero failures/cancellations and three privileged-host skips. Coverage is 91.96% lines, 79.69% branches and 89.86% functions. All 126 focused tests and 13 packed consumer fixtures pass; source diagnostics are reduced from 290 to 278 without increasing baseline allowances. The existing 393-file package, dependency contract, documentation, conformance and security gates pass. Production host certification remains unavailable because the current Railway host denies required Linux namespaces. See [maintenance review](maintenance-review.json) for findings, source/log hashes, reproduction evidence and remaining debt. The earlier sections below preserve their original batch evidence.
+
 ## Review prerequisites
 
 | Item | State | Evidence |
