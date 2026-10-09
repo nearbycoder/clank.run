@@ -1367,7 +1367,6 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     requireWaitPolicy();
     identifier(workflowIdValue, "workflow id", 128, true);
     identifier(stepName, "workflow step name", 128);
-    reconcileWorkflow(workflowIdValue);
     const wait = internal.prepare("SELECT * FROM clank_workflow_waits WHERE workflow_id=? AND step_name=?").get(workflowIdValue, stepName) as WorkflowWaitRow | undefined;
     if (!wait) return null;
     const run = internal.prepare("SELECT owner_id FROM clank_workflow_runs WHERE id=?").get(workflowIdValue);
