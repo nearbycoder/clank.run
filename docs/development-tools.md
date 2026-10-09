@@ -36,11 +36,14 @@ The server implements initialization, full-document synchronization, live compil
 
 Node 22.16 and 24 support transform-only TypeScript syntax. Node 26 compiles erasable TypeScript using its native stripping API. Explicit constructor fields and assignments, objects instead of enums, and ES modules instead of runtime namespaces work on every supported version. Node 26 source maps preserve line positions in the lowered TSX module.
 
-Unmapped Node 26 builds (`sourceMap: false`, including ordinary release builds) compact consecutive
+Unmapped builds on every supported runtime (`sourceMap: false`, including ordinary release builds)
+first strip erasable TypeScript and compact consecutive
 spaces inserted by type erasure. They retain a token separator and every unchanged character and
 newline, preserving runtime strings, templates, regular expressions and line-sensitive syntax.
-Source-mapped builds retain native padding for debugging. This adds no minifier dependency and
-does not change Node 22/24 transform behavior. Unmapped output columns and artifact digests change
+Node 22/24 fall back to native transformation only for syntax that needs runtime transformation,
+including enums, parameter properties and runtime namespaces. Mapped Node 22/24 builds retain
+native transform output; mapped Node 26 builds retain native padding for debugging. This adds no
+minifier dependency. Unmapped output columns and artifact digests change
 after rebuilding; existing verified artifacts retain their original bytes and identity. Reverting
 this build optimization restores the previous padding without a data migration.
 

@@ -1,0 +1,113 @@
+{
+  "kind": "build prerequisite; no additional roadmap feature",
+  "date": "2026-10-09",
+  "baseCommit": "7050c989a5af8ad957212b915b68728cf13b1d9f",
+  "branch": "codex/unmapped-compiler-output",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/271",
+  "status": "local-validation-passed-awaiting-reviewed-pr",
+  "finding": "Only 14824 bytes remained under the existing 6 MiB package bound. Node 22/24 transform printing expands erasable output.",
+  "change": "Unmapped Node 22/24 compilation first uses native stripping plus the existing erased-padding compaction. Only unsupported transform-requiring syntax falls back to native transformation. Mapped Node 22/24 and explicit Node 26 unsupported-syntax behavior remain unchanged.",
+  "browserBudgetCorrection": "The initial full gate exposed retained-comment size regressions. Source comments in core/forms are made concise; native transformed runtime output before/after is byte-identical. Public declarations retain contract documentation. Existing browser/module and package ceilings remain unchanged.",
+  "package": {
+    "files": 403,
+    "fileLimit": 403,
+    "byteLimit": 6291456,
+    "beforeBytes": 6276632,
+    "afterBytes": 5946809,
+    "savedBytes": 329823,
+    "remainingBytes": 344647,
+    "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-pack-final-2e6373900fce2aa6499129a16e7365047880d64f6a45097bea0ddf50e13b2f41.json",
+    "sha256": "2e6373900fce2aa6499129a16e7365047880d64f6a45097bea0ddf50e13b2f41"
+  },
+  "validation": {
+    "compilerMatrix": {
+      "22": {
+        "tests": 10,
+        "pass": 10,
+        "fail": 0,
+        "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-node22-6e2dc4b816186a97bbc92d6dc3378ba8f56c846f5ce9be477d239e7d9750ee47.log",
+        "sha256": "6e2dc4b816186a97bbc92d6dc3378ba8f56c846f5ce9be477d239e7d9750ee47"
+      },
+      "24": {
+        "tests": 10,
+        "pass": 10,
+        "fail": 0,
+        "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-node24-258db1282cb1bb081e9a87f2753a81638243759e457ec4f8de6e463e608f9866.log",
+        "sha256": "258db1282cb1bb081e9a87f2753a81638243759e457ec4f8de6e463e608f9866"
+      },
+      "26": {
+        "tests": 10,
+        "pass": 10,
+        "fail": 0,
+        "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-node26-4d566e285919db0c9bfc361befb3aede0eb242b596ef93d2186d78a0231f407c.log",
+        "sha256": "4d566e285919db0c9bfc361befb3aede0eb242b596ef93d2186d78a0231f407c"
+      }
+    },
+    "commentRuntimeParity": {
+      "status": "passed",
+      "scope": "Core/forms native transform output identical before/after comment edits.",
+      "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-comment-parity-14eb829bbf78102dde9eb17b748edb6a5b58a75f57a55272b7788b65e9d67c1f.log",
+      "sha256": "14eb829bbf78102dde9eb17b748edb6a5b58a75f57a55272b7788b65e9d67c1f"
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 159,
+      "baselineAllowance": 163,
+      "packedFixtures": 22,
+      "skipLibCheck": false,
+      "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-types-final-16ea040c3b60684fd9817834e3ddef3267216b76c9a5ee8cbdd67a033ca54cd4.log",
+      "sha256": "16ea040c3b60684fd9817834e3ddef3267216b76c9a5ee8cbdd67a033ca54cd4"
+    },
+    "release": {
+      "status": "passed",
+      "node": "22.16.0",
+      "tests": 1868,
+      "pass": 1865,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 92.12,
+        "branches": 80.47,
+        "functions": 90.42
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-check-final-4439953e0a6a6a54e133b713fbf56d7d14d861af67ecbd2fad63c993aa967876.log",
+      "sha256": "4439953e0a6a6a54e133b713fbf56d7d14d861af67ecbd2fad63c993aa967876"
+    },
+    "initialReleaseFailure": {
+      "status": "failed, corrected before final validation",
+      "failures": 1,
+      "reason": "Unchanged browser gzip ceilings caught native strip retaining core/forms source comments. No ceiling relaxation or skipped failure.",
+      "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-check-903065d740a803a884d055e5140da9f020c4f565fc829d127a6b1ded1b34e64f.log",
+      "sha256": "903065d740a803a884d055e5140da9f020c4f565fc829d127a6b1ded1b34e64f"
+    }
+  },
+  "compatibility": {
+    "dependencies": "zero added npm dependencies",
+    "publicSignature": "unchanged",
+    "mappedOutput": "unchanged native Node 22/24 transform; Node 26 padding remains intact",
+    "legacyTypeScript": "Node 22/24 unmapped enum/namespace/parameter-property transformations verified at runtime",
+    "artifacts": "Future unmapped builds change bytes/columns/digests. Existing verified artifacts remain immutable. Host certificates bind compiled framework bytes, so changed installations require fresh certification.",
+    "rollback": "Revert compiler/comment optimization for future builds; no application data migration."
+  },
+  "sourceHashes": {
+    "scripts/compiler.mjs": "09fc04e552bdcaba37b0fba3e2e955e3ac7b4a9d8400958994a723fbc520f6d2",
+    "tests/compiler-runtime.test.mjs": "aee30c2c3cbc201442a700d3e81cccc4966d2c2cd0b5d5cb2e82a3fdc793a70c",
+    "src/core.ts": "35f4e35a4f3283b25370a2e5dd964bc6bc25ec058ee2ab8c76a06bc64639392f",
+    "src/core.d.ts": "30b48d7f9d0c11f9f4be63e275272b8ae5ba774ba3168e22aa6cbf04df14aaf2",
+    "src/forms.ts": "360c351fcaa16f25a055c7ba1f5408a9b677f8319a81506d9d5aa546de60ef20",
+    "docs/development-tools.md": "07f5db78429933583eaffcbc835d4e5869aa18f26ae642500e08c9f307f4dff7",
+    "CHANGELOG.md": "947a4edbf21cba532895c4e3ade174772f780bb7e4ae80788e3845b84e0fd6b0"
+  },
+  "preservedExistingFiles": 23,
+  "roadmap": {
+    "implemented": 15,
+    "remaining": 25
+  },
+  "delivery": null
+}

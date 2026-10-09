@@ -47,18 +47,16 @@ test('unterminated import-like comments cannot stall compilation at the editor d
   await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', script], { timeout: 5000 });
 });
 
-test('unmapped Node26 output compacts erased padding without removing token separators or source lines', async () => {
+test('unmapped erasable output compacts native padding on every supported runtime', async () => {
   const declaration = Array.from({ length: 120 }, (_, index) => `  property${index}: Readonly<Record<string, readonly [number, string]>>;`).join('\n');
   const source = `interface LargeDeclaration {\n${declaration}\n}\nfunction value<T>(){}\nexport const isFunction=value<string>instanceof Function;\nexport const exists='x'!in {x:true};\nexport const result=7;`;
   const output = compile(source, { filename: 'padding.ts', sourceMap: false });
   const result = await import(`data:text/javascript,${encodeURIComponent(output)}`);
   assert.equal(result.isFunction, true); assert.equal(result.exists, true); assert.equal(result.result, 7);
-  if (Number(process.versions.node.split('.')[0]) >= 26) {
-    const { stripTypeScriptTypes } = await import('node:module');
-    const native = stripTypeScriptTypes(source, { mode: 'strip' });
-    assert.ok(native.length - output.length > 4000, 'release output must remove substantial erased padding');
-    assert.equal(output.split('\n').length, native.split('\n').length);
-  }
+  const { stripTypeScriptTypes } = await import('node:module');
+  const native = stripTypeScriptTypes(source, { mode: 'strip' });
+  assert.ok(native.length - output.length > 4000, 'release output must remove substantial erased padding');
+  assert.equal(output.split('\n').length, native.split('\n').length);
 });
 
 test('padding compaction preserves SQL, raw templates, tabs, unicode, regex and runtime comments', async () => {
@@ -70,11 +68,38 @@ export const tabs: string = "A\t\tB";
 export const unicode: string = "🧪  café  Ελληνικά";
 export const regex: string = /a  b/u.source;`;
   const output = compile(source, { filename: 'literals.ts', sourceMap: false });
-  if (Number(process.versions.node.split('.')[0]) >= 26) assert.ok(output.includes('// runtime    comment   stays'));
+  assert.ok(output.includes('// runtime    comment   stays'));
   const result = await import(`data:text/javascript,${encodeURIComponent(output)}`);
   assert.equal(result.sql, "SELECT  title,  owner\n  FROM  records\n  WHERE  title = 'a  b';");
   assert.equal(result.raw, 'first  line\\nsecond   line'); assert.equal(result.tabs, 'A\t\tB');
   assert.equal(result.unicode, '🧪  café  Ελληνικά'); assert.equal(result.regex, 'a  b');
+});
+
+test('Node 22/24 unmapped fallback executes enums, parameter properties and runtime namespaces', async () => {
+  const legacy = [
+    ['export enum Choice { One, Two = 7 }; export const result = Choice.Two;', 7],
+    ['class Value { constructor(readonly value: number) {} }; export const result = new Value(8).value;', 8],
+    ['namespace Values { export const one = 9; }; export const result = Values.one;', 9],
+  ];
+  for (const [source, expected] of legacy) {
+    if (Number(process.versions.node.split('.')[0]) >= 26) {
+      assert.throws(() => compile(source, { filename: 'legacy.ts', sourceMap: false }), /legacy.ts:.*erasable TypeScript/);
+    } else {
+      const output = compile(source, { filename: 'legacy.ts', sourceMap: false });
+      assert.doesNotMatch(output, /sourceURL|sourceMappingURL/);
+      assert.equal((await import(`data:text/javascript,${encodeURIComponent(output)}`)).result, expected);
+    }
+  }
+});
+
+test('mapped Node 22/24 output stays identical to native transform and syntax failures remain errors', async () => {
+  const source = 'interface Value { readonly amount: number; }\nexport const value: number = 3;';
+  if (Number(process.versions.node.split('.')[0]) < 26) {
+    const { stripTypeScriptTypes } = await import('node:module');
+    assert.equal(compile(source, { filename: 'mapped-parity.ts' }),
+      stripTypeScriptTypes(source, { mode: 'transform', sourceMap: true, sourceUrl: 'mapped-parity.ts' }));
+  }
+  assert.throws(() => compile('export const broken: number = ;', { sourceMap: false }), SyntaxError);
 });
 
 test('generic calls and return ASI retain their newline semantics after erasure', async () => {
