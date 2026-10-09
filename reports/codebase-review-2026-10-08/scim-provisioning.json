@@ -2,7 +2,7 @@
   "featureId": "12",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/287",
   "pullRequest": "https://github.com/nearbycoder/clank.run/pull/289",
-  "status": "implementation-verified-awaiting-protected-merge",
+  "status": "merged",
   "acceptedFeatureCountBeforeMerge": 21,
   "contract": {
     "scope": "Existing organization and exact OIDC issuer; bounded SCIM Users/Groups plus discovery; no bulk, sort, compound filters, nested groups or enterprise extensions",
@@ -148,17 +148,70 @@
     }
   ],
   "review": {
-    "freshHostedChecks": "Required at final metadata head before protected merge; recorded in PR",
+    "freshHostedChecks": [
+      {
+        "id": 114070898375,
+        "name": "CodeQL",
+        "head": "a79107ef9ab01da3200dab9962b8e69f1086e4a7",
+        "conclusion": "success"
+      },
+      {
+        "id": 114070696421,
+        "name": "Packaged-release conformance",
+        "head": "a79107ef9ab01da3200dab9962b8e69f1086e4a7",
+        "conclusion": "success"
+      },
+      {
+        "id": 114070696361,
+        "name": "Node 22.16",
+        "head": "a79107ef9ab01da3200dab9962b8e69f1086e4a7",
+        "conclusion": "success"
+      },
+      {
+        "id": 114070696285,
+        "name": "Node 24",
+        "head": "a79107ef9ab01da3200dab9962b8e69f1086e4a7",
+        "conclusion": "success"
+      },
+      {
+        "id": 114070696193,
+        "name": "Semantic and packed consumer types",
+        "head": "a79107ef9ab01da3200dab9962b8e69f1086e4a7",
+        "conclusion": "success"
+      },
+      {
+        "id": 114070598236,
+        "name": "JavaScript and TypeScript analysis",
+        "head": "a79107ef9ab01da3200dab9962b8e69f1086e4a7",
+        "conclusion": "success"
+      }
+    ],
     "independentReview": false,
-    "authorReview": "Explicitly non-independent COMMENT; no self-approval",
-    "newCodeQlAlerts": "Final head must report none",
-    "unresolvedThreads": "Final head must report zero",
-    "merge": "Expected-head protected squash with reviewed tree equality; no protection bypass"
+    "authorReview": {
+      "event": "COMMENT",
+      "id": 5476386700,
+      "independent": false
+    },
+    "newCodeQlAlerts": 0,
+    "unresolvedThreads": 0,
+    "merge": {
+      "method": "protected-expected-head-squash",
+      "head": "a79107ef9ab01da3200dab9962b8e69f1086e4a7",
+      "sha": "1232317b74dd0f384b5416604cd4544b717d2049",
+      "reviewedTree": "4eb350683ca4f3946e4af19888e97c17bbc6b54a",
+      "treeEqual": true
+    },
+    "mainCheckouts": {
+      "head": "1232317b74dd0f384b5416604cd4544b717d2049",
+      "trackedClean": true,
+      "preservedFiles": 23
+    }
   },
   "limitations": [
     "No external enterprise IdP tenant interoperability/certification claimed",
     "Production Railway host remains uncertified",
     "Live-controller offboarding credential rotation is a separate repair in PR292/proposal291 and is not claimed as SCIM acceptance",
     "This is not automatic supervisor leadership certification"
-  ]
+  ],
+  "acceptedFeatureCountAfterMerge": 22
 }
