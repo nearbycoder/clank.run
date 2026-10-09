@@ -576,6 +576,7 @@ export async function extractDeploymentBundle(bundle: DeploymentBundle, director
   const fs = await import(fsName) as unknown as {
     mkdir(path: string, options: { recursive: boolean; mode?: number }): Promise<void>;
     writeFile(path: string, data: Uint8Array, options: { flag: "wx"; mode: number }): Promise<void>;
+    chmod(path: string, mode: number): Promise<void>;
   };
   const path = await import(pathName) as unknown as {
     resolve(...segments: string[]): string;
@@ -589,6 +590,9 @@ export async function extractDeploymentBundle(bundle: DeploymentBundle, director
     if (target === root || !target.startsWith(root + path.sep)) throw new Error(`Unsafe deployment path: ${file.path}`);
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     await fs.writeFile(target, base64Bytes(file.content, file.path), { flag: "wx", mode: file.mode });
+    // File creation applies the provider's umask. Restore the already verified
+    // artifact mode so release validation and executable files remain exact.
+    await fs.chmod(target, file.mode);
   }
 }
 

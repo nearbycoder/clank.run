@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile, chmod } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -25,6 +26,28 @@ const config = parseDeploymentConfig({
   database: { path: "app.sqlite", migrations: "migrations", allowUnsafeMigrations: false },
   health: { path: "/healthz", timeoutMs: 5_000 },
   env: { FEATURE: "on" },
+});
+
+test("deployment extraction preserves verified modes under a restrictive provider umask", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-bundle-modes-"));
+  try {
+    const source = join(root, "source"); await mkdir(join(source, "dist"), { recursive: true }); await mkdir(join(source, "migrations"));
+    for (const [name, mode] of [["server.js", 0o644], ["private.txt", 0o600], ["owner.sh", 0o700], ["run.sh", 0o755]]) {
+      const file = join(source, "dist", name); await writeFile(file, "verified fixture bytes"); await chmod(file, mode);
+    }
+    const child = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", "--input-type=module", "--eval", `
+      import assert from 'node:assert/strict'; import {stat,readFile} from 'node:fs/promises'; import {join} from 'node:path';
+      const {createDeploymentBundle,decodeDeploymentBundle,extractDeploymentBundle,parseDeploymentConfig}=await import(process.argv[1]);
+      process.umask(0o077);
+      const config=parseDeploymentConfig({version:1,entry:'dist/server.js',include:['dist','migrations'],database:{path:'app.sqlite',migrations:'migrations'},health:{path:'/healthz',timeoutMs:5000},env:{}});
+      const bundle=await decodeDeploymentBundle(await createDeploymentBundle(process.argv[2],config));
+      await extractDeploymentBundle(bundle,process.argv[3]);
+      for(const file of bundle.files) { const target=join(process.argv[3],file.path);assert.equal((await stat(target)).mode&0o777,file.mode,file.path);assert.equal((await readFile(target)).toString('base64'),file.content); }
+      assert.equal((await stat(process.argv[3])).mode&0o777,0o700);
+      console.log('exact verified modes and bytes preserved');
+    `, new URL("../dist/deploy.js", import.meta.url).href, source, join(root, "release")], { encoding: "utf8", timeout: 30000 });
+    assert.equal(child.status, 0, child.stderr); assert.match(child.stdout, /exact verified modes and bytes preserved/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("deployment bundles are deterministic, checksummed, bounded, and traversal-safe", async () => {

@@ -14,12 +14,18 @@ if (arguments_.some((argument) => argument === "--help" || argument === "-h")) {
   console.log(`Usage: clank-provider
        clank-provider certify --config <profile.json> --quota-id <reserved-id> --disposable
        clank-provider certification --config <profile.json>
+       clank-provider fleet --config <private-fleet.json> --disposable
 
 certify runs privileged enforcement probes only on an explicitly disposable Linux host
 with its own local Docker daemon and dedicated XFS mount. certification inspects the
 authenticated saved report, expiry and current host/policy binding. Both print JSON;
 blocked or stale certification returns exit code 1. Configuration contains directory
 and profile from @clank.run/framework/host-certification.
+
+fleet runs one fixed synthetic scenario against actual coordinator/provider processes.
+It requires a current certificate, two reserved unused XFS project IDs, ten application
+ports and a private JSON configuration from @clank.run/framework/fleet-simulator.
+It prints a bounded timeline/report and returns exit code 1 when blocked.
 
 Runs Clank's complete stateful Docker deployment provider and private runtime ingress.
 
@@ -59,7 +65,39 @@ Bind this process only to a private network or loopback behind TLS. The provider
 runtime capsules, application secrets, and SQLite data must never pass through generic logs.`);
   process.exit(0);
 }
-if (["certify", "certification"].includes(arguments_[0])) {
+if (arguments_[0] === "fleet") {
+  arguments_.shift();
+  const values = new Map();
+  while (arguments_.length) {
+    const name = arguments_.shift();
+    if (!["--config", "--disposable"].includes(name) || values.has(name)) throw new Error("Invalid fleet argument.");
+    const value = name === "--disposable" ? true : arguments_.shift();
+    if (value === undefined || (typeof value === "string" && value.startsWith("--"))) throw new Error("Missing fleet argument.");
+    values.set(name, value);
+  }
+  if (values.get("--disposable") !== true || typeof values.get("--config") !== "string") throw new Error("Fleet requires a private configuration and explicit --disposable.");
+  const { open } = await import("node:fs/promises"), { constants } = await import("node:fs");
+  const handle = await open(values.get("--config"), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  let config;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > 16384 || (stat.mode & 0o077) !== 0 || (typeof process.getuid === "function" && stat.uid !== process.getuid())) throw new Error("Fleet configuration must be an owned, private, bounded regular JSON file.");
+    const bytes = Buffer.alloc(16385);
+    let length = 0;
+    while (length < bytes.length) {
+      const part = await handle.read(bytes, length, bytes.length - length, length);
+      if (part.bytesRead === 0) break;
+      length += part.bytesRead;
+    }
+    if (length > 16384) throw new Error("Fleet configuration exceeded its byte bound.");
+    try { config = JSON.parse(bytes.subarray(0, length).toString("utf8")); }
+    catch { throw new Error("Invalid fleet configuration JSON."); }
+  } finally { await handle.close(); }
+  if (!config || typeof config !== "object" || Array.isArray(config) || Object.keys(config).some(key => !["certificate", "scenario", "quotaIds", "portStart"].includes(key))) throw new Error("Invalid fleet configuration.");
+  const { runLocalProviderFleetScenario } = await import("../dist/fleet-simulator.js");
+  const result = await runLocalProviderFleetScenario({ ...config, disposable: true });
+  console.log(JSON.stringify(result, null, 2)); process.exitCode = result.status === "passed" ? 0 : 1;
+} else if (["certify", "certification"].includes(arguments_[0])) {
   const action = arguments_.shift(), values = new Map();
   while (arguments_.length) {
     const name = arguments_.shift();

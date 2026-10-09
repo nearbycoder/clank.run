@@ -4,7 +4,7 @@
   "baseCommit": "7050c989a5af8ad957212b915b68728cf13b1d9f",
   "branch": "codex/unmapped-compiler-output",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/271",
-  "status": "local-validation-passed-awaiting-reviewed-pr",
+  "status": "merged",
   "finding": "Only 14824 bytes remained under the existing 6 MiB package bound. Node 22/24 transform printing expands erasable output.",
   "change": "Unmapped Node 22/24 compilation first uses native stripping plus the existing erased-padding compaction. Only unsupported transform-requiring syntax falls back to native transformation. Mapped Node 22/24 and explicit Node 26 unsupported-syntax behavior remain unchanged.",
   "browserBudgetCorrection": "The initial full gate exposed retained-comment size regressions. Source comments in core/forms are made concise; native transformed runtime output before/after is byte-identical. Public declarations retain contract documentation. Existing browser/module and package ceilings remain unchanged.",
@@ -145,5 +145,51 @@
     "implemented": 15,
     "remaining": 25
   },
-  "delivery": null
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/272",
+    "reviewedHead": "e3b69e337b301481de1738751d4e9f27ceb4f3f2",
+    "authorReview": {
+      "id": 5468877019,
+      "state": "COMMENTED",
+      "independentApproval": false
+    },
+    "hostedChecks": {
+      "status": "passed",
+      "headRevision": "e3b69e337b301481de1738751d4e9f27ceb4f3f2",
+      "codeql": {
+        "id": 113779848396,
+        "conclusion": "success",
+        "newAlerts": 0,
+        "annotations": 0
+      },
+      "node22": {
+        "id": 113779491377,
+        "conclusion": "success"
+      },
+      "node24": {
+        "id": 113779491248,
+        "conclusion": "success"
+      },
+      "types": {
+        "id": 113779490962,
+        "conclusion": "success"
+      },
+      "packedRelease": {
+        "id": 113779491360,
+        "conclusion": "success"
+      },
+      "analysis": {
+        "id": 113779469536,
+        "conclusion": "success",
+        "annotations": 1
+      }
+    },
+    "reviewThreads": 0,
+    "requestedChanges": 0,
+    "mergeCommit": "b6a61c4749bc3f87c31228ec69d895692b9aa92a",
+    "reviewedTree": "67b3b0efc8df170fdddd36ee73f37bed31d9d0be",
+    "mergedTree": "67b3b0efc8df170fdddd36ee73f37bed31d9d0be",
+    "bothCheckoutsSynchronized": true,
+    "preservedExistingFiles": 23
+  }
 }

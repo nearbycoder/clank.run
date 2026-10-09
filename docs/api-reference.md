@@ -485,6 +485,18 @@ bounded supported profiles, proof details, private metadata and interruption rec
   `LinuxHostCertificationInspection`, `LinuxHostCapability`, `LinuxHostCertificationCheck`,
   `LinuxHostCertificationOptions`, `CertifyLinuxHostOptions`.
 
+## Local provider fleet simulator
+
+Optional module: `@clank.run/framework/fleet-simulator`; see [local provider fleets](local-provider-fleet.md)
+for host admission, fixed faults, operator reservations, proof limits and interruption recovery.
+
+- `parseLocalProviderFleetScenario(input)`: capture and freeze one bounded versioned scenario.
+- `exportLocalProviderFleetScenario(scenario)`: deterministic JSON without operator configuration.
+- `runLocalProviderFleetScenario({ certificate, scenario, disposable: true, quotaIds, portStart, signal? })`:
+  fixed real-process drills, current certified-host admission, bounded timeline and verified cleanup.
+- Types: `LocalProviderFleetScenarioKind`, `LocalProviderFleetScenario`, `LocalProviderFleetOptions`,
+  `LocalProviderFleetEvent`, `LocalProviderFleetReport`.
+
 ## Complete deployment provider service
 
 - `openDockerDeploymentProviderService(options)`: opens provider data, exact-owner Docker cleanup

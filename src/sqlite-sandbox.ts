@@ -156,8 +156,12 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
     try {
       await fs.access("/usr/bin/bwrap", 1);
       await fs.access("/usr/bin/prlimit", 1);
-    } catch { throw new Error("Isolated SQLite tasks on Linux require bubblewrap (/usr/bin/bwrap) and util-linux (/usr/bin/prlimit)."); }
-    return { executable: "/usr/bin/bwrap", arguments: sandboxArgs, descriptors,
+      await fs.access("/usr/bin/setpriv", 1);
+    } catch { throw new Error("Isolated SQLite tasks on Linux require bubblewrap (/usr/bin/bwrap) and util-linux (/usr/bin/prlimit, /usr/bin/setpriv)."); }
+    // A non-root provider can retain host-administration capabilities. Bubblewrap
+    // rejects that ambient state, and SQLite workers must never inherit it.
+    // Clear it in the child before exec; keep the provider's own state untouched.
+    return { executable: "/usr/bin/setpriv", arguments: ["--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "/usr/bin/bwrap", ...sandboxArgs], descriptors,
       moduleUrl: `file:///runtime/framework/${module === "jobs" ? "platform-jobs" : module === "inspection" ? "sqlite-inspection" : module === "recovery" ? "point-in-time" : module}-worker.js`,
       argumentsValue: args, close };
   } catch (error) { await close(); throw error; }
