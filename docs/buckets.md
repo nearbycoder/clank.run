@@ -119,8 +119,9 @@ media type, image signature and dimensions, and the metadata returned by the obj
 publishing the new generation. The prior generation remains current until that commit succeeds.
 
 `list`, `stat`, `delete`, and `createReadIntent` use the same client. Private reads use an expiring
-read capability. Public objects receive an opaque ID plus digest URL that changes with each
-generation and the bucket's `cacheControl` policy. Responses set an exact type and length,
+read capability bound to the exact current generation. Replacing a file invalidates that capability,
+even when the replacement has identical bytes. Public objects receive an opaque ID plus digest URL
+that changes when their bytes change, and the bucket's `cacheControl` policy. Responses set an exact type and length,
 `nosniff`, a digest ETag, safe content disposition,
 and a sandbox content security policy.
 
@@ -139,6 +140,101 @@ These settings are independent:
 | `browserAccess: "server"` | HTTP management is closed; server actions and MCP tools remain available. |
 
 Never treat a public URL as authorization. Use a private bucket for access-controlled material.
+
+## Retained generations and restore
+
+Retention is disabled by default. Enable it explicitly on a bucket, including a generated app's
+bucket declaration:
+
+```ts
+const attachments = defineBucket({
+  name: "attachments",
+  ownership: "user",
+  allowedContentTypes: ["text/plain", "application/pdf"],
+  versions: {
+    maxAgeMs: 7 * 24 * 60 * 60_000,
+    maxPerObject: 5,
+    maxVersions: 500,
+    maxBytes: 100 * 1024 * 1024,
+    perOwnerMaxBytes: 20 * 1024 * 1024,
+  },
+});
+```
+
+Each successful replacement or deletion retires the previous immutable provider generation.
+History contains opaque generation IDs, original digests/types and retention deadlines; it contains
+no provider keys or permanent public URLs. Identical uploads remain separate generations.
+`maxPerObject` is bounded at 100, `maxVersions` at 1,000 per bucket, and age at one year.
+Retained bytes have separate bucket and owner ceilings. Existing `usage()` continues to describe
+current objects and pending uploads; reserve the configured history allowance when sizing storage.
+
+Newest generations have priority. An expired or excess generation loses catalog visibility and
+enters the existing durable cleanup queue. A generation larger than the retained byte allowance
+cannot be retained. Startup, new reservations and history inspection enforce the operator's policy;
+tightening age never extends a stored deadline. Disabling retention or removing a bucket definition
+retires its history and restore receipts during the next sweep. Provider deletion failures remain
+retryable; inaccessible garbage still consumes physical storage until the provider recovers.
+
+Use trusted current identity for server calls:
+
+```ts
+const files = buckets.bucket("attachments");
+const identity = { userId: currentAuthenticatedUser.id };
+const current = files.stat("report.pdf", identity);
+const history = files.listVersions("report.pdf", identity);
+const generation = history[0];
+if (generation) {
+  const stored = await files.getVersion("report.pdf", generation.id, identity);
+  const restored = await files.restoreVersion("report.pdf", generation.id, {
+    ...identity,
+    operationId: crypto.randomUUID(),
+    ifSha256: current?.sha256 ?? null,
+  });
+}
+```
+
+`ifSha256` is required; `null` requires an absent destination. Restore verifies retained bytes and
+reserves current-object quota through the normal upload path. It fences the destination's exact
+provider generation across asynchronous I/O, including same-digest replacements, and rechecks the
+source's visibility and expiry inside the catalog commit. Failed validation, quota admission,
+cancellation or provider writes leave the current file unchanged.
+
+Keep the operation ID and original input until the response is known. An accepted write and its
+receipt commit together. Exact retries return the original metadata without another write;
+different input conflicts. The receipt remains private to the bucket/owner and survives source
+eviction through its original age deadline, allowing replay after restart or a lost response.
+There are at most 10,000 live restore receipts per manager; full capacity rejects new restores.
+Expired source IDs cannot execute again. Receipts describe the accepted generation, which a later
+upload may already have replaced. Use new operation IDs for new work.
+
+The browser client exposes `listVersions`, `createVersionReadIntent` and `restoreVersion` without a
+caller-selectable owner. The history and restore endpoints require a current application session,
+even for public app-owned buckets. User-owned history stays in the authenticated partition;
+app-owned history uses the shared application keyspace. Use `browserAccess: "server"` and protected
+server actions when an app-wide restore needs additional roles.
+
+History download capabilities are private, operation-specific bearer credentials, capped by both
+capability lifetime and retention expiry. They never switch to a current or foreign generation.
+Revalidate retention after provider I/O before sending bytes. As with existing capabilities,
+already issued credentials can be used until they expire; revoking a human session closes new
+history/restore access rather than revoking independently delegated download credentials.
+
+`openBackend` supplies current-session checks before history responses, after request bodies and
+inside restore commits. It closes in-flight restores when another connection revokes that session.
+Standalone HTTP adapters must supply `BucketRequestContext.verifyCurrent`, a synchronous trusted
+credential refresh, plus `verifyWrite` for CSRF. Direct server calls and custom MCP identity
+adapters must authorize the current principal themselves; request-supplied IDs are not credentials.
+
+Version-enabled buckets add `bucket_<name>_versions`, `bucket_<name>_read_version` and
+`bucket_<name>_restore_version`. Reads require `agent:read`, restores require `agent:write`, and
+larger reads return a bounded download capability instead of unbounded inline bytes.
+
+The catalog migration adds generation and restore-receipt tables without rewriting provider bytes.
+Back up those tables with the provider. Upgrading invalidates legacy current-read tokens that
+did not bind a generation; mint fresh read intents. To roll back retention, set `versions: false`
+with the upgraded manager and sweep. Stop it before reverting to an older binary, disable history
+and restore entry points, and rotate the signing key because older code cannot enforce the new
+generation binding. Reverting code alone does not reclaim retained bytes.
 
 ## Images and variants
 
@@ -222,10 +318,13 @@ Use **Open file browser** or visit `https://your-app.example/__clank/buckets`. T
 served by the application itself and requires its normal signed-in session. It lists at most 100
 objects per page, supports bucket and key-prefix navigation, partitions user-owned buckets by the
 current user, omits server-only buckets, and mints five-minute download capabilities for private
-objects. The response is non-cacheable, cannot be framed, sends no referrer, contains no script,
-and uses a restrictive content security policy. It is intentionally read-only; application UI,
-server actions, the browser client, or MCP tools perform uploads and deletion with their normal
-CSRF/scope checks.
+objects. Version-enabled buckets show a **History** link with retained downloads and restore
+buttons. Restores use the current session's CSRF token, preserve keyboard focus, report failures
+through a live status region and reject a changed current file. A standalone adapter without a
+trusted CSRF token/write verifier exposes history downloads without restore buttons. The response
+is non-cacheable, cannot be framed and sends no referrer. Its narrowly scoped restore script uses
+a CSP nonce and same-origin connections. Application UI, server actions, the browser client or MCP
+tools perform uploads and deletion with their normal CSRF/scope checks.
 
 ## Failure and security model
 

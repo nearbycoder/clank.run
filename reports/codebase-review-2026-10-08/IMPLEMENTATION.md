@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Seven of the forty proposed features are implemented across four feature batches; the other thirty-three remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Eight of the forty proposed features are implemented across five feature batches; the other thirty-two remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -60,6 +60,14 @@ Documentation, conformance, dependency and security checks pass. See
 [budget implementation](budget-implementation.json) for source/log hashes and explicit boundaries. The byte ceiling stays 6 MiB; exactly
 two additional distribution files use the explicit 395-file ceiling in the proposal.
 
+## Retained file versions
+
+Feature 28 starts from merged main `7eaaed08a28fbc340dc86d3203a65dba43e03765`, after [PR #252](https://github.com/nearbycoder/clank.run/pull/252) delivered agent budgets through all six hosted checks. Both checkouts were synchronized and existing untracked files preserved. Proposal: [issue #253](https://github.com/nearbycoder/clank.run/issues/253).
+
+Version-enabled buckets now retain bounded immutable generations, expose owner-authorized history/downloads and restore with current-generation fencing and durable exact-retry receipts. Old current-read URLs cannot silently return replacements. The built-in file browser supplies private downloads and CSRF-protected restore forms. Current-session checks close body/provider revocation races. Retired bytes and receipt retention remain bounded independently of current-object quota; rollback and bearer-capability boundaries are explicit.
+
+All 62 focused tests pass, including 23 new feature tests. Real browser keyboard, focus, mobile, download, stale-file and revoked-access checks pass. All 15 packed consumer fixtures pass with no new diagnostics above the existing 163. The full release gate reports 1,750 tests, 1,747 passed, zero failures/cancellations and three privileged-host skips; coverage is 92.16% lines, 79.95% branches and 90.12% functions. Documentation, packaged conformance and security gates pass with the unchanged 395-file/6 MiB limits. See [retained file versions](retained-file-versions.json) for source/log hashes and explicit acceptance limits.
+
 ## Review prerequisites
 
 | Item | State | Evidence |
@@ -103,7 +111,7 @@ two additional distribution files use the explicit 395-file ceiling in the propo
 | 25 | Import correction and upsert workflow | Planned | Pending |
 | 26 | Shared document cursor coordination | Implemented | Revision-aware, session-bound ephemeral cursors; edit/deletion rebasing, expiry/capacity, per-participant owned authorization, session/ACL/email-verification revocation and restart/reconnect tested. Keyboard/browser and mobile checks pass. |
 | 27 | Document suggestions and branches | Implemented | Named durable drafts, immutable proposals, before/after review, author/reviewer policies, document/branch fences, overlap/missing-history rejection, bounded payload/rebase bytes, transactional acceptance and exact restart replay tested. |
-| 28 | Retained file versions and restore | Planned | Pending |
+| 28 | Retained file versions and restore | Implemented | Proposal #253; 23 new feature tests and 62 focused tests, immutable owner/key-scoped history, generation fences, restart/receipt replay, bounded retention and provider cleanup, in-flight session revocation, actual keyboard/mobile/download checks and 15 packed consumer fixtures. Full release gate passes. |
 | 29 | Durable media processing jobs | Planned | Pending |
 | 30 | Offline attachment queue | Planned | Pending |
 | 31 | Hydration mismatch inspector | Implemented | Optional metadata capture, pre-cleanup child paths, original TSX locations, patch/remount reasons, immutable bounded history and redacted JSON. Unit/packed consumer and real keyboard/mobile/cleanup checks pass. DOM gzip budget remains 12,000 bytes. |

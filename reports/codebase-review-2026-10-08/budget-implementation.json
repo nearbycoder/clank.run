@@ -5,7 +5,7 @@
   "baseCommit": "a20aa1986a7d81719ef5242068dc6005d4adaf79",
   "branch": "codex/agent-operation-budgets",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/251",
-  "status": "local-release-validation-passed",
+  "status": "merged",
   "acceptance": {
     "durability": "SQLite grant/receipt rows and scoped writes commit together; exact retries recheck current credentials and action authorization before receipt replay.",
     "accounting": "One accepted call, write invocations, distinct affected rows and registered external-outbox cost. Clients cannot choose costs.",
@@ -102,5 +102,19 @@
     "tests/fixtures/budget-contender.mjs": "e34d69164ca5a33a3eb61ddbc2347fce958fb11ea9199bad25aef68dced8f2f3",
     "type-tests/agent-budgets.ts": "4b735f1c0d4134e5d4b30b381211d1296e60e2fa9c0e474ee2ed24c87f82e71d",
     "docs/governance.md": "e9830d01c0bc73069060fa11f80ad52b8456cc8011118d6b763ad811abebc390"
+  },
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/252",
+    "reviewedHead": "c744af4b5efc218fbf70e6cc3ed62453ac1bf84a",
+    "mergeCommit": "7eaaed08a28fbc340dc86d3203a65dba43e03765",
+    "hostedChecks": {
+      "count": 6,
+      "result": "all successful",
+      "ciRun": 37868691092,
+      "codeqlRun": 37868691098
+    },
+    "review": "Author COMMENT review 5464666140; no independent approval claimed; zero unresolved threads.",
+    "merge": "Protected squash with expected head; no administrative bypass.",
+    "checkouts": "Primary and attached worktree synchronized, preserved untracked hashes unchanged."
   }
 }

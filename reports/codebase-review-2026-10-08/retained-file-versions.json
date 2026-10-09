@@ -1,0 +1,105 @@
+{
+  "feature": 28,
+  "title": "Retained file versions and restore",
+  "date": "2026-10-08",
+  "baseCommit": "7eaaed08a28fbc340dc86d3203a65dba43e03765",
+  "branch": "codex/retained-file-versions",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/253",
+  "status": "local-release-validation-passed",
+  "acceptance": {
+    "generations": "Opt-in immutable retired generations for replacement and deletion; opaque owner/key-bound history IDs, private capabilities and verified bytes.",
+    "fencing": "Current signed reads bind provider generations; stale signed/public reads recheck generation after I/O. Restore snapshots the destination generation before reads and fences it through reservation/commit, including identical-digest replacements.",
+    "retries": "Current object and restore receipt commit together. Exact owner-bound retries survive restart and source byte eviction until the original age deadline, without another provider write. Changed input conflicts; expired source IDs cannot execute again.",
+    "retention": "Independent age, per-object count, total generation count, bucket bytes and owner bytes; strict bounds, newest-first priority, tightened policies, startup retirement and durable provider cleanup. At most 1000 generations per bucket and 10000 live receipts per manager.",
+    "authority": "User owner/key isolation; authenticated history even for public app buckets. CSRF-gated restore, current-session refresh after body parsing and inside commit; revocation through an independent backend connection rolls back body/provider races. Standalone adapters must supply synchronous current checks; direct server/MCP adapters remain trusted authorization boundaries.",
+    "failure": "Quota, receipt capacity, provider, expiry, corruption, deletion/recreation and callback failures preserve current bytes and release reservations. Snapshot/receipt ownership mismatch fails integrity checks.",
+    "browser": "Built-in History links, private downloads, nonce-protected restore forms, visible status and retained keyboard focus. Actual browser/Node HTTP/SQLite auth/local-store flow verifies keyboard restore, exact retained download bytes, stale-file rejection, 390px contained overflow and revoked restore access."
+  },
+  "validation": {
+    "focused": {
+      "tests": 62,
+      "pass": 62,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "newFeatureTests": 23,
+      "path": "/tmp/clank-review-2026-10-08/history-focused.log",
+      "sha256": "ba01b0a6e01d0d6ba9f9f34973ee21671430aaf2c68bb7c64fc5a1a370976079"
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 15,
+      "skipLibCheck": false,
+      "path": "/tmp/clank-review-2026-10-08/history-types.log",
+      "sha256": "dc0c926216f8ed697ecf4bfd302f4dc855bb7ee4069e0a30c4cef4244f6030db"
+    },
+    "release": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1750,
+      "pass": 1747,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 92.16,
+        "branches": 79.95,
+        "functions": 90.12
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 395,
+      "publishFileLimit": 395,
+      "publishBytes": 6174977,
+      "publishByteLimit": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/history-check.log",
+      "sha256": "f936dfb6bd29223be768f87e8f8f0d2d66bcb5a789dad88315a0e53644cde5d6"
+    },
+    "browser": {
+      "path": "/tmp/clank-review-2026-10-08/history-browser-evidence.json",
+      "sha256": "9b9b2c64eaadae2929b4bf59fc31f0c2c7c62fa5611b2e78ffabc7a542806cfc"
+    },
+    "before": {
+      "status": 200,
+      "body": "replacement",
+      "expected": 404,
+      "scope": "Isolated old-current-read regression on the pre-feature build; a signed URL silently returns replacement bytes.",
+      "path": "/tmp/clank-review-2026-10-08/history-capability-before.log",
+      "sha256": "3bbce9f3d97a23c292be0fe6919e9dc809afb9723845b21844883bf3e64da047"
+    },
+    "finalDocumentation": {
+      "status": "passed",
+      "path": "/tmp/clank-review-2026-10-08/history-docs.log",
+      "sha256": "34480eccd3f728f6ad1825077267f607ec972c387daa3579e8f011ae91bfd3c4"
+    }
+  },
+  "compatibility": {
+    "default": "Retention disabled; existing current quotas remain separate from retained capacity. New generation binding intentionally invalidates legacy unbound current-read tokens.",
+    "migration": "Additive clank_bucket_versions and clank_bucket_restore_receipts tables; immutable provider keys reused without copying retired bytes.",
+    "rollback": "Disable versions using upgraded manager and sweep; stop before old binary, disable history/restore, rotate signing key. Old code cannot enforce generation-bound reads, and code reversion alone does not reclaim retained bytes.",
+    "dependencies": "No npm dependencies; same 395-file and 6 MiB package gates."
+  },
+  "boundaries": {
+    "bearerCapabilities": "History capabilities remain valid independently of human session until their bounded expiry/retention deadline; revoked sessions cannot mint new capabilities or restore.",
+    "appOwnership": "Application-owned history is shared; use server-only buckets and protected server actions for additional role checks.",
+    "receipts": "Historical accepted metadata can describe a generation that later uploads replaced.",
+    "cleanup": "Inaccessible garbage consumes physical bytes until provider deletion succeeds.",
+    "clock": "Uses the authoritative operator clock.",
+    "host": "Privileged Docker/XFS certification still requires an explicitly disposable compatible host; three privileged-host skips are not certification."
+  },
+  "sources": {
+    "src/buckets.ts": "342591b7a579a45b775c729d28d5bba8e7c522ac5b87b4cf7710f4e6d78aa43e",
+    "src/buckets.d.ts": "a8b0468d635d2b79858c2742033411bc1f42004b322e880adb4c08c8a27a0a93",
+    "src/backend.ts": "c1a737f45cf4fb47ac093ff365947613e7ba40099901e86270f83c14059d3292",
+    "src/blueprint.ts": "e5e815c8eac9263579e54df9f50a1efb3d285026c2d75042e8576b72d8d830ec",
+    "src/blueprint.d.ts": "110fb3c4c5d6d489f5028ae5479250308f900240467b3b1c7e828cd904bf5074",
+    "type-tests/bucket-versions.ts": "876cbdefc026006cd1422a66e25c006cf67a2db59a28603433c2170e4f8e86af",
+    "tests/bucket-versions.test.mjs": "ab45e63fd4dd80408d43eb79c44a39324473afd17c10535df88be411ddf62205",
+    "docs/buckets.md": "41c8b0c0a91e60210345c3d1f8f51b901f9f1eec675fe07fbe65d2ef03a6cf95"
+  }
+}

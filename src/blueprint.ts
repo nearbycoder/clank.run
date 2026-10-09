@@ -1,4 +1,4 @@
-import { defineBucket } from "./buckets.ts";
+import { defineBucket, type BucketVersionPolicy } from "./buckets.ts";
 import { workspaceTablesSource, workspaceFunctionsSource, guardedDatabaseSource } from "./blueprint-workspaces.ts";
 
 export type AppFieldType =
@@ -105,6 +105,7 @@ export interface AppServiceDefinition {
 }
 
 export interface AppBucketDefinition {
+  versions?: false | BucketVersionPolicy;
   description?: string;
   visibility?: "private" | "public";
   ownership?: "app" | "user";

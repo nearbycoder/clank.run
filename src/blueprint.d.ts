@@ -1,3 +1,4 @@
+import { type BucketVersionPolicy } from "./buckets.js";
 export type AppFieldType = "string" | "text" | "number" | "boolean" | "email" | "url" | "date" | "datetime" | "enum" | "reference";
 export interface AppFieldDefinition {
     type: AppFieldType;
@@ -34,7 +35,7 @@ export interface AppRelationshipDefinition {
      * either endpoint that targets the other endpoint. Clank infers it when
      * exactly one unambiguous reference exists.
      */
-    /** Generated join entity for many-to-many edges. */
+    /** Generated join entity for many-to-many edges; defaults to <name>Links. */
     join?: string;
     reference?: {
         entity: string;
@@ -81,6 +82,7 @@ export interface AppServiceDefinition {
     capabilities?: readonly string[];
 }
 export interface AppBucketDefinition {
+    versions?: false | BucketVersionPolicy;
     description?: string;
     visibility?: "private" | "public";
     ownership?: "app" | "user";
@@ -99,7 +101,13 @@ export interface AppBucketDefinition {
         maxHeight?: number;
         maxPixels?: number;
         formats?: readonly ("png" | "jpeg" | "gif" | "webp" | "avif")[];
-        variants?: Record<string, { width: number; height: number; fit?: "cover" | "contain"; format?: "original" | "png" | "jpeg" | "webp" | "avif"; quality?: number }>;
+        variants?: Record<string, {
+            width: number;
+            height: number;
+            fit?: "cover" | "contain";
+            format?: "original" | "png" | "jpeg" | "webp" | "avif";
+            quality?: number;
+        }>;
     };
 }
 export interface AppDeploymentDefinition {
@@ -175,6 +183,7 @@ export interface AppBlueprintInput {
     actions?: Record<string, AppActionDefinition>;
     migrations?: readonly AppMigrationDefinition[];
     services?: Record<string, AppServiceDefinition>;
+    /** Managed, isolated application object collections. */
     buckets?: Record<string, AppBucketDefinition>;
     fixtures?: Record<string, AppFixtureDefinition>;
     admin?: false | AppAdminStudioDefinition;

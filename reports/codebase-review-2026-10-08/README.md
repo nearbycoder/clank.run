@@ -6,6 +6,8 @@ Clank 0.24.0 has a broad, well-tested runtime and a substantial deployment platf
 
 This document preserves the findings and validation at the reviewed main commit. The [implementation ledger](IMPLEMENTATION.md) records the subsequent fixes, new features, current verification and hosting limitation. The [40 feature plan](FEATURE_PLAN.md) describes new capabilities separately from the fixes below. [Structured verification](verification.json), [reproduction output](reproduction.json), and a [disposable reproduction script](reproduce.mjs) accompany this review.
 
+The latest feature batch adds [retained file versions](retained-file-versions.json), including private history, fenced restore, durable receipts and current-session checks. The [budget feature](budget-implementation.json) is merged in [PR #252](https://github.com/nearbycoder/clank.run/pull/252). Eight roadmap features have acceptance evidence; 32 remain planned. The original findings below retain their historical scope.
+
 ## Follow-up review of merged main
 
 The maintenance pass starts from `1e6e62acbf2e59400c023bd3a33125fe1fc2c7d4`, after PRs #245–247 merged. Fresh fetches confirmed that the checkout matched remote main. It reviews Task cancellation and cleanup, auth guards and account changes, delivery retries/revocation, Fetch/Node error handling, and selected data, storage, recovery and release boundaries. Whole-source semantic analysis and the complete release gate supplement these targeted manual reads; this is not a claim that every implementation line was independently audited.
