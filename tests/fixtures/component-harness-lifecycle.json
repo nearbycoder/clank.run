@@ -1,0 +1,192 @@
+{
+  "journeys": [
+    {
+      "name": "Snapshot rejection abort",
+      "start": "/?mode=abort",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "steps": [
+        {
+          "wait": {
+            "text": "rejected before create: true"
+          }
+        },
+        {
+          "expect": {
+            "text": "active effects: 1; active listeners: 1; created: 1; disposed: 0"
+          }
+        },
+        {
+          "activate": "check-across-reset"
+        },
+        {
+          "wait": {
+            "text": "stale report: discarded"
+          }
+        },
+        {
+          "activate": "remove-controls"
+        },
+        {
+          "activate": "pulse-fixture"
+        },
+        {
+          "expect": {
+            "text": "active effects: 0; active listeners: 0; created: 2; disposed: 2"
+          }
+        },
+        {
+          "expect": {
+            "text": "events: 0"
+          }
+        },
+        {
+          "expect": {
+            "noHorizontalOverflow": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "Snapshot rejection wrong-revision",
+      "start": "/?mode=wrong-revision",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "steps": [
+        {
+          "wait": {
+            "text": "rejected before create: true"
+          }
+        },
+        {
+          "expect": {
+            "text": "active effects: 1; active listeners: 1; created: 1; disposed: 0"
+          }
+        },
+        {
+          "activate": "check-across-reset"
+        },
+        {
+          "wait": {
+            "text": "stale report: discarded"
+          }
+        },
+        {
+          "activate": "remove-controls"
+        },
+        {
+          "activate": "pulse-fixture"
+        },
+        {
+          "expect": {
+            "text": "active effects: 0; active listeners: 0; created: 2; disposed: 2"
+          }
+        },
+        {
+          "expect": {
+            "text": "events: 0"
+          }
+        },
+        {
+          "expect": {
+            "noHorizontalOverflow": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "Snapshot rejection adopt",
+      "start": "/?mode=adopt",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "steps": [
+        {
+          "wait": {
+            "text": "rejected before create: true"
+          }
+        },
+        {
+          "expect": {
+            "text": "active effects: 1; active listeners: 1; created: 1; disposed: 0"
+          }
+        },
+        {
+          "activate": "check-across-reset"
+        },
+        {
+          "wait": {
+            "text": "stale report: discarded"
+          }
+        },
+        {
+          "activate": "remove-controls"
+        },
+        {
+          "activate": "pulse-fixture"
+        },
+        {
+          "expect": {
+            "text": "active effects: 0; active listeners: 0; created: 2; disposed: 2"
+          }
+        },
+        {
+          "expect": {
+            "text": "events: 0"
+          }
+        },
+        {
+          "expect": {
+            "noHorizontalOverflow": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "Mismatch recovery and stale disposal",
+      "start": "/?mismatch=1",
+      "viewport": {
+        "width": 1280,
+        "height": 844
+      },
+      "steps": [
+        {
+          "wait": {
+            "text": "SSR node preserved: false; phase: hydrated"
+          }
+        },
+        {
+          "expect": {
+            "text": "active effects: 1; active listeners: 1; created: 2; disposed: 1; hydration mismatches: 1"
+          }
+        },
+        {
+          "activate": "check-across-disposal"
+        },
+        {
+          "wait": {
+            "text": "stale report: discarded"
+          }
+        },
+        {
+          "activate": "pulse-fixture"
+        },
+        {
+          "expect": {
+            "text": "active effects: 0; active listeners: 0; created: 2; disposed: 2"
+          }
+        },
+        {
+          "expect": {
+            "text": "events: 0"
+          }
+        }
+      ]
+    }
+  ]
+}

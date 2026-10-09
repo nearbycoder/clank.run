@@ -144,8 +144,8 @@ async function openBrowser(options) {
       processHandle = await launchChrome(options.executable, profile, options.headed, options.viewport);
       endpoint = await devtoolsEndpoint(profile, processHandle);
     } catch (error) {
-      if (processHandle) processHandle.kill("SIGKILL");
-      await rm(profile, { recursive: true, force: true });
+      if (processHandle) await stopChrome(processHandle);
+      await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
       throw error;
     }
   }
@@ -155,12 +155,8 @@ async function openBrowser(options) {
     target = await createTarget(endpoint);
     cdp = await CdpConnection.connect(target.webSocketDebuggerUrl);
   } catch (error) {
-    if (processHandle) {
-      processHandle.kill("SIGTERM");
-      await Promise.race([onceExit(processHandle), wait(2_000)]);
-      if (processHandle.exitCode === null) processHandle.kill("SIGKILL");
-    }
-    if (profile) await rm(profile, { recursive: true, force: true });
+    if (processHandle) await stopChrome(processHandle);
+    if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     throw error;
   }
   const exceptions = [];
@@ -189,16 +185,12 @@ async function openBrowser(options) {
     })).data,
     async close() {
       await Promise.race([
-        cdp.send("Target.closeTarget", { targetId: target.id }).catch(() => undefined),
+        (processHandle ? cdp.send("Browser.close") : cdp.send("Target.closeTarget", { targetId: target.id })).catch(() => undefined),
         wait(500),
       ]);
       cdp.close();
-      if (processHandle) {
-        processHandle.kill("SIGTERM");
-        await Promise.race([onceExit(processHandle), wait(2_000)]);
-        if (processHandle.exitCode === null) processHandle.kill("SIGKILL");
-      }
-      if (profile) await rm(profile, { recursive: true, force: true });
+      if (processHandle) await stopChrome(processHandle);
+      if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
     },
   };
 }
@@ -240,6 +232,17 @@ function createCdpDriver(cdp) {
       await settle();
     },
     currentUrl: () => evaluate("location.href"),
+    focus: (id) => evaluate(`(${FOCUS_SOURCE})(${JSON.stringify(id)})`),
+    focusedTarget: () => evaluate("document.activeElement?.getAttribute('data-clank-id') || document.activeElement?.id || undefined"),
+    layout: () => evaluate("({clientWidth:document.documentElement.clientWidth,scrollWidth:Math.max(document.documentElement.scrollWidth,document.body?.scrollWidth??0)})"),
+    async press(key) {
+      const keys = { Tab: ['Tab', 'Tab', 9], 'Shift+Tab': ['Tab', 'Tab', 9], Enter: ['Enter', 'Enter', 13], Space: [' ', 'Space', 32], Escape: ['Escape', 'Escape', 27], ArrowUp: ['ArrowUp', 'ArrowUp', 38], ArrowDown: ['ArrowDown', 'ArrowDown', 40], ArrowLeft: ['ArrowLeft', 'ArrowLeft', 37], ArrowRight: ['ArrowRight', 'ArrowRight', 39], Home: ['Home', 'Home', 36], End: ['End', 'End', 35], PageUp: ['PageUp', 'PageUp', 33], PageDown: ['PageDown', 'PageDown', 34] };
+      if (!Object.hasOwn(keys, key)) throw new Error('Unsupported native journey key.');
+      const [value, code, virtualKey] = keys[key];
+      const parameters = { key: value, code, windowsVirtualKeyCode: virtualKey, nativeVirtualKeyCode: virtualKey, modifiers: key === 'Shift+Tab' ? 8 : 0 };
+      await cdp.send('Input.dispatchKeyEvent', { ...parameters, type: 'keyDown', ...(key === 'Enter' ? { text: '\r' } : key === 'Space' ? { text: ' ' } : {}) });
+      await cdp.send('Input.dispatchKeyEvent', { ...parameters, type: 'keyUp' });
+    },
     inspect: () => evaluate(SEMANTIC_INSPECTION_SOURCE),
     activate: (id) => evaluate(`(${ACTIVATE_SOURCE})(${JSON.stringify(id)})`),
     input: (id, value, options) => evaluate(
@@ -376,7 +379,7 @@ async function devtoolsEndpoint(profile, child) {
   const path = resolve(profile, "DevToolsActivePort");
   const deadline = Date.now() + 15_000;
   while (Date.now() <= deadline) {
-    if (child.exitCode !== null) {
+    if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`Chrome exited before DevTools started. ${child.clankStderr?.() ?? ""}`.trim());
     }
     try {
@@ -534,8 +537,19 @@ async function writeBinaryAtomically(path, contents) {
   }
 }
 
-function onceExit(child) {
-  return child.exitCode !== null ? Promise.resolve() : new Promise((resolvePromise) => child.once("exit", resolvePromise));
+async function stopChrome(child) {
+  const live = () => child.exitCode === null && child.signalCode === null;
+  if (!live()) return;
+  const stoppedWithin = milliseconds => new Promise(resolvePromise => {
+    if (!live()) { resolvePromise(true); return; }
+    const finish = () => { clearTimeout(timer); child.removeListener("exit", finish); resolvePromise(!live()); };
+    const timer = setTimeout(finish, milliseconds);
+    child.once("exit", finish);
+  });
+  child.kill("SIGTERM");
+  if (await stoppedWithin(2_000)) return;
+  child.kill("SIGKILL");
+  if (!await stoppedWithin(2_000)) throw new Error("Chrome did not stop before profile cleanup.");
 }
 
 function wait(milliseconds) {
@@ -547,6 +561,14 @@ const FIND_SOURCE = `(id) => {
     if (element.getAttribute('data-clank-id') === id || element.id === id) return element;
   }
   return null;
+}`;
+
+const FOCUS_SOURCE = `(id) => {
+  const nodes = [...document.querySelectorAll('[data-clank-id],[id]')].filter(element => (element.getAttribute('data-clank-id') || element.id) === id);
+  if(nodes.length !== 1) return false;
+  const element=nodes[0];
+  if(element.disabled || element.getAttribute('aria-disabled') === 'true' || element.closest('[inert],[hidden],[aria-hidden="true"]') || !element.getClientRects().length || typeof element.focus !== 'function')return false;
+  element.focus(); return document.activeElement===element;
 }`;
 
 const ACTIVATE_SOURCE = `(id) => {
@@ -629,6 +651,11 @@ const SEMANTIC_INSPECTION_SOURCE = `(() => {
     const expanded = element.getAttribute('aria-expanded');
     if (expanded === 'true' || expanded === 'false') node.expanded = expanded === 'true';
     if (type === 'checkbox' || type === 'radio') node.checked = Boolean(element.checked);
+    else {
+      const checked = element.getAttribute('aria-checked');
+      if (checked === 'true' || checked === 'false') node.checked = checked === 'true';
+      else if (checked === 'mixed') node.checked = 'mixed';
+    }
     if (tag === 'select' && element.multiple) node.value = [...element.selectedOptions].map(option => option.value);
     else if (!['password','file','hidden'].includes(type) && 'value' in element) node.value = String(element.value).slice(0, 1024);
     if (tag === 'a' && element.href) node.href = element.href;

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, access, chmod } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -95,4 +95,19 @@ test("journey CLI refuses a loopback endpoint that returns a network WebSocket",
     await new Promise((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise()));
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('journey CLI detects terminated startup and removes its own profile', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'clank-journey-startup-')), browser = join(root, 'browser.mjs'), journal = join(root, 'profile.txt'), journey = join(root, 'journey.json');
+  await writeFile(journey, JSON.stringify({ name: 'Startup failure', steps: [{ expect: { text: 'Ready' } }] }));
+  await writeFile(browser, '#!'+process.execPath+'\nimport { writeFileSync } from "node:fs";\nconst profile = process.argv.find(value => value.startsWith("--user-data-dir=")).slice(16);\nwriteFileSync('+JSON.stringify(journal)+', profile);\nprocess.kill(process.pid, "SIGTERM");\n');
+  await chmod(browser, 0o700);
+  try {
+    const started = Date.now(), result = await command(['journey', journey, '--browser='+(process.platform === 'win32' ? process.execPath : browser), '--json']);
+    const message = JSON.parse(result.stderr.trim()).error.message;
+    assert.equal(result.status, 1); assert.match(message, /Chrome exited before DevTools started/);
+    assert.ok(Date.now() - started < 8000, 'signal termination must be noticed before the 15-second startup timeout');
+    const profile = process.platform === 'win32' ? message.match(/--user-data-dir=([^\r\n]+)/)?.[1] : await readFile(journal, 'utf8'); assert.match(profile, /clank-journey-/);
+    await assert.rejects(access(profile), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

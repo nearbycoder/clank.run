@@ -1,6 +1,10 @@
 import type { AgentNode, AgentSurface } from "./ai.ts";
 
 export interface JourneyExpectation {
+  /** Exact semantic ID of the currently focused native element. */
+  focused?: string;
+  /** Require the document's measured scroll width to fit its client width. */
+  noHorizontalOverflow?: true;
   /** Stable agentId or native element ID that must be present. */
   target?: string;
   /** Exact path and query, or an absolute URL on the configured application origin. */
@@ -27,10 +31,15 @@ export interface JourneySecretReference {
 
 export type JourneyInputValue = string | number | boolean | readonly string[] | JourneySecretReference;
 
+export type JourneyKey = "Tab" | "Shift+Tab" | "Enter" | "Space" | "Escape"
+  | "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "Home" | "End" | "PageUp" | "PageDown";
+
 export type JourneyStep =
   | Readonly<{ visit: string }>
   | Readonly<{ input: { target: string; value: JourneyInputValue } }>
   | Readonly<{ activate: string }>
+  | Readonly<{ focus: string }>
+  | Readonly<{ press: JourneyKey }>
   | Readonly<{ expect: JourneyExpectation }>
   | Readonly<{ wait: JourneyExpectation & { timeoutMs?: number } }>
   | Readonly<{ inspect: string }>;
@@ -54,6 +63,12 @@ export interface JourneyInput {
 }
 
 export interface JourneyDriver {
+  /** Native focus; optional for legacy journeys. */
+  focus?(id: string): boolean | Promise<boolean>;
+  /** Native browser input dispatch. Synthetic KeyboardEvent dispatch is insufficient. */
+  press?(key: JourneyKey): void | Promise<void>;
+  focusedTarget?(): string | undefined | Promise<string | undefined>;
+  layout?(): Readonly<{ clientWidth: number; scrollWidth: number }> | Promise<Readonly<{ clientWidth: number; scrollWidth: number }>>;
   navigate(url: string): void | Promise<void>;
   currentUrl(): string | Promise<string>;
   inspect(): readonly AgentNode[] | Promise<readonly AgentNode[]>;
@@ -71,7 +86,7 @@ export interface JourneyDriver {
 
 export interface JourneyStepReport {
   readonly index: number;
-  readonly kind: "visit" | "input" | "activate" | "expect" | "wait" | "inspect";
+  readonly kind: "visit" | "input" | "activate" | "focus" | "press" | "expect" | "wait" | "inspect";
   readonly target?: string;
   readonly label?: string;
   readonly status: "passed" | "failed";
@@ -106,6 +121,7 @@ export interface RunJourneyOptions {
 const MAX_STEPS = 100;
 const MAX_TEXT = 16 * 1024;
 const STATE_KEYS = new Set(["label", "role", "checked", "expanded", "disabled", "readonly", "invalid", "value"]);
+const JOURNEY_KEYS = new Set<JourneyKey>(["Tab", "Shift+Tab", "Enter", "Space", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
 
 /** Validates and snapshots a data-only browser journey contract. */
 export function defineJourney(input: JourneyInput): JourneyDefinition {
@@ -224,7 +240,21 @@ export function createDomJourneyDriver(
 ): JourneyDriver {
   if (!windowObject?.document || !surface) throw new TypeError("A browser window and agent surface are required.");
   return Object.freeze({
-    navigate(url) {
+    focus(id: string) {
+      const matches = [...windowObject.document.querySelectorAll<HTMLElement>('[data-clank-id],[id]')]
+        .filter(element => (element.getAttribute('data-clank-id') || element.id) === id);
+      if (matches.length !== 1 || flattenNodes(surface.inspect()).filter(node => node.id === id && !node.disabled).length !== 1) return false;
+      const target = matches[0]!;
+      if (target.closest('[inert],[hidden],[aria-hidden="true"]') || typeof target.focus !== 'function') return false;
+      target.focus(); return windowObject.document.activeElement === target;
+    },
+    focusedTarget: () => {
+      const element = windowObject.document.activeElement;
+      return element?.getAttribute('data-clank-id') || element?.id || undefined;
+    },
+    layout: () => ({ clientWidth: windowObject.document.documentElement.clientWidth,
+      scrollWidth: Math.max(windowObject.document.documentElement.scrollWidth, windowObject.document.body?.scrollWidth ?? 0) }),
+    navigate(url: string) {
       const target = new URL(url, windowObject.location.href);
       if (target.href === windowObject.location.href) return;
       windowObject.history.pushState({}, "", target.href);
@@ -232,8 +262,8 @@ export function createDomJourneyDriver(
     },
     currentUrl: () => windowObject.location.href,
     inspect: () => surface.inspect(),
-    activate: (id) => surface.activate(id),
-    input: (id, value) => surface.input(id, value),
+    activate: (id: string) => surface.activate(id),
+    input: (id: string, value: string | number | boolean | readonly string[]) => surface.input(id, value),
     visibleText: () => windowObject.document.body?.innerText ?? "",
     async settle() {
       await new Promise<void>((resolve) => windowObject.requestAnimationFrame(() =>
@@ -253,6 +283,16 @@ async function executeStep(
   if ("visit" in step) {
     await navigateWithinOrigin(driver, new URL(step.visit, base).href, base.origin, signal);
     return undefined;
+  }
+  if ("focus" in step) {
+    if (!driver.focus) throw new Error("Journey driver does not support native focus.");
+    if (!await abortable(signal, driver.focus(step.focus))) throw new Error(`Focus target ${step.focus} is unavailable.`);
+    await abortable(signal, driver.settle()); return undefined;
+  }
+  if ("press" in step) {
+    if (!driver.press) throw new Error("Journey driver does not support native keyboard input.");
+    await abortable(signal, driver.press(step.press));
+    await abortable(signal, driver.settle()); return undefined;
   }
   if ("input" in step) {
     const secret = isSecretReference(step.input.value);
@@ -296,6 +336,17 @@ async function expectationMismatch(
   base: URL,
   signal?: AbortSignal,
 ): Promise<string | null> {
+  if (expectation.focused !== undefined) {
+    if (!driver.focusedTarget) throw new Error("Journey driver does not report native focus.");
+    if (await abortable(signal, driver.focusedTarget()) !== expectation.focused) return `Expected native focus on ${expectation.focused}.`;
+  }
+  if (expectation.noHorizontalOverflow) {
+    if (!driver.layout) throw new Error("Journey driver does not report document layout.");
+    const layout = await abortable(signal, driver.layout());
+    if (!layout || !Number.isSafeInteger(layout.clientWidth) || layout.clientWidth < 1 || layout.clientWidth > 10000000
+      || !Number.isSafeInteger(layout.scrollWidth) || layout.scrollWidth < 0 || layout.scrollWidth > 10000000) throw new Error("Journey driver returned invalid document measurements.");
+    if (layout.scrollWidth > layout.clientWidth) return "Document has horizontal overflow.";
+  }
   if (expectation.url !== undefined) {
     const expected = new URL(expectation.url, base);
     if (expected.origin !== base.origin) return "Journey URL expectations must stay on the application origin.";
@@ -349,10 +400,15 @@ function normalizeStep(raw: JourneyStep, index: number): JourneyStep {
   }
   const keys = Object.keys(raw);
   if (keys.length !== 1) throw new TypeError(`Journey step[${index}] must contain exactly one operation.`);
-  if ("visit" in raw) return Object.freeze({ visit: relativeLocation(raw.visit, `journey step[${index}].visit`) });
-  if ("activate" in raw) return Object.freeze({ activate: identifier(raw.activate, `journey step[${index}].activate`) });
-  if ("inspect" in raw) return Object.freeze({ inspect: text(raw.inspect, `journey step[${index}].inspect`, 128) });
-  if ("input" in raw) {
+  if (Object.hasOwn(raw, "focus") && "focus" in raw) return Object.freeze({ focus: identifier(raw.focus, `journey step[${index}].focus`) });
+  if (Object.hasOwn(raw, "press") && "press" in raw) {
+    if (!JOURNEY_KEYS.has(raw.press)) throw new TypeError(`Journey step[${index}].press requires a supported native key.`);
+    return Object.freeze({ press: raw.press });
+  }
+  if (Object.hasOwn(raw, "visit") && "visit" in raw) return Object.freeze({ visit: relativeLocation(raw.visit, `journey step[${index}].visit`) });
+  if (Object.hasOwn(raw, "activate") && "activate" in raw) return Object.freeze({ activate: identifier(raw.activate, `journey step[${index}].activate`) });
+  if (Object.hasOwn(raw, "inspect") && "inspect" in raw) return Object.freeze({ inspect: text(raw.inspect, `journey step[${index}].inspect`, 128) });
+  if (Object.hasOwn(raw, "input") && "input" in raw) {
     if (!raw.input || typeof raw.input !== "object" || Array.isArray(raw.input)) {
       throw new TypeError(`Journey step[${index}].input must be an object.`);
     }
@@ -363,8 +419,8 @@ function normalizeStep(raw: JourneyStep, index: number): JourneyStep {
       value,
     }) });
   }
-  if ("expect" in raw) return Object.freeze({ expect: normalizeExpectation(raw.expect, index, false) });
-  if ("wait" in raw) return Object.freeze({ wait: normalizeExpectation(raw.wait, index, true) });
+  if (Object.hasOwn(raw, "expect") && "expect" in raw) return Object.freeze({ expect: normalizeExpectation(raw.expect, index, false) });
+  if (Object.hasOwn(raw, "wait") && "wait" in raw) return Object.freeze({ wait: normalizeExpectation(raw.wait, index, true) });
   throw new TypeError(`Journey step[${index}] has an unknown operation.`);
 }
 
@@ -373,10 +429,12 @@ function normalizeExpectation(raw: unknown, index: number, wait: boolean): any {
     throw new TypeError(`Journey step[${index}] expectation must be an object.`);
   }
   const source = raw as Record<string, unknown>;
-  exactKeys(source, wait ? ["target", "url", "text", "state", "timeoutMs"] : ["target", "url", "text", "state"], `journey step[${index}] expectation`);
-  if (source.target === undefined && source.url === undefined && source.text === undefined) {
-    throw new TypeError(`Journey step[${index}] expectation requires target, url, or text.`);
+  exactKeys(source, wait ? ["target", "url", "text", "state", "focused", "noHorizontalOverflow", "timeoutMs"] : ["target", "url", "text", "state", "focused", "noHorizontalOverflow"], `journey step[${index}] expectation`);
+  if (source.target === undefined && source.url === undefined && source.text === undefined && source.focused === undefined && source.noHorizontalOverflow === undefined) {
+    throw new TypeError(`Journey step[${index}] expectation requires a semantic, URL, text, focus or layout assertion.`);
   }
+  const focused = source.focused === undefined ? undefined : identifier(source.focused, `journey step[${index}].focused`);
+  if (source.noHorizontalOverflow !== undefined && source.noHorizontalOverflow !== true) throw new TypeError("Journey noHorizontalOverflow must be true.");
   const target = source.target === undefined ? undefined : identifier(source.target, `journey step[${index}].target`);
   const url = source.url === undefined ? undefined : location(source.url, `journey step[${index}].url`);
   const expectedText = source.text === undefined ? undefined : text(source.text, `journey step[${index}].text`, MAX_TEXT);
@@ -397,6 +455,8 @@ function normalizeExpectation(raw: unknown, index: number, wait: boolean): any {
     state = Object.freeze(state);
   }
   return Object.freeze({
+    ...(focused ? { focused } : {}),
+    ...(source.noHorizontalOverflow ? { noHorizontalOverflow: true } : {}),
     ...(target ? { target } : {}),
     ...(url ? { url } : {}),
     ...(expectedText ? { text: expectedText } : {}),
@@ -418,6 +478,8 @@ function normalizeViewport(value: JourneyInput["viewport"]): Readonly<{ width: n
 }
 
 function stepSummary(step: JourneyStep): Pick<JourneyStepReport, "kind" | "target" | "label"> {
+  if ("focus" in step) return { kind: "focus", target: step.focus };
+  if ("press" in step) return { kind: "press", label: step.press };
   if ("visit" in step) return { kind: "visit", label: step.visit };
   if ("input" in step) return { kind: "input", target: step.input.target };
   if ("activate" in step) return { kind: "activate", target: step.activate };

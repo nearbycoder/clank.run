@@ -1117,3 +1117,10 @@ The dashboard loads an account default, switches saved layouts, saves/renames or
 Clients expose `list`, `save({ name, widgets, id?, expectedVersion? })`, `remove(id, expectedVersion)`, and `setDefault(id | null)`. Each placement has an allowed stable `id`, `visible`, `span` (1 or 2), and `collapsed`. Saves reject unknown/duplicate widget IDs and stale versions. Only one layout can be default; setting it is atomic and may advance affected layout versions. Register at most 30 widgets; each account can save 20 layouts with unique case-insensitive names up to 80 characters.
 
 `validateDashboardLayout(value, widgetIds)` validates/detaches placements and appends missing widgets hidden. When the host registry changes, removed widget IDs are omitted from loaded arrangements and newly registered widgets start hidden until the user enables them. The host server/client registries should match. Layout changes remain drafts until saved; refresh and switching layouts explicitly replace those drafts. No separate dashboard, analytics, or layout storage service is needed.
+
+## Isolated component acceptance
+
+Use the optional [component harness](component-harness.md) to render the same typed fixture
+on the server and in a dedicated browser document. It releases effects, portals and owned
+cleanup across reset/selection, validates semantic UI part mappings and exports native Chrome
+keyboard/focus journeys at desktop and narrow widths.

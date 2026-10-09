@@ -320,6 +320,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Performance model](https://docs.clank.run/docs/performance)
 - [AI-first contracts](https://docs.clank.run/docs/ai-first)
 - [Conversational application building](https://docs.clank.run/docs/conversational-build)
+- [Interactive component specimens](docs/component-harness.md)
 - [Semantic real-browser journeys](https://docs.clank.run/docs/browser-journeys)
 - [Realtime presence, cursors, and signals](https://docs.clank.run/docs/collaboration)
 - [Privacy-first typed product analytics](https://docs.clank.run/docs/product-analytics)

@@ -5,7 +5,7 @@
   "baseCommit": "803154168141500e77db33b0daa37d3857d8e11b",
   "branch": "codex/search-browsing",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/263",
-  "status": "local-release-validation-passed",
+  "status": "merged",
   "acceptance": {
     "authorization": "Current session/scope and synchronous record policy precede scalar projection, scoring, snippets and facet values. Current source owner/scope, version and title/body must match the registered index. Denied records never contribute facet values/counts or global ranking statistics; existing whole-scope admission can include denied entries.",
     "facets": "At most eight declared typed scalar fields; missing optional values become null. AND equality filters preserve scalar types. Counts cover all authorized, filtered matching sources once, with explicit candidate/source-byte/distinct-value overflow rather than partial counts.",
@@ -163,5 +163,51 @@
     "docs-site/content-manifest.mjs": "ac0ed6845ba295215f9dcc4a6b124432f714a8c58f892b96a2b136cadb2968ee",
     "README.md": "6a1e26c9314cc8141e15ca5989c11834fad6e8748ef941c635fe24a2b9e1134c",
     "CHANGELOG.md": "19cfefb49aa1ee83e2d33c5ba4d5d8fe508bfe8b02c2a0f4ec9146afd6cb77af"
+  },
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/264",
+    "reviewedHead": "5d1a0f955265e4a8b835d7c9d6950a674bfc899c",
+    "authorCommentReview": 5466619136,
+    "independentApproval": false,
+    "mergeCommit": "22356868facd64e4470a11564b0b87122ed82659",
+    "hostedChecks": [
+      {
+        "id": 113702955441,
+        "name": "CodeQL",
+        "conclusion": "success",
+        "newAlerts": 0
+      },
+      {
+        "id": 113702450681,
+        "name": "Node 22.16",
+        "conclusion": "success"
+      },
+      {
+        "id": 113702450474,
+        "name": "Packaged-release conformance",
+        "conclusion": "success"
+      },
+      {
+        "id": 113702450459,
+        "name": "Semantic and packed consumer types",
+        "conclusion": "success"
+      },
+      {
+        "id": 113702450192,
+        "name": "Node 24",
+        "conclusion": "success"
+      },
+      {
+        "id": 113702449565,
+        "name": "JavaScript and TypeScript analysis",
+        "conclusion": "success"
+      }
+    ],
+    "unresolvedThreads": 0,
+    "requestedChanges": 0,
+    "protectedExpectedHeadMerge": true,
+    "mergeTreeMatchesReviewedHead": true,
+    "bothCheckoutsSynchronized": true,
+    "preexistingFilesPreserved": 23
   }
 }

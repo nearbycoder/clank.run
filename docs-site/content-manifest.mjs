@@ -28,6 +28,7 @@ export const groups = [
       ["performance", "docs/performance.md"],
       ["localization", "docs/localization.md"],
       ["development-tools", "docs/development-tools.md"],
+      ["component-harness", "docs/component-harness.md"],
       ["api-reference", "docs/api-reference.md"]
     ]
   },

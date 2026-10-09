@@ -177,9 +177,9 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 }
 // The forty-feature release adds reviewed public APIs, declarations, internal
 // workers, and CLI helpers while preserving the zero-dependency contract.
-// Retention administration and its private app/platform controller add four files.
-// Proposal #261 preserves the existing byte ceiling and allows no file headroom.
-if ((packResult?.entryCount ?? 0) > 399) fail("Published package unexpectedly exceeds 399 files.");
+// Proposal #265 adds exactly the optional component harness module/declaration.
+// The 6 MiB byte ceiling remains unchanged; no file headroom is reserved.
+if ((packResult?.entryCount ?? 0) > 401) fail("Published package unexpectedly exceeds 401 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 

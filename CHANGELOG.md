@@ -4,6 +4,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add optional typed component specimens with SSR/hydration, owned reset/disposal, common UI
+  contracts, native controls and deterministic assertion exports. Extend browser journeys with
+  native focus/key input, focus/layout assertions and ARIA checked-state inspection. Wait for
+  owned Chrome termination and handle transient profile-removal races during journey cleanup.
+
 - Add opt-in authorized search facets, deterministic revision-pinned result paging and
   account-owned saved searches with fenced edits, exact latest retries and compact retired keys.
 - Validate object-schema fields as own properties and preserve explicitly declared literal
