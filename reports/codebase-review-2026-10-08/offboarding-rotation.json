@@ -1,0 +1,121 @@
+{
+  "maintenance": "organization-offboarding-credential-fencing",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/291",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/292",
+  "status": "verified-awaiting-final-hosted-checks-and-protected-merge",
+  "roadmapFeatureIncrement": 0,
+  "contract": {
+    "scope": "Publish complete organization/provider offboarding fingerprint inventory in the existing schema/policy/projection transaction",
+    "checks": "Require current organization, exact issuer and SHA-256 credential fingerprint before asynchronous verification and again inside revocation transaction",
+    "retiredController": "Rotated credentials, removed providers and changed issuers return 401 without tombstone/audit or account disable",
+    "persistence": "Only SHA-256 fingerprints; no plaintext offboarding secret stored",
+    "rollback": "Failed initialization rolls back publication with all projection changes; compatible binary plus verified database/config snapshot required"
+  },
+  "source": {
+    "head": "5309f9dcfccf10ce4f84d5a8d60354cdeecdd68c",
+    "tree": "cdc7e2602976a110aaf70887a3d284d347b5db91",
+    "archiveSha256": "ce37d7175e9639b610754f7cf6d3000a8c5a64239b8a8d0bf343480634f98549",
+    "files": 1039,
+    "integratedMain": "1232317b74dd0f384b5416604cd4544b717d2049",
+    "postProofChanges": "Report metadata only; 1,037 non-report source inputs remain hash-equal"
+  },
+  "validation": {
+    "completeGates": [
+      {
+        "node": 26,
+        "counts": {
+          "tests": 1988,
+          "pass": 1985,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.81,
+          "branches": 80.73,
+          "functions": 90.01
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "d371bb3028a0826a98d0be09b6fb4defcc108a358f3c6d6eb89cee46c079fb77"
+      },
+      {
+        "node": 22,
+        "counts": {
+          "tests": 1988,
+          "pass": 1985,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.8,
+          "branches": 80.75,
+          "functions": 90.05
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "6967b2b0d8e3a60e3a3de927183c071d8731a663f0cfbd3184b1ee1faab61131"
+      }
+    ],
+    "focused": {
+      "reported": 43,
+      "passed": 43,
+      "failed": 0,
+      "rawSha256": "bb4620e1ccb495be9bb0e5e8711798a11bef3462eadb3f6141e756d35f913c3a"
+    },
+    "types": {
+      "existingDiagnostics": 159,
+      "newDiagnostics": 0,
+      "baselineUnchanged": 163,
+      "packedFixtures": 29,
+      "openApiPassed": true,
+      "rawSha256": "75e2dbe8553b895060da028eb4a02951dc2aa94c49fc4466b62f250e303effc7"
+    },
+    "package": {
+      "files": 405,
+      "unpackedBytes": 6194050,
+      "ceiling": 6291456,
+      "remainingBytes": 97406,
+      "dependencies": 0
+    },
+    "docs": {
+      "build": true,
+      "doctor": {
+        "passed": 6,
+        "warnings": 1,
+        "failed": 0
+      },
+      "offlineArtifact": "f50bcf5fc79f99944bf6b6c67f218b1026d6be59671508e4a02c0f5e03f180cf",
+      "httpMcp": true,
+      "desktopActualParagraph": "offboarding-docs-desktop-01.png",
+      "phoneActualParagraph": "offboarding-docs-phone-02.png",
+      "uploaded": false
+    }
+  },
+  "retainedFailures": [
+    {
+      "proof": "Old live controller accepted the retired credential with 200 and one permanent tombstone",
+      "fix": "Current persisted fingerprint checked at admission and revocation"
+    },
+    {
+      "proof": "Corrected actual held-body reproduction returned 200 before the fix; now 401 with no tombstone or audit",
+      "fix": "Repeat fence after awaited HTTP body read inside the write transaction"
+    },
+    {
+      "setup": "First held-body probe reached host-policy refusal, first type command omitted required external compiler paths, and first phone capture clicked stale responsive state",
+      "resolution": "Explicit allowed proxy host, pinned compiler arguments, refreshed physical phone guide; these are not claimed as acceptance proofs"
+    }
+  ],
+  "evidenceIndexSha256": "6450620802eb78dfb820273a0d855e6168b7e44f6c1a5794d95207a4e972a1a0",
+  "review": {
+    "independent": false,
+    "freshHostedChecks": "Required at final metadata head",
+    "newCodeQlAlerts": "Must be zero",
+    "unresolvedThreads": "Must be zero",
+    "merge": "Normal protected expected-head squash, followed by exact tree equality and both-checkout sync"
+  },
+  "limitations": [
+    "Complete operator-owned provider inventory must be published for the shared store",
+    "An old binary ignores the new fingerprint fence",
+    "No external identity-provider or production host certification claimed"
+  ]
+}
