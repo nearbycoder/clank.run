@@ -18,11 +18,17 @@ Twenty-four packed consumer fixtures pass with 159 existing source diagnostics a
 unchanged 163 allowance. Documentation builds, offline artifact verification and all twelve
 HTTP/agent endpoint checks pass. Nine real provider authority/expiry cases pass, including
 current certification, exact bytes, independent state, controller restart, four staged/queued
-revocations, actual certificate expiry and verified cleanup. The health/restart suite is being
-replayed against the guardian readiness fix. A delayed real guardian regression passes; daemon
+revocations, actual certificate expiry and verified cleanup. All eight health/restart cases
+also pass against the guardian readiness fix. A delayed real guardian regression passes; daemon
 fixture PID records now update atomically, and an owned orphan from the earlier truncated record
-was stopped after verifying its exact command, directory and process group. Fresh complete Node
-22/26 and hosted gates, review and merge remain pending; feature 02 is not counted as delivered.
+was stopped after verifying its exact command, directory and process group. The actual Docker
+controller SIGKILL/restart regression passes. Complete Node 26 verification passes with 1,886
+reported / 1,883 passed / zero failed or cancelled / three existing privileged skips; coverage
+91.80/80.39/90.08. Minimum Node passes every test and coverage; its remaining conformance/security
+phases pass separately after supplying npm on PATH. Hosted Node 22/24, types and conformance
+pass at the initial PR head, but CodeQL finds two fixture code-sanitization alerts. The fixture
+now loads parameters as JSON; all twelve affected minimum-Node tests pass. Fresh fixed-head
+hosted security checks, review and merge remain pending; feature 02 is not counted as delivered.
 See [promotion acceptance](environment-promotions.json) for evidence and failed diagnostic runs.
 The next persistent-channel contract is proposed in [issue #276](https://github.com/nearbycoder/clank.run/issues/276).
 

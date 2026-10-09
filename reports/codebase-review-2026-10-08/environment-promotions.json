@@ -4,12 +4,21 @@
   "baseCommit": "8b22c32d8dc05567d87ad4a9b95219818684fdd9",
   "branch": "codex/environment-promotion",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/275",
-  "status": "acceptance-and-delivery-in-progress",
+  "status": "runtime-acceptance-complete-hosted-security-review-pending",
   "implementation": "Persistent versioned development/staging/production bindings and exact-upload promotion with current authority, independent target secrets/data/buckets, migration policy, atomic acceptance receipts, interruption fences and verified local/certified co-located provider recovery. API, CLI and dashboard share the contract.",
   "validation": {
     "localContracts": {
-      "newTests": 12,
-      "scope": "Real local runtime, database, original upload, independent target state, production administration, revoked authority, deletion/configuration lease, actual controller SIGKILL, snapshots and CLI. Fresh complete gates remain pending."
+      "status": "passed",
+      "tests": 12,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "node": "22.16.0",
+      "scope": "All real local promotion contracts, including the fixture-only CodeQL remediation, pass on the unchanged runtime.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-codeql-fixture-focused-22ad3d6b218f74b8e39ef8ef0a03bdaa6260f5e0d9a0ba346cf04243f8297076.log",
+        "sha256": "22ad3d6b218f74b8e39ef8ef0a03bdaa6260f5e0d9a0ba346cf04243f8297076"
+      }
     },
     "providerAuthorityExpiry": {
       "status": "passed",
@@ -66,8 +75,52 @@
       }
     },
     "providerHealthRestart": {
-      "status": "fresh-replay-running",
-      "scope": "Earlier eight actual cases passed; rerunning against the guardian readiness fix with bounded identical-request retries."
+      "status": "passed",
+      "cases": [
+        {
+          "name": "real current Docker/XFS host certificate",
+          "status": "passed",
+          "reportId": "4b7f0a4f-96d5-439b-a4c2-e5f19d7bf440",
+          "policyDigest": "fface2afd6bd11b44eba6665ab9cbf6cb192397a458bc349ef66d3d39720f789"
+        },
+        {
+          "name": "actual HTTP provider promotion preserves original bytes, non-root runtime and independent data/secrets/buckets",
+          "status": "passed",
+          "digest": "bcba60d8bdf8b04992b6e76cd1413cb675089907126e5e5039d9256296835b70"
+        },
+        {
+          "name": "accepted exact replay across actual controller restart",
+          "status": "passed"
+        },
+        {
+          "name": "actual pending provider operation resumes the same generation after controller restart and rejects a new-key bypass",
+          "status": "passed"
+        },
+        {
+          "name": "real failed Docker candidate health rolls back journaled writes and restores prior provider runtime",
+          "status": "passed"
+        },
+        {
+          "name": "actual host policy change invalidates the certificate before staging another release",
+          "status": "passed"
+        },
+        {
+          "name": "provider code-only proof rejects a changed migration manifest before staging",
+          "status": "passed"
+        },
+        {
+          "name": "owned provider stops, Docker containers/network/nft table retire and XFS quota usage/limits clear",
+          "status": "passed"
+        }
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/provider-health-restart-final-2e064ed3bc31eb94643a9a447014a95d7fbbf2d9d79d3e549fe0bdc0c3ed3617.json",
+        "sha256": "2e064ed3bc31eb94643a9a447014a95d7fbbf2d9d79d3e549fe0bdc0c3ed3617"
+      },
+      "log": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-guest-18-48c0df16b96de2263faa433f6090c6a88b7ab2c799ac8f3b0506e79a920ab2de.log",
+        "sha256": "48c0df16b96de2263faa433f6090c6a88b7ab2c799ac8f3b0506e79a920ab2de"
+      }
     },
     "runtimeGuardianRegression": {
       "status": "passed",
@@ -138,8 +191,63 @@
       }
     },
     "completeRelease": {
-      "status": "pending",
-      "scope": "Fresh Node 22 and Node 26 complete gates are required after the guardian and fixture fixes; earlier successful Node 26 gate predates the guardian change."
+      "node26": {
+        "status": "passed",
+        "node": "26.10.0",
+        "reported": 1886,
+        "passed": 1883,
+        "failed": 0,
+        "cancelled": 0,
+        "skipped": 3,
+        "coverage": {
+          "lines": 91.8,
+          "branches": 80.39,
+          "functions": 90.08
+        },
+        "documentation": "passed",
+        "conformance": "passed",
+        "dependencyContract": "passed",
+        "securityTreePackageHistory": "passed",
+        "evidence": {
+          "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-release-gate-18-ea230ef614a66ff5df580de06ca968f58af8a057e510635f80db97b78ced0f96.log",
+          "sha256": "ea230ef614a66ff5df580de06ca968f58af8a057e510635f80db97b78ced0f96"
+        },
+        "scope": "Complete command passed before the fixture-only CodeQL parameter extraction. Runtime, GUI and public package bytes are unchanged; all 12 affected minimum-Node tests pass afterward. Fresh hosted checks are still required."
+      },
+      "minimumNode": {
+        "status": "all-phases-passed",
+        "node": "22.16.0",
+        "reported": 1886,
+        "passed": 1883,
+        "failed": 0,
+        "cancelled": 0,
+        "skipped": 3,
+        "coverage": {
+          "lines": 91.79,
+          "branches": 80.41,
+          "functions": 90.11
+        },
+        "evidence": {
+          "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-release-gate-17-5bcb4cf45301a242d2d5ce0886255049f017a18d06a438dca8bec458bf0f13d9.log",
+          "sha256": "5bcb4cf45301a242d2d5ce0886255049f017a18d06a438dca8bec458bf0f13d9"
+        },
+        "conformanceAndSecurity": {
+          "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-minimum-conformance-846310d61784cfa3c6ed947eed63e9a3ea6952d1ae8ed179d791c34daaa8dd64.log",
+          "sha256": "846310d61784cfa3c6ed947eed63e9a3ea6952d1ae8ed179d791c34daaa8dd64"
+        },
+        "scope": "Builds, all tests, coverage and docs passed. The combined command then failed because this guest Node installation lacked npm on PATH; remaining packed conformance and security phases pass separately with the correct tooling path. This is not represented as one successful command. Hosted full Node 22 passes at the original PR head; fresh checks follow the fixture-only fix."
+      },
+      "skipScope": "Three existing opt-in privileged tests; the separate actual Docker controller-crash case and both provider drivers pass without skips."
+    },
+    "realDockerControllerCrash": {
+      "status": "passed",
+      "tests": 1,
+      "node": "22.16.0",
+      "scope": "Actual non-root controller with its primary Docker socket group and no inherited capabilities: SIGKILL, immediate startup barrier, exact old-container removal, candidate writes stopped before prior-worker admission, ingress and all private fences cleared.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-guardian-real-docker-quiet-29062e056cda8e42ddf16961d7eef29553e24cad6d9ae3539062e6d51d63576d.log",
+        "sha256": "29062e056cda8e42ddf16961d7eef29553e24cad6d9ae3539062e6d51d63576d"
+      }
     }
   },
   "reviewFixes": [
@@ -158,12 +266,16 @@
     {
       "problem": "The fake-daemon test truncated a PID record during shutdown and its cleanup could lose an owned writer.",
       "fix": "Publish PID records atomically; verified private operator recovery stops only the identified fixture process group, and the fresh focused test passes."
+    },
+    {
+      "problem": "Hosted CodeQL reported two fixture code-sanitization alerts.",
+      "fix": "Keep the promotion application source constant and load label/stop parameters from a JSON data file. All 12 actual minimum-Node promotion tests pass afterward; fresh CodeQL is required."
     }
   ],
   "diagnosticLimits": [
     "The initial minimum gate exposed the guardian startup race. Subsequent Node 22/26 runs passed the canary but failed the fake-daemon cleanup fixture or its occupied port; those runs are not claimed as green complete gates.",
-    "Additional real Docker crash attempts under concurrent load failed before proving the intended crash boundary. A separate idle-guest replay is pending.",
-    "A healthy provider may correctly return 503 while converging; the driver retries the unchanged request within a bounded deadline. Runtime activation/backoff limits are unchanged."
+    "A healthy provider may correctly return 503 while converging; the driver retries the unchanged request within a bounded deadline. Runtime activation/backoff limits are unchanged.",
+    "The real Docker crash replay passes on the idle guest after the earlier concurrent attempts failed before reaching their intended crash boundary."
   ],
   "ownedFixtureRecovery": {
     "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-guardian-fixture-recovery-9db0ff74e37b97f484debc914488c48b551e85323c866e0f1b0ec67dffe1252d.json",
@@ -209,11 +321,12 @@
     "tests/platform-console-log-stream.test.mjs": "110d1309666b2e37b45d85224426c28cf16107815158688b3a170a4ca7a98512",
     "tests/platform-console-refresh.test.mjs": "286c61afb29daff60428abd7e3da583c115de8174b34ea295779666c2660daa7",
     "tests/platform-console-traffic-table.test.mjs": "bdc51746b8597706bd108549183d9f969e296d21cd729ec1dc072f3233b4902c",
-    "tests/platform-environments.test.mjs": "22e321219514a7eeaef77d4b9f0bb4d2555c022be48548b2014e6de6be659b8b",
+    "tests/platform-environments.test.mjs": "102f1e5e6a7b77eba8446fb740f26d0baf7e5deecfc7ecdac1c648a804e18a04",
     "tests/platform-guardian-failure.test.mjs": "8534decf9cc3eaff7453510337973a6edbd6ff67497c4cfac0758ebfbc5e8ffa",
     "tests/platform.test.mjs": "7fc64a86a82931bd5b80e0e29da6d554412a0334fd42c0719729f36268d4ca7b",
     "tests/resilience.test.mjs": "5db05b919808cff2695d8dfe89e544628dfcc3a4f91fd18cf6934fb03b0e8d57",
-    "type-tests/environment-promotion.ts": "3efaca7fbaf940bcc3e5ac58a51a8156a7bd72365d907f05ac86177134eab16e"
+    "type-tests/environment-promotion.ts": "3efaca7fbaf940bcc3e5ac58a51a8156a7bd72365d907f05ac86177134eab16e",
+    "tests/fixtures/platform-promotion-application.mjs": "1a739fd160168b6f50d5fc4e456c44301a20fc548af35197c3bbdc6d99c8e954"
   },
   "preservedExistingFiles": 23,
   "roadmap": {
@@ -223,7 +336,10 @@
   },
   "nextProposal": "https://github.com/nearbycoder/clank.run/issues/276",
   "delivery": {
-    "status": "not-yet-opened",
+    "status": "draft-review-open",
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/277",
+    "originalHead": "e1559238f5da3a73d1ef36cc616086b35f060afa",
+    "originalHostedChecks": "Node 22, Node 24, consumer types and conformance passed; CodeQL had two medium fixture alerts. Final fixed-head results remain required.",
     "independentApproval": false
   }
 }

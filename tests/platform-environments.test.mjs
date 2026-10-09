@@ -91,30 +91,8 @@ async function fixture(t, subprocess = false) {
     const source = join(root, label); await mkdir(join(source, 'dist'), { recursive: true }); await mkdir(join(source, 'migrations'));
     await writeFile(join(source, 'migrations/0001_rows.sql'), "CREATE TABLE sample(value TEXT NOT NULL); INSERT INTO sample VALUES('initial');");
     if (additional) await writeFile(join(source, 'migrations/0002_change.sql'), additional);
-    await writeFile(join(source, 'dist/server.mjs'), `
-      import { createServer } from 'node:http'; import { DatabaseSync } from 'node:sqlite';
-      import { existsSync, writeFileSync } from 'node:fs';
-      const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH);
-      const server=createServer(async (request,response)=>{
-        if(request.url==='/healthz'){
-          if(${JSON.stringify(label)}==='v2'&&process.env.HEALTH_HOLD&&existsSync(process.env.HEALTH_HOLD)){
-            writeFileSync(process.env.HEALTH_ENTERED,'ready');
-            while(existsSync(process.env.HEALTH_HOLD))await new Promise(resolve=>setTimeout(resolve,10));
-          }
-          response.statusCode=process.env.FAIL_HEALTH==='1'&&${JSON.stringify(label)}==='v2'?503:200;response.end('health');return;}
-        if(request.url.startsWith('/write/')) db.prepare('UPDATE sample SET value=?').run(decodeURIComponent(request.url.slice(7)));
-        response.setHeader('content-type','application/json');
-        response.end(JSON.stringify({label:${JSON.stringify(label)},value:db.prepare('SELECT value FROM sample').get().value,
-          secret:process.env.ENVIRONMENT_VALUE,bucketPrefix:process.env.CLANK_BUCKET_PREFIX}));
-      }).listen(Number(process.env.PORT),process.env.HOST);
-      if(${JSON.stringify(stopWrite)})process.on('SIGTERM',()=>{db.prepare('UPDATE sample SET value=?').run(${JSON.stringify(stopWrite)});server.close(()=>process.exit(0));});
-      const stopBarrier=${JSON.stringify(stopBarrier)};
-      if(stopBarrier)process.on('SIGTERM',async()=>{
-        writeFileSync(stopBarrier.entered,'stopping');
-        while(existsSync(stopBarrier.hold))await new Promise(resolve=>setTimeout(resolve,10));
-        server.close(()=>process.exit(0));
-      });
-    `);
+    await writeFile(join(source, 'dist/server.mjs'), await readFile(new URL('./fixtures/platform-promotion-application.mjs', import.meta.url)));
+    await writeFile(join(source, 'dist/fixture-config.json'), JSON.stringify({ label, stopWrite, stopBarrier }));
     const bytes = await createDeploymentBundle(source, parseDeploymentConfig({ version: 1, entry: 'dist/server.mjs', include: ['dist', 'migrations'],
       database: { path: 'app.sqlite', migrations: 'migrations', ...settings }, health: { path: '/healthz', timeoutMs: 5000 }, env: {} }));
     return { bytes, digest: await deploymentDigest(bytes) };
