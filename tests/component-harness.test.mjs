@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { s } from '../dist/ai.js';
 import { effect, signal, onCleanup } from '../dist/core.js';
 import { h } from '../dist/dom.js';
@@ -84,7 +86,7 @@ test('malformed asynchronous factory and manifest results are rejected without e
 
 test('SSR escapes fixture values and bounds output while releasing its instance', async () => {
   const escaped = defineComponentSpecimen(input({ value: { label: '<script>window.secret=1</script>', count: 0 } }));
-  const output = await renderComponentSpecimen(escaped); assert.match(output.html, /&lt;script&gt;/); assert.doesNotMatch(output.html, /<script>/);
+  const output = await renderComponentSpecimen(escaped); assert.match(output.html, /&lt;script&gt;/); assert.doesNotMatch(output.html, /<script>/i);
   let disposed = 0;
   const huge = defineComponentSpecimen(input({ create: () => ({ view: 'x'.repeat(256 * 1024 + 1), manifest: () => contract({}), dispose() { disposed++; } }) }));
   await assert.rejects(renderComponentSpecimen(huge), /SSR output/); assert.equal(disposed, 1);
@@ -117,4 +119,25 @@ test('cancelled hydration cannot release a newer reservation in the same documen
   await assert.rejects(first, /aborted/);
   await assert.rejects(second, /revision does not match/, 'late cancellation leaves the replacement reservation intact');
   await assert.rejects(hydrateComponentSpecimen(root, specimen, snapshot, { signal: controller.signal }), /aborted/);
+});
+
+test('the browser fixture serves only prebuilt specimen pages and never reflects query state', async () => {
+  const child = spawn(process.execPath, [new URL('./fixtures/component-harness-browser.mjs', import.meta.url).pathname], { env: { ...process.env, CLANK_HARNESS_PORT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const stopped = once(child, 'exit');
+  let output = '';
+  const url = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(Error('Fixture did not start')), 5000);
+    const fail = error => { clearTimeout(timer); reject(error); };
+    child.once('error', fail); child.once('exit', () => fail(Error('Fixture exited before startup')));
+    child.stdout.on('data', chunk => { output += chunk; const match = output.match(/http:\/\/127\.0\.0\.1:\d+/); if (match) { clearTimeout(timer); resolve(match[0]); } });
+  }).catch(async error => { child.kill(); await stopped; throw error; });
+  try {
+    const ordinary = await (await fetch(url)).text();
+    const injected = await (await fetch(url+'/?mode='+encodeURIComponent('</ScRiPt><img src=x onerror=alert(1)>'))).text();
+    assert.equal(injected, ordinary, 'unknown modes select static default content');
+    const unknown = await (await fetch(url+'/?specimen='+encodeURIComponent('<svg onload=alert(1)>'))).text();
+    assert.equal(unknown, ordinary, 'unknown specimen names select the static default');
+    const adoption = await (await fetch(url+'/?mode=adopt')).text(); assert.notEqual(adoption, ordinary); assert.ok(adoption.includes('"mode":"adopt"'));
+    const response = await fetch(url+'/assertions.json?specimen=dialog'); assert.equal(response.status, 200); assert.equal((await response.json()).specimen, 'dialog');
+  } finally { child.kill(); await stopped; }
 });

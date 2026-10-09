@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twelve of the forty proposed features are merged across nine feature batches. Search browsing (24) merged in [PR #264](https://github.com/nearbycoder/clank.run/pull/264) after all six hosted checks at the revised head. Both checkouts match main `22356868facd64e4470a11564b0b87122ed82659`. Twenty-eight features remain; component harness (32), proposed in issue #265, has passed local acceptance and is ready for PR review. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twelve of the forty proposed features are merged across nine feature batches. Search browsing (24) merged in [PR #264](https://github.com/nearbycoder/clank.run/pull/264) after all six hosted checks at the revised head. Both checkouts match main `22356868facd64e4470a11564b0b87122ed82659`. Twenty-eight features remain; component harness (32), proposed in issue #265, has passed local acceptance and is under review in [PR #266](https://github.com/nearbycoder/clank.run/pull/266). The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -223,14 +223,17 @@ cleanup. In-app browser checks also exercise actual selection/reset/check/export
 local desktop/mobile screenshots are retained outside Git. ARIA checked inspection and owned
 Chrome signal/profile cleanup are corrected without weakening the browser sandbox.
 
-All 18 focused tests and 20 packed consumer fixtures pass. Source types have 159 existing
+All 19 focused tests and 20 packed consumer fixtures pass. Source types have 159 existing
 diagnostics, down from 163 without expanding the baseline. The full minimum-Node 22.16 release
-gate reports 1,851 tests, 1,848 passed, zero failures/cancellations and the three existing privileged
-host skips; coverage is 87.97% lines, 80.36% branches and 90.43% functions. Documentation,
+gate reports 1,852 tests, 1,849 passed, zero failures/cancellations and the three existing privileged
+host skips; coverage is 87.97% lines, 80.37% branches and 90.43% functions. Documentation,
 packaged conformance and security pass. Exactly two distribution files bring the package to
 401 files / 6,198,569 bytes under proposal #265's exact file limit and unchanged 6 MiB ceiling.
 See [harness evidence](component-harness.json) and [guide](../../docs/component-harness.md).
-The feature is ready for PR review; twelve features remain merged and twenty-eight remain
+Hosted CodeQL review found two fixture alerts on the first head. Case-insensitive HTML
+assertions and fixed prebuilt fixture pages now pass actual HTTP injection regressions; the
+revised head requires fresh hosted checks. The feature is under review in
+[PR #266](https://github.com/nearbycoder/clank.run/pull/266); twelve features remain merged and twenty-eight remain
 unmerged until hosted checks and protected merge complete.
 
 ## Review prerequisites
@@ -280,7 +283,7 @@ unmerged until hosted checks and protected merge complete.
 | 29 | Durable media processing jobs | Planned | Pending |
 | 30 | Offline attachment queue | Planned | Pending |
 | 31 | Hydration mismatch inspector | Implemented | Optional metadata capture, pre-cleanup child paths, original TSX locations, patch/remount reasons, immutable bounded history and redacted JSON. Unit/packed consumer and real keyboard/mobile/cleanup checks pass. DOM gzip budget remains 12,000 bytes. |
-| 32 | Interactive component contract harness | Ready for PR review | Proposal #265; 18 focused tests, 20 packed type fixtures, eight actual Chrome journeys/96 steps and full Node 22.16 gate pass. Hosted review/merge pending. |
+| 32 | Interactive component contract harness | In PR review | PR #266 / proposal #265; 19 focused tests, 20 packed type fixtures, eight actual Chrome journeys/96 steps and full Node 22.16 gate pass. Fresh hosted checks/merge pending. |
 | 33 | OpenAPI export for backend functions | Implemented | Runtime schemas, cookie/CSRF and replay contracts; unsupported/coercive/refined shapes rejected; actual positive/negative authenticated HTTP requests tested against the packed artifact. `tests/openapi.test.mjs`, `type-tests/openapi.ts`. |
 | 34 | Local provider fleet simulator | Planned | Pending |
 | 35 | Translation extraction and review workflow | Implemented | Canonical catalog extraction, locale/source/current fences, placeholder/key/plural validation and reviewed diff acceptance. Node tests, packed types and real browser keyboard/mobile checks confirm the server/browser revision matches. |

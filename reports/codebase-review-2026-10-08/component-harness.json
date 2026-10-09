@@ -12,21 +12,22 @@
     "isolation": "A dedicated connected root with one active harness per document isolates focus and portals. Fingerprints and common UI contracts are checked before acceptance; cancelled, adopted and detached roots never execute stale factories or clear later reservations.",
     "interaction": "Native selection/reset/check/export/dispose controls, current semantic/part assertions and immutable bounded hydration snapshots. Reset/disposal fences discard late checks. Export controls use read-only text with no executable payload.",
     "nativeBrowser": "Eight actual Chrome journeys (96 steps) at 1280/390 widths cover Enter, Space, arrows, Tab/Shift+Tab, focus trapping, Escape return, no horizontal overflow, genuine isTrusted key events, cancellation/adoption/revision rejection, structural recovery, stale checks and resource cleanup. Chrome sandbox remains enabled.",
-    "reviewFixes": "ARIA checked states are preserved in CLI inspection. Fixture schemas are not reparsed after capture. Original document ownership is retained during asynchronous hydration. Owned Chrome shutdown handles signal termination and bounded profile cleanup races; attached external browsers are not shut down.",
+    "reviewFixes": "ARIA checked states are preserved in CLI inspection. Fixture schemas are not reparsed after capture. Original document ownership is retained during asynchronous hydration. Owned Chrome shutdown handles signal termination and bounded profile cleanup races; attached external browsers are not shut down. Hosted CodeQL review strengthened case-insensitive HTML assertions and replaced request-derived fixture state with fixed prebuilt pages; actual HTTP injection regressions pass.",
     "manualBrowser": "In-app browser verifies native controls, assertion status, readonly exports, reset/selection cleanup, actual SSR node identity, mismatch recovery, cancellation/adoption and disposal. Final desktop screenshot and mobile open modal show native first-input focus and measured 390/390 client/scroll widths."
   },
   "validation": {
     "focused": {
-      "tests": 18,
-      "pass": 18,
+      "tests": 19,
+      "pass": 19,
       "fail": 0,
       "cancelled": 0,
       "skipped": 0,
       "newHarnessTests": 8,
+      "newFixtureHttpRegression": 1,
       "newJourneyTests": 2,
       "newStartupRegression": 1,
       "path": "/tmp/clank-review-2026-10-08/component-harness-focused.log",
-      "sha256": "c7015981c71e1e045c02cab755a9a92fa4589f458d2a895a1cff6638d8468d50"
+      "sha256": "dfd270b0d1a64aef1414b3bface1cf8a89ef25c3ef6f3ad1bfc0f1ff3f787678"
     },
     "consumerTypes": {
       "status": "passed",
@@ -43,14 +44,14 @@
     "release": {
       "status": "passed",
       "node": "22.16.0",
-      "tests": 1851,
-      "pass": 1848,
+      "tests": 1852,
+      "pass": 1849,
       "fail": 0,
       "cancelled": 0,
       "skipped": 3,
       "coverage": {
         "lines": 87.97,
-        "branches": 80.36,
+        "branches": 80.37,
         "functions": 90.43
       },
       "documentation": "passed",
@@ -61,7 +62,7 @@
       "fileCeiling": 401,
       "byteCeiling": 6291456,
       "path": "/tmp/clank-review-2026-10-08/component-harness-check.log",
-      "sha256": "edd4f1677a2dce1b74905b10ae6a45783fb02f6dee8d6438c230f9f051695032"
+      "sha256": "4f19f8b9a2efcb0a4d4fde04fe50c67fe8ca1bc334c4105f9126114813cebde5"
     },
     "pack": {
       "path": "/tmp/clank-review-2026-10-08/component-harness-pack.json",
@@ -86,10 +87,10 @@
             }
           ],
           "path": "/tmp/clank-review-2026-10-08/component-harness-toggle-journeys.json",
-          "sha256": "ffafc29160862d27c8d1486a53d5d3f97ae4a50cd54c4db3b2f106ac5a574dca",
+          "sha256": "9b9110317da5ee7f48a6559d5411261361b304fe02f35c81ed9b3f95d9f5f494",
           "commandLog": {
             "path": "/tmp/clank-review-2026-10-08/component-harness-toggle-cli.log",
-            "sha256": "bb5d9dfefc66511c65908b68e8516d2ff582559b8c714de09ed83bd66e4fdb32"
+            "sha256": "ee93215bd5cd7cddf0d2c0a358699e13146b2f9b8537ac23aa23412297fb44c0"
           }
         },
         {
@@ -107,10 +108,10 @@
             }
           ],
           "path": "/tmp/clank-review-2026-10-08/component-harness-dialog-journeys.json",
-          "sha256": "110235f39384e89e34aee29e47b11b7183d38182725acdab61857e67e7f62452",
+          "sha256": "581d47eafa9b4d755a6e812b7a6c62de67b21e7a1a1dfff9ceae1efbc3d8e672",
           "commandLog": {
             "path": "/tmp/clank-review-2026-10-08/component-harness-dialog-cli.log",
-            "sha256": "cd7072fc3f6518d2c1f42f9107883021da207263e2a9736652d23c06cb84c92e"
+            "sha256": "3f07126d2ff0fa35fd92614e29492e98248a03b2b0f6b4ac1b5417fd14b112d9"
           }
         },
         {
@@ -138,10 +139,10 @@
             }
           ],
           "path": "/tmp/clank-review-2026-10-08/component-harness-lifecycle-journeys.json",
-          "sha256": "0944788ebef21a4feec4971ea4bfeade0abc1944ff2d0e37471f92be322dbdb3",
+          "sha256": "08e1ebfbe4b8e57aec42eff18be19fb7ddfad21f7c2758e673e84118bd23bde8",
           "commandLog": {
             "path": "/tmp/clank-review-2026-10-08/component-harness-lifecycle-cli.log",
-            "sha256": "45320f60f0e756c22c80de263b96444a1d98ca2a4b6203adc6c7bc10ac55e412"
+            "sha256": "2331f385153bd2bb72c200cdbf3794c9d395bdcc8ff9a4a13e1bb1c9fedfdc8d"
           }
         }
       ],
@@ -173,12 +174,12 @@
     "scripts/cli-journey.mjs": "55e262f61d7624b20fd783392dbc52ba6bd7e432172359fc231d1bba15de3856",
     "scripts/security-audit.mjs": "ea055e2d748c03379cc7adee57cd7499eae3cb75ee6ad975d5c5f18805b1c181",
     "package.json": "95b27a14f6ed1ece95d45f721d1b63d945f2629c841f3c20636d74594d1da83a",
-    "tests/component-harness.test.mjs": "006aa5db4ce4c36ba539a7bc8c977926ad248205a59004d18f03614fd56eebe2",
+    "tests/component-harness.test.mjs": "e1157a9836165178c3b6752ddb121a147a9ddea30a15b97d5f2838782740994c",
     "tests/journey.test.mjs": "6a853d2d1ca2800438cd7025e152cf7e7c590834141b08e5a36158e60bfaf844",
     "tests/journey-cli.test.mjs": "c78a93d39558f0952d8edf8ad2dbf9a979206223287982ce0656b3c592602ea2",
     "tests/fixtures/component-harness-specimens.mjs": "007b76b2b0e931c9a9d0b53c615c7e288f5cbaec23efd9d46a78ecbbd5c86911",
     "tests/fixtures/component-harness-browser-entry.mjs": "caa5762ec822b1081e460cdb443ac38aeb337d758c5a7994d28f4771814f3bb3",
-    "tests/fixtures/component-harness-browser.mjs": "7959e7c9d5ef9a50f7ca8eed1cc6409e0cc4faa6d79ff121b4c1d1aec1989f92",
+    "tests/fixtures/component-harness-browser.mjs": "9e8ae4bb6eddfb05f28cb1a7a2e7b1e934fe82f257740f7939e983833f76d163",
     "tests/fixtures/component-harness-lifecycle.json": "5e317bd6433ef615a3e76472367ae04988c4075b89a206a751619b91099f7b6a",
     "type-tests/component-harness.ts": "cab0fb8f0ac683df8b7c7c681e021956a79e16f757eb7bfcce869c1df9d42016",
     "docs/component-harness.md": "198882350f2d0797377d2cbc0e0c13e0bd0339f585e11f0779299cd70b275d1d",
