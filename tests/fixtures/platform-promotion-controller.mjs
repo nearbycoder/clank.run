@@ -1,6 +1,8 @@
 // Owned child-process fixture for actual platform interruption/recovery tests.
 import { openPlatform } from '../../dist/platform.js';
-const platform = await openPlatform(JSON.parse(process.argv[2]));
+const platform = await openPlatform({ ...JSON.parse(process.argv[2]),
+  onError(error) { console.error('Owned fixture runtime diagnostic:', error?.stack ?? error); },
+});
 process.on('message', message => {
   if (message.close) { void platform.close().then(() => process.exit(0), () => process.exit(1)); return; }
   void (async () => {
