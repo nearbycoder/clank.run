@@ -28,6 +28,7 @@ export async function pinSQLiteDirectory(input: string, create = false): Promise
 }
 
 interface Mount { path: string; writable: boolean; create?: boolean; optional?: boolean }
+let coverageSequence = 0;
 export interface SQLiteSandbox {
   executable: string;
   arguments: string[];
@@ -39,8 +40,8 @@ export interface SQLiteSandbox {
 
 /** Only fixed worker operations may request filesystem capabilities. */
 export async function prepareSQLiteSandbox(module: string, operation: string, values: readonly unknown[], childArguments: string[], pinned: readonly PinnedSQLiteDirectory[] = []): Promise<SQLiteSandbox> {
-  const pathName = "node:path", fsName = "node:fs/promises", urlName = "node:url";
-  const [path, fs, url] = await Promise.all([import(pathName), import(fsName), import(urlName)]);
+  const pathName = "node:path", fsName = "node:fs/promises", urlName = "node:url", constantsName = "node:fs";
+  const [path, fs, url, { constants }] = await Promise.all([import(pathName), import(fsName), import(urlName), import(constantsName)]);
   const process = (globalThis as any).process;
   const mounts: Mount[] = [];
   const args: any[] = [...structuredClone(values)];
@@ -78,11 +79,29 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
 
   const descriptors: number[] = [];
   const handles: Array<{ close(): Promise<void> }> = [];
+  let coverage: { parent: PinnedSQLiteDirectory; directory: PinnedSQLiteDirectory; name: string } | undefined;
   const sandboxArgs = ["--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL",
     "--dir", "/usr", "--ro-bind", "/usr/bin/prlimit", "/usr/bin/prlimit",
     "--proc", "/proc", "--dev", "/dev",
     "--size", "67108864", "--tmpfs", "/tmp", "--dir", "/work", "--chdir", "/work"];
-  const close = async () => { await Promise.all(handles.map((handle) => handle.close())); };
+  const close = async () => {
+    const profiles = coverage; coverage = undefined;
+    try {
+      if (profiles) {
+        // Every PID namespace can emit coverage-2-<same millisecond>-0.json.
+        // Publish each private profile under a unique, collector-compatible
+        // host name after the worker closes. Never overwrite another profile.
+        for (const name of await fs.readdir(profiles.directory.anchor)) {
+          if (!/^coverage-\d+-\d{13}-\d+\.json$/.test(name)) continue;
+          const source = `${profiles.directory.anchor}/${name}`;
+          if (!(await fs.lstat(source)).isFile()) throw new Error("Invalid SQLite coverage artifact.");
+          const destination = `${profiles.parent.anchor}/coverage-${process.pid}-${Date.now()}-${++coverageSequence}.json`;
+          await fs.link(source, destination);
+        }
+        await fs.rm(`${profiles.parent.anchor}/${profiles.name}`, { recursive: true, force: true });
+      }
+    } finally { await Promise.all(handles.map((handle) => handle.close())); }
+  };
   try {
     for (const library of ["/usr/lib", "/usr/lib64", "/lib", "/lib64"]) {
       try {
@@ -108,8 +127,17 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
         create: mount.create || prior?.create, optional: mount.optional && (!prior || prior.optional) });
     }
     if (process.env.NODE_V8_COVERAGE) {
-      const coverage = path.resolve(process.env.NODE_V8_COVERAGE);
-      merged.set(coverage, { path: coverage, writable: true, create: true });
+      const parent = await pinSQLiteDirectory(path.resolve(process.env.NODE_V8_COVERAGE), true);
+      handles.push(parent);
+      const privatePath = await fs.mkdtemp(`${parent.anchor}/.clank-sqlite-coverage-`);
+      const name = path.basename(privatePath);
+      let handle;
+      try { handle = await fs.open(privatePath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW); }
+      catch (error) { await fs.rm(privatePath, { recursive: true, force: true }); throw error; }
+      const directory = { path: privatePath, fd: handle.fd, anchor: `/proc/self/fd/${handle.fd}`, close: () => handle.close() };
+      handles.push(directory); coverage = { parent, directory, name };
+      bindFd(directory.fd, "/runtime/coverage", true);
+      sandboxArgs.push("--setenv", "NODE_V8_COVERAGE", "/runtime/coverage");
     }
     for (const mount of [...merged.values()].sort((a, b) => a.path.length - b.path.length)) {
       if (["/", "/tmp", "/home", "/var", "/usr", "/etc", "/proc", "/dev"].includes(mount.path)

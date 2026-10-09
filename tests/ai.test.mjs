@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   ActionError,
   ValidationError,
@@ -68,6 +70,14 @@ test("schema containers propagate unexpected refinement failures rather than acc
     [s.record(guarded), { key: "value" }],
     [s.union([guarded, s.string()]), "value"],
   ]) assert.throws(() => schema.parse(input), error => error === failure);
+});
+
+test("refinement requires synchronous booleans and contains rejected promises in a real strict process", () => {
+  const output = execFileSync(process.execPath, [
+    '--unhandled-rejections=strict',
+    fileURLToPath(new URL('./fixtures/schema-refinement-worker.mjs', import.meta.url)),
+  ], { encoding: 'utf8', timeout: 30000 });
+  assert.deepEqual(JSON.parse(output), { checked: 80, normalBooleans: true, thrownFailurePreserved: true });
 });
 
 test("common web schemas cover emails, URLs, dates, records, defaults, refinement, and coercion", () => {

@@ -181,21 +181,26 @@ Cursors pin current authority, source/index and policy revisions; changed state 
 instead of silently skipping or duplicating rows. Exact latest save/delete retries survive
 restart and lost committed responses, while compact retired keys prevent stale recreation.
 
-All 39 focused tests pass, including ten feature cases, four UI regressions and two parser
-regressions. Real independent processes accept one saved mutation and a real SIGKILL rolls
+All 51 focused tests pass, including ten feature cases, four UI regressions, three parser
+regressions and real SQLite sandbox checks. Real independent processes accept one saved mutation and a real SIGKILL rolls
 back uncommitted SQL. Unicode ties/matching, ACL/cursor changes, revocation and candidate,
 source-byte, distinct-value, account, lifetime-key and metadata-byte bounds pass. Real browser
 keyboard/filter/paging, saved load/edit/reload, narrow width, account change, revocation and
 disposal checks pass. Disabled last-page focus loss is corrected. Object-schema review fixes
 inherited field lookup, literal-key prototype mutation and swallowed unexpected refinements.
+Refinements now require synchronous booleans and contain rejected thenables in a real strict
+Node process. Real V8 profiles with colliding namespace filenames are retained independently,
+and workers receive a private pinned coverage directory rather than the parent profile root.
 
-The complete gate passes with 1,838 tests reported, 1,835 passed, zero failures/cancellations
-and three privileged-host skips. Coverage is 92.30% lines, 80.26% branches and 90.38% functions.
+The complete Node 22.16 gate passes with 1,840 tests reported, 1,837 passed, zero failures/cancellations
+and three privileged-host skips. Coverage is 88.23% lines, 80.29% branches and 90.43% functions.
 All 19 packed consumer fixtures pass with the unchanged 163-diagnostic source baseline.
-Docs, packaged conformance and security checks pass: 399 files / 5,843,098 bytes under the
+Docs, packaged conformance and security checks pass: 399 files / 6,163,301 bytes under the
 unchanged 399-file / 6 MiB ceilings. See [search browsing evidence](search-browsing.json) and
 [guide](../../docs/search-browsing.md) for source/log hashes, latest-retry/tombstone limits and
-the existing source-search writer/PITR boundaries. Eleven features are merged; search browsing
+the existing source-search writer/PITR boundaries. The first hosted release job passed every runtime
+test but exhausted the single malformed-coverage-artifact retry. The private worker-profile fix
+passes the complete minimum-Node local gate; the revised head requires fresh hosted checks. Eleven features are merged; search browsing
 awaits hosted review/merge; twenty-eight remain planned.
 
 ## Review prerequisites
@@ -237,7 +242,7 @@ awaits hosted review/merge; twenty-eight remain planned.
 | 21 | Typed PostgreSQL application backend | Planned | Pending |
 | 22 | Authorized cross-table aggregates | Planned | Pending |
 | 23 | Source-linked search indexes | Implemented | Proposal #257; atomic source writes/deletes/history restore, pre-opened independent writers, two actual process crashes, resumable fenced rebuild, bounded drift diagnosis, current owner/record authorization and 16 packed consumer fixtures. Real keyboard/mobile/scope/disposal/revocation checks and full release gate pass. |
-| 24 | Search facets and stable result cursors | Ready for merge | Proposal #263; authorized facets, pinned paging and fenced saved definitions; 39 focused tests, 19 packed fixtures, complete release gate and actual browser controls. `search-browsing.json`. |
+| 24 | Search facets and stable result cursors | Ready for merge | Proposal #263; authorized facets, pinned paging and fenced saved definitions; 51 focused tests, 19 packed fixtures, complete release gate and actual browser controls. `search-browsing.json`. |
 | 25 | Import correction and upsert workflow | Implemented | Proposal #259; immutable server-verified source, separate durable corrections, version-fenced upserts, exact correction/apply receipts, two actual process crashes, lost responses/restart, ownership/current ACL and bounded admission. All 55 focused tests, 17 packed fixtures and full release gate pass; actual upload/keyboard/mobile/stale/account/disposal/revocation checks. |
 | 26 | Shared document cursor coordination | Implemented | Revision-aware, session-bound ephemeral cursors; edit/deletion rebasing, expiry/capacity, per-participant owned authorization, session/ACL/email-verification revocation and restart/reconnect tested. Keyboard/browser and mobile checks pass. |
 | 27 | Document suggestions and branches | Implemented | Named durable drafts, immutable proposals, before/after review, author/reviewer policies, document/branch fences, overlap/missing-history rejection, bounded payload/rebase bytes, transactional acceptance and exact restart replay tested. |

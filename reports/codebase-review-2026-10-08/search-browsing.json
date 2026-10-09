@@ -14,7 +14,7 @@
     "recovery": "Independent real Node processes accept one save for a key. A real SIGKILL after uncommitted SQL insertion rolls back the complete host mutation boundary; reopening preserves the earlier accepted row and permits one new retry. Fresh scope/session revocation denies accepted receipt replay.",
     "capacity": "Real candidate, accumulated source JSON, 101 distinct facet values, per-account, global lifetime identity and saved-byte fixtures reject without partial output or metadata changes. Unsupported protocol fails closed. Accepted identities are not evicted to admit writes.",
     "compatibility": "Legacy manual/source search clients and binding format remain intact. Configuration/callbacks are captured before asynchronous opening. New metadata is opt-in; all public declarations and 19 packed consumer fixtures pass with no source baseline increase.",
-    "reviewFixes": "Actual browser testing found last-page disabled-button focus loss; the correction returns focus to Search. Optional prototype-name facets reproduced inherited schema-field lookup; object schemas now validate own fields and define literal keys without prototype mutation. Unexpected container refinement errors propagate instead of returning partial values or accepting another union branch.",
+    "reviewFixes": "Actual browser testing found last-page disabled-button focus loss; the correction returns focus to Search. Optional prototype-name facets reproduced inherited schema-field lookup; object schemas now validate own fields and define literal keys without prototype mutation. Unexpected container refinement errors propagate instead of returning partial values or accepting another union branch. Refinements require synchronous booleans and contain rejected thenables in a real strict Node process. Separate pinned V8 directories and unique collector-compatible host names preserve colliding PID-namespace profiles without exposing the parent profile directory.",
     "browser": {
       "date": "2026-10-09",
       "fixture": "tests/fixtures/search-browsing-browser.mjs",
@@ -58,16 +58,17 @@
   },
   "validation": {
     "focused": {
-      "tests": 39,
-      "pass": 39,
+      "tests": 51,
+      "pass": 51,
       "fail": 0,
       "cancelled": 0,
       "skipped": 0,
       "newFeatureTests": 10,
       "newUiTests": 4,
-      "newParserRegressions": 2,
+      "newParserRegressions": 3,
+      "newCoverageRegressions": 1,
       "path": "/tmp/clank-review-2026-10-08/search-browsing-focused.log",
-      "sha256": "f6de3ebf23c3f7dc076de45d4c3c2dbbb788ab8737aa2b601ae2983056e314d8"
+      "sha256": "916f9365fc1fd66f3a0ae5525e77a885b7d994eb27da3d96b5197287cfac0699"
     },
     "consumerTypes": {
       "status": "passed",
@@ -82,34 +83,52 @@
     },
     "release": {
       "status": "passed",
-      "node": "26.10.0",
-      "tests": 1838,
-      "pass": 1835,
+      "node": "22.16.0",
+      "tests": 1840,
+      "pass": 1837,
       "fail": 0,
       "cancelled": 0,
       "skipped": 3,
       "coverage": {
-        "lines": 92.3,
-        "branches": 80.26,
-        "functions": 90.38
+        "lines": 88.23,
+        "branches": 80.29,
+        "functions": 90.43
       },
       "documentation": "passed",
       "packagedConformance": "passed",
       "securityTreePackageHistory": "passed",
       "publishFiles": 399,
-      "unpackedBytes": 5843098,
+      "unpackedBytes": 6163301,
       "fileCeiling": 399,
       "byteCeiling": 6291456,
       "path": "/tmp/clank-review-2026-10-08/search-browsing-check.log",
-      "sha256": "8c3d41d433d684e4586732cf8e236c0876823d66e6f7ea2c517417939c686b0b"
+      "sha256": "44b1e9ee1d88f0e056d73a6b6dbb85cfcc32ce610c3f80753ded2d6b39c01a83"
     },
     "pack": {
       "path": "/tmp/clank-review-2026-10-08/search-browsing-pack.json",
-      "sha256": "5cd41a6ed55c0f3675f88430bfdeb3ff4ec62af17e9271b28b08d256fbbad805"
+      "sha256": "8b7df11d84ba6e1ce99bbf393b6e8c6e5f03d3904e1f536290524ded9ebd8582"
     },
     "browser": {
       "path": "/tmp/clank-review-2026-10-08/search-browsing-browser-evidence.json",
       "sha256": "56db4d2e10efed0cd8085c9048b41707eeada6f73b54f9f7ee687ee145d3c456"
+    },
+    "reviewFixReproductions": {
+      "asyncRefinementBefore": {
+        "path": "/tmp/clank-review-2026-10-08/async-refine-reproduction.json",
+        "sha256": "636d3e6ac347a7a13305ccdcf2c957ee473df7f5c83cf4854da6bf415ad31e16"
+      },
+      "namespaceProfileCollisionBefore": {
+        "path": "/tmp/clank-review-2026-10-08/namespace-coverage-before.json",
+        "sha256": "b78a37b1de26b81275c7858bedc6d8ee53365b284950f90abbc6bf9bd526f408"
+      }
+    },
+    "hostedFirstHead": {
+      "head": "ed1e4b4a82bf18a8e20c86e56d5624c990e8bff0",
+      "job": "https://github.com/nearbycoder/clank.run/actions/runs/37892707670/job/113696974429",
+      "runtimeTestsPassed": 1835,
+      "runtimeTestsFailed": 0,
+      "failure": "Malformed experimental V8 coverage JSON after the existing single retry. Five other hosted checks passed. This head was not merged.",
+      "correction": "Private pinned worker profile directories and unique host profile names retain colliding namespace profiles; complete revised local Node 22.16 gate passes. Fresh hosted checks are required for the new head."
     }
   },
   "limits": [
@@ -126,18 +145,23 @@
   "sourceHashes": {
     "src/search.ts": "3fb69bc109307de1628a7b5342f2c664083f3cbe6a52c196f25f5fcab5024939",
     "src/search.d.ts": "206260bd7fa5ed5594face4f703c1a07d3c6ecaf42ef32b102ef912635580e82",
-    "src/ai.ts": "0b2be9ba19a9c6870a746be4f3707294bdcb74cfc71c63b9880bb8cb5f2b5b09",
+    "src/ai.ts": "4cfff4000fc1b7dc5b7c7fb5f64cd0bad768c4e7caf3efa1580b2ebc5b874ad9",
+    "src/sqlite-sandbox.ts": "bb87e92148734d2fce9b537067d70c8889ac468455437be879674ef72b7af425",
+    "tests/sqlite-sandbox.test.mjs": "b2d0528c4414f60c84ae20a195f8d98e60127ad2f9ebee513396ef484f4c068b",
+    "tests/fixtures/schema-refinement-worker.mjs": "3c3e83433926cea7f3160792846060c76e914904c1d9e3a243c6ceea36f01f93",
+    "docs/ai-first.md": "33972a755285fd4aec3b29d15af4d28e4c3bbc38cf0c74df1318178f0d11633f",
+    "docs/sqlite-isolation.md": "5e190f0b17382362fa2027dc8a3ec58a0d862dfcb7bbb7eec52b61470f5adb6b",
     "tests/search-browsing.test.mjs": "0f8d09027b48a418c5d66870828071dc0279fa742694295d3a2caa04b117be73",
     "tests/search-browsing-ui.test.mjs": "bce99366b61be9277483ebb4dafd1db9173263e249cb02fc7f5f822b9ddc2389",
-    "tests/ai.test.mjs": "43917ddc74a6d9e2015c406c411a11d9f8912762cfe27792971a03368a6bb9c9",
+    "tests/ai.test.mjs": "0b27a045530ca2c7596941a9c86cafef7ca7d4b31c4ec1f17c9971b7a0d43a3a",
     "tests/fixtures/search-browsing-worker.mjs": "73ad6dad948f28cd2d350f0d879f669b593fb8bb71cf7865309d6d31cff5641b",
     "tests/fixtures/search-browsing-browser.mjs": "3f7f772453963ba1a70591a10cc61cd3abdb25544fc5f1eb67aded97035f0846",
     "type-tests/search-browsing.ts": "dc7af3dd73f92267fa3c93d8251daf1208d510e7e1188f153ad9d96411c4845e",
     "docs/search-browsing.md": "23b1168585482a26f22b30b6ad38fb3b900d4e4e82aa9e4d0bf77fc9fac1acfb",
     "docs/durable-data-workflows.md": "824dc3653d6e49ca00022377a86e9729a8ecf1c6c096be063bd74105894d193e",
-    "docs/api-reference.md": "e8a3bcecac9ec808c34bb8362e9d87724a61b3ffe730d25b999828fd93a3d15f",
+    "docs/api-reference.md": "8a13b7074bf9884b1403642b68125bf7eee4ddb6f999a912071068a24b06a89e",
     "docs-site/content-manifest.mjs": "ac0ed6845ba295215f9dcc4a6b124432f714a8c58f892b96a2b136cadb2968ee",
     "README.md": "6a1e26c9314cc8141e15ca5989c11834fad6e8748ef941c635fe24a2b9e1134c",
-    "CHANGELOG.md": "93c03e9df5380f9c32d94a203d6b5e744000aef756b94a08768f0172b96d86ee"
+    "CHANGELOG.md": "19cfefb49aa1ee83e2d33c5ba4d5d8fe508bfe8b02c2a0f4ec9146afd6cb77af"
   }
 }

@@ -326,7 +326,14 @@ export const s = {
     if (!message.trim()) throw new TypeError("s.refine() requires an error message.");
     return schemaValue((input, path) => {
       const value = parseAt(inner, input, path);
-      return predicate(value) ? value : issue(path, message);
+      const approved: unknown = predicate(value);
+      if (typeof approved !== "boolean") {
+        // Predicates are synchronous. Contain a rejected promise/thenable from
+        // an incorrectly implemented JavaScript predicate before failing closed.
+        void Promise.resolve(approved).catch(() => undefined);
+        throw new TypeError("s.refine() predicates must return booleans synchronously.");
+      }
+      return approved ? value : issue(path, message);
     }, { ...inner.toJSONSchema(), "x-clank-refinement": true }, description ?? inner.description);
   },
 

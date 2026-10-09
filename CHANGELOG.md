@@ -9,6 +9,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Validate object-schema fields as own properties and preserve explicitly declared literal
   keys without changing the parsed object's prototype. Propagate unexpected refinement
   failures instead of returning partial container values or accepting another union branch.
+- Require synchronous boolean refinement predicates and contain rejected thenables. Preserve
+  isolated SQLite worker coverage profiles when PID namespaces emit colliding filenames.
 
 - Add scoped retention inventory, reviewed purge batches, durable holds and periodic cleanup
   for imports, collaboration operations/receipts and acknowledged platform audit exports.

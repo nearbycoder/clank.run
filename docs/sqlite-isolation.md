@@ -26,6 +26,12 @@ node --test tests/sqlite-sandbox.test.mjs tests/sqlite-isolation.test.mjs
 
 The Linux tests use actual Bubblewrap namespaces and SQLite, without a Docker daemon. They check out-of-directory SQL attachment, database and ancestor symlinks, replacement of a directory after it was pinned, host networking isolation, read-only runtime mounts, backup sidecar handling, native memory/time limits, event-loop responsiveness, queue fairness, admission caps, and expiration. A missing or prohibited Linux sandbox makes these tests fail rather than silently skip. The normal test gate includes both files; no external CI run is needed for development.
 
+During coverage collection, each worker receives its own pinned profile directory. The
+host publishes profiles under unique collector-compatible names after the worker closes.
+Workers do not receive the parent coverage directory. This preserves profiles when PID
+namespaces emit the same V8 filename and avoids concurrent overwrites; coverage thresholds
+and the existing single malformed-artifact retry remain unchanged.
+
 ## Migration and rollback
 
 There is no database schema change. Before upgrading a Linux host, install the two system packages and run the verification command under the same user, container, and security profile as the production control plane. Move databases placed directly in broad shared system directories into per-application directories. Existing project layouts already meet this requirement. An upgrade intentionally refuses namespace execution when the host policy does not permit it. Rolling back restores the previous worker behavior and removes this filesystem security boundary; restrict deployers and data-directory writers to trusted operators before doing so.

@@ -23,6 +23,13 @@ const jsonSchema = CreateTask.toJSONSchema();
 
 Available builders are `string`, `number`, `boolean`, `literal`, `enum`, `unknown`, `array`, `object`, `optional`, `nullable`, and `union`. Objects are strict by default and aggregate nested validation issues with paths. Set `{ strict: false }` to preserve unknown properties.
 
+`s.refine(inner, predicate, message)` adds a synchronous validation predicate. Return an
+actual boolean: `true` approves the parsed value and `false` produces a `ValidationError`.
+Promises, thenables and other non-boolean results throw `TypeError`; rejected thenables
+are contained. A thrown predicate failure propagates through containers and `safeParse`
+as an implementation failure. Perform asynchronous authorization or service lookups in
+the action/backend handler rather than in a schema predicate.
+
 ## Actions
 
 ```ts
