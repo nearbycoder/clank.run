@@ -86,6 +86,7 @@ export const groups = [
       ["deployment-platform", "docs/deployment-platform.md"],
       ["environment-promotions", "docs/environment-promotions.md"],
       ["release-channels", "docs/release-channels.md"],
+      ["release-windows", "docs/release-windows.md"],
       ["deployment-dependencies", "docs/deployment-dependencies.md"],
       ["preview-environments", "docs/preview-environments.md"],
       ["release-lifecycle", "docs/release-lifecycle.md"],

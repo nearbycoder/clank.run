@@ -9,13 +9,13 @@ const status=await readFile('/proc/self/status','utf8');
 assert.match(status,/^Groups:[ \t]*$/m);
 for(const field of ['CapEff','CapPrm','CapInh','CapBnd','CapAmb'])assert.equal(BigInt('0x'+status.match(new RegExp('^'+field+':\\s+([a-f0-9]+)$','m'))[1]),0x201002n);
 assert.match(status,/^NoNewPrivs:\s+1$/m);
-let service,server,handler,listenPort;
+let service,server,handler,listenPort,reconcileReportHeld=false,reconcileReportReady=false;
 const listen=async()=>{
-  server=await serve(request=>handler.paths.includes(new URL(request.url).pathname)?handler.handle(request):service.handle(request),{hostname:'127.0.0.1',port:listenPort??0,maxBodySize:4*1024*1024});
+  server=await serve(async request=>{const path=new URL(request.url).pathname,response=await(handler.paths.includes(path)?handler.handle(request):service.handle(request));if(reconcileReportHeld&&path===handler.path){reconcileReportReady=true;while(reconcileReportHeld)await new Promise(resolve=>setTimeout(resolve,20))}return response},{hostname:'127.0.0.1',port:listenPort??0,maxBodySize:4*1024*1024});
   listenPort=server.port;
 };
 let closeFlight;
-const close=()=>closeFlight??=(async()=>{await server?.close();await service?.close()})();
+const close=()=>closeFlight??=(async()=>{reconcileReportHeld=false;await server?.close();await service?.close()})();
 process.once('disconnect',()=>{void close().then(()=>process.exit(0),()=>process.exit(72))});
 process.once('SIGTERM',()=>{void close().then(()=>process.exit(0),()=>process.exit(72))});
 process.on('message',async message=>{
@@ -28,7 +28,10 @@ process.on('message',async message=>{
           diskQuota:{...config.profile.diskQuota,quotaId:config.quotaId},outboundNetwork:config.profile.outboundNetwork,portStart:57540,portEnd:57560,maxRuntimes:1,maxContainers:1,stopTimeoutMs:1000}});
       handler=createDeploymentProviderHandler(service,{token:config.token,maxArtifactBytes:1024*1024,maxRuntimeBytes:2*1024*1024});
       await listen();value={port:server.port};
-    }else if(message.method==='pause-ingress'){await server.close();server=null;value=true}
+    }else if(message.method==='hold-reconcile-report'){reconcileReportHeld=true;reconcileReportReady=false;value=true}
+    else if(message.method==='reconcile-report-ready'){value=reconcileReportReady}
+    else if(message.method==='release-reconcile-report'){reconcileReportHeld=false;value=true}
+    else if(message.method==='pause-ingress'){await server.close();server=null;value=true}
     else if(message.method==='resume-ingress'){assert.equal(server,null);await listen();value={port:server.port}}
     else if(message.method==='close'){await close();process.send({id:message.id,value:true},()=>process.exit(0));return}
     else throw new Error('Unsupported owned provider operation.');

@@ -1,0 +1,359 @@
+{
+  "feature": "05 Scheduled release windows",
+  "date": "2026-10-09",
+  "baseCommit": "7f26178b8b37c7cf6c2601140eb3c5878e60dbee",
+  "branch": "codex/release-windows",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/280",
+  "status": "ready-for-review; uncounted until protected merge",
+  "implementation": "Exact current channel promotion queued with explicit UTC instants and IANA preview, captured target/dependency versions and initiating credential identity. Existing transactional store leases plus monotonic schedule claims fence execution. Current authority, immutable upload, channel, environment, target and readiness are checked around asynchronous work and atomic schedule/channel/environment acceptance. Cancellation is a direct versioned CAS; interrupted ownership retains fences until verified prior-writer recovery. API, CLI and dashboard use the same exact receipt.",
+  "validation": {
+    "localContracts": {
+      "status": "passed",
+      "tests": 17,
+      "failed": 0,
+      "scope": "All final release-window runtime contracts included in the complete minimum-Node gate: actual local bytes/data, exact replay, controller restart/SIGKILL, cancel/expiry during migrated candidate health, current role/session/device-token/source/target revocation, changed channel/binding/active target/dependencies, pin protection and actual authenticated CLI. DST preview test changes only disposable timestamps; it does not claim a real clock transition.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-node-gate-02-73aa70e83d3a267fc9572eaf3ace1f1efe69466f65cd551aad4c56227fae834f.log",
+        "sha256": "73aa70e83d3a267fc9572eaf3ace1f1efe69466f65cd551aad4c56227fae834f"
+      }
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "sourceDiagnostics": 159,
+      "unchangedBaseline": 163,
+      "newDiagnostics": 0,
+      "packedPositiveNegativeFixtures": 27,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-types-05-d3768145b4a2b30d3de3bf1e0e171fef1e206d8a939742710cf8c7c193c7fad7.log",
+        "sha256": "d3768145b4a2b30d3de3bf1e0e171fef1e206d8a939742710cf8c7c193c7fad7"
+      }
+    },
+    "consoleRaces": {
+      "status": "passed",
+      "tests": 4,
+      "scope": "Late authenticated inspection, old mutation after navigation away/back, terminal refresh and stale version refresh. Final source additionally exercised with a real held list response across project navigation.",
+      "node26Evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-console-node26-02-6762e551b3f37105f931a8a176b1e01596bfca332d040af05abfd513257e290f.log",
+        "sha256": "6762e551b3f37105f931a8a176b1e01596bfca332d040af05abfd513257e290f"
+      },
+      "focusedEvidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-console-races-01-7fc7b5076d581caf9ac0e7b982870f2f8cf6f88725fab0cc941a6be4b7859d72.log",
+        "sha256": "7fc7b5076d581caf9ac0e7b982870f2f8cf6f88725fab0cc941a6be4b7859d72"
+      }
+    },
+    "provider": {
+      "protocol": "clank-provider-promotion-acceptance/1",
+      "status": "passed",
+      "mode": "release-windows",
+      "realGuest": true,
+      "node": "v22.16.0",
+      "cases": [
+        {
+          "name": "real current Docker/XFS host certificate",
+          "status": "passed",
+          "reportId": "9fe71d6e-e8bb-46c9-bdc7-64410ba16a38",
+          "policyDigest": "fface2afd6bd11b44eba6665ab9cbf6cb192397a458bc349ef66d3d39720f789"
+        },
+        {
+          "name": "actual HTTP provider promotion preserves original bytes, non-root runtime and independent data/secrets/buckets",
+          "status": "passed",
+          "digest": "8c80d7dbf73c59555846753cd1477695226b4dbbace550d01d6ee3cc662672de"
+        },
+        {
+          "name": "accepted exact replay across actual controller restart",
+          "status": "passed"
+        },
+        {
+          "name": "actual scheduled certified provider generation resumes across controller restart, preserves exact upload bytes and independent data, and commits schedule/channel/environment acceptance together",
+          "status": "passed"
+        },
+        {
+          "name": "accepted scheduled provider retry after restart returns its original receipt without queueing another generation",
+          "status": "passed"
+        },
+        {
+          "name": "versioned pending cancellation prevents an actual provider generation from being queued",
+          "status": "passed"
+        },
+        {
+          "name": "actual queued provider schedule cancel fences acceptance and restores the frozen prior code while preserving committed code-only application writes",
+          "status": "passed",
+          "requiredReviewedRecovery": false
+        },
+        {
+          "name": "actual queued provider schedule expire fences acceptance and restores the frozen prior code while preserving committed code-only application writes",
+          "status": "passed",
+          "requiredReviewedRecovery": false
+        },
+        {
+          "name": "scheduled certified code-only provider activation rejects changed migration manifests without staging",
+          "status": "passed"
+        },
+        {
+          "name": "owned provider stops, Docker containers/network/nft table retire and XFS quota usage/limits clear",
+          "status": "passed"
+        }
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-provider-acceptance-04-3c748b2aee239d30fc1ba26a5f0dc142b66a1064fc6647d526a081432e698b97.json",
+        "sha256": "3c748b2aee239d30fc1ba26a5f0dc142b66a1064fc6647d526a081432e698b97"
+      },
+      "log": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-provider-04-c36ed27c3d59f185e481a7759e73d93dfe7a81de2c06ac0d0a783a99b79e76c6.log",
+        "sha256": "c36ed27c3d59f185e481a7759e73d93dfe7a81de2c06ac0d0a783a99b79e76c6"
+      }
+    },
+    "fullNode26Gate": {
+      "status": "passed",
+      "node": "26.10.0",
+      "reported": 1941,
+      "passed": 1938,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 91.88,
+        "branches": 80.5,
+        "functions": 90.1
+      },
+      "sourceFreeze": "03",
+      "deltaToFinal": "Only acceptance fixture changes and four new console regression tests; all production code/docs/type hashes unchanged. Those four tests also pass separately on Node 26.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-node-gate-01-48a641e15a2d3bf4107f71958402a9a2792d4e38e1d7393023561287160a490e.log",
+        "sha256": "48a641e15a2d3bf4107f71958402a9a2792d4e38e1d7393023561287160a490e"
+      }
+    },
+    "fullNode22Gate": {
+      "status": "passed",
+      "node": "22.16.0",
+      "reported": 1945,
+      "passed": 1942,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 91.87,
+        "branches": 80.52,
+        "functions": 90.14
+      },
+      "sourceFreeze": "04",
+      "scope": "Complete builds, unchanged dependency/coverage contracts, documentation audit, packed-release conformance and package/tree/reachable-history security audit.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-node-gate-02-73aa70e83d3a267fc9572eaf3ace1f1efe69466f65cd551aad4c56227fae834f.log",
+        "sha256": "73aa70e83d3a267fc9572eaf3ace1f1efe69466f65cd551aad4c56227fae834f"
+      }
+    },
+    "package": {
+      "status": "passed",
+      "files": 405,
+      "unpackedBytes": 6266632,
+      "compressedBytes": 1486172,
+      "unchangedMaxFiles": 405,
+      "unchangedMaxUnpackedBytes": 6291456,
+      "remainingByteHeadroom": 24824,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-final-pack-02-e4b60375ac385f7b77d470bb6cd5ded6691f398a5f8f2a9634d11613c7b89994.json",
+        "sha256": "e4b60375ac385f7b77d470bb6cd5ded6691f398a5f8f2a9634d11613c7b89994"
+      }
+    },
+    "browser": {
+      "status": "passed within recorded source scope",
+      "tool": "Codex in-app browser via CUA",
+      "desktopWidth": 1280,
+      "phoneWidth": 390,
+      "cases": [
+        "Explicit-offset input rejection focuses the error and keeps apply disabled.",
+        "Actual keyboard review binds exact source SHA, target/dependency/channel versions and America/Chicago preview.",
+        "Owned relay discards a real queued response; retry retains body/key and returns original receipt.",
+        "Versioned keyboard cancellation leaves prior target active without candidate acceptance.",
+        "Actual SIGKILL during migrated local candidate health requires typed recovery; empty confirmation rejected, exact confirmation restores prior database and removes unaccepted schema.",
+        "Real held authenticated schedule-list response cannot paint the staging project after navigation.",
+        "Real root-read revocation clears list, starts, expiry and timezone; restoring original disposable permissions restores project access.",
+        "Actual keyboard sign-out clears private receipt and newly entered schedule timestamps/zone.",
+        "Phone schedule cards wrap full digest and UTC/zone times without horizontal page overflow."
+      ],
+      "sourceScope": "Lost-response, recovery and phone layout checked on UI build 04; only the mutation navigation-generation guard changed in build 05, verified by four VM regressions and the final real navigation/revocation/sign-out checks. No layout CSS changed. The attempted final-dashboard phone capture remained 1280 wide because the browser viewport capability targeted the docs tab; it is not counted as phone evidence.",
+      "priorRecoveryInspection": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-browser-inspection-50591c6a011ab3600e378328b33160e3afa9f7816a895a70741689c38b119606.json",
+        "sha256": "50591c6a011ab3600e378328b33160e3afa9f7816a895a70741689c38b119606"
+      },
+      "finalCancellationInspection": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-browser-02-inspection-8aa485f10f0a093ee98db498e12805143cafeb7b39c5852e8f942bc8717d25d5.json",
+        "sha256": "8aa485f10f0a093ee98db498e12805143cafeb7b39c5852e8f942bc8717d25d5"
+      },
+      "revokedAccess": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-browser-02-revoked-dom-3f00233278ea5804e5fd6286dcbe7f31be821c7e22b05ecba9874bc99a2d33d3.json",
+        "sha256": "3f00233278ea5804e5fd6286dcbe7f31be821c7e22b05ecba9874bc99a2d33d3"
+      },
+      "signout": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-browser-02-signout-dom-e84767dba39a8d4f8c42e75eca3c0cb5794e5ed5f1f479753dc7491d2cab8dd3.json",
+        "sha256": "e84767dba39a8d4f8c42e75eca3c0cb5794e5ed5f1f479753dc7491d2cab8dd3"
+      },
+      "desktopCapture": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-browser-desktop-03-c6d49561cd544f81aa44a7c7efd8121843289eedcedb739abed38c0028175632.jpg",
+        "sha256": "c6d49561cd544f81aa44a7c7efd8121843289eedcedb739abed38c0028175632"
+      },
+      "phoneCapture": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-phone-02-32849c0e2fbdc44fd9192a6d59c8b9a205d6040f01a2a53262085ddf27565c88.jpg",
+        "sha256": "32849c0e2fbdc44fd9192a6d59c8b9a205d6040f01a2a53262085ddf27565c88"
+      }
+    },
+    "uiReview": {
+      "status": "passed",
+      "scope": "Changed console controls checked against the web-design-guidelines skill: native labelled controls, exact keyboard review/cancel/recovery, focused errors/status announcements, textContent rendering of persisted data, versioned busy state, stale-response fences, permission/draft clearing and existing responsive cards. No independent reviewer was used."
+    },
+    "documentation": {
+      "status": "passed within browser limits",
+      "guides": 98,
+      "words": 168034,
+      "build": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-docs-build-02-2aa5ac3ea8197012046899f50fe07d63a991ce40212d86eaa6285eeb9754d8fd.log",
+        "sha256": "2aa5ac3ea8197012046899f50fe07d63a991ce40212d86eaa6285eeb9754d8fd"
+      },
+      "doctor": {
+        "passed": 6,
+        "warnings": 1,
+        "failed": 0,
+        "warning": "Optional unlinked standalone docs project; no deployment performed.",
+        "evidence": {
+          "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-docs-doctor-02-edb9bf12470322913c671ba22fd26395f713958f08bc10e21e7ec70c88d15d39.log",
+          "sha256": "edb9bf12470322913c671ba22fd26395f713958f08bc10e21e7ec70c88d15d39"
+        }
+      },
+      "offlineArtifact": {
+        "sha256": "a98de54d7e63fd859a8eea820f2e74df91c5c30c0d0629eb2cb600436abddbef",
+        "uploaded": false,
+        "evidence": {
+          "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-docs-offline-02-5a6c147310bad3476697bd855f5fbeef4365f07ff80b17132a328e3ceaf19b41.log",
+          "sha256": "5a6c147310bad3476697bd855f5fbeef4365f07ff80b17132a328e3ceaf19b41"
+        }
+      },
+      "httpAndMcp": {
+        "status": "passed",
+        "scope": "Home, canonical guide, raw Markdown, JSON index/guide, both LLM formats, discovery, tools/list, docs.search and docs.read; actual read-only docs server.",
+        "evidence": {
+          "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-docs-endpoints-01-0461f7518538e801f78260b306ec5abf35184c8dbbba1b35729dce8a1df49f20.log",
+          "sha256": "0461f7518538e801f78260b306ec5abf35184c8dbbba1b35729dce8a1df49f20"
+        }
+      },
+      "browser": "Desktop and phone home/search/long guide verified. In-app browser blocks all six non-HTML agent format navigations at both widths; HTTP/MCP contents are independently verified, not claimed as browser rendered.",
+      "browserAttempts": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-docs-browser-formats-01-5dcb8412dd20667774b69b964e71e73ae216ff6fd32516a919126ad5816c7b22.json",
+        "sha256": "5dcb8412dd20667774b69b964e71e73ae216ff6fd32516a919126ad5816c7b22"
+      },
+      "phoneGuideCapture": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-docs-phone-02-3f32964be049a1f6c458f86acc3433c3b51fa9b287ffdbc606f23f1010b6bb81.jpg",
+        "sha256": "3f32964be049a1f6c458f86acc3433c3b51fa9b287ffdbc606f23f1010b6bb81"
+      }
+    }
+  },
+  "source": {
+    "baseCommit": "7f26178b8b37c7cf6c2601140eb3c5878e60dbee",
+    "finalHashes": {
+      "CHANGELOG.md": "466fcafe1206bdf8f16780ccbd62433ce724bb9f009bc1bf57dceb9eadd5f6e1",
+      "README.md": "bcd41d14ea9bb2624d8078803915bcd0f33787a93ad40c23eb48267ff044df8a",
+      "docs-site/content-manifest.mjs": "9f6ff06c6d5655d888d7a38787ec2bfcafd14158396a7919bb5b94941f0b910c",
+      "docs/api-reference.md": "a5be699188574dbac80b44ee3efbf952898eea04608423bc787c4ff3e1ca594c",
+      "docs/cli.md": "a991ccd3616e2274bcfa29a8800cd91cc27891043e9879a30d7dc3ab761030cb",
+      "docs/deployment-dependencies.md": "74c3a8e5bca2df8ae891648ed694d6485802fd7860b4a5beb53196a477961a8d",
+      "docs/deployment-platform.md": "ce00419e536d3a867b15b52df7ceacec9408c33679c0befd0b4da393637d4897",
+      "docs/environment-promotions.md": "9d455d58a6b6330e18a84ce41ece1ce244225d4546bb1a3118f4e54fa0740d2a",
+      "docs/platform-dashboard.md": "475c9558265305e71391702209529ee4cd727058bc3739ada807a6b45e9f9b95",
+      "docs/release-channels.md": "d804928a95c85ac23766c80f3203cbf355f3dac2cb69f71c26e52675d3520c8a",
+      "scripts/cli-deploy.mjs": "3f591d449fba722e1ebcd9c926b66a04fcac0af9ff3a9a8c5ba1f75bca81846a",
+      "src/platform-console.ts": "981038d46c8ac4665630e06c95b62bfee95c5295101e81a2d8f0969bfc2161b2",
+      "src/platform.d.ts": "5746e309bfeae891a825f62e0978b3574fa806f97fb79d8c3ad9a02f9a14cd45",
+      "src/platform.ts": "d52eb9f72f25ec3cab431015daafa560dae20c32c1375f3b6d393e669b0aaa58",
+      "tests/fixtures/platform-environment-console-context.mjs": "d486459ac28ccb742af0abe4f0256e828a1e14c3c7c76f950c3b5e377295469b",
+      "tests/fixtures/platform-promotion-provider-guest.mjs": "fea235591ccb9b48a240ba0b74b92ac1986af6e65cf4e11e82ed1f04d3d33d15",
+      "tests/fixtures/platform-promotion-provider-worker.mjs": "56ee21e5e1c645038cc72811009f195eda15cfc5544aac8dfee160cb970cb772",
+      "tests/moon-043-051-dashboard-lists.test.mjs": "e0bb47dbcebcd4c63a2b8d3000994b72b759de33ca694d98befa68d9621a8507",
+      "tests/platform-release-windows.test.mjs": "81cbec1ecf3fc88317c2e983141faf7ac9a9793817ca3760f9d2b54f7db6180d",
+      "tests/platform-release-windows-console.test.mjs": "7c1f4a81aa8e81e8b41bec1f88bc9a257160c745d9e04a20fc77102994a8f170",
+      "type-tests/release-windows.ts": "bf1e0cd7e6e602d2d69fff07d92bf9ca239fb881733bd446aecc0f49caeb7cc7",
+      "docs/release-windows.md": "957011193a410802630d46d1d46a610808b68ef18b7046c85e0bcefc6e2835ab"
+    },
+    "freeze03": {
+      "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-source-03-c453926901193e7d0a802ae5f123d000a27f004780064024875045fedec60067.json",
+      "sha256": "c453926901193e7d0a802ae5f123d000a27f004780064024875045fedec60067"
+    },
+    "freeze04": {
+      "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-source-04-75e0e0251e57ed621df3c0adefb12ea117adf01d8a9e599e0102ab30a5b30350.json",
+      "sha256": "75e0e0251e57ed621df3c0adefb12ea117adf01d8a9e599e0102ab30a5b30350"
+    },
+    "ownedSourceArchive04": {
+      "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-source-04-e6590baa1080f3679490804e8e0a2d072f6463e0419a610298449dbea08d91cd.tar",
+      "sha256": "e6590baa1080f3679490804e8e0a2d072f6463e0419a610298449dbea08d91cd"
+    }
+  },
+  "failedDiagnostics": [
+    {
+      "name": "release-window-authority-01.log",
+      "cause": "Source-read revocation correctly returned ROLE_DENIED/403; the inspection assertion incorrectly expected 200. Corrected expectation passes in authority-02 and final gate.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-authority-01-cf70295995de417f60525056eb307cbe52632132e8fe070b8bdfd3a5165b0421.log",
+        "sha256": "cf70295995de417f60525056eb307cbe52632132e8fe070b8bdfd3a5165b0421"
+      }
+    },
+    {
+      "name": "release-window-console-01.log",
+      "cause": "Older isolated console fixture lacked the new helper and obsolete source-prefix assertion; fixture corrected, final complete gate passes.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-console-01-9679376953a1ba099d471eda412822f80d18dec3846d4a2574586e96502b920a.log",
+        "sha256": "9679376953a1ba099d471eda412822f80d18dec3846d4a2574586e96502b920a"
+      }
+    },
+    {
+      "name": "release-window-types-02.log",
+      "cause": "New packed fixture omitted required publicUrl; fixture corrected, unchanged baseline and all 27 consumers pass.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-types-02-b7e97da8a9c047569c669f6e7c60ce89680edaa49e96b50cb9ed8fd94498ebeb.log",
+        "sha256": "b7e97da8a9c047569c669f6e7c60ce89680edaa49e96b50cb9ed8fd94498ebeb"
+      }
+    },
+    {
+      "name": "release-window-types-04.log",
+      "cause": "Command used a nonexistent trusted TypeScript tool path; corrected invocation succeeds, no source change.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-types-04-c652b65468277a87b96d42eae67c1bf0a89cbfcc6eb9170c93267dee6ca20399.log",
+        "sha256": "c652b65468277a87b96d42eae67c1bf0a89cbfcc6eb9170c93267dee6ca20399"
+      }
+    },
+    {
+      "name": "release-window-provider-01.log",
+      "cause": "Incorrectly expected code-only compensation to undo committed candidate application writes; contract/proposal/docs clarified existing behavior.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-provider-01-71bc8c089ad3d42ff7363efaa195761602e1110556c27486ce4196a81764e895.log",
+        "sha256": "71bc8c089ad3d42ff7363efaa195761602e1110556c27486ce4196a81764e895"
+      }
+    },
+    {
+      "name": "release-window-provider-02.log",
+      "cause": "Pausing ingress before candidate reconciliation did not prove candidate data commit; replaced timing barrier.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-provider-02-d882a2c596e709d15fb9873c5ae0fb808c040130c5d874ecb6215792f98f4f14.log",
+        "sha256": "d882a2c596e709d15fb9873c5ae0fb808c040130c5d874ecb6215792f98f4f14"
+      }
+    },
+    {
+      "name": "release-window-provider-03.log",
+      "cause": "HTTP-ingress barrier was not the provider acceptance observation; it did not prevent acceptance before expiry. Final fixture holds the real healthy provider reconcile response after actual candidate data commit, then cancels/expires before releasing it. No response is forged.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-provider-03-73a098e64223e964356869113af24b6aedf433a771c03bcab0754b8ba09abcb5.log",
+        "sha256": "73a098e64223e964356869113af24b6aedf433a771c03bcab0754b8ba09abcb5"
+      }
+    }
+  ],
+  "limits": [
+    "No exact-clock delivery guarantee: it starts no earlier than the approved instant and accepts before expiry; downtime, sequential due work and provider latency consume the window.",
+    "100 unresolved and 1,000 total retained schedules per root. Terminal history is not pruned or reused; new work is rejected when retained capacity is exhausted. GET returns newest 100 currently authorized entries.",
+    "Local apply-safe recovery restores its pre-operation database. Provider code-only compensation preserves already committed application writes, including writes by an unpublished healthy candidate.",
+    "Interrupted local work requires explicit fresh-authorized typed recovery. Unverified provider compensation retains visible recovery-required state and writer fences.",
+    "References use one supported local transactional control store; automatic supervisor leadership, database replication and multi-region availability are outside feature 05.",
+    "Disposable Docker/XFS profile certification is not production Railway certification. Production remains uncertified."
+  ],
+  "delivery": {
+    "state": "pending protected review and hosted checks",
+    "counted": false
+  }
+}

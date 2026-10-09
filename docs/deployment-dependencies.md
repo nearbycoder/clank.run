@@ -205,3 +205,8 @@ Override contains `expectedVersion`, `reason` and `confirmation`. Configured exp
 also requires `idempotencyKey`, `expectedActiveReleaseId` and `expectedActivationSequence`.
 Existing expected target, environment/channel versions, attestation and idempotency fields
 remain part of the exact request.
+
+Use [scheduled release windows](release-windows.md) to review an exact current channel pin for
+a bounded future window. Execution rechecks current authority and required services, cancellation
+prevents acceptance, and interrupted work retains verified recovery fences. The dashboard exposes
+**Schedule current pin** and **Scheduled releases** in the Environments tab.

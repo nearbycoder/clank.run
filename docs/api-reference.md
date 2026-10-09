@@ -329,6 +329,10 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
   `PlatformChannelPinRequest`, `PlatformChannelActivationRequest`, `PlatformChannelRollbackRequest`,
   `PlatformChannelAction`. Exact retained pins, readonly history and explicit environment
   activation use `/api/projects/:root/channels`; see [release channels](release-channels.md).
+- **Scheduled release windows** — `PlatformReleaseWindowRequest`, `PlatformReleaseWindow`,
+  `PlatformReleaseWindowCancelRequest`, `PlatformReleaseWindowRecoveryRequest`; exact future
+  promotions, current authority and verified recovery use `/api/projects/:root/release-windows`.
+  See [scheduled release windows](release-windows.md).
 - `openPlatform({ providerPromotionHosts })`: private operator certificate/profile registry
   for initialized co-located loopback provider targets under code-only policy. Current host
   proof is required before staging and acceptance; unsupported profiles fail closed.

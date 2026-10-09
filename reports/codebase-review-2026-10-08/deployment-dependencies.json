@@ -4,7 +4,7 @@
   "baseCommit": "be696323c7b0f4fd5cb381d2fb005b2ac8a2a139",
   "branch": "codex/project-dependency-gates",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/279",
-  "status": "implemented-verified-awaiting-hosted-review-and-protected-merge",
+  "status": "merged",
   "implementation": "Versioned managed-service requirements gate ordinary uploads, measured local canaries, explicit rollback and environment/channel activation. Exact credential-bound five-minute checks capture service activation identities. Current authority, policy and identity are checked around asynchronous work and publication. Durable interrupted receipts fence writers until owned cleanup and snapshot or certified-provider recovery. Human overrides bypass readiness only.",
   "validation": {
     "localContracts": {
@@ -213,13 +213,38 @@
       "finalDeltaScope": "Final backend/dashboard/CLI/docs/types match this tested snapshot. Only the disposable provider driver adds a provider-required-service runtime-generation drill afterward; it is verified separately on the same backend."
     },
     "hostedChecks": {
-      "status": "awaiting-updated-head",
-      "initialHead": "115e7e8bc3dc88e59669aae82b809b579c1847e0",
-      "initialHeadChecks": "all-six-passed-but-superseded-by-runtime-state-fix"
+      "status": "passed",
+      "reviewedHead": "eed02db0710c0476c41943a99d644718ce35cd32",
+      "passed": 6,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-hosted-checks-04-8d26502976d59506ea25f7e4d797fcc8c8ca93ffb293b978393a1474ed5c5a25.json",
+        "sha256": "8d26502976d59506ea25f7e4d797fcc8c8ca93ffb293b978393a1474ed5c5a25"
+      },
+      "newCodeQLAlerts": 0,
+      "codeqlAlerts": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-codeql-alerts-04-4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945.json",
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "codeqlAnalyses": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-codeql-analyses-03-e1b4952d5b2d073c9c54a2dee8d3ab16b20d6c9cbae96a78c9b2778bf091e29b.json",
+        "sha256": "e1b4952d5b2d073c9c54a2dee8d3ab16b20d6c9cbae96a78c9b2778bf091e29b"
+      },
+      "unresolvedReviewThreads": 0,
+      "reviewThreads": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-review-threads-04-62cf4a2a96701dd234684b3ab49f9a68f28dd80998835f4866a381eeb07210c6.json",
+        "sha256": "62cf4a2a96701dd234684b3ab49f9a68f28dd80998835f4866a381eeb07210c6"
+      }
     },
     "protectedMerge": {
-      "status": "open-not-merged",
-      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/281"
+      "status": "merged",
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/281",
+      "reviewedHead": "eed02db0710c0476c41943a99d644718ce35cd32",
+      "reviewedTree": "2c9c5feae6aaa4228e0e4b6f2677249deb562c8a",
+      "mergeCommit": "7f26178b8b37c7cf6c2601140eb3c5878e60dbee",
+      "mergedTreeMatchesReviewedTree": true,
+      "method": "protected expected-head squash; no bypass",
+      "authorCommentReview": 5474072535,
+      "independentApproval": false
     },
     "package": {
       "status": "passed",
@@ -324,12 +349,15 @@
     "mergedBeforeThisPr": 18,
     "mergedFeatureBatchesBeforeThisPr": 15,
     "remainingBeforeThisPr": 22,
-    "feature04Counted": false
+    "feature04Counted": true,
+    "mergedAfterThisPr": 19,
+    "mergedFeatureBatchesAfterThisPr": 16,
+    "remainingAfterThisPr": 21
   },
   "preservation": {
     "verifiedFiles": 23,
     "unchanged": true,
-    "main": "be696323c7b0f4fd5cb381d2fb005b2ac8a2a139"
+    "main": "7f26178b8b37c7cf6c2601140eb3c5878e60dbee"
   },
   "nextProposal": "https://github.com/nearbycoder/clank.run/issues/280",
   "initialHeadValidation": {

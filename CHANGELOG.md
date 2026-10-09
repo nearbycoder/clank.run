@@ -4,6 +4,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add exact scheduled channel promotions with explicit UTC windows and IANA previews, durable
+  fenced execution, current credential/readiness checks, versioned cancellation and verified
+  recovery through API, CLI and dashboard. Preserve acceptance across restart and protect
+  unresolved work against channel retirement and project deletion.
+
 - Add versioned project dependency gates for uploads, canaries, rollback and environment/channel
   activation. Bind bounded health checks to exact managed service identities and current
   credentials, expose CLI/dashboard configuration and history, and support explicit human

@@ -195,6 +195,10 @@ const COMMANDS = Object.freeze({
     usage: "clank environment <list|bind|unbind|promote|history|recover> [name] [project-or-key] [directory] [--expected-version <n>] [--migration-policy <apply-safe|code-only>] [--from <name>] [--release <id>] [--digest <sha256>] [--expected-active <id|none>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
     summary: "Configure independent persistent targets and promote an exact retained upload without rebuilding.",
   },
+  "release-window": {
+    usage: "clank release-window <list|queue|show|cancel|recover> [id] [directory] [--request <json-file>] [--expected-version <n>] [--confirm <phrase>] [--attestation <json-file>] [--json]",
+    summary: "Queue, inspect, cancel or recover an exact scheduled channel promotion.",
+  },
   dependency: {
     usage: "clank dependency <get|configure|check|history|activations|recover> [activation-id] [directory] [--config <file>] [--expected-version <n>] [--confirm <phrase>] [--json]",
     summary: "Configure versioned service readiness and inspect or recover gated activations.",
@@ -263,6 +267,7 @@ const VALUE_OPTIONS = Object.freeze({
   deploy: ["name", "slug", "org", "placement", "output", "signing-key", "builder", "build-id", "dependency-version", "dependency-check"],
   environment: ["expected-version", "migration-policy", "from", "release", "digest", "expected-active", "key", "attestation", "confirm", "dependency-version", "dependency-check"],
   dependency: ["config", "expected-version", "confirm"],
+  "release-window": ["request", "expected-version", "confirm", "attestation"],
   channel: ["expected-version", "from", "release", "digest", "to", "environment-version", "expected-active", "from-version", "key", "attestation", "confirm", "version", "dependency-version", "dependency-check"],
   preview: [
     "fixture",
@@ -300,6 +305,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   deploy: ["dry-run", "json"],
   environment: ["json"],
   dependency: ["json"],
+  "release-window": ["json"],
   channel: ["json"],
   preview: [
     "json",
@@ -348,6 +354,7 @@ export async function run(command, args) {
       case "preview": return await previewCommand(args);
       case "environment": return await environmentCommand(args);
       case "dependency": return await dependencyCommand(args);
+      case "release-window": return await releaseWindowCommand(args);
       case "channel": return await channelCommand(args);
       case "status": return await status(args);
       case "releases": return await releases(args);
@@ -2211,6 +2218,36 @@ function cliDependencyVersion(args) {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "string" || !/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) throw new CliError("Pass an exact --dependency-version from dependency get.");
   return Number(value);
+}
+
+async function releaseWindowCommand(args) {
+  const action=args.shift(),values=positionals(args);
+  const allowed={list:["json"],queue:["json","request","attestation"],show:["json"],cancel:["json","expected-version"],recover:["json","expected-version","confirm"]}[action];
+  if(!allowed)throw new CliError(COMMANDS["release-window"].usage);
+  for(const argument of args){if(!argument.startsWith("--"))continue;const name=argument.slice(2).split("=",1)[0];if(!allowed.includes(name))throw new CliError(`--${name} does not apply to release-window ${action}.`)}
+  const named=["show","cancel","recover"].includes(action),id=named?values.shift():null;
+  if(named&&(typeof id!=="string"||!/^window_[A-Za-z0-9_-]{16,128}$/.test(id)))throw new CliError("Pass the exact schedule ID from release-window list.");
+  if(values.length>1)throw new CliError(COMMANDS["release-window"].usage);
+  let method="GET",body,suffix=named?"/"+encodeURIComponent(id):"";
+  if(action==="queue"){
+    const file=option(args,"request");if(!file)throw new CliError("Pass --request with the data-only exact schedule JSON.");
+    body=await readBoundedJsonFile(resolve(file),"Scheduled promotion request",8192);
+    const fields=["channel","targetEnvironment","expectedVersion","expectedEnvironmentVersion","expectedActiveReleaseId","expectedDependencyVersion","idempotencyKey","startsAt","expiresAt","timeZone"];
+    if(!body||typeof body!=="object"||Array.isArray(body)||Object.keys(body).some(key=>!fields.includes(key)))throw new CliError("The schedule JSON contains only the documented exact promotion, UTC instants and timezone fields.");
+    method="POST";
+  }
+  if(action==="cancel"||action==="recover"){
+    const version=option(args,"expected-version");
+    if(typeof version!=="string"||!/^[1-9]\d*$/.test(version)||!Number.isSafeInteger(Number(version)))throw new CliError("Pass the exact --expected-version from release-window show.");
+    body={expectedVersion:Number(version)};method="POST";suffix+="/"+action;
+    if(action==="recover"){const confirmation=option(args,"confirm");if(!confirmation)throw new CliError("Pass the exact --confirm recover-release-window phrase.");body.confirmation=confirmation}
+  }
+  const file=option(args,"attestation"),attestation=file?encodeReleaseAttestation(await readBoundedJsonFile(resolve(file),"Target release attestation",16384)):null;
+  const {profile,link}=await linkedContext(resolve(values[0]??"."));
+  const payload=await platformRequest(profile.server,`/api/projects/${encodeURIComponent(link.projectId)}/release-windows${suffix}`,{token:profile.token,method,...(body?{body}:{}),...(attestation?{headers:{"x-clank-release-attestation":attestation}}:{}),...(action==="recover"?{timeoutMs:PLATFORM_DEPLOY_TIMEOUT_MS}:{})});
+  if(flag(args,"json")){console.log(JSON.stringify(payload,null,2));return}
+  const rows=payload.schedules??[payload.schedule];if(!rows.length)console.log("No authorized scheduled promotions retained.");
+  for(const row of rows)console.log(`${row.id}  version ${row.version}  ${row.state}  ${row.channel} → ${row.targetEnvironment}  ${row.preview.startsAt} – ${row.preview.expiresAt} (${row.timeZone})${row.targetReleaseId?'  '+row.targetReleaseId:''}`);
 }
 
 async function dependencyCommand(args) {
