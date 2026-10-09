@@ -1,0 +1,194 @@
+{
+  "feature": 32,
+  "title": "Interactive component contract harness",
+  "date": "2026-10-09",
+  "baseCommit": "22356868facd64e4470a11564b0b87122ed82659",
+  "branch": "codex/component-harness",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/265",
+  "status": "local-release-validation-passed",
+  "acceptance": {
+    "definition": "Typed schema-validated finite JSON fixtures, captured props/callbacks, common UI part mappings and bounded data-only assertions/journeys. Deterministic exports exclude props and timings and load directly through the existing CLI suite envelope.",
+    "rendering": "The same synchronous instance factory runs inside SSR and browser renderer scopes. Real effects and mounted native listeners are released across reset/selection/disposal; matching hydration preserves the SSR node, structural remount releases its abandoned instance.",
+    "isolation": "A dedicated connected root with one active harness per document isolates focus and portals. Fingerprints and common UI contracts are checked before acceptance; cancelled, adopted and detached roots never execute stale factories or clear later reservations.",
+    "interaction": "Native selection/reset/check/export/dispose controls, current semantic/part assertions and immutable bounded hydration snapshots. Reset/disposal fences discard late checks. Export controls use read-only text with no executable payload.",
+    "nativeBrowser": "Eight actual Chrome journeys (96 steps) at 1280/390 widths cover Enter, Space, arrows, Tab/Shift+Tab, focus trapping, Escape return, no horizontal overflow, genuine isTrusted key events, cancellation/adoption/revision rejection, structural recovery, stale checks and resource cleanup. Chrome sandbox remains enabled.",
+    "reviewFixes": "ARIA checked states are preserved in CLI inspection. Fixture schemas are not reparsed after capture. Original document ownership is retained during asynchronous hydration. Owned Chrome shutdown handles signal termination and bounded profile cleanup races; attached external browsers are not shut down. Hosted CodeQL review strengthened case-insensitive HTML assertions and replaced request-derived fixture state with fixed prebuilt pages; actual HTTP injection regressions pass.",
+    "manualBrowser": "In-app browser verifies native controls, assertion status, readonly exports, reset/selection cleanup, actual SSR node identity, mismatch recovery, cancellation/adoption and disposal. Final desktop screenshot and mobile open modal show native first-input focus and measured 390/390 client/scroll widths."
+  },
+  "validation": {
+    "focused": {
+      "tests": 19,
+      "pass": 19,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "newHarnessTests": 8,
+      "newFixtureHttpRegression": 1,
+      "newJourneyTests": 2,
+      "newStartupRegression": 1,
+      "path": "/tmp/clank-review-2026-10-08/component-harness-focused.log",
+      "sha256": "dfd270b0d1a64aef1414b3bface1cf8a89ef25c3ef6f3ad1bfc0f1ff3f787678"
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 159,
+      "baselineAllowance": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 20,
+      "skipLibCheck": false,
+      "path": "/tmp/clank-review-2026-10-08/component-harness-types.log",
+      "sha256": "c25f4758dc61681d9b3040170c96a8129ebbd5cfe2dd9fa5996ab3b5eb1a679b"
+    },
+    "release": {
+      "status": "passed",
+      "node": "22.16.0",
+      "tests": 1852,
+      "pass": 1849,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 87.97,
+        "branches": 80.37,
+        "functions": 90.43
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 401,
+      "unpackedBytes": 6198569,
+      "fileCeiling": 401,
+      "byteCeiling": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/component-harness-check.log",
+      "sha256": "4f19f8b9a2efcb0a4d4fde04fe50c67fe8ca1bc334c4105f9126114813cebde5"
+    },
+    "pack": {
+      "path": "/tmp/clank-review-2026-10-08/component-harness-pack.json",
+      "sha256": "9ac14b9a5f75c5dc2c646e132eb54d4824a8a0c1b309286d221fce836b270ded"
+    },
+    "browser": {
+      "tool": "Chrome for Testing 155.0.8059.39; separate in-app browser for manual controls",
+      "vendorSource": "https://googlechromelabs.github.io/chrome-for-testing/",
+      "suites": [
+        {
+          "name": "toggle",
+          "journeys": [
+            {
+              "name": "Switch native keyboard 1280",
+              "steps": 15,
+              "ok": true
+            },
+            {
+              "name": "Switch native keyboard 390",
+              "steps": 15,
+              "ok": true
+            }
+          ],
+          "path": "/tmp/clank-review-2026-10-08/component-harness-toggle-journeys.json",
+          "sha256": "9b9110317da5ee7f48a6559d5411261361b304fe02f35c81ed9b3f95d9f5f494",
+          "commandLog": {
+            "path": "/tmp/clank-review-2026-10-08/component-harness-toggle-cli.log",
+            "sha256": "ee93215bd5cd7cddf0d2c0a358699e13146b2f9b8537ac23aa23412297fb44c0"
+          }
+        },
+        {
+          "name": "dialog",
+          "journeys": [
+            {
+              "name": "Dialog native focus 1280",
+              "steps": 16,
+              "ok": true
+            },
+            {
+              "name": "Dialog native focus 390",
+              "steps": 16,
+              "ok": true
+            }
+          ],
+          "path": "/tmp/clank-review-2026-10-08/component-harness-dialog-journeys.json",
+          "sha256": "581d47eafa9b4d755a6e812b7a6c62de67b21e7a1a1dfff9ceae1efbc3d8e672",
+          "commandLog": {
+            "path": "/tmp/clank-review-2026-10-08/component-harness-dialog-cli.log",
+            "sha256": "3f07126d2ff0fa35fd92614e29492e98248a03b2b0f6b4ac1b5417fd14b112d9"
+          }
+        },
+        {
+          "name": "lifecycle",
+          "journeys": [
+            {
+              "name": "Snapshot rejection abort",
+              "steps": 9,
+              "ok": true
+            },
+            {
+              "name": "Snapshot rejection wrong-revision",
+              "steps": 9,
+              "ok": true
+            },
+            {
+              "name": "Snapshot rejection adopt",
+              "steps": 9,
+              "ok": true
+            },
+            {
+              "name": "Mismatch recovery and stale disposal",
+              "steps": 7,
+              "ok": true
+            }
+          ],
+          "path": "/tmp/clank-review-2026-10-08/component-harness-lifecycle-journeys.json",
+          "sha256": "08e1ebfbe4b8e57aec42eff18be19fb7ddfad21f7c2758e673e84118bd23bde8",
+          "commandLog": {
+            "path": "/tmp/clank-review-2026-10-08/component-harness-lifecycle-cli.log",
+            "sha256": "2331f385153bd2bb72c200cdbf3794c9d395bdcc8ff9a4a13e1bb1c9fedfdc8d"
+          }
+        }
+      ],
+      "desktop": {
+        "path": "/tmp/clank-review-2026-10-08/component-harness-desktop.jpg",
+        "sha256": "7fd791938dc8994a02d3d31503840d7f3442fc323ccfb1541cc367738fabd990"
+      },
+      "mobile": {
+        "path": "/tmp/clank-review-2026-10-08/component-harness-mobile.jpg",
+        "sha256": "804044cb655f1d41b2755c3a553f80abf35b148a60f67bfc7661802d4fe1cb4b"
+      }
+    }
+  },
+  "limits": [
+    "Factories are trusted developer code; this is not a JavaScript or origin sandbox. Fixture routes must use disposable development data and their host authentication if served beyond loopback.",
+    "One harness per document; use separate iframe documents for simultaneous portal/focus fixtures.",
+    "Current-state checks do not replay exported keyboard journeys. The DOM driver deliberately has no native press capability.",
+    "Snapshots normalize the common UI manifest; control-specific extra fields are not serialized. Declared conditional parts are checked in their actual mounted journey states.",
+    "Instance counts record callback invocation; external resource cleanup is the factory contract. The controls cleanup removes its panel and disposes the harness; direct harness disposal alone does not remove the panel.",
+    "SSR HTML is bounded after trusted rendering, rather than sandboxing arbitrary factory computation. Factories and manifests are synchronous; views retain existing async SSR support.",
+    "Change the fixture revision for behavior changes; a fingerprint does not serialize factory source code.",
+    "The three existing privileged-host skips do not certify Docker/XFS isolation or fleet takeover."
+  ],
+  "sourceHashes": {
+    "src/component-harness.ts": "ba6a4127f90eb493acdbccc176495dd45acc5285f14ec95ced705dd301dc0c2b",
+    "src/component-harness.d.ts": "13beb149c056a55fed06681acd30d29a9f1271ac8b350059a21da4744158ac48",
+    "src/journey.ts": "0240dcedbfbfacce87dff6355780f6f5ff4f3381a1e4ab35629a0534eff06596",
+    "src/journey.d.ts": "d871fa0b6e1a6bba03155baa8f7704bd3c9180c0d8633a644e3a527786944695",
+    "scripts/cli-journey.mjs": "55e262f61d7624b20fd783392dbc52ba6bd7e432172359fc231d1bba15de3856",
+    "scripts/security-audit.mjs": "ea055e2d748c03379cc7adee57cd7499eae3cb75ee6ad975d5c5f18805b1c181",
+    "package.json": "95b27a14f6ed1ece95d45f721d1b63d945f2629c841f3c20636d74594d1da83a",
+    "tests/component-harness.test.mjs": "e1157a9836165178c3b6752ddb121a147a9ddea30a15b97d5f2838782740994c",
+    "tests/journey.test.mjs": "6a853d2d1ca2800438cd7025e152cf7e7c590834141b08e5a36158e60bfaf844",
+    "tests/journey-cli.test.mjs": "c78a93d39558f0952d8edf8ad2dbf9a979206223287982ce0656b3c592602ea2",
+    "tests/fixtures/component-harness-specimens.mjs": "007b76b2b0e931c9a9d0b53c615c7e288f5cbaec23efd9d46a78ecbbd5c86911",
+    "tests/fixtures/component-harness-browser-entry.mjs": "caa5762ec822b1081e460cdb443ac38aeb337d758c5a7994d28f4771814f3bb3",
+    "tests/fixtures/component-harness-browser.mjs": "9e8ae4bb6eddfb05f28cb1a7a2e7b1e934fe82f257740f7939e983833f76d163",
+    "tests/fixtures/component-harness-lifecycle.json": "5e317bd6433ef615a3e76472367ae04988c4075b89a206a751619b91099f7b6a",
+    "type-tests/component-harness.ts": "cab0fb8f0ac683df8b7c7c681e021956a79e16f757eb7bfcce869c1df9d42016",
+    "docs/component-harness.md": "198882350f2d0797377d2cbc0e0c13e0bd0339f585e11f0779299cd70b275d1d",
+    "docs/browser-journeys.md": "04a6ab14468cac2def919d7fe30816a89fca34fd2e22a56f3a9e5eafecbaca9b",
+    "docs/api-reference.md": "e418557f514895756dbbff5dd8e7db9645dd9a2f19e489590d2533f9a098b08f",
+    "docs/development-tools.md": "2b42a46b24721e4c0d79180a6e3a2fad6cfb15cd097721272a5dcaa60b9e3905",
+    "docs/ui.md": "48ca6edc41ef43da5125430d1dc44d1c432931e42d659f2b122e261650f3bb71",
+    "docs-site/content-manifest.mjs": "f2be3cb1336c88a91ad45d924fa2f5f3a130d1854dc28bcfdb55d5ac57a604e1",
+    "README.md": "229a4d95c695bc09856f8e311ba881662e6dc759727db2ae059a31b735bdbfd2",
+    "CHANGELOG.md": "cf34edfa356d22b3cd0b844a81a0fd823f30a73a411c32f9c1078e1d51bf0998"
+  }
+}

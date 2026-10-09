@@ -3,6 +3,33 @@ import assert from "node:assert/strict";
 
 import { defineJourney, runJourney } from "../dist/index.js";
 
+test('native focus, keyboard and layout capabilities are optional for old journeys and explicit for new ones', async () => {
+  const legacy = driverFixture(), calls = []; let focused;
+  const native = { ...legacy.driver, focus(id) { calls.push(['focus', id]); focused = id; return id === 'task-add'; },
+    press(key) { calls.push(['press', key]); if (key === 'Tab') focused = 'task-title'; }, focusedTarget: () => focused,
+    layout: () => ({ clientWidth: 390, scrollWidth: 390 }) };
+  const journey = defineJourney({ name: 'Native acceptance', steps: [{ focus: 'task-add' }, { expect: { focused: 'task-add' } },
+    { press: 'Tab' }, { expect: { focused: 'task-title', noHorizontalOverflow: true } }] });
+  const report = await runJourney(journey, native, { baseUrl: 'https://app.test' }); assert.equal(report.ok, true);
+  assert.deepEqual(calls, [['focus', 'task-add'], ['press', 'Tab']]);
+  for (const step of [{ focus: 'task-add' }, { press: 'Tab' }, { expect: { focused: 'task-add' } }, { expect: { noHorizontalOverflow: true } }]) {
+    const missing = await runJourney(defineJourney({ name: 'Missing capability', steps: [step] }), legacy.driver, { baseUrl: 'https://app.test' });
+    assert.equal(missing.ok, false); assert.match(missing.error, /does not (support|report)/);
+  }
+  const overflow = await runJourney(journey, { ...native, layout: () => ({ clientWidth: 390, scrollWidth: 391 }) }, { baseUrl: 'https://app.test' });
+  assert.equal(overflow.ok, false); assert.match(overflow.error, /horizontal overflow/);
+  const invalid = await runJourney(journey, { ...native, layout: () => ({ clientWidth: NaN, scrollWidth: 0 }) }, { baseUrl: 'https://app.test' });
+  assert.equal(invalid.ok, false); assert.match(invalid.error, /invalid document measurements/);
+});
+
+test('native key and observation contracts reject unsupported values and inherited operations', () => {
+  for (const step of [{ press: 'Control+script' }, { expect: { focused: '<selector>' } }, { expect: { noHorizontalOverflow: false } }]) {
+    assert.throws(() => defineJourney({ name: 'Bad native assertion', steps: [step] }), TypeError);
+  }
+  const inherited = Object.assign(Object.create({ press: 'arbitrary code' }), { expect: { text: 'Ready' } });
+  assert.deepEqual(defineJourney({ name: 'Own operation', steps: [inherited] }).steps, [{ expect: { text: 'Ready' } }]);
+});
+
 function driverFixture() {
   let url = "https://app.test/old";
   let text = "Tasks";

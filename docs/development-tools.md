@@ -125,3 +125,10 @@ excluded. Extra object fields are discarded and malformed/oversized reports are 
 is a structural reproduction aid, not a saved application or automatic replay of private data.
 Keep inspection inside the local/authorized workbench. No telemetry or public endpoint is added.
 Rollback removes the capture/compiler options; no persistent migration is involved.
+
+## Component contract harness
+
+[Interactive component specimens](component-harness.md) share captured props and UI manifests
+across SSR, hydration and disposable browser mounts. Native controls reset/select instances,
+inspect current contracts and export deterministic Chrome journeys for keyboard, focus and
+narrow-width acceptance. The optional module starts no server and mounts nothing on import.

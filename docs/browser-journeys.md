@@ -16,6 +16,9 @@ npm run test:journey
 The CLI defaults to `http://127.0.0.1:3000`, launches installed Chrome or Chromium with a fresh
 temporary profile, keeps the browser sandbox enabled, and deletes the profile when the run ends.
 It returns nonzero when a step, page exception, navigation boundary, or timeout fails.
+Owned browser shutdown waits for normal or signal termination before deleting its profile.
+Transient profile-removal races have three bounded retries; an attached external browser is
+left running and only the runner-created target is closed.
 
 ## A complete journey
 
@@ -56,11 +59,20 @@ account; never automate a production account or commit credentials.
 | `visit` | relative path | Navigate without leaving the configured application origin. |
 | `input` | `{ target, value }` | Enter text, numbers, booleans, selections, or a secret reference. |
 | `activate` | stable ID | Click an enabled semantic control. |
+| `focus` | stable ID | Focus a unique enabled native element. |
+| `press` | bounded key | Send native Chrome key input to the focused element. |
 | `expect` | expectation | Check immediately. |
 | `wait` | expectation plus optional `timeoutMs` | Poll through hydration, navigation, and live updates. |
 | `inspect` | bounded label | Attach a value-redacted semantic surface snapshot to the report. |
 
 Expectations can combine visible `text`, a relative `url`, a semantic `target`, and target `state`.
+They can also assert `focused: "semantic-id"` and `noHorizontalOverflow: true`. The latter
+compares native document scroll width with its client width after setting the declared viewport.
+Supported keys are `Tab`, `Shift+Tab`, `Enter`, `Space`, `Escape`, the four arrow keys, `Home`,
+`End`, `PageUp` and `PageDown`. Chrome receives native DevTools key input, including default Tab
+navigation and button activation. Explicit ARIA checked states, including unchecked and mixed
+controls, are preserved in the CLI semantic surface.
+
 Supported state is `label`, `role`, `checked`, `expanded`, `disabled`, `readonly`, `invalid`, or
 `value`. Prefer role and behavioral state; assert visible copy only when the wording is itself part
 of the product contract.
@@ -136,3 +148,10 @@ const report = await runJourney(
 `runJourney` is driver-neutral for deterministic unit tests. `createDomJourneyDriver` adapts an
 existing application window; the CLI's driver uses Chrome DevTools directly and remains
 dependency-free.
+
+The optional native driver capabilities are `focus`, `press`, `focusedTarget` and `layout`.
+Older drivers continue to run older journeys. A journey requesting an absent capability fails
+with an explicit report. The DOM adapter reports focus/layout and uses native element focus;
+it does not synthesize keyboard events or implement `press`. Use the Chrome CLI for native
+keyboard acceptance. [Component specimens](component-harness.md) combine captured fixture
+props, UI contracts, SSR/hydration, interactive resets and exported keyboard journeys.

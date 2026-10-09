@@ -228,8 +228,20 @@ types.
 - `createDomJourneyDriver(window, agentSurface)` → `JourneyDriver`: adapt a mounted browser app.
 - `clank journey [file]`: run JSON or trusted local module suites in isolated real Chrome.
 - Types: `JourneyInput`, `JourneyDefinition`, `JourneyStep`, `JourneyExpectation`,
-  `JourneyInputValue`, `JourneySecretReference`, `JourneyDriver`, `JourneyReport`,
+  `JourneyInputValue`, `JourneySecretReference`, `JourneyKey`, `JourneyDriver`, `JourneyReport`,
   `JourneyStepReport`, `RunJourneyOptions`.
+
+## Component specimens
+
+Optional module: `@clank.run/framework/component-harness`; see [component harness](component-harness.md).
+
+- `defineComponentSpecimen(input)` → registered `ComponentSpecimen<Props>`: capture schema-validated props, synchronous factory, semantic part mappings, current assertions and journeys.
+- `renderComponentSpecimen(specimen)` → `{ html, snapshot }`: SSR with owned cleanup and an immutable fingerprint/common UI contract.
+- `mountComponentSpecimen(root, specimen)` / `hydrateComponentSpecimen(root, specimen, snapshot, { signal? }?)` → `ComponentHarness`: mount in a dedicated connected root with one active harness per document.
+- Controller: `snapshot()`, `reset()`, `select(specimen)`, `check()`, `exportAssertions()`, `dispose()`. A stale check returns `null`.
+- `exportComponentAssertions(specimen)` → deterministic CLI-compatible `clank-component-assertions/1` JSON.
+- `mountComponentHarnessControls(container, harness, specimens)` → cleanup: mount native selection/reset/check/export/dispose controls outside the fixture root; cleanup also disposes the harness.
+- Types: `ComponentSpecimen`, `ComponentSpecimenInput`, `ComponentSpecimenInstance`, `ComponentSpecimenSnapshot`, `ComponentHarness`, `ComponentHarnessSnapshot`.
 
 ## Realtime collaboration
 
