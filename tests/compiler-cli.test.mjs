@@ -486,6 +486,41 @@ test("CLI help is command-aware, agent-readable, and never executes the target c
   }
 });
 
+test("deployment CLI preserves dash-prefixed identities after the option terminator", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-cli-positional-")), home = join(root, "home");
+  const calls = [];
+  const server = createHttpServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    calls.push({ method: request.method, url: request.url, body: JSON.parse(body) });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ ok: true, environment: { name: "staging", projectId: calls.at(-1).body.projectId, version: 2 } }));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const platform = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await mkdir(home); await mkdir(join(root, ".clank"));
+    await writeFile(join(home, "config.json"), JSON.stringify({ version: 1, current: platform, profiles: { [platform]: { token: "clnk_positional_fixture", expiresAt: Date.now() + 60000 } } }));
+    await writeFile(join(root, ".clank/project.json"), JSON.stringify({ version: 1, server: platform, projectId: "project_positional" }));
+    const invoke = args => runCliResult(["environment", ...args], root, { ...process.env, CLANK_HOME: home });
+    for (const identity of ["--dash_prefixed_project", "--help", "--json", "--expected-version=999"]) {
+      const result = await invoke(["bind", "--expected-version=1", "--migration-policy=code-only", "--json", "--", "staging", identity]);
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout).environment.projectId, identity);
+      assert.deepEqual(calls.at(-1), { method: "PUT", url: "/api/projects/project_positional/environments/staging", body: { projectId: identity, expectedVersion: 1, migrationPolicy: "code-only" } });
+    }
+    const human = await invoke(["bind", "--expected-version=1", "--", "staging", "--json"]);
+    assert.equal(human.code, 0, human.stderr); assert.match(human.stdout, /^staging: --json at version 2/mu);
+    for (const args of [["bind", "--unknown", "--json", "--", "staging", "--project"], ["bind", "--expected-version", "--", "staging", "--project"], ["list", "--digest=unused", "--json", "--", "--project"]]) {
+      const before = calls.length, result = await invoke(args);
+      assert.equal(result.code, 1); assert.equal(calls.length, before);
+    }
+  } finally {
+    server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("clank jobs launches the configured provider-neutral process with bounded worker settings", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-cli-jobs-"));
   const resultPath = join(root, "worker-environment.json");

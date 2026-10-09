@@ -21,6 +21,10 @@ clank environment bind staging PROJECT_STAGING --expected-version=0 --migration-
 clank environment bind production PROJECT_PRODUCTION --expected-version=0 --migration-policy=code-only
 ```
 
+Generated project IDs can start with a dash. In that case, put options before the
+`--` terminator, for example:
+`clank environment bind --expected-version=0 --migration-policy=code-only --json -- staging --PROJECT_ID`.
+
 Workspace owners/admins configure bindings. Development/staging promotion requires current
 deploy permission on the family root and target, plus read permission on the source.
 Production promotion and direct production deployment/rollback require an owner/admin.

@@ -75,8 +75,9 @@ if (command === "workbench" && !args.includes("--help") && !args.includes("-h"))
 
 if (command !== "build" && command !== "watch") {
   const { run } = await import("./cli-deploy.mjs");
-  if (args.includes("--help") || args.includes("-h")) {
-    await run("help", [command, ...(args.includes("--json") ? ["--json"] : [])]);
+  const end = args.indexOf("--"), options = end === -1 ? args : args.slice(0, end);
+  if (options.includes("--help") || options.includes("-h")) {
+    await run("help", [command, ...(options.includes("--json") ? ["--json"] : [])]);
     process.exit(process.exitCode ?? 0);
   }
   await run(command, args);
