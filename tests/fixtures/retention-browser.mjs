@@ -48,7 +48,7 @@ const server = createServer(async (req, res) => {
     }
     if (req.url === '/fixture/evidence' && user) { const native = runtime.database[SQLITE_INTERNAL]; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ chunks: native.prepare('SELECT count(*) AS n FROM clank_durableImportChunks').get().n, expiredIdentities: native.prepare("SELECT count(*) AS n FROM clank_durableImportOperations WHERE json_extract(_data,'$.expired')=1").get().n, rules: native.prepare('SELECT count(*) AS n FROM clank_retention_schedules').get().n })); return; }
     res.statusCode = 404; res.end('Not found');
-  } catch (error) { res.statusCode = 500; res.end(String(error.message)); }
+  } catch { res.statusCode = 500; res.setHeader('content-type', 'text/plain; charset=utf-8'); res.end('Fixture request failed'); }
 });
 server.listen(43176, '127.0.0.1', () => console.log('Retention verification at ' + origin));
 let closing = false; async function close() { if (closing) return; closing = true; server.close(); retention.close(); imports.close(); runtime.close(); await rm(root, { recursive: true, force: true }); }

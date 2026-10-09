@@ -110,6 +110,14 @@
     "browser": {
       "path": "/tmp/clank-review-2026-10-08/retention-browser-evidence.json",
       "sha256": "0fc7c6c357cd816db7611f82078d365b5b997532442476442015394773dc17e6"
+    },
+    "browserFixtureErrorResponse": {
+      "status": "passed",
+      "contentType": "text/plain; charset=utf-8",
+      "body": "Fixture request failed",
+      "path": "/tmp/clank-review-2026-10-08/retention-fixture-check.log",
+      "sha256": "9a9805645ea30be7058eb63d9b32927980e65aa7f6222a5dc26eb8c63562f52a",
+      "reason": "CodeQL flagged raw exception text in the disposable browser fixture; normal and failing real HTTP requests confirm the fixed response."
     }
   },
   "limits": [
@@ -143,7 +151,7 @@
     "tests/retention-administration.test.mjs": "669a944fd9840780e90f480f1c65442c880b245a6d91683e98c67702e96a6f8b",
     "tests/retention-ui.test.mjs": "976c72670f52246d527111dda3100d6ec7cf2788ee3dcf3ec84b140e880230aa",
     "tests/fixtures/retention-worker.mjs": "9c04ee38df7e958a7d1c8cf1abca35e20640b6eaf11c81651be85fa74e8d1429",
-    "tests/fixtures/retention-browser.mjs": "9998f2f826f3bb335092a48d6a7ced455811078235d7c56dc06dadb5e630d3a9",
+    "tests/fixtures/retention-browser.mjs": "fcedab92f1bd1dae638950c16599eff5f5240935ff287f0ab44562ff283ff5dd",
     "tests/operational-foundations.test.mjs": "6040a0d17f27886637b94873dd82a6dc8a46dc88af1bf2c04e746fefad5edc59",
     "type-tests/retention-administration.ts": "dc6c55cd6e38b6cb4ff0bf1507c0c88c869f538fa212585ea925406633cafcc4",
     "docs/retention-administration.md": "273a30c7f6a0adb4f5361961d010881c5403b157e1a1051b207468c0b1c8b56a",
