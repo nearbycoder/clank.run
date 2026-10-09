@@ -97,6 +97,7 @@ test('aborted actual attempts persist an authenticated blocked report; detached 
 test('actual non-XFS host cannot obtain a green certificate and leaves its private probe files cleaned up', { timeout: 40000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'clank-cert-denied-'));
   try {
+    const { certifyLinuxHost, inspectLinuxHostCertification } = await isolatedInstallation(root);
     const { statfs, readdir } = await import('node:fs/promises');
     assert.notEqual(Number((await statfs(root)).type), 0x58465342, 'ordinary test root must be separate from privileged XFS fixtures');
     const directory = join(root, 'reports'), selected = profile(root);
@@ -104,7 +105,7 @@ test('actual non-XFS host cannot obtain a green certificate and leaves its priva
     assert.equal(report.status, 'blocked');
     assert.equal(report.checks.find(check => check.capability === 'disk-quota').status, 'blocked');
     assert.equal(report.checks.find(check => check.capability === 'runner').reason, 'prerequisite-blocked');
-    assert.deepEqual(await readdir(root), ['reports']);
+    assert.deepEqual((await readdir(root)).sort(), ['installation', 'reports']);
     assert.equal((await inspectLinuxHostCertification({ directory, profile: selected })).current, false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
