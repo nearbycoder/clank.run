@@ -1,5 +1,19 @@
 export const SQLITE_INTERNAL = Symbol.for("clank.sqlite.internal");
 
+const reviewedExecutions = new WeakMap<SQLiteInternal, { requester: string; approver: string; planId: string }>();
+/** Available only during an accepted reviewed action's synchronous transaction. */
+export function currentReviewedExecution(connection: SQLiteInternal): { requester: string; approver: string; planId: string } | undefined {
+  return connection.inTransaction ? reviewedExecutions.get(connection) : undefined;
+}
+export function withReviewedExecution<Value>(connection: SQLiteInternal, identity: { requester: string; approver: string; planId: string }, handler: () => Value): Value {
+  const previous = reviewedExecutions.get(connection);
+  reviewedExecutions.set(connection, Object.freeze({ ...identity }));
+  try { return handler(); } finally {
+    if (previous) reviewedExecutions.set(connection, previous);
+    else reviewedExecutions.delete(connection);
+  }
+}
+
 export interface SQLiteStatement {
   all(...parameters: any[]): Array<Record<string, unknown>>;
   get(...parameters: any[]): Record<string, unknown> | undefined;

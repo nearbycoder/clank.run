@@ -3,7 +3,7 @@ import { AuthError, type AuthRequest, type AuthRuntime } from "./auth.ts";
 import type { SQLiteDatabase, ReadDatabase, WriteDatabase, Id, DatabaseSchema } from "./backend.ts";
 import { McpToolError, type McpTool } from "./mcp.ts";
 import { readJsonRequest, readRequestBytes, requestOriginAllowed, RequestInputError } from "./security.ts";
-import { SQLITE_INTERNAL } from "./sqlite-internal.ts";
+import { SQLITE_INTERNAL, withReviewedExecution } from "./sqlite-internal.ts";
 
 export interface ReviewedActionContext<DB extends DatabaseSchema<any> = any> { readonly db: ReadDatabase<DB>; readonly auth: AuthRequest<any>; }
 export interface ReviewedActionWriteContext<DB extends DatabaseSchema<any> = any> { readonly db: WriteDatabase<DB>; readonly auth: AuthRequest<any>; }
@@ -255,7 +255,8 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
         if (!approvedSession?.user || approvedSession.user.id !== row.approved_by
           || !sql.readScoped(approvedSession.user.id, reviewerDb => canReview(row, reviewerDb, approvedSession))) throw new AuthError("APPROVAL_REQUIRED", "The approver must review this action again.", 409);
         const changes = new Map<string, ReviewedRecordChange>();
-        const output = JSON.parse(encode(sync(action.execute({ db: recordingWriter(db, changes), auth }, args, JSON.parse(String(row.preview))))));
+        const output = withReviewedExecution(sql, { requester: auth.user!.id, approver: approvedSession.user.id, planId: id },
+          () => JSON.parse(encode(sync(action.execute({ db: recordingWriter(db, changes), auth }, args, JSON.parse(String(row.preview)))))));
         const receipt: ReviewedActionReceipt = { protocol: "clank-action-receipt/1", id: `receipt_${crypto.randomUUID()}`, planId: id,
           action: String(row.action), owner: auth.user!.id, committedAt: Date.now(), committedRevision: revision() + (changes.size ? 1 : 0),
           changes: [...changes.values()], output, compensationAvailable: Boolean(action.compensate), compensatedBy: null };
