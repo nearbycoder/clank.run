@@ -791,3 +791,12 @@ current-session/operator checks, capacity limits and upgrade/recovery boundaries
   atomic merge decisions and exact retry identities.
 - Types: `DocumentSelection`, `DocumentCursor`, `DocumentBranch`, `DocumentBranchSummary`,
   `DocumentBranchPreview`.
+
+## Search browsing
+
+`@clank.run/framework/search` exports `createSearchBrowsingClient` and `mountSearchBrowsing`.
+Enable `browsing: { policyRevision, maxSavedSearches?, maxSavedIdentities?, maxSavedBytes? }`
+on `openSearch` with a linked source and optional typed scalar `source.facets`. The client adds
+`browse`, `saved`, version-fenced `save` and `removeSaved`; legacy `SearchClient` stays compatible.
+See [search browsing](search-browsing.md) for complete authorized counts, cursor invalidation,
+compact retired keys, limits and rollback semantics.

@@ -40,6 +40,7 @@ export const groups = [
       ["offline", "docs/offline.md"],
       ["durable-data-workflows", "docs/durable-data-workflows.md"],
       ["retention-administration", "docs/retention-administration.md"],
+      ["search-browsing", "docs/search-browsing.md"],
       ["database", "docs/database.md"],
       ["migrations", "docs/migrations.md"],
       ["auth", "docs/auth.md"],

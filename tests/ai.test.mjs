@@ -45,6 +45,31 @@ test("schema contracts snapshot mutable builder inputs", () => {
   assert.throws(() => profile.parse({ name: "Ada", role: "admin" }), ValidationError);
 });
 
+test("object schemas validate own fields and preserve declared literal keys without changing prototypes", () => {
+  const profile = s.object({ title: s.string(), constructor: s.optional(s.string()) });
+  const inherited = Object.create({ get title() { throw new Error("Inherited getter must not run"); } });
+  assert.throws(() => profile.parse(inherited), ValidationError);
+  assert.deepEqual(profile.parse({ title: "Own" }), { title: "Own", constructor: undefined });
+  const literal = s.object({ ["__proto__"]: s.object({ role: s.string() }) });
+  const parsed = literal.parse(JSON.parse('{"__proto__":{"role":"member"}}'));
+  assert.equal(Object.getPrototypeOf(parsed), Object.prototype);
+  assert.equal(Object.hasOwn(parsed, "__proto__"), true);
+  assert.equal(parsed.role, undefined);
+  assert.deepEqual(parsed.__proto__, { role: "member" });
+  assert.equal(JSON.stringify(parsed), '{"__proto__":{"role":"member"}}');
+});
+
+test("schema containers propagate unexpected refinement failures rather than accepting partial output", () => {
+  const failure = new Error("Refinement dependency unavailable");
+  const guarded = s.refine(s.string(), () => { throw failure; }, "Guard failed");
+  for (const [schema, input] of [
+    [s.object({ required: guarded }), { required: "value" }],
+    [s.array(guarded), ["value"]],
+    [s.record(guarded), { key: "value" }],
+    [s.union([guarded, s.string()]), "value"],
+  ]) assert.throws(() => schema.parse(input), error => error === failure);
+});
+
 test("common web schemas cover emails, URLs, dates, records, defaults, refinement, and coercion", () => {
   assert.equal(s.email().parse("ada@example.com"), "ada@example.com");
   assert.throws(() => s.email().parse("not-an-email"), ValidationError);
