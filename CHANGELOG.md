@@ -4,6 +4,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add typed durable decision/event waits to workflow graphs. Persist bounded requests,
+  deadlines and exact retry receipts without holding worker leases. Require current
+  reviewed-action execution for human decisions, fence resume tokens by current policy,
+  and serialize resume, cancellation and timeout in SQLite transactions.
+
 - Fence retired organization offboarding credentials against the current persisted provider
   snapshot, including requests waiting for their body. Preserve dedicated and linking-disabled
   revocation semantics and roll back credential publication with failed policy reconciliation.

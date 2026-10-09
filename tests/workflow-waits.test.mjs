@@ -288,3 +288,62 @@ test('two actual controllers serialize resume/cancel and resume/deadline races i
     }
   } finally { await a?.close(); await b?.close(); await f.close(); }
 });
+
+test('wait storage bounds reject new authority without evicting pending waits or retry receipts', async () => {
+  const f = await fixture(); try {
+    const run = f.runtime.startWorkflow(f.workflow, { label: 'Retained wait' }), ticket = f.runtime.getWorkflowWait(run.id, 'gate');
+    f.database[internal].exec(`WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<9999)
+      INSERT INTO clank_workflow_waits SELECT 'capacity_'||n,'capacity_workflow_'||n,'gate','event','cancelled','{"title":"capacity"}','retained-nonce',2,1,2 FROM seq`);
+    const refused = f.runtime.startWorkflow(f.workflow, { label: 'Full' });
+    assert.equal(f.runtime.getWorkflow(refused.id).state, 'failed');
+    assert.match(f.runtime.getWorkflow(refused.id).error, /capacity/);
+    assert.equal(f.runtime.getWorkflowWait(run.id, 'gate').state, 'pending');
+    f.database[internal].exec(`WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<20000)
+      INSERT INTO clank_workflow_wait_receipts SELECT 'capacity_wait_'||n,'capacity_key', 'retained_digest',NULL,'{}' FROM seq`);
+    assert.throws(() => f.runtime.resumeWorkflowWait(submission(ticket)), e => e.code === 'WAIT_CAPACITY');
+    assert.equal(f.runtime.getWorkflowWait(run.id, 'gate').version, 1);
+    assert.equal(f.runtime.stats().queued, 0);
+    assert.equal(f.database[internal].prepare('SELECT count(*) AS count FROM clank_workflow_wait_receipts').get().count, 20000);
+  } finally { await f.close(); }
+});
+
+test('unmapped configuration, unsupported protocol and stale definitions refuse pending waits', async () => {
+  const f = await fixture(); let changed;
+  try {
+    const run = f.runtime.startWorkflow(f.workflow, { label: 'Retained' }), ticket = f.runtime.getWorkflowWait(run.id, 'gate');
+    assert.throws(() => openJobs(f.definition, { database: f.database }), /configuration/);
+    assert.throws(() => openJobs(f.definition, { database: f.database, workflowWaits: { ...policy, signingKey: 'a-different-secret-with-same-revision' } }), /must increase/);
+    assert.equal(f.runtime.getWorkflowWait(run.id, 'gate').state, 'pending');
+    f.database[internal].prepare('UPDATE clank_workflow_wait_state SET protocol=99').run();
+    assert.throws(() => openJobs(f.definition, { database: f.database, workflowWaits: policy }), /Unsupported persisted/);
+    assert.throws(() => f.runtime.resumeWorkflowWait(submission(ticket)), e => e.code === 'WAIT_POLICY');
+    f.database[internal].prepare('UPDATE clank_workflow_wait_state SET protocol=1').run();
+    const revised = declaration(f.schema, 'event', 60_001);
+    changed = openJobs(revised.definition, { database: f.database, workflowWaits: policy });
+    assert.throws(() => changed.resumeWorkflowWait(submission(ticket)), e => e.code === 'WAIT_DEFINITION');
+    changed.advanceWorkflows();
+    assert.equal(changed.getWorkflow(run.id).state, 'failed');
+    assert.equal(changed.getWorkflowWait(run.id, 'gate').state, 'cancelled');
+    assert.equal(changed.stats().queued, 0);
+    assert.equal(f.database[internal].prepare('SELECT count(*) AS count FROM clank_workflow_wait_receipts').get().count, 0);
+  } finally { changed?.close(); await f.close(); }
+});
+
+test('asynchronous and oversized wait mappers fail without partial wait state or unhandled rejection', async () => {
+  const f = await fixture(); const errors = []; const rejected = error => errors.push(error); process.on('unhandledRejection', rejected);
+  let altered;
+  try {
+    for (const mapper of [async () => { throw new Error('rejected mapper'); }, () => ({ title: 'Oversized', data: 'x'.repeat(16 * 1024) })]) {
+      const flow = defineWorkflow({ args: {}, graph: ({ wait }) => ({ gate: wait({ mode: 'event', timeoutMs: 60_000, returns: s.string(), request: mapper }) }) });
+      const definition = defineWorkflows(defineJobs({ schema: f.schema }).jobs(() => ({})), { invalid: flow });
+      altered = openJobs(definition, { database: f.database, workflowWaits: policy });
+      const run = altered.startWorkflow(flow, {});
+      assert.equal(altered.getWorkflow(run.id).state, 'failed');
+      assert.equal(altered.getWorkflowWait(run.id, 'gate'), null);
+      altered.close(); altered = undefined;
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(errors, []);
+    assert.equal(f.database[internal].prepare('SELECT count(*) AS count FROM clank_workflow_waits').get().count, 0);
+  } finally { process.off('unhandledRejection', rejected); altered?.close(); await f.close(); }
+});
