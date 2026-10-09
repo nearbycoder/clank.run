@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createServer} from 'node:http';
+import {createServer,request as httpRequest} from 'node:http';
 import {createHash,generateKeyPairSync,sign} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -106,6 +106,61 @@ test('offboarding before first sign-in retains a tombstone and requires the orga
   const request=token=>new Request(origin+'/__clank/sso/offboard/company',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({subject:'employee-1'})});
   assert.equal((await f.sso.handle(request('bad'))).status,401);assert.equal((await f.sso.handle(request(f.secret))).status,200);assert.equal((await flow(f)).status,403);
  }finally{await f.close()}
+});
+
+test('offboarding credential rotation fences a retired live dedicated controller and retains current idempotent revocation',async()=>{
+ const f=await ssoFixture();try{
+  const response=await flow(f),cookie=response.headers.get('set-cookie').split(';')[0],sql=f.runtime.database[key];
+  const rotated='replacement-offboarding-credential-at-least32';
+  const current=openOrganizationSso(f.runtime.database,f.runtime.auth,{applicationOrigin:origin,allowInsecureLoopback:true,
+   providers:[{organizationId:'company',issuer:f.idp.issuer,clientId:'clank-client',offboardingToken:rotated}]});
+  const request=token=>new Request(origin+'/__clank/sso/offboard/company',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({subject:'employee-1'})});
+  assert.equal((await f.sso.handle(request(f.secret))).status,401);
+  assert.equal(sql.prepare('SELECT count(*) n FROM clank_sso_revocations').get().n,0);
+  assert.ok((await f.runtime.auth.resolve(new Request(origin,{headers:{cookie}}))).user);
+  for(let i=0;i<2;i++)assert.equal((await current.handle(request(rotated))).status,200);
+  assert.equal(sql.prepare('SELECT count(*) n FROM clank_sso_revocations').get().n,1);
+  assert.equal((await f.runtime.auth.resolve(new Request(origin,{headers:{cookie}}))).user,null);
+  assert.equal(sql.prepare('SELECT disabled FROM clank_auth_users').get().disabled,1);
+  const registry=sql.prepare('SELECT * FROM clank_sso_offboarding_credentials').all();assert.equal(registry.length,1);
+  assert.match(registry[0].fingerprint,/^[a-f0-9]{64}$/u);assert.ok(!JSON.stringify(registry).includes(rotated));
+ }finally{await f.close()}
+});
+
+test('offboarding rotation survives reopen with linking disabled and removed or changed issuers fence old controllers',async()=>{
+ const f=await identityFixture();try{
+  const old=f.sso,rotated='disabled-linking-current-offboarding-token32';
+  const options={...f.options,identityLinking:undefined,providers:[{...f.options.providers[1],offboardingToken:rotated}]};
+  openOrganizationSso(f.runtime.database,f.runtime.auth,options);
+  const request=(organization,token,subject)=>new Request(origin+'/__clank/sso/offboard/'+organization,{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({subject})});
+  assert.equal((await old.handle(request('company',f.options.providers[0].offboardingToken,'removed'))).status,401);
+  assert.equal((await old.handle(request('second',f.options.providers[1].offboardingToken,'rotated'))).status,401);
+  await f.reopen(options);
+  assert.equal((await f.sso.handle(request('second',rotated,'current'))).status,200);
+  const retired=f.sso;
+  openOrganizationSso(f.runtime.database,f.runtime.auth,{...options,providers:[{...options.providers[0],issuer:f.idp.issuer}]});
+  assert.equal((await retired.handle(request('second',rotated,'wrong-issuer'))).status,401);
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_sso_revocations').get().n,1);
+  assert.equal(f.sql.prepare('SELECT subject,issuer FROM clank_sso_revocations').get().subject,'current');
+ }finally{await f.close()}
+});
+
+test('a real held HTTP offboarding body cannot commit after its live credential is rotated', {timeout:10000}, async()=>{
+ const {serve}=await import('../dist/node.js');const f=await ssoFixture();let server,client;try{
+  let entered;const bodyRead=new Promise(resolve=>entered=resolve);
+  server=await serve(request=>{
+   const reader=request.body.getReader();
+   const body=new ReadableStream({async pull(controller){const next=await reader.read();entered();if(next.done)controller.close();else controller.enqueue(next.value)},cancel(reason){return reader.cancel(reason)}});
+   return f.sso.handle(new Request(request,{body,duplex:'half'}));
+  },{hostname:'127.0.0.1',port:0,trustProxy:true,allowedHosts:['security.test']});
+  const response=new Promise((resolve,reject)=>{client=httpRequest(`http://127.0.0.1:${server.port}/__clank/sso/offboard/company`,{method:'POST',headers:{authorization:'Bearer '+f.secret,'content-type':'application/json','x-forwarded-host':'security.test','x-forwarded-proto':'https'}},incoming=>{incoming.resume();incoming.once('end',()=>resolve(incoming.statusCode))});client.once('error',reject)});
+  client.write('{"subject":');await bodyRead;
+  openOrganizationSso(f.runtime.database,f.runtime.auth,{applicationOrigin:origin,allowInsecureLoopback:true,
+   providers:[{organizationId:'company',issuer:f.idp.issuer,clientId:'clank-client',offboardingToken:'rotated-while-reading-offboarding-secret32'}]});
+  client.end('"employee-1"}');assert.equal(await response,401);
+  assert.equal(f.runtime.database[key].prepare('SELECT count(*) n FROM clank_sso_revocations').get().n,0);
+  assert.equal(f.runtime.database[key].prepare('SELECT count(*) n FROM clank_sso_events').get().n,0);
+ }finally{client?.destroy();await server?.close();await f.close()}
 });
 
 async function platformFixture(options={}){
@@ -248,8 +303,9 @@ test('SCIM policy reconciliation rolls back all membership writes and publicatio
   await f.scim('Users',{schemas:['urn:ietf:params:scim:schemas:core:2.0:User'],externalId:'employee-1',userName:'metadata@example.test'},'POST',undefined,201);
   assert.equal((await flow(f)).status,303);
   f.sql.exec("CREATE TABLE provisioning_hook_proof(role TEXT NOT NULL); INSERT INTO provisioning_hook_proof VALUES('before')");
+  const credentialSnapshot=f.sql.prepare('SELECT * FROM clank_sso_offboarding_credentials ORDER BY organization').all();
   const replacement={...f.options,identityLinking:{policyRevision:3},providers:f.options.providers.map(provider=>provider.organizationId==='company'
-   ?{...provider,provisioning:{...provider.provisioning,groupRoles:[{externalId:'developers',role:'viewer'}]}}:provider)};
+   ?{...provider,offboardingToken:'reconciliation-rotated-offboarding-secret32',provisioning:{...provider.provisioning,groupRoles:[{externalId:'developers',role:'viewer'}]}}:provider)};
   for(const asynchronous of [false,true]){
    assert.throws(()=>openOrganizationSso(f.runtime.database,f.runtime.auth,{...replacement,onProvisioning(){
     f.sql.prepare('UPDATE provisioning_hook_proof SET role=?').run('uncommitted');
@@ -259,6 +315,7 @@ test('SCIM policy reconciliation rolls back all membership writes and publicatio
    await new Promise(resolve=>setImmediate(resolve));
    assert.equal(f.sql.prepare('SELECT role FROM provisioning_hook_proof').get().role,'before');
    assert.equal(f.sql.prepare('SELECT revision FROM clank_sso_policy').get().revision,2);
+   assert.deepEqual(f.sql.prepare('SELECT * FROM clank_sso_offboarding_credentials ORDER BY organization').all(),credentialSnapshot);
    assert.equal((await f.scim('Users')).body.totalResults,1);
   }
   const current=openOrganizationSso(f.runtime.database,f.runtime.auth,{...replacement,onProvisioning(){f.sql.prepare('UPDATE provisioning_hook_proof SET role=?').run('accepted')}});
@@ -266,6 +323,7 @@ test('SCIM policy reconciliation rolls back all membership writes and publicatio
   assert.equal(f.sql.prepare('SELECT role FROM provisioning_hook_proof').get().role,'accepted');
   const request=new Request(origin+'/scim/v2/company/Users',{headers:{authorization:'Bearer '+f.options.providers[0].provisioning.token}});
   assert.equal((await f.sso.handle(request.clone())).status,401);assert.equal((await current.handle(request)).status,200);
+  assert.equal((await identityOffboard(f)).status,401);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_sso_revocations').get().n,0);
  }finally{await f.close()}
 });
 

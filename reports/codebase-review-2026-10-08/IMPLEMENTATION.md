@@ -2,14 +2,14 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-one features are merged across eighteen feature batches. Scheduled release windows (05) merged in [PR #282](https://github.com/nearbycoder/clank.run/pull/282) after all six fresh hosted checks at reviewed head `4c06c2f5d35940872afa6d1fa947c97c25b04597`, no new CodeQL alerts, no unresolved threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Verified organization identity linking (11) merged in [PR #285](https://github.com/nearbycoder/clank.run/pull/285) after fresh combined full Node 26/22 gates and all six hosted checks. Both main checkouts match `1f31092814d9eb2f60025796eac5b2699561c5a8`, with the exact reviewed tree and all 23 existing files preserved. Nineteen features remain; scoped provisioning (12) is verified for protected merge in [PR #289](https://github.com/nearbycoder/clank.run/pull/289) under [proposal #287](https://github.com/nearbycoder/clank.run/issues/287). It is not counted before that merge. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Earlier snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-two features are merged across nineteen feature batches. Scoped provisioning (12) merged in [PR #289](https://github.com/nearbycoder/clank.run/pull/289) after complete Node 26/minimum Node 22 release gates (1,982 passed, zero failures, three existing skips), all 40 focused checks, all 29 packed fixtures and all six fresh hosted checks at `a79107ef9ab01da3200dab9962b8e69f1086e4a7`. CodeQL reports no new alerts and no unresolved thread remains. The non-independent author COMMENT review and expected-head protected squash are recorded. Both main checkouts match `1232317b74dd0f384b5416604cd4544b717d2049`, exactly matching reviewed tree `4eb350683ca4f3946e4af19888e97c17bbc6b54a`; all 23 existing local files are preserved. Eighteen features remain. The separately tested [offboarding credential fence](offboarding-rotation.json) in [PR #292](https://github.com/nearbycoder/clank.run/pull/292) adds no feature. Durable workflow waits (19) are being implemented under [proposal #293](https://github.com/nearbycoder/clank.run/issues/293) and are not counted before acceptance. Production Railway remains uncertified; earlier snapshots below retain their original scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
-## Scoped provisioning verified for protected merge
+## Scoped provisioning accepted
 
 Feature 12 is implemented under [proposal #287](https://github.com/nearbycoder/clank.run/issues/287)
-and awaits final protected merge in [PR #289](https://github.com/nearbycoder/clank.run/pull/289).
+and merged in [PR #289](https://github.com/nearbycoder/clank.run/pull/289).
 Separate expiring credentials, exact resource versions, atomic PATCH and retained retry receipts
 scope Users/Groups to an organization and issuer. Signed OIDC subject proof binds/reactivates
 identities; metadata cannot select accounts or transfer retained ownership. Deactivation revokes
@@ -37,9 +37,13 @@ actual SCIM content are verified at desktop/phone widths. Browser-blocked machin
 is recorded separately from successful HTTP/MCP reads. Initial browser-barrel, manually seeded
 OAuth, deleted-account projection and source03 CLI/time-fixture failures are retained; each had
 a concrete repair before fresh acceptance. No independent review, external enterprise IdP tenant
-certification or production host certification is claimed. Final hosted checks, author COMMENT
-review and expected-head merge must accept the final report head; this still counts 21 merged
-features. See [immutable scoped provisioning evidence](scim-provisioning.json).
+certification or production host certification is claimed. All six hosted checks pass at the exact final head `a79107ef9ab01da3200dab9962b8e69f1086e4a7`, with no new CodeQL alerts or unresolved threads. Non-independent author COMMENT review `5476386700` precedes the normal expected-head protected squash `1232317b74dd0f384b5416604cd4544b717d2049`. Its tree exactly matches `4eb350683ca4f3946e4af19888e97c17bbc6b54a`; both checkouts are synchronized and all 23 existing files preserved. This increases accepted features to 22 across 19 batches. See [scoped provisioning evidence](scim-provisioning.json).
+
+## Offboarding credential rotation verified
+
+[PR #292](https://github.com/nearbycoder/clank.run/pull/292), under [proposal #291](https://github.com/nearbycoder/clank.run/issues/291), publishes bounded hashed credential fingerprints with provider/schema/policy/projection initialization. Already-open retired controllers reject rotated credentials, removed providers and changed issuers at admission and again after asynchronous body verification inside the revocation transaction. Failed initialization rolls back the snapshot. Dedicated and linking-disabled shared identities retain their existing behavior.
+
+The real held numeric-loopback HTTP body returns 200 before the fix and 401 afterward with no tombstone/audit; current credentials still converge on one offboarding record. All 43 focused checks and 29 packed type fixtures pass, with 159 existing / zero new diagnostics against the unchanged 163 baseline. Complete Node 26/22 release gates each pass 1,988 reported / 1,985 passed / zero failed or cancelled / three existing skips, including packed conformance, documentation and security. Coverage is 91.81/80.73/90.01 and 91.80/80.75/90.05 respectively. Source snapshot `5309f9dcfccf10ce4f84d5a8d60354cdeecdd68c`, tree `cdc7e2602976a110aaf70887a3d284d347b5db91`, retains 1,037 hash-equal non-report inputs after the main merge. Package remains 405 files / 6,194,050 bytes, zero dependencies. Docs build, doctor, offline artifact, HTTP/MCP reads and actual desktop/phone rotation paragraphs pass. Retained failed setup/probe captures are distinguished from acceptance. Final hosted checks, author COMMENT and protected merge remain required. This repair adds no roadmap feature. See [credential fencing evidence](offboarding-rotation.json).
 
 ## CLI positional and signed-time repair
 

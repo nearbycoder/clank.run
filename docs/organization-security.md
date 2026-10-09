@@ -8,6 +8,17 @@ External accounts bind to issuer and subject, never automatically to an existing
 
 When embedding SSO outside the platform, `onProvision(userId, organizationId)` and `onOffboard(userId, organizationId)` can update the same database transaction. Hooks must be synchronous and must not perform external side effects. `issueFederatedSession` is a trusted server API; it does not accept unverified browser assertions.
 
+Offboarding credentials are fenced across live controllers sharing the control store. Startup
+publishes the complete configured organization/issuer credential snapshot in the same transaction
+as schema, policy and membership reconciliation. Only SHA-256 fingerprints are retained. A
+rotated credential, removed provider or changed issuer makes a retired controller reject
+offboarding with 401, including a request already waiting for its body before the new snapshot
+commits. Failed startup reconciliation preserves the prior credential snapshot. Dedicated
+accounts and linking-disabled shared accounts retain their offboarding behavior. Publish a
+complete provider inventory for a shared store; an old controller must not republish retired
+configuration. A compatible binary and verified database/configuration snapshot are required for
+rollback: older binaries do not enforce this fence, and revocation rows must be preserved.
+
 ## Verified organization identity linking
 
 Linking is opt-in. Configure `identityLinking: { policyRevision: 1 }` on `openOrganizationSso`
