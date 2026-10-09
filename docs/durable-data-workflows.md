@@ -558,7 +558,10 @@ corrections and their document history in bounded pages. Source hash, initial ma
 job metadata and operation receipts remain. SQLite pages/WAL and independent backups need their
 own retention policies; this does not erase archived physical bytes.
 
-Enabling this mode adds owned correction/operation tables and defaulted metadata on import jobs and chunk checksums.
+Upgraded import writers share defaulted job review metadata and chunk checksums, so streaming-only
+connections can read their existing jobs beside review-enabled connections. Reviewable mode adds
+owned correction/operation tables. Streaming-only writers reject reviewable execution, retry and
+cancellation; use a review-enabled handle for those operations.
 `DurableImportClient` retains its streaming-only structural contract; the factory returns the
 additive `ReviewableImportClient<Values>` subtype. Legacy job outputs and streaming behavior remain available. The widget clears displayed source/preview data when a request detects session/access revocation.
 Register feature tables before sealing

@@ -28,7 +28,10 @@ test('controller SIGKILL stops canary writers before immediate startup admits th
       child.once('message', ready); child.once('exit', exited); child.once('error', failed);
     });
     assert.ok(state.ready); assert.ok(state.guardians.length >= 3);
-    database = new DatabaseSync(state.databasePath, { readOnly: true });
+    // SELECT-only observations still need permission to recover a hot rollback
+    // journal when SIGKILL interrupts a runtime's transaction. A readOnly handle
+    // rejects that normal recovery with SQLITE_READONLY_ROLLBACK (776).
+    database = new DatabaseSync(state.databasePath);
     database.exec('PRAGMA busy_timeout = 5000');
     const priorWriterPids = database.prepare('SELECT DISTINCT pid FROM writer_events').all().map(row => row.pid);
     const priorWrites = database.prepare(`SELECT COUNT(*) AS count FROM writer_events WHERE pid IN (${priorWriterPids.map(() => '?').join(',')})`);
@@ -75,6 +78,44 @@ test('controller SIGKILL stops canary writers before immediate startup admits th
     await startup?.catch(() => undefined);
     try { await platform?.close(); }
     finally { await rm(root,{recursive:true,force:true}); }
+  }
+});
+
+test('a crash observer recovers an interrupted SQLite transaction without admitting its writes', { timeout: 20000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'clank-crash-observer-'));
+  const path = join(root, 'events.sqlite');
+  let database, child, exited;
+  try {
+    database = new DatabaseSync(path);
+    database.exec("CREATE TABLE writer_events(id INTEGER PRIMARY KEY, payload BLOB); INSERT INTO writer_events VALUES(1, zeroblob(131072));");
+    database.close(); database = undefined;
+    child = fork(new URL('./fixtures/sqlite-hot-journal-writer.mjs', import.meta.url), [path], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+    exited = new Promise(resolve => child.once('exit', resolve));
+    let errors = ''; child.stderr.on('data', chunk => { errors += chunk; });
+    await new Promise((resolve, reject) => {
+      const finish = error => {
+        clearTimeout(timer); child.off('message', ready); child.off('exit', failed); child.off('error', finish);
+        if (error) reject(error); else resolve();
+      };
+      const ready = () => finish();
+      const failed = code => finish(Error(`Hot-journal writer exited ${code}: ${errors}`));
+      const timer = setTimeout(() => finish(Error(`Hot-journal writer timed out: ${errors}`)), 10000);
+      child.once('message', ready); child.once('exit', failed); child.once('error', finish);
+    });
+    child.kill('SIGKILL'); await exited;
+    assert.ok((await readdir(root)).includes('events.sqlite-journal'));
+    // This is the CI failure mode: even a SELECT can need journal recovery.
+    assert.throws(() => {
+      let readOnly;
+      try { readOnly = new DatabaseSync(path, { readOnly: true }); readOnly.prepare('SELECT count(*) FROM writer_events').get(); }
+      finally { readOnly?.close(); }
+    }, error => error.code === 'ERR_SQLITE_ERROR' && error.errcode === 776);
+    database = new DatabaseSync(path);
+    assert.deepEqual(database.prepare('SELECT id, length(payload) AS bytes FROM writer_events').all().map(row => ({ ...row })), [{ id: 1, bytes: 131072 }]);
+    assert.equal(database.prepare('PRAGMA integrity_check').get().integrity_check, 'ok');
+  } finally {
+    child?.kill('SIGKILL'); await exited;
+    database?.close(); await rm(root, { recursive: true, force: true });
   }
 });
 

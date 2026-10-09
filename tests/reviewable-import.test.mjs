@@ -264,3 +264,15 @@ test("accepted updates and inserts project current search versions in the same t
     await c.apply(p, "search-success"); assert.equal(search.inspect().indexedRecords, 2); assert.equal(f.rows(u)[0]._version, 2);
   } finally { search?.close(); await f.close(); }
 });
+
+test("preopened upgraded streaming writers read defaulted metadata and cannot bypass review-enabled jobs", async () => {
+  const f = await fixture(); let legacy;
+  try {
+    const u = await f.user("mixed-writers@example.invalid"); legacy = await openDurableImport({ ...f.settings, reviewable: undefined });
+    const c = f.client(u), streaming = f.client(u, { fetch: (url, init) => legacy.handle(new Request(url, { ...init, headers: { ...init.headers, cookie: u.cookie, origin: "https://imports.test" } })) });
+    let old = await streaming.create("Legacy", "legacy"); await streaming.append(old.id, 0, [{ title: "Existing", score: 1 }]); old = await streaming.seal(old.id, 1); assert.equal(old.review, undefined);
+    const reviewed = await staged(f, u, "name,points\nReviewed,2\n"); assert.deepEqual(await streaming.inspect(reviewed.id), reviewed);
+    await assert.rejects(streaming.step(reviewed.id, 0), isCode("IMPORT_REVIEW_REQUIRED")); await assert.rejects(streaming.cancel(reviewed.id), isCode("IMPORT_REVIEW_REQUIRED")); await assert.rejects(streaming.retry(reviewed.id), isCode("IMPORT_REVIEW_REQUIRED"));
+    assert.equal((await streaming.run(old.id)).state, "completed"); assert.equal((await c.inspect(old.id)).review, undefined); assert.equal((await c.apply(await c.preview(reviewed.id), "reviewed")).state, "completed"); assert.equal(f.rows(u).length, 2);
+  } finally { legacy?.close(); await f.close(); }
+});
