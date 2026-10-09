@@ -168,6 +168,39 @@ export interface PlatformChannelAction {
 }
 
 
+export interface PlatformReleaseWindowRequest extends Omit<PlatformChannelActivationRequest, "dependencyOverride" | "dependencyCheckId"> {
+  readonly channel: string;
+  readonly expectedDependencyVersion: number;
+  /** ISO timestamp with an explicit UTC offset. */
+  readonly startsAt: string;
+  readonly expiresAt: string;
+  /** IANA timezone used for display; the approved instants never move. */
+  readonly timeZone: string;
+}
+export interface PlatformReleaseWindow {
+  readonly id: string;
+  readonly version: number;
+  readonly channel: string;
+  readonly channelVersion: number;
+  readonly source: PlatformReleaseChannelEntry;
+  readonly targetEnvironment: PlatformEnvironmentName;
+  readonly targetProjectId: string;
+  readonly environmentVersion: number;
+  readonly expectedActiveReleaseId: string | null;
+  readonly dependencyVersion: number;
+  readonly startsAt: string;
+  readonly expiresAt: string;
+  readonly timeZone: string;
+  readonly preview: { readonly startsAt: string; readonly expiresAt: string };
+  readonly state: "pending" | "running" | "cancelling" | "accepted" | "failed" | "cancelled" | "expired" | "recovery-required";
+  readonly targetReleaseId: string | null;
+  readonly failureCode: string | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+export interface PlatformReleaseWindowCancelRequest { readonly expectedVersion: number }
+export interface PlatformReleaseWindowRecoveryRequest extends PlatformReleaseWindowCancelRequest { readonly confirmation: string }
+
 export interface PlatformLimits {
     /** Maximum organizations created by one account. Defaults to 5. */
     organizationsPerAccount?: number;
@@ -374,6 +407,8 @@ export interface ClankPlatformOptions {
     backups?: PlatformBackupOptions;
     auditExport?: AuditExportOptions;
     operations?: PlatformOperationsOptions;
+    /** Poll queued exact release windows; defaults to one second. False pauses execution. */
+    releaseWindows?: { intervalMs?: number | false };
     canary?: ManagedCanaryOptions;
     jobs?: PlatformJobOperationsOptions;
     previews?: PlatformPreviewOptions;

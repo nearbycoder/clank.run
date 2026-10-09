@@ -432,3 +432,8 @@ Require managed services before target activation with [deployment dependency ga
 The API/CLI accept an optional exact configuration version and credential-bound check ID; dashboard
 promotion and channel reviews capture these automatically. Target gates also apply to ordinary
 uploads and explicit rollback, with durable interruption recovery and audited human readiness approval.
+
+Use [scheduled release windows](release-windows.md) to review an exact current channel pin for
+a bounded future window. Execution rechecks current authority and required services, cancellation
+prevents acceptance, and interrupted work retains verified recovery fences. The dashboard exposes
+**Schedule current pin** and **Scheduled releases** in the Environments tab.

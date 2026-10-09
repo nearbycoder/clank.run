@@ -413,3 +413,8 @@ POST /api/projects/:id/secrets/rotations/:rotationId/{validate|activate|rollback
 Stage accepts
 `{ name, value }`; lifecycle actions accept `{}`. Existing project authorization, browser CSRF,
 and audit behavior apply to every operation.
+
+Use [scheduled release windows](release-windows.md) to review an exact current channel pin for
+a bounded future window. Execution rechecks current authority and required services, cancellation
+prevents acceptance, and interrupted work retains verified recovery fences. The dashboard exposes
+**Schedule current pin** and **Scheduled releases** in the Environments tab.

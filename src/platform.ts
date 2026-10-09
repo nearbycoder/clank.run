@@ -295,6 +295,39 @@ export interface PlatformChannelAction {
   readonly state: PlatformPromotion["state"];
 }
 
+export interface PlatformReleaseWindowRequest extends Omit<PlatformChannelActivationRequest, "dependencyOverride" | "dependencyCheckId"> {
+  readonly channel: string;
+  readonly expectedDependencyVersion: number;
+  /** ISO timestamp with an explicit UTC offset. */
+  readonly startsAt: string;
+  readonly expiresAt: string;
+  /** IANA timezone used for display; the approved instants never move. */
+  readonly timeZone: string;
+}
+export interface PlatformReleaseWindow {
+  readonly id: string;
+  readonly version: number;
+  readonly channel: string;
+  readonly channelVersion: number;
+  readonly source: PlatformReleaseChannelEntry;
+  readonly targetEnvironment: PlatformEnvironmentName;
+  readonly targetProjectId: string;
+  readonly environmentVersion: number;
+  readonly expectedActiveReleaseId: string | null;
+  readonly dependencyVersion: number;
+  readonly startsAt: string;
+  readonly expiresAt: string;
+  readonly timeZone: string;
+  readonly preview: { readonly startsAt: string; readonly expiresAt: string };
+  readonly state: "pending" | "running" | "cancelling" | "accepted" | "failed" | "cancelled" | "expired" | "recovery-required";
+  readonly targetReleaseId: string | null;
+  readonly failureCode: string | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+export interface PlatformReleaseWindowCancelRequest { readonly expectedVersion: number }
+export interface PlatformReleaseWindowRecoveryRequest extends PlatformReleaseWindowCancelRequest { readonly confirmation: string }
+
 
 export interface PlatformLimits {
   /** Maximum organizations created by one account. Defaults to 5. */
@@ -609,6 +642,8 @@ export interface ClankPlatformOptions {
   auditExport?: AuditExportOptions;
   /** Durable operational alerts and scheduled application restore drills. */
   operations?: PlatformOperationsOptions;
+  /** Poll queued exact release windows; defaults to one second. False pauses execution. */
+  releaseWindows?: { intervalMs?: number | false };
   /** Traffic and measured health gates for local code-only deployments behind managed ingress. */
   canary?: ManagedCanaryOptions;
   jobs?: PlatformJobOperationsOptions;
@@ -5652,7 +5687,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         return channelPayload(root.id,name,principal)!;
       });
     });
-  const activateChannel = async (principal: TokenPrincipal,root: ProjectRow,name: string,kind: "promote"|"rollback",input: Record<string,unknown>,attestation: string|null) => {
+  const activateChannel = async (principal: TokenPrincipal,root: ProjectRow,name: string,kind: "promote"|"rollback",input: Record<string,unknown>,attestation: string|null, scheduled?: EnvironmentPromotionContext) => {
     const expected=integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER-1);
     const entryVersion=kind==="rollback"?integerInRange(input.fromVersion,"fromVersion",1,expected-1):expected;
     const targetName=boundedString(input.targetEnvironment,"targetEnvironment",1,16);
@@ -5666,8 +5701,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const fingerprint=syncHash(JSON.stringify([name,kind,expected,entryVersion,targetName,targetVersion,expectedActive,key,attestation===null?null:syncHash(attestation),...(input.dependencyOverride===undefined?[]:[dependencyOverride(input.dependencyOverride)]),...(input.expectedDependencyVersion===undefined?[]:[dependencyExpectedVersion(input.expectedDependencyVersion)]),...(input.dependencyCheckId===undefined?[]:[dependencyCheckId(input.dependencyCheckId)])]));
     const promotionKey=`channel_${syncHash(`${root.id}:${key}`)}`;
     const context: EnvironmentPromotionContext={
-      fingerprint,
+      fingerprint: scheduled ? syncHash(JSON.stringify([fingerprint, scheduled.fingerprint])) : fingerprint,
       assertCurrent(acceptedReplay){
+        scheduled?.assertCurrent(acceptedReplay);
         const channel=channelRow(root.id,name),action=channelActionRow(root.id,key);
         if(!channel||Number(channel.retired)===1)throw new PlatformError(404,"CHANNEL_NOT_FOUND","Channel not found.");
         if(action&&(action.name!==name||action.request_digest!==fingerprint||action.promotion_key!==promotionKey))
@@ -5687,6 +5723,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
       },
       prepared(){
+        scheduled?.prepared();
         if(!channelActionRow(root.id,key))storage.internal.prepare(`INSERT INTO clank_platform_channel_actions
           (root_id,name,idempotency_key,request_digest,kind,channel_version,entry_version,target_name,promotion_key,applied_version,created_at)
           VALUES(?,?,?,?,?,?,?,?,?,NULL,?)`).run(root.id,name,key,fingerprint,kind,expected,entryVersion,targetName,promotionKey,Date.now());
@@ -5705,6 +5742,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           .run(applied,root.id,key,fingerprint);
         if(Number(changed.changes)!==1)throw new PlatformError(409,"CHANNEL_STATE_CHANGED","The channel result changed during activation.");
         audit(storage.internal,principal.userId,principal.tokenId,root.id,`channel.${kind}`,{name,entryVersion,appliedVersion:applied,targetEnvironment:targetName,targetReleaseId:releaseId,idempotencyKey:key});
+        scheduled?.accepted(releaseId);
       },
     };
     const result=await promoteEnvironment(principal,root,targetName,{sourceEnvironment:String(entry.source_name),releaseId:String(entry.source_release_id),digest:String(entry.artifact_digest),
@@ -5712,6 +5750,210 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     return {...result,action:channelActionPayload(channelActionRow(root.id,key)!)};
   };
 
+
+  const releaseWindowRow = (rootId: string, id: string) => storage.internal.prepare("SELECT * FROM clank_platform_release_windows WHERE root_id=? AND id=?").get(rootId,id);
+  type ReleaseWindowRow = NonNullable<ReturnType<typeof releaseWindowRow>>;
+  const windowChannelKey = (row: ReleaseWindowRow) => `scheduled_${syncHash(`${row.root_id}:${row.id}`)}`;
+  const windowPromotionKey = (row: ReleaseWindowRow) => `channel_${syncHash(`${row.root_id}:${windowChannelKey(row)}`)}`;
+  const windowInstant = (input: unknown, name: string) => {
+    const text = boundedString(input,name,20,40);
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(text))
+      throw new PlatformError(422,"RELEASE_WINDOW_TIME_INVALID","Use an ISO timestamp with seconds and an explicit UTC offset.");
+    const calendar = Date.parse(text.slice(0,19)+"Z"), instant = Date.parse(text);
+    if (!Number.isFinite(calendar) || !Number.isFinite(instant) || new Date(calendar).toISOString().slice(0,19)!==text.slice(0,19))
+      throw new PlatformError(422,"RELEASE_WINDOW_TIME_INVALID","Use a valid calendar date and UTC offset.");
+    return instant;
+  };
+  const windowZone = (input: unknown) => {
+    const zone = boundedString(input,"timeZone",1,100);
+    if (!/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+){0,3}$/.test(zone)) throw new PlatformError(422,"RELEASE_WINDOW_ZONE_INVALID","Choose a supported IANA timezone.");
+    try { new Intl.DateTimeFormat("en-US",{timeZone:zone}).format(0); }
+    catch { throw new PlatformError(422,"RELEASE_WINDOW_ZONE_INVALID","Choose a supported IANA timezone."); }
+    return zone;
+  };
+  const releaseWindowPayload = (row: ReleaseWindowRow): PlatformReleaseWindow => {
+    const zone = String(row.time_zone), format = new Intl.DateTimeFormat("en-US",{timeZone:zone,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23",timeZoneName:"longOffset"});
+    return {id:String(row.id),version:Number(row.version),channel:String(row.channel_name),channelVersion:Number(row.channel_version),
+      source:{version:Number(row.channel_version),sourceEnvironment:String(row.source_name) as PlatformEnvironmentName,sourceProjectId:String(row.source_project_id),sourceReleaseId:String(row.source_release_id),digest:String(row.artifact_digest),createdAt:Number(row.source_created_at)},
+      targetEnvironment:String(row.target_name) as PlatformEnvironmentName,targetProjectId:String(row.target_project_id),environmentVersion:Number(row.environment_version),expectedActiveReleaseId:row.expected_active_release_id===null?null:String(row.expected_active_release_id),dependencyVersion:Number(row.dependency_version),
+      startsAt:new Date(Number(row.starts_at)).toISOString(),expiresAt:new Date(Number(row.expires_at)).toISOString(),timeZone:zone,
+      preview:{startsAt:format.format(Number(row.starts_at)),expiresAt:format.format(Number(row.expires_at))},state:String(row.state) as PlatformReleaseWindow["state"],targetReleaseId:row.target_release_id===null?null:String(row.target_release_id),failureCode:row.failure_code===null?null:String(row.failure_code),createdAt:Number(row.created_at),updatedAt:Number(row.updated_at)};
+  };
+  const windowAccess = (principal: TokenPrincipal,row: ReleaseWindowRow,permission: "read"|"deploy"|"rollback"="read") => {
+    requireCurrentPlatformPrincipal(storage,principal);
+    const root = accessibleProject(storage.internal,String(row.root_id),principal,permission==="read"?"read":"deploy").project;
+    const source = accessibleProject(storage.internal,String(row.source_project_id),principal,"read").project;
+    const access = accessibleProject(storage.internal,String(row.target_project_id),principal,permission);
+    if (!root.organizationId || root.parentProjectId || source.parentProjectId || access.project.parentProjectId || source.organizationId!==root.organizationId || access.project.organizationId!==root.organizationId)
+      throw new PlatformError(409,"RELEASE_WINDOW_WORKSPACE_CHANGED","The approved projects must remain independent in the same workspace.");
+    if (permission!=="read" && row.target_name==="production") requireOrganizationAdministration(access.role);
+    return root;
+  };
+  const windowCredential = (principal: TokenPrincipal) => ({userId:principal.userId,tokenId:principal.tokenId,sessionId:principal.sessionId,organizationId:principal.organizationId,projectId:principal.projectId,permissions:principal.permissions,previewName:principal.previewName});
+  const windowPrincipal = (row: ReleaseWindowRow,validate = true): TokenPrincipal => {
+    const original = JSON.parse(String(row.credential)) as ReturnType<typeof windowCredential>;
+    const user = storage.internal.prepare("SELECT email FROM clank_auth_users WHERE id=?").get(original.userId);
+    const principal: TokenPrincipal = {...original,email:String(user?.email??""),impersonation:null};
+    if (validate) {
+      requireCurrentPlatformPrincipal(storage,principal);
+      if (original.tokenId) {
+        const token = storage.internal.prepare("SELECT organization_id,project_id,preview_name,permissions FROM clank_platform_tokens WHERE id=?").get(original.tokenId)!;
+        if (token.organization_id!==original.organizationId || token.project_id!==original.projectId || token.preview_name!==original.previewName)
+          throw new PlatformError(403,"RELEASE_WINDOW_SCOPE_CHANGED","The initiating token scope changed.");
+        const permissions = parseProjectPermissions(token.permissions);
+        principal.permissions = original.permissions.filter(permission=>permissions.includes(permission));
+      }
+    }
+    return principal;
+  };
+  const queueReleaseWindow = async (principal: TokenPrincipal,root: ProjectRow,input: Record<string,unknown>,attestation: string|null) => {
+    requireCurrentPlatformPrincipal(storage,principal);
+    if (principal.impersonation) throw new PlatformError(403,"IMPERSONATION_READ_ONLY","Release scheduling requires the current principal.");
+    const name = boundedString(input.channel,"channel",1,64), key = boundedString(input.idempotencyKey,"idempotencyKey",16,128);
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(name) || !/^[A-Za-z0-9_-]{16,128}$/.test(key)) throw new PlatformError(422,"INVALID_INPUT","Use a valid channel name and exact request key.");
+    const channelVersion = integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER-1);
+    const targetName = boundedString(input.targetEnvironment,"targetEnvironment",1,16);
+    if (!["development","staging","production"].includes(targetName)) throw new PlatformError(422,"INVALID_INPUT","Choose a configured target environment.");
+    const targetVersion = integerInRange(input.expectedEnvironmentVersion,"expectedEnvironmentVersion",1,Number.MAX_SAFE_INTEGER);
+    const expectedActive = input.expectedActiveReleaseId===null?null:boundedString(input.expectedActiveReleaseId,"expectedActiveReleaseId",8,128);
+    const dependencyVersion = integerInRange(input.expectedDependencyVersion,"expectedDependencyVersion",0,Number.MAX_SAFE_INTEGER);
+    const starts = windowInstant(input.startsAt,"startsAt"), expires = windowInstant(input.expiresAt,"expiresAt"), zone = windowZone(input.timeZone);
+    if (expires<=starts || expires-starts>24*60*60_000) throw new PlatformError(422,"RELEASE_WINDOW_TIME_INVALID","The maintenance window must be positive and at most 24 hours.");
+    if (attestation!==null && attestation.length>16*1024) throw new PlatformError(422,"INVALID_RELEASE_ATTESTATION","Use a bounded release attestation.");
+    const credential = windowCredential(principal), fingerprint = syncHash(JSON.stringify([name,key,channelVersion,targetName,targetVersion,expectedActive,dependencyVersion,starts,expires,zone,credential,attestation===null?null:syncHash(attestation)]));
+    return withProjectLock(`environment-family:${root.id}`,()=>withProjectLock(`dependency-graph:${root.organizationId ?? root.ownerId}`,async()=>{
+      const retained = storage.internal.prepare("SELECT * FROM clank_platform_release_windows WHERE root_id=? AND request_key=?").get(root.id,key);
+      if (retained) {
+        windowAccess(principal,retained,"deploy");
+        if (retained.request_digest!==fingerprint) throw new PlatformError(409,"RELEASE_WINDOW_RETRY_CHANGED","This key already names a different approved schedule.");
+        return releaseWindowPayload(retained);
+      }
+      const entry = channelEntry(root.id,name,channelVersion), target = environmentRow(root.id,targetName);
+      if (!entry || !target?.project_id) throw new PlatformError(404,"RELEASE_WINDOW_TARGET_UNAVAILABLE","The exact channel and environment must be configured.");
+      if (entry.source_name===targetName) throw new PlatformError(422,"PROMOTION_SOURCE_INVALID","Choose a different target environment.");
+      const provisional = {root_id:root.id,source_project_id:entry.source_project_id,target_project_id:target.project_id,target_name:targetName};
+      const guard = () => {
+        projectLeaseAssertions.get(`environment-family:${root.id}`)?.();
+        const currentRoot = windowAccess(principal,provisional,"deploy"), channel = channelRow(root.id,name), binding = environmentRow(root.id,targetName), source = environmentRow(root.id,String(entry.source_name));
+        const currentTarget = projectById(storage.internal,String(target.project_id))!;
+        if (!channel || Number(channel.retired)===1 || Number(channel.current_version)!==channelVersion || source?.project_id!==entry.source_project_id || binding?.project_id!==target.project_id || Number(binding?.version)!==targetVersion || currentTarget.activeReleaseId!==expectedActive)
+          throw new PlatformError(409,"RELEASE_WINDOW_REVIEW_STALE","Review the current channel, environment and active target before scheduling.");
+        if (dependencyConfiguration(currentTarget.id).version!==dependencyVersion) throw new PlatformError(409,"DEPENDENCY_VERSION_STALE","Review the current target requirements before scheduling.");
+        const now = Date.now();
+        if (starts<=now || expires>now+30*24*60*60_000) throw new PlatformError(422,"RELEASE_WINDOW_TIME_INVALID","Choose a future window within the next 30 days.");
+        const release = releaseById(storage.internal,String(entry.source_release_id));
+        if (!release || release.projectId!==entry.source_project_id || release.digest!==entry.artifact_digest || !release.artifactAvailable || !["active","inactive"].includes(release.status)) throw new PlatformError(409,"PROMOTION_ARTIFACT_UNAVAILABLE","The original verified upload must remain available.");
+        requireNoEvacuation(currentTarget.id);requireNoEvacuation(release.projectId);
+        return {root:currentRoot,release,target:currentTarget};
+      };
+      const admission = guard(), original = await readRunnerReleaseArtifact(paths.projects,admission.release,new AbortController().signal,runnerArtifactObjects);
+      guard();
+      if (!original || original.sha256!==entry.artifact_digest || await deploymentDigest(original.bytes)!==entry.artifact_digest) throw new PlatformError(409,"PROMOTION_ARTIFACT_UNAVAILABLE","The exact retained upload is unavailable.");
+      if (options.releaseAttestations) {
+        if (!attestation && options.releaseAttestations.required!==false) throw new PlatformError(403,"RELEASE_ATTESTATION_REQUIRED","A signed release attestation is required.");
+        if (attestation) try { await verifyReleaseAttestation(original.bytes,decodeReleaseAttestation(attestation),options.releaseAttestations,admission.target.id); }
+        catch { throw new PlatformError(403,"INVALID_RELEASE_ATTESTATION","The attestation is not trusted for this exact target."); }
+      }
+      const id = `window_${globalThis.crypto.randomUUID().replaceAll("-","")}`;
+      storage.internal.transaction(changes=>{
+        guard();
+        if (Number(storage.internal.prepare("SELECT count(*) AS n FROM clank_platform_release_windows WHERE root_id=? AND state IN ('pending','running','cancelling','recovery-required')").get(root.id)?.n)>=100) throw new PlatformError(409,"RELEASE_WINDOW_CAPACITY","This family has 100 unresolved scheduled promotions.");
+        if (Number(storage.internal.prepare("SELECT count(*) AS n FROM clank_platform_release_windows WHERE root_id=?").get(root.id)?.n)>=1000) throw new PlatformError(409,"RELEASE_WINDOW_HISTORY_CAPACITY","This family has reached its 1,000 retained schedule limit.");
+        const now = Date.now();
+        storage.internal.prepare(`INSERT INTO clank_platform_release_windows(root_id,id,request_key,request_digest,credential,channel_name,channel_version,source_name,source_project_id,source_release_id,artifact_digest,source_created_at,target_name,target_project_id,environment_version,expected_active_release_id,dependency_version,starts_at,expires_at,time_zone,attestation,state,version,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',1,?,?)`).run(root.id,id,key,fingerprint,JSON.stringify(credential),name,channelVersion,entry.source_name,entry.source_project_id,entry.source_release_id,entry.artifact_digest,entry.created_at,targetName,target.project_id,targetVersion,expectedActive,dependencyVersion,starts,expires,zone,attestation,now,now);
+        audit(storage.internal,principal.userId,principal.tokenId,root.id,"release-window.queue",{id,channel:name,channelVersion,targetEnvironment:targetName,startsAt:starts,expiresAt:expires,timeZone:zone});changes.record("__platform",root.id);
+      });
+      return releaseWindowPayload(releaseWindowRow(root.id,id)!);
+    }));
+  };
+  const cancelReleaseWindow = (principal: TokenPrincipal,row: ReleaseWindowRow,expectedVersion: number) => storage.internal.transaction(changes=>{
+    windowAccess(principal,row,"deploy");
+    const credential = windowCredential(principal), creator = JSON.parse(String(row.credential)) as ReturnType<typeof windowCredential>;
+    if (credential.userId!==creator.userId) requireOrganizationAdministration(accessibleProject(storage.internal,String(row.root_id),principal,"deploy").role);
+    const current = releaseWindowRow(String(row.root_id),String(row.id))!;
+    if (Number(current.version)!==expectedVersion) throw new PlatformError(409,"RELEASE_WINDOW_VERSION_STALE","Review the current schedule version.");
+    if (!["pending","running","cancelling","recovery-required"].includes(String(current.state))) throw new PlatformError(409,"RELEASE_WINDOW_TERMINAL","This schedule is already terminal.");
+    const state = current.state==="pending"?"cancelled":current.state==="recovery-required"?"recovery-required":"cancelling";
+    storage.internal.prepare("UPDATE clank_platform_release_windows SET state=?,version=version+1,failure_code='RELEASE_WINDOW_CANCELLED',updated_at=? WHERE root_id=? AND id=? AND version=?").run(state,Date.now(),row.root_id,row.id,expectedVersion);
+    audit(storage.internal,principal.userId,principal.tokenId,String(row.root_id),"release-window.cancel",{id:row.id,state});changes.record("__platform",String(row.root_id));
+    return releaseWindowPayload(releaseWindowRow(String(row.root_id),String(row.id))!);
+  });
+  const releaseWindowInterval = options.releaseWindows?.intervalMs===false?false:integerInRange(options.releaseWindows?.intervalMs??1000,"releaseWindows.intervalMs",100,60_000);
+  let releaseWindowTimer: ReturnType<typeof setTimeout> | undefined, releaseWindowFlight: Promise<void> | undefined;
+  const runReleaseWindow = async (rootId: string,id: string) => withProjectLock(`release-window:${id}`,async()=>{
+    let row = releaseWindowRow(rootId,id);
+    if (!row || !["pending","running","cancelling"].includes(String(row.state)) || Number(row.starts_at)>Date.now()) return;
+    const originalState = String(row.state);
+    storage.internal.prepare("UPDATE clank_platform_release_windows SET claim_fence=claim_fence+1,state=CASE WHEN state='pending' THEN 'running' ELSE state END,version=version+CASE WHEN state='pending' THEN 1 ELSE 0 END,updated_at=? WHERE root_id=? AND id=? AND version=? AND claim_fence=?").run(Date.now(),rootId,id,row.version,row.claim_fence);
+    row = releaseWindowRow(rootId,id)!;const claimed = row;
+    const guardClaim = () => {
+      projectLeaseAssertions.get(`release-window:${id}`)?.();
+      const current = releaseWindowRow(rootId,id);
+      if (!current || current.claim_fence!==claimed.claim_fence || !["running","cancelling"].includes(String(current.state))) throw new PlatformError(409,"RELEASE_WINDOW_CLAIM_LOST","The durable schedule claim changed.");
+      return current;
+    };
+    const context: EnvironmentPromotionContext = {
+      fingerprint:String(row.request_digest),
+      assertCurrent(acceptedReplay) {
+        const current = guardClaim();
+        if (acceptedReplay) throw new PlatformError(409,"RELEASE_WINDOW_STATE_CHANGED","Accepted schedules cannot be executed again.");
+        if (current.state==="cancelling" || current.failure_code==="RELEASE_WINDOW_CANCELLED") throw new PlatformError(409,"RELEASE_WINDOW_CANCELLED","The approved schedule was cancelled.");
+        if (Number(current.expires_at)<=Date.now()) throw new PlatformError(409,"RELEASE_WINDOW_EXPIRED","The approved maintenance window expired.");
+        if (Number(current.starts_at)>Date.now()) throw new PlatformError(409,"RELEASE_WINDOW_NOT_DUE","The maintenance window has not started.");
+        const principal = windowPrincipal(current);windowAccess(principal,current,"deploy");
+        if (dependencyConfiguration(String(current.target_project_id)).version!==Number(current.dependency_version)) throw new PlatformError(409,"DEPENDENCY_VERSION_STALE","The reviewed dependency configuration changed.");
+      },
+      prepared() { context.assertCurrent(false); },
+      accepted(releaseId) {
+        context.assertCurrent(false);
+        const changed = storage.internal.prepare("UPDATE clank_platform_release_windows SET state='accepted',version=version+1,target_release_id=?,failure_code=NULL,updated_at=? WHERE root_id=? AND id=? AND state='running' AND claim_fence=? AND version=?").run(releaseId,Date.now(),rootId,id,claimed.claim_fence,claimed.version);
+        if (Number(changed.changes)!==1) throw new PlatformError(409,"RELEASE_WINDOW_STATE_CHANGED","Schedule acceptance changed during publication.");
+        audit(storage.internal,String(JSON.parse(String(claimed.credential)).userId),null,rootId,"release-window.accept",{id,targetReleaseId:releaseId});
+      },
+    };
+    try {
+      context.assertCurrent(false);
+      const principal = windowPrincipal(row), root = windowAccess(principal,row,"deploy");
+      await activateChannel(principal,root,String(row.channel_name),"promote",{expectedVersion:Number(row.channel_version),targetEnvironment:String(row.target_name),expectedEnvironmentVersion:Number(row.environment_version),expectedActiveReleaseId:row.expected_active_release_id,idempotencyKey:windowChannelKey(row),expectedDependencyVersion:Number(row.dependency_version)},row.attestation===null?null:String(row.attestation),context);
+    } catch (error) {
+      if (releaseWindowRow(rootId,id)?.state==="accepted") return;
+      const current = guardClaim(), code = error instanceof PlatformError?error.code:"RELEASE_WINDOW_FAILED";
+      if (["PROVIDER_DEPLOYMENT_PENDING","PROJECT_BUSY"].includes(code) && current.state==="running" && Number(current.expires_at)>Date.now()) return;
+      let receipt = promotionReceipt(rootId,windowPromotionKey(claimed));
+      if (receipt?.state==="pending" && receipt.target_release_id===null) {
+        const orphan = storage.internal.prepare("SELECT 1 FROM clank_platform_releases WHERE project_id=? AND idempotency_key=?").get(current.target_project_id,`promotion_${syncHash(`${rootId}:${windowPromotionKey(claimed)}`)}`);
+        if (!orphan) { guardClaim();storage.internal.prepare("UPDATE clank_platform_promotions SET state='failed',updated_at=? WHERE root_id=? AND idempotency_key=? AND state='pending' AND target_release_id IS NULL").run(Date.now(),rootId,windowPromotionKey(claimed)); }
+        else storage.internal.prepare("UPDATE clank_platform_promotions SET state='recovery-required',updated_at=? WHERE root_id=? AND idempotency_key=? AND state='pending'").run(Date.now(),rootId,windowPromotionKey(claimed));
+        receipt = promotionReceipt(rootId,windowPromotionKey(claimed));
+      }
+      if (receipt && ["staging","recovery-required"].includes(String(receipt.state)) && projectById(storage.internal,String(current.target_project_id))?.placement==="provider") {
+        try { await withProjectLock(`environment-family:${rootId}`,()=>withProjectLock(String(current.target_project_id),()=>restoreProviderPromotion(windowPrincipal(claimed,false),rootId,windowPromotionKey(claimed),()=>{guardClaim();}))); }
+        catch (recoveryError) { reportDeploymentError(recoveryError); }
+        receipt = promotionReceipt(rootId,windowPromotionKey(claimed));
+      }
+      const unresolved = receipt && ["staging","recovery-required"].includes(String(receipt.state));
+      const terminal = current.failure_code==="RELEASE_WINDOW_CANCELLED" || originalState==="cancelling"?"cancelled":code==="RELEASE_WINDOW_EXPIRED" || Number(current.expires_at)<=Date.now()?"expired":"failed";
+      guardClaim();
+      storage.internal.prepare("UPDATE clank_platform_release_windows SET state=?,version=version+1,failure_code=?,updated_at=? WHERE root_id=? AND id=? AND claim_fence=? AND state IN ('running','cancelling')").run(unresolved?"recovery-required":terminal,current.failure_code==="RELEASE_WINDOW_CANCELLED"?"RELEASE_WINDOW_CANCELLED":code,Date.now(),rootId,id,claimed.claim_fence);
+    }
+  });
+  const sweepReleaseWindows = async () => {
+    const due = storage.internal.prepare("SELECT root_id,id FROM clank_platform_release_windows WHERE state IN ('pending','running','cancelling') AND starts_at<=? ORDER BY starts_at,id LIMIT 10").all(Date.now());
+    for (const row of due) {
+      if (closed) return;
+      try { await runReleaseWindow(String(row.root_id),String(row.id)); }
+      catch (error) { if (!(error instanceof PlatformError && ["PROJECT_BUSY","PROJECT_LEASE_LOST"].includes(error.code))) reportDeploymentError(error); }
+    }
+  };
+  const scheduleReleaseWindows = () => {
+    if (closed || releaseWindowInterval===false) return;
+    releaseWindowTimer = setTimeout(()=>{
+      releaseWindowTimer = undefined;
+      releaseWindowFlight = sweepReleaseWindows().catch(reportDeploymentError).finally(()=>{releaseWindowFlight=undefined;scheduleReleaseWindows();});
+    },releaseWindowInterval);
+    releaseWindowTimer.unref?.();
+  };
 
   const retireChannel = async (principal: TokenPrincipal,root: ProjectRow,name: string,input: Record<string,unknown>) =>
     withProjectLock(`environment-family:${root.id}`,async()=>{
@@ -5727,7 +5969,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if(!row)throw new PlatformError(404,"CHANNEL_NOT_FOUND","Channel not found.");
         if(Number(row.current_version)!==expected&&!(Number(row.retired)===1&&Number(row.current_version)===expected+1))
           throw new PlatformError(409,"CHANNEL_VERSION_STALE","The channel changed; review it before retirement.");
-        requireNoChannelActivation(root.id,name);return row;
+        requireNoChannelActivation(root.id,name);
+        if (storage.internal.prepare("SELECT 1 FROM clank_platform_release_windows WHERE root_id=? AND channel_name=? AND state IN ('pending','running','cancelling','recovery-required') LIMIT 1").get(root.id,name))
+          throw new PlatformError(409,"CHANNEL_SCHEDULED","Cancel or recover scheduled promotions before retiring this channel.");
+        return row;
       };
       storage.internal.transaction(changes=>{
         const row=assertCurrent();if(Number(row.retired)===1)return;
@@ -6175,6 +6420,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     actor: { userId: string; tokenId: string | null },
     action: "project.delete" | "preview.delete" | "preview.expire",
   ): Promise<Record<string, unknown>> => withProjectLock(`dependency-graph:${project.organizationId ?? project.ownerId}`, async () => {
+    if (storage.internal.prepare("SELECT 1 FROM clank_platform_release_windows WHERE (root_id=? OR source_project_id=? OR target_project_id=?) AND state IN ('pending','running','cancelling','recovery-required') LIMIT 1").get(project.id,project.id,project.id)) throw new PlatformError(409,"PROJECT_RELEASE_SCHEDULED","Cancel or recover scheduled promotions before deleting their projects.");
     if (releaseChannelPinned(project.id)) {
       throw new PlatformError(409, "PROJECT_CHANNEL_PINNED", "Retire the release channels that retain this project's artifacts before deleting it.");
     }
@@ -8433,6 +8679,44 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         try { for (const observation of activation.check.observations) dependencyService(principal, project, observation.projectId); return api({ ok: true, activation: { ...activation, detailsAvailable: true } }); }
         catch { return api({ ok: true, activation: { id: activation.id, state: activation.state, createdAt: activation.createdAt, updatedAt: activation.updatedAt, detailsAvailable: false } }); }
       }
+      if (operation==="release-windows" && request.method==="GET") {
+        const schedules=storage.internal.prepare("SELECT * FROM clank_platform_release_windows WHERE root_id=? ORDER BY created_at DESC,id DESC LIMIT 1000").all(project.id).filter(row=>{try{windowAccess(principal,row);return true}catch{return false}}).slice(0,100).map(releaseWindowPayload);
+        return api({ok:true,schedules});
+      }
+      if (operation==="release-windows" && request.method==="POST") {
+        const input=plainObject(await readJsonRequest(request,8192));
+        exact(input,["channel","targetEnvironment","expectedVersion","expectedEnvironmentVersion","expectedActiveReleaseId","expectedDependencyVersion","idempotencyKey","startsAt","expiresAt","timeZone"]);
+        return api({ok:true,schedule:await queueReleaseWindow(principal,project,input,request.headers.get("x-clank-release-attestation"))},201);
+      }
+      const windowMatch=/^release-windows\/(window_[A-Za-z0-9_-]{16,128})(?:\/(cancel|recover))?$/.exec(operation);
+      if (windowMatch) {
+        const id=windowMatch[1]!,action=windowMatch[2],row=releaseWindowRow(project.id,id);
+        if (!row) throw new PlatformError(404,"RELEASE_WINDOW_NOT_FOUND","Schedule not found.");
+        if (!action && request.method==="GET") { windowAccess(principal,row);return api({ok:true,schedule:releaseWindowPayload(row)}); }
+        if (request.method==="POST" && action==="cancel") {
+          const input=plainObject(await readJsonRequest(request,1024));exact(input,["expectedVersion"]);
+          return api({ok:true,schedule:cancelReleaseWindow(principal,row,integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER))});
+        }
+        if (request.method==="POST" && action==="recover") {
+          const input=plainObject(await readJsonRequest(request,4096));exact(input,["expectedVersion","confirmation"]);
+          const version=integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER);
+          windowAccess(principal,row,"rollback");requireOrganizationAdministration(accessibleProject(storage.internal,project.id,principal,"deploy").role);
+          if (Number(row.version)!==version) throw new PlatformError(409,"RELEASE_WINDOW_VERSION_STALE","Review the current schedule version.");
+          if (row.state!=="recovery-required") throw new PlatformError(409,"RELEASE_WINDOW_RECOVERY_REQUIRED","Only an unresolved interrupted schedule can be recovered.");
+          if (input.confirmation!==`recover-release-window ${project.slug} ${id}`) throw new PlatformError(400,"CONFIRMATION_REQUIRED","Pass the exact reviewed recover-release-window confirmation.");
+          const target=projectById(storage.internal,String(row.target_project_id))!;
+          await recoverEnvironmentPromotion(principal,project,String(row.target_name),windowPromotionKey(row),`recover-promotion ${target.slug} ${windowPromotionKey(row)}`);
+          storage.internal.transaction(changes=>{
+            windowAccess(principal,row,"rollback");
+            if (promotionReceipt(project.id,windowPromotionKey(row))?.state!=="failed") throw new PlatformError(409,"RELEASE_WINDOW_RECOVERY_REQUIRED","The original promotion recovery remains unresolved.");
+            const current=releaseWindowRow(project.id,id)!;
+            if (Number(current.version)!==version) throw new PlatformError(409,"RELEASE_WINDOW_VERSION_STALE","The schedule changed during recovery; inspect the current state.");
+            storage.internal.prepare("UPDATE clank_platform_release_windows SET state=?,version=version+1,updated_at=? WHERE root_id=? AND id=? AND version=? AND state='recovery-required'").run(current.failure_code==="RELEASE_WINDOW_CANCELLED"?"cancelled":Number(current.expires_at)<=Date.now()?"expired":"failed",Date.now(),project.id,id,version);
+            audit(storage.internal,principal.userId,principal.tokenId,project.id,"release-window.recover",{id});changes.record("__platform",project.id);
+          });
+          return api({ok:true,schedule:releaseWindowPayload(releaseWindowRow(project.id,id)!)});
+        }
+      }
       if(operation==="channels"&&request.method==="GET"){
         const channels=storage.internal.prepare("SELECT name FROM clank_platform_release_channels WHERE root_id=? ORDER BY name LIMIT 100")
           .all(project.id).map(row=>channelPayload(project.id,String(row.name),principal)).filter(Boolean);
@@ -10123,6 +10407,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   scheduleDomainReconciliation();
   schedulePreviewCleanup();
   scheduleRuntimeSweep();
+  scheduleReleaseWindows();
   backupScheduler.start();
   invitationDeliveries.start();
   auditExporter?.start();
@@ -10138,6 +10423,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     async close() {
       if (closed) return;
       closed = true;
+      if (releaseWindowTimer) clearTimeout(releaseWindowTimer);
+      releaseWindowTimer = undefined;
+      await releaseWindowFlight?.catch(()=>undefined);
       canaries?.close();
       if (canaries) await Promise.all([...locks.values()].map((pending) => pending.catch(() => undefined)));
       if (runtimeSweepTimer) clearTimeout(runtimeSweepTimer);
@@ -11010,6 +11298,22 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
     FOREIGN KEY(root_id,name) REFERENCES clank_platform_release_channels(root_id,name) ON DELETE CASCADE,
     FOREIGN KEY(root_id,promotion_key) REFERENCES clank_platform_promotions(root_id,idempotency_key) ON DELETE CASCADE
   ) WITHOUT ROWID`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_release_windows (
+    root_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    id TEXT NOT NULL, request_key TEXT NOT NULL, request_digest TEXT NOT NULL,
+    credential TEXT NOT NULL CHECK(json_valid(credential)),
+    channel_name TEXT NOT NULL, channel_version INTEGER NOT NULL,
+    source_name TEXT NOT NULL, source_project_id TEXT NOT NULL, source_release_id TEXT NOT NULL,
+    artifact_digest TEXT NOT NULL, source_created_at INTEGER NOT NULL,
+    target_name TEXT NOT NULL, target_project_id TEXT NOT NULL, environment_version INTEGER NOT NULL,
+    expected_active_release_id TEXT, dependency_version INTEGER NOT NULL,
+    starts_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, time_zone TEXT NOT NULL, attestation TEXT,
+    state TEXT NOT NULL CHECK(state IN ('pending','running','cancelling','accepted','failed','cancelled','expired','recovery-required')),
+    version INTEGER NOT NULL, claim_fence INTEGER NOT NULL DEFAULT 0,
+    target_release_id TEXT, failure_code TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    PRIMARY KEY(root_id,id), UNIQUE(root_id,request_key)
+  ) WITHOUT ROWID`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_release_window_due ON clank_platform_release_windows(state,starts_at)");
   const releaseColumns = internal.prepare("PRAGMA table_info(clank_platform_releases)").all();
   if (!releaseColumns.some(column => column.name === "dependency_request_digest")) internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN dependency_request_digest TEXT");
   if (!releaseColumns.some((column) => column.name === "artifact_available")) {

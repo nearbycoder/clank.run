@@ -23,10 +23,11 @@ assert.equal(process.getuid(), 0);
 await stat('/etc/clank-disposable-test-host');
 const arguments_ = process.argv.slice(2);
 assert.equal(arguments_[0], '--disposable');
-assert.ok(arguments_.length === 1 || (arguments_.length === 2 && ['--authority-only','--channels-only','--dependencies-only'].includes(arguments_[1])));
+assert.ok(arguments_.length === 1 || (arguments_.length === 2 && ['--authority-only','--channels-only','--dependencies-only','--windows-only'].includes(arguments_[1])));
 const authorityOnly = arguments_[1] === '--authority-only';
 const channelsOnly = arguments_[1] === '--channels-only';
 const dependenciesOnly = arguments_[1] === '--dependencies-only';
+const windowsOnly = arguments_[1] === '--windows-only';
 const command = promisify(execFile), framework = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const interruption=new AbortController();
 for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>interruption.abort(new Error('Owned acceptance interrupted.')));
@@ -68,7 +69,7 @@ try {
   const options={dataDirectory:join(root,'platform'),publicUrl:origin,signup:true,hostingProfile:'trusted',
     onError(error){console.error("Owned operation diagnostic: "+String(error?.code??error?.name)+": "+String(error?.message).slice(0,500))},
     appPortStart:57500,appPortEnd:57520,ingress:{baseDomain:'apps.example.test',domainRecheckIntervalMs:false},backups:{intervalMs:false},previews:{cleanupIntervalMs:false},
-    providerPromotionHosts:{'promotion-provider':certificate},deploymentAgents:{registrationToken,placement:{activationTimeoutMs:15000,maxDatabaseBytes:1024*1024}}};
+    releaseWindows:{intervalMs:windowsOnly?100:false},providerPromotionHosts:{'promotion-provider':certificate},deploymentAgents:{registrationToken,placement:{activationTimeoutMs:15000,maxDatabaseBytes:1024*1024}}};
   platform=await openPlatform(options);server=await serve(request=>platform.handle(request),{hostname:'127.0.0.1',port:57900,
     allowedHosts:['127.0.0.1','development.apps.example.test','staging.apps.example.test']});
   const registered=await fetch(origin+'/__clank/auth/register',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({email:'guest-owner@example.test',password:'correct horse battery staple'})});
@@ -190,7 +191,44 @@ try {
   assert.equal((await probe(sourceProject)).value,'source-only');
   const replay=await call(environmentPath+'/staging/promotions',input,201);assert.equal(replay.release.id,promoted.release.id);
   cases.push({name:'accepted exact replay across actual controller restart',status:'passed'});
-  if (dependenciesOnly) {
+  if (windowsOnly) {
+    const channelPath=`/api/projects/${sourceProject.id}/channels/stable`,windowsPath=`/api/projects/${sourceProject.id}/release-windows`;
+    const v2=await artifact('v2'),second=await upload(sourceProject,v2,'provider_window_source_02');
+    await call(channelPath,{sourceEnvironment:'development',releaseId:second.id,digest:v2.digest,expectedVersion:0},200,'PUT');
+    const request=(active,key,delay=1000,lifetime=120000)=>({channel:'stable',expectedVersion:1,targetEnvironment:'staging',expectedEnvironmentVersion:1,expectedActiveReleaseId:active,expectedDependencyVersion:0,idempotencyKey:key,startsAt:new Date(Date.now()+delay).toISOString(),expiresAt:new Date(Date.now()+delay+lifetime).toISOString(),timeZone:'America/Chicago'});
+    const queue=async input=>(await call(windowsPath,input,201)).schedule;
+    const current=async id=>(await call(windowsPath+'/'+id)).schedule;
+    const wait=async(id,states,timeout=150000)=>{const deadline=Date.now()+timeout;for(;;){const row=await current(id);if(states.includes(row.state))return row;assert.ok(Date.now()<deadline,JSON.stringify(row));await new Promise(resolve=>setTimeout(resolve,100))}};
+    const generationQueued=async id=>{const control=new DatabaseSync(join(options.dataDirectory,'control.sqlite'));try{const deadline=Date.now()+15000;for(;;){const row=control.prepare("SELECT p.target_release_id,r.provider_generation FROM clank_platform_promotions p JOIN clank_platform_releases r ON r.id=p.target_release_id WHERE p.root_id=? AND p.state IN ('staging','recovery-required') ORDER BY p.created_at DESC LIMIT 1").get(sourceProject.id);if(row?.provider_generation!==null&&row?.provider_generation!==undefined)return row;assert.ok(Date.now()<deadline,'The actual scheduled provider generation must queue. '+JSON.stringify(await current(id)));await new Promise(resolve=>setTimeout(resolve,25))}}finally{control.close()}};
+    await rpc('pause-ingress');const input=request(promoted.release.id,'provider_window_restart_01'),queued=await queue(input);await generationQueued(queued.id);
+    await agent.close();agent=null;await platform.close();platform=await openPlatform(options);agent=await openAgent();await rpc('resume-ingress');
+    const accepted=await wait(queued.id,['accepted']);assert.equal((await probe(targetProject)).label,'v2');assert.equal((await probe(targetProject)).value,'target-only');
+    assert.deepEqual(await readFile(join(options.dataDirectory,'projects',targetProject.id,'artifacts',accepted.targetReleaseId+'.clank.gz')),v2.bytes);
+    cases.push({name:'actual scheduled certified provider generation resumes across controller restart, preserves exact upload bytes and independent data, and commits schedule/channel/environment acceptance together',status:'passed'});
+    const before=(await call(`/api/projects/${targetProject.id}`)).project.activeGeneration;
+    await agent.close();agent=null;await platform.close();platform=await openPlatform(options);agent=await openAgent();
+    assert.equal((await queue(input)).id,queued.id);assert.equal((await current(queued.id)).targetReleaseId,accepted.targetReleaseId);assert.equal((await call(`/api/projects/${targetProject.id}`)).project.activeGeneration,before);
+    cases.push({name:'accepted scheduled provider retry after restart returns its original receipt without queueing another generation',status:'passed'});
+    const pending=await queue(request(accepted.targetReleaseId,'provider_window_cancel_pending_01',1500));await call(windowsPath+'/'+pending.id+'/cancel',{expectedVersion:pending.version});await new Promise(resolve=>setTimeout(resolve,1700));assert.equal((await current(pending.id)).state,'cancelled');assert.equal((await call(`/api/projects/${targetProject.id}`)).project.activeGeneration,before);
+    cases.push({name:'versioned pending cancellation prevents an actual provider generation from being queued',status:'passed'});
+    for(const boundary of ['cancel','expire']){
+      await call(`/api/projects/${targetProject.id}/secrets`,{values:{ENVIRONMENT_VALUE:'staging',HEALTH_WRITE:'1'}},200,'PUT');await rpc('hold-reconcile-report');
+      const scheduled=await queue(request(accepted.targetReleaseId,'provider_window_'+boundary+'_running_01',1000,boundary==='expire'?15000:120000));await generationQueued(scheduled.id);
+      {const deadline=Date.now()+12000;while(!await rpc('reconcile-report-ready')){assert.ok(Date.now()<deadline,'Actual Docker reconciliation must commit its journal before its real report is released.');await new Promise(resolve=>setTimeout(resolve,25))}}
+      if(boundary==='cancel'){const running=await current(scheduled.id),started=Date.now();assert.equal((await call(windowsPath+'/'+scheduled.id+'/cancel',{expectedVersion:running.version})).schedule.state,'cancelling');assert.ok(Date.now()-started<2000,'Cancellation must not wait for the provider family lock.');}
+      else await new Promise(resolve=>setTimeout(resolve,Math.max(0,Date.parse(scheduled.expiresAt)-Date.now()+100)));
+      await rpc('release-reconcile-report');let terminal=await wait(scheduled.id,[boundary==='cancel'?'cancelled':'expired','recovery-required']);const requiredRecovery=terminal.state==='recovery-required';
+      if(requiredRecovery){const deadline=Date.now()+660000;for(;;){const response=await fetch(origin+windowsPath+'/'+scheduled.id+'/recover',{method:'POST',headers:{origin,cookie,'x-clank-csrf':owner.csrfToken,'content-type':'application/json'},body:JSON.stringify({expectedVersion:terminal.version,confirmation:`recover-release-window development ${scheduled.id}`})});const result=await response.json();if(response.status===200){terminal=result.schedule;break}assert.ok([409,503].includes(response.status),JSON.stringify(result));assert.ok(Date.now()<deadline,'Exact provider schedule recovery must converge.');await new Promise(resolve=>setTimeout(resolve,500))}}
+      assert.equal(terminal.state,boundary==='cancel'?'cancelled':'expired');assert.equal(terminal.targetReleaseId,null);assert.equal((await call(`/api/projects/${targetProject.id}`)).project.activeReleaseId,accepted.targetReleaseId);const restored=await probe(targetProject);assert.equal(restored.secret,'staging');assert.equal(restored.value,'unpublished-health-write');
+      cases.push({name:`actual queued provider schedule ${boundary} fences acceptance and restores the frozen prior code while preserving committed code-only application writes`,status:'passed',requiredReviewedRecovery:requiredRecovery});
+      await probe(targetProject,'/write/target-only');
+    }
+    await call(`/api/projects/${targetProject.id}/secrets`,{values:{ENVIRONMENT_VALUE:'staging'}},200,'PUT');
+    const changed=await artifact('v3','CREATE TABLE forbidden_window_schema(id INTEGER PRIMARY KEY);'),third=await upload(sourceProject,changed,'provider_window_schema_03');await call(channelPath,{sourceEnvironment:'development',releaseId:third.id,digest:changed.digest,expectedVersion:1},200,'PUT');
+    const rejected=await queue({...request(accepted.targetReleaseId,'provider_window_schema_rejected_01'),expectedVersion:2});const failed=await wait(rejected.id,['failed']);assert.equal(failed.failureCode,'PROMOTION_MIGRATIONS_BLOCKED');assert.equal((await probe(targetProject)).value,'target-only');
+    cases.push({name:'scheduled certified code-only provider activation rejects changed migration manifests without staging',status:'passed'});
+    console.error('Actual provider scheduled release acceptance verified.');
+  } else if (dependenciesOnly) {
     cases.push({name:'actual first provider activation passes exact dependency health and assigned-host certification',status:'passed'});
     const activate=async(route,body,terminal=201,headers={})=>{
       const deadline=Date.now()+90000;
@@ -418,6 +456,7 @@ try {
   cases.push({name:'provider code-only proof rejects a changed migration manifest before staging',status:'passed'});
   }
 } finally {
+  if(windowsOnly&&worker&&worker.exitCode===null)await rpc('release-reconcile-report').catch(()=>{});
   if(originalNftMode!==undefined)await chmod('/usr/sbin/nft',originalNftMode);
   await agent?.close();await server?.close();await platform?.close();
   if(worker&&worker.exitCode===null){try{await rpc('close');}finally{await workerClosed}}
@@ -437,6 +476,6 @@ try {
   }
 }
 cases.push({name:'owned provider stops, Docker containers/network/nft table retire and XFS quota usage/limits clear',status:'passed'});
-const result={protocol:'clank-provider-promotion-acceptance/1',status:'passed',mode:dependenciesOnly?'deployment-dependencies':channelsOnly?'release-channels':authorityOnly?'authority-expiry':'health-restart',realGuest:true,node:process.version,cases};
+const result={protocol:'clank-provider-promotion-acceptance/1',status:'passed',mode:windowsOnly?'release-windows':dependenciesOnly?'deployment-dependencies':channelsOnly?'release-channels':authorityOnly?'authority-expiry':'health-restart',realGuest:true,node:process.version,cases};
 await writeFile(join(root,'acceptance.json'),JSON.stringify(result,null,2)+'\n',{mode:0o600});
 console.log(JSON.stringify(result));

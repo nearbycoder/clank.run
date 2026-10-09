@@ -14,12 +14,14 @@ export function installEnvironmentConsoleContext(context, html) {
   context.state.channelGeneration ??= 0;
   context.state.channelListGeneration ??= 0;
   context.state.channelHistoryGeneration ??= 0;
+  context.state.windowGeneration ??= 0;
+  context.state.windowMutationBusy ??= false;
   context.state.dependencyProject ??= null;
   context.state.dependencyGeneration ??= 0;
   context.state.dependencyBusy ??= false;
   context.state.dependencyCanConfigure ??= false;
   for (const id of ['#dependency-form', '#dependency-recovery-form']) context.q(id).reset ??= () => {};
-  const channels = ['resetChannelReview', 'updateChannelFields', 'saveChannelDraft', 'resetDependencyState', 'syncDependencyControls', 'updateDependencyOverrideFields'].map(name => {
+  const channels = ['resetChannelReview', 'updateChannelFields', 'saveChannelDraft', 'resetReleaseWindowView', 'resetDependencyState', 'syncDependencyControls', 'updateDependencyOverrideFields'].map(name => {
     const source = html.match(new RegExp('^function ' + name + '\\([^\\n]+', 'm'))?.[0];
     assert.ok(source, 'Shared channel helper must be present: ' + name);
     return source;

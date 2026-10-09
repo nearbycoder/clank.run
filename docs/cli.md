@@ -398,6 +398,14 @@ reviewed versions; activation also captures the target binding, active release a
 `history --version=<n>` reads any exact retained entry. See [persistent release channels](release-channels.md)
 for CLI/dashboard parity, retirement and verified recovery.
 
+## Scheduled release windows
+
+Use `clank release-window list`, `queue --request=release-window.json`, `show`, `cancel` and
+`recover` for exact future channel promotions. Cancellation and recovery require the current
+`--expected-version`; recovery also requires its exact `--confirm` phrase. Queueing never builds
+or stores a readiness override. See [scheduled release windows](release-windows.md) for the
+bounded request, timezone previews, current authority and interruption recovery.
+
 ## Preview environments
 
 ```sh
