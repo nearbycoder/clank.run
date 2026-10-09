@@ -321,6 +321,14 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
 
 ## Deployment platform
 
+- Environment HTTP contracts: `PlatformEnvironmentName`, `PlatformEnvironmentMigrationPolicy`,
+  `PlatformEnvironment`, `PlatformEnvironmentBindingRequest`, `PlatformPromotionRequest`,
+  `PlatformPromotion`. Versioned same-workspace bindings and exact-artifact activation use
+  `/api/projects/:root/environments`; see [environment promotions](environment-promotions.md).
+- `openPlatform({ providerPromotionHosts })`: private operator certificate/profile registry
+  for initialized co-located loopback provider targets under code-only policy. Current host
+  proof is required before staging and acceptance; unsupported profiles fail closed.
+
 - `openPlatform(options)`: browser dashboard, workspace people/invitation administration and
   activity, transparent monthly usage, device authorization, tokens, projects, transactionally
   enforced capacity and traffic limits, ingress metrics, DNS/domain lifecycle, TLS eligibility,
@@ -365,8 +373,10 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
 - Types: `ObjectStore`, `ObjectMetadata`, `StoredObject`, `LocalObjectStoreOptions`,
   `S3ObjectStoreOptions`.
 - `openPlatform({ deploymentAgents: { artifacts: { namespace, store } } })`: retains each new
-  remote-runner upload under a persisted repository identity and content-addressed key. Existing
-  local releases remain readable; mismatched repositories fail closed.
+  local or remote-runner upload under a persisted repository identity and content-addressed key.
+  Without an object repository, original uploads use private project artifact files. Earlier
+  local releases without retained uploads remain runnable but cannot be reconstructed for
+  promotion. Mismatched repositories fail closed.
 - `openPlatform({ backups: { objects: { namespace, store } } })`: gives every project an isolated
   authenticated backup catalog and binds the repository identity/root in the control database.
 

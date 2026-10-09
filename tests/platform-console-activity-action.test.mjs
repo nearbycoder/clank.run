@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
+import { installEnvironmentConsoleContext } from "./fixtures/platform-environment-console-context.mjs";
 import { filterConsoleActivityAction } from "../dist/platform-console-activity-action.js";
 import { filterConsoleActivitySearch } from "../dist/platform-console-activity-search.js";
 import { platformConsolePage } from "../dist/platform-console.js";
@@ -49,6 +50,7 @@ async function fixture() {
   };
   const functions = ["activityScopeKey", "syncActivityScope", "renderActivity", "updateActivitySearch", "loadActivity"].map(name => html.match(new RegExp(`(?:async )?function ${name}\\([^\\n]+`))[0]).join("\n");
   const handler = html.split("\n").find(line => line.startsWith('q("#activity-action").onchange='));
+  installEnvironmentConsoleContext(context, html);
   runInNewContext(`${functions}\n${handler}\nrenderActivity()`, context);
   return { html, state, context };
 }

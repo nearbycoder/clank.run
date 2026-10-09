@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
+import { installEnvironmentConsoleContext } from "./fixtures/platform-environment-console-context.mjs";
 import { compile } from "../scripts/compiler.mjs";
 
 const directory = await mkdtemp(join(tmpdir(), "clank-log-wrap-"));
@@ -79,6 +80,7 @@ function fixture() {
     window: { scrollTo() {}, location: { assign: path => destinations.push(path) } },
     setInterval(callback) { const id = nextTimer++; timers.set(id, callback); return id; }, clearInterval(id) { timers.delete(id); }, clearTimeout() {},
   };
+  installEnvironmentConsoleContext(context, html);
   runInNewContext(source, context);
   const render = entries => { if (entries) state.projectData.logs = entries; context.renderCurrentLogs(); };
   const scroll = top => { list.scrollTop = top; list.onscroll?.(); };

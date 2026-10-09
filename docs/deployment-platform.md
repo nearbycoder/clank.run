@@ -19,6 +19,10 @@ The browser console is also an operating surface, not only a login page. It show
 cron schedules, scheduled encrypted backups, logs, and the full custom-domain lifecycle. See
 [Deployment dashboard, quotas, and domains](platform-dashboard.md).
 
+Bind independent development, staging and production projects, then promote a retained exact
+artifact through the [environment promotion workflow](environment-promotions.md). Each target
+uses its own secrets, data and versioned migration policy.
+
 ## Five-minute managed path
 
 ```sh

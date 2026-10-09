@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
+import { installEnvironmentConsoleContext } from "./fixtures/platform-environment-console-context.mjs";
 import { platformConsolePage } from "../dist/platform-console.js";
 
 function node(tagName, className, text = "") {
@@ -42,6 +43,7 @@ async function fixture() {
   };
   const functions = ["renderTrafficTable", "loadProject", "returnToSignIn"]
     .map(name => html.match(new RegExp(`(?:async )?function ${name}\\([^\\n]+`))[0]).join("\n");
+  installEnvironmentConsoleContext(context, html);
   runInNewContext(functions, context);
   return {
     html, state, nodes, context, calls,

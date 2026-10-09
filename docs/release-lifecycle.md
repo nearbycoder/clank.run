@@ -35,6 +35,11 @@ earlier parent.
 
 ## Provenance, promotion, and progressive delivery
 
+For persistent project targets and actual activation, use [artifact promotion across
+environments](environment-promotions.md). It binds source release/digest, target version,
+active release and retry identity to one accepted transaction. The plan helpers below remain
+caller-owned descriptions of progressive delivery.
+
 `createReleaseProvenance()` hashes the artifact, source revision, configuration, immutable
 migrations, framework, builder, and time. `verifyReleaseProvenance()` detects later mutation.
 Promotion pins that release while traffic moves through ordered stages.

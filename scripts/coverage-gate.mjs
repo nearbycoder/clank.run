@@ -1,10 +1,15 @@
 import { spawn } from "node:child_process";
+import { availableParallelism } from "node:os";
 
 const OUTPUT_TAIL_LIMIT = 256 * 1024;
 
 export const coverageArguments = Object.freeze([
   "--disable-warning=ExperimentalWarning",
   "--test",
+  // Each file may launch compilers, SQLite workers and real app processes.
+  // Bound aggregate pressure on large shared hosts while keeping small CI
+  // runners at their available concurrency. Every discovered test still runs.
+  `--test-concurrency=${Math.min(4, availableParallelism())}`,
   "--test-reporter=tap",
   "--experimental-test-coverage",
   "--test-coverage-include=dist/**/*.js",

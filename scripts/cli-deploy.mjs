@@ -191,6 +191,10 @@ const COMMANDS = Object.freeze({
     usage: "clank preview <deploy|list|remove|github> [name] [directory] [--ttl <hours>] [--data <empty|sanitized>] [--fixture <database.sqlite>] [--json]",
     summary: "Deploy isolated previews with empty or policy-sanitized data, manually or through GitHub OIDC.",
   },
+  environment: {
+    usage: "clank environment <list|bind|unbind|promote|history|recover> [name] [project-or-key] [directory] [--expected-version <n>] [--migration-policy <apply-safe|code-only>] [--from <name>] [--release <id>] [--digest <sha256>] [--expected-active <id|none>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--json]",
+    summary: "Configure independent persistent targets and promote an exact retained upload without rebuilding.",
+  },
   status: {
     usage: "clank status",
     summary: "Show the linked project and active release.",
@@ -249,6 +253,7 @@ const VALUE_OPTIONS = Object.freeze({
   usage: ["org", "month"],
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "placement", "output", "signing-key", "builder", "build-id"],
+  environment: ["expected-version", "migration-policy", "from", "release", "digest", "expected-active", "key", "attestation", "confirm"],
   preview: [
     "fixture",
     "ttl",
@@ -283,6 +288,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   usage: ["json"],
   billing: ["json"],
   deploy: ["dry-run", "json"],
+  environment: ["json"],
   preview: [
     "json",
     "acknowledge-data-loss",
@@ -328,6 +334,7 @@ export async function run(command, args) {
       case "domain": return await domainCommand(args);
       case "deploy": return await deploy(args);
       case "preview": return await previewCommand(args);
+      case "environment": return await environmentCommand(args);
       case "status": return await status(args);
       case "releases": return await releases(args);
       case "logs": return await logs(args);
@@ -2112,6 +2119,66 @@ async function deploy(args) {
   }
 }
 
+async function environmentCommand(args) {
+  const action = args.shift(), values = positionals(args);
+  if (!["list", "bind", "unbind", "promote", "history", "recover"].includes(action)) throw new CliError(COMMANDS.environment.usage);
+  const allowed = {
+    list: ["json"], bind: ["json", "expected-version", "migration-policy"], unbind: ["json", "expected-version"],
+    promote: ["json", "expected-version", "from", "release", "digest", "expected-active", "key", "attestation"],
+    history: ["json"], recover: ["json", "confirm"],
+  }[action];
+  for (const argument of args) {
+    if (!argument.startsWith("--")) continue;
+    const name = argument.slice(2).split("=", 1)[0];
+    if (!allowed.includes(name)) throw new CliError(`--${name} does not apply to environment ${action}.`);
+  }
+  const named = action !== "list", name = named ? values.shift() : null;
+  if (named && !["development", "staging", "production"].includes(name)) throw new CliError("Choose development, staging or production.");
+  const identity = action === "bind" || action === "recover" ? values.shift() : null;
+  if ((action === "bind" || action === "recover") && !identity) throw new CliError(COMMANDS.environment.usage);
+  if (values.length > 1) throw new CliError(COMMANDS.environment.usage);
+  const version = () => {
+    const value = option(args, "expected-version");
+    if (typeof value !== "string" || !/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) throw new CliError("Pass an exact --expected-version from environment list; use 0 for an unconfigured target.");
+    return Number(value);
+  };
+  const required = key => { const value = option(args, key); if (!value) throw new CliError(`Pass --${key} explicitly.`); return value; };
+  let body, method = "GET", suffix = "";
+  if (action === "bind") {
+    const policy = option(args, "migration-policy");
+    if (policy && !["apply-safe", "code-only"].includes(policy)) throw new CliError("Choose apply-safe or code-only for --migration-policy.");
+    body = { projectId: identity, expectedVersion: version(), ...(policy ? { migrationPolicy: policy } : {}) }; method = "PUT";
+  } else if (action === "unbind") { body = { expectedVersion: version() }; method = "DELETE"; }
+  else if (action === "promote") {
+    const source = required("from"), active = required("expected-active"), digest = required("digest"), key = required("key");
+    if (!["development", "staging", "production"].includes(source) || source === name) throw new CliError("Choose a different --from environment.");
+    if (!/^[a-f0-9]{64}$/.test(digest) || !/^[A-Za-z0-9_-]{16,128}$/.test(key)) throw new CliError("Pass an exact artifact SHA-256 and a 16–128 character --key.");
+    body = { sourceEnvironment: source, releaseId: required("release"), digest, expectedVersion: version(), expectedActiveReleaseId: active === "none" ? null : active, idempotencyKey: key };
+    method = "POST"; suffix = "/promotions";
+  } else if (action === "history") suffix = "/promotions";
+  else if (action === "recover") {
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(identity)) throw new CliError("Pass the exact promotion key from environment history.");
+    body = { confirmation: required("confirm") }; method = "POST"; suffix = `/promotions/${encodeURIComponent(identity)}/recover`;
+  }
+  const attestationFile = option(args, "attestation");
+  if (attestationFile && action !== "promote") throw new CliError("--attestation applies only to environment promote.");
+  const attestation = attestationFile ? encodeReleaseAttestation(await readBoundedJsonFile(resolve(attestationFile), "Target release attestation", 16384)) : null;
+  const { profile, link } = await linkedContext(resolve(values[0] ?? "."));
+  const payload = await platformRequest(profile.server, `/api/projects/${encodeURIComponent(link.projectId)}/environments${named ? '/' + name : ''}${suffix}`, {
+    token: profile.token, method, ...(body ? { body } : {}), ...(attestation ? { headers: { "x-clank-release-attestation": attestation } } : {}),
+    ...(action === "promote" || action === "recover" ? { timeoutMs: PLATFORM_DEPLOY_TIMEOUT_MS } : {}),
+  });
+  if (flag(args, "json")) { console.log(JSON.stringify(payload, null, 2)); return; }
+  if (payload.environments) {
+    if (!payload.environments.length) console.log("No persistent environment targets configured.");
+    for (const environment of payload.environments) console.log(`${environment.name}  ${environment.projectId ?? 'unbound'}  version ${environment.version}  ${environment.migrationPolicy}`);
+  } else if (payload.promotions) {
+    if (!payload.promotions.length) console.log("No visible promotions retained.");
+    for (const promotion of payload.promotions) console.log(`${promotion.idempotencyKey}  ${promotion.state}  ${promotion.sourceEnvironment} → ${promotion.targetEnvironment}  ${promotion.digest}  ${promotion.targetReleaseId ?? 'not staged'}`);
+  } else if (payload.environment) console.log(`${payload.environment.name}: ${payload.environment.projectId ?? 'unbound'} at version ${payload.environment.version}.`);
+  else console.log(`${payload.promotion.targetEnvironment}: ${payload.promotion.state} (${payload.promotion.idempotencyKey}).`);
+}
+
 async function previewCommand(args) {
   const subcommand = args.shift();
   if (subcommand === "github") return githubPreviewCommand(args);
@@ -3241,7 +3308,7 @@ async function platformRequest(server, path, options = {}) {
     method: options.method ?? "GET",
     headers,
     ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-  }, PLATFORM_REQUEST_TIMEOUT_MS);
+  }, options.timeoutMs ?? PLATFORM_REQUEST_TIMEOUT_MS);
   if (!response.ok) throw ApiError.from(payload, response.status);
   return payload;
 }

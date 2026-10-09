@@ -4,7 +4,7 @@
   "baseCommit": "b6a61c4749bc3f87c31228ec69d895692b9aa92a",
   "branch": "codex/local-provider-fleet",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/273",
-  "status": "validated; reviewed PR delivery pending",
+  "status": "merged",
   "implementation": "Optional fixed-scenario API and private-config provider CLI run actual coordinator, two provider services and two agents in separate processes. Real leases, HTTP transfer, Docker ingress, SQLite, mount faults and fencing drive every pass.",
   "validation": {
     "release": {
@@ -1981,8 +1981,56 @@
   },
   "preservedExistingFiles": 23,
   "roadmap": {
-    "merged": 15,
-    "remainingUnmerged": 25,
-    "feature34": "Acceptance validated; not counted merged until protected delivery."
+    "merged": 16,
+    "remainingUnmerged": 24,
+    "feature34": "Acceptance and protected delivery complete."
+  },
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/274",
+    "reviewedHead": "01ff61d95e23d2da597eb81ad564e36a970b6097",
+    "authorReview": {
+      "id": 5469531905,
+      "state": "COMMENTED",
+      "independentApproval": false
+    },
+    "hostedChecks": {
+      "status": "passed",
+      "headRevision": "01ff61d95e23d2da597eb81ad564e36a970b6097",
+      "codeql": {
+        "id": 113802814094,
+        "conclusion": "success",
+        "newAlerts": 0,
+        "annotations": 0
+      },
+      "node22": {
+        "id": 113802362756,
+        "conclusion": "success"
+      },
+      "node24": {
+        "id": 113802362825,
+        "conclusion": "success"
+      },
+      "types": {
+        "id": 113802362464,
+        "conclusion": "success"
+      },
+      "packedRelease": {
+        "id": 113802362782,
+        "conclusion": "success"
+      },
+      "analysis": {
+        "id": 113802363769,
+        "conclusion": "success",
+        "annotations": 1,
+        "annotationScope": "Routine Ubuntu runner migration notice"
+      }
+    },
+    "reviewThreads": 0,
+    "requestedChanges": 0,
+    "mergeCommit": "8b22c32d8dc05567d87ad4a9b95219818684fdd9",
+    "reviewedTree": "4625bed1351c720026e33d709c93b7d3e58a4b25",
+    "mergedTree": "4625bed1351c720026e33d709c93b7d3e58a4b25",
+    "bothCheckoutsSynchronized": true,
+    "preservedExistingFiles": 23
   }
 }

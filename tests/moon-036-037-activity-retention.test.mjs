@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
+import { installEnvironmentConsoleContext } from "./fixtures/platform-environment-console-context.mjs";
 import { compile } from "../scripts/compiler.mjs";
 
 const directory = await mkdtemp(join(tmpdir(), "clank-activity-retention-"));
@@ -54,6 +55,7 @@ function fixture() {
     toast: (...args) => toasts.push(args), handleAuthFailure(error) { failures.push(error.status); return error.status === 401; },
     initial: {}, clearInterval() {}, clearTimeout() {}, window: { location: { assign: path => destinations.push(path) } },
   };
+  installEnvironmentConsoleContext(context, html);
   runInNewContext(source, context);
   context.renderActivity();
   const details = id => q("#activity-list").children.flatMap(item => item.children).find(node => node.className === "activity-details" && node.dataset.eventId === String(id));

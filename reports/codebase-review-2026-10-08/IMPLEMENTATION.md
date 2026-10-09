@@ -2,9 +2,35 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Fifteen of the forty proposed features are merged across twelve feature batches. Linux host certification (01) merged in [PR #270](https://github.com/nearbycoder/clank.run/pull/270) after all six checks at reviewed head `fb50d74e23ae069629cf0f8579c0d8248abb6949`, with no new CodeQL alerts or unresolved threads. Both main checkouts match `b6a61c4749bc3f87c31228ec69d895692b9aa92a`, and 23 existing files are preserved. Twenty-five features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. The package prerequisite merged in [PR #272](https://github.com/nearbycoder/clank.run/pull/272) after all six fresh checks, preserving byte ceilings. The local provider fleet simulator (34) has complete local and real disposable-host acceptance under proposal #273; reviewed PR delivery is pending. Earlier snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Sixteen of the forty proposed features are merged across thirteen feature batches. Linux host certification (01) merged in [PR #270](https://github.com/nearbycoder/clank.run/pull/270) after all six checks at reviewed head `fb50d74e23ae069629cf0f8579c0d8248abb6949`, with no new CodeQL alerts or unresolved threads. Both main checkouts match `8b22c32d8dc05567d87ad4a9b95219818684fdd9`, and 23 existing files are preserved. Twenty-four features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. The package prerequisite merged in [PR #272](https://github.com/nearbycoder/clank.run/pull/272) after all six fresh checks, preserving byte ceilings. The local provider fleet simulator (34) merged in [PR #274](https://github.com/nearbycoder/clank.run/pull/274) after all six fresh hosted checks, including minimum Node and no new CodeQL alerts. Artifact promotion (02) is in progress under proposal #275. Earlier snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
+
+## Artifact promotion across environments
+
+Artifact promotion (02) remains in progress under [proposal #275](https://github.com/nearbycoder/clank.run/issues/275).
+The API, CLI and dashboard now bind independent targets with version checks and exact-upload
+promotion receipts. Local tests exercise byte identity, independent data/secrets, production
+roles, revoked source/target access, failed health, actual controller SIGKILL and verified
+snapshot recovery after the prior writer's final write. Real browser checks cover keyboard
+promotion, retained project drafts, stale review, phone width and revocation clearing.
+Twenty-four packed consumer fixtures pass with 159 existing source diagnostics against the
+unchanged 163 allowance. Documentation builds, offline artifact verification and all twelve
+HTTP/agent endpoint checks pass. Nine real provider authority/expiry cases pass, including
+current certification, exact bytes, independent state, controller restart, four staged/queued
+revocations, actual certificate expiry and verified cleanup. All eight health/restart cases
+also pass against the guardian readiness fix. A delayed real guardian regression passes; daemon
+fixture PID records now update atomically, and an owned orphan from the earlier truncated record
+was stopped after verifying its exact command, directory and process group. The actual Docker
+controller SIGKILL/restart regression passes. Complete Node 26 verification passes with 1,886
+reported / 1,883 passed / zero failed or cancelled / three existing privileged skips; coverage
+91.80/80.39/90.08. Minimum Node passes every test and coverage; its remaining conformance/security
+phases pass separately after supplying npm on PATH. Hosted Node 22/24, types and conformance
+pass at the initial PR head, but CodeQL finds two fixture code-sanitization alerts. The fixture
+now loads parameters as JSON; all twelve affected minimum-Node tests pass. Fresh fixed-head
+hosted security checks, review and merge remain pending; feature 02 is not counted as delivered.
+See [promotion acceptance](environment-promotions.json) for evidence and failed diagnostic runs.
+The next persistent-channel contract is proposed in [issue #276](https://github.com/nearbycoder/clank.run/issues/276).
 
 ## Local provider fleet simulator
 
@@ -35,9 +61,11 @@ docs search, navigation, guide and real HTTP/agent endpoints pass. An earlier lo
 full gate failed closed on truncated V8 coverage JSON despite all tests passing; its full
 coverage result is not claimed, and hosted Node 22 remains required.
 
-See [fleet acceptance evidence](fleet-simulator.json). Feature 34 is validated locally and
-on the actual disposable host; protected reviewed PR delivery is pending. The merged count
-remains fifteen until that delivery completes. Production Railway remains uncertified.
+See [fleet acceptance evidence](fleet-simulator.json). Feature 34 is merged in [PR #274](https://github.com/nearbycoder/clank.run/pull/274)
+after all six hosted checks pass at reviewed head `01ff61d95e23d2da597eb81ad564e36a970b6097`.
+The protected merge tree matches the reviewed tree, both checkouts are synchronized and
+all 23 existing files are preserved. Sixteen features are merged; twenty-four remain.
+Production Railway remains uncertified.
 
 ## Minimum-Node package prerequisite
 
@@ -364,7 +392,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | ID | Feature | State | Acceptance evidence |
 | --- | --- | --- | --- |
 | 01 | Verified Linux host certification | Implemented | Proposal #269 / merged PR #270; complete minimum-Node/type gates, four ordinary regressions, six actual allowed/denied/interrupted/cleanup KVM scenarios and 23 privileged isolation regressions. All six hosted checks pass; production remains uncertified. `linux-host-certification.json`. |
-| 02 | Artifact promotion across environments | Planned | Pending |
+| 02 | Artifact promotion across environments | In progress | Proposal #275; API/CLI/browser and local interruption/authority/snapshot checks implemented. Actual certified-provider failure/recovery and full reviewed delivery remain pending. |
 | 03 | Persistent release channels | Planned | Pending |
 | 04 | Deployment dependency gates | Planned | Pending |
 | 05 | Scheduled release windows | Planned | Pending |
@@ -396,7 +424,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 31 | Hydration mismatch inspector | Implemented | Optional metadata capture, pre-cleanup child paths, original TSX locations, patch/remount reasons, immutable bounded history and redacted JSON. Unit/packed consumer and real keyboard/mobile/cleanup checks pass. DOM gzip budget remains 12,000 bytes. |
 | 32 | Interactive component contract harness | Implemented | PR #266 merged after all six fresh checks; 19 focused tests, 20 packed type fixtures, eight actual Chrome journeys/96 steps, minimum-Node release gate and CodeQL pass. |
 | 33 | OpenAPI export for backend functions | Implemented | Runtime schemas, cookie/CSRF and replay contracts; unsupported/coercive/refined shapes rejected; actual positive/negative authenticated HTTP requests tested against the packed artifact. `tests/openapi.test.mjs`, `type-tests/openapi.ts`. |
-| 34 | Local provider fleet simulator | Acceptance validated; PR delivery pending | [Actual coordinator/provider drills](fleet-simulator.json) |
+| 34 | Local provider fleet simulator | Implemented and merged | [Actual coordinator/provider drills](fleet-simulator.json) |
 | 35 | Translation extraction and review workflow | Implemented | Canonical catalog extraction, locale/source/current fences, placeholder/key/plural validation and reviewed diff acceptance. Node tests, packed types and real browser keyboard/mobile checks confirm the server/browser revision matches. |
 | 36 | Project incident workspace | Planned | Pending |
 | 37 | SLO and error budget policies | Planned | Pending |

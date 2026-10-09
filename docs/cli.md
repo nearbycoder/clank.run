@@ -383,6 +383,13 @@ idempotency key and converges on the original release. A successful activation o
 validation/provider rejection clears the record; ambiguous and retryable responses preserve it.
 A changed artifact digest creates a separate attempt.
 
+## Persistent environments
+
+Persistent development, staging and production targets use `clank environment list`, `bind`,
+`unbind`, `promote`, `history` and `recover`. Promotion requires an exact source release/digest,
+binding version, active-target expectation and key; it never builds the app. See [artifact
+promotion across environments](environment-promotions.md) for commands and recovery guarantees.
+
 ## Preview environments
 
 ```sh
@@ -432,7 +439,7 @@ clank rollback <release-id>
 clank rollback <release-id> --restore-data --confirm="restore <slug>"
 ```
 
-`clank releases` reports the retained artifact count and uncompressed runtime/snapshot bytes. Cleanup requires the token's `rollback` permission, never removes the active artifact, and preserves release metadata, logs, and audit evidence. Removing the active release's immediate predecessor also destroys code rollback and its matching data snapshot, so it additionally requires `--allow-rollback-loss`.
+`clank releases` reports the retained artifact count and runtime, original upload and snapshot bytes. Cleanup requires the token's `rollback` permission, never removes the active artifact, and preserves release metadata, logs, and audit evidence. Removing the active release's immediate predecessor also destroys code rollback and its matching data snapshot, so it additionally requires `--allow-rollback-loss`.
 
 Logs are bounded. Every non-empty known secret value is redacted, including short values, with longer overlapping values replaced first. Apps must still avoid logging credentials because transformed, encoded, split, or externally emitted values cannot be recognized reliably.
 For provider-hosted projects, the same command merges durable platform lifecycle events with the

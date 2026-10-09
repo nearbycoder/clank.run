@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
+import { installEnvironmentConsoleContext } from "./fixtures/platform-environment-console-context.mjs";
 import { platformConsolePage } from "../dist/platform-console.js";
 
 async function fixture(authenticated = true) {
@@ -53,6 +54,7 @@ async function fixture(authenticated = true) {
     .map(name => html.match(new RegExp(`function ${name}\\([^\\n]+`))[0]).join("\n");
   const handlers = html.split("\n").filter(line => /^q\("#(?:auto-refresh|auth-form|sign-out)"\)\./.test(line)).join("\n");
   const manualRefresh = html.match(/q\("#refresh"\)\.onclick=.+?;(?=q\("#mobile-menu"\))/)[0];
+  installEnvironmentConsoleContext(context, html);
   runInNewContext(`${functions}\n${handlers}\n${manualRefresh}`, context);
   const advance = milliseconds => {
     const end = now + milliseconds;

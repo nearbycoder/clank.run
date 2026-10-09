@@ -2585,7 +2585,9 @@ test("development server resolves documented trailing-slash example URLs", async
     await new Promise((resolve, reject) => {
       const timeout = setTimeout(
         () => reject(new Error(`Dev server timed out: ${diagnostics}`)),
-        5_000,
+        // This entry point compiles the complete framework before announcing
+        // readiness. The assertion below verifies URL routing, not build speed.
+        30_000,
       );
       child.stdout.on("data", (chunk) => {
         diagnostics += chunk;
