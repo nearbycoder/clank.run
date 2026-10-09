@@ -655,6 +655,12 @@ grant inspection, reduction, and revocation.
 - `Id<Table>` / `DocumentId<Table>` / `s.id(table)`: nominal table-specific IDs.
 - `openSQLite(schema, options?)`: opens Node's built-in synchronous SQLite engine.
 - `createSQLiteDatabase(schema, connection, options?)`: wraps a compatible connection.
+- `QueryBuilder.aggregate({ joins?, groupBy?, measures, authorize, limits? })`: typed complete
+  counts/sums/groups over declared root fields and direct references. Requires caller-scoped
+  synchronous policies for every source, checks native stored-JSON admission before decoding,
+  retains selective related/ACL dependencies, and rejects partial or oversized results.
+  Types: `AggregateJoin`, `AggregateField`, `AggregateMeasure`, `AggregateLimits`,
+  `AggregateOptions`, `AggregateResult`, `AggregateScalar`. See [authorized aggregates](authorized-aggregates.md).
 - `SQLiteDatabase`: `.read`, `.tracked`, `.transaction`, `.subscribe`, `.version`, `.close`.
 - Read table: `.get`, `.query`, `.collect`, `.history(id?, options?)`.
 - Write table: `.insert`, `.patch`, `.replace`, `.delete`, `.restore(id, cursor, options?)`.

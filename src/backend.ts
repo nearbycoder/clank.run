@@ -112,10 +112,10 @@ export function defineTable<const Fields extends SchemaShape>(fields: Fields): T
     index(name, indexFields) {
       if (finalized) throw new TypeError("Table definitions cannot change after defineDatabase().");
       assertIdentifier(name, "index");
-      if (name in indexes) throw new TypeError(`Duplicate index: ${name}`);
+      if (Object.hasOwn(indexes, name)) throw new TypeError(`Duplicate index: ${name}`);
       if (indexFields.length === 0) throw new TypeError(`Index ${name} must contain at least one field.`);
       for (const field of indexFields) {
-        if (!(field in safeFields)) throw new TypeError(`Unknown field ${String(field)} in index ${name}.`);
+        if (!Object.hasOwn(safeFields, field)) throw new TypeError(`Unknown field ${String(field)} in index ${name}.`);
       }
       indexes[name] = Object.freeze([...indexFields]);
       return definition as any;
@@ -187,6 +187,60 @@ export type TableOwned<Table> = Table extends TableDefinition<any, any, infer Ow
 export type Comparison = "eq" | "neq" | "lt" | "lte" | "gt" | "gte";
 type QueryField<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> = keyof DocumentFor<Schema, Name> & string;
 
+export type AggregateScalar = string | number | boolean | null;
+type AggregateKeys<Value, Kind> = { [Key in keyof Value & string]:
+  [Exclude<Value[Key], undefined>] extends [never] ? never :
+  Exclude<Value[Key], undefined> extends Kind | null ?
+  [Exclude<Value[Key], null | undefined>] extends [never] ? null extends Kind ? Key : never : Key : never
+}[keyof Value & string];
+/** A direct reference declared with s.id(target), optionally nullable or optional. */
+export type AggregateJoin<DB extends DatabaseSchema<any>, Name extends TableName<DB>> = {
+  [Target in TableName<DB>]: { readonly table: Target; readonly via: AggregateKeys<TableValue<DB["tables"][Name]>, Id<Target>> }
+}[TableName<DB>];
+type AggregateSource<Joins> = "root" | (keyof Joins & string);
+type AggregateTable<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins, Source> =
+  Source extends "root" ? Name : Source extends keyof Joins ?
+  Joins[Source] extends { readonly table: infer Target extends TableName<DB> } ? Target : never : never;
+type AggregateFields<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins, Kind> = {
+  [Source in AggregateSource<Joins>]: { readonly source: Source;
+    readonly field: AggregateKeys<TableValue<DB["tables"][AggregateTable<DB, Name, Joins, Source>]>, Kind> }
+}[AggregateSource<Joins>];
+export type AggregateField<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins = {}> = AggregateFields<DB, Name, Joins, AggregateScalar>;
+export type AggregateMeasure<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins = {}> =
+  { readonly count: true; readonly sum?: never } | { readonly sum: AggregateFields<DB, Name, Joins, number>; readonly count?: never };
+export interface AggregateLimits {
+  /** Candidate source rows: default 1,000, maximum 10,000. */
+  readonly maxRows?: number;
+  /** Distinct related table/ID lookups, including misses: default 1,000, maximum 10,000. */
+  readonly maxRelated?: number;
+  /** Combined stored UTF-8 source and distinct related JSON: default 2 MiB, maximum 8 MiB. */
+  readonly maxBytes?: number;
+  /** Output groups: default 100, maximum 1,000. */
+  readonly maxGroups?: number;
+  /** Serialized UTF-8 result: default 64 KiB, maximum 256 KiB. */
+  readonly maxOutputBytes?: number;
+}
+export interface AggregateOptions<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins,
+  Measures extends Record<string, AggregateMeasure<DB, Name, Joins>>,
+  Group extends AggregateField<DB, Name, Joins> | undefined> {
+  readonly joins?: Joins;
+  readonly measures: Measures;
+  readonly groupBy?: Group;
+  /** Every source needs an explicit synchronous policy. Its db retains caller scope and tracked dependencies. */
+  readonly authorize: { readonly [Source in AggregateSource<Joins>]:
+    (record: Readonly<DocumentFor<DB, AggregateTable<DB, Name, Joins, Source>>>, db: ReadDatabase<DB>) => boolean };
+  readonly limits?: AggregateLimits;
+}
+type AggregateGroup<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins, Group> =
+  Group extends { readonly source: infer Source; readonly field: infer Field } ?
+  Field extends keyof TableValue<DB["tables"][AggregateTable<DB, Name, Joins, Source>]> ?
+  Exclude<TableValue<DB["tables"][AggregateTable<DB, Name, Joins, Source>]>[Field], undefined> | null : never : null;
+export interface AggregateResult<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins, Measures, Group> {
+  readonly protocol: "clank-aggregate/1";
+  readonly groups: readonly { readonly group: AggregateGroup<DB, Name, Joins, Group>;
+    readonly values: { readonly [Measure in keyof Measures]: number } }[];
+}
+
 export interface QueryBuilder<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> {
   where<Field extends QueryField<Schema, Name>>(field: Field, value: DocumentFor<Schema, Name>[Field]): QueryBuilder<Schema, Name>;
   where<Field extends QueryField<Schema, Name>>(field: Field, comparison: Comparison, value: DocumentFor<Schema, Name>[Field]): QueryBuilder<Schema, Name>;
@@ -194,6 +248,16 @@ export interface QueryBuilder<Schema extends DatabaseSchema<any>, Name extends T
   limit(count: number): QueryBuilder<Schema, Name>;
   collect(): Array<DocumentFor<Schema, Name>>;
   first(): DocumentFor<Schema, Name> | null;
+  /** Complete authorized totals; rejects limit(), oversized plans and asynchronous policies. */
+  aggregate<const Measures extends Record<string, AggregateMeasure<Schema, Name>>,
+    const Group extends AggregateField<Schema, Name> | undefined = undefined>(
+    options: AggregateOptions<Schema, Name, {}, Measures, Group> & { readonly joins?: undefined },
+  ): AggregateResult<Schema, Name, {}, Measures, Group>;
+  aggregate<const Joins extends Record<string, AggregateJoin<Schema, Name>>,
+    const Measures extends Record<string, AggregateMeasure<Schema, Name, Joins>>,
+    const Group extends AggregateField<Schema, Name, Joins> | undefined = undefined>(
+    options: AggregateOptions<Schema, Name, Joins, Measures, Group> & { readonly joins: Joins & { readonly root?: never } },
+  ): AggregateResult<Schema, Name, Joins, Measures, Group>;
 }
 
 export interface ReadTable<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> {
@@ -584,6 +648,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   let transactionActive = false;
   let activeChanges: ReturnType<typeof changesForTransaction> | undefined;
   let readActive = false;
+  let snapshotToken: object | undefined;
   let synchronizing = false;
   const listeners = new Set<(change: DatabaseChange) => void>();
   let poller: ReturnType<typeof setInterval> | undefined;
@@ -676,30 +741,12 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     ownerId?: string | null,
   ): Array<DocumentFor<Schema, Name>> => {
     ensureOpen();
-    const parameters: unknown[] = [];
-    const clauses: string[] = [];
-    const definition = tableDefinition(schema, name);
-    if (definition.ownership === "user") {
-      if (ownerId === null) throw new Error(`Owned table ${name} requires an authenticated user.`);
-      if (ownerId !== undefined) {
-        clauses.push("_owner_id = ?");
-        parameters.push(ownerId);
-      }
-    }
-    clauses.push(...conditions.map((condition) => {
-      const expression = fieldExpression(condition.field);
-      const operator = comparisonOperator(condition.comparison);
-      if (condition.value === null && (condition.comparison === "eq" || condition.comparison === "neq")) {
-        return `${expression} IS ${condition.comparison === "neq" ? "NOT " : ""}NULL`;
-      }
-      parameters.push(toSQLiteValue(condition.value));
-      return `${expression} ${operator} ?`;
-    }));
+    const { where, parameters } = querySelection(schema, name, conditions, ownerId);
     const orderSql = order
       ? ` ORDER BY ${fieldExpression(order.field)} ${order.direction.toUpperCase()}`
       : " ORDER BY _creation_time ASC, _id ASC";
     const limitSql = count === undefined ? "" : ` LIMIT ${validateLimit(count)}`;
-    const sql = `SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)}${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""}${orderSql}${limitSql}`;
+    const sql = `SELECT _id, _owner_id, _creation_time, _version, _data FROM ${tableIdentifier(name)}${where}${orderSql}${limitSql}`;
     const fields = [...conditions.filter((condition) => condition.comparison === "eq").map((condition) => condition.field), ...conditions.filter((condition) => condition.comparison !== "eq" && condition.comparison !== "neq").map((condition) => condition.field), ...(order ? [order.field] : [])];
     return observeQuery(name, sql, parameters, fields, () => prepared(sql).all(...parameters)).map((row) => decodeDocument<Schema, Name>(schema, name, row));
   };
@@ -755,7 +802,93 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     return rows.map((row) => decodeDocumentRevision(schema, name, row));
   };
 
-  const makeReader = (dependencies?: Map<string, ReadDependency>, ownerId?: string | null): ReadDatabase<Schema> => ({
+  const executeAggregate = (name: TableName<Schema>, conditions: QueryCondition[], count: number | undefined,
+    input: unknown, dependencies?: Map<string, ReadDependency>, ownerId?: string | null, token?: object) => {
+    ensureOpen();
+    if ((!readActive && !transactionActive) || token !== snapshotToken) throw new Error("Aggregates require their original active database read or write transaction.");
+    if (count !== undefined) throw new TypeError("Aggregates cannot use limit(); totals must cover the complete authorized selection.");
+    if (conditions.length > 32) throw new RangeError("Aggregate plans allow at most 32 filters.");
+    const plan = aggregatePlan(schema, name, input);
+    const { where, parameters } = querySelection(schema, name, conditions, ownerId);
+    const candidates = prepared(`SELECT _id, length(CAST(_data AS BLOB)) AS bytes FROM ${tableIdentifier(name)}${where} ORDER BY _creation_time ASC, _id ASC LIMIT ?`)
+      .all(...parameters, plan.limits.maxRows + 1);
+    if (candidates.length > plan.limits.maxRows) throw new RangeError("Aggregate source row capacity exceeded.");
+    let bytes = 0;
+    const admit = (value: unknown) => {
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || bytes + value > plan.limits.maxBytes) {
+        throw new RangeError("Aggregate stored JSON byte capacity exceeded.");
+      }
+      bytes += value;
+    };
+    for (const row of candidates) admit(row.bytes);
+    // The native metadata admission above precedes all source JSON decoding.
+    const roots = executeQuery(name, conditions, undefined, undefined, ownerId);
+    const reader = makeReader(dependencies, ownerId);
+    const related = new Map<string, Record<string, unknown> | null>();
+    const permitted = new Map<string, boolean>();
+    const groups = new Map<string, { group: AggregateScalar; values: Record<string, number> }>();
+    const newGroup = (group: AggregateScalar) => ({ group, values: Object.fromEntries(plan.measures.map(({ name }) => [name, 0])) });
+    if (!plan.groupBy) groups.set("null", newGroup(null));
+    for (const root of roots) {
+      Object.freeze(root);
+      if (!aggregateAllowed(plan.authorize.root!, root, reader)) continue;
+      const sources: Record<string, Record<string, unknown>> = Object.create(null);
+      sources.root = root;
+      let visible = true;
+      for (const join of plan.joins) {
+        const id = (root as Record<string, unknown>)[join.via];
+        if (id === undefined || id === null) { visible = false; break; }
+        if (typeof id !== "string" || !/^[A-Za-z0-9_-]{8,128}$/u.test(id)) throw new TypeError("Invalid aggregate reference ID.");
+        const key = `${join.table}:${id}`;
+        if (!related.has(key)) {
+          if (related.size >= plan.limits.maxRelated) throw new RangeError("Aggregate related lookup capacity exceeded.");
+          const owned = tableDefinition(schema, join.table).ownership === "user";
+          if (owned && ownerId === null) throw new Error(`Owned table ${join.table} requires an authenticated user.`);
+          const scoped = owned && ownerId !== undefined;
+          const metadata = prepared(`SELECT length(CAST(_data AS BLOB)) AS bytes FROM ${tableIdentifier(join.table)} WHERE _id = ?${scoped ? " AND _owner_id = ?" : ""}`)
+            .get(...(scoped ? [id, ownerId] : [id]));
+          if (metadata) admit(metadata.bytes);
+          const record = reader.table(join.table).get(id as Id<typeof join.table>);
+          related.set(key, record ? Object.freeze(record) : null);
+        }
+        const record = related.get(key)!;
+        if (!record) { visible = false; break; }
+        const policyKey = `${join.alias}:${key}`;
+        if (!permitted.has(policyKey)) permitted.set(policyKey, aggregateAllowed(plan.authorize[join.alias]!, record, reader));
+        if (!permitted.get(policyKey)) { visible = false; break; }
+        sources[join.alias] = record;
+      }
+      if (!visible) continue;
+      const group = plan.groupBy ? aggregateScalar(sources[plan.groupBy.source]![plan.groupBy.field]) : null;
+      const key = JSON.stringify([typeof group, group]);
+      let result = plan.groupBy ? groups.get(key) : groups.get("null");
+      if (!result) {
+        if (groups.size >= plan.limits.maxGroups) throw new RangeError("Aggregate group capacity exceeded.");
+        result = newGroup(group);
+        groups.set(key, result);
+      }
+      for (const measure of plan.measures) {
+        const value = measure.sum ? sources[measure.sum.source]![measure.sum.field] : 1;
+        if (value === undefined || value === null) continue;
+        if (typeof value !== "number" || !Number.isFinite(value)) throw new TypeError("Aggregate sums require finite numeric values.");
+        const previous = result.values[measure.name]!;
+        const sum = previous + value;
+        if (!Number.isFinite(sum) || (Number.isInteger(previous) && Number.isInteger(value) && !Number.isSafeInteger(sum))) {
+          throw new RangeError("Aggregate numeric capacity exceeded.");
+        }
+        result.values[measure.name] = sum;
+      }
+    }
+    const output = Object.freeze({ protocol: "clank-aggregate/1" as const,
+      groups: Object.freeze([...groups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+        .map(([, row]) => Object.freeze({ group: row.group, values: Object.freeze(row.values) }))) });
+    if (new TextEncoder().encode(JSON.stringify(output)).byteLength > plan.limits.maxOutputBytes) throw new RangeError("Aggregate output byte capacity exceeded.");
+    return output;
+  };
+
+  const makeReader = (dependencies?: Map<string, ReadDependency>, ownerId?: string | null): ReadDatabase<Schema> => {
+    const token = snapshotToken;
+    return {
     table<Name extends TableName<Schema>>(name: Name): ReadTable<Schema, Name> {
       const definition = tableDefinition(schema, name);
       const dependencyOwner = definition.ownership === "user" ? ownerId : undefined;
@@ -773,7 +906,9 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         },
         query() {
           trackTable();
-          return makeQueryBuilder(schema, name, (table, conditions, order, count) => executeQuery(table, conditions, order, count, ownerId));
+          return makeQueryBuilder(schema, name,
+            (table, conditions, order, count) => executeQuery(table, conditions, order, count, ownerId),
+            (conditions, count, input) => executeAggregate(name, conditions, count, input, dependencies, ownerId, token));
         },
         collect() {
           trackTable();
@@ -795,7 +930,8 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         },
       };
     },
-  });
+    };
+  };
 
   const changesForTransaction = () => ({
     records: new Map<string, DatabaseChangeRecord>(),
@@ -1060,6 +1196,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     if (recoveryRequired && !capture) throw new Error("This database requires point-in-time recovery capture before admitting writes.");
     synchronizeChanges(undefined, true);
     transactionActive = true;
+    snapshotToken = {};
     const changes = changesForTransaction();
     activeChanges = changes;
     let value!: Value;
@@ -1150,6 +1287,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     } finally {
       capture?.after();
       transactionActive = false;
+      snapshotToken = undefined;
       activeChanges = undefined;
     }
     if (committedVersion !== undefined) synchronizeChanges(committedVersion, false);
@@ -1164,6 +1302,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     for (let attempt = 0; attempt < 8; attempt++) {
       synchronizeChanges(undefined, true);
       readActive = true;
+      snapshotToken = {};
       let began = false;
       try {
         native.exec("BEGIN DEFERRED");
@@ -1187,6 +1326,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         throw error;
       } finally {
         readActive = false;
+        snapshotToken = undefined;
       }
     }
     throw new Error("Could not establish a stable SQLite read snapshot.");
@@ -1309,12 +1449,13 @@ function makeQueryBuilder<Schema extends DatabaseSchema<any>, Name extends Table
   schema: Schema,
   name: Name,
   execute: (name: Name, conditions: QueryCondition[], order: QueryOrder | undefined, count: number | undefined) => Array<DocumentFor<Schema, Name>>,
+  aggregate: (conditions: QueryCondition[], count: number | undefined, input: unknown) => unknown,
   conditions: QueryCondition[] = [],
   order?: QueryOrder,
   count?: number,
 ): QueryBuilder<Schema, Name> {
   const next = (nextConditions = conditions, nextOrder = order, nextCount = count) =>
-    makeQueryBuilder(schema, name, execute, nextConditions, nextOrder, nextCount);
+    makeQueryBuilder(schema, name, execute, aggregate, nextConditions, nextOrder, nextCount);
   return {
     where(field: string, comparisonOrValue: unknown, maybeValue?: unknown) {
       validateQueryField(schema, name, field);
@@ -1331,6 +1472,7 @@ function makeQueryBuilder<Schema extends DatabaseSchema<any>, Name extends Table
     limit(limit: number) { return next(conditions, order, validateLimit(limit)); },
     collect() { return execute(name, conditions, order, count); },
     first() { return execute(name, conditions, order, 1)[0] ?? null; },
+    aggregate(input: unknown) { return aggregate(conditions, count, input); },
   } as QueryBuilder<Schema, Name>;
 }
 
@@ -3436,7 +3578,7 @@ function tableDefinition<Schema extends DatabaseSchema<any>, Name extends TableN
   schema: Schema,
   name: Name,
 ): Schema["tables"][Name] {
-  const table = schema.tables[name];
+  const table = Object.hasOwn(schema.tables, name) ? schema.tables[name] : undefined;
   if (!table) throw new TypeError(`Unknown table: ${name}`);
   return table;
 }
@@ -3446,7 +3588,7 @@ function validateQueryField<Schema extends DatabaseSchema<any>, Name extends Tab
   name: Name,
   field: string,
 ): void {
-  if (!["_id", "_creationTime", "_version"].includes(field) && !(field in tableDefinition(schema, name).fields)) {
+  if (!["_id", "_creationTime", "_version"].includes(field) && !Object.hasOwn(tableDefinition(schema, name).fields, field)) {
     throw new TypeError(`Unknown field ${field} on table ${name}.`);
   }
 }
@@ -3479,6 +3621,145 @@ function migrateLegacyTable(native: DatabaseSyncLike, legacy: string, current: s
 
 function tableIdentifier(name: string): string {
   return quoteIdentifier(`clank_${name}`);
+}
+
+function querySelection<DB extends DatabaseSchema<any>>(schema: DB, name: TableName<DB>, conditions: QueryCondition[], ownerId?: string | null) {
+  const parameters: unknown[] = [], clauses: string[] = [];
+  if (tableDefinition(schema, name).ownership === "user") {
+    if (ownerId === null) throw new Error(`Owned table ${name} requires an authenticated user.`);
+    if (ownerId !== undefined) { clauses.push("_owner_id = ?"); parameters.push(ownerId); }
+  }
+  for (const condition of conditions) {
+    const expression = fieldExpression(condition.field);
+    if (condition.value === null && (condition.comparison === "eq" || condition.comparison === "neq")) {
+      clauses.push(`${expression} IS ${condition.comparison === "neq" ? "NOT " : ""}NULL`);
+    } else { clauses.push(`${expression} ${comparisonOperator(condition.comparison)} ?`); parameters.push(toSQLiteValue(condition.value)); }
+  }
+  return { where: clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "", parameters };
+}
+
+type AggregateProjection = { source: string; field: string };
+interface AggregatePlan {
+  joins: Array<{ alias: string; table: string; via: string }>;
+  measures: Array<{ name: string; sum?: AggregateProjection }>;
+  groupBy?: AggregateProjection;
+  authorize: Record<string, (record: Readonly<Record<string, unknown>>, db: ReadDatabase<any>) => boolean>;
+  limits: Required<AggregateLimits>;
+}
+
+function aggregateObject(input: unknown, label: string, allowed?: readonly string[]): Record<string, unknown> {
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || (Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null)) throw new TypeError(`${label} must be a plain object.`);
+  const output: Record<string, unknown> = Object.create(null);
+  for (const key of Reflect.ownKeys(input)) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key)!;
+    if (typeof key !== "string" || !descriptor.enumerable || !("value" in descriptor) || (allowed && !allowed.includes(key))) {
+      throw new TypeError(`Invalid ${label} property.`);
+    }
+    output[key] = descriptor.value;
+  }
+  return output;
+}
+
+function aggregateName(name: string) {
+  if (name.length > 64 || !/^[A-Za-z][A-Za-z0-9_]*$/u.test(name)) throw new TypeError("Aggregate names must be 1-64 ASCII identifier characters.");
+}
+
+function aggregateSchemaLeaves(input: unknown, depth = 0): Array<Record<string, unknown>> {
+  if (depth > 8) throw new TypeError("Aggregate field schema is too complex.");
+  const json = aggregateObject(input, "aggregate field schema");
+  if (Object.hasOwn(json, "anyOf")) {
+    if (!Array.isArray(json.anyOf) || !json.anyOf.length || json.anyOf.length > 16) throw new TypeError("Invalid aggregate field alternatives.");
+    const leaves = json.anyOf.flatMap(value => aggregateSchemaLeaves(value, depth + 1));
+    if (leaves.length > 16) throw new TypeError("Aggregate field schema is too complex.");
+    return leaves;
+  }
+  return [json];
+}
+
+function aggregateFieldSchema<DB extends DatabaseSchema<any>>(schema: DB, table: TableName<DB>, field: unknown) {
+  const definition = tableDefinition(schema, table);
+  if (typeof field !== "string" || !Object.hasOwn(definition.fields, field)) throw new TypeError("Aggregates require a declared data field.");
+  return aggregateSchemaLeaves(definition.fields[field]!.toJSONSchema());
+}
+
+function aggregateLeafKind(leaf: Record<string, unknown>) {
+  if (Object.hasOwn(leaf, "const")) return leaf.const === null ? "null" : typeof leaf.const;
+  return leaf.type;
+}
+
+function aggregatePlan<DB extends DatabaseSchema<any>>(schema: DB, root: TableName<DB>, input: unknown): AggregatePlan {
+  const options = aggregateObject(input, "aggregate options", ["joins", "measures", "groupBy", "authorize", "limits"]);
+  const sources = new Map<string, TableName<DB>>([["root", root]]);
+  const joins: AggregatePlan["joins"] = [];
+  const joinOptions = options.joins === undefined ? {} : aggregateObject(options.joins, "aggregate joins");
+  if (Object.keys(joinOptions).length > 4) throw new RangeError("Aggregate plans allow at most four joins.");
+  for (const [alias, input] of Object.entries(joinOptions)) {
+    aggregateName(alias);
+    if (alias === "root") throw new TypeError("The aggregate root alias is reserved.");
+    const join = aggregateObject(input, "aggregate join", ["table", "via"]);
+    if (typeof join.table !== "string") throw new TypeError("Aggregate joins require a declared table.");
+    tableDefinition(schema, join.table);
+    const leaves = aggregateFieldSchema(schema, root, join.via);
+    if (!leaves.some(leaf => aggregateLeafKind(leaf) !== "null") || leaves.some(leaf => aggregateLeafKind(leaf) !== "null"
+      && !(leaf.type === "string" && leaf.format === "clank-id" && leaf.table === join.table))) {
+      throw new TypeError("Aggregate joins require an s.id reference to the declared target table.");
+    }
+    joins.push({ alias, table: join.table, via: join.via as string });
+    sources.set(alias, join.table);
+  }
+  const projection = (input: unknown, numeric: boolean): AggregateProjection => {
+    const value = aggregateObject(input, "aggregate projection", ["source", "field"]);
+    if (typeof value.source !== "string" || !sources.has(value.source)) throw new TypeError("Unknown aggregate source alias.");
+    const leaves = aggregateFieldSchema(schema, sources.get(value.source)!, value.field);
+    const allowed = numeric ? ["number", "integer", "null"] : ["string", "number", "integer", "boolean", "null"];
+    if (leaves.some(leaf => !allowed.includes(aggregateLeafKind(leaf) as string))
+      || (numeric && !leaves.some(leaf => ["number", "integer"].includes(aggregateLeafKind(leaf) as string)))) {
+      throw new TypeError(numeric ? "Aggregate sums require a declared numeric field." : "Aggregate groups require a declared scalar field.");
+    }
+    return { source: value.source, field: value.field as string };
+  };
+  const measureOptions = aggregateObject(options.measures, "aggregate measures");
+  if (!Object.keys(measureOptions).length || Object.keys(measureOptions).length > 16) throw new RangeError("Aggregate plans require 1-16 measures.");
+  const measures = Object.entries(measureOptions).map(([name, input]) => {
+    aggregateName(name);
+    const measure = aggregateObject(input, "aggregate measure", ["count", "sum"]);
+    if (Object.keys(measure).length !== 1) throw new TypeError("Aggregate measures require exactly one count or sum.");
+    if (Object.hasOwn(measure, "count")) {
+      if (measure.count !== true) throw new TypeError("Aggregate count must be true.");
+      return { name };
+    }
+    return { name, sum: projection(measure.sum, true) };
+  });
+  const authorize = aggregateObject(options.authorize, "aggregate authorization", [...sources.keys()]);
+  if ([...sources.keys()].some(alias => typeof authorize[alias] !== "function")) throw new TypeError("Every aggregate source requires a synchronous authorization policy.");
+  const defaults: { -readonly [Key in keyof Required<AggregateLimits>]: number } = { maxRows: 1000, maxRelated: 1000, maxBytes: 2 * 1024 * 1024, maxGroups: 100, maxOutputBytes: 64 * 1024 };
+  const maxima: Required<AggregateLimits> = { maxRows: 10000, maxRelated: 10000, maxBytes: 8 * 1024 * 1024, maxGroups: 1000, maxOutputBytes: 256 * 1024 };
+  const limits = options.limits === undefined ? {} : aggregateObject(options.limits, "aggregate limits", Object.keys(defaults));
+  for (const key of Object.keys(defaults) as Array<keyof AggregateLimits>) {
+    const value = limits[key] === undefined ? defaults[key] : limits[key];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > maxima[key]) throw new RangeError(`Invalid aggregate ${key}.`);
+    defaults[key] = value;
+  }
+  return { joins, measures, authorize: authorize as AggregatePlan["authorize"], limits: defaults,
+    ...(options.groupBy === undefined ? {} : { groupBy: projection(options.groupBy, false) }) };
+}
+
+function aggregateScalar(value: unknown): AggregateScalar {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return Object.is(value, -0) ? 0 : value;
+  throw new TypeError("Aggregate group values must be finite scalars.");
+}
+
+function aggregateAllowed(policy: AggregatePlan["authorize"][string], record: Readonly<Record<string, unknown>>, db: ReadDatabase<any>) {
+  const result: unknown = policy(record, db);
+  if (result && (typeof result === "object" || typeof result === "function") && typeof (result as PromiseLike<unknown>).then === "function") {
+    void Promise.resolve(result).catch(() => {});
+    throw new TypeError("Aggregate authorization policies must be synchronous.");
+  }
+  if (typeof result !== "boolean") throw new TypeError("Aggregate authorization policies must return a boolean.");
+  return result;
 }
 
 function jsonExpression(field: string): string {
