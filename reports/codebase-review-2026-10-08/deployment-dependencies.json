@@ -1,0 +1,495 @@
+{
+  "feature": "04 Deployment dependency gates",
+  "date": "2026-10-09",
+  "baseCommit": "be696323c7b0f4fd5cb381d2fb005b2ac8a2a139",
+  "branch": "codex/project-dependency-gates",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/279",
+  "status": "implemented-verified-awaiting-hosted-review-and-protected-merge",
+  "implementation": "Versioned managed-service requirements gate ordinary uploads, measured local canaries, explicit rollback and environment/channel activation. Exact credential-bound five-minute checks capture service activation identities. Current authority, policy and identity are checked around asynchronous work and publication. Durable interrupted receipts fence writers until owned cleanup and snapshot or certified-provider recovery. Human overrides bypass readiness only.",
+  "validation": {
+    "localContracts": {
+      "status": "passed",
+      "tests": 50,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "scope": "26 dependency, 12 environment and 12 channel contracts on Node 26.10 against the runtime-state fix; includes two held final-response regressions, target snapshot restoration, actual SIGKILL and measured canary traffic.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-runtime-07-bb6f470d95338e06cb5d47ffeae447c1242f19c9ea68d8eff3f1b2277516df80.log",
+        "sha256": "bb6f470d95338e06cb5d47ffeae447c1242f19c9ea68d8eff3f1b2277516df80"
+      }
+    },
+    "finalCliAndRollback": {
+      "status": "passed",
+      "tests": 2,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-final-cli-rollback-01-1b109fea258826fe4de10b6640a181ff779ab9a9cc7018e26f5685a0f1a73d95.log",
+        "sha256": "1b109fea258826fe4de10b6640a181ff779ab9a9cc7018e26f5685a0f1a73d95"
+      }
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "sourceDiagnostics": 159,
+      "unchangedBaseline": 163,
+      "newDiagnostics": 0,
+      "packedPositiveNegativeFixtures": 26,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-types-15-dd6b8ffd8c0f3615d979dd8d95b62e56ca91097c196150b45f754a87da7cbee5.log",
+        "sha256": "dd6b8ffd8c0f3615d979dd8d95b62e56ca91097c196150b45f754a87da7cbee5"
+      }
+    },
+    "consoleCompatibility": {
+      "status": "passed",
+      "tests": 25,
+      "scope": "The two older fixtures changed after the first full-gate failure; all other focused console cases were verified in prior 38-test runs and the successful complete Node 26 gate.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-console-compatibility-03-84ea744e013ebc645438edca717c123b96e4c54bbf6944e855df280c465de7e0.log",
+        "sha256": "84ea744e013ebc645438edca717c123b96e4c54bbf6944e855df280c465de7e0"
+      }
+    },
+    "provider": {
+      "protocol": "clank-provider-promotion-acceptance/1",
+      "status": "passed",
+      "mode": "deployment-dependencies",
+      "realGuest": true,
+      "node": "v22.16.0",
+      "cases": [
+        {
+          "name": "real current Docker/XFS host certificate",
+          "status": "passed",
+          "reportId": "5f5e1712-3526-4f32-8711-c513fc60e572",
+          "policyDigest": "fface2afd6bd11b44eba6665ab9cbf6cb192397a458bc349ef66d3d39720f789"
+        },
+        {
+          "name": "actual failed first provider activation stops its exact owned generation, retains initialized data and protected migration proof across restart, rejects changed migrations and permits a subsequent reviewed activation",
+          "status": "passed"
+        },
+        {
+          "name": "actual HTTP provider promotion preserves original bytes, non-root runtime and independent data/secrets/buckets",
+          "status": "passed",
+          "digest": "8c80d7dbf73c59555846753cd1477695226b4dbbace550d01d6ee3cc662672de"
+        },
+        {
+          "name": "accepted exact replay across actual controller restart",
+          "status": "passed"
+        },
+        {
+          "name": "actual first provider activation passes exact dependency health and assigned-host certification",
+          "status": "passed"
+        },
+        {
+          "name": "real ordinary gated provider upload preserves exact bytes and initialized application state",
+          "status": "passed"
+        },
+        {
+          "name": "actual queued provider service-replacement rejects acceptance and restores the prior frozen writer without rechecking failed readiness",
+          "status": "passed"
+        },
+        {
+          "name": "actual queued provider health-failure rejects acceptance and restores the prior frozen writer without rechecking failed readiness",
+          "status": "passed"
+        },
+        {
+          "name": "actual provider reviewed rollback and accepted replay across controller restart retain target data and never recheck unhealthy service readiness",
+          "status": "passed"
+        },
+        {
+          "name": "actual provider channel and environment acceptance commit their dependency receipt together",
+          "status": "passed"
+        },
+        {
+          "name": "gated ordinary provider activation rejects changed migrations and an actually changed host policy before staging",
+          "status": "passed"
+        },
+        {
+          "name": "actual provider required-service health binds the queued runtime generation before its accepted release identity changes, rejecting stale checks without source staging",
+          "status": "passed"
+        },
+        {
+          "name": "owned provider stops, Docker containers/network/nft table retire and XFS quota usage/limits clear",
+          "status": "passed"
+        }
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-provider-acceptance-09-1fb96c516640b305fb6752e10f479a75130fbecff270d1af23c6755c74ea586e.json",
+        "sha256": "1fb96c516640b305fb6752e10f479a75130fbecff270d1af23c6755c74ea586e"
+      },
+      "log": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-provider-09-b4fe827120ed628d14099d0a5b1c0844329307d97343c991e869de361593356c.log",
+        "sha256": "b4fe827120ed628d14099d0a5b1c0844329307d97343c991e869de361593356c"
+      },
+      "testedPlatformSource": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-provider-tested-platform-09-299771ecfdd169c8c80ad7961254756da44e67814071b032680a995b95e7c7ba.ts",
+        "sha256": "299771ecfdd169c8c80ad7961254756da44e67814071b032680a995b95e7c7ba"
+      },
+      "sourceSnapshot": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-source-06-6c5b7367f83c61418128a8d34eb25efec01e4a9e65d1f2f214d796f2f60d2bad.json",
+        "sha256": "6c5b7367f83c61418128a8d34eb25efec01e4a9e65d1f2f214d796f2f60d2bad"
+      },
+      "finalDelta": null,
+      "productionHostModified": false
+    },
+    "browser": {
+      "status": "passed",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-browser-evidence-02-cc9f231434a50266d4a81f4d2081d38e6295e318f328e1b1e5343c0b0e814ea3.json",
+        "sha256": "cc9f231434a50266d4a81f4d2081d38e6295e318f328e1b1e5343c0b0e814ea3"
+      },
+      "scope": "Final console source matches this evidence hash. Earlier ambiguous-response proof retains its own pre-layout-correction scope.",
+      "earlierAmbiguousResponse": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-browser-evidence-01-3e0b22a382e6afdb1154332657247b687a90d1f40be83b377b6ee4c02e6cfa35.json",
+        "sha256": "3e0b22a382e6afdb1154332657247b687a90d1f40be83b377b6ee4c02e6cfa35"
+      }
+    },
+    "docs": {
+      "status": "passed",
+      "build": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-docs-build-03-9a9f8da649189ae49b5d9d8be2d0dd8b71a4842daf2fc838e6f47d720d8788d5.log",
+        "sha256": "9a9f8da649189ae49b5d9d8be2d0dd8b71a4842daf2fc838e6f47d720d8788d5"
+      },
+      "doctor": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-docs-doctor-04-6b48dc8228377aa426543d7cf18aef4703b70fd20636d6e6d04e7aa48f5a5423.log",
+        "sha256": "6b48dc8228377aa426543d7cf18aef4703b70fd20636d6e6d04e7aa48f5a5423"
+      },
+      "offlineArtifact": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-docs-offline-04-daf3a0a42fed296eb0d3b64e74b2a0db470df46a6afd49c2d73cb9013c9ec554.log",
+        "sha256": "daf3a0a42fed296eb0d3b64e74b2a0db470df46a6afd49c2d73cb9013c9ec554"
+      },
+      "httpAndMcp": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-docs-endpoints-final-02-69852a3747d61605101f74876bd5f9bab0314dca15da435fb298b76acc374015.log",
+        "sha256": "69852a3747d61605101f74876bd5f9bab0314dca15da435fb298b76acc374015"
+      },
+      "browser": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-docs-browser-evidence-44b833ad6487268ea56cb9ff570e17f710ed19e5812aa946649b77f5caf45ef9.json",
+        "sha256": "44b833ad6487268ea56cb9ff570e17f710ed19e5812aa946649b77f5caf45ef9"
+      },
+      "guides": 97,
+      "uploaded": false
+    },
+    "node26CompleteGate": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1924,
+      "passed": 1921,
+      "failed": 0,
+      "cancelled": 0,
+      "privilegedSkips": 3,
+      "coverage": {
+        "lines": 91.86,
+        "branches": 80.48,
+        "functions": 90.1
+      },
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-release-gate-04-bed081088752cc07dad76e93dc965b860794ff6194f33fcfe4f3e1206ed2e036.log",
+        "sha256": "bed081088752cc07dad76e93dc965b860794ff6194f33fcfe4f3e1206ed2e036"
+      },
+      "sourceSnapshot": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-source-05-447245089969957bb53daf91ae6242391840fc5c363b21542c3d5c97ae48ab48.json",
+        "sha256": "447245089969957bb53daf91ae6242391840fc5c363b21542c3d5c97ae48ab48"
+      },
+      "finalDeltaScope": "Final backend/dashboard/CLI/docs/types match this tested snapshot. Only the disposable provider driver adds a provider-required-service runtime-generation drill afterward; it is verified separately on the same backend."
+    },
+    "node22CompleteGate": {
+      "status": "passed",
+      "node": "22.16.0",
+      "tests": 1924,
+      "passed": 1921,
+      "failed": 0,
+      "cancelled": 0,
+      "privilegedSkips": 3,
+      "coverage": {
+        "lines": 91.85,
+        "branches": 80.5,
+        "functions": 90.14
+      },
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-release-gate-05-24c2607833cf19332d9584f26dd9eea6400f36afd0bb27c0c935c6b9bcfba1c4.log",
+        "sha256": "24c2607833cf19332d9584f26dd9eea6400f36afd0bb27c0c935c6b9bcfba1c4"
+      },
+      "sourceSnapshot": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-source-05-447245089969957bb53daf91ae6242391840fc5c363b21542c3d5c97ae48ab48.json",
+        "sha256": "447245089969957bb53daf91ae6242391840fc5c363b21542c3d5c97ae48ab48"
+      },
+      "finalDeltaScope": "Final backend/dashboard/CLI/docs/types match this tested snapshot. Only the disposable provider driver adds a provider-required-service runtime-generation drill afterward; it is verified separately on the same backend."
+    },
+    "hostedChecks": {
+      "status": "awaiting-updated-head",
+      "initialHead": "115e7e8bc3dc88e59669aae82b809b579c1847e0",
+      "initialHeadChecks": "all-six-passed-but-superseded-by-runtime-state-fix"
+    },
+    "protectedMerge": {
+      "status": "open-not-merged",
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/281"
+    },
+    "package": {
+      "status": "passed",
+      "files": 405,
+      "unpackedBytes": 6223690,
+      "compressedBytes": 1476203,
+      "unchangedMaxFiles": 405,
+      "unchangedMaxUnpackedBytes": 6291456,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-final-pack-02-d6461b97f8c07a27201ec9fed399416564fad74c6777eb252dafa9f8569361de.json",
+        "sha256": "d6461b97f8c07a27201ec9fed399416564fad74c6777eb252dafa9f8569361de"
+      }
+    }
+  },
+  "review": {
+    "independent": false,
+    "scope": "Author review of migration, activation, credential/identity revalidation, CLI retry fingerprints, bounded probing/history, private compensation, graph deletion and real browser revocation. A separate independent approval is not claimed. Final review found and fixed unchanged-release runtime/status changes during the last health response. Private readiness identity binds local process state and provider desired/observed generations; public histories exclude these fields."
+  },
+  "diagnostics": [
+    {
+      "run": "provider-04",
+      "result": "failed",
+      "finding": "Real initial cleanup supplied a release ID for a stopped deployment, which orchestration rejects. Fixed by stopping the exact owned generation with releaseId null."
+    },
+    {
+      "run": "provider-05",
+      "result": "failed",
+      "finding": "Initial helper assumed 201 and did not handle the documented exact pending retry. Corrected helper without weakening terminal assertions."
+    },
+    {
+      "run": "provider-06",
+      "result": "failed",
+      "finding": "Real subsequent activation reinitialized already retained provider data. Fixed by persisting verified observed initialization, protected artifact/migration identity and host, then preserving that data across restart."
+    },
+    {
+      "run": "provider-07",
+      "result": "failed",
+      "finding": "Owned fixture left HEALTH_WRITE enabled because secret updates merge values. Explicitly cleared the disposable flag before later v2 activation."
+    },
+    {
+      "run": "node26-complete-01",
+      "result": "failed",
+      "tests": 1922,
+      "passed": 1910,
+      "failed": 9,
+      "finding": "Eight isolated creation fixtures omitted the actual new shared controls helper; one source assertion expected the old reset prefix. Included the actual helper and required the new reset before the preserved list reset."
+    },
+    {
+      "run": "types-12",
+      "result": "setup-failed",
+      "finding": "Trusted compiler paths were omitted. Final run supplied the existing external compiler and passed without installing framework dependencies."
+    },
+    {
+      "run": "docs-doctor-03",
+      "result": "setup-failed",
+      "finding": "Doctor ran from repository root without an application deployment contract. Final doctor/offline checks ran from docs-site and passed."
+    },
+    {
+      "run": "runtime-race-before-02",
+      "result": "expected-regressions-failed-on-prior-code",
+      "tests": 2,
+      "failed": 2,
+      "finding": "The prior code returned 201 for each actual final HTTP 200 held across a controller release-status or suspension-policy change. Fixed code returns 409 and restores the exact prior data snapshot.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-runtime-race-before-02-031b78ae84a200819ee894a2d581869655a3c9a9175200859ccac294162992e5.log",
+        "sha256": "031b78ae84a200819ee894a2d581869655a3c9a9175200859ccac294162992e5"
+      }
+    }
+  ],
+  "limits": [
+    "Only managed same-workspace dependencies; no arbitrary health URLs, scripts or credentials.",
+    "Initialized gated provider targets preserve exact migration corpus and require current co-located host certification; provider data rollback remains separately reviewed.",
+    "Unaccepted initialization is retained only when actual running-generation proof exists; ambiguous initialization requires operator inspection.",
+    "No production Railway host certification or production changes are claimed.",
+    "Completed history and check IDs expire; expired ordinary retries fail closed on the retained fingerprint."
+  ],
+  "finalSourceSha256": {
+    "CHANGELOG.md": "961d75dd596b87c7c5ea63d6abcd1837bba6aa99b237bc0c4a38c8b5a3b71e7d",
+    "README.md": "6fd570729ae6a6e35e766a6a3a38bec07f40a4264705313bb274bc5d6c68cb92",
+    "docs-site/content-manifest.mjs": "e7f3264a288ba35f2826bf910a76906dc9a92d73ee924fb8c8938a4cd459fc76",
+    "docs/deployment-dependencies.md": "4ef67cb2759b30669f163502c8200ba67912df5ed1f4add92c6fb1f7998b6795",
+    "docs/api-reference.md": "a12c70c29a86c18c4540071867778ce69512c1241c29ddb8b64a74952a9038cf",
+    "docs/cli.md": "d69452732c1d4cada8fe61fa4e3f09819bbe49da3cfe1fb771aa3aaed06e90ce",
+    "docs/environment-promotions.md": "fe477e860b06b9ae510728a44fe1041031fcee19292d3e1157b8ff1507372701",
+    "docs/platform-dashboard.md": "3b36bf93f3d2575bb53814048577a41bb852383fd4545cb32f5e94aebc50dd8e",
+    "docs/release-channels.md": "283e7e5687d3331b3a5488f1d505117bae6e2439d1d8a6f7c87fcb9af60f14cd",
+    "docs/release-lifecycle.md": "c8e8f8842330d634872c916be4cec1af866ed6a806bff16d3f53fb2933a542fb",
+    "scripts/cli-deploy.mjs": "1c956735c97ea96bd21699532ecec2cfd78300b8e1e96a6d97feedd871bc7fca",
+    "src/platform-console.ts": "9b0eb74a6f9a99d3a25ce728acf41046600c6970ef3c3fca7466a3a333afcd51",
+    "src/platform.d.ts": "9b189044eb243adfb1e063f45ebe214c16d2f3931b7ac9c7d352895d7edbf9f4",
+    "src/platform.ts": "299771ecfdd169c8c80ad7961254756da44e67814071b032680a995b95e7c7ba",
+    "tests/fixtures/platform-environment-console-context.mjs": "d4d923f6bc8d5f320e0e85f1855323d788f4edd55cb0da0f4965232aac9c792f",
+    "tests/fixtures/platform-environment-fixture.mjs": "1889e31d56e0daca181aa01d9ba97767ad84e9218ee1bff26500b7e2d88af1b1",
+    "tests/fixtures/platform-promotion-provider-guest.mjs": "5514b18ce3c8c9c999679ff2d5c76d27fbbae0df33eb74847cb0476850e5be17",
+    "tests/fixtures/platform-dependency-application.mjs": "5faf3cbf98aaa95b30d75096e4f0b4373443d15f42b8962a4ad9b4873a885f48",
+    "tests/platform-dependencies.test.mjs": "0ba2354aba2ab20041330ea845a24a81de62150bf02df0bb338fbd8ada2c67f7",
+    "type-tests/deployment-dependencies.ts": "279add1da4d74e954f5087e85e7f96e94fb6b9c03f34a89006a0f425b41e7918",
+    "tests/moon-032-create-pending.test.mjs": "863045d0df51d37a6a1a25b36f8171b832a4a19c526e7a6301cf29a8fa095f32",
+    "tests/moon-043-051-dashboard-lists.test.mjs": "9d697ac48466d5670ece3326fdfdf20414073ca82a99962acd2f0c4ca61e628e"
+  },
+  "roadmapAccounting": {
+    "mergedBeforeThisPr": 18,
+    "mergedFeatureBatchesBeforeThisPr": 15,
+    "remainingBeforeThisPr": 22,
+    "feature04Counted": false
+  },
+  "preservation": {
+    "verifiedFiles": 23,
+    "unchanged": true,
+    "main": "be696323c7b0f4fd5cb381d2fb005b2ac8a2a139"
+  },
+  "nextProposal": "https://github.com/nearbycoder/clank.run/issues/280",
+  "initialHeadValidation": {
+    "localContracts": {
+      "status": "passed",
+      "tests": 48,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "scope": "24 dependency plus 12 environment and 12 channel tests on Node 26.10; includes actual SIGKILL, owned rollback safety snapshots and measured canary traffic. The final no-op assertion and CLI help were subsequently checked separately.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-runtime-05-def5172d43b36680bc23ac921032a846864c250d1b9f5e0f15c915ebd4ecd214.log",
+        "sha256": "def5172d43b36680bc23ac921032a846864c250d1b9f5e0f15c915ebd4ecd214"
+      }
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "sourceDiagnostics": 159,
+      "unchangedBaseline": 163,
+      "newDiagnostics": 0,
+      "packedPositiveNegativeFixtures": 26,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-types-14-dd6b8ffd8c0f3615d979dd8d95b62e56ca91097c196150b45f754a87da7cbee5.log",
+        "sha256": "dd6b8ffd8c0f3615d979dd8d95b62e56ca91097c196150b45f754a87da7cbee5"
+      }
+    },
+    "provider": {
+      "protocol": "clank-provider-promotion-acceptance/1",
+      "status": "passed",
+      "mode": "deployment-dependencies",
+      "realGuest": true,
+      "node": "v22.16.0",
+      "cases": [
+        {
+          "name": "real current Docker/XFS host certificate",
+          "status": "passed",
+          "reportId": "a8cf3486-862d-4042-91d2-2f1d7554955e",
+          "policyDigest": "fface2afd6bd11b44eba6665ab9cbf6cb192397a458bc349ef66d3d39720f789"
+        },
+        {
+          "name": "actual failed first provider activation stops its exact owned generation, retains initialized data and protected migration proof across restart, rejects changed migrations and permits a subsequent reviewed activation",
+          "status": "passed"
+        },
+        {
+          "name": "actual HTTP provider promotion preserves original bytes, non-root runtime and independent data/secrets/buckets",
+          "status": "passed",
+          "digest": "8c80d7dbf73c59555846753cd1477695226b4dbbace550d01d6ee3cc662672de"
+        },
+        {
+          "name": "accepted exact replay across actual controller restart",
+          "status": "passed"
+        },
+        {
+          "name": "actual first provider activation passes exact dependency health and assigned-host certification",
+          "status": "passed"
+        },
+        {
+          "name": "real ordinary gated provider upload preserves exact bytes and initialized application state",
+          "status": "passed"
+        },
+        {
+          "name": "actual queued provider service-replacement rejects acceptance and restores the prior frozen writer without rechecking failed readiness",
+          "status": "passed"
+        },
+        {
+          "name": "actual queued provider health-failure rejects acceptance and restores the prior frozen writer without rechecking failed readiness",
+          "status": "passed"
+        },
+        {
+          "name": "actual provider reviewed rollback and accepted replay across controller restart retain target data and never recheck unhealthy service readiness",
+          "status": "passed"
+        },
+        {
+          "name": "actual provider channel and environment acceptance commit their dependency receipt together",
+          "status": "passed"
+        },
+        {
+          "name": "gated ordinary provider activation rejects changed migrations and an actually changed host policy before staging",
+          "status": "passed"
+        },
+        {
+          "name": "owned provider stops, Docker containers/network/nft table retire and XFS quota usage/limits clear",
+          "status": "passed"
+        }
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-provider-acceptance-08-742c57d970146411736d4b98130342113d68416fb8f290ea77606ca2d12aeba4.json",
+        "sha256": "742c57d970146411736d4b98130342113d68416fb8f290ea77606ca2d12aeba4"
+      },
+      "log": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-provider-08-468cd338383f178d4cbc18c63214040e003b33a07ad10636c59b758ff5408abe.log",
+        "sha256": "468cd338383f178d4cbc18c63214040e003b33a07ad10636c59b758ff5408abe"
+      },
+      "testedPlatformSource": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-provider-tested-platform-08-d7a37e3e9ed89241f4e75d44f99786d9508018cb509ca5e65f5f59cfdf03e08f.ts",
+        "sha256": "d7a37e3e9ed89241f4e75d44f99786d9508018cb509ca5e65f5f59cfdf03e08f"
+      },
+      "finalDelta": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-provider-to-final-5876d081ccb57ec42e15ddf08e0db37ebf99f3de901cae66842a7f07e4239340.diff",
+        "sha256": "5876d081ccb57ec42e15ddf08e0db37ebf99f3de901cae66842a7f07e4239340"
+      },
+      "deltaScope": "One extra fail-closed admission condition prevents retained provider initialization from taking the unconfigured v0 bypass. All provider-tested versioned paths are unchanged; full final Node 22 and hosted gates remain required.",
+      "productionHostModified": false
+    },
+    "node26CompleteGate": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1922,
+      "passed": 1919,
+      "failed": 0,
+      "cancelled": 0,
+      "privilegedSkips": 3,
+      "coverage": {
+        "lines": 91.85,
+        "branches": 80.47,
+        "functions": 90.1
+      },
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-release-gate-02-e7f8762a84caaf168b466a32f4b720e7610ec287d917c6096b61308544cc7bf2.log",
+        "sha256": "e7f8762a84caaf168b466a32f4b720e7610ec287d917c6096b61308544cc7bf2"
+      },
+      "sourceSnapshot": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-source-03-19fa285321e4ff2b9a11d1cb68053ca367debb1865ffaee01ece68ca95a5e53f.json",
+        "sha256": "19fa285321e4ff2b9a11d1cb68053ca367debb1865ffaee01ece68ca95a5e53f"
+      },
+      "finalDeltaScope": "Final changes add deploy help text, positive/negative type assertions and a no-op rollback assertion. Executable platform and dashboard source are unchanged. They are covered by separate final checks and the subsequent complete minimum-Node gate."
+    },
+    "node22CompleteGate": {
+      "status": "passed",
+      "node": "22.16.0",
+      "tests": 1922,
+      "passed": 1919,
+      "failed": 0,
+      "cancelled": 0,
+      "privilegedSkips": 3,
+      "coverage": {
+        "lines": 91.85,
+        "branches": 80.49,
+        "functions": 90.14
+      },
+      "sourceSnapshot": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-source-04-1954ab0324fbc879c10ae59a17339912abbdc8d440aab5687da2189cb5a2d845.json",
+        "sha256": "1954ab0324fbc879c10ae59a17339912abbdc8d440aab5687da2189cb5a2d845"
+      },
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-release-gate-03-1841c5d35c99cde2ece1583eeeaa261ed881b60119c72b0d45cd0bf72beb3068.log",
+        "sha256": "1841c5d35c99cde2ece1583eeeaa261ed881b60119c72b0d45cd0bf72beb3068"
+      }
+    },
+    "package": {
+      "status": "passed",
+      "files": 405,
+      "unpackedBytes": 6222693,
+      "compressedBytes": 1479229,
+      "unchangedMaxFiles": 405,
+      "unchangedMaxUnpackedBytes": 6291456,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/dependency-evidence/dependency-final-pack-01-cd5faab7cb738ed9f4b2b28f32f95f175ba9fb9b8971eac9de9ad2077cf8cc30.json",
+        "sha256": "cd5faab7cb738ed9f4b2b28f32f95f175ba9fb9b8971eac9de9ad2077cf8cc30"
+      }
+    }
+  }
+}

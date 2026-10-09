@@ -166,3 +166,8 @@ share one transaction. Older controllers do not enforce channel pins. Before rev
 channel support, finish or recover pending actions and retire retained channels with the
 compatible controller. Otherwise older cleanup or project deletion can remove their retained
 uploads. Preserve the control store and uploads together when taking a recovery backup.
+
+Require managed services before target activation with [deployment dependency gates](deployment-dependencies.md).
+The API/CLI accept an optional exact configuration version and credential-bound check ID; dashboard
+promotion and channel reviews capture these automatically. Target gates also apply to ordinary
+uploads and explicit rollback, with durable interruption recovery and audited human readiness approval.

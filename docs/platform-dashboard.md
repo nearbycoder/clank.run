@@ -427,3 +427,8 @@ currently active release because legacy release timestamps cannot reconstruct ro
 
 Use [persistent release channels](release-channels.md) to retain named immutable artifact history,
 review explicit promotion or rollback, and retire pins without deleting uploads or application data.
+
+Require managed services before target activation with [deployment dependency gates](deployment-dependencies.md).
+The API/CLI accept an optional exact configuration version and credential-bound check ID; dashboard
+promotion and channel reviews capture these automatically. Target gates also apply to ordinary
+uploads and explicit rollback, with durable interruption recovery and audited human readiness approval.

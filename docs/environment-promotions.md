@@ -173,3 +173,8 @@ including its original secret revisions. Resolving newly edited secrets again co
 the candidate and its prior code fail health checks. New promotions and explicit deployment
 continue to resolve current target secrets; compensation restores the runtime authorized before
 the failed candidate and rechecks its exact generation, node and host admission.
+
+Require managed services before target activation with [deployment dependency gates](deployment-dependencies.md).
+The API/CLI accept an optional exact configuration version and credential-bound check ID; dashboard
+promotion and channel reviews capture these automatically. Target gates also apply to ordinary
+uploads and explicit rollback, with durable interruption recovery and audited human readiness approval.

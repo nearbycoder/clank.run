@@ -91,10 +91,10 @@ export async function fixture(t, subprocess = false, overrides = {}) {
       database: { path: 'app.sqlite', migrations: 'migrations', ...settings }, health: { path: '/healthz', timeoutMs: 5000 }, env: {} }));
     return { bytes, digest: await deploymentDigest(bytes) };
   };
-  const upload = async (project, artifact, key, expected = 201) => {
+  const upload = async (project, artifact, key, expected = 201, requestOptions = {}) => {
     const response = await platform.handle(new Request(origin + `/api/projects/${project.id}/releases`, {
-      method: 'POST', headers: { origin, cookie: owner.cookie, 'x-clank-csrf': owner.csrf,
-        'content-type': 'application/vnd.clank.deploy+gzip', 'x-clank-content-sha256': artifact.digest, 'x-clank-idempotency-key': key }, body: artifact.bytes,
+      method: 'POST', headers: { origin, cookie: (requestOptions.account ?? owner).cookie, 'x-clank-csrf': (requestOptions.account ?? owner).csrf,
+        'content-type': 'application/vnd.clank.deploy+gzip', 'x-clank-content-sha256': artifact.digest, 'x-clank-idempotency-key': key, ...requestOptions.headers }, body: artifact.bytes,
     })); const data = await response.json(); assert.equal(response.status, expected, JSON.stringify(data)); return data.release;
   };
   const promotion = (release, artifact, expectedActiveReleaseId = null, idempotencyKey = 'promotion_exact_request_01', expectedVersion = 1) => ({

@@ -177,6 +177,9 @@ export interface PlatformPromotionRequest {
   readonly expectedVersion: number;
   readonly expectedActiveReleaseId: string | null;
   readonly idempotencyKey: string;
+  readonly dependencyOverride?: PlatformDependencyOverride;
+  readonly expectedDependencyVersion?: number;
+  readonly dependencyCheckId?: string;
 }
 export interface PlatformPromotion {
   readonly idempotencyKey: string;
@@ -193,6 +196,60 @@ export interface PlatformPromotion {
   readonly updatedAt: number;
 }
 
+
+export interface PlatformDependencyRequirement {
+  readonly projectId: string;
+  readonly readiness: "active" | "healthy";
+  readonly digest?: string;
+}
+export interface PlatformDependencyConfiguration {
+  readonly version: number;
+  readonly requirements: readonly PlatformDependencyRequirement[];
+  readonly timeoutMs: number;
+  readonly overridePolicy: "deny" | "administrator";
+  readonly updatedAt: number | null;
+}
+export interface PlatformDependencyUpdate {
+  readonly expectedVersion: number;
+  readonly requirements: readonly PlatformDependencyRequirement[];
+  readonly timeoutMs: number;
+  readonly overridePolicy: "deny" | "administrator";
+}
+export interface PlatformDependencyOverride {
+  readonly expectedVersion: number;
+  readonly reason: string;
+  readonly confirmation: string;
+}
+export interface PlatformRollbackRequest {
+  readonly releaseId: string;
+  readonly restoreData?: boolean;
+  readonly confirmation?: string;
+  readonly idempotencyKey?: string;
+  readonly expectedActiveReleaseId?: string;
+  readonly expectedActivationSequence?: number;
+  readonly dependencyOverride?: PlatformDependencyOverride;
+  readonly expectedDependencyVersion?: number;
+  readonly dependencyCheckId?: string;
+}
+export interface PlatformDependencyObservation {
+  readonly projectId: string;
+  readonly readiness: "active" | "healthy";
+  readonly releaseId: string | null;
+  readonly digest: string | null;
+  readonly activatedAt: number | null;
+  readonly generation: number | null;
+  readonly activationSequence: number | null;
+  readonly ready: boolean;
+  readonly reason: "ready" | "inactive" | "digest-mismatch" | "runtime-unavailable" | "health-failed" | "health-timeout";
+}
+export interface PlatformDependencyCheck {
+  readonly id: string;
+  readonly version: number;
+  readonly ready: boolean;
+  readonly overridden: boolean;
+  readonly observations: readonly PlatformDependencyObservation[];
+  readonly checkedAt: number;
+}
 
 export interface PlatformReleaseChannelEntry {
   readonly version: number;
@@ -220,6 +277,9 @@ export interface PlatformChannelActivationRequest {
   readonly expectedEnvironmentVersion: number;
   readonly expectedActiveReleaseId: string | null;
   readonly idempotencyKey: string;
+  readonly dependencyOverride?: PlatformDependencyOverride;
+  readonly expectedDependencyVersion?: number;
+  readonly dependencyCheckId?: string;
 }
 export interface PlatformChannelRollbackRequest extends PlatformChannelActivationRequest {
   readonly fromVersion: number;
@@ -711,11 +771,13 @@ interface ReleaseRow {
 
 interface DeploymentAcceptance {
   readonly migrationPolicy: "apply-safe" | "code-only";
+  readonly dependencyGate?: true;
   assertCurrent(): void;
   staged(releaseId: string): void;
   beforeDatabaseChange(existed: boolean): void;
   accepted(releaseId: string): void;
   beforeProviderAcceptance?(): Promise<void>;
+  beforeLocalAcceptance?(): Promise<void>;
 }
 
 interface EnvironmentPromotionContext {
@@ -2040,7 +2102,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     project: ProjectRow,
     release: ReleaseRow,
     secrets: Record<string, string>,
+    recovering = false,
   ): Promise<ActiveProcess> => {
+    if (!recovering) requireNoInterruptedPromotion(project.id);
     requireRuntimeLaunchAuthority(project.id);
     const current = active.get(project.id);
     if (current) await stopRunning(current);
@@ -2316,7 +2380,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     project: ProjectRow,
     release: ReleaseRow,
     generation: number,
-    intent: "deploy" | "restore" | "failover" = "deploy",
+    intent: "deploy" | "rollback" | "restore" | "failover" = "deploy",
     assertCurrent?: () => void,
     accepted?: () => void,
     beforeAcceptance?: () => Promise<void>,
@@ -2488,7 +2552,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           project,
           release,
           release.providerGeneration,
-          "deploy", assertQueueCurrent, accepted, beforeAcceptance,
+          permission, assertQueueCurrent, accepted, beforeAcceptance,
         );
       }
     }
@@ -2537,7 +2601,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       },
     );
     const encryptedEnvironment = encryptProviderEnvironment(environment, masterKey);
-    const databaseMode = project.activeGeneration === null
+    const initialized = dependencyProviderInitialization(project.id);
+    if (initialized && currentDesired?.assignedNodeId !== initialized.node_id) throw new PlatformError(409, "DEPENDENCY_HOST_CHANGED", "Retained initialized data belongs to the exact verified provider host.");
+    const databaseMode = project.activeGeneration === null && !initialized
       ? "initialize"
       : "preserve";
     storage.internal.transaction(() => {
@@ -2607,7 +2673,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     return waitForProviderRelease(principal, project, {
       ...release,
       providerGeneration: generation,
-    }, generation, "deploy", assertQueueCurrent, accepted, beforeAcceptance);
+    }, generation, permission, assertQueueCurrent, accepted, beforeAcceptance);
   };
 
   const deployProviderRelease = async (
@@ -4191,6 +4257,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           cancelRestart(projectId);
           return;
         }
+        try { requireNoInterruptedPromotion(projectId); } catch { cancelRestart(projectId); return; }
         try {
           await startRelease(project, release, decryptProjectSecrets(storage.internal, project.id, masterKey));
           storage.internal.prepare(
@@ -4218,13 +4285,363 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     catch { /* Operator observers must never interrupt candidate cleanup or rollback. */ }
   };
 
-  const requireNoInterruptedPromotion = (projectId: string): void => {
+  const dependencyConfiguration = (projectId: string): PlatformDependencyConfiguration => {
+    const row = storage.internal.prepare("SELECT * FROM clank_platform_dependency_configurations WHERE project_id=?").get(projectId);
+    const requirements = storage.internal.prepare("SELECT * FROM clank_platform_dependency_edges WHERE project_id=? ORDER BY service_project_id").all(projectId)
+      .map(edge => ({ projectId: String(edge.service_project_id), readiness: String(edge.readiness) as "active" | "healthy",
+        ...(edge.artifact_digest === null ? {} : { digest: String(edge.artifact_digest) }) }));
+    return { version: row ? Number(row.version) : 0, requirements, timeoutMs: row ? Number(row.timeout_ms) : 5000,
+      overridePolicy: row?.override_policy === "administrator" ? "administrator" : "deny", updatedAt: row ? Number(row.updated_at) : null };
+  };
+  const dependencyService = (principal: TokenPrincipal, project: ProjectRow, serviceId: string): ProjectRow => {
+    let service: ProjectRow;
+    try { service = accessibleProject(storage.internal, serviceId, principal, "read").project; }
+    catch { throw new PlatformError(403, "DEPENDENCY_ACCESS_REQUIRED", "Current read access to every required service is required."); }
+    if (project.parentProjectId || service.parentProjectId || project.id === service.id
+      || project.organizationId !== service.organizationId || (!project.organizationId && project.ownerId !== service.ownerId)) {
+      throw new PlatformError(409, "DEPENDENCY_WORKSPACE_CHANGED", "Required services must remain independent projects in the same workspace.");
+    }
+    return service;
+  };
+  const dependencyAdministration = (principal: TokenPrincipal, projectId: string): ProjectRow => {
+    requireCurrentPlatformPrincipal(storage, principal); requireFreshPlatformAuthentication(principal);
+    const access = accessibleProject(storage.internal, projectId, principal, "tokens");
+    requireOrganizationAdministration(access.role);
+    if (principal.impersonation || access.project.parentProjectId) throw new PlatformError(403, "DEPENDENCY_ADMINISTRATION_DENIED", "Use the current workspace administrator and a production project.");
+    return access.project;
+  };
+  const updateDependencies = async (principal: TokenPrincipal, project: ProjectRow, input: Record<string, unknown>) => {
+    exact(input, ["expectedVersion", "requirements", "timeoutMs", "overridePolicy"]);
+    const expected = integerInRange(input.expectedVersion, "expectedVersion", 0, Number.MAX_SAFE_INTEGER - 1);
+    const timeout = integerInRange(input.timeoutMs, "timeoutMs", 100, 10000);
+    if (input.overridePolicy !== "deny" && input.overridePolicy !== "administrator") throw new PlatformError(422, "INVALID_INPUT", "Choose deny or administrator override policy.");
+    if (!Array.isArray(input.requirements) || input.requirements.length > 16) throw new PlatformError(422, "INVALID_INPUT", "Declare at most sixteen required services.");
+    const requirements = input.requirements.map(value => {
+      const row = plainObject(value); exact(row, ["projectId", "readiness", "digest"]);
+      const projectId = boundedString(row.projectId, "projectId", 8, 128);
+      if (row.readiness !== "active" && row.readiness !== "healthy") throw new PlatformError(422, "INVALID_INPUT", "Choose active or healthy readiness.");
+      const digest = row.digest === undefined ? null : boundedString(row.digest, "digest", 64, 64);
+      if (digest !== null && !/^[a-f0-9]{64}$/.test(digest)) throw new PlatformError(422, "INVALID_INPUT", "Use an exact upload SHA-256.");
+      return { projectId, readiness: row.readiness, digest };
+    });
+    if (new Set(requirements.map(row => row.projectId)).size !== requirements.length) throw new PlatformError(422, "INVALID_INPUT", "Declare each required service once.");
+    return withProjectLock(`dependency-graph:${project.organizationId ?? project.ownerId}`, async () => {
+      storage.internal.transaction(changes => {
+        const current = dependencyAdministration(principal, project.id);
+        if (current.organizationId !== project.organizationId || (!current.organizationId && current.ownerId !== project.ownerId)) throw new PlatformError(409, "DEPENDENCY_WORKSPACE_CHANGED", "The reviewed project moved to a different workspace.");
+        if (expected === 0 && (storage.internal.prepare("SELECT 1 FROM clank_distributed_leases WHERE resource=? AND expires_at>? LIMIT 1").get(`project:${project.id}`, Date.now())
+          || storage.internal.prepare("SELECT 1 FROM clank_platform_releases WHERE project_id=? AND status='staging' LIMIT 1").get(project.id))) {
+          throw new PlatformError(409, "DEPENDENCY_CONFIGURATION_BUSY", "Establish the first dependency configuration while the project has no active control operation or staged release.");
+        }
+        if (dependencyConfiguration(project.id).version !== expected) throw new PlatformError(409, "DEPENDENCY_VERSION_STALE", "The dependency configuration changed; review its current version.");
+        for (const requirement of requirements) {
+          dependencyService(principal, current, requirement.projectId);
+          const visited = new Set<string>(), pending = [requirement.projectId];
+          while (pending.length) {
+            const id = pending.pop()!;
+            if (id === project.id) throw new PlatformError(409, "DEPENDENCY_CYCLE", "Required services cannot form a dependency cycle.");
+            if (visited.has(id)) continue;
+            visited.add(id);
+            if (visited.size > 1000) throw new PlatformError(409, "DEPENDENCY_GRAPH_LIMIT", "The bounded dependency graph is too large to validate.");
+            pending.push(...storage.internal.prepare("SELECT service_project_id FROM clank_platform_dependency_edges WHERE project_id=?").all(id).map(row => String(row.service_project_id)));
+          }
+        }
+        storage.internal.prepare(`INSERT INTO clank_platform_dependency_configurations(project_id,version,timeout_ms,override_policy,updated_at)
+          VALUES(?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET version=excluded.version,timeout_ms=excluded.timeout_ms,override_policy=excluded.override_policy,updated_at=excluded.updated_at`)
+          .run(project.id, expected + 1, timeout, String(input.overridePolicy), Date.now());
+        storage.internal.prepare("DELETE FROM clank_platform_dependency_edges WHERE project_id=?").run(project.id);
+        for (const requirement of requirements) storage.internal.prepare("INSERT INTO clank_platform_dependency_edges(project_id,service_project_id,readiness,artifact_digest) VALUES(?,?,?,?)")
+          .run(project.id, requirement.projectId, String(requirement.readiness), requirement.digest);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "dependencies.configure", { version: expected + 1, count: requirements.length, overridePolicy: input.overridePolicy });
+        changes.record("__platform", project.id);
+      });
+      return dependencyConfiguration(project.id);
+    });
+  };
+  const dependencyIdentity = (project: ProjectRow, readiness: "active" | "healthy" = "active") => {
+    const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
+    const sequence = storage.internal.prepare("SELECT id FROM clank_platform_activations WHERE project_id=? ORDER BY id DESC LIMIT 1").get(project.id);
+    const running = readiness === "healthy" && project.placement === "local" ? active.get(project.id) : null;
+    const desired = readiness === "healthy" && project.placement === "provider" ? orchestrator.desired(project.id) : null;
+    const runtimeIdentity = readiness === "active" ? null : JSON.stringify(project.placement === "provider"
+      ? [project.runtimePolicy, desired?.generation ?? null, desired?.desiredReleaseId ?? null, desired?.desiredState ?? null,
+        desired?.assignedNodeId ?? null, desired?.observedGeneration ?? null, desired?.observedReleaseId ?? null, desired?.observedState ?? null]
+      : [project.runtimePolicy, running?.releaseId ?? null, running?.child.pid ?? null,
+        Boolean(running && !running.expectedStop && running.child.exitCode === null && running.child.signalCode === null)]);
+    return { releaseId: project.activeReleaseId, digest: release?.digest ?? null, activatedAt: release?.activatedAt ?? null,
+      releaseStatus: release?.status ?? null, runtimeIdentity,
+      generation: project.activeGeneration, activationSequence: sequence ? Number(sequence.id) : null,
+      placement: project.placement, nodeId: project.providerNodeId, organizationId: project.organizationId, ownerId: project.ownerId };
+  };
+  type DependencyObservation = { -readonly [Key in keyof PlatformDependencyObservation]: PlatformDependencyObservation[Key] } & ReturnType<typeof dependencyIdentity>;
+  interface DependencyReview {
+    workspace: { organizationId: string | null; ownerId: string };
+    principalHash: string;
+    configuration: PlatformDependencyConfiguration;
+    observations: DependencyObservation[];
+    checkedAt: number;
+    checkId: string | null;
+    override: PlatformDependencyOverride | null;
+  }
+  const dependencyOverride = (value: unknown): PlatformDependencyOverride | null => {
+    if (value === undefined || value === null) return null;
+    const input = plainObject(value); exact(input, ["expectedVersion", "reason", "confirmation"]);
+    return { expectedVersion: integerInRange(input.expectedVersion, "expectedVersion", 1, Number.MAX_SAFE_INTEGER),
+      reason: boundedString(input.reason, "reason", 8, 500), confirmation: boundedString(input.confirmation, "confirmation", 1, 200) };
+  };
+  const dependencyExpectedVersion = (value: unknown): number | undefined => value === undefined ? undefined : integerInRange(value, "expectedDependencyVersion", 0, Number.MAX_SAFE_INTEGER);
+  const dependencyVersionHeader = (request: Request): number | undefined => {
+    const value = request.headers.get("x-clank-dependency-version");
+    if (value === null) return undefined;
+    if (!/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) throw new PlatformError(422, "INVALID_INPUT", "Use an exact dependency configuration version.");
+    return Number(value);
+  };
+  const dependencyOverrideHeader = (request: Request): PlatformDependencyOverride | undefined => {
+    const header = request.headers.get("x-clank-dependency-override");
+    if (header === null) return undefined;
+    let value: unknown;
+    try { value = JSON.parse(boundedString(header, "dependencyOverride", 2, 2048)); }
+    catch { throw new PlatformError(422, "INVALID_INPUT", "Use a bounded JSON dependency override object."); }
+    return dependencyOverride(value) ?? undefined;
+  };
+  const assertDependencyReview = (principal: TokenPrincipal, projectId: string, review: DependencyReview, permission: "read" | "deploy" | "rollback"): ProjectRow => {
+    requireCurrentPlatformPrincipal(storage, principal);
+    const project = accessibleProject(storage.internal, projectId, principal, permission).project;
+    if (review.principalHash !== dependencyPrincipalHash(principal)) throw new PlatformError(403, "DEPENDENCY_CHECK_PRINCIPAL_CHANGED", "The dependency review belongs to a different current credential; recover interrupted work before a new review.");
+    if (!review.workspace || project.organizationId !== review.workspace.organizationId || (!project.organizationId && project.ownerId !== review.workspace.ownerId)) throw new PlatformError(409, "DEPENDENCY_WORKSPACE_CHANGED", "The target workspace changed during activation.");
+    if (dependencyConfiguration(projectId).version !== review.configuration.version) throw new PlatformError(409, "DEPENDENCY_VERSION_STALE", "The dependency configuration changed during activation.");
+    if (review.override) {
+      dependencyAdministration(principal, projectId);
+      if (!principal.sessionId || principal.tokenId || review.configuration.overridePolicy !== "administrator"
+        || review.override.expectedVersion !== review.configuration.version || review.override.confirmation !== `override-dependencies ${project.slug} ${review.configuration.version}`) {
+        throw new PlatformError(403, "DEPENDENCY_OVERRIDE_DENIED", "Readiness override requires the exact current policy, confirmation and a human administrator session.");
+      }
+    }
+    for (const observation of review.observations) {
+      const service = dependencyService(principal, project, observation.projectId), identity = dependencyIdentity(service, observation.readiness);
+      for (const key of Object.keys(identity) as Array<keyof typeof identity>) {
+        if (identity[key] !== observation[key]) throw new PlatformError(409, "DEPENDENCY_CHANGED", "A required service changed during activation; review its current release.");
+      }
+    }
+    return project;
+  };
+  const probeDependencyReview = async (principal: TokenPrincipal, projectId: string, review: DependencyReview, permission: "read" | "deploy" | "rollback") => {
+    assertDependencyReview(principal, projectId, review, permission);
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), review.configuration.timeoutMs);
+    const deadline = Date.now() + review.configuration.timeoutMs;
+    let next = 0;
+    try {
+      await Promise.all(Array.from({ length: Math.min(4, review.observations.length) }, async () => {
+        while (next < review.observations.length) {
+          const observation = review.observations[next++]!, requirement = review.configuration.requirements.find(row => row.projectId === observation.projectId)!;
+          assertDependencyReview(principal, projectId, review, permission);
+          const service = projectById(storage.internal, observation.projectId)!, release = observation.releaseId ? releaseById(storage.internal, observation.releaseId) : null;
+          observation.ready = false;
+          if (!release || release.status !== "active") { observation.reason = "inactive"; continue; }
+          if (requirement.digest && requirement.digest !== release.digest) { observation.reason = "digest-mismatch"; continue; }
+          if (requirement.readiness === "active") { observation.ready = true; observation.reason = "ready"; continue; }
+          if (controller.signal.aborted || Date.now() >= deadline) { observation.reason = "health-timeout"; continue; }
+          let url: URL; const headers = new Headers();
+          try {
+            if (service.placement === "provider") {
+              const runtime = exactProviderRuntime(service, release);
+              url = new URL(exactProviderOrigin(service, runtime.nodeId));
+              url.pathname = `${providerRuntimePath(service.id)}${release.config.health.path}`;
+              headers.set("x-clank-project-id", service.id); headers.set("x-clank-runtime-protocol", DEPLOYMENT_RUNTIME_PROTOCOL);
+              headers.set("x-clank-runtime-generation", String(runtime.generation)); headers.set("x-clank-runtime-ingress", providerIngressToken(masterKey, service.id, runtime.generation));
+            } else {
+              const running = active.get(service.id);
+              if (!running || running.releaseId !== release.id || running.expectedStop || service.runtimePolicy === "suspended" || running.child.exitCode !== null || running.child.signalCode !== null) throw new Error("Unavailable.");
+              url = new URL(`http://127.0.0.1:${running.port}`); url.pathname = release.config.health.path;
+            }
+          } catch { observation.reason = "runtime-unavailable"; continue; }
+          const probe = new AbortController(), stop = () => probe.abort();
+          controller.signal.addEventListener("abort", stop, { once: true });
+          const probeTimer = setTimeout(stop, Math.max(1, Math.min(1500, deadline - Date.now())));
+          try {
+            const response = await fetch(url, { method: "GET", headers, redirect: "manual", signal: probe.signal });
+            void response.body?.cancel().catch(() => {});
+            observation.ready = response.ok; observation.reason = response.ok ? "ready" : "health-failed";
+          } catch { observation.reason = probe.signal.aborted ? "health-timeout" : "health-failed"; }
+          finally { clearTimeout(probeTimer); controller.signal.removeEventListener("abort", stop); }
+          assertDependencyReview(principal, projectId, review, permission);
+        }
+      }));
+    } finally { clearTimeout(timer); }
+    assertDependencyReview(principal, projectId, review, permission);
+    review.checkedAt = Date.now();
+    return { id: review.checkId ?? "", version: review.configuration.version, ready: review.observations.every(row => row.ready), overridden: Boolean(review.override),
+      observations: review.observations, checkedAt: review.checkedAt } satisfies PlatformDependencyCheck;
+  };
+  const dependencyPrincipalHash = (principal: TokenPrincipal) => syncHash(JSON.stringify([principal.userId, principal.sessionId, principal.tokenId, principal.impersonation?.id ?? null]));
+  const dependencyCheckId = (value: unknown): string | undefined => {
+    if (value === undefined) return undefined;
+    const id = boundedString(value, "dependencyCheckId", 16, 128);
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(id)) throw new PlatformError(422, "INVALID_INPUT", "Use the exact retained dependency check ID.");
+    return id;
+  };
+  const captureDependencyReview = async (principal: TokenPrincipal, project: ProjectRow, permission: "read" | "deploy" | "rollback", override?: unknown, expectedCheck?: string): Promise<DependencyReview> => {
+    if (expectedCheck !== undefined) {
+      const row = storage.internal.prepare("SELECT * FROM clank_platform_dependency_checks WHERE project_id=? AND id=?").get(project.id, expectedCheck);
+      if (!row || !row.review || Number(row.created_at) + 300000 <= Date.now()) throw new PlatformError(409, "DEPENDENCY_CHECK_EXPIRED", "The retained dependency review expired; check the current services again.");
+      if (row.principal_hash !== dependencyPrincipalHash(principal)) throw new PlatformError(403, "DEPENDENCY_CHECK_PRINCIPAL_CHANGED", "The dependency review belongs to a different current credential.");
+      const review = JSON.parse(String(row.review)) as DependencyReview; review.override = dependencyOverride(override);
+      await probeDependencyReview(principal, project.id, review, permission);
+      return review;
+    }
+    const configuration = dependencyConfiguration(project.id), observations = configuration.requirements.map(requirement => {
+      const service = dependencyService(principal, project, requirement.projectId);
+      return { projectId: service.id, readiness: requirement.readiness, ...dependencyIdentity(service, requirement.readiness), ready: false,
+        reason: "inactive" as PlatformDependencyObservation["reason"] };
+    });
+    const review = { workspace: { organizationId: project.organizationId, ownerId: project.ownerId }, principalHash: dependencyPrincipalHash(principal), configuration, observations, checkedAt: 0, checkId: null, override: dependencyOverride(override) };
+    await probeDependencyReview(principal, project.id, review, permission);
+    return review;
+  };
+  const publicDependencyCheck = (review: DependencyReview): PlatformDependencyCheck => ({
+    id: review.checkId ?? "", version: review.configuration.version, ready: review.observations.every(row => row.ready), overridden: Boolean(review.override), checkedAt: review.checkedAt,
+    observations: review.observations.map(({ placement, nodeId, organizationId, ownerId, releaseStatus, runtimeIdentity, ...observation }) => observation),
+  });
+  const recordDependencyCheck = (principal: TokenPrincipal, projectId: string, review: DependencyReview, permission: "read" | "deploy" | "rollback" = "read") => {
+    review.checkId = `check_${globalThis.crypto.randomUUID().replaceAll("-", "")}`;
+    const report = publicDependencyCheck(review);
+    storage.internal.transaction(() => {
+      assertDependencyReview(principal, projectId, review, permission);
+      storage.internal.prepare("INSERT INTO clank_platform_dependency_checks(id,project_id,report,review,principal_hash,created_at) VALUES(?,?,?,?,?,?)")
+        .run(review.checkId, projectId, JSON.stringify(report), JSON.stringify(review), dependencyPrincipalHash(principal), Date.now());
+      storage.internal.prepare(`DELETE FROM clank_platform_dependency_checks WHERE project_id=? AND id NOT IN
+        (SELECT id FROM clank_platform_dependency_checks WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT 100)`).run(projectId, projectId);
+    });
+    return report;
+  };
+  const requireDependencyReadiness = (review: DependencyReview) => {
+    if (!review.override && !review.observations.every(row => row.ready)) throw new PlatformError(409, "DEPENDENCY_NOT_READY", "A required service is not ready; inspect the current bounded dependency check.");
+  };
+
+  const dependencyActivationRow = (projectId: string, activationId: string) => storage.internal.prepare(
+    "SELECT * FROM clank_platform_dependency_activations WHERE project_id=? AND activation_id=?").get(projectId, activationId);
+  const dependencyProviderInitialization = (projectId: string) => storage.internal.prepare(
+    "SELECT release_id,node_id,generation FROM clank_platform_dependency_provider_initializations WHERE project_id=?").get(projectId);
+  const dependencyActivationPayload = (row: NonNullable<ReturnType<typeof dependencyActivationRow>>) => {
+    const review = JSON.parse(String(row.review)) as DependencyReview;
+    return { id: String(row.activation_id), state: String(row.state), previousReleaseId: row.previous_release_id === null ? null : String(row.previous_release_id),
+      candidateReleaseId: row.candidate_release_id === null ? null : String(row.candidate_release_id), check: publicDependencyCheck(review),
+      overrideReason: review.override?.reason ?? null, createdAt: Number(row.created_at), updatedAt: Number(row.updated_at) };
+  };
+  const requireNoInterruptedDependencyActivation = (projectId: string, except?: string) => {
+    if (storage.internal.prepare("SELECT 1 FROM clank_platform_dependency_activations WHERE project_id=? AND activation_id<>? AND state IN ('pending','staging','recovery-required') LIMIT 1").get(projectId, except ?? "")) {
+      throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "Recover the interrupted dependency-gated activation before admitting another writer.");
+    }
+  };
+  const dependencyAcceptedReplay = (principal: TokenPrincipal, project: ProjectRow, row: NonNullable<ReturnType<typeof dependencyActivationRow>>, permission: "deploy" | "rollback") => {
+    requireCurrentPlatformPrincipal(storage, principal);
+    project = accessibleProject(storage.internal, project.id, principal, permission).project;
+    const review = JSON.parse(String(row.review)) as DependencyReview;
+    for (const observation of review.observations) dependencyService(principal, project, observation.projectId);
+    if (review.override) {
+      dependencyAdministration(principal, project.id);
+      if (!principal.sessionId || principal.tokenId) throw new PlatformError(403, "DEPENDENCY_OVERRIDE_DENIED", "The retained override belongs to the current human administrator workflow.");
+    }
+  };
+  const prepareDependencyAcceptance = async (principal: TokenPrincipal, project: ProjectRow, activationId: string, fingerprint: string,
+    permission: "deploy" | "rollback", original: DeploymentAcceptance | undefined, override?: unknown, expectedVersion?: number, expectedCheck?: string): Promise<DeploymentAcceptance | undefined> => {
+    const retained = dependencyActivationRow(project.id, activationId);
+    if (retained && retained.request_digest !== fingerprint) throw new PlatformError(409, "DEPENDENCY_RETRY_CHANGED", "This activation key already names a different reviewed request.");
+    if (retained?.state === "accepted") { dependencyAcceptedReplay(principal, project, retained, permission); return original; }
+    if (retained && ["failed", "recovery-required"].includes(String(retained.state))) throw new PlatformError(409,
+      retained.state === "failed" ? "DEPENDENCY_ACTIVATION_FAILED" : "DEPENDENCY_RECOVERY_REQUIRED", "The retained activation failed; inspect or recover it before using a new request.");
+    const configuration = dependencyConfiguration(project.id);
+    if (expectedVersion !== undefined && configuration.version !== expectedVersion) throw new PlatformError(409, "DEPENDENCY_VERSION_STALE", "The requested dependency version changed before activation.");
+    if (!retained && configuration.version === 0 && expectedCheck === undefined && expectedVersion === undefined && !dependencyProviderInitialization(project.id)) {
+      if (dependencyOverride(override)) throw new PlatformError(403, "DEPENDENCY_OVERRIDE_DENIED", "Configure an explicit administrator override policy first.");
+      return original;
+    }
+    const review = retained ? JSON.parse(String(retained.review)) as DependencyReview : await captureDependencyReview(principal, project, permission, override, expectedCheck);
+    if (!retained && expectedCheck === undefined) recordDependencyCheck(principal, project.id, review, permission);
+    requireDependencyReadiness(review);
+    let candidateId = retained?.candidate_release_id === null || retained?.candidate_release_id === undefined ? null : String(retained.candidate_release_id);
+    const previousId = retained ? retained.previous_release_id === null ? null : String(retained.previous_release_id) : project.activeReleaseId;
+    const previousGeneration = retained ? retained.previous_generation === null ? null : Number(retained.previous_generation) : project.activeGeneration;
+    let hostAdmission: { nodeId: string; expiresAt: number } | null = null;
+    if (project.placement === "provider" && (project.activeReleaseId || dependencyProviderInitialization(project.id))) {
+      assertDependencyReview(principal, project.id, review, permission);
+      const nodeId = orchestrator.desired(project.id)?.assignedNodeId ?? project.providerNodeId;
+      if (!nodeId) throw new PlatformError(409, "DEPENDENCY_HOST_CHANGED", "The initialized provider host is unavailable for admission.");
+      const initialized = dependencyProviderInitialization(project.id);
+      if (initialized && initialized.node_id !== nodeId) throw new PlatformError(409, "DEPENDENCY_HOST_CHANGED", "Retained initialized data belongs to the exact verified provider host.");
+      const report = await providerPromotionCertificate(project, nodeId, project.activeReleaseId === null);
+      hostAdmission = { nodeId, expiresAt: report.expiresAt };
+    }
+    const assertCurrent = () => {
+      original?.assertCurrent();
+      projectLeaseAssertions.get(project.id)?.();
+      const current = assertDependencyReview(principal, project.id, review, permission);
+      if (current.activeReleaseId !== previousId || current.activeGeneration !== previousGeneration) throw new PlatformError(409, "DEPENDENCY_TARGET_CHANGED", "The reviewed target changed before activation.");
+      if (hostAdmission && (hostAdmission.expiresAt <= Date.now() || orchestrator.desired(project.id)?.assignedNodeId !== hostAdmission.nodeId)) throw new PlatformError(409, "DEPENDENCY_HOST_CHANGED", "Provider host admission changed before activation.");
+      if (candidateId !== null) {
+        const row = dependencyActivationRow(project.id, activationId);
+        if (!row || row.request_digest !== fingerprint || row.state !== "staging" || row.candidate_release_id !== candidateId) throw new PlatformError(409, "DEPENDENCY_STATE_CHANGED", "The durable dependency activation changed.");
+      }
+    };
+    const refresh = async () => {
+      assertCurrent();
+      await probeDependencyReview(principal, project.id, review, permission); requireDependencyReadiness(review); assertCurrent();
+      if (candidateId !== null) storage.internal.transaction(() => {
+        assertCurrent(); storage.internal.prepare("UPDATE clank_platform_dependency_activations SET review=?,updated_at=? WHERE project_id=? AND activation_id=? AND state='staging'")
+          .run(JSON.stringify(review), Date.now(), project.id, activationId);
+      });
+    };
+    assertCurrent();
+    return {
+      migrationPolicy: original?.migrationPolicy ?? "apply-safe", dependencyGate: true, assertCurrent,
+      staged(releaseId) {
+        assertCurrent(); original?.staged(releaseId);
+        storage.internal.prepare(`INSERT INTO clank_platform_dependency_activations(project_id,activation_id,request_digest,review,previous_release_id,previous_generation,candidate_release_id,state,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,'staging',?,?)`).run(project.id, activationId, fingerprint, JSON.stringify(review), previousId, previousGeneration, releaseId, Date.now(), Date.now());
+        candidateId = releaseId;
+        if (activationId.startsWith("deploy_")) storage.internal.prepare("UPDATE clank_platform_releases SET dependency_request_digest=? WHERE id=? AND project_id=?").run(fingerprint, releaseId, project.id);
+        storage.internal.prepare(`DELETE FROM clank_platform_dependency_activations WHERE project_id=? AND state IN ('accepted','failed') AND activation_id NOT IN
+          (SELECT activation_id FROM clank_platform_dependency_activations WHERE project_id=? ORDER BY created_at DESC,activation_id DESC LIMIT 100)`).run(project.id, project.id);
+      },
+      beforeDatabaseChange(existed) {
+        assertCurrent(); original?.beforeDatabaseChange(existed);
+        storage.internal.transaction(() => {
+          assertCurrent();
+          storage.internal.prepare("UPDATE clank_platform_dependency_activations SET database_changed=1,database_existed=?,updated_at=? WHERE project_id=? AND activation_id=? AND state='staging'")
+            .run(existed ? 1 : 0, Date.now(), project.id, activationId);
+        });
+      },
+      beforeLocalAcceptance: refresh,
+      async beforeProviderAcceptance() {
+        await original?.beforeProviderAcceptance?.();
+        const current = projectById(storage.internal, project.id)!, nodeId = orchestrator.desired(project.id)?.assignedNodeId;
+        if (!nodeId) throw new PlatformError(409, "DEPENDENCY_HOST_CHANGED", "The candidate has no exact assigned provider host.");
+        const certificate = await providerPromotionCertificate(current, nodeId, previousId === null); hostAdmission = { nodeId, expiresAt: certificate.expiresAt };
+        await refresh();
+      },
+      accepted(releaseId) {
+        // The enclosing transaction already checked the old target pointer;
+        // its release/generation publication is now visible on this connection.
+        assertDependencyReview(principal, project.id, review, permission); requireDependencyReadiness(review);
+        if (Date.now() - review.checkedAt > 2000) throw new PlatformError(409, "DEPENDENCY_CHECK_EXPIRED", "Refresh the bounded dependency check before accepting activation.");
+        original?.accepted(releaseId);
+        const changed = storage.internal.prepare("UPDATE clank_platform_dependency_activations SET state='accepted',updated_at=? WHERE project_id=? AND activation_id=? AND request_digest=? AND candidate_release_id=? AND state='staging'")
+          .run(Date.now(), project.id, activationId, fingerprint, releaseId);
+        if (Number(changed.changes) !== 1) throw new PlatformError(409, "DEPENDENCY_STATE_CHANGED", "Dependency acceptance changed inside publication.");
+        storage.internal.prepare("DELETE FROM clank_platform_dependency_provider_initializations WHERE project_id=?").run(project.id);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "dependencies.activation.accept", { activationId, configurationVersion: review.configuration.version, overridden: Boolean(review.override), reason: review.override?.reason ?? null });
+      },
+    };
+  };
+
+  const requireNoInterruptedPromotion = (projectId: string, dependencyId?: string): void => {
+    requireNoInterruptedDependencyActivation(projectId, dependencyId);
     if (storage.internal.prepare("SELECT 1 FROM clank_platform_promotions WHERE target_project_id=? AND state IN ('staging','recovery-required') LIMIT 1").get(projectId)) {
       throw new PlatformError(409, "PROMOTION_RECOVERY_REQUIRED", "The target has an interrupted promotion; verified recovery is required before starting another writer.");
     }
   };
 
-  const deploy = async (
+  const deployCore = async (
     principal: TokenPrincipal,
     project: ProjectRow,
     bytes: Uint8Array,
@@ -4232,10 +4649,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     idempotencyKey: string,
     attestationHeader: string | null,
     acceptance?: DeploymentAcceptance,
+    dependencyFactory?: (project: ProjectRow, release: ReleaseRow | null) => Promise<DeploymentAcceptance | undefined>,
+    dependencyId?: string,
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
     requireCurrentPlatformPrincipal(storage, principal);
     project = accessibleProject(storage.internal, project.id, principal, "deploy").project;
-    if (!acceptance) requireNoInterruptedPromotion(project.id);
+    const originalAcceptance = acceptance;
+    if (!acceptance) requireNoInterruptedPromotion(project.id, dependencyId);
+    else requireNoInterruptedDependencyActivation(project.id, dependencyId);
     const assertCurrent = () => {
       projectLeaseAssertions.get(project.id)?.();
       requireNoEvacuation(project.id);
@@ -4259,9 +4680,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const existing = storage.internal.prepare(
       "SELECT id, status FROM clank_platform_releases WHERE project_id = ? AND idempotency_key = ?",
     ).get(project.id, idempotencyKey);
+    const existingRelease = existing ? releaseById(storage.internal, String(existing.id)) : null;
+    if (existingRelease && existingRelease.digest !== digest) throw new PlatformError(409, "IDEMPOTENCY_ARTIFACT_MISMATCH", "This deployment key already names a different artifact.");
+    acceptance = await dependencyFactory?.(project, existingRelease) ?? acceptance;
+    assertCurrent();
     if (existing) {
-      const release = releaseById(storage.internal, String(existing.id));
-      if (release?.digest !== digest) throw new PlatformError(409, "IDEMPOTENCY_ARTIFACT_MISMATCH", "This deployment key already names a different artifact.");
+      const release = existingRelease;
       if (project.placement === "provider" && release?.status === "staging") {
         return deployProviderRelease(principal, project, release, release.config, acceptance, assertCurrent);
       }
@@ -4282,7 +4706,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         "This platform does not allow unrestricted migration SQL.",
       );
     }
-    if (acceptance && bundle.config.database.allowUnsafeMigrations) {
+    if (originalAcceptance && bundle.config.database.allowUnsafeMigrations) {
       throw new PlatformError(403, "PROMOTION_UNSAFE_MIGRATIONS", "Environment promotion requires restricted migration SQL.");
     }
     if (project.databasePath && project.databasePath !== bundle.config.database.path) {
@@ -4293,6 +4717,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       );
     }
     if (canaries && project.placement === "provider") throw new PlatformError(409, "CANARY_PROVIDER_UNSUPPORTED", "Managed canaries require local placement with parallel code-only releases.");
+    const initializedProvider = project.placement === "provider" ? dependencyProviderInitialization(project.id) : null;
+    if (project.placement === "provider" && (project.activeReleaseId || initializedProvider) && acceptance?.dependencyGate) {
+      const prior = releaseById(storage.internal, project.activeReleaseId ?? String(initializedProvider!.release_id));
+      if (!prior?.artifactAvailable) throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "Retain the exact prior upload before a gated provider activation.");
+      const original = await readRunnerReleaseArtifact(paths.projects, prior, new AbortController().signal, runnerArtifactObjects);
+      assertCurrent();
+      if (!original || original.sha256 !== prior.digest) throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "The exact prior provider upload is unavailable.");
+      const priorBundle = await decodeDeploymentBundle(original.bytes, { maxTotalBytes: options.maxArtifactBytes ?? 100 * 1024 * 1024 }); assertCurrent();
+      if (!samePromotionMigrations(priorBundle, bundle)) throw new PlatformError(409, "DEPENDENCY_PROVIDER_MIGRATIONS_BLOCKED", "Gated provider code activation must preserve the exact initialized migration set; perform data recovery separately.");
+    }
     const bundleStorageBytes = bundle.files.reduce((total, file) => total + file.size, 0);
     // Keep the original verified upload, including for local placement. Exact
     // promotion must never reconstruct or rebuild an immutable artifact.
@@ -4518,6 +4952,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       } finally {
         if (rolling) reservedRolloutPorts.delete(rolloutPort);
       }
+      await acceptance?.beforeLocalAcceptance?.();
+      assertCurrent();
       if (canaries && rolling && previousRuntime) {
         const candidate = candidateRuntime;
         recordLog(project.id, releaseId, "platform", "Candidate entered measured canary traffic stages; the prior release remains available for rollback.");
@@ -4532,6 +4968,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           projectLeaseAssertions.get(project.id)?.();
           requireCurrentPlatformPrincipal(storage, principal);
           accessibleProject(storage.internal, project.id, principal, "deploy");
+          assertCurrent(); await acceptance?.beforeLocalAcceptance?.(); assertCurrent();
           checkCanaryProcesses();
           await waitForHealth(candidate.port, release.config.health.path, Math.min(2000, release.config.health.timeoutMs), candidate.child);
           checkCanaryProcesses();
@@ -4541,6 +4978,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         accessibleProject(storage.internal, project.id, principal, "deploy");
         checkCanaryProcesses();
       }
+      await acceptance?.beforeLocalAcceptance?.(); assertCurrent();
       active.set(project.id, candidateRuntime);
       if (rolling) {
         recordLog(
@@ -4689,7 +5127,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           try {
             const previous = releaseById(storage.internal, previousReleaseId);
             if (!previous) throw new Error("Prior runtime metadata is unavailable.");
-            await startRelease(project, previous, decryptProjectSecrets(storage.internal, project.id, masterKey));
+            await startRelease(project, previous, decryptProjectSecrets(storage.internal, project.id, masterKey), true);
             restartSucceeded = true;
           } catch (restartError) { reportDeploymentError(restartError); }
         }
@@ -4733,7 +5171,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         if (previousWasStopped && previousReleaseId) {
           const previous = releaseById(storage.internal, previousReleaseId);
           if (previous) {
-            await startRelease(project, previous, decryptProjectSecrets(storage.internal, project.id, masterKey));
+            await startRelease(project, previous, decryptProjectSecrets(storage.internal, project.id, masterKey), true);
           }
         }
       } catch (restoreError) {
@@ -4754,6 +5192,39 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       throw new PlatformError(422, "DEPLOYMENT_FAILED", failure);
     }
   });
+
+  const deploy = async (principal: TokenPrincipal, project: ProjectRow, bytes: Uint8Array, digest: string, key: string,
+    attestation: string | null, acceptance?: DeploymentAcceptance, override?: unknown, expectedVersion?: number, checkId?: string): Promise<Record<string, unknown>> => {
+    checkId = dependencyCheckId(checkId);
+    const activationId = `deploy_${syncHash(key)}`, parsedOverride = dependencyOverride(override);
+    const fingerprint = syncHash(JSON.stringify([digest, key, attestation === null ? null : syncHash(attestation), parsedOverride, ...(expectedVersion === undefined ? [] : [expectedVersion]), ...(checkId === undefined ? [] : [checkId])]));
+    let enteredOperation = false;
+    try {
+      return await deployCore(principal, project, bytes, digest, key, attestation, acceptance, async (current, existing) => {
+        enteredOperation = true;
+        const retained = dependencyActivationRow(project.id, activationId);
+        const existingFingerprint = existing ? storage.internal.prepare("SELECT dependency_request_digest FROM clank_platform_releases WHERE id=? AND project_id=?").get(existing.id, project.id)?.dependency_request_digest : null;
+        if (existingFingerprint && existingFingerprint !== fingerprint) throw new PlatformError(409, "DEPENDENCY_RETRY_CHANGED", "The retained release belongs to a different dependency-reviewed request.");
+        if (existingFingerprint && !retained) throw new PlatformError(409, "DEPENDENCY_RESULT_EXPIRED", "This dependency activation receipt expired; inspect the retained release instead of retrying its old request.");
+        if (existing && retained && current.placement === "local" && existing.status === "staging") throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "An interrupted local activation requires verified recovery before retrying.");
+        if (existing && !retained && existing.status !== "staging") return acceptance;
+        return prepareDependencyAcceptance(principal, current, activationId, fingerprint, "deploy", acceptance, parsedOverride, expectedVersion, checkId);
+      }, activationId);
+    } catch (error) {
+      const row = dependencyActivationRow(project.id, activationId);
+      if (enteredOperation && row && row.request_digest === fingerprint && row.state !== "accepted" && row.state !== "failed") {
+        const current = projectById(storage.internal, project.id), code = error instanceof PlatformError ? error.code : "";
+        const state = current?.placement === "provider" ? ["PROVIDER_DEPLOYMENT_PENDING", "PLATFORM_CLOSING"].includes(code) ? "staging" : "recovery-required"
+          : ["RUNTIME_CLEANUP_UNRESOLVED", "DEPLOYMENT_RECOVERY_FAILED", "PROMOTION_RECOVERY_REQUIRED", "DEPENDENCY_RECOVERY_REQUIRED"].includes(code) ? "recovery-required" : "failed";
+        storage.internal.prepare("UPDATE clank_platform_dependency_activations SET state=?,updated_at=? WHERE project_id=? AND activation_id=? AND state<>'accepted'").run(state, Date.now(), project.id, activationId);
+        if (current?.placement === "provider" && state === "recovery-required" && !acceptance) {
+          try { await withProjectLock(project.id, () => restoreDependencyActivation(principal, project.id, activationId)); }
+          catch (recoveryError) { reportDeploymentError(recoveryError); throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "The provider activation failed; the exact prior writer remains fenced for verified recovery."); }
+        }
+      }
+      throw error;
+    }
+  };
 
   const environmentRow = (rootId: string, name: string) => storage.internal.prepare(
     "SELECT * FROM clank_platform_environments WHERE root_id=? AND name=?",
@@ -4789,12 +5260,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       return true;
     } catch { return false; }
   }).slice(0, 100).map(promotionPayload);
-  const providerPromotionCertificate = async (project: ProjectRow, nodeId: string): Promise<LinuxHostCertificationReport> => {
+  const providerPromotionCertificate = async (project: ProjectRow, nodeId: string, allowInitial = false): Promise<LinuxHostCertificationReport> => {
     const node = orchestrator.listNodes().find(row => row.id === nodeId);
     const certificate = promotionHosts.get(nodeId);
     if (!certificate || !node?.endpoint || node.status !== "active") throw new PlatformError(409, "PROMOTION_HOST_CERTIFICATION_REQUIRED", "The target provider needs a current operator host certificate.");
     const endpoint = new URL(node.endpoint);
-    if (!["127.0.0.1", "[::1]"].includes(endpoint.hostname) || project.providerNodeId !== nodeId) throw new PlatformError(409, "PROMOTION_HOST_PROOF_UNSUPPORTED", "This certificate proves a co-located provider host; remote placement needs a matching remote proof.");
+    const initialAssignment = allowInitial && project.placement === "provider" && project.providerNodeId === null
+      && project.activeReleaseId === null && project.activeGeneration === null && orchestrator.desired(project.id)?.assignedNodeId === nodeId;
+    if (!["127.0.0.1", "[::1]"].includes(endpoint.hostname) || (project.providerNodeId !== nodeId && !initialAssignment)) throw new PlatformError(409, "PROMOTION_HOST_PROOF_UNSUPPORTED", "This certificate proves a co-located provider host; remote placement needs a matching remote proof.");
     try { return await requireCurrentLinuxHostCertification(certificate); }
     catch { throw new PlatformError(409, "PROMOTION_HOST_CERTIFICATION_REQUIRED", "The target provider's host certificate is missing, blocked, changed or expired."); }
   };
@@ -4806,6 +5279,94 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     ]);
     return identity(left) === identity(right);
   };
+  const restoreDependencyActivation = async (principal: TokenPrincipal, projectId: string, activationId: string, guard?: () => void): Promise<void> => {
+    const row = dependencyActivationRow(projectId, activationId), project = projectById(storage.internal, projectId);
+    const candidate = row?.candidate_release_id ? releaseById(storage.internal, String(row.candidate_release_id)) : null;
+    const previous = row?.previous_release_id ? releaseById(storage.internal, String(row.previous_release_id)) : null;
+    if (!row || !project || !candidate || candidate.projectId !== projectId || (row.previous_release_id && (!previous || previous.projectId !== projectId || !previous.artifactAvailable))) {
+      throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "The exact activation and prior artifact are unavailable for verified recovery.");
+    }
+    const priorId = previous?.id ?? null, priorGeneration = row.previous_generation === null ? null : Number(row.previous_generation);
+    const assertRecovery = () => {
+      projectLeaseAssertions.get(projectId)?.(); guard?.(); requireNoEvacuation(projectId);
+      const current = projectById(storage.internal, projectId), receipt = dependencyActivationRow(projectId, activationId);
+      if (!current || current.activeReleaseId !== priorId || current.activeGeneration !== priorGeneration || !receipt || receipt.candidate_release_id !== candidate.id
+        || !["staging", "recovery-required"].includes(String(receipt.state))) throw new PlatformError(409, "DEPENDENCY_TARGET_CHANGED", "Recovery ownership or the authoritative prior target changed.");
+      return current;
+    };
+    assertRecovery();
+    storage.internal.prepare("UPDATE clank_platform_dependency_activations SET state='recovery-required',updated_at=? WHERE project_id=? AND activation_id=? AND state='staging'").run(Date.now(), projectId, activationId);
+    const accepted = () => {
+      const changed = storage.internal.prepare("UPDATE clank_platform_dependency_activations SET state='failed',updated_at=? WHERE project_id=? AND activation_id=? AND candidate_release_id=? AND state='recovery-required'")
+        .run(Date.now(), projectId, activationId, candidate.id);
+      if (Number(changed.changes) !== 1) throw new PlatformError(409, "DEPENDENCY_STATE_CHANGED", "Recovery receipt changed before completion.");
+      if (activationId.startsWith("deploy_")) storage.internal.prepare("UPDATE clank_platform_releases SET status='failed',failure=? WHERE id=? AND status<>'active'").run("Dependency-gated activation did not commit; its prior target was recovered.", candidate.id);
+      audit(storage.internal, principal.userId, principal.tokenId, projectId, "dependencies.activation.recover", { activationId, failedReleaseId: candidate.id, priorReleaseId: priorId, placement: project.placement });
+    };
+    if (project.placement === "provider") {
+      const desired = orchestrator.desired(projectId), nodeId = project.providerNodeId ?? desired?.assignedNodeId;
+      if (!nodeId || !desired || desired.assignedNodeId !== nodeId || ![candidate.id, priorId].includes(desired.desiredReleaseId)) throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "An unrelated provider generation needs operator review.");
+      await providerPromotionCertificate(project, nodeId, previous === null); assertRecovery();
+      if (previous) {
+        const frozen = priorGeneration === null ? null : providerGeneration(storage.internal, projectId, priorGeneration, previous.id);
+        if (!frozen) throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "The prior provider runtime configuration is unavailable.");
+        await queueProviderRelease(principal, project, previous, previous.config, true, "rollback", () => { assertRecovery(); }, accepted,
+          async () => { await providerPromotionCertificate(projectById(storage.internal, projectId)!, nodeId); assertRecovery(); }, decryptProviderEnvironment(frozen.encryptedEnvironment, masterKey));
+      } else {
+        // Initial activation has no accepted writer. Stop its exact owned
+        // generation and retain its application data for a subsequent review.
+        const owned = orchestrator.desired(projectId);
+        if (!owned || owned.generation !== desired.generation || owned.desiredReleaseId !== desired.desiredReleaseId || owned.assignedNodeId !== nodeId) throw new PlatformError(409, "DEPENDENCY_TARGET_CHANGED", "Initial provider recovery changed generation ownership.");
+        if (desired.observedGeneration === desired.generation && desired.observedState === "running" && desired.observedReleaseId === candidate.id) {
+          const initialized = dependencyProviderInitialization(projectId);
+          if (initialized && initialized.node_id !== nodeId) throw new PlatformError(409, "DEPENDENCY_HOST_CHANGED", "Initial recovery cannot substitute another initialized provider host.");
+          storage.internal.transaction(() => {
+            assertRecovery();
+            storage.internal.prepare(`INSERT INTO clank_platform_dependency_provider_initializations(project_id,release_id,node_id,generation,created_at)
+              VALUES(?,?,?,?,?) ON CONFLICT(project_id) DO NOTHING`).run(projectId,candidate.id,nodeId,desired.generation,Date.now());
+          });
+        }
+        const stopped = desired.desiredState === "stopped" ? desired : await orchestrator.setDesired({ projectId, releaseId: null, state: "stopped" });
+        const deadline = Date.now() + providerPlacement!.activationTimeoutMs;
+        for (;;) {
+          assertRecovery();
+          const current = orchestrator.desired(projectId);
+          if (!current || current.generation !== stopped.generation || current.desiredReleaseId !== null || current.desiredState !== "stopped" || current.assignedNodeId !== nodeId) throw new PlatformError(409, "DEPENDENCY_TARGET_CHANGED", "Initial provider cleanup changed ownership.");
+          if (current.observedGeneration === stopped.generation && current.observedState === "stopped") break;
+          if (Date.now() >= deadline) throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "Initial provider cleanup has not been verified.");
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        await providerPromotionCertificate(project, nodeId, true); assertRecovery();
+        storage.internal.transaction(changes => { assertRecovery(); accepted(); changes.record("__platform", projectId); });
+      }
+      return;
+    }
+    const snapshotId = row.safety_backup_id === null || row.safety_backup_id === undefined ? candidate.id : String(row.safety_backup_id);
+    const snapshotPath = row.safety_backup_id ? await releaseBackupPath(paths.projects, projectId, snapshotId) : candidate.backupPath;
+    const snapshotBytes = row.safety_backup_id ? Number(row.safety_backup_bytes) : candidate.snapshotBytes;
+    if (Number(row.database_changed) === 1 && Number(row.database_existed) === 1) {
+      if (!snapshotPath || snapshotPath !== await releaseBackupPath(paths.projects, projectId, snapshotId)
+        || snapshotBytes <= 0 || await regularFileBytes(snapshotPath) !== snapshotBytes) throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "The exact pre-operation safety snapshot is unavailable.");
+    }
+    assertRecovery(); cancelRestart(projectId); await stopProject(projectId); assertRecovery();
+    if (Number(row.database_changed) === 1) {
+      const dataRoot = await projectDataDirectory(paths.projects, projectId), databasePath = await safeProjectDataPath(dataRoot, candidate.config.database.path);
+      assertRecovery();
+      if (Number(row.database_existed) === 1) await restoreSQLiteBackup(snapshotPath!, databasePath);
+      else await removeDatabaseFiles(databasePath);
+      assertRecovery();
+    }
+    if (previous) {
+      const running = await launchRelease(project, previous, decryptProjectSecrets(storage.internal, projectId, masterKey), project.port, () => { assertRecovery(); });
+      active.set(projectId, running); runtimeActivity.set(projectId, Date.now());
+    }
+    storage.internal.transaction(changes => {
+      assertRecovery(); accepted();
+      if (previous) storage.internal.prepare("UPDATE clank_platform_releases SET status='active',failure=NULL WHERE id=? AND project_id=?").run(previous.id, projectId);
+      changes.record("__platform", projectId);
+    });
+  };
+
   const restoreProviderPromotion = async (
     principal: TokenPrincipal, rootId: string, key: string, guard?: () => void,
   ): Promise<void> => {
@@ -4846,6 +5407,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const result = storage.internal.prepare("UPDATE clank_platform_promotions SET state='failed',updated_at=? WHERE root_id=? AND idempotency_key=? AND target_release_id=? AND state IN ('staging','recovery-required')")
         .run(Date.now(), rootId, key, candidate.id);
       if (Number(result.changes) !== 1) throw new PlatformError(409, "PROMOTION_STATE_CHANGED", "Provider recovery acceptance changed.");
+      storage.internal.prepare("UPDATE clank_platform_dependency_activations SET state='failed',updated_at=? WHERE project_id=? AND candidate_release_id=? AND state IN ('staging','recovery-required')").run(Date.now(), target.id, candidate.id);
       audit(storage.internal, principal.userId, principal.tokenId, target.id, "environment.promotion.recover", { rootId, idempotencyKey: key, failedReleaseId: candidate.id, priorReleaseId: previous.id, placement: "provider", dataPolicy: "preserve-code-only" });
     }, async () => { await providerPromotionCertificate(projectById(storage.internal, target.id)!, nodeId); assertRecovery(); }, priorEnvironment);
   };
@@ -4867,7 +5429,10 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (!source?.project_id || !target?.project_id) throw new PlatformError(404, "ENVIRONMENT_NOT_FOUND", "Both source and target environments must be configured.");
       const sourceId = String(source.project_id), targetId = String(target.project_id);
       const baseRequestDigest = syncHash(JSON.stringify([sourceName, sourceId, Number(source.version), releaseId, digest,
-        targetName, targetId, version, expectedActive, key, attestation === null ? null : syncHash(attestation)]));
+        targetName, targetId, version, expectedActive, key, attestation === null ? null : syncHash(attestation),
+        ...(input.dependencyOverride === undefined ? [] : [dependencyOverride(input.dependencyOverride)]),
+        ...(input.expectedDependencyVersion === undefined ? [] : [dependencyExpectedVersion(input.expectedDependencyVersion)]),
+        ...(input.dependencyCheckId === undefined ? [] : [dependencyCheckId(input.dependencyCheckId)])]));
       // Ordinary environment receipts keep their original fingerprint on upgrade.
       const requestDigest = context ? syncHash(JSON.stringify([baseRequestDigest, context.fingerprint])) : baseRequestDigest;
       const assertAuthority = (requireArtifact = true) => {
@@ -4975,7 +5540,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         },
       };
       try {
-        const release = await deploy(principal, targetProject, promotionBytes, digest, `promotion_${syncHash(`${root.id}:${key}`)}`, attestation, acceptance);
+        const release = await deploy(principal, targetProject, promotionBytes, digest, `promotion_${syncHash(`${root.id}:${key}`)}`, attestation, acceptance, input.dependencyOverride, dependencyExpectedVersion(input.expectedDependencyVersion), dependencyCheckId(input.dependencyCheckId));
         receipt = promotionReceipt(root.id, key)!;
         if (receipt.state !== "accepted") throw new PlatformError(409, "PROMOTION_RECOVERY_REQUIRED", "The promotion has not committed activation.");
         return { promotion: promotionPayload(receipt), release };
@@ -5098,7 +5663,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     if(!/^[A-Za-z0-9_-]{16,128}$/.test(key))throw new PlatformError(422,"INVALID_INPUT","Use a bounded channel action key.");
     const entry=channelEntry(root.id,name,entryVersion);
     if(!entry)throw new PlatformError(404,"CHANNEL_ENTRY_NOT_FOUND","The exact immutable channel entry is unavailable.");
-    const fingerprint=syncHash(JSON.stringify([name,kind,expected,entryVersion,targetName,targetVersion,expectedActive,key,attestation===null?null:syncHash(attestation)]));
+    const fingerprint=syncHash(JSON.stringify([name,kind,expected,entryVersion,targetName,targetVersion,expectedActive,key,attestation===null?null:syncHash(attestation),...(input.dependencyOverride===undefined?[]:[dependencyOverride(input.dependencyOverride)]),...(input.expectedDependencyVersion===undefined?[]:[dependencyExpectedVersion(input.expectedDependencyVersion)]),...(input.dependencyCheckId===undefined?[]:[dependencyCheckId(input.dependencyCheckId)])]));
     const promotionKey=`channel_${syncHash(`${root.id}:${key}`)}`;
     const context: EnvironmentPromotionContext={
       fingerprint,
@@ -5143,7 +5708,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       },
     };
     const result=await promoteEnvironment(principal,root,targetName,{sourceEnvironment:String(entry.source_name),releaseId:String(entry.source_release_id),digest:String(entry.artifact_digest),
-      expectedVersion:targetVersion,expectedActiveReleaseId:expectedActive,idempotencyKey:promotionKey},attestation,context);
+      expectedVersion:targetVersion,expectedActiveReleaseId:expectedActive,idempotencyKey:promotionKey,...(input.dependencyOverride===undefined?{}:{dependencyOverride:input.dependencyOverride}),...(input.expectedDependencyVersion===undefined?{}:{expectedDependencyVersion:dependencyExpectedVersion(input.expectedDependencyVersion)}),...(input.dependencyCheckId===undefined?{}:{dependencyCheckId:dependencyCheckId(input.dependencyCheckId)})},attestation,context);
     return {...result,action:channelActionPayload(channelActionRow(root.id,key)!)};
   };
 
@@ -5246,6 +5811,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           storage.internal.prepare("UPDATE clank_platform_releases SET status='failed',failure=? WHERE id=? AND project_id=?").run("Interrupted promotion was recovered to its prior target.", release.id, targetId);
           if (previous) storage.internal.prepare("UPDATE clank_platform_releases SET status='active',failure=NULL WHERE id=? AND project_id=?").run(previous.id, targetId);
           storage.internal.prepare("UPDATE clank_platform_promotions SET state='failed',updated_at=? WHERE root_id=? AND idempotency_key=?").run(Date.now(), root.id, key);
+          storage.internal.prepare("UPDATE clank_platform_dependency_activations SET state='failed',updated_at=? WHERE project_id=? AND candidate_release_id=? AND state IN ('staging','recovery-required')").run(Date.now(), targetId, release.id);
           audit(storage.internal, principal.userId, principal.tokenId, targetId, "environment.promotion.recover", { rootId: root.id, environment: name, idempotencyKey: key, releaseId: release.id, restoredReleaseId: previous?.id ?? null });
           changes.record("__platform", targetId);
         });
@@ -5257,23 +5823,28 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     });
   });
 
-  const rollback = async (
+  const rollbackCore = async (
     principal: TokenPrincipal,
     project: ProjectRow,
     targetId: string,
     restoreData: boolean,
     confirmation: string | undefined,
+    dependencyId?: string,
+    dependencyFingerprint?: string,
+    dependencyFactory?: (project: ProjectRow, target: ReleaseRow) => Promise<DeploymentAcceptance | undefined>,
   ): Promise<Record<string, unknown>> => withProjectLock(project.id, async () => {
-    requireNoInterruptedPromotion(project.id);
+    requireNoInterruptedPromotion(project.id, dependencyId);
     requireCurrentPlatformPrincipal(storage, principal);
     project = accessibleProject(storage.internal, project.id, principal, "rollback").project;
     if (restoreData) requireFreshPlatformAuthentication(principal);
+    let acceptance: DeploymentAcceptance | undefined;
     const assertRollbackCurrent = () => {
       projectLeaseAssertions.get(project.id)?.();
       requireNoEvacuation(project.id);
       requireCurrentPlatformPrincipal(storage, principal);
       accessibleProject(storage.internal, project.id, principal, "rollback");
       if (restoreData) requireFreshPlatformAuthentication(principal);
+      acceptance?.assertCurrent();
     };
     cancelRestart(project.id);
     const current = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
@@ -5284,8 +5855,32 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     if (!target.artifactAvailable) {
       throw new PlatformError(409, "RELEASE_ARTIFACT_UNAVAILABLE", "This release's runtime artifact has been removed.");
     }
-    if (target.id === current.id) return releasePayload(project, current, appUrlTemplate);
+    if (dependencyId) {
+      const retained = dependencyActivationRow(project.id, dependencyId);
+      if (retained && retained.request_digest !== dependencyFingerprint) throw new PlatformError(409, "DEPENDENCY_RETRY_CHANGED", "This rollback key belongs to a different request.");
+      if (retained?.state === "accepted") { dependencyAcceptedReplay(principal, project, retained, "rollback"); return releasePayload(project, target, appUrlTemplate); }
+      if (retained && project.placement === "local" && ["staging", "recovery-required"].includes(String(retained.state))) throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "The interrupted local rollback requires verified recovery before retrying.");
+      if (retained?.state === "failed") throw new PlatformError(409, "DEPENDENCY_ACTIVATION_FAILED", "The retained rollback failed; inspect it before submitting a new request.");
+    }
+    if (target.id === current.id) {
+      if (dependencyId) throw new PlatformError(409, "DEPENDENCY_TARGET_ALREADY_ACTIVE", "Choose an inactive release for a reviewed rollback.");
+      return releasePayload(project, current, appUrlTemplate);
+    }
+    if (project.placement === "provider" && dependencyFactory) {
+      if (restoreData) throw new PlatformError(409, "DEPENDENCY_PROVIDER_MIGRATIONS_BLOCKED", "Gated provider rollback activates code only; use the separately reviewed data recovery workflow.");
+      const priorUpload = await readRunnerReleaseArtifact(paths.projects, current, new AbortController().signal, runnerArtifactObjects);
+      const targetUpload = await readRunnerReleaseArtifact(paths.projects, target, new AbortController().signal, runnerArtifactObjects);
+      assertRollbackCurrent();
+      if (!priorUpload || !targetUpload || !samePromotionMigrations(await decodeDeploymentBundle(priorUpload.bytes), await decodeDeploymentBundle(targetUpload.bytes))) throw new PlatformError(409, "DEPENDENCY_PROVIDER_MIGRATIONS_BLOCKED", "Gated provider rollback must preserve the exact initialized migration set.");
+      assertRollbackCurrent();
+    }
+    acceptance = await dependencyFactory?.(project, target); assertRollbackCurrent();
+    if (acceptance && dependencyId && !dependencyActivationRow(project.id, dependencyId)) storage.internal.transaction(() => { assertRollbackCurrent(); acceptance!.staged(target.id); });
     if (project.placement === "provider") {
+      const acceptProviderRollback = () => {
+        acceptance?.accepted(target.id);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.rollback", { from: current.id, to: target.id, restoreData, placement: "provider" });
+      };
       if (restoreData) {
         if (target.id !== current.previousReleaseId) {
           throw new PlatformError(
@@ -5316,7 +5911,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             project,
             target,
             target.providerGeneration,
-            "deploy", assertRollbackCurrent,
+            "rollback", assertRollbackCurrent,
+            acceptProviderRollback,
+            acceptance?.beforeProviderAcceptance,
           );
         }
       }
@@ -5337,13 +5934,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         true,
         "rollback",
         assertRollbackCurrent,
+        acceptProviderRollback,
+        acceptance?.beforeProviderAcceptance,
       );
-      audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.rollback", {
-        from: current.id,
-        to: target.id,
-        restoreData,
-        placement: "provider",
-      });
       return result;
     }
     if (restoreData) {
@@ -5354,46 +5947,108 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "restore ${project.slug}".`);
       }
     }
-    await stopProject(project.id);
     const dataRoot = await projectDataDirectory(paths.projects, project.id);
     const currentDatabasePath = await safeProjectDataPath(dataRoot, current.config.database.path);
-    let safetyBackup: string | null = null;
+    let safetyBackup: string | null = null, candidate: ActiveProcess | undefined;
+    let activationCommitted = false, activatedResult: Record<string, unknown> | undefined;
     try {
+      assertRollbackCurrent(); await stopProject(project.id); assertRollbackCurrent();
       if (restoreData) {
-        safetyBackup = await releaseBackupPath(paths.projects, project.id, `rollback-${await randomId(8)}`);
-        await backupSQLite(currentDatabasePath, safetyBackup);
-        await restoreSQLiteBackup(current.backupPath!, currentDatabasePath);
+        const safetyId = `rollback-${await randomId(8)}`;
+        safetyBackup = await releaseBackupPath(paths.projects, project.id, safetyId);
+        await backupSQLite(currentDatabasePath, safetyBackup); assertRollbackCurrent();
+        const safetyBytes = await regularFileBytes(safetyBackup);
+        if (acceptance && dependencyId) storage.internal.transaction(() => {
+          assertRollbackCurrent();
+          storage.internal.prepare("UPDATE clank_platform_dependency_activations SET safety_backup_id=?,safety_backup_bytes=? WHERE project_id=? AND activation_id=? AND state='staging'").run(safetyId, safetyBytes, project.id, dependencyId);
+        });
+        acceptance?.beforeDatabaseChange(true);
+        await restoreSQLiteBackup(current.backupPath!, currentDatabasePath); assertRollbackCurrent();
       }
-      await startRelease(project, target, decryptProjectSecrets(storage.internal, project.id, masterKey));
+      candidate = await launchRelease(project, target, decryptProjectSecrets(storage.internal, project.id, masterKey), project.port, assertRollbackCurrent);
+      await acceptance?.beforeLocalAcceptance?.(); assertRollbackCurrent();
+      active.set(project.id, candidate);
       const now = Date.now();
       storage.internal.transaction((changes) => {
+        assertRollbackCurrent();
         recordDeploymentActivation(storage.internal, project.id, target.id, now);
         storage.internal.prepare("UPDATE clank_platform_releases SET status = 'inactive' WHERE id = ?").run(current.id);
         storage.internal.prepare("UPDATE clank_platform_releases SET status = 'active', activated_at = ? WHERE id = ?")
           .run(now, target.id);
         storage.internal.prepare("UPDATE clank_platform_projects SET active_release_id = ?, database_path = ?, updated_at = ? WHERE id = ?")
           .run(target.id, target.config.database.path, now, project.id);
+        acceptance?.accepted(target.id);
+        audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.rollback", { from: current.id, to: target.id, restoreData });
         changes.record("__platform", project.id);
       });
-      audit(storage.internal, principal.userId, principal.tokenId, project.id, "release.rollback", {
-        from: current.id,
-        to: target.id,
-        restoreData,
-      });
-      backupScheduler.registerProject(project.id);
-      return releasePayload(
+      activationCommitted = true;
+      activatedResult = releasePayload(
         { ...project, activeReleaseId: target.id, updatedAt: now },
         { ...target, status: "active", activatedAt: now },
         appUrlTemplate,
       );
+      backupScheduler.registerProject(project.id);
+      return activatedResult;
     } catch (error) {
-      await stopProject(project.id);
-      if (safetyBackup) await restoreSQLiteBackup(safetyBackup, currentDatabasePath);
-      await startRelease(project, current, decryptProjectSecrets(storage.internal, project.id, masterKey));
+      if (activationCommitted && activatedResult) return activatedResult;
+      try {
+        if (candidate) await stopRunning(candidate);
+        await stopProject(project.id);
+        if (safetyBackup) await restoreSQLiteBackup(safetyBackup, currentDatabasePath);
+        await startRelease(project, current, decryptProjectSecrets(storage.internal, project.id, masterKey), true);
+      } catch (recoveryError) {
+        reportDeploymentError(recoveryError); throw new PlatformError(422, "ROLLBACK_RECOVERY_FAILED", "The prior writer or safety snapshot could not be restored; verified recovery is required.");
+      }
+      if (acceptance && error instanceof PlatformError) throw error;
       throw new PlatformError(422, "ROLLBACK_FAILED", safeError(error));
     }
   });
 
+  const rollback = async (principal: TokenPrincipal, project: ProjectRow, targetId: string, restoreData: boolean, confirmation: string | undefined,
+    input?: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const configuration = dependencyConfiguration(project.id), override = dependencyOverride(input?.dependencyOverride);
+    const expectedVersion = dependencyExpectedVersion(input?.expectedDependencyVersion), checkId = dependencyCheckId(input?.dependencyCheckId);
+    if (configuration.version === 0 && !override && expectedVersion === undefined && checkId === undefined) return rollbackCore(principal, project, targetId, restoreData, confirmation);
+    const key = boundedString(input?.idempotencyKey, "idempotencyKey", 16, 128);
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(key)) throw new PlatformError(422, "INVALID_INPUT", "Use a bounded rollback request key.");
+    const expectedActive = boundedString(input?.expectedActiveReleaseId, "expectedActiveReleaseId", 8, 128);
+    const expectedSequence = integerInRange(input?.expectedActivationSequence, "expectedActivationSequence", 1, Number.MAX_SAFE_INTEGER);
+    const activationId = `rollback_${syncHash(key)}`, fingerprint = syncHash(JSON.stringify([targetId, restoreData, confirmation ?? null, key, expectedActive, expectedSequence, override, ...(expectedVersion === undefined ? [] : [expectedVersion]), ...(checkId === undefined ? [] : [checkId])]));
+    const retained = dependencyActivationRow(project.id, activationId);
+    if (retained?.request_digest !== undefined && retained.request_digest !== fingerprint) throw new PlatformError(409, "DEPENDENCY_RETRY_CHANGED", "This rollback key belongs to a different reviewed request.");
+    if (retained?.state === "accepted") {
+      dependencyAcceptedReplay(principal, project, retained, "rollback");
+      const target = releaseById(storage.internal, String(retained.candidate_release_id));
+      if (!target || target.projectId !== project.id) throw new PlatformError(409, "DEPENDENCY_RESULT_EXPIRED", "The accepted rollback result is unavailable.");
+      return releasePayload(accessibleProject(storage.internal, project.id, principal, "rollback").project, target, appUrlTemplate);
+    }
+    let enteredOperation = false;
+    try {
+      return await rollbackCore(principal, project, targetId, restoreData, confirmation, activationId, fingerprint, async current => {
+        enteredOperation = true;
+        if (current.activeReleaseId !== expectedActive || dependencyIdentity(current).activationSequence !== expectedSequence) throw new PlatformError(409, "DEPENDENCY_TARGET_CHANGED", "The reviewed rollback target changed; capture its current activation sequence.");
+        return prepareDependencyAcceptance(principal, current, activationId, fingerprint, "rollback", undefined, override, expectedVersion, checkId);
+      });
+    } catch (error) {
+      const row = dependencyActivationRow(project.id, activationId);
+      if (enteredOperation && row && row.request_digest === fingerprint && row.state !== "accepted" && row.state !== "failed") {
+        const current = projectById(storage.internal, project.id), code = error instanceof PlatformError ? error.code : "";
+        const state = current?.placement === "provider" ? ["PROVIDER_DEPLOYMENT_PENDING", "PLATFORM_CLOSING"].includes(code) ? "staging" : "recovery-required"
+          : ["ROLLBACK_RECOVERY_FAILED", "DEPENDENCY_RECOVERY_REQUIRED"].includes(code) ? "recovery-required" : "failed";
+        storage.internal.prepare("UPDATE clank_platform_dependency_activations SET state=?,updated_at=? WHERE project_id=? AND activation_id=? AND state<>'accepted'").run(state, Date.now(), project.id, activationId);
+        if (current?.placement === "provider" && state === "recovery-required") {
+          try { await withProjectLock(project.id, () => restoreDependencyActivation(principal, project.id, activationId)); }
+          catch (recoveryError) { reportDeploymentError(recoveryError); throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "Provider rollback failed; its prior writer remains fenced until verified recovery."); }
+        }
+      }
+      throw error;
+    }
+  };
+
+  const dependencyRecoveryPinned = (projectId: string, releaseId?: string): boolean => Boolean(storage.internal.prepare(
+    `SELECT 1 FROM clank_platform_dependency_activations WHERE project_id=? AND state IN ('pending','staging','recovery-required')
+      AND (? IS NULL OR candidate_release_id=? OR previous_release_id=?) LIMIT 1`).get(projectId, releaseId ?? null, releaseId ?? null, releaseId ?? null))
+    || Boolean(releaseId && dependencyProviderInitialization(projectId)?.release_id === releaseId);
   const releaseChannelPinned = (projectId: string, releaseId?: string): boolean => Boolean(
     releaseId === undefined
       ? storage.internal.prepare(`SELECT 1 FROM clank_platform_channel_entries
@@ -5422,6 +6077,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
     // Pinning holds this same source-project lease through artifact verification
     // and insertion. No new pin can race storage removal after this check.
+    if (dependencyRecoveryPinned(project.id, release.id)) throw new PlatformError(409, "RELEASE_DEPENDENCY_RECOVERY_PINNED", "Retain the exact artifact until interrupted recovery or initialized provider data has a verified accepted writer.");
     if (releaseChannelPinned(project.id, release.id)) {
       throw new PlatformError(409, "RELEASE_CHANNEL_PINNED", "Retire the release channels that retain this artifact before removing it.");
     }
@@ -5518,10 +6174,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     project: ProjectRow,
     actor: { userId: string; tokenId: string | null },
     action: "project.delete" | "preview.delete" | "preview.expire",
-  ): Promise<Record<string, unknown>> => {
+  ): Promise<Record<string, unknown>> => withProjectLock(`dependency-graph:${project.organizationId ?? project.ownerId}`, async () => {
     if (releaseChannelPinned(project.id)) {
       throw new PlatformError(409, "PROJECT_CHANNEL_PINNED", "Retire the release channels that retain this project's artifacts before deleting it.");
     }
+    if (dependencyRecoveryPinned(project.id)) throw new PlatformError(409, "DEPENDENCY_RECOVERY_REQUIRED", "Recover the interrupted activation before deleting its project.");
+    if (storage.internal.prepare("SELECT 1 FROM clank_platform_dependency_edges WHERE service_project_id=? LIMIT 1").get(project.id)) throw new PlatformError(409, "PROJECT_DEPENDENCY_REQUIRED", "Remove dependent service references before deleting the project.");
     const activeRelease = project.activeReleaseId
       ? releaseById(storage.internal, project.activeReleaseId)
       : null;
@@ -5630,7 +6288,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       revokedTokens,
       ...summary,
     };
-  };
+  });
 
   const deleteProject = async (
     principal: TokenPrincipal,
@@ -5645,6 +6303,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
     requireOrganizationAdministration(access.role);
     const project = access.project;
+    if (storage.internal.prepare("SELECT 1 FROM clank_platform_dependency_edges WHERE service_project_id=? LIMIT 1").get(projectId)) {
+      throw new PlatformError(409, "PROJECT_DEPENDENCY_REQUIRED", "Remove this service from its dependent projects before deleting it.");
+    }
     if (storage.internal.prepare("SELECT 1 FROM clank_platform_environments WHERE project_id=? OR (root_id=? AND project_id IS NOT NULL) LIMIT 1").get(projectId, projectId)) {
       throw new PlatformError(409, "ENVIRONMENTS_EXIST", "Unbind persistent environment targets before deleting their project or family root.");
     }
@@ -7676,6 +8337,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? "logs"
         : /^channels\/[a-z][a-z0-9-]{0,63}$/.test(operation) && request.method === "DELETE"
           ? "tokens"
+        : operation.startsWith("dependencies")
+          ? operation === "dependencies" && request.method === "PUT" ? "tokens" : operation.startsWith("dependencies/activations/") && request.method === "POST" ? "rollback" : "read"
         : operation.startsWith("environments") || operation.startsWith("channels")
           ? request.method === "GET" ? "read" : "deploy"
         : operation.startsWith("previews")
@@ -7713,6 +8376,63 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      if (operation === "dependencies" && request.method === "GET") {
+        requireCurrentProjectAuthority();
+        const configuration = dependencyConfiguration(project.id);
+        for (const requirement of configuration.requirements) dependencyService(principal, project, requirement.projectId);
+        return api({ ok: true, configuration, target: { releaseId: project.activeReleaseId, activationSequence: dependencyIdentity(project).activationSequence } });
+      }
+      if (operation === "dependencies" && request.method === "PUT") {
+        const input = plainObject(await readJsonRequest(request, 16 * 1024));
+        return api({ ok: true, configuration: await updateDependencies(principal, project, input) });
+      }
+      if (operation === "dependencies/check" && request.method === "POST") {
+        const input = plainObject(await readJsonRequest(request, 4 * 1024)); exact(input, ["expectedVersion"]);
+        const expected = integerInRange(input.expectedVersion, "expectedVersion", 0, Number.MAX_SAFE_INTEGER);
+        requireCurrentProjectAuthority();
+        if (dependencyConfiguration(project.id).version !== expected) throw new PlatformError(409, "DEPENDENCY_VERSION_STALE", "Review the current dependency configuration.");
+        const review = await captureDependencyReview(principal, project, "read");
+        return api({ ok: true, check: recordDependencyCheck(principal, project.id, review) });
+      }
+      if (operation === "dependencies/checks" && request.method === "GET") {
+        requireCurrentProjectAuthority();
+        const checks = storage.internal.prepare("SELECT report FROM clank_platform_dependency_checks WHERE project_id=? ORDER BY created_at DESC,id DESC LIMIT 100").all(project.id)
+          .map(row => JSON.parse(String(row.report)) as PlatformDependencyCheck).filter(report => {
+            try { for (const observation of report.observations) dependencyService(principal, project, observation.projectId); return true; }
+            catch { return false; }
+          });
+        return api({ ok: true, checks });
+      }
+      if (operation === "dependencies/activations" && request.method === "GET") {
+        requireCurrentProjectAuthority();
+        const activations = storage.internal.prepare("SELECT * FROM clank_platform_dependency_activations WHERE project_id=? ORDER BY created_at DESC,activation_id DESC LIMIT 100").all(project.id).map(row => {
+          const payload = dependencyActivationPayload(row);
+          try { for (const observation of payload.check.observations) dependencyService(principal, project, observation.projectId); return { ...payload, detailsAvailable: true }; }
+          catch { return { id: payload.id, state: payload.state, createdAt: payload.createdAt, updatedAt: payload.updatedAt, detailsAvailable: false }; }
+        });
+        return api({ ok: true, activations });
+      }
+      const dependencyRecoveryMatch = /^dependencies\/activations\/(deploy_[A-Za-z0-9_-]{16,128}|rollback_[A-Za-z0-9_-]{16,128})\/recover$/.exec(operation);
+      if (dependencyRecoveryMatch && request.method === "POST") {
+        const input = plainObject(await readJsonRequest(request, 4 * 1024)); exact(input, ["confirmation"]);
+        const id = dependencyRecoveryMatch[1]!, confirmation = boundedString(input.confirmation, "confirmation", 1, 300);
+        const guard = () => {
+          requireCurrentPlatformPrincipal(storage, principal); requireFreshPlatformAuthentication(principal);
+          const access = accessibleProject(storage.internal, project.id, principal, "rollback"); requireOrganizationAdministration(access.role);
+          if (principal.impersonation) throw new PlatformError(403, "DEPENDENCY_ADMINISTRATION_DENIED", "Recovery requires the current administrator.");
+          if (confirmation !== `recover-dependencies ${access.project.slug} ${id}`) throw new PlatformError(400, "CONFIRMATION_REQUIRED", "Review the exact activation and pass its recover-dependencies confirmation.");
+        };
+        await withProjectLock(project.id, async () => {
+          guard(); const row = dependencyActivationRow(project.id, id);
+          if (!row) throw new PlatformError(404, "DEPENDENCY_ACTIVATION_NOT_FOUND", "Activation not found.");
+          if (row.state === "accepted" || row.state === "failed") return;
+          if (storage.internal.prepare("SELECT 1 FROM clank_platform_promotions WHERE target_project_id=? AND target_release_id=? AND state IN ('staging','recovery-required') LIMIT 1").get(project.id, String(row.candidate_release_id))) throw new PlatformError(409, "PROMOTION_RECOVERY_REQUIRED", "Use the original environment/channel promotion recovery so both receipts finish together.");
+          await restoreDependencyActivation(principal, project.id, id, guard);
+        });
+        const activation = dependencyActivationPayload(dependencyActivationRow(project.id, id)!);
+        try { for (const observation of activation.check.observations) dependencyService(principal, project, observation.projectId); return api({ ok: true, activation: { ...activation, detailsAvailable: true } }); }
+        catch { return api({ ok: true, activation: { id: activation.id, state: activation.state, createdAt: activation.createdAt, updatedAt: activation.updatedAt, detailsAvailable: false } }); }
+      }
       if(operation==="channels"&&request.method==="GET"){
         const channels=storage.internal.prepare("SELECT name FROM clank_platform_release_channels WHERE root_id=? ORDER BY name LIMIT 100")
           .all(project.id).map(row=>channelPayload(project.id,String(row.name),principal)).filter(Boolean);
@@ -7756,7 +8476,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         }
         if(request.method==="POST"&&(action==="promote"||action==="rollback")){
           const input=plainObject(await readJsonRequest(request,8192));
-          exact(input,["targetEnvironment","expectedVersion","expectedEnvironmentVersion","expectedActiveReleaseId","idempotencyKey",...(action==="rollback"?["fromVersion"]:[])]);
+          exact(input,["targetEnvironment","expectedVersion","expectedEnvironmentVersion","expectedActiveReleaseId","idempotencyKey","dependencyOverride","expectedDependencyVersion","dependencyCheckId",...(action==="rollback"?["fromVersion"]:[])]);
           return api({ok:true,...await activateChannel(principal,project,name,action,input,request.headers.get("x-clank-release-attestation"))},201);
         }
       }
@@ -7813,7 +8533,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (promotionMatch && request.method === "GET") return api({ ok: true, promotions: promotionRows(project.id, promotionMatch[1]!, principal) });
       if (promotionMatch && request.method === "POST") {
         const input = plainObject(await readJsonRequest(request, 8192));
-        exact(input, ["sourceEnvironment", "releaseId", "digest", "expectedVersion", "expectedActiveReleaseId", "idempotencyKey"]);
+        exact(input, ["sourceEnvironment", "releaseId", "digest", "expectedVersion", "expectedActiveReleaseId", "idempotencyKey", "dependencyOverride", "expectedDependencyVersion", "dependencyCheckId"]);
         return api({ ok: true, ...await promoteEnvironment(principal, project, promotionMatch[1]!, input, request.headers.get("x-clank-release-attestation")) }, 201);
       }
       const promotionRecoveryMatch = /^environments\/(development|staging|production)\/promotions\/([A-Za-z0-9_-]{16,128})\/recover$/.exec(operation);
@@ -8490,15 +9210,16 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ok: true,
           releases: rows.map((row) => {
             const release = releaseRow(row);
-            const channelPinned = releaseChannelPinned(project.id, release.id);
+            const channelPinned = releaseChannelPinned(project.id, release.id), dependencyPinned = dependencyRecoveryPinned(project.id, release.id);
             return {
               ...publicRelease(release),
               cleanup: {
                 allowed: release.artifactAvailable
                   && release.id !== project.activeReleaseId
                   && release.status !== "staging"
-                  && !channelPinned,
+                  && !channelPinned && !dependencyPinned,
                 channelPinned,
+                dependencyPinned,
                 rollbackProtected: release.id === activeRelease?.previousReleaseId,
               },
             };
@@ -8572,18 +9293,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           throw error;
         }
         requireCurrentProjectAuthority();
-        return api({ ok: true, release: await deploy(principal, project, bytes, claimedDigest, idempotencyKey, request.headers.get("x-clank-release-attestation")) }, 201);
+        return api({ ok: true, release: await deploy(principal, project, bytes, claimedDigest, idempotencyKey, request.headers.get("x-clank-release-attestation"), undefined, dependencyOverrideHeader(request), dependencyVersionHeader(request), request.headers.has("x-clank-dependency-check") ? dependencyCheckId(request.headers.get("x-clank-dependency-check")) : undefined) }, 201);
       }
       if (operation === "rollback" && request.method === "POST") {
         const input = plainObject(await readJsonRequest(request, 16 * 1024));
-        exact(input, ["releaseId", "restoreData", "confirmation"]);
+        exact(input, ["releaseId", "restoreData", "confirmation", "idempotencyKey", "expectedActiveReleaseId", "expectedActivationSequence", "dependencyOverride", "expectedDependencyVersion", "dependencyCheckId"]);
         const releaseId = boundedString(input.releaseId, "releaseId", 8, 128);
         const restoreData = input.restoreData === true;
         const confirmation = input.confirmation === undefined
           ? undefined
           : boundedString(input.confirmation, "confirmation", 1, 200);
         requireCurrentProjectAuthority();
-        return api({ ok: true, release: await rollback(principal, project, releaseId, restoreData, confirmation) });
+        return api({ ok: true, release: await rollback(principal, project, releaseId, restoreData, confirmation, input) });
       }
       if (operation === "backups" && request.method === "GET") {
         const effective = projectQuotas(storage.internal, project, quotaDefaults);
@@ -10199,6 +10920,57 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
     PRIMARY KEY(root_id, idempotency_key)
   ) WITHOUT ROWID`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_promotions_target_state ON clank_platform_promotions(target_project_id,state)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_dependency_configurations (
+    project_id TEXT PRIMARY KEY REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL CHECK(version > 0),
+    timeout_ms INTEGER NOT NULL CHECK(timeout_ms BETWEEN 100 AND 10000),
+    override_policy TEXT NOT NULL CHECK(override_policy IN ('deny','administrator')),
+    updated_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_dependency_edges (
+    project_id TEXT NOT NULL REFERENCES clank_platform_dependency_configurations(project_id) ON DELETE CASCADE,
+    service_project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE RESTRICT,
+    readiness TEXT NOT NULL CHECK(readiness IN ('active','healthy')),
+    artifact_digest TEXT,
+    PRIMARY KEY(project_id,service_project_id)
+  ) WITHOUT ROWID`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_dependency_required_service ON clank_platform_dependency_edges(service_project_id)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_dependency_checks (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    report TEXT NOT NULL,
+    review TEXT NOT NULL,
+    principal_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
+  const dependencyCheckColumns = internal.prepare("PRAGMA table_info(clank_platform_dependency_checks)").all();
+  for (const column of ["review", "principal_hash"]) if (!dependencyCheckColumns.some(row => row.name === column)) internal.exec(`ALTER TABLE clank_platform_dependency_checks ADD COLUMN ${column} TEXT`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_dependency_check_history ON clank_platform_dependency_checks(project_id,created_at)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_dependency_activations (
+    project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    activation_id TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    review TEXT NOT NULL,
+    previous_release_id TEXT,
+    previous_generation INTEGER,
+    candidate_release_id TEXT,
+    database_changed INTEGER NOT NULL DEFAULT 0 CHECK(database_changed IN (0,1)),
+    database_existed INTEGER NOT NULL DEFAULT 0 CHECK(database_existed IN (0,1)),
+    safety_backup_id TEXT,
+    safety_backup_bytes INTEGER,
+    state TEXT NOT NULL CHECK(state IN ('pending','staging','accepted','failed','recovery-required')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(project_id,activation_id)
+  ) WITHOUT ROWID`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_dependency_activation_state ON clank_platform_dependency_activations(project_id,state)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_dependency_provider_initializations (
+    project_id TEXT PRIMARY KEY REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    release_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    generation INTEGER NOT NULL CHECK(generation > 0),
+    created_at INTEGER NOT NULL
+  ) WITHOUT ROWID`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_release_channels (
     root_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
@@ -10239,6 +11011,7 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
     FOREIGN KEY(root_id,promotion_key) REFERENCES clank_platform_promotions(root_id,idempotency_key) ON DELETE CASCADE
   ) WITHOUT ROWID`);
   const releaseColumns = internal.prepare("PRAGMA table_info(clank_platform_releases)").all();
+  if (!releaseColumns.some(column => column.name === "dependency_request_digest")) internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN dependency_request_digest TEXT");
   if (!releaseColumns.some((column) => column.name === "artifact_available")) {
     internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN artifact_available INTEGER NOT NULL DEFAULT 1");
   }

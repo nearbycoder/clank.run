@@ -29,7 +29,7 @@ const line = prefix => {
 const source = [
   line("function titleConsoleTime("),
   line("const state="), line("async function api("), line("function syncCreateSubmits("),
-  line("function renderIdentity("), line('q("#new-site").onclick='),
+  line("function syncDependencyControls("), line("function renderIdentity("), line('q("#new-site").onclick='),
   line('q("#site-form").onsubmit='), line('q("#add-domain").onclick='),
   line('q("#domain-form").onsubmit='), "globalThis.consoleState=state;",
 ].join("\n");

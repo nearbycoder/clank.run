@@ -2,14 +2,46 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Seventeen of the forty proposed features are merged across fourteen feature batches. Artifact promotion (02) merged in [PR #277](https://github.com/nearbycoder/clank.run/pull/277) after all six fresh hosted checks at reviewed head `c03a8e8920389507c54d79bd21cbd10565471223`, with no new CodeQL alerts, no unresolved review threads and an author review explicitly recorded as non-independent. Both main checkouts match `2b0e04853e695ff5942a9fe2fd27692756144f47`, and 23 existing files are preserved. Twenty-three features remain. Linux host certification (01), the package prerequisite and the fleet simulator (34) merged in PRs #270, #272 and #274. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Persistent release channels (03) are in progress under proposal #276 in a separate managed worktree. Earlier snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Eighteen of the forty proposed features are merged across fifteen feature batches. Persistent release channels (03) merged in [PR #278](https://github.com/nearbycoder/clank.run/pull/278) after all six fresh hosted checks at reviewed head `3b1497af3b342f471f40f72fbda3abed2f9efe93`, with no new CodeQL alerts, no unresolved review threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Both main checkouts match `be696323c7b0f4fd5cb381d2fb005b2ac8a2a139`, and 23 existing files are preserved. Twenty-two features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Dependency gates (04) are implemented locally under proposal #279 and await hosted checks, review and protected merge. Earlier snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
+## Deployment dependency gates
+
+Feature 04 is implemented under [proposal #279](https://github.com/nearbycoder/clank.run/issues/279)
+and remains uncounted pending hosted review and protected merge. Versioned requirements
+cover managed services in the same workspace, bounded active/health readiness and optional upload
+SHA-256. Browser reviews bind a credential-specific five-minute check ID, configuration version
+and exact service activation sequence. Ordinary uploads, local canaries, explicit rollback and
+environment/channel promotions revalidate current authority and identities before publication.
+Human overrides require the configured policy, current administrator session and exact approval;
+they bypass readiness alone. Interrupted work retains writer and artifact fences until verified
+snapshot recovery or certified provider compensation.
+
+Final review reproduced acceptance after service status or runtime policy changed during the last
+actual health response. Private runtime identity now fences those changes; both regressions
+verify rejection and restoration of the prior database. All 50 local deployment contracts and 26 packed consumer fixtures pass with no new diagnostics
+against the unchanged type baseline. Thirteen real disposable Docker/XFS provider cases pass,
+including first-activation cleanup, protected initialization proof across restart, retained data,
+changed migrations, service replacement, unhealthy readiness, rollback replay, real provider
+required-service generation changes and complete owned
+resource cleanup. These drills found and fixed invalid initial stop requests and attempts to
+reinitialize retained data. Real keyboard, mobile, override, service replacement, controller-kill
+recovery and workspace revocation checks pass. The first complete Node 26 run found nine legacy
+isolated-fixture failures; the corrected complete run passes 1,924 reported / 1,921 passed / zero
+failed or cancelled / three existing privileged skips, plus coverage, documentation, conformance
+and security. The final complete Node 22 gate also passes 1,924 reported / 1,921 passed / zero failed or
+cancelled / three existing privileged skips, with coverage 91.85/80.50/90.14. The unchanged
+405-file, 6 MiB package ceiling contains 6,223,690 unpacked bytes. Hosted checks remain pending. Documentation
+build/doctor/offline checks and HTTP/MCP contracts pass. The in-app browser blocks non-HTML raw
+and agent formats; their HTTP contents are verified, with desktop/phone guide and live search
+checks recorded separately. See [dependency acceptance](deployment-dependencies.json) for exact
+source hashes, failed diagnostics, source deltas and limits. Production Railway remains uncertified.
+
 ## Persistent release channels
 
-Feature 03 is locally verified under [proposal #276](https://github.com/nearbycoder/clank.run/issues/276),
-with its protected merge still pending. Named channel pins retain exact successful uploads and
+Feature 03 is merged in [PR #278](https://github.com/nearbycoder/clank.run/pull/278) under
+[proposal #276](https://github.com/nearbycoder/clank.run/issues/276). Named channel pins retain exact successful uploads and
 immutable history. API, CLI and dashboard share explicit promotion, historical rollback and
 retirement. Target activation, acceptance receipts and rollback pointer publication commit
 atomically. Exact accepted replay returns its original result without deploying old code again.
@@ -33,8 +65,9 @@ ceiling. Docs build/doctor/offline verification, desktop/phone reading/search an
 actual HTTP/MCP checks pass. The downgrade guide explicitly requires retiring pins before
 reverting to a controller that cannot enforce them. No production host was modified.
 See [channel acceptance](release-channels.json), including failed diagnostic runs and the exact
-provider-tested source delta. Seventeen features remain merged; twenty-three still require
-completion, including this feature's hosted checks and protected merge.
+provider-tested source delta and protected merge. All six fresh hosted checks passed at the
+reviewed head; no new CodeQL alerts or unresolved threads remain. Eighteen features are merged
+across fifteen batches; twenty-two remain. The author review is explicitly non-independent.
 
 ## Artifact promotion across environments
 
@@ -426,7 +459,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 01 | Verified Linux host certification | Implemented | Proposal #269 / merged PR #270; complete minimum-Node/type gates, four ordinary regressions, six actual allowed/denied/interrupted/cleanup KVM scenarios and 23 privileged isolation regressions. All six hosted checks pass; production remains uncertified. `linux-host-certification.json`. |
 | 02 | Artifact promotion across environments | In progress | Proposal #275; API/CLI/browser and local interruption/authority/snapshot checks implemented. Actual certified-provider failure/recovery and full reviewed delivery remain pending. |
 | 03 | Persistent release channels | Planned | Pending |
-| 04 | Deployment dependency gates | Planned | Pending |
+| 04 | Deployment dependency gates | Implemented; awaiting hosted checks, review and merge | [Evidence](deployment-dependencies.json) |
 | 05 | Scheduled release windows | Planned | Pending |
 | 06 | Automatic supervisor leadership | Planned | Pending |
 | 07 | Online provider node handoff | Planned | Pending |

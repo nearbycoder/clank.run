@@ -4,7 +4,7 @@
   "baseCommit": "2b0e04853e695ff5942a9fe2fd27692756144f47",
   "branch": "codex/persistent-release-channels",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/276",
-  "status": "verified-awaiting-hosted-checks",
+  "status": "merged",
   "implementation": "Versioned named channel pins retain exact successful uploads and immutable source identity. API, CLI and dashboard share explicit pin/promote/historical rollback/retirement contracts. Target acceptance, receipts and rollback pointer publication commit together. Pending requests fence repinning, retirement and history capacity; accepted replay never reactivates its old artifact.",
   "validation": {
     "localContracts": {
@@ -367,16 +367,49 @@
     "docs/release-channels.md": "167171f4c9749b28e27f7642e3cb32bbc804004e153ada294df8bc330ec8d665"
   },
   "roadmap": {
-    "mergedFeatures": 17,
-    "mergedBatches": 14,
-    "remainingFeatures": 23,
-    "feature03Counted": false,
-    "reason": "A protected merge after fresh hosted checks is still required."
+    "mergedFeatures": 18,
+    "mergedBatches": 15,
+    "remainingFeatures": 22,
+    "feature03Counted": true,
+    "reason": "Protected merge after all six fresh hosted checks; exact reviewed tree verified."
   },
   "remaining": {
-    "hostedChecks": "Pending PR creation and six fresh checks at its reviewed head.",
-    "independentReview": "Not performed; the author review will be explicitly identified as non-independent.",
+    "hostedChecks": "All six passed at the exact reviewed head before protected merge.",
+    "independentReview": "Not performed; author COMMENT 5472668017 is explicitly non-independent.",
     "productionRailway": "Untouched and uncertified.",
     "existingSemanticDebt": "159 existing source diagnostics remain within the unchanged 163 baseline."
+  },
+  "merge": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/278",
+    "reviewedHead": "3b1497af3b342f471f40f72fbda3abed2f9efe93",
+    "reviewedTree": "3e2790326daadd286b8a8ddcac84ba195ee5f0c8",
+    "mergeCommit": "be696323c7b0f4fd5cb381d2fb005b2ac8a2a139",
+    "mergedAt": "2026-10-09T16:35:07Z",
+    "method": "squash",
+    "hostedChecks": {
+      "status": "passed",
+      "count": 6,
+      "checkRunIds": [
+        113916426719,
+        113915724874,
+        113915724789,
+        113915724781,
+        113915724461,
+        113915724317
+      ]
+    },
+    "newCodeQLAlerts": 0,
+    "unresolvedReviewThreads": 0,
+    "authorReview": {
+      "id": 5472668017,
+      "independent": false
+    },
+    "proposalState": "CLOSED",
+    "bothMainCheckouts": "be696323c7b0f4fd5cb381d2fb005b2ac8a2a139",
+    "preservedExistingFiles": 23,
+    "evidence": {
+      "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-protected-merge.json",
+      "sha256": "7caa3728775ab87b795caa7a21f4a22905d26472219d4c4d0116c56a2e93d99e"
+    }
   }
 }

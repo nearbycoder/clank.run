@@ -4,6 +4,15 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add versioned project dependency gates for uploads, canaries, rollback and environment/channel
+  activation. Bind bounded health checks to exact managed service identities and current
+  credentials, expose CLI/dashboard configuration and history, and support explicit human
+  readiness approval with durable recovery fences and deletion protection. Preserve prior
+  data and frozen provider environments during compensation and interrupted rollback recovery.
+- Keep failed provider rollback from changing a historically accepted artifact into a failed
+  upload, and commit rollback audit records with provider acceptance. Constrain environment
+  form grid tracks so long select options and reviewed identities remain readable on phones.
+
 - Recognize Node 26’s unterminated-string coverage artifact diagnostic for the existing
   single bounded retry, while preserving immediate failure for tests, threshold misses,
   inconsistent counts and other errors. A successful retry must measure JavaScript.
