@@ -307,6 +307,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Linux provider disk and outbound policies](docs/linux-provider-isolation.md)
 - [Expiring Linux host certification](docs/linux-host-certification.md)
 - [Exact artifact promotion across environments](docs/environment-promotions.md)
+- [Persistent release channels](docs/release-channels.md)
 - [Disposable local provider fleets](docs/local-provider-fleet.md)
 - [Planned provider node evacuation](docs/planned-node-evacuation.md)
 - [Localization](docs/localization.md)

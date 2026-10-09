@@ -195,6 +195,10 @@ const COMMANDS = Object.freeze({
     usage: "clank environment <list|bind|unbind|promote|history|recover> [name] [project-or-key] [directory] [--expected-version <n>] [--migration-policy <apply-safe|code-only>] [--from <name>] [--release <id>] [--digest <sha256>] [--expected-active <id|none>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--json]",
     summary: "Configure independent persistent targets and promote an exact retained upload without rebuilding.",
   },
+  channel: {
+    usage: "clank channel <list|get|pin|history|actions|promote|rollback|retire> [name] [directory] [--expected-version <n>] [--from <environment>] [--release <id>] [--digest <sha256>] [--to <environment>] [--environment-version <n>] [--expected-active <id|none>] [--from-version <n>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--version <n>] [--json]",
+    summary: "Pin immutable channel history and explicitly promote or roll back an exact retained artifact.",
+  },
   status: {
     usage: "clank status",
     summary: "Show the linked project and active release.",
@@ -254,6 +258,7 @@ const VALUE_OPTIONS = Object.freeze({
   token: ["permissions", "expires-in", "name"],
   deploy: ["name", "slug", "org", "placement", "output", "signing-key", "builder", "build-id"],
   environment: ["expected-version", "migration-policy", "from", "release", "digest", "expected-active", "key", "attestation", "confirm"],
+  channel: ["expected-version", "from", "release", "digest", "to", "environment-version", "expected-active", "from-version", "key", "attestation", "confirm", "version"],
   preview: [
     "fixture",
     "ttl",
@@ -289,6 +294,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   billing: ["json"],
   deploy: ["dry-run", "json"],
   environment: ["json"],
+  channel: ["json"],
   preview: [
     "json",
     "acknowledge-data-loss",
@@ -335,6 +341,7 @@ export async function run(command, args) {
       case "deploy": return await deploy(args);
       case "preview": return await previewCommand(args);
       case "environment": return await environmentCommand(args);
+      case "channel": return await channelCommand(args);
       case "status": return await status(args);
       case "releases": return await releases(args);
       case "logs": return await logs(args);
@@ -2177,6 +2184,88 @@ async function environmentCommand(args) {
     for (const promotion of payload.promotions) console.log(`${promotion.idempotencyKey}  ${promotion.state}  ${promotion.sourceEnvironment} → ${promotion.targetEnvironment}  ${promotion.digest}  ${promotion.targetReleaseId ?? 'not staged'}`);
   } else if (payload.environment) console.log(`${payload.environment.name}: ${payload.environment.projectId ?? 'unbound'} at version ${payload.environment.version}.`);
   else console.log(`${payload.promotion.targetEnvironment}: ${payload.promotion.state} (${payload.promotion.idempotencyKey}).`);
+}
+
+async function channelCommand(args) {
+  const action = args.shift(), values = positionals(args);
+  const allowed = {
+    list: ["json"], get: ["json"], history: ["json", "version"], actions: ["json"],
+    pin: ["json", "from", "release", "digest", "expected-version"],
+    promote: ["json", "to", "expected-version", "environment-version", "expected-active", "key", "attestation"],
+    rollback: ["json", "to", "expected-version", "environment-version", "expected-active", "from-version", "key", "attestation"],
+    retire: ["json", "expected-version", "confirm"],
+  }[action];
+  if (!allowed) throw new CliError(COMMANDS.channel.usage);
+  for (const argument of args) {
+    if (!argument.startsWith("--")) continue;
+    const name = argument.slice(2).split("=", 1)[0];
+    if (!allowed.includes(name)) throw new CliError(`--${name} does not apply to channel ${action}.`);
+  }
+  const name = action === "list" ? null : values.shift();
+  if (action !== "list" && (typeof name !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(name))) {
+    throw new CliError("Choose a 1–64 character channel name beginning with a lowercase letter.");
+  }
+  if (values.length > 1) throw new CliError(COMMANDS.channel.usage);
+  const required = key => {
+    const value = option(args, key);
+    if (!value) throw new CliError(`Pass --${key} explicitly.`);
+    return value;
+  };
+  const integer = (key, minimum = 1, maximum = Number.MAX_SAFE_INTEGER - 1) => {
+    const value = required(key), number = Number(value);
+    if (!/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(number) || number < minimum || number > maximum) {
+      throw new CliError(`Pass an exact --${key} between ${minimum} and ${maximum}.`);
+    }
+    return number;
+  };
+  const environment = key => {
+    const value = required(key);
+    if (!["development", "staging", "production"].includes(value)) throw new CliError(`Choose development, staging or production for --${key}.`);
+    return value;
+  };
+  let body, method = "GET", suffix = "";
+  if (action === "pin") {
+    const digest = required("digest");
+    if (!/^[a-f0-9]{64}$/.test(digest)) throw new CliError("Pass an exact artifact SHA-256.");
+    body = { sourceEnvironment: environment("from"), releaseId: required("release"), digest, expectedVersion: integer("expected-version", 0) };
+    method = "PUT";
+  } else if (action === "retire") {
+    body = { expectedVersion: integer("expected-version"), confirmation: required("confirm") };
+    method = "DELETE";
+  } else if (action === "promote" || action === "rollback") {
+    const active = required("expected-active"), key = required("key"), expectedVersion = integer("expected-version");
+    if (!/^[A-Za-z0-9_-]{16,128}$/.test(key)) throw new CliError("Pass a 16–128 character exact --key.");
+    body = { targetEnvironment: environment("to"), expectedVersion,
+      expectedEnvironmentVersion: integer("environment-version", 1, Number.MAX_SAFE_INTEGER),
+      expectedActiveReleaseId: active === "none" ? null : active, idempotencyKey: key,
+      ...(action === "rollback" ? { fromVersion: integer("from-version", 1, expectedVersion - 1) } : {}) };
+    method = "POST"; suffix = "/" + action;
+  } else if (action === "history" || action === "actions") {
+    suffix = "/" + action;
+    if (action === "history" && option(args, "version")) suffix += "/" + integer("version", 1, Number.MAX_SAFE_INTEGER);
+  }
+  const attestationFile = option(args, "attestation");
+  const attestation = attestationFile
+    ? encodeReleaseAttestation(await readBoundedJsonFile(resolve(attestationFile), "Target release attestation", 16384)) : null;
+  const { profile, link } = await linkedContext(resolve(values[0] ?? "."));
+  const payload = await platformRequest(profile.server, `/api/projects/${encodeURIComponent(link.projectId)}/channels${name ? '/' + name : ''}${suffix}`, {
+    token: profile.token, method, ...(body ? { body } : {}),
+    ...(attestation ? { headers: { "x-clank-release-attestation": attestation } } : {}),
+    ...(action === "promote" || action === "rollback" ? { timeoutMs: PLATFORM_DEPLOY_TIMEOUT_MS } : {}),
+  });
+  if (flag(args, "json")) { console.log(JSON.stringify(payload, null, 2)); return; }
+  if (payload.channels) {
+    if (!payload.channels.length) console.log("No authorized channels retained.");
+    for (const channel of payload.channels) console.log(`${channel.name}  version ${channel.version}  ${channel.current?.digest ?? 'retired'}`);
+  } else if (payload.entries) {
+    if (!payload.entries.length) console.log("No authorized channel entries retained.");
+    for (const entry of payload.entries) console.log(`version ${entry.version}  ${entry.sourceEnvironment}  ${entry.sourceReleaseId}  ${entry.digest}`);
+  } else if (payload.actions) {
+    if (!payload.actions.length) console.log("No authorized channel actions retained.");
+    for (const entry of payload.actions) console.log(`${entry.idempotencyKey}  ${entry.kind}  ${entry.state}  version ${entry.entryVersion} → ${entry.targetEnvironment}  ${entry.targetReleaseId ?? 'not staged'}`);
+  } else if (payload.entry) console.log(`version ${payload.entry.version}  ${payload.entry.sourceEnvironment}  ${payload.entry.sourceReleaseId}  ${payload.entry.digest}`);
+  else if (payload.channel) console.log(`${payload.channel.name}: version ${payload.channel.version} (${payload.channel.current?.digest ?? 'retired'}).`);
+  else console.log(`${payload.action.name}: ${payload.action.kind} ${payload.action.state} at version ${payload.action.appliedVersion ?? 'not accepted'} (${payload.action.idempotencyKey}).`);
 }
 
 async function previewCommand(args) {

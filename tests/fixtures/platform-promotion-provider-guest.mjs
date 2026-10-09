@@ -22,8 +22,9 @@ assert.equal(process.getuid(), 0);
 await stat('/etc/clank-disposable-test-host');
 const arguments_ = process.argv.slice(2);
 assert.equal(arguments_[0], '--disposable');
-assert.ok(arguments_.length === 1 || (arguments_.length === 2 && arguments_[1] === '--authority-only'));
+assert.ok(arguments_.length === 1 || (arguments_.length === 2 && ['--authority-only','--channels-only'].includes(arguments_[1])));
 const authorityOnly = arguments_[1] === '--authority-only';
+const channelsOnly = arguments_[1] === '--channels-only';
 const command = promisify(execFile), framework = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const interruption=new AbortController();
 for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>interruption.abort(new Error('Owned acceptance interrupted.')));
@@ -80,15 +81,8 @@ try {
   await writeFile(join(sourceFiles,'migrations/0001_sample.sql'),"CREATE TABLE sample(value TEXT NOT NULL);INSERT INTO sample VALUES('initial');");
   const artifact=async(label,extraMigration='')=>{
     if(extraMigration)await writeFile(join(sourceFiles,'migrations/0002_schema.sql'),extraMigration);
-    await writeFile(join(sourceFiles,'dist/server.mjs'),`
-      import {createServer} from 'node:http';import {DatabaseSync} from 'node:sqlite';
-      const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH);
-      if(${JSON.stringify(label)}==='v2'&&process.env.HEALTH_WRITE==='1')db.prepare('UPDATE sample SET value=?').run('unpublished-health-write');
-      createServer((request,response)=>{if(request.url==='/healthz'){response.statusCode=process.env.FAIL_HEALTH==='1'&&${JSON.stringify(label)}==='v2'?503:200;response.end('health');return}
-        if(request.url.startsWith('/write/'))db.prepare('UPDATE sample SET value=?').run(decodeURIComponent(request.url.slice(7)));
-        response.setHeader('content-type','application/json');response.end(JSON.stringify({label:${JSON.stringify(label)},uid:process.getuid(),value:db.prepare('SELECT value FROM sample').get().value,secret:process.env.ENVIRONMENT_VALUE,bucketPrefix:process.env.CLANK_BUCKET_PREFIX}));
-      }).listen(Number(process.env.PORT),process.env.HOST);
-    `);
+    await writeFile(join(sourceFiles,'dist/server.mjs'),await readFile(new URL('./platform-provider-promotion-application.mjs',import.meta.url)));
+    await writeFile(join(sourceFiles,'dist/fixture-config.json'),JSON.stringify({label}));
     const bytes=await createDeploymentBundle(sourceFiles,parseDeploymentConfig({version:1,entry:'dist/server.mjs',include:['dist','migrations'],database:{path:'app.sqlite',migrations:'migrations'},health:{path:'/healthz',timeoutMs:5000},env:{}}));
     return{bytes,digest:await deploymentDigest(bytes)};
   };
@@ -148,7 +142,48 @@ try {
   assert.equal((await probe(sourceProject)).value,'source-only');
   const replay=await call(environmentPath+'/staging/promotions',input,201);assert.equal(replay.release.id,promoted.release.id);
   cases.push({name:'accepted exact replay across actual controller restart',status:'passed'});
-  if (authorityOnly) {
+  if (channelsOnly) {
+    const channelPath=`/api/projects/${sourceProject.id}/channels/stable`;
+    const pin=async(release,bundle,expectedVersion)=>call(channelPath,{sourceEnvironment:'development',releaseId:release.id,digest:bundle.digest,expectedVersion},200,'PUT');
+    const activate=async(kind,request,terminal=201)=>{
+      const deadline=Date.now()+(terminal===201?90000:660000);
+      while(true){
+        const response=await fetch(origin+channelPath+'/'+kind,{method:'POST',signal:interruption.signal,headers:{origin,cookie,'x-clank-csrf':owner.csrfToken,'content-type':'application/json'},body:JSON.stringify(request)});
+        const result=await response.json();
+        if(response.status!==503){assert.equal(response.status,terminal,JSON.stringify(result));return result}
+        assert.equal(result.error.code,'PROVIDER_DEPLOYMENT_PENDING');assert.ok(Date.now()<deadline,'The same channel action must converge within the unchanged provider retry budget.');
+        console.error('Actual channel '+kind+' remains pending.');
+      }
+    };
+    const request=(expectedVersion,active,key)=>({targetEnvironment:'staging',expectedVersion,expectedEnvironmentVersion:1,expectedActiveReleaseId:active,idempotencyKey:key});
+    await pin(source,v1,0);
+    const initial=await activate('promote',request(1,promoted.release.id,'provider_channel_initial_01'));
+    assert.deepEqual(await readFile(join(options.dataDirectory,'projects',targetProject.id,'artifacts',initial.release.id+'.clank.gz')),v1.bytes);
+    assert.equal((await probe(targetProject)).value,'target-only');
+    cases.push({name:'real certified provider channel promotion preserves original bytes and independent target state',status:'passed'});
+    const v2=await artifact('v2'),second=await upload(sourceProject,v2,'provider_channel_source_02');await pin(second,v2,1);
+    const upgraded=await activate('promote',request(2,initial.release.id,'provider_channel_upgrade_01'));
+    assert.equal((await probe(targetProject)).label,'v2');
+    const rollbackRequest={...request(2,upgraded.release.id,'provider_channel_rollback_01'),fromVersion:1};
+    const rolledBack=await activate('rollback',rollbackRequest);
+    assert.equal(rolledBack.action.appliedVersion,3);assert.equal((await call(channelPath)).channel.current.sourceReleaseId,source.id);
+    assert.deepEqual(await readFile(join(options.dataDirectory,'projects',targetProject.id,'artifacts',rolledBack.release.id+'.clank.gz')),v1.bytes);
+    assert.equal((await probe(targetProject)).value,'target-only');
+    cases.push({name:'actual provider historical rollback commits a new channel version with exact old bytes only after verified activation',status:'passed'});
+    await pin(second,v2,3);
+    const latest=await activate('promote',request(4,rolledBack.release.id,'provider_channel_latest_01'));
+    await agent.close();agent=null;await platform.close();platform=await openPlatform(options);agent=await openAgent();
+    const replay=await call(channelPath+'/rollback',rollbackRequest,201);assert.equal(replay.release.id,rolledBack.release.id);
+    assert.equal((await call(`/api/projects/${targetProject.id}`)).project.activeReleaseId,latest.release.id);assert.equal((await probe(targetProject)).label,'v2');
+    cases.push({name:'accepted channel rollback replay across actual controller restart does not reactivate its old artifact',status:'passed'});
+    await call(`/api/projects/${targetProject.id}/secrets`,{values:{ENVIRONMENT_VALUE:'staging',FAIL_HEALTH:'1',HEALTH_WRITE:'1'}},200,'PUT');
+    const failed=await activate('rollback',{...request(4,latest.release.id,'provider_channel_failed_01'),fromVersion:2},422);
+    assert.equal(failed.error.code,'PROVIDER_DEPLOYMENT_FAILED');assert.equal((await call(channelPath)).channel.version,4);
+    const restored=await probe(targetProject);assert.equal(restored.label,'v2');assert.equal(restored.value,'target-only');
+    assert.equal((await call(channelPath+'/actions')).actions.find(action=>action.idempotencyKey==='provider_channel_failed_01').state,'failed');
+    cases.push({name:'real failed provider channel rollback restores journaled target writes and leaves the channel pin unchanged',status:'passed'});
+    console.error('Actual provider release channel acceptance verified.');
+  } else if (authorityOnly) {
     const response=await fetch(origin+'/__clank/auth/register',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({email:'guest-developer@example.test',password:'correct horse battery staple'})});
     assert.equal(response.status,201);const developer=await response.json();developer.cookie=response.headers.get('set-cookie').split(';')[0];
     const control=new DatabaseSync(join(options.dataDirectory,'control.sqlite'));
@@ -262,6 +297,6 @@ try {
   }
 }
 cases.push({name:'owned provider stops, Docker containers/network/nft table retire and XFS quota usage/limits clear',status:'passed'});
-const result={protocol:'clank-provider-promotion-acceptance/1',status:'passed',mode:authorityOnly?'authority-expiry':'health-restart',realGuest:true,node:process.version,cases};
+const result={protocol:'clank-provider-promotion-acceptance/1',status:'passed',mode:channelsOnly?'release-channels':authorityOnly?'authority-expiry':'health-restart',realGuest:true,node:process.version,cases};
 await writeFile(join(root,'acceptance.json'),JSON.stringify(result,null,2)+'\n',{mode:0o600});
 console.log(JSON.stringify(result));

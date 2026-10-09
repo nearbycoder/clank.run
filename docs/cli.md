@@ -390,6 +390,14 @@ Persistent development, staging and production targets use `clank environment li
 binding version, active-target expectation and key; it never builds the app. See [artifact
 promotion across environments](environment-promotions.md) for commands and recovery guarantees.
 
+## Release channels
+
+Use `clank channel list`, `get`, `pin`, `history`, `actions`, `promote`, `rollback` and `retire`
+for immutable channel pins and explicit environment activation. All mutations require exact
+reviewed versions; activation also captures the target binding, active release and request key.
+`history --version=<n>` reads any exact retained entry. See [persistent release channels](release-channels.md)
+for CLI/dashboard parity, retirement and verified recovery.
+
 ## Preview environments
 
 ```sh

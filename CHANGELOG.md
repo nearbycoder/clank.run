@@ -4,10 +4,21 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Recognize Node 26’s unterminated-string coverage artifact diagnostic for the existing
+  single bounded retry, while preserving immediate failure for tests, threshold misses,
+  inconsistent counts and other errors. A successful retry must measure JavaScript.
+
+- Add persistent named release channels with immutable source pins, version-fenced updates,
+  exact-byte environment promotion and historical rollback through CLI and dashboard. Commit
+  rollback pointers only with verified activation; protect retained uploads from cleanup and
+  project deletion, and support explicit authenticated retirement with versioned tombstones.
+
 - Add persistent development/staging/production bindings, exact-artifact promotion, durable
   request receipts, migration policies, current authority fences and verified recovery through
   the dashboard and CLI. Support certified co-located code-only provider targets; unresolved
   cleanup, host proof or interrupted migration stays fenced.
+- Restore the prior provider generation’s frozen runtime environment during failed-promotion
+  compensation, so changed candidate secrets cannot prevent prior-code recovery.
 - Retain original local upload bytes within storage limits, snapshot migrations after prior
   writers stop, contain rejected error observers, and recheck provider deployment/rollback
   authority before activation.

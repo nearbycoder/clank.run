@@ -66,6 +66,48 @@ export interface PlatformPromotion {
 
 export type PlatformQuotaKey = "organizationsPerAccount" | "projectsPerAccount" | "projectsPerOrganization" | "domainsPerProject" | "releasesPerProject" | "releaseStorageBytesPerProject" | "bucketStorageBytesPerProject" | "bucketObjectsPerProject" | "backupsPerProject" | "requestsPerMonthPerOrganization" | "transferBytesPerMonthPerOrganization" | "requestsPerMinutePerProject";
 export type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
+export interface PlatformReleaseChannelEntry {
+  readonly version: number;
+  readonly sourceEnvironment: PlatformEnvironmentName;
+  readonly sourceProjectId: string;
+  readonly sourceReleaseId: string;
+  readonly digest: string;
+  readonly createdAt: number;
+}
+export interface PlatformReleaseChannel {
+  readonly name: string;
+  readonly version: number;
+  readonly current: PlatformReleaseChannelEntry | null;
+  readonly updatedAt: number;
+}
+export interface PlatformChannelPinRequest {
+  readonly sourceEnvironment: PlatformEnvironmentName;
+  readonly releaseId: string;
+  readonly digest: string;
+  readonly expectedVersion: number;
+}
+export interface PlatformChannelActivationRequest {
+  readonly targetEnvironment: PlatformEnvironmentName;
+  readonly expectedVersion: number;
+  readonly expectedEnvironmentVersion: number;
+  readonly expectedActiveReleaseId: string | null;
+  readonly idempotencyKey: string;
+}
+export interface PlatformChannelRollbackRequest extends PlatformChannelActivationRequest {
+  readonly fromVersion: number;
+}
+export interface PlatformChannelAction {
+  readonly name: string;
+  readonly idempotencyKey: string;
+  readonly kind: "promote" | "rollback";
+  readonly entryVersion: number;
+  readonly appliedVersion: number | null;
+  readonly targetEnvironment: PlatformEnvironmentName;
+  readonly targetReleaseId: string | null;
+  readonly state: PlatformPromotion["state"];
+}
+
+
 export interface PlatformLimits {
     /** Maximum organizations created by one account. Defaults to 5. */
     organizationsPerAccount?: number;

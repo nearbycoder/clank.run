@@ -4,7 +4,7 @@
   "baseCommit": "8b22c32d8dc05567d87ad4a9b95219818684fdd9",
   "branch": "codex/environment-promotion",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/275",
-  "status": "runtime-acceptance-complete-hosted-security-review-pending",
+  "status": "merged",
   "implementation": "Persistent versioned development/staging/production bindings and exact-upload promotion with current authority, independent target secrets/data/buckets, migration policy, atomic acceptance receipts, interruption fences and verified local/certified co-located provider recovery. API, CLI and dashboard share the contract.",
   "validation": {
     "localContracts": {
@@ -330,16 +330,59 @@
   },
   "preservedExistingFiles": 23,
   "roadmap": {
-    "merged": 16,
-    "remainingUnmerged": 24,
-    "feature02": "Not yet counted as delivered."
+    "merged": 17,
+    "remainingUnmerged": 23,
+    "feature02": "Acceptance and protected delivery complete."
   },
   "nextProposal": "https://github.com/nearbycoder/clank.run/issues/276",
   "delivery": {
-    "status": "draft-review-open",
+    "status": "merged",
     "pullRequest": "https://github.com/nearbycoder/clank.run/pull/277",
-    "originalHead": "e1559238f5da3a73d1ef36cc616086b35f060afa",
-    "originalHostedChecks": "Node 22, Node 24, consumer types and conformance passed; CodeQL had two medium fixture alerts. Final fixed-head results remain required.",
-    "independentApproval": false
+    "reviewedHead": "c03a8e8920389507c54d79bd21cbd10565471223",
+    "authorReview": {
+      "id": 5471827741,
+      "state": "COMMENTED",
+      "independentApproval": false
+    },
+    "hostedChecks": {
+      "status": "passed",
+      "headRevision": "c03a8e8920389507c54d79bd21cbd10565471223",
+      "codeql": {
+        "id": 113879699184,
+        "conclusion": "success",
+        "newAlerts": 0,
+        "annotations": 0
+      },
+      "node22": {
+        "id": 113879066673,
+        "conclusion": "success"
+      },
+      "node24": {
+        "id": 113879066592,
+        "conclusion": "success"
+      },
+      "types": {
+        "id": 113879066793,
+        "conclusion": "success"
+      },
+      "packedRelease": {
+        "id": 113879066521,
+        "conclusion": "success"
+      },
+      "analysis": {
+        "id": 113879066374,
+        "conclusion": "success",
+        "annotations": 1
+      }
+    },
+    "reviewThreads": 2,
+    "resolvedReviewThreads": 2,
+    "unresolvedReviewThreads": 0,
+    "requestedChanges": 0,
+    "mergeCommit": "2b0e04853e695ff5942a9fe2fd27692756144f47",
+    "reviewedTree": "fcc7daaa4cb2f32820843885d95d174410b3c6e2",
+    "mergedTree": "fcc7daaa4cb2f32820843885d95d174410b3c6e2",
+    "bothCheckoutsSynchronized": true,
+    "preservedExistingFiles": 23
   }
 }

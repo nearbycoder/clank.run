@@ -424,3 +424,6 @@ Fresh deployments record time from accepted release creation through healthy act
 reactivations and rollbacks show no deployment duration instead of counting the release's age.
 The platform retains the latest 100 activation records per project. Upgrades seed only the
 currently active release because legacy release timestamps cannot reconstruct rollback history.
+
+Use [persistent release channels](release-channels.md) to retain named immutable artifact history,
+review explicit promotion or rollback, and retire pins without deleting uploads or application data.
