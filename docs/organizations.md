@@ -72,6 +72,7 @@ an administrator cannot grant, change, or remove an owner. See
 - `DELETE /api/organizations/:id/invitations/:invitationId` revokes an active invitation.
 - `PATCH /api/organizations/:id/members/:userId` changes a role with `{ "role": "admin" }`.
 - `DELETE /api/organizations/:id/members/:userId` lets a member leave or an administrator remove them, then revokes workspace-scoped credentials.
+- `GET /api/organizations/:id/provisioning/:userId` lets an owner or administrator review retained SCIM ownership and its current version. POST to the same path deliberately adopts an eligible verified source assignment using the reviewed resource/version/current role, stable retry key and confirmation. It always requires fresh browser MFA/passkey verification. Human membership edits and invitations otherwise take precedence over later SCIM updates; explicit provisioning disable/delete still revokes the affected workspace. See [scoped provisioning](organization-security.md#scoped-user-and-group-provisioning).
 - `POST /api/invitations/accept` accepts a single-use token for the currently authenticated account.
 - `GET /api/admin/invitations` lists active personal-only invitations without token material.
 - `POST /api/admin/invitations` creates or replaces a personal-only invitation with `{ "email": "..." }`.

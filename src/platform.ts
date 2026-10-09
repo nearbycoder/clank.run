@@ -7,7 +7,7 @@ import { createRetentionController, dispatchRetention } from "./retention-intern
 import type { RetentionAdministrationOptions } from "./retention-administration.ts";
 import { openAuditExporter, type AuditExportOptions } from "./audit-export.ts";
 import { forecastUsage } from "./usage-forecast.ts";
-import { openOrganizationSso, type OrganizationSsoOptions } from "./organization-sso.ts";
+import { openOrganizationSso, type OrganizationSsoOptions, type OrganizationProvisioningAssignment } from "./organization-sso.ts";
 import { captureLogLines, redactLogSecrets } from "./security.ts";
 import { runSQLiteTask } from "./sqlite-task.ts";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
@@ -627,7 +627,7 @@ export interface ClankPlatformOptions {
   signup?: boolean | "bootstrap";
   /** Bounded password-hashing admission. Hash strength remains at the framework defaults. */
   authentication?: { concurrency?: number; maxQueue?: number };
-  organizationSso?: Omit<OrganizationSsoOptions, "onProvision" | "onOffboard">;
+  organizationSso?: Omit<OrganizationSsoOptions, "onProvision" | "onOffboard" | "onProvisioning">;
   /** Opt in to recent passkey/MFA checks for destructive recovery and ownership changes. */
   freshAuthentication?: { required?: boolean; maxAgeMs?: number };
   masterKey?: string | Uint8Array;
@@ -1274,15 +1274,21 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     if (!current || current.user?.id !== principal.userId) throw new PlatformError(403, "FRESH_AUTH_REQUIRED", "A browser passkey or MFA verification is required for this operation.");
     storage.auth.requireFreshAuthentication(current, freshAuthenticationAge);
   };
+  const provisioningOrganizations = new Set((options.organizationSso?.providers ?? []).filter(provider => provider.provisioning).map(provider => provider.organizationId));
   const organizationSso = options.organizationSso ? openOrganizationSso(storage.database, storage.auth, {
     ...options.organizationSso,
     onProvision(userId, organizationId) {
       if (!storage.internal.prepare("SELECT id FROM clank_platform_organizations WHERE id = ?").get(organizationId)) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "SSO organization is not configured.");
       storage.internal.prepare("INSERT OR IGNORE INTO clank_platform_memberships(organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, 'viewer', ?, ?)").run(organizationId, userId, Date.now(), Date.now());
     },
+    onProvisioning(userId, organizationId, assignment) {
+      if (!storage.internal.prepare("SELECT id FROM clank_platform_organizations WHERE id=?").get(organizationId)) throw new AuthError("ORGANIZATION_NOT_FOUND", "Provisioning organization is not configured.", 404);
+      applyProvisioningAssignment(storage.internal, organizationId, userId, assignment);
+    },
     onOffboard(userId, organizationId, context) {
       if(context?.reason==="unlink" && storage.internal.prepare("SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?").get(organizationId,userId)?.role==="owner"
         && !storage.internal.prepare("SELECT 1 FROM clank_platform_memberships m JOIN clank_auth_users u ON u.id=m.user_id WHERE m.organization_id=? AND m.user_id<>? AND m.role='owner' AND u.disabled=0 LIMIT 1").get(organizationId,userId)) throw new AuthError("LAST_OWNER","Grant another active workspace owner before unlinking this identity.",409);
+      markProvisioningManualOverride(storage.internal, organizationId, userId, null, false);
       storage.internal.prepare("DELETE FROM clank_platform_memberships WHERE organization_id = ? AND user_id = ?").run(organizationId, userId);
       if(context?.accountMode==="linked") {
         storage.internal.prepare("DELETE FROM clank_platform_project_members WHERE user_id=? AND project_id IN (SELECT id FROM clank_platform_projects WHERE organization_id=?)").run(userId,organizationId);
@@ -6876,6 +6882,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             request,
             authPrefix,
             invitationDeliveries.cancel,
+            provisioningOrganizations,
           ));
         }
         if (registering && signupMode === false) {
@@ -8272,6 +8279,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               role = CASE WHEN clank_platform_memberships.role = 'owner' THEN 'owner' ELSE excluded.role END,
               updated_at = excluded.updated_at`)
             .run(invitation.organization_id, principal.userId, invitation.role, now, now);
+          const organizationId = String(invitation.organization_id);
+          const grantedRole = validateOrganizationRole(String(storage.internal.prepare("SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?").get(organizationId, principal.userId)!.role), true);
+          markProvisioningManualOverride(storage.internal, organizationId, principal.userId, grantedRole, provisioningOrganizations.has(organizationId));
           invitationDeliveries.cancel(String(invitation.id));
           changes.record("__platform", String(invitation.organization_id));
         });
@@ -8433,6 +8443,58 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           });
           return api({ ok: true, invitationId, revoked: true });
         }
+        const provisioningMember = /^provisioning\/([A-Za-z0-9_-]{8,128})$/u.exec(operation);
+        if (provisioningMember && (request.method === "GET" || request.method === "POST")) {
+          requireOrganizationAdministration(membership.role);
+          const memberId = provisioningMember[1]!;
+          const inspect = () => {
+            const row = storage.internal.prepare("SELECT * FROM clank_platform_provisioning_assignments WHERE organization_id=? AND user_id=?").get(organizationId, memberId);
+            if (!row) throw new PlatformError(404, "PROVISIONING_NOT_FOUND", "Retained provisioning ownership not found.");
+            const currentRole = storage.internal.prepare("SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?").get(organizationId, memberId)?.role ?? null;
+            const desired = organizationSso?.provisioningAssignment?.(memberId, organizationId);
+            return { memberId, resourceId: row.resource_id, version: provisioningAssignmentVersion(row), currentRole,
+              desiredRole: desired?.role ?? row.desired_role, manualOverride: Number(row.manual_override) === 1,
+              eligible: Boolean(desired?.active && !desired.deactivated && desired.resourceId === row.resource_id) };
+          };
+          if (request.method === "GET") return api(storage.internal.transaction(() => {
+            requireCurrentPlatformPrincipal(storage, principal);
+            requireOrganizationAdministration(organizationMembership(storage.internal, organizationId, principal.userId).role);
+            return { ok: true, assignment: inspect() };
+          }));
+          const input = plainObject(await readJsonRequest(request, 8 * 1024));
+          exact(input, ["resourceId", "expectedVersion", "expectedCurrentRole", "idempotencyKey", "confirmed"]);
+          const resourceId = boundedString(input.resourceId, "resourceId", 37, 37), retryKey = boundedString(input.idempotencyKey, "idempotencyKey", 16, 128);
+          if (!/^scim_[a-f0-9]{32}$/u.test(resourceId) || !/^[A-Za-z0-9_-]{16,128}$/u.test(retryKey)
+            || !Number.isSafeInteger(input.expectedVersion) || Number(input.expectedVersion) < 1 || input.confirmed !== true) throw new PlatformError(422, "INVALID_PROVISIONING_ADOPTION", "Review the current assignment and confirm its exact version.");
+          const expectedRole = input.expectedCurrentRole === null ? null : validateOrganizationRole(String(input.expectedCurrentRole), true);
+          const exactInput = JSON.stringify([principal.userId, memberId, resourceId, input.expectedVersion, expectedRole]);
+          const accepted = storage.internal.transaction(changes => {
+            requireCurrentPlatformPrincipal(storage, principal);
+            requireOrganizationAdministration(organizationMembership(storage.internal, organizationId, principal.userId).role);
+            const browser = principal.sessionId ? storage.auth.refreshSession(principal.sessionId) : null;
+            if (!browser?.user || browser.user.id !== principal.userId) throw new AuthError("FRESH_AUTH_REQUIRED", "Use a current browser MFA or passkey verification to adopt provisioning ownership.", 403);
+            storage.auth.requireFreshAuthentication(browser, 300_000);
+            const old = storage.internal.prepare("SELECT input,receipt FROM clank_platform_provisioning_adoptions WHERE organization_id=? AND key=?").get(organizationId, retryKey);
+            if (old) {
+              if (old.input !== exactInput) throw new PlatformError(409, "PROVISIONING_RETRY_CONFLICT", "This retry key belongs to another adoption.");
+              return JSON.parse(String(old.receipt));
+            }
+            const snapshot = inspect(), desired = organizationSso?.provisioningAssignment?.(memberId, organizationId);
+            if (snapshot.version !== input.expectedVersion || snapshot.resourceId !== resourceId || snapshot.currentRole !== expectedRole) throw new PlatformError(409, "PROVISIONING_STALE", "Refresh and review the current assignment and membership.");
+            if (!snapshot.eligible || !desired?.active || desired.deactivated || desired.resourceId !== resourceId) throw new PlatformError(409, "PROVISIONING_INELIGIBLE", "A current verified provisioned identity is required before adoption.");
+            if (expectedRole === "owner" && organizationMembership(storage.internal, organizationId, principal.userId).role !== "owner") throw new PlatformError(403, "ROLE_DENIED", "Only an owner can adopt another owner's assignment.");
+            if (Number(storage.internal.prepare("SELECT count(*) AS n FROM clank_platform_provisioning_adoptions WHERE organization_id=?").get(organizationId)!.n) >= 1000
+              || Number(storage.internal.prepare("SELECT count(*) AS n FROM clank_platform_provisioning_adoptions").get()!.n) >= 10000) throw new PlatformError(409, "PROVISIONING_CAPACITY", "Retained adoption receipt capacity is full.");
+            storage.internal.prepare("UPDATE clank_platform_provisioning_assignments SET manual_override=0,floor_role=?,version=version+1 WHERE organization_id=? AND user_id=?").run(expectedRole, organizationId, memberId);
+            applyProvisioningAssignment(storage.internal, organizationId, memberId, desired);
+            const result = { ok: true, accepted: true, assignment: inspect() };
+            storage.internal.prepare("INSERT INTO clank_platform_provisioning_adoptions VALUES(?,?,?,?)").run(organizationId, retryKey, exactInput, JSON.stringify(result));
+            changes.record("__platform", organizationId); changes.record("__auth", memberId, memberId);
+            audit(storage.internal, principal.userId, principal.tokenId, null, "organization.provisioning.adopt", { organizationId, memberId, resourceId, version: result.assignment.version });
+            return result;
+          });
+          return api(accepted);
+        }
         const memberMatch = /^members\/([A-Za-z0-9_-]{8,128})$/.exec(operation);
         if (memberMatch && (request.method === "PATCH" || request.method === "DELETE")) {
           const memberId = memberMatch[1]!;
@@ -8466,6 +8528,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
               if (owners <= 1) throw new PlatformError(409, "LAST_OWNER", "An organization must retain at least one owner.");
             }
             if (request.method === "DELETE") {
+              markProvisioningManualOverride(storage.internal, organizationId, memberId, null, provisioningOrganizations.has(organizationId));
               storage.internal.prepare("DELETE FROM clank_platform_memberships WHERE organization_id = ? AND user_id = ?")
                 .run(organizationId, memberId);
               storage.internal.prepare(`DELETE FROM clank_platform_project_members WHERE user_id = ?
@@ -8477,6 +8540,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
                     SELECT id FROM clank_platform_projects WHERE organization_id = ?
                   ))`).run(now, memberId, organizationId, organizationId);
             } else {
+              markProvisioningManualOverride(storage.internal, organizationId, memberId, nextRole, provisioningOrganizations.has(organizationId));
               storage.internal.prepare(`UPDATE clank_platform_memberships SET role = ?, updated_at = ?
                 WHERE organization_id = ? AND user_id = ?`).run(nextRole, now, organizationId, memberId);
             }
@@ -10774,6 +10838,12 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
     PRIMARY KEY (organization_id, user_id)
   )`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_memberships_user ON clank_platform_memberships (user_id, organization_id)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_provisioning_assignments (
+    organization_id TEXT NOT NULL,user_id TEXT NOT NULL,resource_id TEXT,desired_role TEXT,active INTEGER NOT NULL DEFAULT 0,
+    deactivated INTEGER NOT NULL DEFAULT 0,floor_role TEXT,manual_override INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY(organization_id,user_id))`);
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_provisioning_adoptions (
+    organization_id TEXT NOT NULL,key TEXT NOT NULL,input TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(organization_id,key))`);
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_project_members (
     project_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL REFERENCES clank_auth_users(id) ON DELETE CASCADE,
@@ -14853,6 +14923,7 @@ async function registerWithInvitation(
   request: Request,
   authPrefix: string,
   cancelDelivery: (invitationId: string) => void,
+  provisioningOrganizations: ReadonlySet<string>,
 ): Promise<Response> {
   if (!requestOriginAllowed(request)) {
     throw new PlatformError(403, "ORIGIN_MISMATCH", "Cross-origin auth request rejected.");
@@ -14920,6 +14991,8 @@ async function registerWithInvitation(
         storage.internal.prepare(`INSERT INTO clank_platform_memberships
           (organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`)
           .run(workspaceInvitation.organization_id, userId, role, now, now);
+        markProvisioningManualOverride(storage.internal, String(workspaceInvitation.organization_id), userId,
+          validateOrganizationRole(String(role), true), provisioningOrganizations.has(String(workspaceInvitation.organization_id)));
         changes.record("__platform", String(workspaceInvitation.organization_id));
       } else {
         changes.record("__platform", userId);
@@ -17249,6 +17322,59 @@ function roleAllows(role: OrganizationRole, permission: ProjectPermission): bool
     return ["read", "logs", "deploy", "rollback", "jobs", "audit", "previews"].includes(permission);
   }
   return permission === "read" || permission === "logs";
+}
+
+function provisioningAssignmentVersion(row: Record<string, unknown> | undefined): number {
+  if (!row) return 0;
+  const version = Number(row.version);
+  if (!Number.isSafeInteger(version) || version < 1 || version >= Number.MAX_SAFE_INTEGER) throw new AuthError("PROVISIONING_CAPACITY", "Assignment version capacity is unavailable.", 409);
+  return version;
+}
+function admitProvisioningAssignment(internal: SQLiteInternal, organizationId: string): void {
+  if (Number(internal.prepare("SELECT count(*) AS n FROM clank_platform_provisioning_assignments WHERE organization_id=?").get(organizationId)!.n) >= 2000
+    || Number(internal.prepare("SELECT count(*) AS n FROM clank_platform_provisioning_assignments").get()!.n) >= 20000) throw new AuthError("PROVISIONING_CAPACITY", "Retained assignment ownership capacity is full.", 409);
+}
+function markProvisioningManualOverride(internal: SQLiteInternal, organizationId: string, userId: string, role: OrganizationRole | null, configured: boolean): void {
+  const row = internal.prepare("SELECT * FROM clank_platform_provisioning_assignments WHERE organization_id=? AND user_id=?").get(organizationId, userId);
+  if (!configured && !row) return;
+  if (!row) admitProvisioningAssignment(internal, organizationId);
+  internal.prepare(`INSERT INTO clank_platform_provisioning_assignments(organization_id,user_id,floor_role,manual_override,version)
+    VALUES(?,?,?,1,1) ON CONFLICT(organization_id,user_id) DO UPDATE SET floor_role=excluded.floor_role,manual_override=1,version=?`)
+    .run(organizationId, userId, role, provisioningAssignmentVersion(row) + 1);
+}
+function applyProvisioningAssignment(internal: SQLiteInternal, organizationId: string, userId: string, assignment: OrganizationProvisioningAssignment): void {
+  const row = internal.prepare("SELECT * FROM clank_platform_provisioning_assignments WHERE organization_id=? AND user_id=?").get(organizationId, userId);
+  if (!row) admitProvisioningAssignment(internal, organizationId);
+  const existing = internal.prepare("SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?").get(organizationId, userId);
+  const floor = assignment.deactivated ? null : row ? row.floor_role === null ? null : validateOrganizationRole(String(row.floor_role), true)
+    : existing ? validateOrganizationRole(String(existing.role), true) : null;
+  const manual = Number(row?.manual_override ?? 0) === 1;
+  const changed = !row || row.resource_id !== assignment.resourceId || row.desired_role !== assignment.role
+    || Number(row.active) !== Number(assignment.active) || Number(row.deactivated) !== Number(assignment.deactivated) || row.floor_role !== floor;
+  const previousVersion = provisioningAssignmentVersion(row), version = changed ? previousVersion + 1 : previousVersion;
+  internal.prepare(`INSERT INTO clank_platform_provisioning_assignments VALUES(?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(organization_id,user_id) DO UPDATE SET resource_id=excluded.resource_id,desired_role=excluded.desired_role,
+      active=excluded.active,deactivated=excluded.deactivated,floor_role=excluded.floor_role,version=excluded.version`)
+    .run(organizationId, userId, assignment.resourceId, assignment.role, assignment.active ? 1 : 0, assignment.deactivated ? 1 : 0, floor, manual ? 1 : 0, version);
+  if (assignment.deactivated) {
+    internal.prepare("DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?").run(organizationId, userId);
+    internal.prepare(`DELETE FROM clank_platform_project_members WHERE user_id=? AND project_id IN
+      (SELECT id FROM clank_platform_projects WHERE organization_id=?)`).run(userId, organizationId);
+    if (Number(row?.deactivated ?? 0) !== 1 || row?.resource_id !== assignment.resourceId) {
+      internal.prepare(`UPDATE clank_platform_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL AND
+        ((organization_id IS NULL AND project_id IS NULL) OR organization_id=? OR project_id IN
+        (SELECT id FROM clank_platform_projects WHERE organization_id=?))`).run(Date.now(), userId, organizationId, organizationId);
+      internal.prepare("UPDATE clank_platform_device_codes SET status='denied',consumed_at=? WHERE user_id=?").run(Date.now(), userId);
+    }
+    return;
+  }
+  if (manual) return;
+  const roles: OrganizationRole[] = ["viewer", "developer", "admin", "owner"];
+  const desired = assignment.active ? assignment.role : null;
+  const effective = floor && desired ? roles.indexOf(floor) > roles.indexOf(desired) ? floor : desired : floor ?? desired;
+  if (effective) internal.prepare(`INSERT INTO clank_platform_memberships VALUES(?,?,?,?,?)
+    ON CONFLICT(organization_id,user_id) DO UPDATE SET role=excluded.role,updated_at=excluded.updated_at`).run(organizationId, userId, effective, Date.now(), Date.now());
+  else internal.prepare("DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?").run(organizationId, userId);
 }
 
 function organizationMembership(

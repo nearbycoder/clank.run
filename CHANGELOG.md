@@ -4,6 +4,11 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add opt-in organization-scoped SCIM User/Group provisioning with separate expiring credentials,
+  conditional resource versions, atomic PATCH and durable retry receipts. Require signed subject
+  proof for binding/reactivation, preserve manual role ownership and unrelated workspace access,
+  and provide fresh, versioned native membership adoption.
+
 - Add opt-in verified organization identity linking with fresh local and provider authentication,
   durable subject ownership, versioned unlink receipts and organization-scoped offboarding.
   Preserve unrelated organization access and expose guarded native account-security controls.

@@ -8,6 +8,12 @@ A feature is complete only when its documented acceptance evidence exists. Propo
 
 ## Verified organization identity linking
 
+Feature 12 is in implementation under [proposal #287](https://github.com/nearbycoder/clank.run/issues/287).
+The focused HTTP, signed identity and native membership suite passes 39 checks, including an
+actual accepted-write SIGKILL/restart and a separate process's live/browser/CLI/MCP revocation.
+All 29 packed type fixtures pass without new source diagnostics. Full release gates and hosted
+review remain pending; this does not change the accepted 21/40 feature count.
+
 Feature 11 is implemented under [proposal #283](https://github.com/nearbycoder/clank.run/issues/283)
 and merged in [PR #285](https://github.com/nearbycoder/clank.run/pull/285) with the canary drain and concurrent-fixture repairs after all fresh acceptance gates. Existing signed-in users can explicitly link
 organization identities after real local MFA/passkey and fresh provider authentication. Stable
