@@ -8,7 +8,7 @@ import { mountSharedSavedViews } from "../dist/saved-views.js";
 import { mountDurableImporter } from "../dist/durable-import.js";
 
 class Element {
-  constructor(tag, document) { this.tag = tag; this.ownerDocument = document; this.childNodes = []; this.listeners = new Map(); this.attributes = new Map(); this.value = ""; this.disabled = false; this.ownText = ""; }
+  constructor(tag, document) { this.tag = tag; this.ownerDocument = document; this.childNodes = []; this.listeners = new Map(); this.attributes = new Map(); this.style = {}; this.value = ""; this.disabled = false; this.ownText = ""; }
   append(...nodes) { for (const node of nodes) { node.parentNode = this; this.childNodes.push(node); } }
   replaceChildren(...nodes) { this.childNodes.forEach(node => { node.parentNode = null; }); this.childNodes = []; this.ownText = ""; this.append(...nodes); }
   setAttribute(key, value) { this.attributes.set(key, value); }
@@ -63,4 +63,23 @@ test("search, shared-view and durable-import controls call their clients and ren
   const closeViews = mountSharedSavedViews(views, { list: async () => [{ id: "view", name: "Read only", definition: { filters: [], sort: [], columns: [] }, isDefault: true, canEdit: false, canSetDefault: false }] }, { current: () => ({ filters: [], sort: [], columns: [] }), apply: view => { applied = view; } }); await settle(); await button(views, "Read only (workspace default)").fire("click"); assert.ok(applied); assert.equal(descendants(views, "button").some(item => item.textContent === "Delete shared view"), false); closeViews();
   const imports = fixture(); let resumed;
   const closeImports = mountDurableImporter(imports, { run: async id => { resumed = id; return { id, state: "completed", uploadedRows: 8, processedRows: 8, insertedRows: 8, skippedRows: 0, issues: [] }; } }, { columns: [] }); descendants(imports, "input")[1].value = "saved-import"; await button(imports, "Run or resume import").fire("click"); assert.equal(resumed, "saved-import"); assert.match(imports.textContent, /8\/8 processed/u); closeImports();
+});
+
+test("search responses and record buttons cannot cross scope changes or cleanup", async () => {
+  const container = fixture(), pending = []; let scope = "one", opened = 0;
+  const dispose = mountSearch(container, { search: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) }, { scope: () => scope, open: () => { opened++; } });
+  const form = descendants(container, "form")[0], result = { hits: [{ id: "private", title: "Private title", snippet: "Private snippet", score: 1 }], total: 1, truncated: false };
+  const first = form.fire("submit"); await settle(); scope = "two"; pending[0].resolve(result); await first;
+  assert.doesNotMatch(container.textContent, /Private/); assert.match(container.textContent, /scope changed/); assert.equal(button(container, "Search").disabled, false);
+  const second = form.fire("submit"); await settle(); pending[1].resolve(result); await second;
+  const oldButton = button(container, "Private title"); scope = "three"; await oldButton.fire("click"); assert.equal(opened, 0); assert.doesNotMatch(container.textContent, /Private/);
+  const third = form.fire("submit"); await settle(); dispose(); pending[2].resolve(result); await third; await oldButton.fire("click"); assert.equal(opened, 0); assert.equal(container.childNodes.length, 0);
+});
+
+test("late search failures cannot overwrite a later response or enable its pending submit", async () => {
+  const container = fixture(), pending = [];
+  const dispose = mountSearch(container, { search: () => new Promise((resolve, reject) => pending.push({ resolve, reject })) }, { scope: () => "same", open: () => {} });
+  const form = descendants(container, "form")[0], first = form.fire("submit"); await settle(); const second = form.fire("submit"); await settle();
+  pending[0].reject(new Error("old request")); await first; assert.equal(button(container, "Search").disabled, true); assert.doesNotMatch(container.textContent, /unavailable/);
+  pending[1].resolve({ hits: [], total: 0, truncated: false }); await second; assert.match(container.textContent, /0 results/); assert.equal(button(container, "Search").disabled, false); dispose();
 });

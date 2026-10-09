@@ -6,7 +6,7 @@ Clank 0.24.0 has a broad, well-tested runtime and a substantial deployment platf
 
 This document preserves the findings and validation at the reviewed main commit. The [implementation ledger](IMPLEMENTATION.md) records the subsequent fixes, new features, current verification and hosting limitation. The [40 feature plan](FEATURE_PLAN.md) describes new capabilities separately from the fixes below. [Structured verification](verification.json), [reproduction output](reproduction.json), and a [disposable reproduction script](reproduce.mjs) accompany this review.
 
-The latest feature batch adds [retained file versions](retained-file-versions.json), including private history, fenced restore, durable receipts and current-session checks. The [budget feature](budget-implementation.json) is merged in [PR #252](https://github.com/nearbycoder/clank.run/pull/252). Eight roadmap features have acceptance evidence; 32 remain planned. The original findings below retain their historical scope.
+The latest feature batch adds [source-linked search](source-linked-search.json), with atomic source projection, current source authorization, resumable rebuild and drift diagnosis. [Retained file versions](retained-file-versions.json) merged in [PR #254](https://github.com/nearbycoder/clank.run/pull/254), and [compiler padding](compiler-padding-review.json) merged in [PR #256](https://github.com/nearbycoder/clank.run/pull/256). Nine roadmap features have acceptance evidence; 31 remain planned. The original findings below retain their historical scope.
 
 ## Follow-up review of merged main
 

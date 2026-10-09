@@ -18,6 +18,9 @@ export function featureTransport<Functions extends FunctionTree>(options: SyncCl
   return { client, api: createApi<Functions>() };
 }
 export function requireFeatureAccess(allowed: unknown): asserts allowed is true {
-  if (allowed !== true) throw new BackendActionError(404, "RESOURCE_NOT_FOUND", "Resource not found or access denied.");
+  if (allowed !== true) {
+    void Promise.resolve(allowed).catch(() => undefined);
+    throw new BackendActionError(404, "RESOURCE_NOT_FOUND", "Resource not found or access denied.");
+  }
 }
 export function featureInput(message: string): never { throw new BackendActionError(400, "INVALID_INPUT", message); }

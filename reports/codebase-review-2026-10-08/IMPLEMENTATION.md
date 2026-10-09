@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Eight of the forty proposed features are implemented across five feature batches; the other thirty-two remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Nine of the forty proposed features are implemented across six feature batches; the other thirty-one remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -84,6 +84,27 @@ privileged-host skips; coverage is 92.17% lines, 79.95% branches and 90.12% func
 See [compiler padding review](compiler-padding-review.json). This prerequisite does not change
 the feature count: eight implemented and thirty-two planned.
 
+## Source-linked search
+
+Feature 23 starts from merged main `761671eb6fbd24addd811af4ed056eda37d531bf`, after
+[PR #256](https://github.com/nearbycoder/clank.run/pull/256) passes all six hosted checks.
+Proposal: [issue #257](https://github.com/nearbycoder/clank.run/issues/257). Named typed bindings
+project source writes, deletes and record-history restores atomically across upgraded writers.
+Search verifies current scoped source rows before ranking, and rebuild/diagnostics have bounded
+persistent cursors and generation/revision fences. Existing manual search remains compatible;
+unlinked application schemas and recovery epochs remain unchanged. Failed first registration
+rolls back all derived tables.
+
+All 75 focused tests, including 16 source-search tests and two new UI race regressions, pass.
+Actual process kills during write/rebuild preserve the committed boundary; real browser keyboard,
+focus, mobile, pending scope/disposal and revoked-access checks pass. All 16 packed consumer
+fixtures pass without additions to the 163 source diagnostics. The full gate reports 1,772 tests,
+1,769 passed, zero failures/cancellations and three privileged-host skips; coverage is
+92.19% lines, 80.04% branches and 90.16% functions. Documentation, conformance and security pass;
+the package has 395 files and 5,677,195 bytes under unchanged bounds. Existing PITR rejection of
+FTS virtual tables remains explicit. See [source-linked search](source-linked-search.json).
+Nine features have acceptance evidence; thirty-one remain planned.
+
 ## Review prerequisites
 
 | Item | State | Evidence |
@@ -122,7 +143,7 @@ the feature count: eight implemented and thirty-two planned.
 | 20 | Workflow compensation steps | Planned | Pending |
 | 21 | Typed PostgreSQL application backend | Planned | Pending |
 | 22 | Authorized cross-table aggregates | Planned | Pending |
-| 23 | Source-linked search indexes | Planned | Pending |
+| 23 | Source-linked search indexes | Implemented | Proposal #257; atomic source writes/deletes/history restore, pre-opened independent writers, two actual process crashes, resumable fenced rebuild, bounded drift diagnosis, current owner/record authorization and 16 packed consumer fixtures. Real keyboard/mobile/scope/disposal/revocation checks and full release gate pass. |
 | 24 | Search facets and stable result cursors | Planned | Pending |
 | 25 | Import correction and upsert workflow | Planned | Pending |
 | 26 | Shared document cursor coordination | Implemented | Revision-aware, session-bound ephemeral cursors; edit/deletion rebasing, expiry/capacity, per-participant owned authorization, session/ACL/email-verification revocation and restart/reconnect tested. Keyboard/browser and mobile checks pass. |

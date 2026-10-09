@@ -39,3 +39,91 @@ export interface SQLiteTransactionCapture {
   after(): void;
   close(): void;
 }
+
+/** Persisted, bounded source projection. No callbacks or SQL from a binding. */
+export interface SQLiteSearchBinding {
+  version: 1;
+  name: string; table: string; title: string; body: string;
+  scope: "owner" | { field: string }; owned: boolean;
+  maxRecords: number; maxBytes: number; maxScopeRecords: number;
+}
+type SearchConnection = Pick<SQLiteInternal, "exec" | "prepare">;
+export const SOURCE_SEARCH_FTS = "clank_source_search_fts";
+export function bootstrapSourceSearch(connection: SearchConnection): void {
+  connection.exec(`CREATE TABLE IF NOT EXISTS clank_source_search_indexes (
+    name TEXT PRIMARY KEY, definition TEXT NOT NULL CHECK(json_valid(definition)),
+    generation TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision BETWEEN 1 AND 9007199254740991),
+    cursor TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('building','ready'))
+  ) WITHOUT ROWID`);
+}
+export function bootstrapSourceSearchFTS(connection: SearchConnection): void {
+  connection.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${SOURCE_SEARCH_FTS} USING fts5(
+    index_name UNINDEXED, scope UNINDEXED, id UNINDEXED, source_version UNINDEXED,
+    bytes UNINDEXED, title, body, tokenize='unicode61')`);
+}
+export function parseSearchBinding(value: string): SQLiteSearchBinding {
+  if (typeof value !== "string" || value.length > 4000) throw new Error("Invalid persisted source-search binding.");
+  const binding = JSON.parse(value) as SQLiteSearchBinding;
+  const identifier = (value: unknown) => typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value);
+  if (!binding || binding.version !== 1 || !identifier(binding.name) || !identifier(binding.table) || !identifier(binding.title) || !identifier(binding.body)
+    || typeof binding.owned !== "boolean" || (binding.owned ? binding.scope !== "owner" : !binding.scope || typeof binding.scope !== "object" || !identifier(binding.scope.field))
+    || !Number.isSafeInteger(binding.maxRecords) || binding.maxRecords < 1 || binding.maxRecords > 50000
+    || !Number.isSafeInteger(binding.maxBytes) || binding.maxBytes < 1 || binding.maxBytes > 64 * 1024 * 1024
+    || !Number.isSafeInteger(binding.maxScopeRecords) || binding.maxScopeRecords < 1 || binding.maxScopeRecords > 50000) {
+    throw new Error("Invalid persisted source-search binding.");
+  }
+  return binding;
+}
+export function sourceSearchTable(binding: SQLiteSearchBinding): string { return `"clank_${binding.table}"`; }
+export function searchSourceRecord(binding: SQLiteSearchBinding, row: Record<string, unknown>): {
+  id: string; scope: string; title: string; body: string; version: number; bytes: number;
+} {
+  const data = JSON.parse(String(row._data));
+  const title = data?.[binding.title], body = data?.[binding.body];
+  const scope = binding.scope === "owner" ? row._owner_id : data?.[binding.scope.field];
+  const id = row._id, version = row._version;
+  if (typeof id !== "string" || !id || id.length > 200 || typeof scope !== "string" || !scope || scope.length > 200
+    || typeof title !== "string" || typeof body !== "string" || !Number.isSafeInteger(version) || Number(version) < 1) throw new TypeError("Source-search record has invalid fields.");
+  const titleBytes = new TextEncoder().encode(title).length, bodyBytes = new TextEncoder().encode(body).length;
+  if (titleBytes > 1000 || bodyBytes > 1024 * 1024) throw new RangeError("Source-search title/body exceed 1 KiB/1 MiB.");
+  return { id, scope, title, body, version: Number(version), bytes: titleBytes + bodyBytes };
+}
+export function sourceSearchMatches(binding: SQLiteSearchBinding, source: Record<string, unknown> | undefined, indexed: Record<string, unknown> | undefined): boolean {
+  if (!source || !indexed) return false;
+  try {
+    const record = searchSourceRecord(binding, source);
+    return indexed.id === record.id && indexed.scope === record.scope && indexed.title === record.title
+      && indexed.body === record.body && Number(indexed.source_version) === record.version && Number(indexed.bytes) === record.bytes;
+  } catch { return false; }
+}
+export function projectSearchRecord(connection: SearchConnection, binding: SQLiteSearchBinding, id: string): void {
+  const row = connection.prepare(`SELECT _id,_owner_id,_version,_data FROM ${sourceSearchTable(binding)} WHERE _id=?`).get(id);
+  connection.prepare(`DELETE FROM ${SOURCE_SEARCH_FTS} WHERE index_name=? AND id=?`).run(binding.name, id);
+  if (!row) return;
+  const record = searchSourceRecord(binding, row);
+  const usage = connection.prepare(`SELECT count(*) AS records,coalesce(sum(bytes),0) AS bytes FROM ${SOURCE_SEARCH_FTS} WHERE index_name=?`).get(binding.name)!;
+  if (Number(usage.records) >= binding.maxRecords || Number(usage.bytes) + record.bytes > binding.maxBytes
+    || Number(connection.prepare(`SELECT count(*) AS records FROM ${SOURCE_SEARCH_FTS} WHERE index_name=? AND scope=?`).get(binding.name, record.scope)?.records) >= binding.maxScopeRecords) throw new RangeError("Source-search index exceeds its configured capacity.");
+  connection.prepare(`INSERT INTO ${SOURCE_SEARCH_FTS}(index_name,scope,id,source_version,bytes,title,body) VALUES(?,?,?,?,?,?,?)`)
+    .run(binding.name, record.scope, record.id, record.version, record.bytes, record.title, record.body);
+}
+/** Called before commit for every upgraded writer, even one opened before registration. */
+export function updateSourceSearch(connection: SearchConnection, records: Iterable<{ table: string; id: string }>): void {
+  const changed = [...records];
+  if (!changed.length) return;
+  if (!connection.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_source_search_indexes'").get()) return;
+  const bindings = connection.prepare("SELECT name,definition FROM clank_source_search_indexes ORDER BY name LIMIT 17").all();
+  if (bindings.length > 16) throw new RangeError("Source-search binding capacity exceeded.");
+  for (const row of bindings) {
+    const binding = parseSearchBinding(String(row.definition));
+    if (row.name !== binding.name) throw new Error("Source-search binding identity mismatch.");
+    const affected = changed.filter(record => record.table === binding.table);
+    if (!affected.length) continue;
+    if (Number(connection.prepare(`SELECT count(*) AS records FROM ${sourceSearchTable(binding)}`).get()?.records) > binding.maxRecords) throw new RangeError("Source-search source exceeds its configured record capacity.");
+    // Account for the final batch, so a valid byte/scope swap is not rejected
+    // because a later affected record has not released its old allocation yet.
+    for (const record of affected) connection.prepare(`DELETE FROM ${SOURCE_SEARCH_FTS} WHERE index_name=? AND id=?`).run(binding.name, record.id);
+    for (const record of affected) projectSearchRecord(connection, binding, record.id);
+    connection.prepare("UPDATE clank_source_search_indexes SET revision=revision+1 WHERE name=?").run(binding.name);
+  }
+}

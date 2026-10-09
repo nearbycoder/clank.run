@@ -1,0 +1,111 @@
+{
+  "feature": 23,
+  "title": "Source-linked search indexes",
+  "date": "2026-10-08",
+  "baseCommit": "761671eb6fbd24addd811af4ed056eda37d531bf",
+  "branch": "codex/source-linked-search",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/257",
+  "status": "local-release-validation-passed",
+  "acceptance": {
+    "atomic": "Core transaction hook projects registered source inserts, patches, replacements, deletes and record-history restores before commit; index/capacity failures roll back application rows, history and index. Independent pre-opened connections and real child processes use the persisted binding.",
+    "authority": "Scope policy, owner-derived scope and optional current record policy precede ranking; current scoped source version/content/scope must match. Deleted, stale, inaccessible and duplicate candidates cannot supply snippets or consume authorized ranking capacity. Rejected async policies are denied and their promises contained.",
+    "rebuild": "Persistent bounded cursor and generation; concurrent source edits/inserts/deletes remain indexed. Restart and process death preserve the last committed boundary. Exact old repair revision conflicts rather than restarting accepted progress; resume calls do not rewrite source rows.",
+    "diagnosis": "Bounded union scan reports missing/stale/orphan/duplicate ID counts, byte/record inventory and continuation cursor. Does not certify unscanned rows.",
+    "limits": "At most 16 bindings; up to 50000 source records and 64 MiB text bytes per binding, default 16 MiB, plus per-scope and per-record bounds. Final-state swaps accepted; failed rebuild does not advance cursor. Descriptor version/identity and generation fences reject unsupported persistence or stale handles.",
+    "browser": "Actual HTTP/SQLite/auth flow verifies keyboard search/open, retained focus, 390px contained long-title layout, scope change during delayed response, disposal during delayed response and revoked session failure. Automated UI regressions prevent late errors/enabling submit and stale record opens.",
+    "compatibility": "Unlinked applications gain no search tables and preserve an active recovery epoch. Failed first registration rolls back metadata, FTS and shadow tables together. Optional/defaulted source fields are rejected; string literals/enums are supported."
+  },
+  "validation": {
+    "focused": {
+      "tests": 75,
+      "pass": 75,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "sourceFeatureTests": 16,
+      "newUiRegressions": 2,
+      "path": "/tmp/clank-review-2026-10-08/source-search-focused.log",
+      "sha256": "d6065eeaf49e4b366a9b046b773f37dab871b1ade2678d32d17389dd16afdf32"
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 16,
+      "skipLibCheck": false,
+      "path": "/tmp/clank-review-2026-10-08/source-search-types.log",
+      "sha256": "c9a99ac4a0f2947b6227e72cd6b5440d8d979a390ad5360e41110786b880f448"
+    },
+    "release": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1772,
+      "pass": 1769,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 92.19,
+        "branches": 80.04,
+        "functions": 90.16
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 395,
+      "publishFileLimit": 395,
+      "publishBytes": 5677195,
+      "publishByteLimit": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/source-search-check.log",
+      "sha256": "9f6f665e4421b3291fccb460e7597ab7e79d24c4bf1667fb9cfd41fffd736df2"
+    },
+    "before": {
+      "scope": "Pre-feature manual indexing retains initial content after patch and deletion without an application indexing worker. This demonstrates the automatic projection gap; manual eventual consistency was documented.",
+      "path": "/tmp/clank-review-2026-10-08/source-search-before.log",
+      "sha256": "8b0d8293afa4dca8a0546577cada22f4f19c1962e6282070d70908667cd48c72"
+    },
+    "browser": {
+      "path": "/tmp/clank-review-2026-10-08/source-search-browser-evidence.json",
+      "sha256": "4f069bfb27e0c32aeba1225ad4f6f98c43e826715704c116e00a7286f54528f3"
+    },
+    "initialReleaseFailure": {
+      "reason": "The existing fake element omitted its standard style object. Fixture corrected; two meaningful UI race regressions added; full release gate rerun successfully.",
+      "path": "/tmp/clank-review-2026-10-08/source-search-check-initial-ui-fixture-failure.log",
+      "sha256": "580e47842c10b37cec1d3da89aedae6b74b9ac9ac64d4c68b4b22c9d62e4a066"
+    },
+    "finalDocumentation": {
+      "status": "passed",
+      "path": "/tmp/clank-review-2026-10-08/source-search-docs.log",
+      "sha256": "083f9a5333c9922a3b14d9ce7bb75901153ae21da3568afab1367dddec82019b"
+    }
+  },
+  "compatibility": {
+    "default": "Existing manual service contract remains available; source-linked services expose server-only rebuild/inspect/detach and cannot manually forge entries. Browser HTTP search remains compatible.",
+    "migration": "First source registration transaction adds versioned binding metadata, FTS and shadow tables; source rows are untouched. Unlinked application schemas are unchanged. Registration on a sealed recovery database is refused. Previously used source_search_ application names must be renamed/migrated before upgrading.",
+    "rollback": "Drain writers, unmount search, fenced detach with upgraded service, then revert code. Unmount alone keeps atomic indexing active. FTS infrastructure remains until explicitly removed after detach/backup.",
+    "dependencies": "No npm dependencies or new publish files; unchanged 395-file and 6 MiB gates."
+  },
+  "boundaries": {
+    "writerVersions": "All writers must use upgraded core before binding registration; old binaries/direct SQL are unsupported. Current-source checks hide stale/deleted content and diagnostics identify drift.",
+    "recovery": "Existing PITR seal explicitly rejects virtual tables. No journaled FTS recovery claim; use consistent SQLite snapshots/rebuilds. Unlinked recovery schemas remain unchanged.",
+    "administration": "Trusted server-only index administration; no automatic browser or MCP mutation exposure.",
+    "physicalRetention": "Byte budget concerns current title/body projection; FTS metadata/pages/WAL and independent backups need operator retention policies.",
+    "externalRevocation": "Rendered data is not proactively erased by external permission changes; dispose/remount on account/workspace changes and discover revocation on subsequent requests.",
+    "host": "Three privileged Docker/XFS skips remain, not certification."
+  },
+  "sources": {
+    "src/backend.ts": "2232d138bba4a3592adf33e86fcbfa45fc6fe71ad5436395e78130b0b95d75ed",
+    "src/search.ts": "b3e20f7e6ffdbfe720accc810b49c5e934e4b3e6edd9f43d4a8e1d46ea5cecf4",
+    "src/search.d.ts": "3bea8610f61d183959d1b5c2dfb580e53a9b856248a49a02753f3d5f2ef68508",
+    "src/sqlite-internal.ts": "2d16833c29aa04a0ee510894be75682e763b444bf24f78d3601a12e83d19f22b",
+    "src/sqlite-internal.d.ts": "c673812048607882d609adccdc8736d1475f7553919c751eefc3f760bc0516b6",
+    "src/feature-service.ts": "fa30f872ae7da34f0480badb488bcc6a72d4ccdd869ed03dfc4c7660840b9800",
+    "tests/source-search.test.mjs": "ed52657ed2fa9048307172a0d1cc0342849c1c83be4f82eff9864c8c7abe8b25",
+    "tests/fixtures/source-search-worker.mjs": "728f80673e8a6656119d3b290016b44c0ac07dd49b2c8a31fb42b7f8ce53cb92",
+    "tests/durable-features-ui.test.mjs": "57b5e629e1233bd486e052466f114f0643907f5f447bbf815a0da5b59dfb87db",
+    "type-tests/source-search.ts": "845891bac3fb35745ef3a7c1454de1fbaee0185560ef8b184b14cf890211f3d3",
+    "docs/durable-data-workflows.md": "8b3ca0b7def09fa85dc5275eacdb50b9ebceb8dfe791160859adfa3e120348ca"
+  }
+}

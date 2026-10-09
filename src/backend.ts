@@ -35,6 +35,7 @@ import {
 } from "./security.ts";
 import {
   SQLITE_INTERNAL,
+  updateSourceSearch,
   type SQLiteInternal,
 } from "./sqlite-internal.ts";
 import {
@@ -141,7 +142,7 @@ export function defineDatabase<const Tables extends Record<string, TableDefiniti
   for (const [name, table] of Object.entries(safeTables)) {
     assertIdentifier(name, "table");
     if (RESERVED_TABLE_NAMES.has(name) || name.startsWith("platform_") || name.startsWith("pitr_")
-      || name === "search_fts" || name.startsWith("search_fts_")) {
+      || name === "search_fts" || name.startsWith("search_fts_") || name.startsWith("source_search_")) {
       throw new TypeError(`Table name ${name} is reserved for Clank internals.`);
     }
     const finalize = (table as TableDefinition<any, any, any> & { [FINALIZE_TABLE]?: () => void })[FINALIZE_TABLE];
@@ -1068,6 +1069,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       capture?.before();
       value = handler(changes);
       assertSynchronous(value, "mutation");
+      updateSourceSearch(native, changes.records.values());
       if (changes.records.size > 0) {
         prepared("UPDATE clank_meta SET _value = _value + 1 WHERE _key = 'global_version'").run();
         committedVersion = readGlobalRevision(prepared);
