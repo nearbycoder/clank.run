@@ -2,13 +2,43 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Sixteen of the forty proposed features are merged across thirteen feature batches. Linux host certification (01) merged in [PR #270](https://github.com/nearbycoder/clank.run/pull/270) after all six checks at reviewed head `fb50d74e23ae069629cf0f8579c0d8248abb6949`, with no new CodeQL alerts or unresolved threads. Both main checkouts match `8b22c32d8dc05567d87ad4a9b95219818684fdd9`, and 23 existing files are preserved. Twenty-four features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. The package prerequisite merged in [PR #272](https://github.com/nearbycoder/clank.run/pull/272) after all six fresh checks, preserving byte ceilings. The local provider fleet simulator (34) merged in [PR #274](https://github.com/nearbycoder/clank.run/pull/274) after all six fresh hosted checks, including minimum Node and no new CodeQL alerts. Artifact promotion (02) is in progress under proposal #275. Earlier snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Seventeen of the forty proposed features are merged across fourteen feature batches. Artifact promotion (02) merged in [PR #277](https://github.com/nearbycoder/clank.run/pull/277) after all six fresh hosted checks at reviewed head `c03a8e8920389507c54d79bd21cbd10565471223`, with no new CodeQL alerts, no unresolved review threads and an author review explicitly recorded as non-independent. Both main checkouts match `2b0e04853e695ff5942a9fe2fd27692756144f47`, and 23 existing files are preserved. Twenty-three features remain. Linux host certification (01), the package prerequisite and the fleet simulator (34) merged in PRs #270, #272 and #274. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Persistent release channels (03) are in progress under proposal #276 in a separate managed worktree. Earlier snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
+## Persistent release channels
+
+Feature 03 is locally verified under [proposal #276](https://github.com/nearbycoder/clank.run/issues/276),
+with its protected merge still pending. Named channel pins retain exact successful uploads and
+immutable history. API, CLI and dashboard share explicit promotion, historical rollback and
+retirement. Target activation, acceptance receipts and rollback pointer publication commit
+atomically. Exact accepted replay returns its original result without deploying old code again.
+Pins protect cleanup and source-project deletion; pending rollback reserves bounded history
+capacity. Retirement preserves uploads/data and keeps a monotonically versioned name tombstone.
+
+All twelve actual local contracts pass, including SIGKILL/recovery, revoked source/target access,
+concurrent CAS updates, seeded capacity limits, exact old-entry reads, CLI parity and configured
+fresh authentication. Eight actual Docker/XFS provider cases pass. That proof reproduced and
+fixed compensation resolving newly edited secrets again: recovery now restores the prior active
+generation's frozen environment. Browser checks pass for keyboard pin/promotion/rollback, a
+lost accepted response, retained exact retries across project navigation, phone error focus,
+revoked access and field cleanup. Identity rendering now keeps Apply disabled without a current
+review. Both complete Node 22.16 and 26.10 gates pass: 1,898 reported / 1,895 passed / zero
+failed or cancelled / three existing privileged skips, with measured coverage above every floor.
+A reproduced Node 26 truncated reporter error now receives the existing one bounded retry;
+real test failures, cancellation, threshold misses and empty coverage still fail immediately.
+Twenty-five packed consumer fixtures pass with 159 existing source diagnostics against the
+unchanged 163 baseline. The 405-file package occupies 6,123,915 bytes under the unchanged 6 MiB
+ceiling. Docs build/doctor/offline verification, desktop/phone reading/search and all twelve
+actual HTTP/MCP checks pass. The downgrade guide explicitly requires retiring pins before
+reverting to a controller that cannot enforce them. No production host was modified.
+See [channel acceptance](release-channels.json), including failed diagnostic runs and the exact
+provider-tested source delta. Seventeen features remain merged; twenty-three still require
+completion, including this feature's hosted checks and protected merge.
+
 ## Artifact promotion across environments
 
-Artifact promotion (02) remains in progress under [proposal #275](https://github.com/nearbycoder/clank.run/issues/275).
+Artifact promotion (02) is merged under [proposal #275](https://github.com/nearbycoder/clank.run/issues/275) and [PR #277](https://github.com/nearbycoder/clank.run/pull/277).
 The API, CLI and dashboard now bind independent targets with version checks and exact-upload
 promotion receipts. Local tests exercise byte identity, independent data/secrets, production
 roles, revoked source/target access, failed health, actual controller SIGKILL and verified
@@ -27,8 +57,10 @@ reported / 1,883 passed / zero failed or cancelled / three existing privileged s
 91.80/80.39/90.08. Minimum Node passes every test and coverage; its remaining conformance/security
 phases pass separately after supplying npm on PATH. Hosted Node 22/24, types and conformance
 pass at the initial PR head, but CodeQL finds two fixture code-sanitization alerts. The fixture
-now loads parameters as JSON; all twelve affected minimum-Node tests pass. Fresh fixed-head
-hosted security checks, review and merge remain pending; feature 02 is not counted as delivered.
+now loads parameters as JSON; all twelve affected minimum-Node tests pass. All six fixed-head
+hosted checks pass, including full Node 22/24 and CodeQL with no new alerts. Both findings are
+resolved; the protected squash merge has the exact reviewed tree. Seventeen features are merged;
+twenty-three remain. Both checkouts are synchronized and all 23 existing files are preserved.
 See [promotion acceptance](environment-promotions.json) for evidence and failed diagnostic runs.
 The next persistent-channel contract is proposed in [issue #276](https://github.com/nearbycoder/clank.run/issues/276).
 

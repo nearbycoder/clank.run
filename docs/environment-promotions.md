@@ -164,3 +164,12 @@ The control-store migration adds bindings and receipts without rewriting existin
 Rolling back application code disables the endpoints while preserving these tables and project
 data. Complete unresolved recovery with a compatible controller before rollback; disabling
 endpoints does not undo accepted promotions or resolve staged provider generations.
+
+Use [persistent release channels](release-channels.md) to retain named immutable artifact history,
+review explicit promotion or rollback, and retire pins without deleting uploads or application data.
+
+Automatic provider compensation restores the prior active generation’s frozen runtime environment,
+including its original secret revisions. Resolving newly edited secrets again could make both
+the candidate and its prior code fail health checks. New promotions and explicit deployment
+continue to resolve current target secrets; compensation restores the runtime authorized before
+the failed candidate and rechecks its exact generation, node and host admission.

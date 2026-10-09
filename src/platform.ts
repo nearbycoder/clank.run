@@ -194,6 +194,48 @@ export interface PlatformPromotion {
 }
 
 
+export interface PlatformReleaseChannelEntry {
+  readonly version: number;
+  readonly sourceEnvironment: PlatformEnvironmentName;
+  readonly sourceProjectId: string;
+  readonly sourceReleaseId: string;
+  readonly digest: string;
+  readonly createdAt: number;
+}
+export interface PlatformReleaseChannel {
+  readonly name: string;
+  readonly version: number;
+  readonly current: PlatformReleaseChannelEntry | null;
+  readonly updatedAt: number;
+}
+export interface PlatformChannelPinRequest {
+  readonly sourceEnvironment: PlatformEnvironmentName;
+  readonly releaseId: string;
+  readonly digest: string;
+  readonly expectedVersion: number;
+}
+export interface PlatformChannelActivationRequest {
+  readonly targetEnvironment: PlatformEnvironmentName;
+  readonly expectedVersion: number;
+  readonly expectedEnvironmentVersion: number;
+  readonly expectedActiveReleaseId: string | null;
+  readonly idempotencyKey: string;
+}
+export interface PlatformChannelRollbackRequest extends PlatformChannelActivationRequest {
+  readonly fromVersion: number;
+}
+export interface PlatformChannelAction {
+  readonly name: string;
+  readonly idempotencyKey: string;
+  readonly kind: "promote" | "rollback";
+  readonly entryVersion: number;
+  readonly appliedVersion: number | null;
+  readonly targetEnvironment: PlatformEnvironmentName;
+  readonly targetReleaseId: string | null;
+  readonly state: PlatformPromotion["state"];
+}
+
+
 export interface PlatformLimits {
   /** Maximum organizations created by one account. Defaults to 5. */
   organizationsPerAccount?: number;
@@ -674,6 +716,13 @@ interface DeploymentAcceptance {
   beforeDatabaseChange(existed: boolean): void;
   accepted(releaseId: string): void;
   beforeProviderAcceptance?(): Promise<void>;
+}
+
+interface EnvironmentPromotionContext {
+  readonly fingerprint: string;
+  assertCurrent(acceptedReplay: boolean): void;
+  prepared(): void;
+  accepted(releaseId: string): void;
 }
 
 interface TokenPrincipal {
@@ -2373,6 +2422,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     guard?: () => void,
     accepted?: () => void,
     beforeAcceptance?: () => Promise<void>,
+    frozenEnvironment?: Record<string, string>,
   ): Promise<Record<string, unknown>> => {
     const assertQueueCurrent = () => {
       projectLeaseAssertions.get(project.id)?.();
@@ -2475,7 +2525,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       );
     }
     const generation = (prior?.generation ?? 0) + 1;
-    const environment = providerRuntimeEnvironment(
+    const environment = frozenEnvironment ?? providerRuntimeEnvironment(
       config,
       decryptProjectSecrets(storage.internal, project.id, masterKey),
       {
@@ -4766,11 +4816,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     if (!receipt || !target || target.placement !== "provider" || !candidate || !previous || previous.projectId !== target.id || !previous.artifactAvailable
       || !target.providerNodeId || target.activeReleaseId !== previous.id) throw new PlatformError(409, "PROMOTION_RECOVERY_REQUIRED", "The exact prior provider target is unavailable for recovery.");
     const nodeId = target.providerNodeId;
+    const priorGeneration = target.activeGeneration;
+    const priorRuntime = priorGeneration === null ? null : providerGeneration(storage.internal, target.id, priorGeneration, previous.id);
+    if (!priorRuntime) throw new PlatformError(409, "PROMOTION_RECOVERY_REQUIRED", "The prior provider runtime configuration is unavailable for recovery.");
+    // Compensation restores the configuration that actually ran before the
+    // candidate. Resolving current secrets again can make that prior code fail
+    // its health checks too, and would change the originally authorized runtime.
+    const priorEnvironment = decryptProviderEnvironment(priorRuntime.encryptedEnvironment, masterKey);
     const assertRecovery = () => {
       projectLeaseAssertions.get(target.id)?.();
       guard?.();
       const current = projectById(storage.internal, target.id), currentReceipt = promotionReceipt(rootId, key);
-      if (!current || current.activeReleaseId !== previous.id || current.providerNodeId !== nodeId || !currentReceipt
+      if (!current || current.activeReleaseId !== previous.id || current.activeGeneration !== priorGeneration || current.providerNodeId !== nodeId || !currentReceipt
         || currentReceipt.target_release_id !== candidate.id || !["staging", "recovery-required"].includes(String(currentReceipt.state))) throw new PlatformError(409, "PROMOTION_TARGET_STALE", "Provider recovery ownership or the authoritative target changed.");
       requireNoEvacuation(target.id);
     };
@@ -4782,18 +4839,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     // work is recovered by the provider journal after verified quiescence;
     // committed application writes remain, just as for local code-only rollback.
     await queueProviderRelease(principal, target, previous, previous.config, true, "rollback", assertRecovery, () => {
-      assertRecovery();
+      // finishProviderRelease has just checked the prior generation while
+      // holding this transaction, then published its verified replacement.
       storage.internal.prepare("UPDATE clank_platform_releases SET status='failed',failure=? WHERE id=? AND status<>'active'")
         .run("Environment promotion did not commit; the exact prior provider target was recovered.", candidate.id);
       const result = storage.internal.prepare("UPDATE clank_platform_promotions SET state='failed',updated_at=? WHERE root_id=? AND idempotency_key=? AND target_release_id=? AND state IN ('staging','recovery-required')")
         .run(Date.now(), rootId, key, candidate.id);
       if (Number(result.changes) !== 1) throw new PlatformError(409, "PROMOTION_STATE_CHANGED", "Provider recovery acceptance changed.");
       audit(storage.internal, principal.userId, principal.tokenId, target.id, "environment.promotion.recover", { rootId, idempotencyKey: key, failedReleaseId: candidate.id, priorReleaseId: previous.id, placement: "provider", dataPolicy: "preserve-code-only" });
-    }, async () => { await providerPromotionCertificate(projectById(storage.internal, target.id)!, nodeId); assertRecovery(); });
+    }, async () => { await providerPromotionCertificate(projectById(storage.internal, target.id)!, nodeId); assertRecovery(); }, priorEnvironment);
   };
   const promoteEnvironment = async (
     principal: TokenPrincipal, root: ProjectRow, targetName: string,
     input: Record<string, unknown>, attestation: string | null,
+    context?: EnvironmentPromotionContext,
   ): Promise<Record<string, unknown>> => {
     const sourceName = boundedString(input.sourceEnvironment, "sourceEnvironment", 1, 16);
     if (!["development", "staging", "production"].includes(sourceName) || sourceName === targetName) throw new PlatformError(422, "PROMOTION_SOURCE_INVALID", "Choose a different source environment.");
@@ -4807,9 +4866,12 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       const source = environmentRow(root.id, sourceName), target = environmentRow(root.id, targetName);
       if (!source?.project_id || !target?.project_id) throw new PlatformError(404, "ENVIRONMENT_NOT_FOUND", "Both source and target environments must be configured.");
       const sourceId = String(source.project_id), targetId = String(target.project_id);
-      const requestDigest = syncHash(JSON.stringify([sourceName, sourceId, Number(source.version), releaseId, digest,
+      const baseRequestDigest = syncHash(JSON.stringify([sourceName, sourceId, Number(source.version), releaseId, digest,
         targetName, targetId, version, expectedActive, key, attestation === null ? null : syncHash(attestation)]));
+      // Ordinary environment receipts keep their original fingerprint on upgrade.
+      const requestDigest = context ? syncHash(JSON.stringify([baseRequestDigest, context.fingerprint])) : baseRequestDigest;
       const assertAuthority = (requireArtifact = true) => {
+        context?.assertCurrent(receipt?.state === "accepted");
         projectLeaseAssertions.get(`environment-family:${root.id}`)?.();
         requireCurrentPlatformPrincipal(storage, principal);
         const currentRoot = accessibleProject(storage.internal, root.id, principal, "deploy").project;
@@ -4879,6 +4941,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
             VALUES(?,?,?,?,?,?,?,?,?,?,NULL,'pending',?,?)`)
             .run(root.id, key, requestDigest, sourceName, sourceId, releaseId, digest, targetName, targetId, version, Date.now(), Date.now());
         }
+        context?.prepared();
       });
       const acceptance: DeploymentAcceptance = {
         migrationPolicy: String(target.migration_policy) as "apply-safe" | "code-only",
@@ -4907,6 +4970,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           const result = storage.internal.prepare("UPDATE clank_platform_promotions SET state='accepted',updated_at=? WHERE root_id=? AND idempotency_key=? AND request_digest=? AND target_release_id=? AND state='staging'")
             .run(Date.now(), root.id, key, requestDigest, id);
           if (Number(result.changes) !== 1) throw new PlatformError(409, "PROMOTION_STATE_CHANGED", "Promotion acceptance changed during activation.");
+          context?.accepted(id);
           audit(storage.internal, principal.userId, principal.tokenId, targetId, "environment.promote", { rootId: root.id, sourceEnvironment: sourceName, sourceReleaseId: releaseId, targetEnvironment: targetName, targetReleaseId: id, digest, environmentVersion: version, ...(hostReport ? { hostCertificate: { id: hostReport.id, policyDigest: hostReport.policyDigest, hostDigest: hostReport.hostDigest, expiresAt: hostReport.expiresAt } } : { hostingProfile: "trusted" }) });
         },
       };
@@ -4934,6 +4998,184 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
     });
   };
+
+  const channelRow = (rootId: string, name: string) => storage.internal.prepare(
+    "SELECT * FROM clank_platform_release_channels WHERE root_id=? AND name=?").get(rootId,name);
+  const channelEntry = (rootId: string, name: string, version: number) => storage.internal.prepare(
+    "SELECT * FROM clank_platform_channel_entries WHERE root_id=? AND name=? AND version=?").get(rootId,name,version);
+  const channelEntryPayload = (row: NonNullable<ReturnType<typeof channelEntry>>) => ({
+    version:Number(row.version), sourceEnvironment:String(row.source_name), sourceProjectId:String(row.source_project_id),
+    sourceReleaseId:String(row.source_release_id), digest:String(row.artifact_digest), createdAt:Number(row.created_at),
+  });
+  const channelPayload = (rootId: string, name: string, principal: TokenPrincipal) => {
+    const row=channelRow(rootId,name),entry=row?channelEntry(rootId,name,Number(row.current_version)):null;
+    if(!row)return null;
+    if(Number(row.retired)===1)return {name,version:Number(row.current_version),current:null,updatedAt:Number(row.updated_at)};
+    if(!entry)return null;
+    try{accessibleProject(storage.internal,String(entry.source_project_id),principal,"read");}catch{return null}
+    return {name,version:Number(row.current_version),current:channelEntryPayload(entry),updatedAt:Number(row.updated_at)};
+  };
+  const channelHistory = (rootId: string, name: string, principal: TokenPrincipal) => storage.internal.prepare(
+    "SELECT * FROM clank_platform_channel_entries WHERE root_id=? AND name=? ORDER BY version DESC LIMIT 1000")
+    .all(rootId,name).filter(row=>{
+      try{accessibleProject(storage.internal,String(row.source_project_id),principal,"read");return true}catch{return false}
+    }).slice(0,100).map(channelEntryPayload);
+  const channelActionRow = (rootId: string, key: string) => storage.internal.prepare(
+    "SELECT * FROM clank_platform_channel_actions WHERE root_id=? AND idempotency_key=?").get(rootId,key);
+  const channelActionPayload = (row: NonNullable<ReturnType<typeof channelActionRow>>) => {
+    const receipt=promotionReceipt(String(row.root_id),String(row.promotion_key));
+    if(!receipt)throw new PlatformError(409,"CHANNEL_RESULT_UNAVAILABLE","The channel action receipt is unavailable.");
+    return {name:String(row.name),idempotencyKey:String(row.idempotency_key),kind:String(row.kind),entryVersion:Number(row.entry_version),
+      appliedVersion:row.applied_version===null?null:Number(row.applied_version),targetEnvironment:String(row.target_name),
+      targetReleaseId:receipt.target_release_id===null?null:String(receipt.target_release_id),state:String(receipt.state)};
+  };
+  const requireNoChannelActivation = (rootId: string, name: string) => {
+    if(storage.internal.prepare(`SELECT 1 FROM clank_platform_channel_actions a
+      JOIN clank_platform_promotions p ON p.root_id=a.root_id AND p.idempotency_key=a.promotion_key
+      WHERE a.root_id=? AND a.name=? AND p.state IN ('pending','staging','recovery-required')`).get(rootId,name))
+      throw new PlatformError(409,"CHANNEL_ACTIVATION_PENDING","Finish or recover the current channel activation before changing its pin.");
+  };
+  const requireChannelCapacity = (rootId: string, creating: boolean, excludeKey = "") => {
+    if(creating&&Number(storage.internal.prepare("SELECT count(*) AS n FROM clank_platform_release_channels WHERE root_id=?").get(rootId)?.n)>=100)
+      throw new PlatformError(409,"CHANNEL_CAPACITY","This family has reached its 100 retained channel limit.");
+    const reserved=Number(storage.internal.prepare(`SELECT count(*) AS n FROM clank_platform_channel_actions a
+      JOIN clank_platform_promotions p ON p.root_id=a.root_id AND p.idempotency_key=a.promotion_key
+      WHERE a.root_id=? AND a.kind='rollback' AND a.idempotency_key<>? AND p.state IN ('pending','staging','recovery-required')`).get(rootId,excludeKey)?.n);
+    if(Number(storage.internal.prepare("SELECT count(*) AS n FROM clank_platform_channel_entries WHERE root_id=?").get(rootId)?.n)+reserved>=1000)
+      throw new PlatformError(409,"CHANNEL_HISTORY_CAPACITY","This family has reached its 1,000 immutable channel entry limit.");
+  };
+  const pinChannel = async (principal: TokenPrincipal, root: ProjectRow, name: string, input: Record<string,unknown>) =>
+    withProjectLock(`environment-family:${root.id}`,async()=>{
+      const sourceName=boundedString(input.sourceEnvironment,"sourceEnvironment",1,16);
+      if(!["development","staging","production"].includes(sourceName))throw new PlatformError(422,"INVALID_INPUT","Choose a configured source environment.");
+      const source=environmentRow(root.id,sourceName);
+      if(!source?.project_id)throw new PlatformError(404,"ENVIRONMENT_NOT_FOUND","The source environment is not configured.");
+      const sourceId=String(source.project_id),releaseId=boundedString(input.releaseId,"releaseId",8,128);
+      const digest=boundedString(input.digest,"digest",64,64),expected=integerInRange(input.expectedVersion,"expectedVersion",0,Number.MAX_SAFE_INTEGER-1);
+      if(!/^[a-f0-9]{64}$/.test(digest))throw new PlatformError(422,"INVALID_INPUT","Use an exact artifact SHA-256.");
+      return withProjectLock(sourceId,async()=>{
+        const assertPin=()=>{
+          projectLeaseAssertions.get(`environment-family:${root.id}`)?.();projectLeaseAssertions.get(sourceId)?.();
+          requireCurrentPlatformPrincipal(storage,principal);
+          const currentRoot=accessibleProject(storage.internal,root.id,principal,"deploy").project;
+          const currentSource=accessibleProject(storage.internal,sourceId,principal,"read").project;
+          if(currentRoot.parentProjectId||!currentRoot.organizationId||currentSource.parentProjectId||currentSource.organizationId!==currentRoot.organizationId)
+            throw new PlatformError(409,"ENVIRONMENT_TARGET_INVALID","Channel sources must remain independent projects in the same workspace.");
+          requireNoEvacuation(sourceId);requireNoChannelActivation(root.id,name);
+          const binding=environmentRow(root.id,sourceName),row=channelRow(root.id,name);
+          if(binding?.project_id!==sourceId||Number(binding?.version)!==Number(source.version))
+            throw new PlatformError(409,"ENVIRONMENT_VERSION_STALE","The source binding changed.");
+          if((row?Number(row.current_version):0)!==expected)throw new PlatformError(409,"CHANNEL_VERSION_STALE","The channel changed; review its current version.");
+          const release=releaseById(storage.internal,releaseId);
+          if(!release||release.projectId!==sourceId||release.digest!==digest||!release.artifactAvailable||!["active","inactive"].includes(release.status))
+            throw new PlatformError(409,"PROMOTION_ARTIFACT_UNAVAILABLE","Pin a retained verified release that activated successfully.");
+          requireChannelCapacity(root.id,!row);return release;
+        };
+        const release=assertPin(),upload=await readRunnerReleaseArtifact(paths.projects,release,new AbortController().signal,runnerArtifactObjects);
+        assertPin();
+        if(!upload||upload.sha256!==digest||await deploymentDigest(upload.bytes)!==digest)throw new PlatformError(409,"PROMOTION_ARTIFACT_UNAVAILABLE","The original verified upload is unavailable.");
+        storage.internal.transaction(changes=>{
+          assertPin();const now=Date.now();
+          storage.internal.prepare(`INSERT INTO clank_platform_release_channels(root_id,name,current_version,updated_at,retired)
+            VALUES(?,?,?,?,0) ON CONFLICT(root_id,name) DO UPDATE SET current_version=excluded.current_version,updated_at=excluded.updated_at,retired=0`)
+            .run(root.id,name,expected+1,now);
+          storage.internal.prepare(`INSERT INTO clank_platform_channel_entries(root_id,name,version,source_name,source_project_id,source_release_id,artifact_digest,created_at)
+            VALUES(?,?,?,?,?,?,?,?)`).run(root.id,name,expected+1,sourceName,sourceId,releaseId,digest,now);
+          audit(storage.internal,principal.userId,principal.tokenId,root.id,"channel.pin",{name,version:expected+1,sourceEnvironment:sourceName,sourceReleaseId:releaseId,digest});
+          changes.record("__platform",root.id);
+        });
+        return channelPayload(root.id,name,principal)!;
+      });
+    });
+  const activateChannel = async (principal: TokenPrincipal,root: ProjectRow,name: string,kind: "promote"|"rollback",input: Record<string,unknown>,attestation: string|null) => {
+    const expected=integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER-1);
+    const entryVersion=kind==="rollback"?integerInRange(input.fromVersion,"fromVersion",1,expected-1):expected;
+    const targetName=boundedString(input.targetEnvironment,"targetEnvironment",1,16);
+    if(!["development","staging","production"].includes(targetName))throw new PlatformError(422,"INVALID_INPUT","Choose a configured target environment.");
+    const targetVersion=integerInRange(input.expectedEnvironmentVersion,"expectedEnvironmentVersion",1,Number.MAX_SAFE_INTEGER);
+    const expectedActive=input.expectedActiveReleaseId===null?null:boundedString(input.expectedActiveReleaseId,"expectedActiveReleaseId",8,128);
+    const key=boundedString(input.idempotencyKey,"idempotencyKey",16,128);
+    if(!/^[A-Za-z0-9_-]{16,128}$/.test(key))throw new PlatformError(422,"INVALID_INPUT","Use a bounded channel action key.");
+    const entry=channelEntry(root.id,name,entryVersion);
+    if(!entry)throw new PlatformError(404,"CHANNEL_ENTRY_NOT_FOUND","The exact immutable channel entry is unavailable.");
+    const fingerprint=syncHash(JSON.stringify([name,kind,expected,entryVersion,targetName,targetVersion,expectedActive,key,attestation===null?null:syncHash(attestation)]));
+    const promotionKey=`channel_${syncHash(`${root.id}:${key}`)}`;
+    const context: EnvironmentPromotionContext={
+      fingerprint,
+      assertCurrent(acceptedReplay){
+        const channel=channelRow(root.id,name),action=channelActionRow(root.id,key);
+        if(!channel||Number(channel.retired)===1)throw new PlatformError(404,"CHANNEL_NOT_FOUND","Channel not found.");
+        if(action&&(action.name!==name||action.request_digest!==fingerprint||action.promotion_key!==promotionKey))
+          throw new PlatformError(409,"CHANNEL_RETRY_CHANGED","This key already names a different channel action.");
+        const currentEntry=channelEntry(root.id,name,entryVersion),binding=environmentRow(root.id,String(entry.source_name));
+        if(!currentEntry||currentEntry.source_release_id!==entry.source_release_id||currentEntry.artifact_digest!==entry.artifact_digest||binding?.project_id!==entry.source_project_id)
+          throw new PlatformError(409,"CHANNEL_SOURCE_CHANGED","The pinned channel source no longer matches its environment.");
+        if(acceptedReplay){
+          if(!action||action.applied_version===null)throw new PlatformError(409,"CHANNEL_RESULT_UNAVAILABLE","The accepted channel result is unavailable.");
+        }else{
+          if(Number(channel.current_version)!==expected)throw new PlatformError(409,"CHANNEL_VERSION_STALE","The channel changed; review its current version.");
+          if(storage.internal.prepare(`SELECT 1 FROM clank_platform_channel_actions a
+            JOIN clank_platform_promotions p ON p.root_id=a.root_id AND p.idempotency_key=a.promotion_key
+            WHERE a.root_id=? AND a.name=? AND a.idempotency_key<>? AND p.state IN ('pending','staging','recovery-required')`).get(root.id,name,key))
+            throw new PlatformError(409,"CHANNEL_ACTIVATION_PENDING","Resume or recover the existing channel action first.");
+          if(kind==="rollback")requireChannelCapacity(root.id,false,key);
+        }
+      },
+      prepared(){
+        if(!channelActionRow(root.id,key))storage.internal.prepare(`INSERT INTO clank_platform_channel_actions
+          (root_id,name,idempotency_key,request_digest,kind,channel_version,entry_version,target_name,promotion_key,applied_version,created_at)
+          VALUES(?,?,?,?,?,?,?,?,?,NULL,?)`).run(root.id,name,key,fingerprint,kind,expected,entryVersion,targetName,promotionKey,Date.now());
+      },
+      accepted(releaseId){
+        const applied=kind==="rollback"?expected+1:expected;
+        if(kind==="rollback"){
+          requireChannelCapacity(root.id,false,key);
+          storage.internal.prepare(`INSERT INTO clank_platform_channel_entries(root_id,name,version,source_name,source_project_id,source_release_id,artifact_digest,created_at)
+            VALUES(?,?,?,?,?,?,?,?)`).run(root.id,name,applied,entry.source_name,entry.source_project_id,entry.source_release_id,entry.artifact_digest,Date.now());
+          const changed=storage.internal.prepare("UPDATE clank_platform_release_channels SET current_version=?,updated_at=? WHERE root_id=? AND name=? AND current_version=?")
+            .run(applied,Date.now(),root.id,name,expected);
+          if(Number(changed.changes)!==1)throw new PlatformError(409,"CHANNEL_VERSION_STALE","The channel changed during rollback acceptance.");
+        }
+        const changed=storage.internal.prepare("UPDATE clank_platform_channel_actions SET applied_version=? WHERE root_id=? AND idempotency_key=? AND request_digest=? AND applied_version IS NULL")
+          .run(applied,root.id,key,fingerprint);
+        if(Number(changed.changes)!==1)throw new PlatformError(409,"CHANNEL_STATE_CHANGED","The channel result changed during activation.");
+        audit(storage.internal,principal.userId,principal.tokenId,root.id,`channel.${kind}`,{name,entryVersion,appliedVersion:applied,targetEnvironment:targetName,targetReleaseId:releaseId,idempotencyKey:key});
+      },
+    };
+    const result=await promoteEnvironment(principal,root,targetName,{sourceEnvironment:String(entry.source_name),releaseId:String(entry.source_release_id),digest:String(entry.artifact_digest),
+      expectedVersion:targetVersion,expectedActiveReleaseId:expectedActive,idempotencyKey:promotionKey},attestation,context);
+    return {...result,action:channelActionPayload(channelActionRow(root.id,key)!)};
+  };
+
+
+  const retireChannel = async (principal: TokenPrincipal,root: ProjectRow,name: string,input: Record<string,unknown>) =>
+    withProjectLock(`environment-family:${root.id}`,async()=>{
+      const expected=integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER-1);
+      const confirmation=boundedString(input.confirmation,"confirmation",1,300);
+      const assertCurrent=()=>{
+        projectLeaseAssertions.get(`environment-family:${root.id}`)?.();
+        requireCurrentPlatformPrincipal(storage,principal);requireFreshPlatformAuthentication(principal);
+        const access=accessibleProject(storage.internal,root.id,principal,"tokens");requireOrganizationAdministration(access.role);
+        if(confirmation!==`retire-channel ${access.project.slug} ${name}`)
+          throw new PlatformError(400,"CONFIRMATION_REQUIRED",`Pass confirmation "retire-channel ${access.project.slug} ${name}".`);
+        const row=channelRow(root.id,name);
+        if(!row)throw new PlatformError(404,"CHANNEL_NOT_FOUND","Channel not found.");
+        if(Number(row.current_version)!==expected&&!(Number(row.retired)===1&&Number(row.current_version)===expected+1))
+          throw new PlatformError(409,"CHANNEL_VERSION_STALE","The channel changed; review it before retirement.");
+        requireNoChannelActivation(root.id,name);return row;
+      };
+      storage.internal.transaction(changes=>{
+        const row=assertCurrent();if(Number(row.retired)===1)return;
+        storage.internal.prepare("DELETE FROM clank_platform_channel_actions WHERE root_id=? AND name=?").run(root.id,name);
+        storage.internal.prepare("DELETE FROM clank_platform_channel_entries WHERE root_id=? AND name=?").run(root.id,name);
+        storage.internal.prepare("UPDATE clank_platform_release_channels SET current_version=?,retired=1,updated_at=? WHERE root_id=? AND name=?")
+          .run(expected+1,Date.now(),root.id,name);
+        audit(storage.internal,principal.userId,principal.tokenId,root.id,"channel.retire",{name,version:expected+1,clearedHistory:true,preservedUploads:true});
+        changes.record("__platform",root.id);
+      });
+      return channelPayload(root.id,name,principal)!;
+    });
+
 
   const recoverEnvironmentPromotion = async (
     principal: TokenPrincipal, root: ProjectRow, name: string, key: string, confirmation: string,
@@ -5152,6 +5394,14 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
   });
 
+  const releaseChannelPinned = (projectId: string, releaseId?: string): boolean => Boolean(
+    releaseId === undefined
+      ? storage.internal.prepare(`SELECT 1 FROM clank_platform_channel_entries
+          WHERE source_project_id = ? LIMIT 1`).get(projectId)
+      : storage.internal.prepare(`SELECT 1 FROM clank_platform_channel_entries
+          WHERE source_project_id = ? AND source_release_id = ? LIMIT 1`).get(projectId, releaseId),
+  );
+
   const cleanupRelease = async (
     principal: TokenPrincipal,
     project: ProjectRow,
@@ -5170,6 +5420,11 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     if (confirmation !== expected) {
       throw new PlatformError(400, "CONFIRMATION_REQUIRED", `Pass confirmation "${expected}".`);
     }
+    // Pinning holds this same source-project lease through artifact verification
+    // and insertion. No new pin can race storage removal after this check.
+    if (releaseChannelPinned(project.id, release.id)) {
+      throw new PlatformError(409, "RELEASE_CHANNEL_PINNED", "Retire the release channels that retain this artifact before removing it.");
+    }
     if (!release.artifactAvailable) {
       storage.internal.transaction(() => {
         storage.internal.prepare(`DELETE FROM clank_platform_provider_generations
@@ -5183,6 +5438,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         ...publicRelease(cleaned),
         cleanup: {
           allowed: false,
+          channelPinned: false,
           rollbackProtected: currentProject.activeReleaseId
             ? releaseById(storage.internal, currentProject.activeReleaseId)?.previousReleaseId === release.id
             : false,
@@ -5254,7 +5510,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     const cleaned = releaseById(storage.internal, release.id)!;
     return {
       ...publicRelease(cleaned),
-      cleanup: { allowed: false, rollbackProtected: false },
+      cleanup: { allowed: false, rollbackProtected: false, channelPinned: false },
     };
   });
 
@@ -5263,6 +5519,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     actor: { userId: string; tokenId: string | null },
     action: "project.delete" | "preview.delete" | "preview.expire",
   ): Promise<Record<string, unknown>> => {
+    if (releaseChannelPinned(project.id)) {
+      throw new PlatformError(409, "PROJECT_CHANNEL_PINNED", "Retire the release channels that retain this project's artifacts before deleting it.");
+    }
     const activeRelease = project.activeReleaseId
       ? releaseById(storage.internal, project.activeReleaseId)
       : null;
@@ -7415,7 +7674,9 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ? "tokens"
         : operation === "logs"
           ? "logs"
-        : operation.startsWith("environments")
+        : /^channels\/[a-z][a-z0-9-]{0,63}$/.test(operation) && request.method === "DELETE"
+          ? "tokens"
+        : operation.startsWith("environments") || operation.startsWith("channels")
           ? request.method === "GET" ? "read" : "deploy"
         : operation.startsWith("previews")
           ? "previews"
@@ -7452,6 +7713,54 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      if(operation==="channels"&&request.method==="GET"){
+        const channels=storage.internal.prepare("SELECT name FROM clank_platform_release_channels WHERE root_id=? ORDER BY name LIMIT 100")
+          .all(project.id).map(row=>channelPayload(project.id,String(row.name),principal)).filter(Boolean);
+        return api({ok:true,channels});
+      }
+      const channelEntryMatch = /^channels\/([a-z][a-z0-9-]{0,63})\/history\/([1-9][0-9]{0,15})$/.exec(operation);
+      if (channelEntryMatch && request.method === "GET") {
+        const name = channelEntryMatch[1]!, version = Number(channelEntryMatch[2]);
+        const channel = channelPayload(project.id, name, principal);
+        const entry = Number.isSafeInteger(version) ? channelEntry(project.id, name, version) : null;
+        if (!channel?.current || !entry) throw new PlatformError(404, "CHANNEL_ENTRY_NOT_FOUND", "Channel entry not found.");
+        try { accessibleProject(storage.internal, String(entry.source_project_id), principal, "read"); }
+        catch { throw new PlatformError(404, "CHANNEL_ENTRY_NOT_FOUND", "Channel entry not found."); }
+        return api({ ok: true, channel, entry: channelEntryPayload(entry) });
+      }
+      const channelMatch=/^channels\/([a-z][a-z0-9-]{0,63})(?:\/(history|actions|promote|rollback))?$/.exec(operation);
+      if(channelMatch){
+        const name=channelMatch[1]!,action=channelMatch[2]??"";
+        if(request.method==="GET"&&["","history","actions"].includes(action)){
+          const channel=channelPayload(project.id,name,principal);
+          if(!channel)throw new PlatformError(404,"CHANNEL_NOT_FOUND","Channel not found.");
+          if(action==="history")return api({ok:true,channel,entries:channelHistory(project.id,name,principal)});
+          if(action==="actions"){
+            const actions=storage.internal.prepare("SELECT * FROM clank_platform_channel_actions WHERE root_id=? AND name=? ORDER BY created_at DESC,idempotency_key LIMIT 1000")
+              .all(project.id,name).filter(row=>{
+                const entry=channelEntry(project.id,name,Number(row.entry_version)),receipt=promotionReceipt(project.id,String(row.promotion_key));
+                if(!entry||!receipt)return false;
+                try{accessibleProject(storage.internal,String(entry.source_project_id),principal,"read");accessibleProject(storage.internal,String(receipt.target_project_id),principal,"read");return true}catch{return false}
+              }).slice(0,100).map(channelActionPayload);
+            return api({ok:true,channel,actions});
+          }
+          return api({ok:true,channel});
+        }
+        if(!action&&request.method==="PUT"){
+          const input=plainObject(await readJsonRequest(request,8192));exact(input,["sourceEnvironment","releaseId","digest","expectedVersion"]);
+          return api({ok:true,channel:await pinChannel(principal,project,name,input)});
+        }
+        if(!action&&request.method==="DELETE"){
+          const input=plainObject(await readJsonRequest(request,8192));exact(input,["expectedVersion","confirmation"]);
+          return api({ok:true,channel:await retireChannel(principal,project,name,input)});
+        }
+        if(request.method==="POST"&&(action==="promote"||action==="rollback")){
+          const input=plainObject(await readJsonRequest(request,8192));
+          exact(input,["targetEnvironment","expectedVersion","expectedEnvironmentVersion","expectedActiveReleaseId","idempotencyKey",...(action==="rollback"?["fromVersion"]:[])]);
+          return api({ok:true,...await activateChannel(principal,project,name,action,input,request.headers.get("x-clank-release-attestation"))},201);
+        }
+      }
+
       if (operation === "environments" && request.method === "GET") {
         return api({ ok: true, environments: environmentRows(project.id, principal) });
       }
@@ -8181,12 +8490,15 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
           ok: true,
           releases: rows.map((row) => {
             const release = releaseRow(row);
+            const channelPinned = releaseChannelPinned(project.id, release.id);
             return {
               ...publicRelease(release),
               cleanup: {
                 allowed: release.artifactAvailable
                   && release.id !== project.activeReleaseId
-                  && release.status !== "staging",
+                  && release.status !== "staging"
+                  && !channelPinned,
+                channelPinned,
                 rollbackProtected: release.id === activeRelease?.previousReleaseId,
               },
             };
@@ -9887,6 +10199,45 @@ async function openPlatformDatabase(path: string, masterKey: Uint8Array,
     PRIMARY KEY(root_id, idempotency_key)
   ) WITHOUT ROWID`);
   internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_promotions_target_state ON clank_platform_promotions(target_project_id,state)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_release_channels (
+    root_id TEXT NOT NULL REFERENCES clank_platform_projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    current_version INTEGER NOT NULL CHECK(current_version > 0),
+    retired INTEGER NOT NULL DEFAULT 0 CHECK(retired IN (0,1)),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(root_id,name)
+  ) WITHOUT ROWID`);
+  const channelColumns = internal.prepare("PRAGMA table_info(clank_platform_release_channels)").all();
+  if(!channelColumns.some(column=>column.name==="retired"))internal.exec("ALTER TABLE clank_platform_release_channels ADD COLUMN retired INTEGER NOT NULL DEFAULT 0 CHECK(retired IN (0,1))");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_channel_entries (
+    root_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version INTEGER NOT NULL CHECK(version > 0),
+    source_name TEXT NOT NULL CHECK(source_name IN ('development','staging','production')),
+    source_project_id TEXT NOT NULL,
+    source_release_id TEXT NOT NULL,
+    artifact_digest TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(root_id,name,version),
+    FOREIGN KEY(root_id,name) REFERENCES clank_platform_release_channels(root_id,name) ON DELETE CASCADE
+  ) WITHOUT ROWID`);
+  internal.exec("CREATE INDEX IF NOT EXISTS clank_platform_channel_release_pins ON clank_platform_channel_entries(source_project_id,source_release_id)");
+  internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_channel_actions (
+    root_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('promote','rollback')),
+    channel_version INTEGER NOT NULL,
+    entry_version INTEGER NOT NULL,
+    target_name TEXT NOT NULL CHECK(target_name IN ('development','staging','production')),
+    promotion_key TEXT NOT NULL,
+    applied_version INTEGER,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(root_id,idempotency_key),
+    FOREIGN KEY(root_id,name) REFERENCES clank_platform_release_channels(root_id,name) ON DELETE CASCADE,
+    FOREIGN KEY(root_id,promotion_key) REFERENCES clank_platform_promotions(root_id,idempotency_key) ON DELETE CASCADE
+  ) WITHOUT ROWID`);
   const releaseColumns = internal.prepare("PRAGMA table_info(clank_platform_releases)").all();
   if (!releaseColumns.some((column) => column.name === "artifact_available")) {
     internal.exec("ALTER TABLE clank_platform_releases ADD COLUMN artifact_available INTEGER NOT NULL DEFAULT 1");

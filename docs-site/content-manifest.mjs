@@ -85,6 +85,7 @@ export const groups = [
       ["cli", "docs/cli.md"],
       ["deployment-platform", "docs/deployment-platform.md"],
       ["environment-promotions", "docs/environment-promotions.md"],
+      ["release-channels", "docs/release-channels.md"],
       ["preview-environments", "docs/preview-environments.md"],
       ["release-lifecycle", "docs/release-lifecycle.md"],
       ["release-attestations", "docs/release-attestations.md"],

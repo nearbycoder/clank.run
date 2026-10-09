@@ -90,3 +90,6 @@ production database. Call `verifyPortableProjectExport()` before importing.
 and the caller-supplied rate card. `clank workbench capacity workload.json rate-card.json --json`
 returns the calculated units, cost drivers, and assumptions. It is a transparent estimate, not a
 bill.
+
+Use [persistent release channels](release-channels.md) to retain named immutable artifact history,
+review explicit promotion or rollback, and retire pins without deleting uploads or application data.

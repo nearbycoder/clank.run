@@ -1,0 +1,382 @@
+{
+  "feature": "03 Persistent release channels",
+  "date": "2026-10-09",
+  "baseCommit": "2b0e04853e695ff5942a9fe2fd27692756144f47",
+  "branch": "codex/persistent-release-channels",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/276",
+  "status": "verified-awaiting-hosted-checks",
+  "implementation": "Versioned named channel pins retain exact successful uploads and immutable source identity. API, CLI and dashboard share explicit pin/promote/historical rollback/retirement contracts. Target acceptance, receipts and rollback pointer publication commit together. Pending requests fence repinning, retirement and history capacity; accepted replay never reactivates its old artifact.",
+  "validation": {
+    "localContracts": {
+      "status": "passed",
+      "tests": 12,
+      "failed": 0,
+      "cancelled": 0,
+      "node": "22.16.0",
+      "cases": [
+        "Exact byte promotion, historical rollback, immutable entries, independent target data and accepted replay after pointer advancement/controller restart",
+        "CAS pinning, artifact/project cleanup protection, retirement tombstones and stale recreation retries",
+        "Failed rollback preserves pin and restores target database",
+        "Actual controller SIGKILL, pending fences, reserved capacity and verified recovery before the prior writer resumes",
+        "Current source and target revocation during actual candidate health checks",
+        "Actual linked CLI list/get/pin/history/exact entry/actions/promote/rollback/retire and strict option validation",
+        "Seeded immutable-history/name capacity, newest 100 lists and exact older entry reads",
+        "Current administrator and production roles; exact retirement confirmation",
+        "Configured fresh-authentication policy blocks password-only retirement",
+        "Concurrent actual pins produce one version; state persists after restart",
+        "Rebinding a historical source cannot reinterpret its pin or accepted action"
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-focused-05-e1afc39c612d7befb2d17b0f42b45bd07ac6757e126e99d4f941804154da0f48.log",
+        "sha256": "e1afc39c612d7befb2d17b0f42b45bd07ac6757e126e99d4f941804154da0f48"
+      },
+      "finalGate": "The final minimum-Node gate includes all twelve contracts against current runtime source."
+    },
+    "consoleCompatibility": {
+      "status": "passed",
+      "tests": 24,
+      "failed": 0,
+      "cancelled": 0,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-identity-compatibility-03-0591f5ea4f6f29a088d53d33f42f5e369e5dc6d8aff0e1701e14af79b92fe066.log",
+        "sha256": "0591f5ea4f6f29a088d53d33f42f5e369e5dc6d8aff0e1701e14af79b92fe066"
+      }
+    },
+    "provider": {
+      "status": "passed",
+      "realGuest": true,
+      "node": "v22.16.0",
+      "cases": [
+        {
+          "name": "real current Docker/XFS host certificate",
+          "status": "passed",
+          "reportId": "18d1ee71-0b71-4d6c-965a-530058074a41",
+          "policyDigest": "fface2afd6bd11b44eba6665ab9cbf6cb192397a458bc349ef66d3d39720f789"
+        },
+        {
+          "name": "actual HTTP provider promotion preserves original bytes, non-root runtime and independent data/secrets/buckets",
+          "status": "passed",
+          "digest": "8c80d7dbf73c59555846753cd1477695226b4dbbace550d01d6ee3cc662672de"
+        },
+        {
+          "name": "accepted exact replay across actual controller restart",
+          "status": "passed"
+        },
+        {
+          "name": "real certified provider channel promotion preserves original bytes and independent target state",
+          "status": "passed"
+        },
+        {
+          "name": "actual provider historical rollback commits a new channel version with exact old bytes only after verified activation",
+          "status": "passed"
+        },
+        {
+          "name": "accepted channel rollback replay across actual controller restart does not reactivate its old artifact",
+          "status": "passed"
+        },
+        {
+          "name": "real failed provider channel rollback restores journaled target writes and leaves the channel pin unchanged",
+          "status": "passed"
+        },
+        {
+          "name": "owned provider stops, Docker containers/network/nft table retire and XFS quota usage/limits clear",
+          "status": "passed"
+        }
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-provider-acceptance-02-bfff05edd07a6d9d9c370d52d69b056d826dd021b06a46716c87537fc5f5fd00.json",
+        "sha256": "bfff05edd07a6d9d9c370d52d69b056d826dd021b06a46716c87537fc5f5fd00"
+      },
+      "log": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-provider-02-e218fb8b406f53f60e48ef8a85e25e03b28c8ba9467ba2da10b5e46d1409af13.log",
+        "sha256": "e218fb8b406f53f60e48ef8a85e25e03b28c8ba9467ba2da10b5e46d1409af13"
+      },
+      "testedPlatformSource": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-provider-tested-platform-af86fb53fe225c8260f208d420c58c425f7c545e994360f2293442f5ce051f81.ts",
+        "sha256": "af86fb53fe225c8260f208d420c58c425f7c545e994360f2293442f5ce051f81"
+      },
+      "finalSourceDelta": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-provider-to-final-8216d4550ae1f1240f13bef9a5cf22d32e3ed7d0b7753e294e5f938cce50d4d8.diff",
+        "sha256": "8216d4550ae1f1240f13bef9a5cf22d32e3ed7d0b7753e294e5f938cce50d4d8"
+      },
+      "scope": "Actual frozen compensation and channel promotion/rollback implementation. The only final platform-source difference is DELETE retirement permission dispatch (tokens), exercised by the final local gates; provider activation/recovery code is unchanged."
+    },
+    "browser": {
+      "status": "passed",
+      "cases": [
+        {
+          "case": "accepted response discarded; exact pending request survives cross-project navigation",
+          "status": "passed",
+          "copy": "Exact request retained. Channel request: ec9c73749be44621b33a427fe628381b. Retry keeps the reviewed versions, artifact and target. Pin/retirement conflicts require inspecting current state before reviewing again."
+        },
+        {
+          "case": "exact replay converges on the original accepted release",
+          "status": "passed",
+          "result": "stable promote accepted. Target release: 6-Qs3NE1iSCrOVig3rYF2hcu. Artifact: a600196f612c1ba49cb4f035095f418f945406e372222437b0eb3b3ac19bb647"
+        },
+        {
+          "case": "keyboard pin, promotion and historical rollback append channel version 3",
+          "status": "passed",
+          "result": "stable rollback accepted. Target release: inO6E_pEXG-ndCQlyK4dnXSO. Artifact: a600196f612c1ba49cb4f035095f418f945406e372222437b0eb3b3ac19bb647"
+        },
+        {
+          "case": "workspace membership revocation clears review, history, list and disables apply",
+          "status": "passed"
+        },
+        {
+          "case": "phone 390\u00d7844 incorrect retirement confirmation focuses the inline error with no horizontal overflow",
+          "status": "passed",
+          "viewport": 390,
+          "width": 375
+        },
+        {
+          "case": "final dashboard revocation after completed review clears all release fields and fences late responses",
+          "status": "passed",
+          "observed": {
+            "fields": [
+              "",
+              "",
+              "",
+              "",
+              "",
+              ""
+            ],
+            "history": "",
+            "list": "",
+            "pathname": "/overview",
+            "review": "",
+            "submitDisabled": true
+          }
+        }
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-browser-evidence-03c992074b26cc3c0888a190c37531ffac8817b8dccb55099c403fd45ef5f272.json",
+        "sha256": "03c992074b26cc3c0888a190c37531ffac8817b8dccb55099c403fd45ef5f272"
+      },
+      "screenshots": [
+        {
+          "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-desktop-current-73471d4fc2d671c9f9d698e3dda48eed0b5660028a1778ea211d3dbc491274fb.png",
+          "sha256": "73471d4fc2d671c9f9d698e3dda48eed0b5660028a1778ea211d3dbc491274fb"
+        },
+        {
+          "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-mobile-current-0b21c5eae9834226262fe4430420ba5865a5db93f16276c1266f4148d5d8617e.png",
+          "sha256": "0b21c5eae9834226262fe4430420ba5865a5db93f16276c1266f4148d5d8617e"
+        }
+      ],
+      "scope": "Owned actual localhost fixtures. One accepted response discarded by the owned relay; no production state.",
+      "cleanup": "Signed out, reset viewport, closed both owned tabs, stopped only owned fixture/docs processes and verified both fixture roots were removed."
+    },
+    "types": {
+      "status": "passed",
+      "existingDiagnostics": 159,
+      "unchangedBaseline": 163,
+      "packedConsumerFixtures": 25,
+      "packedOpenApi": "passed",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-types-05-bdb369cd876ae8c255e684f5e6a17b07bb1f23fb3a03bd09107972bc82800f09.log",
+        "sha256": "bdb369cd876ae8c255e684f5e6a17b07bb1f23fb3a03bd09107972bc82800f09"
+      }
+    },
+    "minimumNodeReleaseGate": {
+      "status": "passed",
+      "node": "22.16.0",
+      "tests": 1898,
+      "pass": 1895,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 91.83,
+        "branches": 80.44,
+        "functions": 90.15
+      },
+      "scope": "Complete release gate as ordinary UID 1000 on the owned Linux guest. The three pre-existing privileged skips are separate from real Docker/XFS acceptance. A later documentation-only downgrade clarification passed fresh build/doctor/offline and HTTP/MCP checks.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-release-gate-04-08054c2010d41c81a2391a68181728dfcb9c5d8ccc07bf2a268f23fdc7ce8477.log",
+        "sha256": "08054c2010d41c81a2391a68181728dfcb9c5d8ccc07bf2a268f23fdc7ce8477"
+      }
+    },
+    "node26ReleaseGate": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1898,
+      "pass": 1895,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 91.84,
+        "branches": 80.42,
+        "functions": 90.11
+      },
+      "scope": "Complete release gate as ordinary UID 1000 on the owned Linux guest. The three pre-existing privileged skips are separate from real Docker/XFS acceptance. A later documentation-only downgrade clarification passed fresh build/doctor/offline and HTTP/MCP checks.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-release-gate-03-d4f50bd21bbe9aa8dd84d49b365e35a0be5b0c9d0fe278e566df6dd00aea9756.log",
+        "sha256": "d4f50bd21bbe9aa8dd84d49b365e35a0be5b0c9d0fe278e566df6dd00aea9756"
+      }
+    },
+    "coverageFailureGuards": {
+      "status": "passed",
+      "testsPerRuntime": 6,
+      "node22": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-coverage-22-225c9e88f071be627a51b386f7e4118b846dc553aedd420f5680042d7007f6bc.log",
+        "sha256": "225c9e88f071be627a51b386f7e4118b846dc553aedd420f5680042d7007f6bc"
+      },
+      "node26": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-coverage-26-5f8f5cbe4728082154592fa0ed3c667e4ece7c467331e70388ab369c72a4ccf6.log",
+        "sha256": "5f8f5cbe4728082154592fa0ed3c667e4ece7c467331e70388ab369c72a4ccf6"
+      },
+      "scope": "Known native JSON reporter diagnostics allow one retry only after consistent all-tests-passed counts. Real failures, cancellation, thresholds, unknown errors and empty successful coverage still fail."
+    },
+    "documentation": {
+      "status": "passed",
+      "guides": 96,
+      "words": 164781,
+      "build": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-docs-build-04-fe73de0c95b12f0dd9402f1a592691266f03d2619a6abdfd4b89a25459e238ca.log",
+        "sha256": "fe73de0c95b12f0dd9402f1a592691266f03d2619a6abdfd4b89a25459e238ca"
+      },
+      "doctor": {
+        "passed": 6,
+        "unlinkedProjectWarnings": 1,
+        "failed": 0,
+        "evidence": {
+          "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-docs-doctor-04-f8689200b87314439a946fdf1b238d0b44acde4af52a743e334eee83193c754a.log",
+          "sha256": "f8689200b87314439a946fdf1b238d0b44acde4af52a743e334eee83193c754a"
+        }
+      },
+      "offlineArtifact": {
+        "sha256": "c2180ecdbc7a51ed149825f1d296d8f9942bfb5d63d966c84cce84de90046ead",
+        "uploaded": false,
+        "evidence": {
+          "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-docs-offline-04-e412e5967e00dd5878fceb52d698f30b69c1eb52181b116f598536317219afd1.log",
+          "sha256": "e412e5967e00dd5878fceb52d698f30b69c1eb52181b116f598536317219afd1"
+        }
+      },
+      "actualHttpAgentChecks": 12,
+      "httpAgentEvidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-docs-endpoints-final-170b8f5b4116d565354df5982b283d7c8af5a7564106c19324d58cc61dfef25f.log",
+        "sha256": "170b8f5b4116d565354df5982b283d7c8af5a7564106c19324d58cc61dfef25f"
+      },
+      "desktopPhoneBrowser": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-docs-browser-evidence-cebcce465cd1803ad8b41162a729143292cac10e4595b540ea1ef98d06ed7c05.json",
+        "sha256": "cebcce465cd1803ad8b41162a729143292cac10e4595b540ea1ef98d06ed7c05"
+      },
+      "screenshots": [
+        {
+          "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-docs-desktop-1f539dae9693af6b3aa360c1941e900ef8ed26079b7bc3b3abcd1b470ab9f35f.png",
+          "sha256": "1f539dae9693af6b3aa360c1941e900ef8ed26079b7bc3b3abcd1b470ab9f35f"
+        },
+        {
+          "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-docs-phone-3c7d6e6d7e2521b6ef3b6afbf23735eab44f7b19973a427792a59eebca846069.png",
+          "sha256": "3c7d6e6d7e2521b6ef3b6afbf23735eab44f7b19973a427792a59eebca846069"
+        }
+      ]
+    },
+    "package": {
+      "status": "passed",
+      "files": 405,
+      "unpackedBytes": 6123915,
+      "unchangedByteCeiling": 6291456,
+      "remainingBytes": 167541,
+      "dependencies": 0,
+      "integrity": "sha512-SJHoYgmbH7DsIsZtXgVGOP/iOrUIjfQZ05hLWwytUL+YrlfTsNxe+EWgCGKNUvnw79vYVD4fUhgzPtljuwb/rA==",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-package-03-7218f42b7c34058bd0d35fce9f16ba2142f4ae057d2e36f30596438ad45bfbed.json",
+        "sha256": "7218f42b7c34058bd0d35fce9f16ba2142f4ae057d2e36f30596438ad45bfbed"
+      }
+    },
+    "finalSourceSecurity": {
+      "status": "passed",
+      "scope": "Final source/report/package and complete reachable Git history before commit.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-final-security-e5aa7592e49e66e49bb280f66986f00b6deb9a521b5392cc329086a43d4287a1.log",
+        "sha256": "e5aa7592e49e66e49bb280f66986f00b6deb9a521b5392cc329086a43d4287a1"
+      }
+    }
+  },
+  "reviewFixes": [
+    {
+      "priority": "P1",
+      "finding": "Failed provider compensation resolved newly edited secrets again, causing the exact prior release to fail health checks as well.",
+      "fix": "Restore the prior active generation\u2019s encrypted frozen environment and fence that exact active generation; publish the replacement and failed receipt atomically. Ordinary new deployments and explicit rollback continue resolving current target settings.",
+      "proof": "The initial real provider run reproduced the failure; all eight fixed real provider cases now pass."
+    },
+    {
+      "priority": "P2",
+      "finding": "Identity rendering could re-enable channel Apply after the review or access was cleared.",
+      "fix": "Reapply current review/pending/busy/account/project conditions after identity rendering; revocation clears input fields and generation-fences late replies.",
+      "proof": "Actual browser review, revoked membership, field clearing, disabled Apply and logout pass."
+    },
+    {
+      "priority": "P2",
+      "finding": "Node 26\u2019s unterminated-string reporter diagnostic was outside the existing bounded coverage retry whitelist.",
+      "fix": "Add that exact native parser form, retaining all pass-count and measured-output guards and the two-run ceiling.",
+      "proof": "Six focused gate tests pass on Node 22/26; both complete final gates pass."
+    },
+    {
+      "priority": "P2",
+      "finding": "Controllers without channel support cannot preserve its artifact pins during cleanup.",
+      "fix": "Document finishing/recovering pending actions and retiring channels before a downgrade; preserve control store and uploads together in recovery backups."
+    }
+  ],
+  "diagnosticFailures": [
+    {
+      "status": "failed-corrected",
+      "run": "Initial real provider rollback proof",
+      "reason": "Automatic compensation reused newly edited FAIL_HEALTH secrets for the prior v2 release; recovery-required was correct but restoration failed.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-provider-01-cc041a3d0b6d8797a2b78af0e956614163a518571311231a80518143678c5afc.log",
+        "sha256": "cc041a3d0b6d8797a2b78af0e956614163a518571311231a80518143678c5afc"
+      }
+    },
+    {
+      "status": "failed-corrected",
+      "run": "Node 26 complete gate before retry diagnostic fix",
+      "tests": 1898,
+      "passed": 1895,
+      "failedTests": 0,
+      "cancelledTests": 0,
+      "skipped": 3,
+      "reason": "Coverage artifact JSON contained an unterminated string. No coverage or complete-gate success is claimed for that run.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/channel-evidence/channel-release-gate-02-b8b2b0e915b73542773ff93bc9b6459c0b76294b52a9701c9cfce5ada17f6610.log",
+        "sha256": "b8b2b0e915b73542773ff93bc9b6459c0b76294b52a9701c9cfce5ada17f6610"
+      }
+    }
+  ],
+  "compatibility": {
+    "persistentSchema": "Additive channel/entry/action tables and retired-name tombstones. Existing ordinary environment receipt fingerprints are unchanged.",
+    "bounds": "100 retained names including tombstones and 1,000 immutable entries per family. Pending rollback reserves its entry; read lists expose newest 100 authorized rows and exact historical reads remain available.",
+    "retirement": "Current root tokens authority, workspace owner/admin, exact expected version/confirmation and the platform\u2019s configured fresh-authentication policy. Clears channel history/actions/pins, preserving uploads/data/running releases/underlying receipts.",
+    "downgrade": "Controllers without channel support do not enforce pins; finish/recover pending work and retire channels before reverting."
+  },
+  "sourceSha256": {
+    "src/platform.ts": "a6a1d165968d478b74509941ab1278247b938188a7c365b559cc102d7579d9a1",
+    "src/platform.d.ts": "12a0adc9f806e34b57d2b49a1d38a5d11928777c2b8f2904935a92d279b5825f",
+    "src/platform-console.ts": "c5846271d9f784c7912c6be371dc28b4ec55d624928789c3c091f3ea1e705daa",
+    "scripts/cli-deploy.mjs": "bc0daa9f3647b20145b0088a9cf8efb256e77fc86e9701a8630eabf5a3e40284",
+    "scripts/coverage-gate.mjs": "7f08945aba030771e327e416b999ce330cd8536b14089927adc42afc41d8225d",
+    "tests/test-coverage.test.mjs": "2445dc5d322949dbff0ba7f714c158f517a9d61080f8a44487e03d8643ece3cc",
+    "tests/platform-channels.test.mjs": "9364499a8af2db7c2f87799da263785e6a1c287162d80fbef5bf9ca6063d10d6",
+    "tests/platform-environments.test.mjs": "2bc76dbe65a87d2004738d387621069a01d7f25448d4d1b576a95e727783dbd9",
+    "tests/fixtures/platform-environment-fixture.mjs": "527f6503fdb3dbf75bd35637e0761716fef74befec38446b9a0462ffa90172a6",
+    "tests/fixtures/platform-promotion-provider-guest.mjs": "69944afefc45483ad6cd9dadc7c9508be6fd268189fb356ec0895aa5e1093c97",
+    "tests/fixtures/platform-provider-promotion-application.mjs": "217e9966fc19a3f4ea7a4970938122cc2cdf125a10c765fa8c0eb1390486f578",
+    "type-tests/release-channels.ts": "444e7896a48df6e3e78860f383a14faccc2af70d11d79aa69c322a845f0a2ddc",
+    "docs/release-channels.md": "167171f4c9749b28e27f7642e3cb32bbc804004e153ada294df8bc330ec8d665"
+  },
+  "roadmap": {
+    "mergedFeatures": 17,
+    "mergedBatches": 14,
+    "remainingFeatures": 23,
+    "feature03Counted": false,
+    "reason": "A protected merge after fresh hosted checks is still required."
+  },
+  "remaining": {
+    "hostedChecks": "Pending PR creation and six fresh checks at its reviewed head.",
+    "independentReview": "Not performed; the author review will be explicitly identified as non-independent.",
+    "productionRailway": "Untouched and uncertified.",
+    "existingSemanticDebt": "159 existing source diagnostics remain within the unchanged 163 baseline."
+  }
+}
