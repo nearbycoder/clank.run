@@ -305,6 +305,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Retention administration and holds](docs/retention-administration.md)
 - [Search facets, stable paging and saved searches](docs/search-browsing.md)
 - [Linux provider disk and outbound policies](docs/linux-provider-isolation.md)
+- [Expiring Linux host certification](docs/linux-host-certification.md)
 - [Planned provider node evacuation](docs/planned-node-evacuation.md)
 - [Localization](docs/localization.md)
 - [Organization and account security](docs/organization-security.md)

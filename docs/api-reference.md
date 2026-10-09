@@ -469,6 +469,22 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
   `DockerDeploymentRuntimeState`, `DockerDeploymentRuntimeDiagnostics`,
   `DockerDeploymentFilesystemDiagnostics`, `DockerDeploymentRuntimeLauncher`.
 
+## Linux host certification
+
+Optional module: `@clank.run/framework/host-certification`; see
+[Linux host certification](linux-host-certification.md) for disposable-host preparation,
+bounded supported profiles, proof details, private metadata and interruption recovery.
+
+- `certifyLinuxHost({ directory, profile, disposable: true, quotaId, ttlMs?, signal? })`:
+  runs fixed enforcement probes and saves a versioned, locally authenticated report.
+- `inspectLinuxHostCertification({ directory, profile })`: rechecks the saved report's
+  authentication, expiry and current policy/host binding; returns a fixed reason and report.
+- `requireCurrentLinuxHostCertification({ directory, profile })`: returns only a current
+  all-passed report, otherwise throws `LINUX_HOST_CERTIFICATION_REQUIRED`.
+- Types: `LinuxHostCertificationProfile`, `LinuxHostCertificationReport`,
+  `LinuxHostCertificationInspection`, `LinuxHostCapability`, `LinuxHostCertificationCheck`,
+  `LinuxHostCertificationOptions`, `CertifyLinuxHostOptions`.
+
 ## Complete deployment provider service
 
 - `openDockerDeploymentProviderService(options)`: opens provider data, exact-owner Docker cleanup

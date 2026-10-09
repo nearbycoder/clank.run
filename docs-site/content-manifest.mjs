@@ -116,6 +116,7 @@ export const groups = [
       ["organization-security", "docs/organization-security.md"],
       ["sqlite-isolation", "docs/sqlite-isolation.md"],
       ["linux-provider-isolation", "docs/linux-provider-isolation.md"],
+      ["linux-host-certification", "docs/linux-host-certification.md"],
       ["threat-model", "docs/threat-model.md"],
       ["security-asvs", "docs/security-asvs.md"],
       ["code-audit", "docs/code-audit.md"],

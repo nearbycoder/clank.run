@@ -5,7 +5,7 @@
   "baseCommit": "3481fc206a55eb3cc1c2d991497597f30619ec86",
   "branch": "codex/authorized-aggregates",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/267",
-  "status": "local-release-validation-passed",
+  "status": "merged",
   "acceptance": {
     "contract": "QueryBuilder.aggregate preserves nominal direct s.id target fields, typed source aliases, declared numeric/scalar projections and exact result measure names. At most four inner references, sixteen measures and thirty-two filters; count/sum/group result protocol clank-aggregate/1 is immutable and deterministic.",
     "authorization": "Caller owner SQL scopes both source candidates and each parent before metadata admission or decoding. Explicit synchronous policies run before contribution, roots before reference traversal. Missing, null, denied and other-owner references exclude the root from all measures. Repeated parents are decoded once, with independent alias policy caches and one contribution per accepted root.",
@@ -85,5 +85,30 @@
     "docs-site/content-manifest.mjs": "4ee90a685267f0a026b3f0275cbf9bcba2de289ea9005fecda5deff8ef7ea670",
     "README.md": "24f3e0496c5065d121fe53e1faeb128bb829efd7fbe690bf67600a7b20fc0c7e",
     "CHANGELOG.md": "1970360282d006b20f6537f96eefc5b3be592ba43f3b0cfc4161d5857f41bc6a"
+  },
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/268",
+    "reviewedHead": "66eb5fa60eefe3c7f89633b3e6a30939f26ef0d8",
+    "authorReviewId": 5467566089,
+    "independentApprovalClaimed": false,
+    "mergeCommit": "283cbcf0aa368fd7f1fc40cc2c1067e578241bcc",
+    "reviewedHeadTree": "8053567bff8fbe020fa5f779721da82d6141d6b5",
+    "mergeTree": "8053567bff8fbe020fa5f779721da82d6141d6b5",
+    "checks": {
+      "CodeQL": 113733536666,
+      "Node 22.16": 113733095543,
+      "Node 24": 113733095471,
+      "Semantic and packed consumer types": 113733095536,
+      "Packaged-release conformance": 113733095086,
+      "JavaScript and TypeScript analysis": 113733094583
+    },
+    "allSixFreshChecksPassed": true,
+    "newCodeQLAlerts": 0,
+    "CodeQLAnnotations": 0,
+    "analysisAnnotations": "One routine runner-image notice; no actionable finding.",
+    "unresolvedReviewThreads": 0,
+    "requestedChanges": 0,
+    "bothCheckoutsSynced": true,
+    "preservedExistingFiles": 23
   }
 }
