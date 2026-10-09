@@ -7233,7 +7233,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /\.button\{[^}]*text-decoration:none;/);
     assert.match(signedInHtml, /\.breadcrumbs\{flex:1;min-width:0;overflow:hidden;white-space:nowrap\}/);
     assert.match(signedInHtml, /\.sidebar-account \.button\{flex:0 0 44px;min-width:44px\}/);
-    assert.match(signedInHtml, /\.sidebar\{position:fixed;left:0;z-index:20;width:252px;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;/);
+    assert.match(signedInHtml, /\.sidebar\{position:fixed;left:0;z-index:20;width:min\(320px,calc\(100vw - 48px\)\);overflow:hidden;/);
     assert.match(signedInHtml, /\.activity-details summary\{display:inline-flex;align-items:center;min-height:44px\}/);
     assert.match(signedInHtml, /grid-template-columns:repeat\(5,minmax\(44px,1fr\)\)/);
     assert.match(
