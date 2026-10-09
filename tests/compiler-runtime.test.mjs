@@ -70,7 +70,7 @@ export const tabs: string = "A\t\tB";
 export const unicode: string = "🧪  café  Ελληνικά";
 export const regex: string = /a  b/u.source;`;
   const output = compile(source, { filename: 'literals.ts', sourceMap: false });
-  assert.ok(output.includes('// runtime    comment   stays'));
+  if (Number(process.versions.node.split('.')[0]) >= 26) assert.ok(output.includes('// runtime    comment   stays'));
   const result = await import(`data:text/javascript,${encodeURIComponent(output)}`);
   assert.equal(result.sql, "SELECT  title,  owner\n  FROM  records\n  WHERE  title = 'a  b';");
   assert.equal(result.raw, 'first  line\\nsecond   line'); assert.equal(result.tabs, 'A\t\tB');

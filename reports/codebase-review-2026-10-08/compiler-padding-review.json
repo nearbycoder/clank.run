@@ -61,6 +61,16 @@
       "status": "passed",
       "path": "/tmp/clank-review-2026-10-08/compiler-padding-docs.log",
       "sha256": "b75c35b838ec488000ff4dc165a6cce30a32fb1b2e07816e29f725bff081a23c"
+    },
+    "correctedFocused": {
+      "status": "passed",
+      "reason": "Node22/24 native transforms remove comments; exact comment preservation asserted only in Node26 strip mode. Runtime literal value assertions remain on all versions.",
+      "path": "/tmp/clank-review-2026-10-08/compiler-padding-corrected-focused.log",
+      "sha256": "7553f48430365a37f09a774e84c6392f63a9d803c1daf8724affd99313ad8334"
+    },
+    "initialHostedFailure": {
+      "ciRun": 37873130290,
+      "reason": "New exact comment-preservation assertion incorrectly assumed transform mode retains comments; assertion narrowed without production code changes."
     }
   },
   "compatibility": {
@@ -76,7 +86,7 @@
   },
   "sources": {
     "scripts/compiler.mjs": "8e03886f5bf6a735406ba88edbc803102da74d50a4c2a2e4edd4d43272952502",
-    "tests/compiler-runtime.test.mjs": "c221f7a25f13d7501792be95994735a10234d10195bab9b89fe176f1abc8ab7f",
+    "tests/compiler-runtime.test.mjs": "8d33debbac9aaa3a9798f8aa9315d6228127cd8c20a2d10e0f3dd13910ab90d6",
     "docs/development-tools.md": "a5f6febd7fe2c94bcb498eca2a81c21e627937afe23d26a787dc2d0d0472a0f9"
   }
 }
