@@ -12,6 +12,14 @@ process.umask(0o077);
 const arguments_ = process.argv.slice(2);
 if (arguments_.some((argument) => argument === "--help" || argument === "-h")) {
   console.log(`Usage: clank-provider
+       clank-provider certify --config <profile.json> --quota-id <reserved-id> --disposable
+       clank-provider certification --config <profile.json>
+
+certify runs privileged enforcement probes only on an explicitly disposable Linux host
+with its own local Docker daemon and dedicated XFS mount. certification inspects the
+authenticated saved report, expiry and current host/policy binding. Both print JSON;
+blocked or stale certification returns exit code 1. Configuration contains directory
+and profile from @clank.run/framework/host-certification.
 
 Runs Clank's complete stateful Docker deployment provider and private runtime ingress.
 
@@ -51,6 +59,31 @@ Bind this process only to a private network or loopback behind TLS. The provider
 runtime capsules, application secrets, and SQLite data must never pass through generic logs.`);
   process.exit(0);
 }
+if (["certify", "certification"].includes(arguments_[0])) {
+  const action = arguments_.shift(), values = new Map();
+  while (arguments_.length) {
+    const name = arguments_.shift();
+    if (!["--config", "--quota-id", "--disposable"].includes(name) || values.has(name)) throw new Error("Invalid certification argument.");
+    const value = name === "--disposable" ? true : arguments_.shift();
+    if (value === undefined || (typeof value === "string" && value.startsWith("--"))) throw new Error("Missing certification argument.");
+    values.set(name, value);
+  }
+  if (typeof values.get("--config") !== "string" || (action === "certification" && values.size !== 1)
+    || (action === "certify" && (values.get("--disposable") !== true || !/^[1-9]\d{0,9}$/.test(values.get("--quota-id") ?? "")))) throw new Error("Certification requires the documented explicit arguments.");
+  const { open } = await import("node:fs/promises"), { constants } = await import("node:fs");
+  const handle = await open(values.get("--config"), constants.O_RDONLY | constants.O_NOFOLLOW);
+  let config;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > 16384) throw new Error("Certification configuration must be a bounded regular JSON file.");
+    config = JSON.parse(await handle.readFile("utf8"));
+  } finally { await handle.close(); }
+  if (!config || typeof config !== "object" || Array.isArray(config) || Object.keys(config).some((key) => !["directory", "profile"].includes(key))) throw new Error("Invalid certification configuration.");
+  const { certifyLinuxHost, inspectLinuxHostCertification } = await import("../dist/host-certification.js");
+  const result = action === "certify" ? await certifyLinuxHost({ ...config, disposable: true, quotaId: Number(values.get("--quota-id")) }) : await inspectLinuxHostCertification(config);
+  console.log(JSON.stringify(result, null, 2));
+  process.exitCode = (action === "certify" ? result.status === "passed" : result.current) ? 0 : 1;
+} else {
 if (arguments_.length > 0) {
   throw new Error("clank-provider accepts only --help.");
 }
@@ -248,6 +281,8 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
       },
     ).finally(() => clearTimeout(deadline));
   });
+}
+
 }
 
 function required(name) {

@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Thirteen of the forty proposed features are merged across ten feature batches. The component harness (32) merged in [PR #266](https://github.com/nearbycoder/clank.run/pull/266) after all six checks at its revised head, with both CodeQL threads resolved. Both checkouts match main `3481fc206a55eb3cc1c2d991497597f30619ec86`, and 23 existing files are preserved. Twenty-seven features remain; authorized aggregates (22), proposed in [issue #267](https://github.com/nearbycoder/clank.run/issues/267), are now in progress. Earlier delivery snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Fourteen of the forty proposed features are merged across eleven feature batches. Authorized aggregates (22) merged in [PR #268](https://github.com/nearbycoder/clank.run/pull/268) after all six checks at the reviewed head, with no new CodeQL alerts or unresolved threads. Both main checkouts match `283cbcf0aa368fd7f1fc40cc2c1067e578241bcc`, and 23 existing files are preserved. Twenty-six features remain; verified Linux host certification (01) has passed local release, type and six actual disposable-KVM acceptance scenarios under proposal #269 and is awaiting reviewed delivery. Earlier delivery snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -261,7 +261,38 @@ added. See [aggregate evidence](authorized-aggregates.json) and [guide](../../do
 SQLite internal scans, trusted schema parsing and extra policy reads are outside admission
 limits; denied source candidates can affect admission in the owner's scope, never successful
 values or totals. This is backend validation and does not claim privileged host certification.
-Thirteen features remain merged; feature 22 is locally validated and awaiting reviewed delivery.
+[PR #268](https://github.com/nearbycoder/clank.run/pull/268) passed all six fresh hosted checks
+with no new CodeQL alerts, unresolved threads or requested changes. It merged as
+`283cbcf0aa368fd7f1fc40cc2c1067e578241bcc`, with the same tree as reviewed head
+`66eb5fa60eefe3c7f89633b3e6a30939f26ef0d8`. Both checkouts were synchronized and all
+23 existing files preserved. Fourteen features are merged; twenty-six remain.
+
+## Linux host certification: feature 01 awaiting reviewed delivery
+
+Proposal [#269](https://github.com/nearbycoder/clank.run/issues/269) adds the optional
+`host-certification` contract and provider CLI certification/inspection. Fixed probes require
+actual namespace, migration/SQLite worker rollback, exact XFS byte/inode/WAL rejection,
+the production Docker launcher, selected resources and controlled positive/negative egress.
+Private authenticated reports bind boot, policy, mount, framework/runtime/tool bytes and local
+Docker/image identity, expire and reject changed or tampered state. Unconfirmed cleanup retains
+attempt markers; there is no implicit image pull, caller probe callback or process fallback.
+
+The minimum-Node complete gate passes: 1,866 reported, 1,863 passed, zero failed/cancelled,
+three existing privileged skips; coverage 87.56% lines, 80.50% branches and 90.43% functions.
+Four new ordinary regressions and 22 packed type fixtures pass; source diagnostics remain
+159 against the unchanged 163 allowance. The exact optional module adds two distribution
+files: 403 files and 6,276,337 bytes, within the unchanged 6 MiB byte ceiling.
+
+A fresh owned Debian 13 KVM guest has its own Docker daemon and new XFS disk, separate from
+the workstation and production. All 23 existing privileged/isolation regressions pass without
+skips. Six actual new scenarios pass: selective egress, deny-all egress, denied namespaces,
+missing-image refusal, parent death during SQLite with rollback, and denied cleanup that
+keeps markers until exact operator cleanup. Tests run from an installation path containing
+spaces. Guest policy/tool permissions are restored, and owned runtimes, links, firewall and
+test files are absent. These are disposable-profile certificates; production Railway remains
+uncertified. No provider leadership/handoff/remote recovery is counted as delivered.
+See [certification evidence](linux-host-certification.json) for source/log/provenance hashes
+and supported limits. Feature 01 remains in progress until reviewed PR delivery; 14 are merged.
 
 ## Review prerequisites
 
@@ -279,7 +310,7 @@ Thirteen features remain merged; feature 22 is locally validated and awaiting re
 
 | ID | Feature | State | Acceptance evidence |
 | --- | --- | --- | --- |
-| 01 | Verified Linux host certification | Planned | Pending |
+| 01 | Verified Linux host certification | In progress | Proposal #269; complete local minimum-Node/type gates, four ordinary regressions, six actual allowed/denied/interrupted/cleanup KVM scenarios and 23 privileged isolation regressions. Awaiting reviewed PR delivery; production remains uncertified. `linux-host-certification.json`. |
 | 02 | Artifact promotion across environments | Planned | Pending |
 | 03 | Persistent release channels | Planned | Pending |
 | 04 | Deployment dependency gates | Planned | Pending |
@@ -300,7 +331,7 @@ Thirteen features remain merged; feature 22 is locally validated and awaiting re
 | 19 | Durable human waits in workflows | Planned | Pending |
 | 20 | Workflow compensation steps | Planned | Pending |
 | 21 | Typed PostgreSQL application backend | Planned | Pending |
-| 22 | Authorized cross-table aggregates | Validated, awaiting merge | Proposal #267; typed owner/policy-scoped count/sum/group, native JSON admission and selective related/ACL updates. Ten real SQLite regressions, 21 packed fixtures and full minimum-Node release gate pass. `authorized-aggregates.json`. |
+| 22 | Authorized cross-table aggregates | Implemented | Proposal #267; typed owner/policy-scoped count/sum/group, native JSON admission and selective related/ACL updates. Ten real SQLite regressions, 21 packed fixtures and full minimum-Node release gate pass. `authorized-aggregates.json`. |
 | 23 | Source-linked search indexes | Implemented | Proposal #257; atomic source writes/deletes/history restore, pre-opened independent writers, two actual process crashes, resumable fenced rebuild, bounded drift diagnosis, current owner/record authorization and 16 packed consumer fixtures. Real keyboard/mobile/scope/disposal/revocation checks and full release gate pass. |
 | 24 | Search facets and stable result cursors | Implemented | Proposal #263; authorized facets, pinned paging and fenced saved definitions; 51 focused tests, 19 packed fixtures, complete release gate and actual browser controls. `search-browsing.json`. |
 | 25 | Import correction and upsert workflow | Implemented | Proposal #259; immutable server-verified source, separate durable corrections, version-fenced upserts, exact correction/apply receipts, two actual process crashes, lost responses/restart, ownership/current ACL and bounded admission. All 55 focused tests, 17 packed fixtures and full release gate pass; actual upload/keyboard/mobile/stale/account/disposal/revocation checks. |

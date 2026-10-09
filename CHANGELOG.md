@@ -4,6 +4,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add optional, policy-bound Linux host certification with real disposable namespace,
+  SQLite migration/worker, XFS quota and Docker resource/egress probes, authenticated
+  expiring reports and CLI inspection. Denied, interrupted or unverified cleanup stays blocked.
+
 - Add typed, caller-scoped count/sum/group projections over declared references, with explicit
   record policies, native JSON admission, bounded output and selective related/ACL live updates.
   Reject inherited table, query-field and index-field names while preserving declared literal keys.

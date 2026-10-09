@@ -1,0 +1,431 @@
+{
+  "feature": 1,
+  "title": "Verified Linux host certification",
+  "date": "2026-10-09",
+  "baseCommit": "283cbcf0aa368fd7f1fc40cc2c1067e578241bcc",
+  "branch": "codex/linux-host-certification",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/269",
+  "status": "local-validation-passed-awaiting-reviewed-pr",
+  "acceptance": {
+    "workflow": "Explicit local operator certification and JSON CLI inspection of a captured static Docker/XFS profile; existing providers opt into requiring a current report.",
+    "contract": "Optional host-certification module, certifyLinuxHost, inspectLinuxHostCertification and requireCurrentLinuxHostCertification. Seven fixed capabilities; immutable clank-linux-host-certification/1 reports, private local HMAC authentication and bounded reason codes.",
+    "binding": "Fresh boot/kernel/architecture, process identity/capabilities, namespace/forwarding settings, selected mount identity/options, all framework JavaScript/runtime bytes, enforcement-tool content/permissions and local daemon/resolved immutable image identity. Policy and wall/boot uptime expiry rechecked at inspection; report snapshot rechecked after host sampling.",
+    "enforcement": "Actual isolated successful/rejected migrations, terminated endless SQL and atomic rollback/recovery; mapped user/mount/network namespaces; selected byte/inode and SQLite/WAL quota denial with outside controls; production non-root Docker launcher, exact selected memory/swap/CPU/PID values, read-only root/code, absent host secret, zero capabilities/no-new-privileges and bounded tmpfs.",
+    "egress": "Controlled private namespace endpoints prove routing before policy for allowed/denied/public/private/metadata and host destinations. Selected Docker/nft policy then admits only the representative allowed address and matching pinned name; deny-all profile separately passes. No requests reach real external control addresses.",
+    "failure": "Real namespace denial, missing immutable image, killed parent during an active SQLite transaction, and nft execution denial during cleanup all prevent green. Killed worker exits and pending data/ledger roll back. Denied cleanup retains both markers until exact ownership-verified manual cleanup.",
+    "persistence": "Private owned key/report/attempt metadata, pinned no-symlink directory and no-follow bounded reads, exclusive per-directory/root-host attempts. Keys/reports fsynced, report atomically renamed and directory synced. Earlier report invalidated before probing; incomplete attempts remain blocked. Detached CLI/process inspection recovers a completed result.",
+    "compatibility": "No application or provider-store migration, new dependency, automatic image pull, remote inherited Docker context, caller probe callback, arbitrary executable or process-runner fallback. New optional JS/declaration pair explicitly raises only the file ceiling from 401 to 403; byte ceiling remains 6 MiB."
+  },
+  "validation": {
+    "ordinaryFocused": {
+      "tests": 4,
+      "pass": 4,
+      "fail": 0,
+      "skipped": 0,
+      "path": "/tmp/clank-review-2026-10-08/host-certification-focused.log",
+      "sha256": "059437efbf429a1448832a50b0d3f8ad1deba131b3611d3ebf1b1cad1a50a120",
+      "scope": "Initial ordinary focused run; same four tests also pass in the final full gate after subsequent review fixes."
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 159,
+      "baselineAllowance": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 22,
+      "skipLibCheck": false,
+      "path": "/tmp/clank-review-2026-10-08/host-certification-types-final.log",
+      "sha256": "16ea040c3b60684fd9817834e3ddef3267216b76c9a5ee8cbdd67a033ca54cd4"
+    },
+    "release": {
+      "status": "passed",
+      "node": "22.16.0",
+      "tests": 1866,
+      "pass": 1863,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 87.56,
+        "branches": 80.5,
+        "functions": 90.43
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 403,
+      "unpackedBytes": 6276337,
+      "fileCeiling": 403,
+      "byteCeiling": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/host-certification-check-final.log",
+      "sha256": "f4c9daee7f1724a465eb2955a50f7f777b2491bc433a8c230e17d929c2c002d0"
+    },
+    "pack": {
+      "path": "/tmp/clank-review-2026-10-08/host-certification-pack-final.json",
+      "sha256": "2a4d79df17dec848bddbe4dbd194e4e250bed73964e9d945bf0f915bf1bf1cd3"
+    },
+    "existingRealGuestProbes": {
+      "tests": 23,
+      "pass": 23,
+      "fail": 0,
+      "skipped": 0,
+      "path": "/tmp/clank-disposable-linux-cwb5c3a6/guest-existing-probes.log",
+      "sha256": "b2387becf1837d8c9238f78aac44e695506c6df8a298bdbffc61612bf14f86d1",
+      "scope": "Actual existing privileged Docker/XFS plus namespace and SQLite isolation/sandbox regressions. Supporting modules remain unchanged in final source."
+    },
+    "realGuestAcceptance": {
+      "status": "passed",
+      "node": "22.16.0",
+      "installPathContainsSpaces": true,
+      "cases": 6,
+      "results": {
+        "protocol": "clank-host-certification-acceptance/1",
+        "realGuest": true,
+        "node": "v22.16.0",
+        "cases": [
+          {
+            "name": "allowed",
+            "report": {
+              "protocol": "clank-linux-host-certification/1",
+              "id": "7d32d8b4-2012-4da4-aea6-04f5eb61ee95",
+              "status": "passed",
+              "createdAt": 1791537626990,
+              "expiresAt": 1791541226990,
+              "bootUptimeMs": 2535260,
+              "policyDigest": "e493b8490dd25cf2e870dfda7241b037affe6915508c278fe81f94ba221d06c5",
+              "hostDigest": "4df367dd5ab628a1c23003c905aa0553981dbc4278db5254bddb2f283056f0c5",
+              "checks": [
+                {
+                  "capability": "namespaces",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "migrations",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "sqlite-worker",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "disk-quota",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "runner",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "egress",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "cleanup",
+                  "status": "passed",
+                  "reason": "verified"
+                }
+              ]
+            }
+          },
+          {
+            "name": "namespace-denied",
+            "report": {
+              "protocol": "clank-linux-host-certification/1",
+              "id": "9500511c-c790-48cc-862f-e96bd87fd98f",
+              "status": "blocked",
+              "createdAt": 1791537628152,
+              "expiresAt": 1791541228152,
+              "bootUptimeMs": 2536360,
+              "policyDigest": "e493b8490dd25cf2e870dfda7241b037affe6915508c278fe81f94ba221d06c5",
+              "hostDigest": "0b58c8347d8606196c9009b4a1f212b3b9dca3c1c4f4968d49676896779439c5",
+              "checks": [
+                {
+                  "capability": "namespaces",
+                  "status": "blocked",
+                  "reason": "host-policy-denied"
+                },
+                {
+                  "capability": "migrations",
+                  "status": "blocked",
+                  "reason": "prerequisite-blocked"
+                },
+                {
+                  "capability": "sqlite-worker",
+                  "status": "blocked",
+                  "reason": "prerequisite-blocked"
+                },
+                {
+                  "capability": "disk-quota",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "runner",
+                  "status": "blocked",
+                  "reason": "prerequisite-blocked"
+                },
+                {
+                  "capability": "egress",
+                  "status": "blocked",
+                  "reason": "prerequisite-blocked"
+                },
+                {
+                  "capability": "cleanup",
+                  "status": "passed",
+                  "reason": "verified"
+                }
+              ]
+            }
+          },
+          {
+            "name": "deny-all-egress",
+            "report": {
+              "protocol": "clank-linux-host-certification/1",
+              "id": "d55aa369-d9d7-48ae-8613-8b29b4c6d79d",
+              "status": "passed",
+              "createdAt": 1791537643413,
+              "expiresAt": 1791541243413,
+              "bootUptimeMs": 2551680,
+              "policyDigest": "6f80587bbf3a262832b718c74b9013b5298151e6c77e5662e882d73c1b1eca3b",
+              "hostDigest": "4df367dd5ab628a1c23003c905aa0553981dbc4278db5254bddb2f283056f0c5",
+              "checks": [
+                {
+                  "capability": "namespaces",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "migrations",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "sqlite-worker",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "disk-quota",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "runner",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "egress",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "cleanup",
+                  "status": "passed",
+                  "reason": "verified"
+                }
+              ]
+            }
+          },
+          {
+            "name": "missing-image",
+            "report": {
+              "protocol": "clank-linux-host-certification/1",
+              "id": "4be11039-f591-4f16-896e-b7ab2b3623ae",
+              "status": "blocked",
+              "createdAt": 1791537654434,
+              "expiresAt": 1791541254434,
+              "bootUptimeMs": 2562640,
+              "policyDigest": "ae2dfef734d4fc065604c530f09b4da009c2895a571ac801f10035c80cf5a41b",
+              "hostDigest": "0fa6fb9379ab578e658780f5edbd8c88434ad5b68456fc361ca3900eed8443a4",
+              "checks": [
+                {
+                  "capability": "namespaces",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "migrations",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "sqlite-worker",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "disk-quota",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "runner",
+                  "status": "blocked",
+                  "reason": "probe-failed"
+                },
+                {
+                  "capability": "egress",
+                  "status": "blocked",
+                  "reason": "probe-failed"
+                },
+                {
+                  "capability": "cleanup",
+                  "status": "passed",
+                  "reason": "verified"
+                }
+              ]
+            }
+          },
+          {
+            "name": "parent-killed-during-real-sqlite",
+            "blockedAfterDeath": true,
+            "atomicRollback": true,
+            "childExited": true,
+            "explicitOwnedCleanup": true
+          },
+          {
+            "name": "cleanup-denied",
+            "report": {
+              "protocol": "clank-linux-host-certification/1",
+              "id": "c7a2c987-e3e6-4559-b3ab-4d1e00aa0efd",
+              "status": "blocked",
+              "createdAt": 1791537669889,
+              "expiresAt": 1791541269889,
+              "bootUptimeMs": 2578160,
+              "policyDigest": "e493b8490dd25cf2e870dfda7241b037affe6915508c278fe81f94ba221d06c5",
+              "hostDigest": "4df367dd5ab628a1c23003c905aa0553981dbc4278db5254bddb2f283056f0c5",
+              "checks": [
+                {
+                  "capability": "namespaces",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "migrations",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "sqlite-worker",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "disk-quota",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "runner",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "egress",
+                  "status": "passed",
+                  "reason": "verified"
+                },
+                {
+                  "capability": "cleanup",
+                  "status": "blocked",
+                  "reason": "cleanup-failed"
+                }
+              ]
+            },
+            "persistedAttemptMarkers": true,
+            "explicitOwnedFirewallCleanup": true
+          }
+        ],
+        "initialImages": [
+          "sha256:470015c1ab1577c19efce2e80cdad4afd9c682cf8f4dcf3dccae5abfd9113397"
+        ],
+        "finalMountEmpty": true,
+        "finalOwnedRuntimesEmpty": true,
+        "finalOwnedLinksEmpty": true
+      },
+      "path": "/tmp/clank-disposable-linux-cwb5c3a6/certification-acceptance.log",
+      "sha256": "e8b1c08d0c7599ffa473dfbb77f306c1b08f75fabca23ba8720350aed57ffb9a",
+      "compiledModuleSha256": "96f406dc28b80b038ddde38ee0f2fcb57c48a469d7e096af05c13a0be94413a2",
+      "immutableSourceArchive": {
+        "path": "/tmp/clank-disposable-linux-cwb5c3a6/certification-source-final.tar",
+        "sha256": "e7e5968b899eff94c7849f843a54fd9ce381e496fdf57448c5ee29337bc9385c"
+      }
+    }
+  },
+  "disposableEnvironment": {
+    "createdForThisWork": true,
+    "hostGlobalPackagesOrServicesChanged": false,
+    "existingVmOrUserDiskReused": false,
+    "hardware": "Owned KVM guest, 4 vCPUs, 4096 MiB RAM, fresh 12 GiB root overlay and 2 GiB XFS test disk; loopback-only SSH forwarding.",
+    "guest": "Debian 13, Linux 6.12.111+deb13-cloud-amd64, Docker 26.1.5+dfsg1/overlay2 with its own local daemon, XFS prjquota and nftables 1.1.3.",
+    "applicationImage": "node@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20",
+    "selectedMemory": "512m",
+    "selectedCpus": "1",
+    "selectedPids": 128,
+    "selectedQuotaBytes": 33554432,
+    "selectedQuotaFiles": 64,
+    "qemuPackages": {
+      "count": 17,
+      "verification": "Detached PGP signatures verified against installed distribution keyrings before extraction into a private scratch runtime; no system package install.",
+      "path": "/tmp/clank-disposable-linux-cwb5c3a6/verified-packages.json",
+      "sha256": "f8eb82b6ba40b5a776ffb1a2e1e358e40ef2569aac099b8420d0fb942e59495e"
+    },
+    "image": {
+      "url": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2",
+      "checksumSource": "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
+      "sha512": "f46f0671a6e5bdec5291ab8972bae2f10e5408c2f64a74078f11efc2f06a436a9d0313ed50e0472542eeabf780e9f7c792ac0a314c6c20507fcd9fd81b468c3d",
+      "bytes": 341508096,
+      "verification": "Matched official HTTPS-distributed Debian SHA512SUMS; no detached signature provided by this directory."
+    },
+    "imageMetadata": {
+      "path": "/tmp/clank-disposable-linux-cwb5c3a6/verified-image.json",
+      "sha256": "23b66e4eb0c7c74842be9e91258d36c841049129c1c7f7c84b0a6a88a31de69a"
+    },
+    "launch": {
+      "path": "/tmp/clank-disposable-linux-cwb5c3a6/launch-boot-order.json",
+      "sha256": "cce0a9a01bc00ddde123e9bbcf7fb19cfaeeb160b24b4fee8ace9cadd924fbd3"
+    },
+    "cleanup": "Guest namespace setting and nft executable permissions restored. No owned provider runtimes, certification links/routes/firewall tables or test files remain; completed reserved quotas have zero usage and cleared limits. Interrupted/denied-cleanup markers removed only after exact explicit owned cleanup in the guarded driver. Guest remains available for subsequent provider feature verification."
+  },
+  "reviewFixes": [
+    "Decode module URLs correctly for installations containing spaces.",
+    "Require exact Docker memory/swap/CPU/PID values rather than merely positive limits.",
+    "Force the local Unix Docker daemon and a private clean launcher context.",
+    "Boundly wait for XFS delayed deallocation; never clear a quota with outstanding usage.",
+    "Retain attempt markers on uncertain final cleanup and verify potentially uncertain routes/links.",
+    "Use deferred imports inside the embedded runner to preserve the browser import contract.",
+    "Fsync private keys/reports and the publication directory; verify current report bytes and expiry after fresh host sampling."
+  ],
+  "limits": [
+    "V1 static isolated-Docker profiles only; 4\u201364 MiB aligned persistent quota and 32\u2013128 inode limits, 128 MiB\u20132 GiB container memory, 0.1\u20134 CPUs and 16\u201332768 PIDs. Larger/different policies cannot reuse this certificate.",
+    "Controlled representative allowed/denied IPv4 addresses and selected pinned names are sampled; universal public allow policies without a denied-public control are unsupported. External availability/DNS and every possible exhaustion behavior are not attested.",
+    "Certification is an expiring point-in-time measurement, not continuous monitoring or protection from a compromised host operator. Arbitrary external policy-file changes are not attested.",
+    "Forced crash cleanup is explicit operator work; no age-based automatic unlock or recycled live quota assignment. A running SQLite task settles or hits its fixed deadline before cancellation cleanup.",
+    "No production Railway certificate, production deployment, provider leadership/failover/handoff, fleet simulation or remote PITR acceptance is claimed. The existing ordinary gate still has its three privileged skips; the real guest suite separately runs with zero skips."
+  ],
+  "sourceHashes": {
+    "src/host-certification.ts": "edeadf09a3da52efcecbba69ca652aa4ea890ebe04abbdc3a6d48f6d257e4ff1",
+    "src/host-certification.d.ts": "d9e842c9d1467e45ce4ffe5fb373aedec03d43462d479e332638a203fceb6d2f",
+    "scripts/clank-provider.mjs": "d78cc944cbb0ffbadf9ca4d593628832032a20abcaa92e8f6433be1b65ee304b",
+    "tests/host-certification.test.mjs": "aee06e311f9449b8a9a6fed59f5709f3198b9e05b71865ac988a4a472c4e5ca9",
+    "tests/fixtures/host-certification-guest.mjs": "51ae6a280f52e9bd6c12b05f6ede45ac086cd715a9e401a2cdb0a56bccbf5f26",
+    "type-tests/host-certification.ts": "b1b79d45d1d60f31a880132851aea4e1998464a694c86cb05d1a29b885606b63",
+    "docs/linux-host-certification.md": "a5966cc8e0e84fc463c518fc6d6f13483f50180db651b727f86cd28f7090b032",
+    "docs/api-reference.md": "b6e89ba4314687e9222eeded6a679eef52bb282e76da16dcc323a3efbc136c07",
+    "docs-site/content-manifest.mjs": "b798b6561ed79f42fc38fd008b0951bb6ed9dc1aa1326bbf37ca6fab6530492b",
+    "README.md": "57d3d37f6d411cad0f4955895dbbbcf956c2aec216c41bc72364c30888588fbf",
+    "CHANGELOG.md": "b5cbc3221ec231ef34148851c89bbc97b34a294a93cf8ce6410fc9b5f4296f80",
+    "package.json": "1adf3ab8986e8ed6f58db3c0bcf973f63499a174078c684d89395314a0da9050",
+    "scripts/security-audit.mjs": "6f0d41ba7c422d21894ef8907604c08c7d1bc32f04683f0126f09f65c3d9d106"
+  },
+  "preservedExistingFiles": 23,
+  "delivery": null
+}
