@@ -4,6 +4,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Fence retired organization offboarding credentials against the current persisted provider
+  snapshot, including requests waiting for their body. Preserve dedicated and linking-disabled
+  revocation semantics and roll back credential publication with failed policy reconciliation.
+
 - Add opt-in organization-scoped SCIM User/Group provisioning with separate expiring credentials,
   conditional resource versions, atomic PATCH and durable retry receipts. Require signed subject
   proof for binding/reactivation, preserve manual role ownership and unrelated workspace access,

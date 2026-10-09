@@ -72,6 +72,8 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
     return [provider.organizationId, { ...provider, provisioning, allowed }] as const;
   }));
   if (!providers.size || providers.size !== options.providers.length || providers.size > 100) throw new TypeError("Configure 1–100 unique organization SSO providers.");
+  const offboardingFingerprints = new Map([...providers.values()].map(provider => [provider.organizationId,
+    createHash("sha256").update(JSON.stringify([provider.organizationId, provider.issuer, provider.offboardingToken])).digest("hex")]));
   const linking = options.identityLinking ? Object.freeze({...options.identityLinking}) : undefined;
   const maxActive = linking?.maxActiveIdentities ?? 10, maxRetained = linking?.maxRetainedIdentities ?? 50;
   if (linking && (!Number.isSafeInteger(linking.policyRevision) || linking.policyRevision < 1
@@ -111,6 +113,17 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
     sql.exec("CREATE TABLE IF NOT EXISTS clank_sso_unlinks (user_id TEXT NOT NULL, key TEXT NOT NULL, input TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(user_id,key))");
     sql.exec("CREATE TABLE IF NOT EXISTS clank_sso_revocations (organization TEXT NOT NULL, issuer TEXT NOT NULL, subject TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(organization, issuer, subject))");
     sql.exec(`CREATE TABLE IF NOT EXISTS clank_sso_events (id INTEGER PRIMARY KEY AUTOINCREMENT, organization TEXT NOT NULL, user_id TEXT NOT NULL, event TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // Publish the complete operator snapshot inside the schema/policy transaction.
+    // Dedicated accounts and linking-disabled deployments need the same live fence.
+    sql.exec("CREATE TABLE IF NOT EXISTS clank_sso_offboarding_credentials (organization TEXT PRIMARY KEY, issuer TEXT NOT NULL, fingerprint TEXT NOT NULL)");
+    sql.prepare("DELETE FROM clank_sso_offboarding_credentials").run();
+    for (const provider of providers.values()) sql.prepare("INSERT INTO clank_sso_offboarding_credentials VALUES(?,?,?)")
+      .run(provider.organizationId, provider.issuer, offboardingFingerprints.get(provider.organizationId));
+  };
+  const requireOffboardingCredential = (provider: OrganizationSsoProvider) => {
+    const current = sql.prepare("SELECT issuer,fingerprint FROM clank_sso_offboarding_credentials WHERE organization=?").get(provider.organizationId);
+    if (!current || current.issuer !== provider.issuer || current.fingerprint !== offboardingFingerprints.get(provider.organizationId))
+      throw new AuthError("UNAUTHENTICATED", "Offboarding authentication failed.", 401);
   };
   const policyCurrent = () => {
     const policy = sql.prepare("SELECT * FROM clank_sso_policy WHERE singleton=1").get();
@@ -337,11 +350,13 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
         }
         if (offboard && request.method === "POST") {
           const provider = providers.get(offboard[1]!); if (!provider) throw new AuthError("SSO_NOT_FOUND", "SSO provider not found.", 404);
+          requireOffboardingCredential(provider);
           const token = request.headers.get("authorization")?.replace(/^Bearer /u, "") ?? "";
           if (token.length > 1024 || !await equal(token, provider.offboardingToken)) throw new AuthError("UNAUTHENTICATED", "Offboarding authentication failed.", 401);
           const input = await readJsonRequest(request, 8192) as { subject?: unknown };
           if (!input || typeof input.subject !== "string" || !input.subject || input.subject.length > 255) throw new AuthError("INVALID_INPUT", "An exact subject is required.", 422);
           const userId = sql.transaction(changes => {
+            requireOffboardingCredential(provider);
             sql.prepare("INSERT OR IGNORE INTO clank_sso_revocations(organization, issuer, subject, at) VALUES (?, ?, ?, ?)").run(provider.organizationId, provider.issuer, input.subject, Date.now());
             const row = sql.prepare("SELECT user_id FROM clank_sso_identities WHERE organization = ? AND issuer = ? AND subject = ?").get(provider.organizationId, provider.issuer, input.subject);
             if (!row) { audit(provider.organizationId, "unprovisioned", "offboarded"); return null; }
