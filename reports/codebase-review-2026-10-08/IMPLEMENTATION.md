@@ -33,8 +33,9 @@ network failures. The client enforces a fifteen-second deadline and 256 KiB stre
 The unchanged package contract contains 405 files / 6,129,809 unpacked bytes, with 161,647 bytes
 remaining. Documentation build, doctor, offline artifact and HTTP/MCP checks pass. Desktop/phone
 HTML, search and final guide text are verified; blocked browser agent-format navigation is
-reported separately from successful HTTP/MCP verification. No external enterprise IdP tenant
-certification or production host certification is claimed. A full-suite run also caught candidate
+reported separately from successful HTTP/MCP verification. Hosted CodeQL also identified a fixture callback redirect; the destination is now fixed, and
+actual GET/POST foreign-origin and wrong-path refusals plus valid/restart flows pass. No external
+enterprise IdP tenant certification or production host certification is claimed. A full-suite run also caught candidate
 cleanup terminating an admitted canary request; a separate maintenance fix with a deterministic
 held-response proof follows this feature. See [immutable acceptance evidence](identity-linking.json).
 

@@ -23,6 +23,7 @@ for(const [index,organization] of ['company-a','company-b'].entries()){
  const issuer=`http://127.0.0.1:${port+index+1}`,codes=new Map(),{privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'P-256'}),jwk={...publicKey.export({format:'jwk'}),kid:organization,alg:'ES256',use:'sig'};
  const server=createServer(async(req,res)=>{try{
   const url=new URL(req.url,issuer);res.setHeader('cache-control','no-store');
+  if(url.pathname==='/authorize'&&(url.searchParams.get('redirect_uri')!==origin+'/__clank/sso/callback'||url.searchParams.get('client_id')!=='fixture-client')){res.writeHead(400);return res.end('Invalid fixture callback')}
   if(url.pathname==='/.well-known/openid-configuration'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({issuer,authorization_endpoint:issuer+'/authorize',token_endpoint:issuer+'/token',jwks_uri:issuer+'/keys',response_types_supported:['code'],id_token_signing_alg_values_supported:['ES256']}))}
   if(url.pathname==='/keys'){res.setHeader('content-type','application/json');return res.end(JSON.stringify({keys:[jwk]}))}
   if(url.pathname==='/authorize'&&req.method==='GET'){
@@ -32,7 +33,7 @@ for(const [index,organization] of ['company-a','company-b'].entries()){
   if(url.pathname==='/authorize'&&req.method==='POST'){
    const body=await boundedBody(req),input=new URLSearchParams(body);
    if(input.get('account')!=='employee'||input.get('password')!=='provider-fixture-password'||url.searchParams.get('prompt')!=='login'||url.searchParams.get('max_age')!=='0'){res.writeHead(403);return res.end('Provider verification failed')}
-   const code=crypto.randomUUID();codes.set(code,{...Object.fromEntries(url.searchParams),authTime:Math.floor(Date.now()/1000)});audit.push({organization,event:'provider-password-verified'});res.writeHead(303,{location:url.searchParams.get('redirect_uri')+'?'+new URLSearchParams({state:url.searchParams.get('state'),code})});return res.end();
+   const code=crypto.randomUUID();codes.set(code,{...Object.fromEntries(url.searchParams),authTime:Math.floor(Date.now()/1000)});audit.push({organization,event:'provider-password-verified'});res.writeHead(303,{location:origin+'/__clank/sso/callback?'+new URLSearchParams({state:url.searchParams.get('state'),code})});return res.end();
   }
   if(url.pathname==='/token'){
    const input=new URLSearchParams(await boundedBody(req)),flow=codes.get(input.get('code'));codes.delete(input.get('code'));

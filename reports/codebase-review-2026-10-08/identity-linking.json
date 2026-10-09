@@ -78,7 +78,8 @@
       ],
       "fullReleaseGate": "passed",
       "ordinaryUid": 1000,
-      "log": "identity-linking-node26-gate-05.log"
+      "log": "identity-linking-node26-gate-05.log",
+      "sourceScope": "Final runtime/type/test/guide source 05. Later source 06 changes only the manual provider fixture callback guard and acceptance-report metadata; its actual HTTP rejection/valid/restart proof passes and fresh hosted checks cover the updated head."
     },
     "node22": {
       "tests": 1965,
@@ -93,11 +94,13 @@
       ],
       "fullReleaseGate": "passed",
       "ordinaryUid": 1000,
-      "log": "identity-linking-node22-gate-05.log"
+      "log": "identity-linking-node22-gate-05.log",
+      "sourceScope": "Final runtime/type/test/guide source 05. Later source 06 changes only the manual provider fixture callback guard and acceptance-report metadata; its actual HTTP rejection/valid/restart proof passes and fresh hosted checks cover the updated head."
     },
     "processProof": {
       "status": "passed",
       "checks": [
+        "exact fixture callback refuses external and wrong-path redirects on GET and POST",
         "real password+MFA and fresh provider code/PKCE/ES256 acceptance",
         "accepted callback exact replay survives actual controller SIGKILL/restart",
         "lost accepted unlink receipt survives second actual SIGKILL/restart and fresh local login",
@@ -147,7 +150,8 @@
     "resolved": [
       "Lost accepted unlink errors, malformed/oversized bodies and transport failures now reload real authority; account/session changes fence results",
       "Disabled co-owner regression failed before the final query; enabled owners are now required",
-      "Known malformed-property-value experimental coverage artifact receives only the existing single retry after every test passes; actual failures and coverage shortfalls are never retried"
+      "Known malformed-property-value experimental coverage artifact receives only the existing single retry after every test passes; actual failures and coverage shortfalls are never retried",
+      "Hosted CodeQL flagged the disposable IdP callback redirect. The fixture now admits only its exact configured callback/client and constructs a fixed destination; real GET/POST foreign-origin and wrong-path refusals pass, followed by valid PKCE/JWT acceptance and two SIGKILL/restart receipt proofs."
     ],
     "retainedForSeparateMaintenance": [
       "Source 03 full run caught an existing candidate rollback terminating an admitted request with 502. Final source 05 gates passed without relaxing that test. Read analysis identifies missing candidate ingress drain before verified cleanup; deterministic held-response regression and a separate maintenance PR are next."
@@ -162,7 +166,7 @@
     "tests/organization-security.test.mjs": "9343362f57eca400476a648b686ee80308c5c3ba4c54451d9d802605707b3edb",
     "tests/dom.test.mjs": "66703937c3ba151cc6336b1e3a41e22f1bb1adf25ac760abde859eebf30b306c",
     "type-tests/organization-identity-linking.ts": "a172f1a601d0de890b5fceb2aaf0b3e6f823e0fe0b8b9c51ba33068abdba55cd",
-    "tests/fixtures/organization-identity-browser.mjs": "30336e214453dfa0c3aea198955166fecd3cf3b7dfc1501040c6998e206e3d54",
+    "tests/fixtures/organization-identity-browser.mjs": "79d679a4dc721c7d64ac4ec191470a7a0831b11f4964fb5122f7586e0333d2ea",
     "tests/fixtures/organization-identity-browser-entry.mjs": "5066a61a37c17b17829ff22f43139710d4cdeba7f26e64c19d1cd51d0df305d5",
     "docs/organization-security.md": "f8ac0dd029065340424050b3ded70e4f2540547ddb6c4051b151a47817b4782c",
     "docs/auth.md": "245e24d57f1b0e8b3d4ecd5386a90c2c5be279689cefcb4159f726bc8a5861da",
@@ -301,6 +305,26 @@
       "sha256": "8797a096950837c0a411498e9c3203650d87532769b491c0d7c23d347f832a3a",
       "bytes": 1197,
       "immutablePrivateCopy": "8797a096950837c0a411498e9c3203650d87532769b491c0d7c23d347f832a3a.txt"
+    },
+    "identity-linking-source-06.json": {
+      "sha256": "cc403d8c0526595ea74d820bba7bb9a84be5e8215c18a130158de23a6fadda0c",
+      "bytes": 2088,
+      "immutablePrivateCopy": "cc403d8c0526595ea74d820bba7bb9a84be5e8215c18a130158de23a6fadda0c.json"
+    },
+    "identity-linking-process-proof-03.mjs": {
+      "sha256": "5abbbca6e457f4b3a1fdb30e2ff8c18dc803bc29ad8d9e2322b30cf0ca0c004a",
+      "bytes": 6322,
+      "immutablePrivateCopy": "5abbbca6e457f4b3a1fdb30e2ff8c18dc803bc29ad8d9e2322b30cf0ca0c004a.mjs"
+    },
+    "identity-linking-process-proof-03.json": {
+      "sha256": "92d62a5a711eadd2d5ae2e221346e37a066cfc388fbfdf8e77d9ad6d455faf1b",
+      "bytes": 662,
+      "immutablePrivateCopy": "92d62a5a711eadd2d5ae2e221346e37a066cfc388fbfdf8e77d9ad6d455faf1b.json"
+    },
+    "identity-linking-process-proof-04.log": {
+      "sha256": "6665f0b0a0a52bda16b592ce9de148e5835aff45fe7a7e28a7cdfc3b41d3697f",
+      "bytes": 608,
+      "immutablePrivateCopy": "6665f0b0a0a52bda16b592ce9de148e5835aff45fe7a7e28a7cdfc3b41d3697f.log"
     }
   },
   "delivery": {
