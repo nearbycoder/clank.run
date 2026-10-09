@@ -83,6 +83,96 @@ const accepted = await verifyApproval({
 });
 ```
 
+## Durable agent operation budgets
+
+`openAgentBudgets()` attaches expiring, owner/principal-bound capacity to a grant. Registered
+actions automatically debit one accepted call, each write invocation and each distinct affected
+record. An action can also declare a fixed external-operation cost for transactional outbox
+work. Client arguments cannot choose these costs. Budget debit, owned application writes and
+the replay receipt commit in the same SQLite transaction, including across independent processes.
+
+```ts
+import { s, type AuthRequest } from "@clank.run/framework";
+import { openAgentBudgets, defineAgentBudgetAction, type AgentBudgetContext } from "@clank.run/framework/agent-budgets";
+
+interface BudgetCaller { auth: AuthRequest; principalId: string; }
+
+const actions = {
+  create: defineAgentBudgetAction(schema, {
+    revision: "create-v1",
+    args: s.object({ text: s.string() }),
+    authorize: ({ caller }: AgentBudgetContext<BudgetCaller, typeof schema>) => Boolean(caller.auth.requireUser()),
+    execute: ({ db }, input) => ({ id: db.table("items").insert(input) }),
+  }),
+};
+
+const budgets = await openAgentBudgets(database, {
+  actions,
+  // caller comes from your authenticated server adapter, never raw request JSON.
+  // auth.requireUser() must revalidate current session/delegated credentials.
+  identity(caller: BudgetCaller) {
+    const user = caller.auth.requireUser();
+    return { ownerId: user.id, principalId: caller.principalId };
+  },
+  authorizeManage: ({ caller }) => Boolean(caller.auth.requireRole("admin")),
+});
+
+const grant = budgets.grant({
+  principalId: "agent-grant-7", actions: ["create"],
+  limits: { calls: 10, writes: 10, records: 10, externalOperations: 0 },
+  expiresAt: Date.now() + 60_000, reason: "Create ten reviewed follow-up items",
+}, administratorContext);
+
+const remaining = budgets.preview(grant.id, agentContext).remaining;
+const receipt = budgets.execute({
+  grantId: grant.id, operationId: "request-1", action: "create", input: { text: "Follow up" },
+}, agentContext);
+```
+
+The identity resolver runs again inside the write transaction. It must resolve **current** trusted
+credentials and revocation from the authenticated adapter, including for an exact receipt retry.
+A grant does not replace action authorization or row ownership. The assigned principal may inspect
+its grant; administration requires `authorizeManage`. Other owners receive `BUDGET_NOT_FOUND`.
+Named actions are bound to their definition revisions. Change the revision when execution,
+authorization or external-operation costs change; old grants then receive `BUDGET_ACTION_CHANGED`.
+
+`execute()` accepts only synchronous callbacks and finite, bounded JSON inputs/results. Keep all
+local writes inside `context.db`; retained writer/read/query handles stop working when the
+transaction ends. Async execution, history purges, unsupported JSON and overspending roll back
+the entire action. Even a callback that catches a budget error cannot commit excess records.
+Write calls that affect no existing record still count as writes; distinct affected records count
+once per action. Deleting an existing row counts that row too.
+
+An exact `(grantId, operationId)` retry with the same action revision and canonical parsed input
+returns the durable receipt without executing or debiting again, including after restart.
+Changed retries receive `BUDGET_RETRY_CONFLICT`. Action authorization is rechecked before replay.
+Revoked or expired grants reject execution/replay with `BUDGET_CLOSED`; their remaining preview
+shows zero. `revoke()` is immediately effective and survives restart. A preview is a current
+snapshot, not a capacity reservation; execution always checks the balance under the write lock.
+
+External-operation costs measure accepted **transactional outbox work**, not successful network
+responses. Set `externalOperations` on the registered action to the number of outbox operations
+it enqueues. Its execution context supplies a stable `operationId` including the grant ID; pass
+that key to an idempotent provider. Do not perform network requests directly in the action.
+Budgets do not make unrelated external APIs exactly once.
+
+Limits are explicit integers from zero through one million for all four dimensions. Grants expire
+within 30 days and require a bounded reason. Defaults retain at most 1,000 grants, 10,000 receipts
+and 16 KiB per input/output. At capacity, new admission fails with `BUDGET_CAPACITY` while exact
+live receipts remain replayable. Configure smaller limits for sensitive applications.
+`prune()` and grant admission retire only the current owner's grants after expiry/revocation plus
+`retentionMs` (default one day). The bounded purge handles at most 500 grants per call. Retired
+IDs are never reused, so their old retries cannot create new operations.
+
+The additive `clank_agent_budget_grants` and `clank_agent_budget_receipts` tables participate in
+ordinary SQLite backups and recovery capture. Bootstrap the service before opening the first
+`openPointInTimeRecovery()` epoch, which seals the schema. Restores preserve grant counters and
+receipts together at the selected commit. Restoring an older point also restores older grant and
+revocation state; reconcile current credentials and remote effects before resuming operations.
+Rollback should disable protected actions until
+the budget adapter is restored; routing them to an unbudgeted fallback removes their protection.
+Keep untrusted client IDs/costs out of the identity and management callbacks.
+
 ## Typed feature delivery
 
 Flags can be disabled, scheduled, targeted, or assigned to weighted variants. A stable hash of

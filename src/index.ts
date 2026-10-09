@@ -10,6 +10,7 @@ export * from "./hydration-inspection.ts";
 export * from "./router.ts";
 export * from "./ai.ts";
 export * from "./agent-contract.ts";
+export * from "./agent-budgets.ts";
 export * from "./journey.ts";
 export * from "./collaboration.ts";
 export * from "./analytics.ts";
