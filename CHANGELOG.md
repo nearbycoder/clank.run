@@ -4,6 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add opt-in verified organization identity linking with fresh local and provider authentication,
+  durable subject ownership, versioned unlink receipts and organization-scoped offboarding.
+  Preserve unrelated organization access and expose guarded native account-security controls.
+- Recognize Node's malformed-property-value coverage artifact diagnostic for the existing
+  single bounded retry only after every test passes; keep test failures and coverage thresholds strict.
+
 - Drain admitted requests before stopping a failed canary candidate, with the existing two-second
   limit and verified process-cleanup fence. Preserve the prior release and accepted data on rollback.
 

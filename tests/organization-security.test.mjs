@@ -7,7 +7,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {defineAuth,defineBackend,defineDatabase,openBackend,createAuthClient,renderToString} from '../dist/index.js';
 import {openOrganizationSso} from '../dist/organization-sso.js';
-import {AccountSecurity,PasswordRecoveryForm,EmailVerificationForm} from '../dist/account-security.js';
+import {AccountSecurity,PasswordRecoveryForm,EmailVerificationForm,createOrganizationIdentityClient} from '../dist/account-security.js';
 const origin='https://security.test',key=Symbol.for('clank.sqlite.internal');
 function req(path,body,session,method=body===undefined?'GET':'POST'){return new Request(origin+path,{method,headers:{origin,...(body===undefined?{}:{'content-type':'application/json'}),...(session?{cookie:session.cookie,'x-clank-csrf':session.csrf}: {})},...(body===undefined?{}:{body:JSON.stringify(body)})})}
 async function fixture(options={}){const dir=await mkdtemp(join(tmpdir(),'clank-org-security-'));const runtime=await openBackend(defineBackend({schema:defineDatabase({}),auth:defineAuth({password:{cost:1024,maxMemory:4*1024*1024},...options})}).functions(()=>({})),{path:join(dir,'app.sqlite')});return{runtime,async close(){runtime.close();await rm(dir,{recursive:true,force:true})}}}
@@ -61,19 +61,19 @@ test('session inventory and revocation are owner scoped and security screens exp
 
 async function mockIdp(){
  const {privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'P-256'}),jwk={...publicKey.export({format:'jwk'}),kid:'fixture-key',alg:'ES256',use:'sig'};
- let issuer='',overrides={},wrongSignature=false,discoveryOverride={};const codes=new Map();
+ let issuer='',overrides={},wrongSignature=false,discoveryOverride={};const codes=new Map();let tokenCalls=0,heldKeys;
  const server=createServer(async(request,response)=>{const url=new URL(request.url,issuer);response.setHeader('content-type','application/json');
   if(url.pathname==='/.well-known/openid-configuration')return response.end(JSON.stringify({issuer,authorization_endpoint:issuer+'/authorize',token_endpoint:issuer+'/token',jwks_uri:issuer+'/keys',response_types_supported:['code'],id_token_signing_alg_values_supported:['ES256'],...discoveryOverride}));
-  if(url.pathname==='/keys')return response.end(JSON.stringify({keys:[jwk]}));
+  if(url.pathname==='/keys'){if(heldKeys){const held=heldKeys;heldKeys=undefined;held.reached();await held.wait;}return response.end(JSON.stringify({keys:[jwk]}));}
   if(url.pathname==='/authorize'){const code=crypto.randomUUID();codes.set(code,Object.fromEntries(url.searchParams));response.writeHead(302,{location:url.searchParams.get('redirect_uri')+'?'+new URLSearchParams({code,state:url.searchParams.get('state')})});return response.end()}
-  if(url.pathname==='/token'){let body='';for await(const chunk of request)body+=chunk;const input=new URLSearchParams(body),flow=codes.get(input.get('code'));codes.delete(input.get('code'));
+  if(url.pathname==='/token'){tokenCalls++;let body='';for await(const chunk of request)body+=chunk;const input=new URLSearchParams(body),flow=codes.get(input.get('code'));codes.delete(input.get('code'));
    if(!flow||input.get('redirect_uri')!==flow.redirect_uri||createHash('sha256').update(input.get('code_verifier')).digest('base64url')!==flow.code_challenge){response.statusCode=400;return response.end('{}')}
-   const now=Math.floor(Date.now()/1000),claims={iss:issuer,aud:'clank-client',sub:'employee-1',nonce:flow.nonce,iat:now,exp:now+300,email:'employee@example.test',email_verified:true,name:'Employee',...overrides};
+   const now=Math.floor(Date.now()/1000),claims={iss:issuer,aud:'clank-client',sub:'employee-1',nonce:flow.nonce,iat:now,auth_time:now,exp:now+300,email:'employee@example.test',email_verified:true,name:'Employee',...overrides};
    const message=[{alg:'ES256',kid:jwk.kid},claims].map(value=>Buffer.from(JSON.stringify(value)).toString('base64url')).join('.');
    const signature=wrongSignature?Buffer.alloc(64):sign('sha256',Buffer.from(message),{key:privateKey,dsaEncoding:'ieee-p1363'});return response.end(JSON.stringify({id_token:message+'.'+signature.toString('base64url'),token_type:'Bearer',access_token:'ignored'}));
   }response.statusCode=404;response.end('{}');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));issuer='http://127.0.0.1:'+server.address().port;
- return {issuer,setClaims(value){overrides=value},badSignature(value){wrongSignature=value},setDiscovery(value){discoveryOverride=value},async close(){server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}};
+ return {issuer,get tokenCalls(){return tokenCalls},holdKeys(){let reached,release;const ready=new Promise(resolve=>reached=resolve),wait=new Promise(resolve=>release=resolve);heldKeys={reached,wait};return {ready,release}},setClaims(value){overrides=value},badSignature(value){wrongSignature=value},setDiscovery(value){discoveryOverride=value},async close(){server.closeAllConnections();await new Promise(resolve=>server.close(resolve))}};
 }
 async function ssoFixture(){const f=await fixture(),idp=await mockIdp(),secret='offboard-test-secret-32-characters-minimum',options={applicationOrigin:origin,allowInsecureLoopback:true,providers:[{organizationId:'company',issuer:idp.issuer,clientId:'clank-client',offboardingToken:secret}]};const sso=openOrganizationSso(f.runtime.database,f.runtime.auth,options);return{...f,idp,secret,sso,async close(){await idp.close();await f.close()}}}
 async function flow(f,alter){const start=await f.sso.handle(req('/__clank/sso/start/company'));assert.equal(start.status,303);const authorized=await fetch(start.headers.get('location'),{redirect:'manual'});const callback=new Request(authorized.headers.get('location'),{headers:{cookie:start.headers.get('set-cookie').split(';')[0]}});return f.sso.handle(alter?alter(callback):callback)}
@@ -154,4 +154,249 @@ test('platform SSO provisions viewer membership and durable offboarding revokes 
   const offboard=await f.platform.handle(new Request(origin+`/__clank/sso/offboard/${project.organizationId}`,{method:'POST',headers:{authorization:'Bearer '+secret,'content-type':'application/json'},body:JSON.stringify({subject:'employee-1'})}));assert.equal(offboard.status,200,await offboard.clone().text());
   assert.equal((await f.platform.handle(new Request(origin+'/api/projects',{headers:{authorization:'Bearer '+cli.accessToken}}))).status,401);assert.equal((await f.platform.handle(req('/api/projects',undefined,employee))).status,401);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_platform_memberships WHERE user_id=?').get(employee.user.id).n,0);await pcall(f,'/api/device/token',{deviceCode:pending.deviceCode},undefined,400);
  }finally{await idp.close();await f.close()}
+});
+
+async function identityFixture(extra={}) {
+ const dir=await mkdtemp(join(tmpdir(),'clank-linked-identities-')),deliveries=[],idp=await mockIdp(),second=await mockIdp();
+ const definition=defineBackend({schema:defineDatabase({}),auth:defineAuth({password:{cost:1024,maxMemory:4*1024*1024},mfa:{send:delivery=>deliveries.push(delivery)}})}).functions(()=>({}));
+ let runtime=await openBackend(definition,{path:join(dir,'identities.sqlite')});
+ const options={applicationOrigin:origin,allowInsecureLoopback:true,identityLinking:{policyRevision:1},providers:[{organizationId:'company',issuer:idp.issuer,clientId:'clank-client',offboardingToken:'organization-one-offboarding-secret-32chars'},{organizationId:'second',issuer:second.issuer,clientId:'clank-client',offboardingToken:'organization-two-offboarding-secret-32chars'}],...extra};
+ let sso=openOrganizationSso(runtime.database,runtime.auth,options);
+ return {dir,idp,second,options,deliveries,get runtime(){return runtime},get sso(){return sso},get sql(){return runtime.database[key]},
+  async fresh(session){const start=await post(runtime,'/__clank/auth/reauthenticate/mfa/start',{password:'password-for-tests'},session);await post(runtime,'/__clank/auth/reauthenticate/mfa/finish',{challengeId:start.challengeId,code:deliveries.at(-1).code},session);return session},
+  async reopen(updated=options){runtime.close();runtime=await openBackend(definition,{path:join(dir,'identities.sqlite')});sso=openOrganizationSso(runtime.database,runtime.auth,updated)},
+  async close(){runtime.close();await idp.close();await second.close();await rm(dir,{recursive:true,force:true})}};
+}
+async function identityCall(f,path,body,session,status=200){const response=await f.sso.handle(req('/__clank/sso/'+path,body,session));const json=await response.json();assert.equal(response.status,status,JSON.stringify(json));return json}
+async function linkingFlow(f,session,organization='company') {
+ const start=await f.sso.handle(req('/__clank/sso/link/'+organization,{},session)),body=await start.json();assert.equal(start.status,200,JSON.stringify(body));
+ const location=new URL(body.authorizationUrl);assert.equal(location.searchParams.get('prompt'),'login');assert.equal(location.searchParams.get('max_age'),'0');
+ const authorized=await fetch(location,{redirect:'manual'}),request=new Request(authorized.headers.get('location'),{headers:{cookie:session.cookie+'; '+start.headers.get('set-cookie').split(';')[0]}});
+ return {request,finish:()=>f.sso.handle(request.clone())};
+}
+async function loginLocal(runtime,email='local@example.test'){
+ const response=await runtime.handle(req('/__clank/auth/login',{email,password:'password-for-tests'}));const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));return{cookie:response.headers.get('set-cookie').split(';')[0],csrf:result.csrfToken,user:result.user,session:result.session};
+}
+async function identityOffboard(f,organization='company',subject='employee-1') {const provider=f.options.providers.find(provider=>provider.organizationId===organization);return f.sso.handle(new Request(origin+'/__clank/sso/offboard/'+organization,{method:'POST',headers:{authorization:'Bearer '+provider.offboardingToken,'content-type':'application/json'},body:JSON.stringify({subject})}));}
+
+test('verified linking retains the local profile, spans two organizations and replays accepted callbacks after SQLite reopen',async()=>{
+ const f=await identityFixture();try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test'));const first=await linkingFlow(f,owner);assert.equal((await first.finish()).status,303);
+  const tokenCalls=f.idp.tokenCalls;await f.reopen();assert.equal((await first.finish()).status,303);assert.equal(f.idp.tokenCalls,tokenCalls);
+  assert.equal((await f.sso.handle(new Request(first.request.url.replace(/code=[^&]+/u,'code=wrong'),{headers:first.request.headers}))).status,409);
+  const other=await linkingFlow(f,owner,'second');assert.equal((await other.finish()).status,303);
+  const list=await identityCall(f,'identities',undefined,owner);assert.equal(list.identities.length,2);assert.ok(list.identities.every(row=>row.active && row.version===1));
+  const local=f.sql.prepare('SELECT email,profile FROM clank_auth_users WHERE id=?').get(owner.user.id);assert.equal(local.email,'local@example.test');assert.deepEqual(JSON.parse(local.profile),{name:'Security'});
+  const events=f.sql.prepare("SELECT count(*) n FROM clank_sso_events WHERE event='linked'").get().n;assert.equal(events,2);
+  await identityCall(f,'link/company',{},owner,409);
+ }finally{await f.close()}
+});
+
+test('linking denies anonymous, bearer, wrong-origin, CSRF, non-fresh and cross-session callbacks',async()=>{
+ const f=await identityFixture();try{
+  await identityCall(f,'identities',undefined,undefined,401);
+  const owner=await register(f.runtime,'local@example.test'),other=await f.fresh(await register(f.runtime,'other@example.test'));
+  await identityCall(f,'link/company',{},owner,403);await f.fresh(owner);
+  const bearer=req('/__clank/sso/link/company',{},owner);bearer.headers.set('authorization','Bearer made-up-token');assert.equal((await f.sso.handle(bearer)).status,401);
+  const csrf=req('/__clank/sso/link/company',{},owner);csrf.headers.delete('x-clank-csrf');assert.equal((await f.sso.handle(csrf)).status,403);
+  const crossOrigin=req('/__clank/sso/link/company',{},owner);crossOrigin.headers.set('origin','https://other.test');assert.equal((await f.sso.handle(crossOrigin)).status,403);
+  await identityCall(f,'link/company',{userId:other.user.id},owner,422);
+  const flow=await linkingFlow(f,owner);const wrong=new Request(flow.request.url,{headers:{cookie:other.cookie+'; '+flow.request.headers.get('cookie').split('; ').at(-1)}});assert.equal((await f.sso.handle(wrong)).status,403);
+  assert.equal((await flow.finish()).status,303);const inventory=await identityCall(f,'identities',undefined,other);assert.equal(inventory.identities.length,0);
+ }finally{await f.close()}
+});
+
+test('signed provider auth_time is required and stale/future verification never creates a binding',async()=>{
+ const f=await identityFixture();try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test'));
+  for(const auth_time of [undefined,Math.floor(Date.now()/1000)-301,Math.floor(Date.now()/1000)+31,'fresh']){f.idp.setClaims({auth_time});const flow=await linkingFlow(f,owner);const response=await flow.finish();assert.equal(response.status,403,await response.text());}
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_sso_identities').get().n,0);
+  f.idp.setClaims({});const pending=await linkingFlow(f,owner);f.sql.prepare('UPDATE clank_auth_sessions SET authenticated_at=? WHERE id=?').run(Date.now()-300001,owner.session.id);assert.equal((await pending.finish()).status,403);
+ }finally{await f.close()}
+});
+
+test('provider subjects cannot transfer across accounts or organizations, including retained inactive ownership',async()=>{
+ const f=await identityFixture();try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test')),other=await f.fresh(await register(f.runtime,'other@example.test'));
+  const accepted=await linkingFlow(f,owner);assert.equal((await accepted.finish()).status,303);
+  const collision=await linkingFlow(f,other);assert.equal((await collision.finish()).status,409);
+  const row=(await identityCall(f,'identities',undefined,owner)).identities[0],input={identityId:row.id,expectedVersion:row.version,idempotencyKey:'identity_unlink_collision_1'};
+  await identityCall(f,'unlink',input,other,404);await identityCall(f,'unlink',input,owner);const inactiveCollision=await linkingFlow(f,other);assert.equal((await inactiveCollision.finish()).status,409);
+  // Reusing the issuer and subject under a second organization cannot create another human account.
+  const providers=[f.options.providers[0],{...f.options.providers[1],issuer:f.idp.issuer}];await f.reopen({...f.options,providers,identityLinking:{policyRevision:2}});
+  const cross=await linkingFlow(f,other,'second');assert.equal((await cross.finish()).status,409);
+  const start=await f.sso.handle(req('/__clank/sso/start/second'));const authorized=await fetch(start.headers.get('location'),{redirect:'manual'});f.idp.setClaims({email:'changed-email@example.test'});
+  const ordinary=await f.sso.handle(new Request(authorized.headers.get('location'),{headers:{cookie:start.headers.get('set-cookie').split(';')[0]}}));assert.equal(ordinary.status,409);
+ }finally{await f.close()}
+});
+
+test('unlink is versioned, survives lost responses/restart, preserves ownership and permits a fresh explicit relink',async()=>{
+ const f=await identityFixture();try{
+  let owner=await f.fresh(await register(f.runtime,'local@example.test'));const first=await linkingFlow(f,owner);assert.equal((await first.finish()).status,303);
+  const row=(await identityCall(f,'identities',undefined,owner)).identities[0],input={identityId:row.id,expectedVersion:row.version,idempotencyKey:'unlink_restart_exact_receipt'};
+  await identityCall(f,'unlink',{...input,expectedVersion:999},owner,409);const receipt=await identityCall(f,'unlink',input,owner);assert.equal(receipt.signedOut,true);assert.equal(receipt.identity.version,2);
+  assert.equal((await f.runtime.auth.resolve(req('/',undefined,owner))).user,null);assert.equal(f.sql.prepare('SELECT disabled FROM clank_auth_users WHERE id=?').get(owner.user.id).disabled,0);
+  await f.reopen();owner=await f.fresh(await loginLocal(f.runtime));assert.deepEqual(await identityCall(f,'unlink',input,owner),receipt);
+  await identityCall(f,'unlink',{...input,expectedVersion:2},owner,409);
+  const relink=await linkingFlow(f,owner);assert.equal((await relink.finish()).status,303);const next=(await identityCall(f,'identities',undefined,owner)).identities[0];assert.equal(next.id,row.id);assert.equal(next.version,3);assert.equal(next.active,true);
+  assert.deepEqual(await identityCall(f,'unlink',input,owner),receipt);assert.equal((await identityCall(f,'identities',undefined,owner)).identities[0].active,true);
+  assert.equal((await first.finish()).status,401);assert.equal(f.sql.prepare("SELECT count(*) n FROM clank_sso_events WHERE event='unlinked'").get().n,1);
+ }finally{await f.close()}
+});
+
+test('partial offboarding retains unrelated identities after linking is disabled and revokes live sessions',async()=>{
+ const f=await identityFixture();try{
+  let owner=await f.fresh(await register(f.runtime,'local@example.test'));
+  for(const organization of ['company','second']){const flow=await linkingFlow(f,owner,organization);assert.equal((await flow.finish()).status,303)}
+  await f.reopen({...f.options,identityLinking:undefined});assert.equal((await identityCall(f,'identities',undefined,owner)).enabled,false);await identityCall(f,'link/company',{},owner,403);
+  assert.equal((await identityOffboard(f)).status,200);assert.equal((await f.runtime.auth.resolve(req('/',undefined,owner))).user,null);
+  const rows=f.sql.prepare('SELECT organization,active FROM clank_sso_identities ORDER BY organization').all();assert.deepEqual(rows.map(row=>[row.organization,row.active]),[['company',0],['second',1]]);
+  assert.equal(f.sql.prepare('SELECT disabled FROM clank_auth_users WHERE id=?').get(owner.user.id).disabled,0);
+  owner=await loginLocal(f.runtime);const start=await f.sso.handle(req('/__clank/sso/start/second'));const authorized=await fetch(start.headers.get('location'),{redirect:'manual'});const signedIn=await f.sso.handle(new Request(authorized.headers.get('location'),{headers:{cookie:start.headers.get('set-cookie').split(';')[0]}}));assert.equal(signedIn.status,303);
+  assert.equal((await identityOffboard(f)).status,200);assert.equal(f.sql.prepare("SELECT version FROM clank_sso_identities WHERE organization='company'").get().version,2);
+ }finally{await f.close()}
+});
+
+test('held real JWKS response cannot publish a link after local revocation, offboarding or policy replacement',async()=>{
+ for(const mode of ['session','offboard','policy']){const f=await identityFixture();try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test')),flow=await linkingFlow(f,owner),held=f.idp.holdKeys(),finishing=flow.finish();await held.ready;
+  if(mode==='session') f.runtime.auth.revokeUserSessions(owner.user.id);
+  if(mode==='offboard') assert.equal((await identityOffboard(f)).status,200);
+  if(mode==='policy') openOrganizationSso(f.runtime.database,f.runtime.auth,{...f.options,identityLinking:{policyRevision:2}});
+  held.release();assert.equal((await finishing).status,mode==='session'?401:403);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_sso_identities').get().n,0);
+ }finally{await f.close()}}
+});
+
+test('changed provider configuration and account generation reject pending links; original policy cannot overwrite newer revisions',async()=>{
+ const f=await identityFixture();try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test')),pending=await linkingFlow(f,owner),second=await linkingFlow(f,owner,'second');assert.equal((await second.finish()).status,303);assert.equal((await pending.finish()).status,409);
+  const providerChange=await linkingFlow(f,owner);const updated={...f.options,providers:f.options.providers.map(provider=>({...provider,clientSecret:'new-server-secret'}))};await f.reopen(updated);assert.equal((await providerChange.finish()).status,409);
+  assert.throws(()=>openOrganizationSso(f.runtime.database,f.runtime.auth,{...f.options,providers:f.options.providers.map(provider=>({...provider,clientId:'changed-client'}))}),/Increase/);
+  openOrganizationSso(f.runtime.database,f.runtime.auth,{...f.options,identityLinking:{policyRevision:2}});assert.throws(()=>openOrganizationSso(f.runtime.database,f.runtime.auth,f.options),/Increase/);
+ }finally{await f.close()}
+});
+
+test('identity and receipt capacities stay bounded without pruning issuer ownership or accepted retry keys',async()=>{
+ const f=await identityFixture({identityLinking:{policyRevision:1,maxActiveIdentities:1,maxRetainedIdentities:1}});try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test')),first=await linkingFlow(f,owner);assert.equal((await first.finish()).status,303);await identityCall(f,'link/second',{},owner,409);
+  const row=(await identityCall(f,'identities',undefined,owner)).identities[0];
+  for(let index=0;index<100;index++)f.sql.prepare('INSERT INTO clank_sso_unlinks VALUES(?,?,?,?)').run(owner.user.id,'seeded-receipt-'+index,'[]','{}');
+  await identityCall(f,'unlink',{identityId:row.id,expectedVersion:1,idempotencyKey:'bounded_unlink_101'},owner,409);assert.equal(f.sql.prepare('SELECT active FROM clank_sso_identities WHERE id=?').get(row.id).active,1);
+  f.sql.prepare('DELETE FROM clank_sso_unlinks WHERE user_id=?').run(owner.user.id);
+  await identityCall(f,'unlink',{identityId:row.id,expectedVersion:1,idempotencyKey:'bounded_unlink_accepted'},owner);
+  const nextOwner=await f.fresh(await loginLocal(f.runtime));f.idp.setClaims({sub:'another-subject'});const different=await linkingFlow(f,nextOwner);assert.equal((await different.finish()).status,409);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_sso_identities').get().n,1);
+ }finally{await f.close()}
+});
+
+test('last usable identity unlink fails closed and a failing transactional hook retains all identity state',async()=>{
+ const f=await identityFixture({onOffboard(){throw new Error('hook unavailable')}});try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test')),flow=await linkingFlow(f,owner);assert.equal((await flow.finish()).status,303);const row=(await identityCall(f,'identities',undefined,owner)).identities[0],input={identityId:row.id,expectedVersion:1,idempotencyKey:'transactional_unlink_1'};
+  await identityCall(f,'unlink',input,owner,400);assert.equal(f.sql.prepare('SELECT active FROM clank_sso_identities WHERE id=?').get(row.id).active,1);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_sso_unlinks').get().n,0);assert.ok((await f.runtime.auth.resolve(req('/',undefined,owner))).user);
+  const password=f.sql.prepare('SELECT password_hash FROM clank_auth_users WHERE id=?').get(owner.user.id).password_hash;f.sql.prepare('UPDATE clank_auth_users SET password_hash=? WHERE id=?').run('federated:unusable',owner.user.id);
+  await identityCall(f,'unlink',input,owner,409);f.sql.prepare('UPDATE clank_auth_users SET password_hash=? WHERE id=?').run(password,owner.user.id);
+ }finally{await f.close()}
+});
+
+test('legacy identity schema upgrades atomically, keeps revocations/audit, and failed configuration rolls back table replacement',async()=>{
+ const f=await fixture(),idp=await mockIdp();try{
+  const owner=await register(f.runtime),sql=f.runtime.database[key];
+  sql.exec('CREATE TABLE clank_sso_identities (organization TEXT NOT NULL,issuer TEXT NOT NULL,subject TEXT NOT NULL,user_id TEXT NOT NULL UNIQUE REFERENCES clank_auth_users(id) ON DELETE CASCADE,active INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(organization,issuer,subject))');
+  sql.prepare('INSERT INTO clank_sso_identities VALUES(?,?,?,?,1)').run('company',idp.issuer,'legacy-subject',owner.user.id);
+  sql.exec('CREATE TABLE clank_sso_policy(singleton INTEGER PRIMARY KEY,revision INTEGER NOT NULL,enabled INTEGER NOT NULL,configuration TEXT NOT NULL)');sql.prepare('INSERT INTO clank_sso_policy VALUES(1,2,1,?)').run('different-configuration');
+  const options={applicationOrigin:origin,allowInsecureLoopback:true,providers:[{organizationId:'company',issuer:idp.issuer,clientId:'clank-client',offboardingToken:'legacy-offboarding-secret-32chars-long'}],identityLinking:{policyRevision:1}};
+  assert.throws(()=>openOrganizationSso(f.runtime.database,f.runtime.auth,options),/Increase/);assert.ok(!sql.prepare('PRAGMA table_info(clank_sso_identities)').all().some(column=>column.name==='id'));assert.equal(sql.prepare('SELECT subject FROM clank_sso_identities').get().subject,'legacy-subject');
+  sql.exec('DELETE FROM clank_sso_policy');sql.exec('CREATE TABLE clank_sso_revocations(organization TEXT NOT NULL,issuer TEXT NOT NULL,subject TEXT NOT NULL,at INTEGER NOT NULL,PRIMARY KEY(organization,issuer,subject))');sql.prepare('INSERT INTO clank_sso_revocations VALUES(?,?,?,?)').run('company',idp.issuer,'earlier-offboard',42);
+  const sso=openOrganizationSso(f.runtime.database,f.runtime.auth,options),row=sql.prepare('SELECT * FROM clank_sso_identities').get();assert.match(row.id,/^sso_[a-f0-9]{32}$/u);assert.equal(row.user_id,owner.user.id);assert.equal(row.version,1);assert.equal(row.active,1);assert.equal(sql.prepare('SELECT at FROM clank_sso_revocations').get().at,42);
+  openOrganizationSso(f.runtime.database,f.runtime.auth,options);assert.equal(sql.prepare('SELECT id FROM clank_sso_identities').get().id,row.id);assert.equal((await sso.handle(req('/__clank/sso/identities',undefined,owner))).status,200);assert.deepEqual(sql.prepare('PRAGMA foreign_key_check').all(),[]);
+ }finally{await idp.close();await f.close()}
+});
+
+test('actual federated session creation cannot outlive an offboarding during its asynchronous publication boundary',async()=>{
+ const f=await identityFixture();try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test'));
+  for(const organization of ['company','second']){const flow=await linkingFlow(f,owner,organization);assert.equal((await flow.finish()).status,303)}
+  let reached,release;const ready=new Promise(resolve=>reached=resolve),held=new Promise(resolve=>release=resolve);
+  const auth=new Proxy(f.runtime.auth,{get(target,property){if(property==='issueFederatedSession')return async(...args)=>{reached();await held;return target.issueFederatedSession(...args)};const value=target[property];return typeof value==='function'?value.bind(target):value}});
+  const sso=openOrganizationSso(f.runtime.database,auth,f.options);
+  const start=await sso.handle(req('/__clank/sso/start/second'));const authorized=await fetch(start.headers.get('location'),{redirect:'manual'});const finishing=sso.handle(new Request(authorized.headers.get('location'),{headers:{cookie:start.headers.get('set-cookie').split(';')[0]}}));await ready;
+  assert.equal((await identityOffboard(f,'company')).status,200);release();const response=await finishing;assert.equal(response.status,403);assert.equal(response.headers.get('set-cookie'),null);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_auth_sessions WHERE user_id=?').get(owner.user.id).n,0);assert.equal(f.sql.prepare("SELECT active FROM clank_sso_identities WHERE organization='second'").get().active,1);
+ }finally{await f.close()}
+});
+
+test('pending link capacity is bounded, exact receipt replay checks current configuration, and invalid contracts fail closed',async()=>{
+ const f=await identityFixture();try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test'));
+  for(let index=0;index<10;index++)await identityCall(f,'link/company',{},owner);
+  await identityCall(f,'link/company',{},owner,503);f.sql.prepare('UPDATE clank_sso_states SET expires=1').run();
+  const accepted=await linkingFlow(f,owner);assert.equal((await accepted.finish()).status,303);
+  await f.reopen({...f.options,providers:f.options.providers.map(provider=>({...provider,clientSecret:'changed-secret'}))});assert.equal((await accepted.finish()).status,409);
+  for(const input of [{},null,{identityId:'invalid',expectedVersion:1,idempotencyKey:'valid_key_123456789'}])await identityCall(f,'unlink',input,owner,422);
+  assert.throws(()=>openOrganizationSso(f.runtime.database,f.runtime.auth,{...f.options,identityLinking:{policyRevision:3,maxActiveIdentities:11}}),/policy/);
+ }finally{await f.close()}
+});
+
+test('identity client uses current CSRF/browser ownership and clears session after real unlink',async()=>{
+ const f=await identityFixture();try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test')),other=await f.fresh(await register(f.runtime,'other@example.test'));let heldResponse,release,hold=false;
+  const transport=async(url,init)=>{const request=new Request(new URL(url,origin),{...init,headers:{...init?.headers,cookie:owner.cookie,origin}});const response=new URL(request.url).pathname.startsWith('/__clank/sso')?await f.sso.handle(request):await f.runtime.handle(request);if(hold){heldResponse=response;await new Promise(resolve=>release=resolve);}return response};
+  const client=createAuthClient({initial:{user:owner.user,session:owner.session,csrfToken:owner.csrf},fetch:transport});const identities=createOrganizationIdentityClient({auth:client,fetch:transport});assert.equal((await identities.list()).identities.length,0);const started=await identities.start('company');assert.equal(new URL(started.authorizationUrl).searchParams.get('max_age'),'0');
+  const flow=await linkingFlow(f,owner);assert.equal((await flow.finish()).status,303);const row=(await identities.list()).identities[0];assert.equal(row.organizationId,'company');
+  const html=await renderToString(AccountSecurity({auth:client,identities}));assert.match(html,/Organization identities/);assert.match(html,/Refresh organization identities/);assert.match(html,/Sign back in/);
+  hold=true;const pending=identities.list();while(!heldResponse)await new Promise(resolve=>setImmediate(resolve));client.user.value=other.user;client.session.value=other.session;release();await assert.rejects(pending,/Account changed/);
+  hold=false;client.user.value=owner.user;client.session.value=owner.session;
+  const result=await identities.unlink({identityId:row.id,expectedVersion:row.version,idempotencyKey:'client_exact_unlink_key'});assert.equal(result.signedOut,true);assert.equal(client.user.value,null);
+  await assert.rejects(identities.start('company'),/Sign in/);assert.throws(()=>createOrganizationIdentityClient({auth:client,prefix:'/invalid/'}),/prefix/);
+ }finally{await f.close()}
+});
+
+async function verifyPlatformPasskey(f,owner){
+ const {privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'P-256'}),credentialId=Buffer.from('identity-link-passkey-'+owner.user.id).toString('base64url');
+ f.sql.prepare('INSERT INTO clank_auth_passkeys(id,credential_id,user_id,name,public_key,algorithm,counter,transports,created_at) VALUES(?,?,?,?,?,-7,0,?,?)').run('identity-key-'+owner.user.id,credentialId,owner.user.id,'Identity key',JSON.stringify(publicKey.export({format:'jwk'})),'[]',Date.now());
+ const start=await pcall(f,'/__clank/auth/reauthenticate/passkey/start',{},owner),client=Buffer.from(JSON.stringify({type:'webauthn.get',challenge:start.options.challenge,origin,crossOrigin:false})),data=Buffer.concat([createHash('sha256').update('security.test').digest(),Buffer.from([5,0,0,0,1])]);
+ const credential={id:credentialId,rawId:credentialId,type:'public-key',response:{clientDataJSON:client.toString('base64url'),authenticatorData:data.toString('base64url'),signature:sign('sha256',Buffer.concat([data,createHash('sha256').update(client).digest()]),privateKey).toString('base64url'),userHandle:null}};
+ await pcall(f,'/__clank/auth/reauthenticate/passkey/finish',{challengeId:start.challengeId,challenge:start.options.challenge,credential},owner);
+}
+
+test('platform partial offboarding revokes only affected project scopes, all broad credentials, and preserves unrelated organization access',async()=>{
+ const f=await platformFixture(),first=await mockIdp(),second=await mockIdp();try{
+  const a=await register(f.platform,'owner-a@example.test'),b=await register(f.platform,'owner-b@example.test'),member=await register(f.platform,'local@example.test');
+  const projectA=(await pcall(f,'/api/projects',{name:'Linked workspace A'},a,201)).project,projectB=(await pcall(f,'/api/projects',{name:'Linked workspace B'},b,201)).project;
+  const providers=[{organizationId:projectA.organizationId,issuer:first.issuer,clientId:'clank-client',offboardingToken:'first-organization-offboarding-secret-32chars'},{organizationId:projectB.organizationId,issuer:second.issuer,clientId:'clank-client',offboardingToken:'second-organization-offboarding-secret-32chars'}];
+  const settings={applicationOrigin:origin,allowInsecureLoopback:true,providers,identityLinking:{policyRevision:1}};await f.reopen({organizationSso:settings});await verifyPlatformPasskey(f,member);
+  const linked={sso:{handle:request=>f.platform.handle(request)},options:settings};
+  for(const project of [projectA,projectB]){const flow=await linkingFlow(linked,member,project.organizationId);assert.equal((await flow.finish()).status,303);assert.equal(f.sql.prepare('SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(project.organizationId,member.user.id).role,'viewer')}
+  await pcall(f,`/api/organizations/${projectA.organizationId}/members/${member.user.id}`,{role:'admin'},a,200,'PATCH');await pcall(f,`/api/organizations/${projectB.organizationId}/members/${member.user.id}`,{role:'admin'},b,200,'PATCH');
+  await pcall(f,`/api/projects/${projectA.id}/members/${member.user.id}`,{permissions:['read','tokens']},a,200,'PUT');await pcall(f,`/api/projects/${projectB.id}/members/${member.user.id}`,{permissions:['read','tokens']},b,200,'PUT');
+  const scopedA=await pcall(f,`/api/projects/${projectA.id}/tokens`,{name:'Scoped A',permissions:['read']},member,201),scopedB=await pcall(f,`/api/projects/${projectB.id}/tokens`,{name:'Scoped B',permissions:['read']},member,201);
+  const broadStart=await pcall(f,'/api/device/start',{clientName:'Broad CLI'},undefined,201);await pcall(f,'/api/device/approve',{code:broadStart.userCode},member);const broad=await pcall(f,'/api/device/token',{deviceCode:broadStart.deviceCode});
+  const pending=await pcall(f,'/api/device/start',{clientName:'Pending broad CLI'},undefined,201);await pcall(f,'/api/device/approve',{code:pending.userCode},member);
+  await f.reopen({organizationSso:{...settings,identityLinking:undefined}});assert.equal((await identityOffboard(linked,projectA.organizationId)).status,200);
+  assert.equal(f.sql.prepare('SELECT disabled FROM clank_auth_users WHERE id=?').get(member.user.id).disabled,0);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(projectA.organizationId,member.user.id).n,0);assert.equal(f.sql.prepare('SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(projectB.organizationId,member.user.id).role,'admin');
+  assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_platform_project_members WHERE project_id=? AND user_id=?').get(projectA.id,member.user.id).n,0);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_platform_project_members WHERE project_id=? AND user_id=?').get(projectB.id,member.user.id).n,1);
+  const bearer=(token,project)=>f.platform.handle(new Request(origin+'/api/projects/'+project.id,{headers:{authorization:'Bearer '+token}}));
+  assert.equal((await bearer(scopedA.token.accessToken,projectA)).status,401);assert.equal((await bearer(scopedB.token.accessToken,projectB)).status,200);assert.equal((await bearer(broad.accessToken,projectB)).status,401);await pcall(f,'/api/device/token',{deviceCode:pending.deviceCode},undefined,400);await pcall(f,'/api/projects',undefined,member,401);
+  const local=await loginLocal(f.platform);await pcall(f,`/api/projects/${projectA.id}`,undefined,local,404);await pcall(f,`/api/projects/${projectB.id}`,undefined,local);
+ }finally{await first.close();await second.close();await f.close()}
+});
+
+test('platform voluntary unlink keeps the last owner while explicit provider offboarding still revokes organization access',async()=>{
+ const f=await platformFixture(),idp=await mockIdp();try{
+  const owner=await register(f.platform,'local@example.test'),project=(await pcall(f,'/api/projects',{name:'Last owner linking'},owner,201)).project;
+  const settings={applicationOrigin:origin,allowInsecureLoopback:true,providers:[{organizationId:project.organizationId,issuer:idp.issuer,clientId:'clank-client',offboardingToken:'last-owner-offboarding-secret-32chars'}],identityLinking:{policyRevision:1}};await f.reopen({organizationSso:settings});await verifyPlatformPasskey(f,owner);
+  const linked={sso:{handle:request=>f.platform.handle(request)},options:settings},flow=await linkingFlow(linked,owner,project.organizationId);assert.equal((await flow.finish()).status,303);
+  const row=(await pcall(f,'/__clank/sso/identities',undefined,owner)).identities[0];const failure=await pcall(f,'/__clank/sso/unlink',{identityId:row.id,expectedVersion:row.version,idempotencyKey:'last_owner_unlink_attempt'},owner,409);assert.equal(failure.error.code,'LAST_OWNER');assert.equal(f.sql.prepare('SELECT active FROM clank_sso_identities WHERE id=?').get(row.id).active,1);await pcall(f,'/api/projects',undefined,owner);
+  const disabledOwner=await register(f.platform,'disabled-owner@example.test');await addMember(f,project,owner,disabledOwner);await pcall(f,`/api/organizations/${project.organizationId}/members/${disabledOwner.user.id}`,{role:'owner'},owner,200,'PATCH');f.sql.prepare('UPDATE clank_auth_users SET disabled=1 WHERE id=?').run(disabledOwner.user.id);await pcall(f,'/api/projects',undefined,disabledOwner,401);
+  const disabledFailure=await pcall(f,'/__clank/sso/unlink',{identityId:row.id,expectedVersion:row.version,idempotencyKey:'disabled_owner_unlink_attempt'},owner,409);assert.equal(disabledFailure.error.code,'LAST_OWNER');assert.equal(f.sql.prepare('SELECT active FROM clank_sso_identities WHERE id=?').get(row.id).active,1);
+  assert.equal((await identityOffboard(linked,project.organizationId)).status,200);assert.equal(f.sql.prepare('SELECT disabled FROM clank_auth_users WHERE id=?').get(owner.user.id).disabled,0);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(project.organizationId,owner.user.id).n,0);
+ }finally{await idp.close();await f.close()}
+});
+
+test('lost accepted unlink transport and body failures immediately reload real authority and clear client account state',async()=>{
+ for(const failureMode of ['json','html','network','oversized']){const f=await identityFixture();let pulls=0,cancelled=false;try{
+  const owner=await f.fresh(await register(f.runtime,'local@example.test')),flow=await linkingFlow(f,owner);assert.equal((await flow.finish()).status,303);
+  const transport=async(url,init)=>{const request=new Request(new URL(url,origin),{...init,headers:{...init?.headers,cookie:owner.cookie,origin}}),isSso=new URL(request.url).pathname.startsWith('/__clank/sso');const response=isSso?await f.sso.handle(request):await f.runtime.handle(request);if(request.url.endsWith('/unlink')&&response.ok){if(failureMode==='network')throw new TypeError('Network response lost');return new Response(failureMode==='html'?'<html>upstream failure</html>':failureMode==='oversized'?new ReadableStream({pull(controller){pulls++;if(pulls>2)throw Error('Read past response budget');controller.enqueue(new Uint8Array(pulls===1?262144:1))},cancel(){cancelled=true}},{highWaterMark:0}):JSON.stringify({ok:false,error:{code:'RESPONSE_LOST',message:'Accepted response lost'}}),{status:500})}return response};
+  const client=createAuthClient({initial:{user:owner.user,session:owner.session,csrfToken:owner.csrf},fetch:transport}),identities=createOrganizationIdentityClient({auth:client,fetch:transport}),row=(await identities.list()).identities[0],input={identityId:row.id,expectedVersion:row.version,idempotencyKey:'lost_accepted_unlink_retry'};
+  await assert.rejects(identities.unlink(input),failureMode==='html'?/Invalid identity response/:failureMode==='network'?/Network response lost/:failureMode==='oversized'?/too large/:/Accepted response lost/);assert.equal(client.user.value,null);assert.equal(client.session.value,null);assert.equal(f.sql.prepare('SELECT active FROM clank_sso_identities WHERE id=?').get(row.id).active,0);assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_sso_unlinks').get().n,1);if(failureMode==='oversized'){assert.equal(pulls,2);assert.equal(cancelled,true)}
+  const fresh=await f.fresh(await loginLocal(f.runtime));const receipt=await identityCall(f,'unlink',input,fresh);assert.equal(receipt.identity.version,2);assert.equal(f.sql.prepare("SELECT count(*) n FROM clank_sso_events WHERE event='unlinked'").get().n,1);
+ }finally{await f.close()}}
 });

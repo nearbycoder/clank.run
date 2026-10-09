@@ -1280,10 +1280,19 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (!storage.internal.prepare("SELECT id FROM clank_platform_organizations WHERE id = ?").get(organizationId)) throw new PlatformError(404, "ORGANIZATION_NOT_FOUND", "SSO organization is not configured.");
       storage.internal.prepare("INSERT OR IGNORE INTO clank_platform_memberships(organization_id, user_id, role, created_at, updated_at) VALUES (?, ?, 'viewer', ?, ?)").run(organizationId, userId, Date.now(), Date.now());
     },
-    onOffboard(userId, organizationId) {
+    onOffboard(userId, organizationId, context) {
+      if(context?.reason==="unlink" && storage.internal.prepare("SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?").get(organizationId,userId)?.role==="owner"
+        && !storage.internal.prepare("SELECT 1 FROM clank_platform_memberships m JOIN clank_auth_users u ON u.id=m.user_id WHERE m.organization_id=? AND m.user_id<>? AND m.role='owner' AND u.disabled=0 LIMIT 1").get(organizationId,userId)) throw new AuthError("LAST_OWNER","Grant another active workspace owner before unlinking this identity.",409);
       storage.internal.prepare("DELETE FROM clank_platform_memberships WHERE organization_id = ? AND user_id = ?").run(organizationId, userId);
-      storage.internal.prepare("DELETE FROM clank_platform_project_members WHERE user_id = ?").run(userId);
-      storage.internal.prepare("UPDATE clank_platform_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(Date.now(), userId);
+      if(context?.accountMode==="linked") {
+        storage.internal.prepare("DELETE FROM clank_platform_project_members WHERE user_id=? AND project_id IN (SELECT id FROM clank_platform_projects WHERE organization_id=?)").run(userId,organizationId);
+        // Unscoped account credentials may cover the removed organization; revoke conservatively.
+        storage.internal.prepare(`UPDATE clank_platform_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL AND
+          ((organization_id IS NULL AND project_id IS NULL) OR organization_id=? OR project_id IN (SELECT id FROM clank_platform_projects WHERE organization_id=?))`).run(Date.now(),userId,organizationId,organizationId);
+      } else {
+        storage.internal.prepare("DELETE FROM clank_platform_project_members WHERE user_id=?").run(userId);
+        storage.internal.prepare("UPDATE clank_platform_tokens SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL").run(Date.now(),userId);
+      }
       storage.internal.prepare("UPDATE clank_platform_device_codes SET status = 'denied', consumed_at = ? WHERE user_id = ?").run(Date.now(), userId);
       audit(storage.internal, userId, null, null, "organization.offboard", { organizationId });
     },

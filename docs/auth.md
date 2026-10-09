@@ -126,10 +126,14 @@ call may still resolve its response for its caller. Passkey registration and rea
 before sending their finish request if the account or session changed during the browser prompt.
 These guards protect client state; they do not serialize the browser's handling of HTTP cookies.
 
-`AccountSecurity({ auth })` clears its session/passkey inventory, password fields, MFA challenge,
+`AccountSecurity({ auth })` clears its session/passkey inventory, optional organization identity
+inventory, password fields, MFA challenge,
 and status when the user or session changes. Replies from a previous account or a disposed screen
 cannot repopulate those controls. In-process anonymous backend callers expose all auth guards;
 `auth.requireVerified()` rejects with `UNAUTHENTICATED` (401), like `requireUser()` and `requireRole()`.
+
+For opt-in verified organization linking, scoped offboarding and its reusable account controls,
+see [Organization and account security](organization-security.md#verified-organization-identity-linking).
 
 ## SSR
 
