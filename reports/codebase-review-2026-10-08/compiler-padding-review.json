@@ -4,7 +4,7 @@
   "baseCommit": "054f1f03b12e153093880148a43d3641762b79c6",
   "branch": "codex/compact-type-erasure-padding",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/255",
-  "status": "local-release-validation-passed",
+  "status": "merged",
   "finding": "Native Node26 type stripping retains erased type syntax as padding; release package was only 116479 bytes below the unchanged 6 MiB limit.",
   "change": "Unmapped Node26 output compacts only consecutive changed-space positions, retaining one separator and every unchanged character/newline. Mapped output retains native padding; Node22/24 transform behavior is unchanged.",
   "package": {
@@ -88,5 +88,17 @@
     "scripts/compiler.mjs": "8e03886f5bf6a735406ba88edbc803102da74d50a4c2a2e4edd4d43272952502",
     "tests/compiler-runtime.test.mjs": "8d33debbac9aaa3a9798f8aa9315d6228127cd8c20a2d10e0f3dd13910ab90d6",
     "docs/development-tools.md": "a5f6febd7fe2c94bcb498eca2a81c21e627937afe23d26a787dc2d0d0472a0f9"
+  },
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/256",
+    "reviewedHead": "4b90ce62bc55c42d925f38d89860d732bb3b950b",
+    "mergeCommit": "761671eb6fbd24addd811af4ed056eda37d531bf",
+    "authorCommentReview": 5464971250,
+    "independentApproval": false,
+    "hostedChecks": "all six passed after correcting the transform-mode test assertion",
+    "ciRun": 37873467866,
+    "codeqlRun": 37873467863,
+    "merge": "protected expected-head squash; no bypass",
+    "bothCheckouts": "synchronized; 7 current and 16 primary untracked files preserved"
   }
 }

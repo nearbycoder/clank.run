@@ -285,6 +285,84 @@ corpus; `truncated` tells the UI to narrow the search. Ranking folds accents and
 the original spelling and text coordinates.
 Indexed titles are limited to 1,000 UTF-8 bytes and bodies to 1 MiB each.
 
+### Link an index to source rows
+
+For atomic indexing, declare the source once on the server. The application schema is required;
+title/body must be required string fields. Owned tables use `scope: "owner"`; public tables use
+`scope: { field: "workspaceId" }` with a declared required string scope field and an explicit
+scope authorization policy. Names and field identifiers contain ASCII letters, digits and
+underscores, begin with a letter and have at most 64 characters.
+Optional/defaulted source fields are rejected: normalize defaults into required stored fields
+before indexing. Required string schemas, string enums and string literals are supported.
+
+```ts
+import { defineDatabase, defineTable, s } from "@clank.run/framework";
+import { openSearch } from "@clank.run/framework/search";
+const schema = defineDatabase({
+  notes: defineTable({ title: s.string(), body: s.string() }).owned(),
+});
+const search = await openSearch({
+  path: "app.sqlite", auth, schema,
+  source: { name: "notes", table: "notes", title: "title", body: "body", scope: "owner" },
+  authorize: ({ auth }, scope) => auth.requireUser().id === scope,
+});
+// Bounded server administration; schedule further calls while status is building.
+const progress = search.rebuild({ batchSize: 250 });
+const diagnostic = search.inspect({ limit: 250 });
+```
+
+The core SQLite transaction updates registered source indexes before commit for inserts,
+patches, replacements, deletes and record-history restores, including independent connections
+opened before registration. A failed index update rolls back source rows, history and index
+together. Changing scope removes the old entry. All writers must use the upgraded core before
+registration; old binaries and direct SQL writes are unsupported. The index retains each source
+version. Each hit must also match the current owner-scoped source row, title, body and scope
+before it consumes ranking capacity. Stale, deleted or inaccessible rows are never displayed.
+Additional record ACLs still belong in `authorizeRecord`.
+
+At most 16 named indexes can be registered. Each defaults to 50,000 source records and 16 MiB
+of indexed title/body bytes; `source.maxRecords` allows 1–50,000 and `source.maxBytes` allows
+1 byte–64 MiB. Scope limits and per-record byte limits above also apply. These limits apply to
+the final transaction state, allowing valid multi-record byte/scope swaps. Registration rejects
+an oversized source table. Rebuild rejects oversized content without advancing its cursor;
+correct/delete the offending rows or drain writers and replace the binding with larger bounds.
+FTS metadata, SQLite pages/WAL and independent backups have additional physical overhead.
+
+An initial rebuild makes search return `SEARCH_SOURCE_UNAVAILABLE` until complete. Calls process
+1–1,000 rows (250 by default), atomically advancing a persistent ID cursor. Source writes remain
+indexed during rebuild, including new IDs behind that cursor. Restart or a lost response resumes
+committed progress without rewriting application rows. `rebuild()` on a ready index is a no-op.
+To repair drift, pass the current ready revision from `inspect()` as `ifRevision`. Starting repair
+clears the derived index and starts one bounded batch; a lost-response retry with the old revision
+conflicts instead of restarting progress. Inspect current state and resume without `ifRevision`.
+
+`inspect({ cursor, limit })` scans a bounded union of source/index IDs and reports missing, stale,
+orphan and duplicate counts, overall indexed bytes/records and `nextCursor`. Follow that cursor to diagnose
+the full index. Counts cover the scanned batch; they do not certify unscanned records. Rebuild,
+inspect and detach are trusted server-only methods and are never HTTP or agent mutations. A
+linked service does not expose manual `upsert`/`remove`, preventing forged source entries.
+The browser search control ignores responses and open-record buttons after a scope change or
+cleanup. Dispose and remount it on logout/account/workspace changes; external permission changes
+are discovered on the next request.
+
+First source registration adds reserved `clank_source_search_indexes` metadata and
+`clank_source_search_fts` with its FTS shadow tables. Applications without source registration
+gain no search tables. The `source_search_` application-table prefix is reserved; migrate any
+existing application tables using that prefix before upgrading. SQLite keeps
+`trusted_schema` disabled; no FTS triggers or dependencies are added. Existing manual indexes
+remain compatible. Point-in-time recovery explicitly rejects virtual tables, including this FTS
+index; use consistent SQLite snapshots and rebuilds. Do not weaken its existing recovery seal.
+Search schema initialization is rejected on a database sealed for journaled recovery; do not
+register an FTS index in an existing recovery epoch.
+
+Rollback: drain writers, unmount search, call `search.detach(search.inspect().generation)` using
+the upgraded service, and then revert code. Detach removes the binding and its derived rows
+without changing source rows. Old service handles cannot rebuild or detach a replacement
+generation. FTS tables remain as derived infrastructure; their presence still excludes journaled
+recovery until an operator removes them after all indexes are detached and a consistent backup
+has been taken. Changed definitions/limits require this fenced detach followed by registration;
+unmounting alone leaves atomic source indexing active.
+
 ## Publish shared saved views
 
 ```ts
