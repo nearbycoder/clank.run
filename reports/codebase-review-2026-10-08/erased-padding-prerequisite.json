@@ -1,0 +1,150 @@
+{
+  "kind": "compiler package prerequisite; no additional feature",
+  "date": "2026-10-09",
+  "baseCommit": "114945b36b0ce367ffac3e914ebcf90ff4753b08",
+  "branch": "codex/erased-type-padding-prerequisite",
+  "status": "implemented; hosted review and protected merge pending",
+  "finding": "Release-window package had only 24824 bytes under the unchanged 6 MiB ceiling. Native stripping left horizontal indentation and spaces between erased type words.",
+  "change": "Compact complete horizontal runs containing erased syntax and remove padding on fully erased lines. Keep every newline, token separators and unchanged literal/comment whitespace. Mapped and transform-only output remains unchanged.",
+  "package": {
+    "files": 405,
+    "fileLimit": 405,
+    "byteLimit": 6291456,
+    "beforeBytes": 6266632,
+    "afterBytes": 6100641,
+    "savedBytes": 165991,
+    "remainingBytes": 190815,
+    "compressedBytes": 1463681
+  },
+  "validation": {
+    "focused": {
+      "tests": 47,
+      "passed": 47,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "regression": "New erased-line size assertion fails on the previous compiler; actual imported literal values, CRLF/newline count and ASI execute correctly with the change.",
+    "node26": {
+      "tests": 1946,
+      "passed": 1943,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": [
+        91.88,
+        80.5,
+        90.1
+      ],
+      "fullReleaseGate": "passed"
+    },
+    "node22": {
+      "tests": 1946,
+      "passed": 1943,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": [
+        91.87,
+        80.53,
+        90.14
+      ],
+      "fullReleaseGate": "passed"
+    },
+    "types": {
+      "packedFixtures": 27,
+      "sourceDiagnostics": 159,
+      "unchangedBaseline": 163,
+      "newDiagnostics": 0,
+      "openApiExamples": "passed"
+    },
+    "documentation": {
+      "guides": 98,
+      "words": 168080,
+      "build": "passed",
+      "doctor": {
+        "passed": 6,
+        "warnings": 1,
+        "failed": 0
+      },
+      "offlineArtifact": "verified; no upload",
+      "httpAndMcp": "Eight required HTTP surfaces plus MCP discovery, tools/list, docs.search and docs.read passed.",
+      "desktopPhone": "Home, search and updated long guide verified at 1280 and 390 pixels. Raw Markdown, JSON, LLM text and discovery navigation is blocked by this browser; actual HTTP contents verified separately.",
+      "temporaryViewport": "reset"
+    }
+  },
+  "sources": {
+    "scripts/compiler.mjs": "fd7f8c74980fee445ddb08e0fce3fb02becbf27aca6f9a131789560c5e25afc6",
+    "tests/compiler-runtime.test.mjs": "5b0da8f89daa466f09c5611fc280f051c7c1dd310b023cff4ed39b878ed675ec",
+    "docs/development-tools.md": "771df1750d4d352a67504fcff50f3d3f2094040726fcb5c38a4d6bb168d9389a",
+    "CHANGELOG.md": "756213f0d0ec56e948735c879d5d9b5d76bd1c9b9ad8e5e3cefd8bbbb5462854",
+    "reports/codebase-review-2026-10-08/IMPLEMENTATION.md": "576e79fd102cc8343e65d7d625f4c1f1580076c16e120ace0d8a661c9c5d15b4",
+    "reports/codebase-review-2026-10-08/README.md": "753bb11e93df6302e599bc526013371e60144830763d3654e890f14957448eb7",
+    "reports/codebase-review-2026-10-08/release-windows.json": "daefd705f7ffe859bcfc739865e4718a7949a4c4d47cba4ef58f611dd57903d5"
+  },
+  "evidence": {
+    "focused-01.log": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/9c6a00e7e144b02a7d8c5caebd0cad7888a8ca42916e5b0a83e9732796d5ed35-erased-padding-focused-01.log",
+      "sha256": "9c6a00e7e144b02a7d8c5caebd0cad7888a8ca42916e5b0a83e9732796d5ed35"
+    },
+    "prior-failure-01.log": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/36ad6550abaad825f36c95e0ce5bff1339e0d81d15670599830c6cf6e0b9f2a8-erased-padding-prior-failure-01.log",
+      "sha256": "36ad6550abaad825f36c95e0ce5bff1339e0d81d15670599830c6cf6e0b9f2a8"
+    },
+    "pack-02.json": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/230c8e1852aa9fd1627164ce2c316d67f52d3d85a41f97ab507ca8442037df82-erased-padding-pack-02.json",
+      "sha256": "230c8e1852aa9fd1627164ce2c316d67f52d3d85a41f97ab507ca8442037df82"
+    },
+    "types-01.log": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/d3768145b4a2b30d3de3bf1e0e171fef1e206d8a939742710cf8c7c193c7fad7-erased-padding-types-01.log",
+      "sha256": "d3768145b4a2b30d3de3bf1e0e171fef1e206d8a939742710cf8c7c193c7fad7"
+    },
+    "docs-build-01.log": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/57be31b86a963eeb03bd4d35b0f9118be8ee9078d193102285701afc87263520-erased-padding-docs-build-01.log",
+      "sha256": "57be31b86a963eeb03bd4d35b0f9118be8ee9078d193102285701afc87263520"
+    },
+    "docs-doctor-01.log": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/edb9bf12470322913c671ba22fd26395f713958f08bc10e21e7ec70c88d15d39-erased-padding-docs-doctor-01.log",
+      "sha256": "edb9bf12470322913c671ba22fd26395f713958f08bc10e21e7ec70c88d15d39"
+    },
+    "docs-offline-01.log": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/0a9cbfc78696f9c49720bc1c7d06b4890fc55be37bbb264999be9541f3cea628-erased-padding-docs-offline-01.log",
+      "sha256": "0a9cbfc78696f9c49720bc1c7d06b4890fc55be37bbb264999be9541f3cea628"
+    },
+    "docs-endpoints-01.log": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/88e426b69878fd8456d60812d8fbca85358a1b2826b773dd787c1b530ce65438-erased-padding-docs-endpoints-01.log",
+      "sha256": "88e426b69878fd8456d60812d8fbca85358a1b2826b773dd787c1b530ce65438"
+    },
+    "browser-01.json": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/20e22f1d10d2330e8591643d21bd0e89799f6b8d4e7e9d0d0fb6b24d21d27c7c-erased-padding-browser-01.json",
+      "sha256": "20e22f1d10d2330e8591643d21bd0e89799f6b8d4e7e9d0d0fb6b24d21d27c7c"
+    },
+    "node26-gate-01.log": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/a7bee32be10f3d6063ca78855bffadec5c8627a0ccfa9bce4073d92ea0434ff5-erased-padding-node26-gate-01.log",
+      "sha256": "a7bee32be10f3d6063ca78855bffadec5c8627a0ccfa9bce4073d92ea0434ff5"
+    },
+    "node22-gate-01.log": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/5a090a47c62591179c3af8a257e2a3383f5f866fa4a3bbab59ccb936588bfd7c-erased-padding-node22-gate-01.log",
+      "sha256": "5a090a47c62591179c3af8a257e2a3383f5f866fa4a3bbab59ccb936588bfd7c"
+    },
+    "source-01.json": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/48b2a2a2d97d4a409c44d9be7eac4d9ba06a20e32c570fbfa7f570624731c663-erased-padding-source-01.json",
+      "sha256": "48b2a2a2d97d4a409c44d9be7eac4d9ba06a20e32c570fbfa7f570624731c663"
+    }
+  },
+  "compatibility": {
+    "dependencies": "none added",
+    "artifactIdentity": "Rebuilding changes unmapped columns and digests; existing verified artifact bytes/identity remain.",
+    "rollback": "Revert compiler optimization; no persistent schema or data migration."
+  },
+  "roadmap": {
+    "merged": 20,
+    "featureBatches": 17,
+    "remaining": 20
+  },
+  "limits": [
+    "Three existing privileged skips are not claimed as host certification.",
+    "Production Railway remains uncertified.",
+    "Author review is non-independent."
+  ]
+}

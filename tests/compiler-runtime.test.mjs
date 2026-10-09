@@ -75,6 +75,20 @@ export const regex: string = /a  b/u.source;`;
   assert.equal(result.unicode, '🧪  café  Ελληνικά'); assert.equal(result.regex, 'a  b');
 });
 
+test('erased lines lose padding while whitespace-only literal lines and ASI stay intact', async () => {
+  const declaration = Array.from({length:80}, (_, index) => `\t  property${index} : Readonly < Record < string , readonly [ number , string ] > > ;`).join('\r\n');
+  const source = `interface Padding {\r\n${declaration}\r\n}\r\nexport const raw = String.raw\`first\r\n   \r\n\t \r\nlast\`;\r\nfunction identity<T>(value:T):T {return value;}\r\nexport const value=identity<\r\n   number\r\n>(7);\r\nexport function returned():number|undefined {return\r\n   identity<number>(8);\r\n}\r\nexport const tokens=identity< number >instanceof Function;`;
+  const output = compile(source, {filename:'line-padding.ts',sourceMap:false});
+  const mapped = compile(source, {filename:'line-padding.ts'});
+  assert.equal(output.split('\r\n').length, source.split('\r\n').length);
+  assert.ok(output.includes('first\r\n   \r\n\t \r\nlast'));
+  assert.ok(mapped.length > output.length);
+  assert.ok(output.length < 600, 'fully erased declaration lines must not consume package space');
+  const result = await import(`data:text/javascript,${encodeURIComponent(output)}`);
+  assert.equal(result.raw, 'first\n   \n\t \nlast');
+  assert.equal(result.value,7);assert.equal(result.returned(),undefined);assert.equal(result.tokens,true);
+});
+
 test('Node 22/24 unmapped fallback executes enums, parameter properties and runtime namespaces', async () => {
   const legacy = [
     ['export enum Choice { One, Two = 7 }; export const result = Choice.Two;', 7],
