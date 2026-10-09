@@ -2,14 +2,30 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Nineteen of the forty proposed features are merged across sixteen feature batches. Deployment dependency gates (04) merged in [PR #281](https://github.com/nearbycoder/clank.run/pull/281) after all six fresh hosted checks at reviewed head `eed02db0710c0476c41943a99d644718ce35cd32`, no new CodeQL alerts, no unresolved threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Both main checkouts match `7f26178b8b37c7cf6c2601140eb3c5878e60dbee`, and all 23 existing files are preserved. Twenty-one features remain. Scheduled release windows (05) are in progress under proposal #280 and remain uncounted. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Earlier snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty features are merged across seventeen feature batches. Scheduled release windows (05) merged in [PR #282](https://github.com/nearbycoder/clank.run/pull/282) after all six fresh hosted checks at reviewed head `4c06c2f5d35940872afa6d1fa947c97c25b04597`, no new CodeQL alerts, no unresolved threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Both main checkouts match `114945b36b0ce367ffac3e914ebcf90ff4753b08`, and all 23 existing files are preserved. Twenty features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Earlier snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
+
+## Erased-line package prerequisite
+
+Complete horizontal runs containing erased types now compact in unmapped builds, and fully
+erased declaration lines retain their newline without indentation. Literal whitespace, token
+separators, ASI, CRLF and mapped debugging output remain intact. The new size regression fails
+on the previous compiler. All 47 focused cases and both complete Node 22/26 release gates pass:
+1,946 reported / 1,943 passed / zero failed or cancelled / three existing privileged skips.
+All 27 packed type fixtures pass with 159 existing diagnostics and no additions. Documentation
+build, doctor, offline artifact and HTTP/MCP checks pass; desktop/phone HTML and search are
+verified. Browser-blocked agent formats are verified separately by HTTP. The unchanged 405-file,
+6 MiB ceiling now contains 6,100,641 bytes, saving 165,991 and leaving 190,815. Hosted review
+and protected merge remain pending. This prerequisite adds no feature to the 20/40 count.
+See [immutable acceptance evidence](erased-padding-prerequisite.json).
 
 ## Scheduled release windows
 
 Feature 05 is implemented under [proposal #280](https://github.com/nearbycoder/clank.run/issues/280)
-and remains uncounted until reviewed, protected delivery. An exact current channel pin can be
+and merged in [PR #282](https://github.com/nearbycoder/clank.run/pull/282) after all six fresh
+hosted checks, zero new alerts or unresolved threads, an explicit non-independent author review
+and ordinary expected-head protected merge. The merged tree equals the reviewed tree. An exact current channel pin can be
 queued for explicit UTC instants with an IANA timezone preview. The durable schedule captures
 source artifact identity, target binding/active release, dependency version and the initiating
 credential. Existing store leases and a monotonic claim fence execution; current authority,
@@ -493,7 +509,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 02 | Artifact promotion across environments | Implemented and merged | [Acceptance and protected delivery](environment-promotions.json) |
 | 03 | Persistent release channels | Implemented and merged | Proposal #276 / merged PR #278; [acceptance](release-channels.json). |
 | 04 | Deployment dependency gates | Implemented and merged | Proposal #279 / merged PR #281; [acceptance](deployment-dependencies.json). |
-| 05 | Scheduled release windows | In progress; uncounted | Proposal #280; actual local, CLI, browser and certified-provider acceptance implemented. Both full Node gates, real provider/browser acceptance and consumer types pass. Review and protected delivery remain pending; [acceptance](release-windows.json). |
+| 05 | Scheduled release windows | Implemented and merged | Proposal #280 / merged PR #282; [acceptance and protected delivery](release-windows.json). |
 | 06 | Automatic supervisor leadership | Planned | Pending |
 | 07 | Online provider node handoff | Planned | Pending |
 | 08 | Provider managed canaries | Planned | Pending |

@@ -4,6 +4,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Reduce unmapped compiler output by removing complete erased declaration padding and compacting
+  horizontal whitespace around erased types. Preserve token separators, runtime literal whitespace,
+  CRLF/newline semantics and mapped debugging output without adding a minifier dependency.
+
 - Add exact scheduled channel promotions with explicit UTC windows and IANA previews, durable
   fenced execution, current credential/readiness checks, versioned cancellation and verified
   recovery through API, CLI and dashboard. Preserve acceptance across restart and protect

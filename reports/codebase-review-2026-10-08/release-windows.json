@@ -4,7 +4,7 @@
   "baseCommit": "7f26178b8b37c7cf6c2601140eb3c5878e60dbee",
   "branch": "codex/release-windows",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/280",
-  "status": "ready-for-review; uncounted until protected merge",
+  "status": "merged",
   "implementation": "Exact current channel promotion queued with explicit UTC instants and IANA preview, captured target/dependency versions and initiating credential identity. Existing transactional store leases plus monotonic schedule claims fence execution. Current authority, immutable upload, channel, environment, target and readiness are checked around asynchronous work and atomic schedule/channel/environment acceptance. Cancellation is a direct versioned CAS; interrupted ownership retains fences until verified prior-writer recovery. API, CLI and dashboard use the same exact receipt.",
   "validation": {
     "localContracts": {
@@ -353,7 +353,118 @@
     "Disposable Docker/XFS profile certification is not production Railway certification. Production remains uncertified."
   ],
   "delivery": {
-    "state": "pending protected review and hosted checks",
-    "counted": false
+    "state": "merged through ordinary branch protection",
+    "counted": true,
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/282",
+    "reviewedHead": "4c06c2f5d35940872afa6d1fa947c97c25b04597",
+    "reviewedTree": "775147e0b42e2d1133c654e447ea0414cee38ff9",
+    "authorReviewId": 5474635545,
+    "independentReview": false,
+    "checks": [
+      {
+        "id": 113995838378,
+        "name": "CodeQL",
+        "head_sha": "4c06c2f5d35940872afa6d1fa947c97c25b04597",
+        "status": "completed",
+        "conclusion": "success",
+        "details_url": "https://github.com/nearbycoder/clank.run/runs/113995838378",
+        "output": {
+          "title": "No new alerts in code changed by this pull request",
+          "summary": "[View all branch alerts](/nearbycoder/clank.run/security/code-scanning?query=pr%3A282+tool%3ACodeQL+is%3Aopen).",
+          "text": null,
+          "annotations_count": 0
+        }
+      },
+      {
+        "id": 113995146683,
+        "name": "Node 22.16",
+        "head_sha": "4c06c2f5d35940872afa6d1fa947c97c25b04597",
+        "status": "completed",
+        "conclusion": "success",
+        "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/37982171518/job/113995146683",
+        "output": {
+          "title": null,
+          "summary": null,
+          "text": null,
+          "annotations_count": 0
+        }
+      },
+      {
+        "id": 113995146646,
+        "name": "Node 24",
+        "head_sha": "4c06c2f5d35940872afa6d1fa947c97c25b04597",
+        "status": "completed",
+        "conclusion": "success",
+        "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/37982171518/job/113995146646",
+        "output": {
+          "title": null,
+          "summary": null,
+          "text": null,
+          "annotations_count": 0
+        }
+      },
+      {
+        "id": 113995146599,
+        "name": "Packaged-release conformance",
+        "head_sha": "4c06c2f5d35940872afa6d1fa947c97c25b04597",
+        "status": "completed",
+        "conclusion": "success",
+        "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/37982171518/job/113995146599",
+        "output": {
+          "title": null,
+          "summary": null,
+          "text": null,
+          "annotations_count": 0
+        }
+      },
+      {
+        "id": 113995146365,
+        "name": "Semantic and packed consumer types",
+        "head_sha": "4c06c2f5d35940872afa6d1fa947c97c25b04597",
+        "status": "completed",
+        "conclusion": "success",
+        "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/37982171518/job/113995146365",
+        "output": {
+          "title": null,
+          "summary": null,
+          "text": null,
+          "annotations_count": 0
+        }
+      },
+      {
+        "id": 113995146068,
+        "name": "JavaScript and TypeScript analysis",
+        "head_sha": "4c06c2f5d35940872afa6d1fa947c97c25b04597",
+        "status": "completed",
+        "conclusion": "success",
+        "details_url": "https://github.com/nearbycoder/clank.run/actions/runs/37982171557/job/113995146068",
+        "output": {
+          "title": null,
+          "summary": null,
+          "text": null,
+          "annotations_count": 1
+        }
+      }
+    ],
+    "newCodeQlAlerts": 0,
+    "unresolvedReviewThreads": 0,
+    "informationalAnnotation": "GitHub runner-image migration notice; no code defect annotation.",
+    "mergeCommit": "114945b36b0ce367ffac3e914ebcf90ff4753b08",
+    "mergedTree": "775147e0b42e2d1133c654e447ea0414cee38ff9",
+    "exactReviewedTree": true,
+    "adminBypass": false,
+    "mainCheckouts": {
+      "primary": "114945b36b0ce367ffac3e914ebcf90ff4753b08",
+      "original": "114945b36b0ce367ffac3e914ebcf90ff4753b08"
+    },
+    "preservedExistingFiles": 23,
+    "preMergeEvidence": {
+      "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-hosted-premerge-01-b0415caf7004a59925c9644ddd8be03d3a65ecae86a2f1f0cd2d2aebb5f54dc4.json",
+      "sha256": "b0415caf7004a59925c9644ddd8be03d3a65ecae86a2f1f0cd2d2aebb5f54dc4"
+    },
+    "mergeEvidence": {
+      "path": "/tmp/clank-review-2026-10-08/release-window-evidence/release-window-protected-merge-01-556f68e5904f60986d3a32ce73d5b891a96f47820a61c1f143cdfd6d152c6f8a.json",
+      "sha256": "556f68e5904f60986d3a32ce73d5b891a96f47820a61c1f143cdfd6d152c6f8a"
+    }
   }
 }

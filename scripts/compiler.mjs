@@ -55,19 +55,23 @@ export function compile(source, options = {}) {
   }
 }
 
-// Native stripping replaces type syntax with spaces. Compact only changed
-// positions, retaining a separator: value<T>instanceof must stay two tokens.
-// Every unchanged character/newline survives, including runtime literal spaces.
+// Native stripping replaces type syntax with spaces. A horizontal whitespace
+// run containing erased syntax is outside runtime literals/comments. Keep a
+// separator between tokens and every newline, including ASI-sensitive ones.
+// Whitespace-only runtime literal lines match the source and remain untouched.
 function compactErasedPadding(source, javascript) {
   if (source.length !== javascript.length) return javascript;
   const parts = [];
   let copied = 0;
   for (let index = 0; index < javascript.length; index++) {
-    if (javascript[index] !== " " || source[index] === " ") continue;
+    if (javascript[index] !== " " && javascript[index] !== "\t") continue;
     let end = index + 1;
-    while (end < javascript.length && javascript[end] === " " && source[end] !== " ") end++;
-    if (end - index > 1) {
-      parts.push(javascript.slice(copied, index), " ");
+    while (end < javascript.length && (javascript[end] === " " || javascript[end] === "\t")) end++;
+    if (source.slice(index, end) !== javascript.slice(index, end)) {
+      const blankLine = (index === 0 || javascript[index - 1] === "\n")
+        && (end === javascript.length || javascript[end] === "\n"
+          || javascript[end] === "\r" && javascript[end + 1] === "\n");
+      parts.push(javascript.slice(copied, index), blankLine ? "" : " ");
       copied = end;
     }
     index = end - 1;
