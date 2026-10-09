@@ -4,6 +4,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Compact native type-erasure padding in unmapped erasable builds on Node 22/24 as well as
+  Node 26. Keep Node 22/24 transformation for enums, parameter properties and runtime namespaces,
+  and preserve mapped compiler output. Future build digests change; stored artifacts do not.
+
 - Add optional, policy-bound Linux host certification with real disposable namespace,
   SQLite migration/worker, XFS quota and Docker resource/egress probes, authenticated
   expiring reports and CLI inspection. Denied, interrupted or unverified cleanup stays blocked.

@@ -10,22 +10,18 @@ export function compile(source, options = {}) {
     ? transformTSX(source, { importSource: options.jsxImportSource, filename, hydrationDiagnostics: options.hydrationDiagnostics }).code
     : source;
   const stripOnly = Number(process.versions.node.split(".")[0]) >= 26;
+  let stripped = stripOnly || options.sourceMap === false;
   let javascript;
   try {
-    javascript = withoutStripTypesWarning(() => stripTypeScriptTypes(transformed, stripOnly
-      ? { mode: "strip" }
-      : {
-        mode: "transform", sourceMap: options.sourceMap !== false,
-        // Do not rename emitted files when measuring dist coverage.
-        ...(options.sourceMap === false ? {} : { sourceUrl: filename }),
-      }));
+    javascript = emit(stripped ? "strip" : "transform");
   } catch (error) {
-    if (stripOnly && error?.code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX") {
-      throw new SyntaxError(`${filename}: ${error.message}. On Node 26 use erasable TypeScript: explicit constructor fields, object literals instead of enums, and ES modules instead of runtime namespaces. Node 22/24 retain transform support.`, { cause: error });
-    }
-    throw error;
+    if (!stripped || error?.code !== "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX") throw error;
+    if (stripOnly) throw new SyntaxError(`${filename}: ${error.message}. On Node 26 use erasable TypeScript: explicit constructor fields, object literals instead of enums, and ES modules instead of runtime namespaces. Node 22/24 retain transform support.`, { cause: error });
+    // Older supported runtimes still transform syntax with runtime semantics.
+    stripped = false;
+    javascript = emit("transform");
   }
-  if (stripOnly && options.sourceMap === false) javascript = compactErasedPadding(transformed, javascript);
+  if (stripped && options.sourceMap === false) javascript = compactErasedPadding(transformed, javascript);
   // Strip mode preserves line positions. TSX maps to the lowered module just as
   // transform mode does; supply line mappings without the removed Node option.
   if (stripOnly && options.sourceMap !== false) {
@@ -48,6 +44,15 @@ export function compile(source, options = {}) {
     },
   );
   return javascript;
+
+  function emit(mode) {
+    return withoutStripTypesWarning(() => stripTypeScriptTypes(transformed, mode === "strip"
+      ? { mode }
+      : { mode, sourceMap: options.sourceMap !== false,
+        // Do not rename emitted files when measuring dist coverage.
+        ...(options.sourceMap === false ? {} : { sourceUrl: filename }),
+      }));
+  }
 }
 
 // Native stripping replaces type syntax with spaces. Compact only changed

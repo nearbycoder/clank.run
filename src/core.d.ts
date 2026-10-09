@@ -61,6 +61,7 @@ export interface EffectOptions {
 export declare function effect(callback: (onCleanup: (cleanup: Cleanup) => void) => void | Cleanup, options?: EffectOptions): Cleanup;
 export declare function batch<T>(callback: () => T): T;
 /** Batches writes and atomically rolls signal values back if the callback throws. */
+/** Batches writes and atomically rolls signal values back if the callback throws. */
 export declare function transaction<T>(callback: () => T): T;
 export declare function untrack<T>(callback: () => T): T;
 export declare function onCleanup(cleanup: Cleanup): Cleanup;

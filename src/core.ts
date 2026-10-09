@@ -1,5 +1,3 @@
-/** Clank's fine-grained reactive kernel. It has no platform dependencies. */
-
 export const SIGNAL = Symbol.for("clank.signal");
 export const STORE = Symbol.for("clank.store");
 
@@ -59,10 +57,9 @@ function diagnostic(type: ReactiveDiagnostic["type"], target: Source | Observer,
   reportingDiagnostic = true;
   const previousTracking = tracking;
   tracking = false;
-  try { for (const listener of diagnosticListeners) { try { listener(event); } catch { /* Inspection cannot break an update. */ } } }
+  try { for (const listener of diagnosticListeners) { try { listener(event); } catch {} } }
   finally { tracking = previousTracking; reportingDiagnostic = false; }
 }
-/** Opt-in metadata only. Start before mounting; detach to remove instrumentation overhead. */
 export function observeReactivity(listener: (event: ReactiveDiagnostic) => void): Cleanup {
   diagnosticListeners.add(listener);
   return () => { diagnosticListeners.delete(listener); if (!diagnosticListeners.size) diagnosticIds = new WeakMap(); };
@@ -83,8 +80,7 @@ function detach(observer: Observer): void {
 
 function notify(source: Source): void {
   diagnostic("invalidate", source);
-  // Invalidate the whole dependency graph before effects read it. Flushing
-  // while visiting observers repeats shared effects and exposes stale siblings.
+  // Invalidate all siblings before flushing effects.
   batch(() => {
     for (const observer of [...source.observers]) observer.schedule();
   });
@@ -189,7 +185,6 @@ export class ReactiveSignal<T> implements Source {
     });
   }
 
-  /** @internal Restores a failed transaction without creating another journal entry. */
   _restore(value: T): void {
     if (Object.is(this.#value, value)) return;
     this.#value = value;
@@ -369,7 +364,6 @@ export function batch<T>(callback: () => T): T {
   }
 }
 
-/** Batches writes and atomically rolls signal values back if the callback throws. */
 export function transaction<T>(callback: () => T): T {
   return batch(() => {
     const journal = new Map<ReactiveSignal<unknown>, unknown>();
@@ -486,9 +480,7 @@ export function store<T extends object>(initial: T): T {
           })
         : Reflect.set(target, key, raw, receiver);
       batch(() => {
-        // Array length writes coerce their input and can partially truncate even
-        // when rejected. Cache the native result, including removed indexes.
-        // Unread accessors remain lazy; writes need only refresh cached reads.
+        // Rejected length writes can still truncate; refresh only cached reads.
         signals.get(key)?.set(() => Reflect.get(target, key, receiver));
         if (array && key === "length" && array.length < previousLength) {
           for (const [property, cached] of signals) {
@@ -497,11 +489,10 @@ export function store<T extends object>(initial: T): T {
               cached.set(() => Reflect.get(target, property, receiver));
             }
           }
-          // A shorter length changes the shape only when own indexes disappeared.
+          // Shape changes only when own indexes vanish.
           if (Reflect.ownKeys(target).length < previousKeyCount) iteration.update((count) => count + 1);
         }
-        // Writing an array index can grow its native length without a separate
-        // proxy write to "length". Publish both changes before effects run.
+        // Index writes can grow length; publish both before flushing.
         if (array && key !== "length" && array.length !== previousLength) {
           signals.get("length")?.set(array.length);
         }
@@ -514,8 +505,7 @@ export function store<T extends object>(initial: T): T {
       const result = Reflect.deleteProperty(target, key);
       if (!result || !owned) return result;
       batch(() => {
-        // Removing a shadow exposes its prototype value, with normal getter
-        // receiver semantics, while inherited-only deletes leave it untouched.
+        // Deleting an own shadow exposes the prototype getter.
         signals.get(key)?.set(() => Reflect.get(target, key, proxied));
         iteration.update((count) => count + 1);
       });
@@ -642,7 +632,6 @@ function onCleanupIfOwned(cleanup: Cleanup): void {
   if (activeScope) registerCleanup(cleanup);
 }
 
-/** Reduces an async iterable into a live signal, useful for model-token streams. */
 export async function consumeStream<T>(
   iterable: AsyncIterable<T>,
   initial: T,

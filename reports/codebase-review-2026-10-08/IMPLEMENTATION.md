@@ -2,9 +2,29 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Fourteen of the forty proposed features are merged across eleven feature batches. Authorized aggregates (22) merged in [PR #268](https://github.com/nearbycoder/clank.run/pull/268) after all six checks at the reviewed head, with no new CodeQL alerts or unresolved threads. Both main checkouts match `283cbcf0aa368fd7f1fc40cc2c1067e578241bcc`, and 23 existing files are preserved. Twenty-six features remain; verified Linux host certification (01) has passed local release, type and six actual disposable-KVM acceptance scenarios under proposal #269 and is awaiting reviewed delivery. Earlier delivery snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Fifteen of the forty proposed features are merged across twelve feature batches. Linux host certification (01) merged in [PR #270](https://github.com/nearbycoder/clank.run/pull/270) after all six checks at reviewed head `fb50d74e23ae069629cf0f8579c0d8248abb6949`, with no new CodeQL alerts or unresolved threads. Both main checkouts match `7050c989a5af8ad957212b915b68728cf13b1d9f`, and 23 existing files are preserved. Twenty-five features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. The next delivery prepares package capacity under proposal #271, then implements the local provider fleet simulator (34). Earlier snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
+
+## Minimum-Node package prerequisite
+
+Proposal [#271](https://github.com/nearbycoder/clank.run/issues/271) extends compacted native
+stripping to unmapped erasable Node 22/24 builds. Unsupported syntax alone falls back to their
+native transformation, preserving enum/namespace/parameter-property runtime semantics. Mapped
+output and the Node 26 compatibility boundary stay unchanged. Concise core/forms source
+comments keep the original browser byte ceilings; their transformed runtime code is identical.
+
+All ten compiler cases pass separately on Node 22.16, 24.21 and 26.10. The final minimum-Node
+release gate passes: 1,868 reported / 1,865 passed / zero failed/cancelled / three existing
+privileged skips; coverage 92.11/80.39/90.43 line/branch/function. All 22 packed type fixtures
+pass with 159 existing source diagnostics against the unchanged 163 allowance. Documentation,
+conformance and security checks pass. The 403-file package shrinks by 329,823 bytes to
+5,946,809, leaving 344,647 under the unchanged 6 MiB ceiling. No additional feature is counted.
+Hosted Node 22 exposed concurrent build output changes during a certification fixture. The
+fixture now uses a private immutable installation snapshot, preserving every strict admission
+assertion; all four focused cases and the revised complete local gate pass.
+See [compiler strip evidence](compiler-strip-review.json). Existing immutable artifact bytes
+are preserved; updated framework installations need fresh host certification.
 
 ## Merged main and follow-up maintenance
 
@@ -310,7 +330,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 
 | ID | Feature | State | Acceptance evidence |
 | --- | --- | --- | --- |
-| 01 | Verified Linux host certification | In progress | Proposal #269; complete local minimum-Node/type gates, four ordinary regressions, six actual allowed/denied/interrupted/cleanup KVM scenarios and 23 privileged isolation regressions. Awaiting reviewed PR delivery; production remains uncertified. `linux-host-certification.json`. |
+| 01 | Verified Linux host certification | Implemented | Proposal #269 / merged PR #270; complete minimum-Node/type gates, four ordinary regressions, six actual allowed/denied/interrupted/cleanup KVM scenarios and 23 privileged isolation regressions. All six hosted checks pass; production remains uncertified. `linux-host-certification.json`. |
 | 02 | Artifact promotion across environments | Planned | Pending |
 | 03 | Persistent release channels | Planned | Pending |
 | 04 | Deployment dependency gates | Planned | Pending |

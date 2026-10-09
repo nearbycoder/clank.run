@@ -5,7 +5,7 @@
   "baseCommit": "283cbcf0aa368fd7f1fc40cc2c1067e578241bcc",
   "branch": "codex/linux-host-certification",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/269",
-  "status": "local-validation-passed-awaiting-reviewed-pr",
+  "status": "merged",
   "acceptance": {
     "workflow": "Explicit local operator certification and JSON CLI inspection of a captured static Docker/XFS profile; existing providers opt into requiring a current report.",
     "contract": "Optional host-certification module, certifyLinuxHost, inspectLinuxHostCertification and requireCurrentLinuxHostCertification. Seven fixed capabilities; immutable clank-linux-host-certification/1 reports, private local HMAC authentication and bounded reason codes.",
@@ -428,5 +428,51 @@
     "scripts/security-audit.mjs": "6f0d41ba7c422d21894ef8907604c08c7d1bc32f04683f0126f09f65c3d9d106"
   },
   "preservedExistingFiles": 23,
-  "delivery": null
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/270",
+    "reviewedHead": "fb50d74e23ae069629cf0f8579c0d8248abb6949",
+    "authorReview": {
+      "id": 5468648676,
+      "state": "COMMENTED",
+      "independentApproval": false
+    },
+    "hostedChecks": {
+      "status": "passed",
+      "headRevision": "fb50d74e23ae069629cf0f8579c0d8248abb6949",
+      "codeql": {
+        "id": 113769571191,
+        "conclusion": "success",
+        "newAlerts": 0,
+        "annotations": 0
+      },
+      "analysis": {
+        "id": 113769053966,
+        "conclusion": "success",
+        "annotations": 1
+      },
+      "node22": {
+        "id": 113769053659,
+        "conclusion": "success"
+      },
+      "node24": {
+        "id": 113769053295,
+        "conclusion": "success"
+      },
+      "types": {
+        "id": 113769053724,
+        "conclusion": "success"
+      },
+      "packedRelease": {
+        "id": 113769053772,
+        "conclusion": "success"
+      }
+    },
+    "reviewThreads": 0,
+    "requestedChanges": 0,
+    "mergeCommit": "7050c989a5af8ad957212b915b68728cf13b1d9f",
+    "reviewedTree": "4cf1ee9a354859800a0f2cddcddd6673c2682b40",
+    "mergedTree": "4cf1ee9a354859800a0f2cddcddd6673c2682b40",
+    "bothCheckoutsSynchronized": true,
+    "preservedExistingFiles": 23
+  }
 }

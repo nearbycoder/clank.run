@@ -231,9 +231,7 @@ export function createForm<Values extends FormValues, Result = unknown>(
       if (custom) assertErrorKeys(keys, custom);
       mergeErrors(next, custom);
     }
-    // Validators may synchronously reset or replace their submission. Commit
-    // its parsed values, errors and status together only while it still owns
-    // the form; direct/manual validation retains its unconditional behavior.
+    // Validators can reset or replace submissions; commit only for the current owner.
     if (!isCurrent()) return false;
     const accepted = !hasErrors(next);
     batch(() => {
