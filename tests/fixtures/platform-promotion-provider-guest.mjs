@@ -259,6 +259,28 @@ try {
     finally{await chmod(nft,originalNftMode);originalNftMode=undefined}
     assert.equal((await call(`/api/projects/${targetProject.id}/releases`)).releases.length,count);
     cases.push({name:'gated ordinary provider activation rejects changed migrations and an actually changed host policy before staging',status:'passed'});
+    const sourceDependencies=`/api/projects/${sourceProject.id}/dependencies`;
+    await call(sourceDependencies,{expectedVersion:0,requirements:[{projectId:targetProject.id,readiness:'healthy'}],timeoutMs:5000,overridePolicy:'deny'},200,'PUT');
+    const remoteCheck=(await call(sourceDependencies+'/check',{expectedVersion:1})).check;
+    const priorProvider=(await call(`/api/projects/${targetProject.id}`)).project;
+    assert.equal(remoteCheck.ready,true);assert.equal(remoteCheck.observations[0].releaseId,priorProvider.activeReleaseId);
+    assert.equal(remoteCheck.observations[0].generation,priorProvider.activeGeneration);
+    assert.ok(!JSON.stringify(remoteCheck).includes('runtimeIdentity'));
+    const sourceCount=(await call(`/api/projects/${sourceProject.id}/releases`)).releases.length;
+    const queuedControl=new DatabaseSync(join(options.dataDirectory,'control.sqlite'));
+    await rpc('pause-ingress');
+    const queued=gatedUpload(v1,'provider_required_generation_01');queued.catch(()=>{});
+    try{
+      const deadline=Date.now()+10000;
+      while(true){const row=queuedControl.prepare("SELECT r.provider_generation FROM clank_platform_dependency_activations a JOIN clank_platform_releases r ON r.id=a.candidate_release_id WHERE a.project_id=? AND a.state='staging' ORDER BY a.created_at DESC LIMIT 1").get(targetProject.id);if(row?.provider_generation!==null&&row?.provider_generation!==undefined)break;assert.ok(Date.now()<deadline,'The actual required provider generation must queue.');await new Promise(resolve=>setTimeout(resolve,25))}
+      const stillAccepted=(await call(`/api/projects/${targetProject.id}`)).project;
+      assert.equal(stillAccepted.activeReleaseId,priorProvider.activeReleaseId);assert.equal(stillAccepted.activeGeneration,priorProvider.activeGeneration);
+      const response=await fetch(origin+`/api/projects/${sourceProject.id}/releases`,{method:'POST',signal:interruption.signal,headers:{origin,cookie,'x-clank-csrf':owner.csrfToken,'content-type':'application/vnd.clank.deploy+gzip','x-clank-content-sha256':v1.digest,'x-clank-idempotency-key':'provider_required_stale_review_01','x-clank-dependency-version':'1','x-clank-dependency-check':remoteCheck.id},body:v1.bytes});
+      const rejected=await response.json();assert.equal(response.status,409,JSON.stringify(rejected));assert.equal(rejected.error.code,'DEPENDENCY_CHANGED');
+      assert.equal((await call(`/api/projects/${sourceProject.id}/releases`)).releases.length,sourceCount);
+    }finally{queuedControl.close();await rpc('resume-ingress');await queued}
+    assert.equal((await probe(targetProject)).value,'target-only');
+    cases.push({name:'actual provider required-service health binds the queued runtime generation before its accepted release identity changes, rejecting stale checks without source staging',status:'passed'});
     console.error('Actual provider deployment dependency acceptance verified.');
   } else if (channelsOnly) {
     const channelPath=`/api/projects/${sourceProject.id}/channels/stable`;

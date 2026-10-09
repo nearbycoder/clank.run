@@ -4358,10 +4358,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       return dependencyConfiguration(project.id);
     });
   };
-  const dependencyIdentity = (project: ProjectRow) => {
+  const dependencyIdentity = (project: ProjectRow, readiness: "active" | "healthy" = "active") => {
     const release = project.activeReleaseId ? releaseById(storage.internal, project.activeReleaseId) : null;
     const sequence = storage.internal.prepare("SELECT id FROM clank_platform_activations WHERE project_id=? ORDER BY id DESC LIMIT 1").get(project.id);
+    const running = readiness === "healthy" && project.placement === "local" ? active.get(project.id) : null;
+    const desired = readiness === "healthy" && project.placement === "provider" ? orchestrator.desired(project.id) : null;
+    const runtimeIdentity = readiness === "active" ? null : JSON.stringify(project.placement === "provider"
+      ? [project.runtimePolicy, desired?.generation ?? null, desired?.desiredReleaseId ?? null, desired?.desiredState ?? null,
+        desired?.assignedNodeId ?? null, desired?.observedGeneration ?? null, desired?.observedReleaseId ?? null, desired?.observedState ?? null]
+      : [project.runtimePolicy, running?.releaseId ?? null, running?.child.pid ?? null,
+        Boolean(running && !running.expectedStop && running.child.exitCode === null && running.child.signalCode === null)]);
     return { releaseId: project.activeReleaseId, digest: release?.digest ?? null, activatedAt: release?.activatedAt ?? null,
+      releaseStatus: release?.status ?? null, runtimeIdentity,
       generation: project.activeGeneration, activationSequence: sequence ? Number(sequence.id) : null,
       placement: project.placement, nodeId: project.providerNodeId, organizationId: project.organizationId, ownerId: project.ownerId };
   };
@@ -4410,7 +4418,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
     }
     for (const observation of review.observations) {
-      const service = dependencyService(principal, project, observation.projectId), identity = dependencyIdentity(service);
+      const service = dependencyService(principal, project, observation.projectId), identity = dependencyIdentity(service, observation.readiness);
       for (const key of Object.keys(identity) as Array<keyof typeof identity>) {
         if (identity[key] !== observation[key]) throw new PlatformError(409, "DEPENDENCY_CHANGED", "A required service changed during activation; review its current release.");
       }
@@ -4483,7 +4491,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     }
     const configuration = dependencyConfiguration(project.id), observations = configuration.requirements.map(requirement => {
       const service = dependencyService(principal, project, requirement.projectId);
-      return { projectId: service.id, readiness: requirement.readiness, ...dependencyIdentity(service), ready: false,
+      return { projectId: service.id, readiness: requirement.readiness, ...dependencyIdentity(service, requirement.readiness), ready: false,
         reason: "inactive" as PlatformDependencyObservation["reason"] };
     });
     const review = { workspace: { organizationId: project.organizationId, ownerId: project.ownerId }, principalHash: dependencyPrincipalHash(principal), configuration, observations, checkedAt: 0, checkId: null, override: dependencyOverride(override) };
@@ -4492,7 +4500,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   };
   const publicDependencyCheck = (review: DependencyReview): PlatformDependencyCheck => ({
     id: review.checkId ?? "", version: review.configuration.version, ready: review.observations.every(row => row.ready), overridden: Boolean(review.override), checkedAt: review.checkedAt,
-    observations: review.observations.map(({ placement, nodeId, organizationId, ownerId, ...observation }) => observation),
+    observations: review.observations.map(({ placement, nodeId, organizationId, ownerId, releaseStatus, runtimeIdentity, ...observation }) => observation),
   });
   const recordDependencyCheck = (principal: TokenPrincipal, projectId: string, review: DependencyReview, permission: "read" | "deploy" | "rollback" = "read") => {
     review.checkId = `check_${globalThis.crypto.randomUUID().replaceAll("-", "")}`;

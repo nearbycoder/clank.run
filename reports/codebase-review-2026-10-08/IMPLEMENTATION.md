@@ -18,18 +18,21 @@ Human overrides require the configured policy, current administrator session and
 they bypass readiness alone. Interrupted work retains writer and artifact fences until verified
 snapshot recovery or certified provider compensation.
 
-All 48 local deployment contracts and 26 packed consumer fixtures pass with no new diagnostics
-against the unchanged type baseline. Twelve real disposable Docker/XFS provider cases pass,
+Final review reproduced acceptance after service status or runtime policy changed during the last
+actual health response. Private runtime identity now fences those changes; both regressions
+verify rejection and restoration of the prior database. All 50 local deployment contracts and 26 packed consumer fixtures pass with no new diagnostics
+against the unchanged type baseline. Thirteen real disposable Docker/XFS provider cases pass,
 including first-activation cleanup, protected initialization proof across restart, retained data,
-changed migrations, service replacement, unhealthy readiness, rollback replay and complete owned
+changed migrations, service replacement, unhealthy readiness, rollback replay, real provider
+required-service generation changes and complete owned
 resource cleanup. These drills found and fixed invalid initial stop requests and attempts to
 reinitialize retained data. Real keyboard, mobile, override, service replacement, controller-kill
 recovery and workspace revocation checks pass. The first complete Node 26 run found nine legacy
-isolated-fixture failures; the corrected complete run passes 1,922 reported / 1,919 passed / zero
+isolated-fixture failures; the corrected complete run passes 1,924 reported / 1,921 passed / zero
 failed or cancelled / three existing privileged skips, plus coverage, documentation, conformance
-and security. The final complete Node 22 gate also passes 1,922 reported / 1,919 passed / zero failed or
-cancelled / three existing privileged skips, with coverage 91.85/80.49/90.14. The unchanged
-405-file, 6 MiB package ceiling contains 6,222,693 unpacked bytes. Hosted checks remain pending. Documentation
+and security. The final complete Node 22 gate also passes 1,924 reported / 1,921 passed / zero failed or
+cancelled / three existing privileged skips, with coverage 91.85/80.50/90.14. The unchanged
+405-file, 6 MiB package ceiling contains 6,223,690 unpacked bytes. Hosted checks remain pending. Documentation
 build/doctor/offline checks and HTTP/MCP contracts pass. The in-app browser blocks non-HTML raw
 and agent formats; their HTTP contents are verified, with desktop/phone guide and live search
 checks recorded separately. See [dependency acceptance](deployment-dependencies.json) for exact

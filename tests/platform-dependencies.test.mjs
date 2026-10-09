@@ -130,6 +130,39 @@ test('an unready service blocks new artifact staging and denied overrides cannot
   await f.upload(f.staging, artifact, 'dependency_denied_override_01', 403, { headers: { 'x-clank-dependency-override': JSON.stringify({ expectedVersion: 1, reason: 'Approved maintenance operation', confirmation: 'override-dependencies staging 1' }) } });
 });
 
+for (const boundary of ['release status', 'runtime policy']) test(`a ${boundary} change during the final real dependency health response prevents acceptance`, { timeout: 60000 }, async t => {
+  const f = await fixture(t), policy = join(f.root, 'service-health.json');
+  await f.call(`/api/projects/${f.development.id}/secrets`, { values: { DEPENDENCY_HEALTH_FILE: policy } }, 200, 'PUT');
+  const service = await f.upload(f.development, await serviceArtifact(f, 'service'), 'dependency_runtime_service_01');
+  await f.call(path(f), configuration([{ projectId: f.development.id, readiness: 'healthy' }]), 200, 'PUT');
+  const first = await f.upload(f.staging, await f.artifact('v1'), 'dependency_runtime_target_01');
+  await f.probe(f.staging, '/write/prior-target');
+  const candidateHold = join(f.root, 'candidate-hold'), candidateEntered = join(f.root, 'candidate-entered');
+  const serviceHold = join(f.root, 'service-hold'), serviceEntered = join(f.root, 'service-entered');
+  await writeFile(candidateHold, 'hold');
+  await f.call(`/api/projects/${f.staging.id}/secrets`, { values: { HEALTH_HOLD: candidateHold, HEALTH_ENTERED: candidateEntered } }, 200, 'PUT');
+  const candidate = await f.artifact('v2', "UPDATE sample SET value='unaccepted'; CREATE TABLE candidate_only(id INTEGER PRIMARY KEY);");
+  const pending = f.upload(f.staging, candidate, 'dependency_runtime_held_target_01', 409); pending.catch(() => {});
+  const control = new DatabaseSync(join(f.options.dataDirectory, 'control.sqlite')); t.after(() => control.close());
+  try {
+    await entered(candidateEntered);
+    await writeFile(serviceHold, 'hold'); await writeFile(policy, JSON.stringify({ hold: serviceHold, entered: serviceEntered, status: 200, waitOnCall: 2, countFile: join(f.root, 'service-count') }));
+    await rm(candidateHold); await entered(serviceEntered);
+    // Change owned controller state while the application's actual HTTP 200 is pending,
+    // without replacing the accepted release, generation or activation sequence.
+    if (boundary === 'release status') control.prepare("UPDATE clank_platform_releases SET status='crashed' WHERE id=?").run(service.id);
+    else control.prepare("UPDATE clank_platform_projects SET runtime_policy='suspended' WHERE id=?").run(f.development.id);
+    await rm(serviceHold); await pending;
+    assert.equal((await f.call(`/api/projects/${f.staging.id}`)).project.activeReleaseId, first.id);
+    assert.equal((await f.probe(f.staging)).value, 'prior-target');
+    const db = new DatabaseSync(join(f.options.dataDirectory, 'projects', f.staging.id, 'data/app.sqlite'));
+    try { assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name='candidate_only'").get(), undefined); } finally { db.close(); }
+    const receipts = (await f.call(path(f) + '/activations')).activations;
+    assert.equal(receipts.find(row => row.candidateReleaseId !== first.id).state, 'failed');
+    for (const field of ['runtimeIdentity', 'releaseStatus']) assert.ok(!JSON.stringify(receipts).includes(field), 'Private runtime identity must not enter public history.');
+  } finally { await rm(candidateHold, { force: true }); await rm(serviceHold, { force: true }); }
+});
+
 test('an explicitly permitted human override bypasses readiness alone and changed retries still reject', { timeout: 60000 }, async t => {
   const f = await fixture(t), artifact = await f.artifact('v1');
   await f.call(path(f), configuration([{ projectId: f.development.id, readiness: 'healthy' }], 0, 5000, 'administrator'), 200, 'PUT');

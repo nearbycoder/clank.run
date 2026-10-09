@@ -6,8 +6,12 @@ createServer(async (request, response) => {
   if (request.url === '/healthz') {
     const file = process.env.DEPENDENCY_HEALTH_FILE;
     const policy = file && existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
-    if (policy.entered) writeFileSync(policy.entered, 'health-check-entered');
-    while (policy.hold && existsSync(policy.hold)) await new Promise(resolve => setTimeout(resolve, 10));
+    const count = policy.countFile ? (existsSync(policy.countFile) ? Number(readFileSync(policy.countFile, 'utf8')) : 0) + 1 : 1;
+    if (policy.countFile) writeFileSync(policy.countFile, String(count));
+    if (count >= (policy.waitOnCall ?? 1)) {
+      if (policy.entered) writeFileSync(policy.entered, 'health-check-entered');
+      while (policy.hold && existsSync(policy.hold)) await new Promise(resolve => setTimeout(resolve, 10));
+    }
     response.statusCode = policy.status ?? 200;
     if (policy.redirect) { response.statusCode = 302; response.setHeader('location', policy.redirect); }
     response.end('private-application-health-payload');
