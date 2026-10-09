@@ -46,3 +46,61 @@ test('unterminated import-like comments cannot stall compilation at the editor d
     if (!output.includes('export const ok')) throw Error('Compilation changed the valid module');`;
   await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', script], { timeout: 5000 });
 });
+
+test('unmapped Node26 output compacts erased padding without removing token separators or source lines', async () => {
+  const declaration = Array.from({ length: 120 }, (_, index) => `  property${index}: Readonly<Record<string, readonly [number, string]>>;`).join('\n');
+  const source = `interface LargeDeclaration {\n${declaration}\n}\nfunction value<T>(){}\nexport const isFunction=value<string>instanceof Function;\nexport const exists='x'!in {x:true};\nexport const result=7;`;
+  const output = compile(source, { filename: 'padding.ts', sourceMap: false });
+  const result = await import(`data:text/javascript,${encodeURIComponent(output)}`);
+  assert.equal(result.isFunction, true); assert.equal(result.exists, true); assert.equal(result.result, 7);
+  if (Number(process.versions.node.split('.')[0]) >= 26) {
+    const { stripTypeScriptTypes } = await import('node:module');
+    const native = stripTypeScriptTypes(source, { mode: 'strip' });
+    assert.ok(native.length - output.length > 4000, 'release output must remove substantial erased padding');
+    assert.equal(output.split('\n').length, native.split('\n').length);
+  }
+});
+
+test('padding compaction preserves SQL, raw templates, tabs, unicode, regex and runtime comments', async () => {
+  const source = `type Ignored = Readonly<Record<string, readonly [number, string]>>;
+// runtime    comment   stays
+export const sql: string = \`SELECT  title,  owner\n  FROM  records\n  WHERE  title = 'a  b';\`;
+export const raw: string = String.raw\`first  line\\nsecond   line\`;
+export const tabs: string = "A\t\tB";
+export const unicode: string = "🧪  café  Ελληνικά";
+export const regex: string = /a  b/u.source;`;
+  const output = compile(source, { filename: 'literals.ts', sourceMap: false });
+  if (Number(process.versions.node.split('.')[0]) >= 26) assert.ok(output.includes('// runtime    comment   stays'));
+  const result = await import(`data:text/javascript,${encodeURIComponent(output)}`);
+  assert.equal(result.sql, "SELECT  title,  owner\n  FROM  records\n  WHERE  title = 'a  b';");
+  assert.equal(result.raw, 'first  line\\nsecond   line'); assert.equal(result.tabs, 'A\t\tB');
+  assert.equal(result.unicode, '🧪  café  Ελληνικά'); assert.equal(result.regex, 'a  b');
+});
+
+test('generic calls and return ASI retain their newline semantics after erasure', async () => {
+  const source = `function identity<T>(value:T):T { return value; }
+export const value=identity<
+  number
+>(7);
+export function returned(): number | undefined { return
+  identity<number>(100);
+}
+export const array = [1, 2] as const;
+;[3, 4].forEach(() => undefined);`;
+  const output = compile(source, { filename: 'asi.ts', sourceMap: false });
+  const result = await import(`data:text/javascript,${encodeURIComponent(output)}`);
+  assert.equal(result.value, 7); assert.equal(result.returned(), undefined); assert.deepEqual(result.array, [1, 2]);
+});
+
+test('mapped Node26 output retains native padding and the original source content', async () => {
+  const source = 'interface Padding { readonly field: Readonly<Record<string, number>>; }\nexport const value: number = 3;';
+  const mapped = compile(source, { filename: 'mapped-padding.ts' });
+  const encoded = mapped.match(/sourceMappingURL=data:application\/json[^,]*,([^\s]+)/)?.[1];
+  assert.ok(encoded); const map = JSON.parse(Buffer.from(encoded, 'base64').toString());
+  if (Number(process.versions.node.split('.')[0]) >= 26) {
+    assert.deepEqual(map.sourcesContent, [source]);
+    const { stripTypeScriptTypes } = await import('node:module');
+    assert.equal(mapped.split('\n//# sourceMappingURL=')[0], stripTypeScriptTypes(source, { mode: 'strip' }));
+    assert.ok(mapped.split('\n//# sourceMappingURL=')[0].length > compile(source, { sourceMap: false }).length);
+  }
+});

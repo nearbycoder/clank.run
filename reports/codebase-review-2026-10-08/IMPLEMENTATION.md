@@ -68,6 +68,22 @@ Version-enabled buckets now retain bounded immutable generations, expose owner-a
 
 All 62 focused tests pass, including 23 new feature tests. Real browser keyboard, focus, mobile, download, stale-file and revoked-access checks pass. All 15 packed consumer fixtures pass with no new diagnostics above the existing 163. The full release gate reports 1,750 tests, 1,747 passed, zero failures/cancellations and three privileged-host skips; coverage is 92.16% lines, 79.95% branches and 90.12% functions. Documentation, packaged conformance and security gates pass with the unchanged 395-file/6 MiB limits. See [retained file versions](retained-file-versions.json) for source/log hashes and explicit acceptance limits.
 
+## Release package prerequisite
+
+[PR #254](https://github.com/nearbycoder/clank.run/pull/254) merged retained file versions as
+`054f1f03b12e153093880148a43d3641762b79c6` after all six hosted checks passed. Both checkouts
+are synchronized and preexisting untracked files are preserved.
+
+The next build change compacts Node 26 type-erasure padding only in unmapped output. It preserves
+runtime literals, separators, newlines and mapped output, adds no dependency and leaves Node
+22/24 transforms unchanged. The 395-file package shrinks from 6,174,977 to 5,655,821 bytes,
+leaving 635,635 bytes under the unchanged 6 MiB limit for subsequent capabilities.
+All 16 focused tests and 15 packed consumer fixtures pass with no new source diagnostics.
+The full release gate reports 1,754 tests, 1,751 passed, zero failures/cancellations and three
+privileged-host skips; coverage is 92.17% lines, 79.95% branches and 90.12% functions.
+See [compiler padding review](compiler-padding-review.json). This prerequisite does not change
+the feature count: eight implemented and thirty-two planned.
+
 ## Review prerequisites
 
 | Item | State | Evidence |

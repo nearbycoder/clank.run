@@ -1,0 +1,92 @@
+{
+  "kind": "build prerequisite; no additional roadmap feature",
+  "date": "2026-10-08",
+  "baseCommit": "054f1f03b12e153093880148a43d3641762b79c6",
+  "branch": "codex/compact-type-erasure-padding",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/255",
+  "status": "local-release-validation-passed",
+  "finding": "Native Node26 type stripping retains erased type syntax as padding; release package was only 116479 bytes below the unchanged 6 MiB limit.",
+  "change": "Unmapped Node26 output compacts only consecutive changed-space positions, retaining one separator and every unchanged character/newline. Mapped output retains native padding; Node22/24 transform behavior is unchanged.",
+  "package": {
+    "files": 395,
+    "fileLimit": 395,
+    "byteLimit": 6291456,
+    "beforeBytes": 6174977,
+    "afterBytes": 5655821,
+    "savedBytes": 519156,
+    "remainingBytes": 635635
+  },
+  "validation": {
+    "before": {
+      "status": "expected isolated size regression fails on the pre-change compiler",
+      "path": "/tmp/clank-review-2026-10-08/compiler-padding-before.log",
+      "sha256": "4602d214ffe3d0dc10a1c8a9fd37f55203eb4aa6e1b49be1f807cae1a8a61019"
+    },
+    "focused": {
+      "tests": 16,
+      "pass": 16,
+      "fail": 0,
+      "path": "/tmp/clank-review-2026-10-08/compiler-padding-focused.log",
+      "sha256": "7c1861276b0c17cb57488e88e034520d0f54408fe3d3009094017f95f6174e73"
+    },
+    "consumerTypes": {
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 15,
+      "status": "passed",
+      "path": "/tmp/clank-review-2026-10-08/compiler-padding-types.log",
+      "sha256": "dc0c926216f8ed697ecf4bfd302f4dc855bb7ee4069e0a30c4cef4244f6030db"
+    },
+    "release": {
+      "node": "26.10.0",
+      "tests": 1754,
+      "pass": 1751,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 92.17,
+        "branches": 79.95,
+        "functions": 90.12
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "path": "/tmp/clank-review-2026-10-08/compiler-padding-check.log",
+      "sha256": "c1f701b9fd2789b69378f9636d95d7cfcf7a6b016b7934e16a24f6a9ea3dfab9"
+    },
+    "finalDocumentation": {
+      "status": "passed",
+      "path": "/tmp/clank-review-2026-10-08/compiler-padding-docs.log",
+      "sha256": "b75c35b838ec488000ff4dc165a6cce30a32fb1b2e07816e29f725bff081a23c"
+    },
+    "correctedFocused": {
+      "status": "passed",
+      "reason": "Node22/24 native transforms remove comments; exact comment preservation asserted only in Node26 strip mode. Runtime literal value assertions remain on all versions.",
+      "path": "/tmp/clank-review-2026-10-08/compiler-padding-corrected-focused.log",
+      "sha256": "7553f48430365a37f09a774e84c6392f63a9d803c1daf8724affd99313ad8334"
+    },
+    "initialHostedFailure": {
+      "ciRun": 37873130290,
+      "reason": "New exact comment-preservation assertion incorrectly assumed transform mode retains comments; assertion narrowed without production code changes."
+    }
+  },
+  "compatibility": {
+    "dependency": "zero added npm dependencies",
+    "sourceMaps": "unchanged native padding and original sourcesContent",
+    "artifacts": "ordinary rebuilding changes unmapped columns and digests; existing verified artifacts retain bytes/identity",
+    "rollback": "revert compiler optimization; no data migration"
+  },
+  "boundaries": {
+    "host": "Three privileged Docker/XFS skips remain; no host certification claimed.",
+    "types": "Existing 163 semantic source diagnostics remain.",
+    "roadmap": "Eight implemented; thirty-two planned."
+  },
+  "sources": {
+    "scripts/compiler.mjs": "8e03886f5bf6a735406ba88edbc803102da74d50a4c2a2e4edd4d43272952502",
+    "tests/compiler-runtime.test.mjs": "8d33debbac9aaa3a9798f8aa9315d6228127cd8c20a2d10e0f3dd13910ab90d6",
+    "docs/development-tools.md": "a5f6febd7fe2c94bcb498eca2a81c21e627937afe23d26a787dc2d0d0472a0f9"
+  }
+}
