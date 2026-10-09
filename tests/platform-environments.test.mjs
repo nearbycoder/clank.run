@@ -223,7 +223,8 @@ test('actual environment CLI promotes without rebuilding and preserves explicit 
   await writeFile(join(f.root, '.clank/project.json'), JSON.stringify({ version: 1, server, projectId: f.development.id }), { mode: 0o600 });
   const cli = new URL('../scripts/clank.mjs', import.meta.url).pathname;
   const run = async args => {
-    const result = await promisify(execFile)(process.execPath, ['--disable-warning=ExperimentalWarning', cli, 'environment', ...args, '--json'], { cwd: f.root, env: { ...process.env, CLANK_HOME: home }, timeout: 30000, maxBuffer: 1024 * 1024 });
+    const end = args.indexOf('--'), cliArgs = end < 0 ? [...args, '--json'] : [...args.slice(0, end), '--json', ...args.slice(end)];
+    const result = await promisify(execFile)(process.execPath, ['--disable-warning=ExperimentalWarning', cli, 'environment', ...cliArgs], { cwd: f.root, env: { ...process.env, CLANK_HOME: home }, timeout: 30000, maxBuffer: 1024 * 1024 });
     return JSON.parse(result.stdout);
   };
   const list = await run(['list']); assert.equal(list.environments.length, 3);
@@ -233,7 +234,7 @@ test('actual environment CLI promotes without rebuilding and preserves explicit 
   const promoted = await run(promotionArgs); assert.equal(promoted.release.digest, artifact.digest); assert.equal(promoted.promotion.state, 'accepted');
   const replay = await run(promotionArgs); assert.equal(replay.release.id, promoted.release.id);
   const history = await run(['history', 'staging']); assert.equal(history.promotions.length, 1);
-  const policy = await run(['bind', 'staging', f.staging.id, '--expected-version', '1', '--migration-policy', 'code-only']); assert.equal(policy.environment.version, 2);
+  const policy = await run(['bind', '--expected-version', '1', '--migration-policy', 'code-only', '--', 'staging', f.staging.id]); assert.equal(policy.environment.version, 2);
   await assert.rejects(run(promotionArgs), error => JSON.parse(error.stderr).error.code === 'ENVIRONMENT_VERSION_STALE');
   await assert.rejects(run(['promote', 'staging', '--from', 'development']), /Pass --expected-active explicitly/);
   const unbound = await run(['unbind', 'staging', '--expected-version', '2']); assert.equal(unbound.environment.projectId, null);

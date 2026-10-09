@@ -9,6 +9,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   proof for binding/reactivation, preserve manual role ownership and unrelated workspace access,
   and provide fresh, versioned native membership adoption.
 
+- Preserve dash-prefixed deployment identities and directories after the CLI `--`
+  option terminator, including literal `--help` and `--json` values. Keep prior
+  options strict and prevent clock-boundary races in signed-provider rejection tests.
+
 - Add opt-in verified organization identity linking with fresh local and provider authentication,
   durable subject ownership, versioned unlink receipts and organization-scoped offboarding.
   Preserve unrelated organization access and expose guarded native account-security controls.

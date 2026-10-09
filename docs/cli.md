@@ -2,6 +2,12 @@
 
 The `clank` executable contains both the compiler and deployment client. It does not install application dependencies or execute remote build hooks.
 
+Deployment client commands accept `--` to end option parsing. Put all options before it
+when an identity or directory begins with a dash. For example:
+`clank environment bind --expected-version=1 --json -- staging --PROJECT_ID`.
+Everything after `--` is positional, including strings such as `--help` or `--json`;
+required options and unknown-option validation still apply before the terminator.
+
 The package also exposes three operator processes: `clank-platform` starts the control plane,
 `clank-runner` connects an authenticated remote deployment node, and `clank-provider` runs the
 reference stateful Docker provider plus private runtime ingress. Their `--help` output lists

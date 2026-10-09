@@ -299,7 +299,9 @@ test('linking denies anonymous, bearer, wrong-origin, CSRF, non-fresh and cross-
 test('signed provider auth_time is required and stale/future verification never creates a binding',async()=>{
  const f=await identityFixture();try{
   const owner=await f.fresh(await register(f.runtime,'local@example.test'));
-  for(const auth_time of [undefined,Math.floor(Date.now()/1000)-301,Math.floor(Date.now()/1000)+31,'fresh']){f.idp.setClaims({auth_time});const flow=await linkingFlow(f,owner);const response=await flow.finish();assert.equal(response.status,403,await response.text());}
+  // Leave a wide margin beyond the thirty-second clock-skew allowance: a
+  // second boundary during real HTTP/JWK verification must not make it valid.
+  for(const auth_time of [undefined,Math.floor(Date.now()/1000)-3600,Math.floor(Date.now()/1000)+3600,'fresh']){f.idp.setClaims({auth_time});const flow=await linkingFlow(f,owner);const response=await flow.finish();assert.equal(response.status,403,await response.text());}
   assert.equal(f.sql.prepare('SELECT count(*) n FROM clank_sso_identities').get().n,0);
   f.idp.setClaims({});const pending=await linkingFlow(f,owner);f.sql.prepare('UPDATE clank_auth_sessions SET authenticated_at=? WHERE id=?').run(Date.now()-300001,owner.session.id);assert.equal((await pending.finish()).status,403);
  }finally{await f.close()}
