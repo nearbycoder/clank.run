@@ -302,6 +302,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 
 - [Development updates and editor integration](docs/development-tools.md)
 - [Durable data workflows](docs/durable-data-workflows.md)
+- [Retention administration and holds](docs/retention-administration.md)
 - [Linux provider disk and outbound policies](docs/linux-provider-isolation.md)
 - [Planned provider node evacuation](docs/planned-node-evacuation.md)
 - [Localization](docs/localization.md)

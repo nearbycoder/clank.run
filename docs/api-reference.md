@@ -774,6 +774,12 @@ alarm-process, authorization, backup, and placement guarantees.
 
 ## Durable document collaboration
 
+`@clank.run/framework/retention-administration` exports `openRetentionAdministration`,
+`createRetentionAdministrationClient` and `mountRetentionAdministration` for scoped inventory,
+exact purge previews/receipts, versioned holds and persistent schedules. See
+[retention administration](retention-administration.md) for the protected data subset,
+current-session/operator checks, capacity limits and upgrade/recovery boundaries.
+
 `@clank.run/framework/collaborative-documents` provides `openCollaborativeDocuments`,
 `createCollaborativeDocumentsClient`, `textEdit` and `mountCollaborativeEditor`. See
 [durable data workflows](durable-data-workflows.md) for authorization, replay and capacity policies.

@@ -39,6 +39,7 @@ export const groups = [
       ["full-stack", "docs/full-stack.md"],
       ["offline", "docs/offline.md"],
       ["durable-data-workflows", "docs/durable-data-workflows.md"],
+      ["retention-administration", "docs/retention-administration.md"],
       ["database", "docs/database.md"],
       ["migrations", "docs/migrations.md"],
       ["auth", "docs/auth.md"],

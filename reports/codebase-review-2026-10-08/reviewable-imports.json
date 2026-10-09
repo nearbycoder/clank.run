@@ -128,5 +128,26 @@
     "tests/platform-crash.test.mjs": "6736fb036f0002a48cffed71ab9add33bb898b1fc402258968dd2d1a1504f15a",
     "tests/platform-docker-crash.test.mjs": "e8f21125b9d3fab0638645820c16067ecf6cb4554febd69222440c2ecb5243d1",
     "tests/fixtures/sqlite-hot-journal-writer.mjs": "2853a9918fa32435e6c7a501463c73056a7e378310985b07c68185d559ab6c00"
+  },
+  "delivery": {
+    "status": "merged",
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/260",
+    "reviewedHead": "632ed51969f2a5c79bef535afeb4246c90deb309",
+    "mergeCommit": "55a6509248d635346910b59fa8d21708660d1ff8",
+    "review": {
+      "id": 5465603899,
+      "action": "COMMENT",
+      "independent": false
+    },
+    "hosted": {
+      "ci": 37882412623,
+      "codeql": 37882412603,
+      "allSixChecks": "SUCCESS",
+      "unresolvedThreads": 0
+    },
+    "mergeTreeMatchesReviewedHead": true,
+    "checkoutsSynchronized": true,
+    "preexistingWorktreeFilesPreserved": 7,
+    "preexistingPrimaryFilesPreserved": 16
   }
 }

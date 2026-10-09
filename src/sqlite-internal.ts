@@ -20,10 +20,51 @@ export interface SQLiteInternal {
   transaction<Value>(handler: (changes: SQLiteInternalChangeRecorder) => Value): Value;
   /** Re-scope reads inside an active transaction for independent participant/approval authorization. */
   readScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").ReadDatabase<any>) => Value): Value;
+  /** Re-scope generated metadata writes after independent current operator authorization. */
+  writeScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").WriteDatabase<any>) => Value): Value;
   /** Capture selective dependencies inside the current write transaction. */
   readTrackedScoped<Value>(userId: string | null, handler: (db: import("./backend.ts").ReadDatabase<any>) => Value): import("./backend.ts").TrackedResult<Value>;
   /** Retire persisted and pending snapshots of a record deleted in this write transaction. */
   purgeDeletedHistory(table: string, id: string): void;
+}
+
+/** Every upgraded source writer consults persisted holds, including preopened connections. */
+export function isRetentionHeld(connection: Pick<SQLiteInternal, "prepare">, kind: "import" | "collaboration" | "audit", id: string, now = Date.now()): boolean {
+  if (!connection.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_retention_holds'").get()) return false;
+  const state = connection.prepare("SELECT protocol FROM clank_retention_state WHERE singleton=1").get();
+  if (state?.protocol !== 1) throw new Error("Unsupported persisted retention hold protocol.");
+  const rows = connection.prepare("SELECT scope,reason,expires_at,version FROM clank_retention_holds WHERE kind=? AND resource_id=? LIMIT 2").all(kind, id);
+  if (rows.length > 1) throw new Error("Conflicting persisted retention holds.");
+  const row = rows[0];
+  if (!row) return false;
+  if (typeof row.scope !== "string" || !row.scope || row.scope.length > 200 || typeof row.reason !== "string" || !row.reason || row.reason.length > 2000 || !Number.isSafeInteger(row.version) || Number(row.version) < 1 || row.expires_at !== null && (!Number.isSafeInteger(row.expires_at) || Number(row.expires_at) < 0)) throw new Error("Invalid persisted retention hold.");
+  return row.expires_at === null || Number(row.expires_at) > now;
+}
+
+/** Fixed history predicate for every upgraded writer's automatic cleanup. */
+export function retentionHistoryProtection(connection: Pick<SQLiteInternal, "prepare">): string {
+  if (!connection.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_retention_holds'").get()) return "";
+  if (connection.prepare("SELECT protocol FROM clank_retention_state WHERE singleton=1").get()?.protocol !== 1) throw new Error("Unsupported persisted retention hold protocol.");
+  if (connection.prepare(`SELECT 1 FROM clank_retention_holds WHERE
+    typeof(kind)<>'text' OR kind NOT IN ('import','collaboration','audit') OR typeof(resource_id)<>'text' OR length(resource_id) NOT BETWEEN 1 AND 200
+    OR typeof(scope)<>'text' OR length(scope) NOT BETWEEN 1 AND 200 OR typeof(reason)<>'text' OR length(reason) NOT BETWEEN 1 AND 2000
+    OR typeof(version)<>'integer' OR version NOT BETWEEN 1 AND 9007199254740991
+    OR expires_at IS NOT NULL AND (typeof(expires_at)<>'integer' OR expires_at NOT BETWEEN 0 AND 9007199254740991) LIMIT 1`).get()) throw new Error("Invalid persisted retention hold.");
+  if (connection.prepare("SELECT 1 FROM clank_retention_holds GROUP BY kind,resource_id HAVING count(*)>1 LIMIT 1").get()) throw new Error("Conflicting persisted retention holds.");
+  return ` AND NOT EXISTS(SELECT 1 FROM clank_retention_holds held WHERE (held.expires_at IS NULL OR held.expires_at>?) AND (
+    held.kind='import' AND ((table_name='durableImportJobs' AND held.resource_id=document_id)
+      OR table_name IN ('durableImportChunks','durableImportCorrections','durableImportOperations') AND held.resource_id=json_extract(snapshot_data,'$.jobId'))
+    OR held.kind='collaboration' AND ((table_name='collaborativeDocs' AND held.resource_id=json_extract(snapshot_data,'$.key'))
+      OR table_name IN ('collaborativeOperations','collaborativeReceipts','collaborativeBranches') AND held.resource_id=json_extract(snapshot_data,'$.documentId'))))`;
+}
+
+/** Count held source history without materializing payloads; shared admission bound. */
+export function retentionHistoryUsage(connection: Pick<SQLiteInternal, "prepare">, protection = retentionHistoryProtection(connection), now = Date.now()): { records: number; bytes: number } {
+  if (!protection || !connection.prepare("SELECT 1 FROM clank_retention_holds WHERE expires_at IS NULL OR expires_at>? LIMIT 1").get(now)) return { records: 0, bytes: 0 };
+  const row = connection.prepare(`SELECT count(*) AS records,coalesce(sum(length(CAST(snapshot_data AS BLOB))),0) AS bytes FROM clank_document_revisions
+    WHERE table_name IN ('durableImportJobs','durableImportChunks','durableImportCorrections','durableImportOperations','collaborativeDocs','collaborativeOperations','collaborativeReceipts','collaborativeBranches') AND NOT(1${protection})`).get(now)!;
+  if (!Number.isSafeInteger(row.records) || !Number.isSafeInteger(row.bytes) || Number(row.records) < 0 || Number(row.bytes) < 0) throw new Error("Invalid held history usage.");
+  return { records: Number(row.records), bytes: Number(row.bytes) };
 }
 
 /** Internal hook used by the point-in-time journal. All callbacks are synchronous. */

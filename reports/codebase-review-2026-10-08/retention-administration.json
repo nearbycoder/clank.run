@@ -1,0 +1,155 @@
+{
+  "feature": 39,
+  "title": "Retention administration and holds",
+  "date": "2026-10-09",
+  "baseCommit": "55a6509248d635346910b59fa8d21708660d1ff8",
+  "branch": "codex/retention-administration",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/261",
+  "status": "local-release-validation-passed",
+  "acceptance": {
+    "inventory": "Current-session scoped source inventory with UTF-8 payload/receipt/history counts, protected identities, explicit holds and authorized-generation pagination. Trusted persisted source associations resolve ownership; browser scope grants nothing. Global source admission bounds include denied resources.",
+    "review": "Private source snapshots bind exact selection, source versions/counts, payload/history entries, policy/hold revision, cutoff and deletion bounds. Changed/forged previews fail; current authority is checked before new execution and retained receipt replay. Payload retirement and exact receipt commit atomically.",
+    "imports": "Durable holds preserve terminal raw source and superseded correction/history copies across preopened upgraded connections/restart. Reviewed purge replaces accepted result payloads with expired fingerprint identities; original correction/apply retries fail with IMPORT_OPERATION_EXPIRED and cannot execute again. Job/source identity and imported application values remain.",
+    "collaboration": "Holds suppress receipt/operation/source-history cleanup. Purge advances a persisted accepted-base floor while retaining current text, branches and their identities/history. Old edits conflict after receipt retirement; current-revision edits continue.",
+    "audit": "Pending/unsigned audit events cannot retire. Held acknowledged envelopes remain local without redelivery; bounded outbox growth applies backpressure and still delivers pending signed events. Retirement preserves sequence/checkpoints, independently verified continuity and other organizations. Invalid next events cannot starve already signed delivery.",
+    "holds": "Persisted, expiring and versioned; expired rows remain inspectable. Release/recreation cannot reuse a prior version. General database global/per-document history cleanup honors active source holds. A real 100,000-snapshot fixture proves capacity rollback keeps text, history and receipts intact.",
+    "schedule": "Persisted principal/session, policy revision, rule version, occurrence, cursor and next due time. Independent processes execute one occurrence; revocation or changed policy pauses it. Failed purge rolls back, errors remain bounded, missed cadences coalesce and cursor rotation avoids starvation by held early resources.",
+    "recovery": "Real SIGKILL after payload deletion and receipt insertion rolls back the complete SQLite boundary. Independent processes return one exact accepted purge. A deliberately lost committed HTTP response replays identically after service restart.",
+    "browser": {
+      "date": "2026-10-09",
+      "fixture": "tests/fixtures/retention-browser.mjs",
+      "transport": "Actual same-origin HTTP handlers over disposable SQLite, persisted source metadata and operator roles; browser cookies and CSRF retained.",
+      "heldReview": {
+        "records": 0,
+        "blocked": "held",
+        "acceptDisabled": true
+      },
+      "releasedReview": {
+        "records": 4,
+        "bytes": 1964,
+        "acceptance": "keyboard Enter",
+        "focusedAfterAcceptance": "Refresh inventory"
+      },
+      "remainingInventory": {
+        "payloadRows": 0,
+        "receiptRows": 0,
+        "historyRows": 5,
+        "identityRows": 2,
+        "protectedRows": 7,
+        "protectedBytes": 4374
+      },
+      "rules": "A paused browser-daily rule persisted through Save/Load; keyboard Edit restored its current version and focused Rule name.",
+      "accountSwitch": "Second real authenticated cookie/session saw zero resources; private reason and rule fields were empty. Return to original account showed retained identities.",
+      "revocation": "Deleting the persisted operator role produced access denial and cleared inventory/rules/forms.",
+      "disposal": "Disposed controls removed from the accessibility tree; late/disposal races also covered in focused UI regressions.",
+      "mobile": {
+        "requestedWidth": 390,
+        "clientWidth": 375,
+        "scrollWidth": 375
+      },
+      "desktop": {
+        "requestedWidth": 1280,
+        "clientWidth": 1265,
+        "scrollWidth": 1265
+      },
+      "browserWarningsOrErrors": [],
+      "screenshots": "Viewed through browser tool output; no saved screenshot file is claimed.",
+      "limits": "The standalone widget is tested; existing platform dashboard/CLI do not automatically embed it. Browser testing does not certify Docker/XFS or physical erasure."
+    }
+  },
+  "validation": {
+    "focused": {
+      "tests": 63,
+      "pass": 63,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "newFeatureTests": 17,
+      "newUiTests": 4,
+      "path": "/tmp/clank-review-2026-10-08/retention-focused.log",
+      "sha256": "38bdf7f0efc57bd02a4fa8298f0b9e47bf6adf47bbccdb4f8b565872df0ea8c3"
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 18,
+      "skipLibCheck": false,
+      "path": "/tmp/clank-review-2026-10-08/retention-types.log",
+      "sha256": "ab2a19f8437b6f47b2cbcadba1d645d33397eb1c2dea62570fd1dabff24331dd"
+    },
+    "release": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1822,
+      "pass": 1819,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 92.27,
+        "branches": 80.18,
+        "functions": 90.32
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 399,
+      "unpackedBytes": 5808460,
+      "fileCeiling": 399,
+      "byteCeiling": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/retention-check.log",
+      "sha256": "21352c9e3f896e2b5a80232e08f76dce2772f9d7c74777b726c526c1fdb3c119"
+    },
+    "pack": {
+      "path": "/tmp/clank-review-2026-10-08/retention-pack.json",
+      "sha256": "d9d5d3a465f389aef11ee90daa1ce10e1661e19b96ea9c4886ea1b0f9e9b3748"
+    },
+    "browser": {
+      "path": "/tmp/clank-review-2026-10-08/retention-browser-evidence.json",
+      "sha256": "0fc7c6c357cd816db7611f82078d365b5b997532442476442015394773dc17e6"
+    }
+  },
+  "limits": [
+    "No physical SQLite/WAL/PITR/backup/archive erasure or cross-database atomicity claim.",
+    "Current document text, branches, job/source metadata and compact retry identities remain; scoped source transfers require trusted hold reconciliation.",
+    "Upgrade all source writers; old binaries that ignore holds/floors or reject new metadata are unsupported. Historical restores require reconciliation before reopening sources.",
+    "Held source history is capped at 100,000 snapshots/128 MiB; accepted retention identities are never silently evicted. Lifetime receipt capacity applies backpressure.",
+    "General history pruning follows source holds, but direct trusted SQLite mutation remains outside the public contract.",
+    "Standalone operator widget and programmatic platform adapter; dashboard/CLI do not automatically mount it.",
+    "Three privileged-host cases remain skipped; Docker/XFS certification and dependent deployment features still require an explicitly disposable compatible host."
+  ],
+  "sourceHashes": {
+    "src/retention-administration.ts": "23d1381b40b7c1ce9e7d78b1e73a3c97c199223f6be4fb87845204c15bbb5659",
+    "src/retention-administration.d.ts": "b450e6554172e4211ad8f86bc0d0d9f39ff1fd4f748331bf63410711b5583a91",
+    "src/retention-internal.ts": "c0c0ebef26110c83d6f8bcee2ebfcb950b697497354eda384785db1fa3bb7425",
+    "src/retention-internal.d.ts": "96013996860359b50e74627aad7e70cb430f99b629d6a20dbe082f90aba4f894",
+    "src/backend.ts": "7ec825baa7528077eb173c00967dce381f272c53b7920f8f46df94990fbbec76",
+    "src/sqlite-internal.ts": "58e20d4acabf54b66498afa3ea91b065d12f2f79184b69332da0953c5efebcb3",
+    "src/sqlite-internal.d.ts": "5b382669392e3df8310ae5c2e57fdb465f865eac6a7d7c88db32158d1dff4011",
+    "src/feature-service.ts": "00722250dafeb98c33654e695264a7bbe4d6f4b0324d205e044a270c2fa33555",
+    "src/durable-import.ts": "51bd5ced4dae4e9edc9d8a3ad87a0b74e1b19dd823428afb77863319b032860e",
+    "src/collaborative-documents.ts": "5600b77528b8a6562b2eea072953975f6920bc25153e82546b42e63b2689c722",
+    "src/audit-export.ts": "5fa043d74ee04380618776c2d15eb5187ebaf22b26f97e2113d8cea8614bc0fe",
+    "src/audit-export.d.ts": "7e8ef7e58f3cec4c739e34e8cde02c34ab9b05bdb721fa739f6618fb4bb91d70",
+    "src/platform.ts": "5603d9bbb46fb323f6eaa63cba8590fb42f07309a518b8d13ea78cc52bd09a8b",
+    "src/platform.d.ts": "2df36f2833263f0b7d4a2be20142d6b08467958de89443b7f848bd9d9dea021c",
+    "src/index.ts": "4d1614debb10e56410497ae35fb49d2acb88dd69c8118aaf734982ac73a4672b",
+    "src/index.d.ts": "866a5e13085fcd59996c837c033e9fa788c65671b6df11c7d723dff89280e476",
+    "package.json": "f9881ce8bcaea3ccc366df862ff47900cb9f41e430498707c2fb1c861fda076e",
+    "scripts/security-audit.mjs": "dd3904ed9e8949ccf7c1bbe0b8334a1e4d4f4856d9c6d8587f33c16fd14ff812",
+    "tests/retention-administration.test.mjs": "669a944fd9840780e90f480f1c65442c880b245a6d91683e98c67702e96a6f8b",
+    "tests/retention-ui.test.mjs": "976c72670f52246d527111dda3100d6ec7cf2788ee3dcf3ec84b140e880230aa",
+    "tests/fixtures/retention-worker.mjs": "9c04ee38df7e958a7d1c8cf1abca35e20640b6eaf11c81651be85fa74e8d1429",
+    "tests/fixtures/retention-browser.mjs": "9998f2f826f3bb335092a48d6a7ced455811078235d7c56dc06dadb5e630d3a9",
+    "tests/operational-foundations.test.mjs": "6040a0d17f27886637b94873dd82a6dc8a46dc88af1bf2c04e746fefad5edc59",
+    "type-tests/retention-administration.ts": "dc6c55cd6e38b6cb4ff0bf1507c0c88c869f538fa212585ea925406633cafcc4",
+    "docs/retention-administration.md": "273a30c7f6a0adb4f5361961d010881c5403b157e1a1051b207468c0b1c8b56a",
+    "docs/api-reference.md": "b4c7a6692fe1511cb4d3c1cfe10c9453d326b6b0b6b6a86694e7fa1c6dc8e673",
+    "docs-site/content-manifest.mjs": "bf59728dec26fb52970fb9a9cd2be6b38db1688b21fde2f2171c5769b2d0e2db",
+    "README.md": "8e5cf7fd29185487be62b256025498dabda1f2cff90b262c42b64f6f734be513",
+    "CHANGELOG.md": "2d486a10658f1f1bc03c2d891d098b70c22b63f8e220c140884fb533eeddb838"
+  }
+}

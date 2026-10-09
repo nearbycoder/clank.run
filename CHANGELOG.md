@@ -4,6 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add scoped retention inventory, reviewed purge batches, durable holds and periodic cleanup
+  for imports, collaboration operations/receipts and acknowledged platform audit exports.
+  Expired retry identities remain fenced, and holds suppress pruning across upgraded writers.
+- Bound held audit outbox growth, avoid redelivery of acknowledged envelopes, and continue
+  delivery of signed pending entries when a later event cannot be captured.
+
 ## 0.24.0 - 2026-10-03
 
 - Add forty framework and platform improvements covering tenant isolation, recovery, governance,
