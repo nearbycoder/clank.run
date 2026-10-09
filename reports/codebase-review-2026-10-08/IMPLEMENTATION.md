@@ -105,6 +105,31 @@ the package has 395 files and 5,677,195 bytes under unchanged bounds. Existing P
 FTS virtual tables remains explicit. See [source-linked search](source-linked-search.json).
 Nine features have acceptance evidence; thirty-one remain planned.
 
+## Reviewable import corrections and upserts
+
+[PR #258](https://github.com/nearbycoder/clank.run/pull/258) merged source-linked search as
+`22a530873fd54e02ee7c5551a4a68cf8d539b077` after all six hosted checks passed. Both checkouts
+were synchronized, and all seven/sixteen preexisting untracked files were preserved.
+
+Feature 25 adds immutable canonical source staging, separate mapping/value corrections and
+explicit authorized insert/update/skip review. Accepted batches bind source, correction revision,
+job progress and target versions; target writes, counters and exact receipts commit atomically.
+Applied batches stay immutable. Legacy streaming contracts and structural clients remain usable.
+Proposal: [issue #259](https://github.com/nearbycoder/clank.run/issues/259).
+
+All 54 focused tests pass, including 21 feature tests and four UI regressions. Actual process kills,
+independent connections, lost creation/update responses, restart, changed sources/mappings,
+invalid/ambiguous rows, scoped/current authorization, capacity rollback and search projection are
+verified. Real browser file chooser, keyboard/focus, mobile, correction/review, stale rejection,
+account/disposal and clearing displayed source on session revocation pass. All 17 packed consumer
+fixtures pass without additions to the 163 source diagnostics. The full gate reports 1,797 tests,
+1,794 passed, zero failures/cancellations and three privileged-host skips; coverage is
+92.22% lines, 80.08% branches and 90.24% functions. Documentation, conformance and security pass;
+the package has 395 files and 5,725,722 bytes under unchanged bounds. See
+[reviewable imports](reviewable-imports.json) for exact evidence and retention/migration boundaries.
+Ten features have acceptance evidence; thirty remain planned. Hosted review/merge is still pending
+for this batch; local validation does not replace those checks.
+
 ## Review prerequisites
 
 | Item | State | Evidence |
@@ -145,7 +170,7 @@ Nine features have acceptance evidence; thirty-one remain planned.
 | 22 | Authorized cross-table aggregates | Planned | Pending |
 | 23 | Source-linked search indexes | Implemented | Proposal #257; atomic source writes/deletes/history restore, pre-opened independent writers, two actual process crashes, resumable fenced rebuild, bounded drift diagnosis, current owner/record authorization and 16 packed consumer fixtures. Real keyboard/mobile/scope/disposal/revocation checks and full release gate pass. |
 | 24 | Search facets and stable result cursors | Planned | Pending |
-| 25 | Import correction and upsert workflow | Planned | Pending |
+| 25 | Import correction and upsert workflow | Implemented | Proposal #259; immutable server-verified source, separate durable corrections, version-fenced upserts, exact correction/apply receipts, two actual process crashes, lost responses/restart, ownership/current ACL and bounded admission. All 54 focused tests, 17 packed fixtures and full release gate pass; actual upload/keyboard/mobile/stale/account/disposal/revocation checks. |
 | 26 | Shared document cursor coordination | Implemented | Revision-aware, session-bound ephemeral cursors; edit/deletion rebasing, expiry/capacity, per-participant owned authorization, session/ACL/email-verification revocation and restart/reconnect tested. Keyboard/browser and mobile checks pass. |
 | 27 | Document suggestions and branches | Implemented | Named durable drafts, immutable proposals, before/after review, author/reviewer policies, document/branch fences, overlap/missing-history rejection, bounded payload/rebase bytes, transactional acceptance and exact restart replay tested. |
 | 28 | Retained file versions and restore | Implemented | Proposal #253; 23 new feature tests and 62 focused tests, immutable owner/key-scoped history, generation fences, restart/receipt replay, bounded retention and provider cleanup, in-flight session revocation, actual keyboard/mobile/download checks and 15 packed consumer fixtures. Full release gate passes. |

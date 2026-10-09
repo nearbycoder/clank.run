@@ -1,0 +1,117 @@
+{
+  "feature": 25,
+  "title": "Import correction and upsert workflow",
+  "date": "2026-10-08",
+  "baseCommit": "22a530873fd54e02ee7c5551a4a68cf8d539b077",
+  "branch": "codex/reviewed-import-corrections",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/259",
+  "status": "local-release-validation-passed",
+  "acceptance": {
+    "source": "Immutable owner-scoped raw headers/rows; server-verified SHA-256 canonical identity and per-chunk checksum; changed source or initial mapping cannot reuse job identity. Invalid cells remain staged for inspection/correction.",
+    "corrections": "Durable mapping revisions and typed row overlays affect only unprocessed rows. Replacements retire superseded history; accepted batches and raw source are unchanged. Exact correction receipts survive restart; changed operation input conflicts.",
+    "preview": "Current source batch, canonical identity, correction revision, job version/progress, JSON target schema/import declaration and existing target versions bind each reviewed batch. Server recomputation inside SQLite prevents forged or stale acceptance. Only declared import fields appear in before/after values.",
+    "upsert": "Declared scalar non-null unique identity; exactly one authorized owner-scoped match. Ambiguous matches and repeated batch keys fail explicitly. Updates preserve unmapped fields; inserts use the full schema/defaults. Invalid batches write no targets or progress.",
+    "authority": "Current auth/owner fences on every new route and client response; unowned reads and writes require explicit policies. Read policy precedes existing values, and write policy checks original/proposed values. Exact replay rechecks current target access. Async policies fail closed with rejected promises contained.",
+    "atomic": "Target writes, cursor/counters, corrections and exact accepted result receipts commit together. Two actual process kills after target/receipt writes roll back the complete boundary. Lost initial response with a stable creation key resumes one job; lost update response replays once after restart. Independent connections accept one exact operation.",
+    "integrations": "Source-linked search success projects current imported versions; capacity failure rolls back target rows, index, job progress and receipt.",
+    "retention": "Bounded global jobs/chunks/staging, source bytes, target lookup/final insert count, correction rows/bytes and receipt rows/bytes. Completion/cancellation purges raw/correction payloads and document-history copies in pages, while source identities/job metadata/operation receipts remain. Admission rejects instead of dropping replay protection.",
+    "browser": "Actual file chooser/HTTP/SQLite flow verifies invalid preview, saved mapping/value corrections, explicit before/after review, stale version rejection and acceptance. Keyboard focus is restored after disabled actions, long values fit 390px, account/disposal responses are discarded and detected session revocation clears already displayed source. New upload control retains a creation key while mounted."
+  },
+  "validation": {
+    "focused": {
+      "tests": 54,
+      "pass": 54,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "sourceFeatureTests": 21,
+      "newUiRegressions": 4,
+      "path": "/tmp/clank-review-2026-10-08/import-focused.log",
+      "sha256": "7610e6fa43b502e9c284a0a1d7789487ccf9cbd3958224ff9fa8d9886c22ff0e",
+      "qualification": "Final focused rerun additionally asserts that replaying an earlier accepted batch returns its original progress after later batches complete."
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 17,
+      "skipLibCheck": false,
+      "legacyStructuralClient": "Positive fixture implements the unchanged streaming-only DurableImportClient.",
+      "path": "/tmp/clank-review-2026-10-08/import-types.log",
+      "sha256": "77302b4dfcd3be1414a1982e057c1cd2de429b72dc5a52298e3b06fe7f57cebe"
+    },
+    "release": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1797,
+      "pass": 1794,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 92.22,
+        "branches": 80.08,
+        "functions": 90.24
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 395,
+      "publishFileLimit": 395,
+      "publishBytes": 5725722,
+      "publishByteLimit": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/import-check.log",
+      "sha256": "71bf6a20e12bd7a5f158895cbd71b281922e0ebb9b404d04d04fa00e8bba6025"
+    },
+    "browser": {
+      "path": "/tmp/clank-review-2026-10-08/import-browser-evidence.json",
+      "sha256": "a703b705db4f94e31165accfd68f4644ce69f55599e9ae10a2aa1b1c6be39c59"
+    },
+    "earlierChecks": [
+      {
+        "reason": "Passed before the additional displayed-source revocation regression, stable upload key and resource/compatibility tests.",
+        "status": "passed",
+        "path": "/tmp/clank-review-2026-10-08/import-check-before-revocation-display.log",
+        "sha256": "ef8e64f3afda79a0b4722fe4192f7490642cb56fee7ce9e250b78eef3cdcac07"
+      },
+      {
+        "reason": "Passed before separating the additive ReviewableImportClient from the unchanged legacy structural interface.",
+        "status": "passed",
+        "path": "/tmp/clank-review-2026-10-08/import-check-before-client-interface-split.log",
+        "sha256": "46f6ac76394ff6c343451ea21fb6ac2089e4d83e1aff92b557a35f59abe2e9bf"
+      }
+    ],
+    "finalDocumentation": {
+      "status": "passed",
+      "path": "/tmp/clank-review-2026-10-08/import-docs.log",
+      "sha256": "0e2a75e6ce39978c1546eb3f33e4a9b09962ebe1da94cda6ffc604617c95e979"
+    }
+  },
+  "compatibility": {
+    "default": "Streaming insert-only methods/outputs remain available. DurableImportClient structural implementations need no review methods; the factory returns its additive ReviewableImportClient subtype. Legacy routes cannot apply reviewable raw chunks.",
+    "migration": "Opt-in owned correction/operation tables plus defaulted job metadata/chunk checksums. No new application tables when reviewable mode is disabled. Register feature schema before a PITR seal; the existing recovery guard remains.",
+    "definition": "Drain/finish/cancel jobs before changing their import target JSON schema, fields, uniqueness, duplicate policy or batch size. Definition drift fails closed; direct SQL and older writers of reviewable metadata are unsupported.",
+    "rollback": "Finish/cancel reviewable jobs, drain writers and unmount their controls. Retain job/source identity and operation receipts; use the upgraded importer to inspect them. Ordinary CRUD remains usable.",
+    "dependencies": "No npm dependencies or new distribution files; unchanged 395-file/6 MiB gates."
+  },
+  "boundaries": {
+    "identity": "Canonical parsed data is attested, not verbatim CSV file bytes. Equivalent quoting/line endings can share identity.",
+    "privateSource": "Raw source belongs to its uploading account; target read policy controls existing target values. Workspace/account navigation must dispose/remount controls.",
+    "creationRetry": "Custom callers must supply a stable key to recover an unknown initial create response. Default keys represent new imports. Widget keys persist while mounted.",
+    "receiptResult": "Exact results describe their original acceptance; inspect for current progress. Deleted/revoked target access denies receipt retrieval. Capacity limits deliberately reject work rather than expire retry identities.",
+    "queryBounds": "Responses at most 1 MiB, correction/result records 64 KiB, canonical source 16 MiB, browser files 5 MiB/50000 rows. Smaller batches/windows are required for large values. Index unique fields for efficient bounded lookup.",
+    "physicalRetention": "Logical current payload limits do not erase SQLite/WAL/independent archived bytes. Metadata/receipt tombstones stay admitted under global bounds; retention administration remains feature39.",
+    "host": "Three privileged Docker/XFS skips remain, not certification."
+  },
+  "sources": {
+    "src/durable-import.ts": "8162f073e1ae8accf289e47b00332da95d70f23bd4d3fb22d1a1e6fb102b4eb6",
+    "src/durable-import.d.ts": "0124db7a4aeff3a7e18f191387419e18b1c140ffea59309ddc711b939c985f35",
+    "tests/reviewable-import.test.mjs": "72f36c0dedfe39be54e62b0159c7a91e632727af5839100791559fa00d96bfc4",
+    "tests/fixtures/reviewable-import-worker.mjs": "84dbc767062e4a7ee7296e59328a7cffc75731081a8154041ebe7385f2a51b18",
+    "tests/durable-features-ui.test.mjs": "09fd3edb66ed3f2c4df849dc0048907f5b66ef13fab98296615f4b510d9afb87",
+    "type-tests/reviewable-import.ts": "2b2d98d859e0389465b3693154e8d7b7450b4889c86e5645d1e145fd038bc385",
+    "docs/durable-data-workflows.md": "23e53d5ebcbba3abe32bd5bcdade3ac69e54f8acd19cbce018cdbe9c531956ce"
+  }
+}

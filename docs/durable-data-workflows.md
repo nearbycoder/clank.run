@@ -470,3 +470,102 @@ keep their tables so a later compatible version can resume safely. Do not remove
 cursor metadata and then replay old requests. Already committed bulk edits, imports, and document
 edits require your application's data history/restore policy or a coordinated database restore;
 unmounting a service does not reverse writes.
+
+## Correct and upsert a reviewable import
+
+Enable `reviewable` beside the existing streaming insert-only importer. Raw CSV rows are staged
+without converting invalid cells; they remain immutable until the job finishes or is cancelled.
+Mappings and typed row corrections are stored separately and apply only to unprocessed rows.
+A changed file or initial mapping cannot resume an existing import identity.
+
+```ts
+import {
+  openDurableImport, createDurableImportClient, mountReviewableImporter,
+} from "@clank.run/framework/durable-import";
+
+const imports = await openDurableImport({
+  path: "app.sqlite", auth, schema, table: "records", fields: ["title", "score"],
+  uniqueBy: ["title"], batchSize: 100,
+  reviewable: { duplicates: "upsert" },
+});
+// Mount this handle at /__clank/imports through your existing HTTP router.
+const currentUser = () => browserAuth.user.value?.id ?? null;
+const client = createDurableImportClient<{ title: string; score: number }>({
+  auth: browserAuth, currentUser,
+});
+const columns = [
+  { source: "name", target: "title", type: "text" as const, required: true },
+  { source: "points", target: "score", type: "integer" as const, required: true },
+] as const;
+const dispose = mountReviewableImporter(importContainer, client, { columns, currentUser });
+// Dispose and remount on account/workspace changes and navigation.
+```
+
+For a custom UI, call `uploadReviewableCsv(file, columns, { key, id })`, then `sourceWindow(id)`
+to inspect a bounded page of raw rows and current corrections. Supply a stable creation `key`
+when retrying an upload whose initial response might be lost; the widget does this while mounted. CSV row numbers include the
+header, so the first data row is 2. Save changes through `correctMapping(id, revision, columns,
+operationId)` or `correctRows(id, revision, [{ row: 2, values: { score: 5 } }], operationId)`.
+Use the current `job.review.revision`. Corrections must match declared target field types and
+cannot alter processed rows. Changing a mapping affects remaining rows; saved value corrections
+take precedence over that mapping. Applied target records and immutable chunks are untouched.
+
+Call `preview(id)` to see authorized `insert`, `update`, `skip` or `invalid` effects and before/after
+values for declared import fields. Accept that exact preview with `apply(preview, operationId)`.
+The server recomputes it inside the SQLite write transaction and checks canonical source identity,
+source batch, correction revision, job version/progress, route definition and existing target
+versions. An unrelated target write does not invalidate a batch; an affected version or changed
+matching key does. If any row is invalid, acceptance records a failed job without applying any
+target writes or advancing progress. Inspect and correct those rows, then preview again.
+`run`, `step`, legacy `append` and legacy `seal` cannot bypass reviewable batch acceptance.
+
+The default reviewable duplicate policy is `error`. `skip` preserves a matched record and its
+version. `upsert` requires nonempty scalar string/number/boolean `uniqueBy` fields, rejects missing/null identities and accepts
+exactly one matching record in the current owner scope. Multiple matches and repeated identities
+within a batch fail explicitly. Updates preserve unmapped fields. Inserts still require the full
+target schema, including defaults. Values outside declared import fields are omitted from previews.
+For unowned tables, both `authorizeRead` and the existing write `authorize` are mandatory; read
+policy runs before returning existing values, and write policy checks both existing and proposed
+records. All policies are synchronous, current and fail closed. Async/rejected policies grant no
+access. These service writes do not invoke separate application mutation handlers.
+
+Give each accepted correction or batch a stable operation ID. The exact result, target writes and
+progress commit together. Retry the same input/ID after a lost response or restart; it returns the
+retained result without another update. Reusing an ID for changed input conflicts. Current session,
+owner and target authorization are still required for replay. If a target is deleted or no longer
+authorized, its successful receipt cannot be retrieved. Retained results describe their original
+acceptance, so use `inspect(id)` for current progress. The widget retains operation IDs across
+retries while mounted and offers **Refresh import progress** to reconcile a lost response.
+
+Reviewable files are limited to 5 MiB and 50,000 rows. SHA-256 covers canonical parsed headers plus
+raw row arrays, each JSON-encoded with a trailing newline; the server hashes persisted chunks at
+seal and verifies the client fingerprint. This identifies parsed data: equivalent quoting or line
+endings yield the same identity. It does not attest verbatim file bytes. A canonical source is
+bounded to 16 MiB (`maxSourceBytes` can lower it). Existing import job, chunk and global staging
+limits also apply. Source windows allow at most 100 rows and previews use the configured batch
+size (at most 500); each response is capped at 1 MiB. Request a smaller source window or configure
+a smaller batch when values exceed that bound. Matching and accepted inserts are admitted only within `maxTargetRecords`
+(default/maximum 50,000 records in the owner scope, or the whole unowned target); index unique
+fields for efficient lookups. This capacity check is separate from record authorization.
+
+`reviewable.maxCorrections` and `maxReceipts` default to and cannot exceed 100,000 global rows each.
+Current correction bytes default to 16 MiB, at most 64 MiB via `maxCorrectionBytes`; receipt result
+and target-ID bytes default to 32 MiB, at most 128 MiB via `maxReceiptBytes`. A row correction and
+individual receipt result are at most 64 KiB. Capacity exhaustion rejects the entire operation;
+receipts are never silently removed to permit potentially repeated writes. Correction replacement
+retires its superseded document-history copy; completion/cancellation retires raw chunks, current
+corrections and their document history in bounded pages. Source hash, initial mapping fingerprint,
+job metadata and operation receipts remain. SQLite pages/WAL and independent backups need their
+own retention policies; this does not erase archived physical bytes.
+
+Enabling this mode adds owned correction/operation tables and defaulted metadata on import jobs and chunk checksums.
+`DurableImportClient` retains its streaming-only structural contract; the factory returns the
+additive `ReviewableImportClient<Values>` subtype. Legacy job outputs and streaming behavior remain available. The widget clears displayed source/preview data when a request detects session/access revocation.
+Register feature tables before sealing
+a PITR schema; the existing recovery schema guard still applies. Finish/cancel active reviewable
+jobs and drain writers before changing their target schema, mapped field declaration, uniqueness,
+duplicate policy or batch size. These definitions are fenced across restart. Direct SQL changes
+and older import binaries writing reviewable metadata are unsupported. For rollback, finish or
+cancel reviewable jobs, unmount their controls and keep retained source identities/operation
+receipts. Use the upgraded importer to inspect those receipts; ordinary application CRUD remains
+usable. No dependencies, new package files or release size allowances are added.

@@ -5,7 +5,7 @@
   "baseCommit": "761671eb6fbd24addd811af4ed056eda37d531bf",
   "branch": "codex/source-linked-search",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/257",
-  "status": "local-release-validation-passed",
+  "status": "merged",
   "acceptance": {
     "atomic": "Core transaction hook projects registered source inserts, patches, replacements, deletes and record-history restores before commit; index/capacity failures roll back application rows, history and index. Independent pre-opened connections and real child processes use the persisted binding.",
     "authority": "Scope policy, owner-derived scope and optional current record policy precede ranking; current scoped source version/content/scope must match. Deleted, stale, inaccessible and duplicate candidates cannot supply snippets or consume authorized ranking capacity. Rejected async policies are denied and their promises contained.",
@@ -107,5 +107,23 @@
     "tests/durable-features-ui.test.mjs": "57b5e629e1233bd486e052466f114f0643907f5f447bbf815a0da5b59dfb87db",
     "type-tests/source-search.ts": "845891bac3fb35745ef3a7c1454de1fbaee0185560ef8b184b14cf890211f3d3",
     "docs/durable-data-workflows.md": "8b3ca0b7def09fa85dc5275eacdb50b9ebceb8dfe791160859adfa3e120348ca"
+  },
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/258",
+    "reviewedHead": "d5414353039d24021de5b123aedfef31485bf121",
+    "mergeCommit": "22a530873fd54e02ee7c5551a4a68cf8d539b077",
+    "ciRun": 37876397205,
+    "codeqlRun": 37876397253,
+    "hostedChecks": 6,
+    "allChecksPassed": true,
+    "unresolvedReviewThreads": 0,
+    "authorCommentReview": 5465160643,
+    "independentApproval": false,
+    "merge": "Expected-head squash through branch protection; no administrative bypass.",
+    "synchronizedCheckouts": true,
+    "preservedUntrackedFiles": {
+      "worktree": 7,
+      "primary": 16
+    }
   }
 }

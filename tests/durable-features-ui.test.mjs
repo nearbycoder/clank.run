@@ -5,7 +5,7 @@ import { mountBulkEditor } from "../dist/bulk-edit.js";
 import { mountCollaborativeEditor } from "../dist/collaborative-documents.js";
 import { mountSearch } from "../dist/search.js";
 import { mountSharedSavedViews } from "../dist/saved-views.js";
-import { mountDurableImporter } from "../dist/durable-import.js";
+import { mountDurableImporter, mountReviewableImporter } from "../dist/durable-import.js";
 
 class Element {
   constructor(tag, document) { this.tag = tag; this.ownerDocument = document; this.childNodes = []; this.listeners = new Map(); this.attributes = new Map(); this.style = {}; this.value = ""; this.disabled = false; this.ownText = ""; }
@@ -82,4 +82,51 @@ test("late search failures cannot overwrite a later response or enable its pendi
   const form = descendants(container, "form")[0], first = form.fire("submit"); await settle(); const second = form.fire("submit"); await settle();
   pending[0].reject(new Error("old request")); await first; assert.equal(button(container, "Search").disabled, true); assert.doesNotMatch(container.textContent, /unavailable/);
   pending[1].resolve({ hits: [], total: 0, truncated: false }); await second; assert.match(container.textContent, /0 results/); assert.equal(button(container, "Search").disabled, false); dispose();
+});
+
+const reviewColumns = [{ source: "name", target: "title", type: "text" }, { source: "points", target: "score", type: "integer" }];
+const reviewJob = () => ({ id: "job", state: "ready", uploadedRows: 1, processedRows: 0, insertedRows: 0, skippedRows: 0, issues: [], review: { sourceHash: "hash", headers: ["name", "points"], columns: reviewColumns, revision: 0, updatedRows: 0, duplicates: "upsert" } });
+const reviewWindow = job => ({ job, rows: [{ row: 2, source: ["<script>Private", "oops"], corrections: {} }], nextRow: null });
+
+test("reviewable importer saves typed corrections, previews explicit effects, and reconciles a lost response", async () => {
+  const container = fixture(); let job = reviewJob(), corrections, accepted, complete = false;
+  const client = {
+    sourceWindow: async () => reviewWindow(job),
+    correctRows: async (id, revision, rows, key) => { corrections = { id, revision, rows, key }; job = { ...job, review: { ...job.review, revision: 1 } }; return job; },
+    preview: async () => ({ id: "job", digest: "review", effects: [{ row: 2, action: "update", before: { score: 1 }, after: { score: 5 } }] }),
+    apply: async (preview, key) => { accepted = { preview, key }; complete = true; throw new Error("response lost"); },
+    inspect: async () => complete ? { ...job, state: "completed", processedRows: 1, review: { ...job.review, updatedRows: 1 } } : job,
+  };
+  const dispose = mountReviewableImporter(container, client, { columns: reviewColumns, currentUser: () => "owner" });
+  descendants(container, "input")[1].value = "job"; await button(container, "Inspect remaining source rows").fire("click"); assert.match(container.textContent, /<script>Private/);
+  const score = descendants(container, "input").find(node => node.attributes.get("aria-label") === "Correction for row 2 score"); score.value = "5"; await score.fire("input");
+  await button(container, "Preview next batch").fire("click"); assert.match(container.textContent, /Save row corrections/);
+  await button(container, "Save row corrections").fire("click"); assert.deepEqual(corrections.rows, [{ row: 2, values: { score: 5 } }]); assert.equal(corrections.revision, 0); assert.ok(corrections.key);
+  await button(container, "Preview next batch").fire("click"); assert.match(container.textContent, /Before:.*1[\s\S]*After:.*5/);
+  await button(container, "Accept reviewed batch").fire("click"); assert.equal(accepted.preview.digest, "review"); assert.ok(accepted.key); assert.match(container.textContent, /response lost/);
+  await button(container, "Refresh import progress").fire("click"); assert.match(container.textContent, /completed: 1\/1/); assert.match(container.textContent, /1 updated/); assert.doesNotMatch(container.textContent, /Private/); dispose();
+});
+
+test("reviewable importer discards late source and preview responses after an account switch or disposal", async () => {
+  const container = fixture(); let current = "owner", resolve;
+  const dispose = mountReviewableImporter(container, { sourceWindow: () => new Promise(done => { resolve = done; }) }, { columns: reviewColumns, currentUser: () => current });
+  descendants(container, "input")[1].value = "job"; const pending = button(container, "Inspect remaining source rows").fire("click"); await settle(); current = "other"; resolve(reviewWindow(reviewJob())); await pending;
+  assert.doesNotMatch(container.textContent, /Private/); assert.match(container.textContent, /account changed/); assert.equal(button(container, "Accept reviewed batch").disabled, true); dispose();
+  const other = fixture(); let preview;
+  const cleanup = mountReviewableImporter(other, { preview: () => new Promise(done => { preview = done; }) }, { columns: reviewColumns, currentUser: () => "owner" });
+  const request = button(other, "Preview next batch").fire("click"); await settle(); cleanup(); preview({ effects: [{ row: 2, action: "insert", after: { title: "Private" } }] }); await request; assert.equal(other.childNodes.length, 0);
+});
+
+
+test("reviewable importer clears displayed source when a subsequent request detects session revocation", async () => {
+  const container = fixture(); let revoked = false;
+  const dispose = mountReviewableImporter(container, { sourceWindow: async () => { if (revoked) throw Object.assign(new Error("Authentication is required."), { status: 401 }); return reviewWindow(reviewJob()); } }, { columns: reviewColumns, currentUser: () => "owner" });
+  descendants(container, "input")[1].value = "job"; await button(container, "Inspect remaining source rows").fire("click"); assert.match(container.textContent, /Private/); revoked = true;
+  await button(container, "Inspect remaining source rows").fire("click"); assert.doesNotMatch(container.textContent, /Private/); assert.equal(descendants(container, "fieldset").length, 0); assert.match(container.textContent, /Authentication is required/); dispose();
+});
+
+test("reviewable upload control retries a lost creation response with the same source key", async () => {
+  const container = fixture(), keys = []; let attempts = 0;
+  const dispose = mountReviewableImporter(container, { uploadReviewableCsv: async (_file, _columns, settings) => { keys.push(settings.key); if (!attempts++) throw new Error("initial response lost"); return reviewJob(); }, sourceWindow: async () => reviewWindow(reviewJob()) }, { columns: reviewColumns, currentUser: () => "owner" });
+  descendants(container, "input")[0].files = [{ name: "source.csv", size: 40, lastModified: 1 }]; await button(container, "Stage or resume CSV").fire("click"); assert.match(container.textContent, /initial response lost/); await button(container, "Stage or resume CSV").fire("click"); assert.ok(keys[0]); assert.equal(keys[0], keys[1]); assert.match(container.textContent, /ready: 0\/1/); dispose();
 });
