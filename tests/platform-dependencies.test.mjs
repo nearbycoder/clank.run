@@ -443,3 +443,76 @@ test('real canary traffic cannot publish after dependency health fails during a 
   const report = (await f.call(`/api/projects/${f.staging.id}/canary`)).canaries[0]; assert.equal(report.state, 'failed');
   assert.equal((await f.call(path(f) + '/activations')).activations.find(row => row.candidateReleaseId !== first.id).state, 'failed');
 });
+
+for (const stalled of [false, true]) {
+  test(`failed canary ${stalled ? 'bounds a stalled response drain' : 'drains an admitted response before stopping'}`, { timeout: 60000 }, async t => {
+    const f = await fixture(t, false, { canary: {
+      stages: [{ trafficPercent: 100, durationMs: 2500, minimumSamples: 2 }],
+      maximumErrorRate: 0.1, maximumP95Ms: 1000,
+    } });
+    const policy = join(f.root, 'service-policy.json');
+    const hold = join(f.root, 'request-hold'), admittedFile = join(f.root, 'request-admitted');
+    // Observe the persisted phase directly: a public API request can spend
+    // the entire drain interval waiting on other controller work.
+    const sql = new DatabaseSync(join(f.root, 'platform/control.sqlite'), { readOnly: true });
+    const report = () => {
+      const row = sql.prepare('SELECT report FROM clank_platform_canaries WHERE project_id=? ORDER BY updated_at DESC LIMIT 1').get(f.staging.id);
+      return row ? JSON.parse(row.report) : null;
+    };
+    const waitFor = async (check, message) => {
+      const deadline = Date.now() + 5000;
+      while (!check()) {
+        assert.ok(Date.now() < deadline, message);
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    };
+    let deploy, admitted;
+    try {
+      await f.call(`/api/projects/${f.development.id}/secrets`, { values: { DEPENDENCY_HEALTH_FILE: policy } }, 200, 'PUT');
+      await f.upload(f.development, await serviceArtifact(f, 'drain-service'), 'candidate_drain_service_01');
+      await f.call(path(f), configuration([{ projectId: f.development.id, readiness: 'healthy' }]), 200, 'PUT');
+      const prior = await f.upload(f.staging, await f.artifact('canary-prior'), 'candidate_drain_prior_01');
+      await f.probe(f.staging, '/write/retained-data');
+      await writeFile(hold, 'hold');
+      await f.call(`/api/projects/${f.staging.id}/secrets`, { values: {
+        CANARY_REQUEST_HOLD: hold, CANARY_REQUEST_ENTERED: admittedFile,
+      } }, 200, 'PUT');
+      let deploymentFinished = false, responseFinished = false;
+      deploy = f.upload(f.staging, await f.artifact('canary-candidate'), 'candidate_drain_upload_01', 409)
+        .finally(() => { deploymentFinished = true; });
+      deploy.catch(() => {});
+      await waitFor(() => report()?.state === 'running' && report()?.trafficPercent === 100, 'Candidate must enter measured traffic.');
+      await f.probe(f.staging, '/fast'); await f.probe(f.staging, '/fast');
+      admitted = f.probe(f.staging, '/held', stalled ? 502 : 200)
+        .then(value => ({ value }), error => ({ error }))
+        .finally(() => { responseFinished = true; });
+      await entered(admittedFile);
+      await writeFile(policy, JSON.stringify({ status: 503 }));
+      await waitFor(() => report()?.state === 'failed', 'Dependency failure must retire the candidate.');
+      const failedAt = Date.now();
+      assert.equal(responseFinished, false, 'An admitted request must survive the start of rollback.');
+      assert.equal(deploymentFinished, false, 'Candidate cleanup must wait for the admitted request.');
+      assert.equal((await f.probe(f.staging, '/fast')).label, 'canary-prior', 'New traffic must use the prior release while the candidate drains.');
+      if (!stalled) await rm(hold);
+      const result = await admitted;
+      assert.equal(result.error, undefined, result.error?.stack);
+      if (stalled) {
+        assert.equal(result.value.error.code, 'UPSTREAM_FAILED');
+        assert.ok(Date.now() - failedAt >= 1800, 'Termination must respect the two-second drain interval.');
+      } else {
+        assert.equal(result.value.label, 'canary-candidate');
+        assert.equal(result.value.value, 'retained-data');
+      }
+      await deploy;
+      assert.equal((await f.call(`/api/projects/${f.staging.id}`)).project.activeReleaseId, prior.id);
+      assert.equal((await f.probe(f.staging)).label, 'canary-prior');
+      assert.equal((await f.probe(f.staging)).value, 'retained-data');
+      const logs = (await f.call(`/api/projects/${f.staging.id}/logs`)).logs;
+      assert.equal(logs.some(row => row.message === 'Candidate drain reached its two-second limit; terminating remaining streams.'), stalled);
+    } finally {
+      await rm(hold, { force: true });
+      await Promise.allSettled([deploy, admitted].filter(Boolean));
+      sql.close();
+    }
+  });
+}
