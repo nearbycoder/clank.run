@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 // Install the actual shared environment helpers and their state dependencies;
 // these tests still exercise their original log/activity/runtime assertions.
 export function installEnvironmentConsoleContext(context, html) {
+  context.initial ??= { authenticated: false, email: null, impersonation: null };
   context.state.environmentDrafts ??= new Map();
   context.state.environmentHistoryGeneration ??= 0;
   context.state.environmentProject ??= null;
@@ -13,8 +14,13 @@ export function installEnvironmentConsoleContext(context, html) {
   context.state.channelGeneration ??= 0;
   context.state.channelListGeneration ??= 0;
   context.state.channelHistoryGeneration ??= 0;
-  const channels = ['resetChannelReview', 'updateChannelFields', 'saveChannelDraft'].map(name => {
-    const source = html.match(new RegExp('^function ' + name + '\\(\\)[^\\n]+', 'm'))?.[0];
+  context.state.dependencyProject ??= null;
+  context.state.dependencyGeneration ??= 0;
+  context.state.dependencyBusy ??= false;
+  context.state.dependencyCanConfigure ??= false;
+  for (const id of ['#dependency-form', '#dependency-recovery-form']) context.q(id).reset ??= () => {};
+  const channels = ['resetChannelReview', 'updateChannelFields', 'saveChannelDraft', 'resetDependencyState', 'syncDependencyControls', 'updateDependencyOverrideFields'].map(name => {
+    const source = html.match(new RegExp('^function ' + name + '\\([^\\n]+', 'm'))?.[0];
     assert.ok(source, 'Shared channel helper must be present: ' + name);
     return source;
   }).join('\n');

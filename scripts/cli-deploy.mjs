@@ -184,7 +184,7 @@ const COMMANDS = Object.freeze({
     summary: "Manage custom domains and DNS verification.",
   },
   deploy: {
-    usage: "clank deploy [directory] [--name <name>] [--slug <slug>] [--org <id>] [--placement <local|provider>] [--dry-run] [--output <file>] [--signing-key <file>] [--builder <id>] [--build-id <id>] [--json]",
+    usage: "clank deploy [directory] [--name <name>] [--slug <slug>] [--org <id>] [--placement <local|provider>] [--dry-run] [--output <file>] [--signing-key <file>] [--builder <id>] [--build-id <id>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
     summary: "Build, package, migrate, and atomically deploy in one command.",
   },
   preview: {
@@ -192,11 +192,15 @@ const COMMANDS = Object.freeze({
     summary: "Deploy isolated previews with empty or policy-sanitized data, manually or through GitHub OIDC.",
   },
   environment: {
-    usage: "clank environment <list|bind|unbind|promote|history|recover> [name] [project-or-key] [directory] [--expected-version <n>] [--migration-policy <apply-safe|code-only>] [--from <name>] [--release <id>] [--digest <sha256>] [--expected-active <id|none>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--json]",
+    usage: "clank environment <list|bind|unbind|promote|history|recover> [name] [project-or-key] [directory] [--expected-version <n>] [--migration-policy <apply-safe|code-only>] [--from <name>] [--release <id>] [--digest <sha256>] [--expected-active <id|none>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
     summary: "Configure independent persistent targets and promote an exact retained upload without rebuilding.",
   },
+  dependency: {
+    usage: "clank dependency <get|configure|check|history|activations|recover> [activation-id] [directory] [--config <file>] [--expected-version <n>] [--confirm <phrase>] [--json]",
+    summary: "Configure versioned service readiness and inspect or recover gated activations.",
+  },
   channel: {
-    usage: "clank channel <list|get|pin|history|actions|promote|rollback|retire> [name] [directory] [--expected-version <n>] [--from <environment>] [--release <id>] [--digest <sha256>] [--to <environment>] [--environment-version <n>] [--expected-active <id|none>] [--from-version <n>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--version <n>] [--json]",
+    usage: "clank channel <list|get|pin|history|actions|promote|rollback|retire> [name] [directory] [--expected-version <n>] [--from <environment>] [--release <id>] [--digest <sha256>] [--to <environment>] [--environment-version <n>] [--expected-active <id|none>] [--from-version <n>] [--key <id>] [--attestation <file>] [--confirm <phrase>] [--version <n>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
     summary: "Pin immutable channel history and explicitly promote or roll back an exact retained artifact.",
   },
   status: {
@@ -212,7 +216,7 @@ const COMMANDS = Object.freeze({
     summary: "Read bounded application logs.",
   },
   rollback: {
-    usage: "clank rollback <release-id> [--restore-data --confirm <phrase>]",
+    usage: "clank rollback <release-id> [--restore-data --confirm <phrase>] [--key <id> --expected-active <id> --expected-activation <n>] [--dependency-version <n>] [--dependency-check <id>] [--json]",
     summary: "Health-check and activate an earlier release.",
   },
   backup: {
@@ -256,9 +260,10 @@ const VALUE_OPTIONS = Object.freeze({
   audit: ["org", "limit", "before"],
   usage: ["org", "month"],
   token: ["permissions", "expires-in", "name"],
-  deploy: ["name", "slug", "org", "placement", "output", "signing-key", "builder", "build-id"],
-  environment: ["expected-version", "migration-policy", "from", "release", "digest", "expected-active", "key", "attestation", "confirm"],
-  channel: ["expected-version", "from", "release", "digest", "to", "environment-version", "expected-active", "from-version", "key", "attestation", "confirm", "version"],
+  deploy: ["name", "slug", "org", "placement", "output", "signing-key", "builder", "build-id", "dependency-version", "dependency-check"],
+  environment: ["expected-version", "migration-policy", "from", "release", "digest", "expected-active", "key", "attestation", "confirm", "dependency-version", "dependency-check"],
+  dependency: ["config", "expected-version", "confirm"],
+  channel: ["expected-version", "from", "release", "digest", "to", "environment-version", "expected-active", "from-version", "key", "attestation", "confirm", "version", "dependency-version", "dependency-check"],
   preview: [
     "fixture",
     "ttl",
@@ -275,7 +280,7 @@ const VALUE_OPTIONS = Object.freeze({
   journey: ["url", "browser", "cdp", "output", "timeout"],
   releases: ["confirm"],
   logs: ["limit"],
-  rollback: ["confirm"],
+  rollback: ["confirm", "key", "expected-active", "expected-activation", "dependency-version", "dependency-check"],
   backup: ["reason", "confirm"],
   secrets: ["from-env"],
 });
@@ -294,6 +299,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   billing: ["json"],
   deploy: ["dry-run", "json"],
   environment: ["json"],
+  dependency: ["json"],
   channel: ["json"],
   preview: [
     "json",
@@ -303,7 +309,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
     "force",
   ],
   releases: ["allow-rollback-loss"],
-  rollback: ["restore-data"],
+  rollback: ["restore-data", "json"],
   doctor: ["json"],
   jobs: ["json"],
   journey: ["json", "headed"],
@@ -341,6 +347,7 @@ export async function run(command, args) {
       case "deploy": return await deploy(args);
       case "preview": return await previewCommand(args);
       case "environment": return await environmentCommand(args);
+      case "dependency": return await dependencyCommand(args);
       case "channel": return await channelCommand(args);
       case "status": return await status(args);
       case "releases": return await releases(args);
@@ -1965,6 +1972,7 @@ async function domainCommand(args) {
 }
 
 async function deploy(args) {
+  const dependencyVersion = cliDependencyVersion(args), dependencyCheck = cliDependencyCheck(args);
   const root = resolve(positionals(args)[0] ?? ".");
   const startedAt = performance.now();
   const json = flag(args, "json");
@@ -2059,7 +2067,7 @@ async function deploy(args) {
   const idempotencyKey = await deploymentAttempt(root, {
     server: profile.server,
     projectId: link.projectId,
-    digest,
+    digest, ...(dependencyVersion === undefined ? {} : { dependencyVersion }), ...(dependencyCheck === undefined ? {} : { dependencyCheck }),
   });
   const attestation = signingKey ? await signReleaseAttestation(artifact, signingKey, {
     projectId: link.projectId,
@@ -2078,6 +2086,8 @@ async function deploy(args) {
       "x-clank-content-sha256": digest,
       ...(attestation ? { "x-clank-release-attestation": encodeReleaseAttestation(attestation) } : {}),
       "x-clank-idempotency-key": idempotencyKey,
+      ...(dependencyVersion === undefined ? {} : { "x-clank-dependency-version": String(dependencyVersion) }),
+      ...(dependencyCheck === undefined ? {} : { "x-clank-dependency-check": dependencyCheck }),
     },
     body: artifact,
     },
@@ -2131,7 +2141,7 @@ async function environmentCommand(args) {
   if (!["list", "bind", "unbind", "promote", "history", "recover"].includes(action)) throw new CliError(COMMANDS.environment.usage);
   const allowed = {
     list: ["json"], bind: ["json", "expected-version", "migration-policy"], unbind: ["json", "expected-version"],
-    promote: ["json", "expected-version", "from", "release", "digest", "expected-active", "key", "attestation"],
+    promote: ["json", "expected-version", "from", "release", "digest", "expected-active", "key", "attestation", "dependency-version", "dependency-check"],
     history: ["json"], recover: ["json", "confirm"],
   }[action];
   for (const argument of args) {
@@ -2167,6 +2177,9 @@ async function environmentCommand(args) {
     if (!/^[A-Za-z0-9_-]{16,128}$/.test(identity)) throw new CliError("Pass the exact promotion key from environment history.");
     body = { confirmation: required("confirm") }; method = "POST"; suffix = `/promotions/${encodeURIComponent(identity)}/recover`;
   }
+  const dependencyVersion = cliDependencyVersion(args), dependencyCheck = cliDependencyCheck(args);
+  if (action === "promote" && dependencyVersion !== undefined) body.expectedDependencyVersion = dependencyVersion;
+  if (action === "promote" && dependencyCheck !== undefined) body.dependencyCheckId = dependencyCheck;
   const attestationFile = option(args, "attestation");
   if (attestationFile && action !== "promote") throw new CliError("--attestation applies only to environment promote.");
   const attestation = attestationFile ? encodeReleaseAttestation(await readBoundedJsonFile(resolve(attestationFile), "Target release attestation", 16384)) : null;
@@ -2186,13 +2199,71 @@ async function environmentCommand(args) {
   else console.log(`${payload.promotion.targetEnvironment}: ${payload.promotion.state} (${payload.promotion.idempotencyKey}).`);
 }
 
+function cliDependencyCheck(args) {
+  const value = option(args, "dependency-check");
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(value)) throw new CliError("Pass the exact --dependency-check ID from dependency check.");
+  return value;
+}
+
+function cliDependencyVersion(args) {
+  const value = option(args, "dependency-version");
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || !/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) throw new CliError("Pass an exact --dependency-version from dependency get.");
+  return Number(value);
+}
+
+async function dependencyCommand(args) {
+  const action = args.shift(), values = positionals(args);
+  const allowed = { get: ["json"], configure: ["json", "config", "expected-version"], check: ["json", "expected-version"],
+    history: ["json"], activations: ["json"], recover: ["json", "confirm"] }[action];
+  if (!allowed) throw new CliError(COMMANDS.dependency.usage);
+  for (const argument of args) {
+    if (!argument.startsWith("--")) continue;
+    const name = argument.slice(2).split("=", 1)[0];
+    if (!allowed.includes(name)) throw new CliError(`--${name} does not apply to dependency ${action}.`);
+  }
+  const identity = action === "recover" ? values.shift() : null;
+  if (action === "recover" && (typeof identity !== "string" || !/^(deploy|rollback)_[A-Za-z0-9_-]{16,128}$/.test(identity))) throw new CliError("Pass the exact activation ID from dependency activations.");
+  if (values.length > 1) throw new CliError(COMMANDS.dependency.usage);
+  const { profile, link } = await linkedContext(resolve(values[0] ?? "."));
+  const version = () => {
+    const value = option(args, "expected-version");
+    if (typeof value !== "string" || !/^(0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) throw new CliError("Pass an exact --expected-version from dependency get.");
+    return Number(value);
+  };
+  let body, method = "GET", suffix = "";
+  if (action === "configure") {
+    const file = option(args, "config"); if (!file) throw new CliError("Pass --config with the data-only dependency configuration.");
+    const configuration = await readBoundedJsonFile(file, "Dependency configuration", 16 * 1024);
+    if (!configuration || typeof configuration !== "object" || Array.isArray(configuration) || Object.keys(configuration).some(key => !["requirements", "timeoutMs", "overridePolicy"].includes(key))) throw new CliError("The configuration declares only requirements, timeoutMs and overridePolicy.");
+    body = { ...configuration, expectedVersion: version() }; method = "PUT";
+  } else if (action === "check") { body = { expectedVersion: version() }; method = "POST"; suffix = "/check"; }
+  else if (action === "history") suffix = "/checks";
+  else if (action === "activations") suffix = "/activations";
+  else if (action === "recover") { const confirmation = option(args, "confirm"); if (!confirmation) throw new CliError("Pass the exact --confirm recover-dependencies phrase."); body = { confirmation }; method = "POST"; suffix = `/activations/${encodeURIComponent(identity)}/recover`; }
+  const payload = await platformRequest(profile.server, `/api/projects/${encodeURIComponent(link.projectId)}/dependencies${suffix}`, { token: profile.token, method,
+    ...(body ? { body } : {}), ...(action === "recover" ? { timeoutMs: PLATFORM_DEPLOY_TIMEOUT_MS } : {}) });
+  if (flag(args, "json")) { console.log(JSON.stringify(payload, null, 2)); return; }
+  if (payload.configuration) {
+    console.log(`Dependency version ${payload.configuration.version}; timeout ${payload.configuration.timeoutMs}ms; override ${payload.configuration.overridePolicy}.`);
+    for (const row of payload.configuration.requirements) console.log(`${row.projectId}  ${row.readiness}  ${row.digest ?? "any accepted upload"}`);
+    if (payload.target) console.log(`Target ${payload.target.releaseId ?? "not deployed"}; activation sequence ${payload.target.activationSequence ?? "none"}.`);
+  } else if (payload.check || payload.checks) {
+    for (const report of payload.checks ?? [payload.check]) {
+      console.log(`Version ${report.version}: ${report.ready ? "ready" : "blocked"} at ${new Date(report.checkedAt).toISOString()}.`);
+      for (const row of report.observations) console.log(`${row.projectId}  ${row.reason}  ${row.releaseId ?? "no accepted release"}`);
+    }
+  } else for (const row of payload.activations ?? [payload.activation]) console.log(`${row.id}  ${row.state}  ${row.detailsAvailable === false ? "current dependency access required" : row.candidateReleaseId ?? "not staged"}`);
+}
+
 async function channelCommand(args) {
   const action = args.shift(), values = positionals(args);
   const allowed = {
     list: ["json"], get: ["json"], history: ["json", "version"], actions: ["json"],
     pin: ["json", "from", "release", "digest", "expected-version"],
-    promote: ["json", "to", "expected-version", "environment-version", "expected-active", "key", "attestation"],
-    rollback: ["json", "to", "expected-version", "environment-version", "expected-active", "from-version", "key", "attestation"],
+    promote: ["json", "to", "expected-version", "environment-version", "expected-active", "key", "attestation", "dependency-version", "dependency-check"],
+    rollback: ["json", "to", "expected-version", "environment-version", "expected-active", "from-version", "key", "attestation", "dependency-version", "dependency-check"],
     retire: ["json", "expected-version", "confirm"],
   }[action];
   if (!allowed) throw new CliError(COMMANDS.channel.usage);
@@ -2244,6 +2315,9 @@ async function channelCommand(args) {
     suffix = "/" + action;
     if (action === "history" && option(args, "version")) suffix += "/" + integer("version", 1, Number.MAX_SAFE_INTEGER);
   }
+  const dependencyVersion = cliDependencyVersion(args), dependencyCheck = cliDependencyCheck(args);
+  if (["promote", "rollback"].includes(action) && dependencyVersion !== undefined) body.expectedDependencyVersion = dependencyVersion;
+  if (["promote", "rollback"].includes(action) && dependencyCheck !== undefined) body.dependencyCheckId = dependencyCheck;
   const attestationFile = option(args, "attestation");
   const attestation = attestationFile
     ? encodeReleaseAttestation(await readBoundedJsonFile(resolve(attestationFile), "Target release attestation", 16384)) : null;
@@ -3166,16 +3240,24 @@ async function rollback(args) {
   const releaseId = positionals(args)[0];
   if (!releaseId) throw new CliError("Usage: clank rollback <release-id>");
   const { profile, link } = await linkedContext(process.cwd());
+  let reviewed = {};
+  if (["key", "expected-active", "expected-activation"].some(name => option(args, name))) {
+    const key = option(args, "key"), active = option(args, "expected-active"), sequence = option(args, "expected-activation");
+    if (typeof key !== "string" || !/^[A-Za-z0-9_-]{16,128}$/.test(key) || typeof active !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(active)
+      || typeof sequence !== "string" || !/^[1-9]\d*$/.test(sequence) || !Number.isSafeInteger(Number(sequence))) throw new CliError("For gated rollback pass --key, --expected-active and --expected-activation from dependency get; keep them unchanged on retry.");
+    reviewed = { idempotencyKey: key, expectedActiveReleaseId: active, expectedActivationSequence: Number(sequence) };
+  }
   const payload = await platformRequest(profile.server, `/api/projects/${link.projectId}/rollback`, {
     method: "POST",
     token: profile.token,
     body: {
-      releaseId,
+      releaseId, ...reviewed, ...(cliDependencyVersion(args) === undefined ? {} : { expectedDependencyVersion: cliDependencyVersion(args) }), ...(cliDependencyCheck(args) === undefined ? {} : { dependencyCheckId: cliDependencyCheck(args) }),
       restoreData: flag(args, "restore-data"),
       ...(option(args, "confirm") ? { confirmation: option(args, "confirm") } : {}),
     },
   });
-  console.log(`Active release: ${payload.release.id}`);
+  if (flag(args, "json")) console.log(JSON.stringify(payload, null, 2));
+  else console.log(`Active release: ${payload.release.id}`);
 }
 
 async function backupCommand(args) {
@@ -3599,6 +3681,8 @@ async function deploymentAttempt(root, expected) {
     if (saved.server === expected.server
       && saved.projectId === expected.projectId
       && saved.digest === expected.digest
+      && (saved.dependencyVersion ?? null) === (expected.dependencyVersion ?? null)
+      && (saved.dependencyCheck ?? null) === (expected.dependencyCheck ?? null)
       && Date.now() - saved.createdAt <= 24 * 60 * 60 * 1_000) {
       return saved.idempotencyKey;
     }

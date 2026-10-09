@@ -862,3 +862,7 @@ on `openSearch` with a linked source and optional typed scalar `source.facets`. 
 `browse`, `saved`, version-fenced `save` and `removeSaved`; legacy `SearchClient` stays compatible.
 See [search browsing](search-browsing.md) for complete authorized counts, cursor invalidation,
 compact retired keys, limits and rollback semantics.
+
+Project dependency configuration, checks, retained activations and verified recovery use
+`/api/projects/:id/dependencies`. See [deployment dependency gates](deployment-dependencies.md)
+for strict bodies, version/check binding, upload headers, rollback fencing and human override scope.

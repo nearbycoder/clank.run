@@ -1,6 +1,7 @@
 // Run only on the explicitly owned disposable Docker/XFS guest. This is not a
 // default npm test and never substitutes a fake provider or certificate.
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, writeFile, rm, chmod, chown, stat } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,9 +23,10 @@ assert.equal(process.getuid(), 0);
 await stat('/etc/clank-disposable-test-host');
 const arguments_ = process.argv.slice(2);
 assert.equal(arguments_[0], '--disposable');
-assert.ok(arguments_.length === 1 || (arguments_.length === 2 && ['--authority-only','--channels-only'].includes(arguments_[1])));
+assert.ok(arguments_.length === 1 || (arguments_.length === 2 && ['--authority-only','--channels-only','--dependencies-only'].includes(arguments_[1])));
 const authorityOnly = arguments_[1] === '--authority-only';
 const channelsOnly = arguments_[1] === '--channels-only';
+const dependenciesOnly = arguments_[1] === '--dependencies-only';
 const command = promisify(execFile), framework = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const interruption=new AbortController();
 for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>interruption.abort(new Error('Owned acceptance interrupted.')));
@@ -49,7 +51,9 @@ await chown(providerRoot, 1000, 1000); await chmod(providerRoot, 0o700);
 const profile = { mode:'docker-isolated', image, user:'1000:1000', memory:'512m', cpus:'1', pidsLimit:128,
   diskQuota:{mountDirectory, hardBytes:64*1024*1024,hardFiles:128}, outboundNetwork:{allowCidrs:[]}, networkProbe:{deniedAddress:'9.9.9.9'} };
 const certificate = { directory:join(root,'certificate'), profile };
-const cases = []; let platform, server, agent, worker, workerClosed, config, originalNftMode;
+const cases = [];
+cases.push=function(...entries){const length=Array.prototype.push.apply(this,entries);writeFileSync(join(root,'progress.json'),JSON.stringify({protocol:'clank-provider-promotion-acceptance/1',status:'in-progress',node:process.version,cases:[...this]},null,2)+'\n',{mode:0o600});return length};
+let platform, server, agent, worker, workerClosed, config, originalNftMode;
 let rpcSequence=0; const pending=new Map();
 const rpc = (method, input) => new Promise((resolve,reject)=>{
   const id=++rpcSequence, timer=setTimeout(()=>{pending.delete(id);reject(new Error('Owned provider IPC timed out.'));},30000);
@@ -62,6 +66,7 @@ try {
   console.error('Current host certificate verified.');
   const origin='http://127.0.0.1:57900', registrationToken='clank_promotion_guest_enrollment_1234567890123456789';
   const options={dataDirectory:join(root,'platform'),publicUrl:origin,signup:true,hostingProfile:'trusted',
+    onError(error){console.error("Owned operation diagnostic: "+String(error?.code??error?.name)+": "+String(error?.message).slice(0,500))},
     appPortStart:57500,appPortEnd:57520,ingress:{baseDomain:'apps.example.test',domainRecheckIntervalMs:false},backups:{intervalMs:false},previews:{cleanupIntervalMs:false},
     providerPromotionHosts:{'promotion-provider':certificate},deploymentAgents:{registrationToken,placement:{activationTimeoutMs:15000,maxDatabaseBytes:1024*1024}}};
   platform=await openPlatform(options);server=await serve(request=>platform.handle(request),{hostname:'127.0.0.1',port:57900,
@@ -87,8 +92,14 @@ try {
     return{bytes,digest:await deploymentDigest(bytes)};
   };
   const upload=async(project,bundle,key)=>{
-    const response=await fetch(origin+`/api/projects/${project.id}/releases`,{method:'POST',headers:{origin,cookie,'x-clank-csrf':owner.csrfToken,'content-type':'application/vnd.clank.deploy+gzip','x-clank-content-sha256':bundle.digest,'x-clank-idempotency-key':key},body:bundle.bytes});
-    const value=await response.json();assert.equal(response.status,201,JSON.stringify(value));return value.release;
+    const deadline=Date.now()+90000;
+    for(;;){
+      const response=await fetch(origin+`/api/projects/${project.id}/releases`,{method:'POST',signal:interruption.signal,headers:{origin,cookie,'x-clank-csrf':owner.csrfToken,'content-type':'application/vnd.clank.deploy+gzip','x-clank-content-sha256':bundle.digest,'x-clank-idempotency-key':key},body:bundle.bytes});
+      const value=await response.json();
+      if(response.status!==503){assert.equal(response.status,201,JSON.stringify(value));return value.release}
+      assert.equal(value.error.code,'PROVIDER_DEPLOYMENT_PENDING');
+      assert.ok(Date.now()<deadline,'The exact initial provider upload must finish within its acceptance budget.');
+    }
   };
   const probe=async(project,path='/')=>{
     return new Promise((resolve,reject)=>{
@@ -116,7 +127,44 @@ try {
   agent=await openAgent();
   await call(`/api/projects/${sourceProject.id}/secrets`,{values:{ENVIRONMENT_VALUE:'development'}},200,'PUT');
   await call(`/api/projects/${targetProject.id}/secrets`,{values:{ENVIRONMENT_VALUE:'staging'}},200,'PUT');
-  const v1=await artifact('v1'),source=await upload(sourceProject,v1,'source_provider_initial'),target=await upload(targetProject,v1,'target_provider_initial');
+  let dependencyService, dependencyBundle, dependencyPolicy;
+  const dependencyPath=`/api/projects/${targetProject.id}/dependencies`;
+  if(dependenciesOnly){
+    dependencyService=await create('required-service','local');
+    const files=join(root,'dependency-source');await mkdir(join(files,'dist'),{recursive:true});await mkdir(join(files,'migrations'));
+    await writeFile(join(files,'dist/server.mjs'),await readFile(new URL('./platform-dependency-application.mjs',import.meta.url)));
+    await writeFile(join(files,'migrations/0001_sample.sql'),"CREATE TABLE sample(value TEXT NOT NULL);INSERT INTO sample VALUES('service-data');");
+    const bytes=await createDeploymentBundle(files,parseDeploymentConfig({version:1,entry:'dist/server.mjs',include:['dist','migrations'],database:{path:'app.sqlite',migrations:'migrations'},health:{path:'/healthz',timeoutMs:5000},env:{}}));
+    dependencyBundle={bytes,digest:await deploymentDigest(bytes)};dependencyPolicy=join(root,'dependency-health.json');
+    await call(`/api/projects/${dependencyService.id}/secrets`,{values:{DEPENDENCY_HEALTH_FILE:dependencyPolicy}},200,'PUT');
+    await upload(dependencyService,dependencyBundle,'provider_dependency_service_01');
+    await call(dependencyPath,{expectedVersion:0,requirements:[{projectId:dependencyService.id,readiness:'healthy'}],timeoutMs:5000,overridePolicy:'deny'},200,'PUT');
+  }
+  const v1=await artifact('v1'),source=await upload(sourceProject,v1,'source_provider_initial');
+  if(dependenciesOnly){
+    await call(`/api/projects/${targetProject.id}/secrets`,{values:{ENVIRONMENT_VALUE:'staging',HEALTH_WRITE:'1'}},200,'PUT');
+    const initial=await artifact('v2');await rpc('pause-ingress');
+    const flight=fetch(origin+`/api/projects/${targetProject.id}/releases`,{method:'POST',headers:{origin,cookie,'x-clank-csrf':owner.csrfToken,'content-type':'application/vnd.clank.deploy+gzip','x-clank-content-sha256':initial.digest,'x-clank-idempotency-key':'provider_dependency_initial_failed_01'},body:initial.bytes});flight.catch(()=>{});
+    const control=new DatabaseSync(join(options.dataDirectory,'control.sqlite'));
+    try{const deadline=Date.now()+10000;for(;;){const row=control.prepare("SELECT a.candidate_release_id,r.provider_generation FROM clank_platform_dependency_activations a JOIN clank_platform_releases r ON r.id=a.candidate_release_id WHERE a.project_id=? AND a.state='staging' LIMIT 1").get(targetProject.id);if(row?.provider_generation!==null&&row?.provider_generation!==undefined)break;assert.ok(Date.now()<deadline,'The real first provider generation must queue before dependency failure.');await new Promise(resolve=>setTimeout(resolve,25))}}finally{control.close()}
+    await writeFile(dependencyPolicy,JSON.stringify({status:503}));await rpc('resume-ingress');
+    const response=await flight,result=await response.json();assert.equal(response.status,409,JSON.stringify(result));assert.equal(result.error.code,'DEPENDENCY_NOT_READY');
+    assert.equal((await call(`/api/projects/${targetProject.id}`)).project.activeReleaseId,null);
+    assert.equal((await call(dependencyPath+'/activations')).activations[0].state,'failed');
+    const failedInitial=(await call(`/api/projects/${targetProject.id}/releases`)).releases.find(row=>row.digest===initial.digest);
+    assert.equal(failedInitial.cleanup.dependencyPinned,true);assert.equal(failedInitial.cleanup.allowed,false);
+    assert.equal((await call(`/api/projects/${targetProject.id}/releases/${failedInitial.id}`,{confirmation:`delete-release ${targetProject.slug} ${failedInitial.id}`,allowRollbackLoss:true},409,'DELETE')).error.code,'RELEASE_DEPENDENCY_RECOVERY_PINNED');
+    await writeFile(dependencyPolicy,JSON.stringify({status:200}));
+    await call(`/api/projects/${targetProject.id}/secrets`,{values:{ENVIRONMENT_VALUE:'staging',HEALTH_WRITE:''}},200,'PUT');
+    await agent.close();agent=null;await platform.close();platform=await openPlatform(options);agent=await openAgent();
+    const readyDeadline=Date.now()+30000;for(;;){if((await call(dependencyPath+'/check',{expectedVersion:1})).check.ready)break;assert.ok(Date.now()<readyDeadline,'The actual accepted required service must restart before first-target recovery.');await new Promise(resolve=>setTimeout(resolve,500))}
+    const changed=await artifact('changed-initial','CREATE TABLE blocked_initial_schema(id INTEGER PRIMARY KEY);');
+    const blocked=await fetch(origin+`/api/projects/${targetProject.id}/releases`,{method:'POST',headers:{origin,cookie,'x-clank-csrf':owner.csrfToken,'content-type':'application/vnd.clank.deploy+gzip','x-clank-content-sha256':changed.digest,'x-clank-idempotency-key':'provider_dependency_initial_changed_01'},body:changed.bytes});
+    assert.equal(blocked.status,409);assert.equal((await blocked.json()).error.code,'DEPENDENCY_PROVIDER_MIGRATIONS_BLOCKED');
+    await rm(join(sourceFiles,'migrations/0002_schema.sql'));
+  }
+  const target=await upload(targetProject,v1,'target_provider_initial');
+  if(dependenciesOnly){assert.equal((await probe(targetProject)).value,'unpublished-health-write');assert.equal((await call(`/api/projects/${targetProject.id}/releases`)).releases.find(row=>row.digest!==v1.digest).cleanup.dependencyPinned,false);cases.push({name:'actual failed first provider activation stops its exact owned generation, retains initialized data and protected migration proof across restart, rejects changed migrations and permits a subsequent reviewed activation',status:'passed'})}
   console.error('Source and real provider target initialized.');
   await probe(sourceProject,'/write/source-only');await probe(targetProject,'/write/target-only');
   const input={sourceEnvironment:'development',releaseId:source.id,digest:v1.digest,expectedVersion:1,expectedActiveReleaseId:target.id,idempotencyKey:'provider_exact_request_01'};
@@ -142,7 +190,77 @@ try {
   assert.equal((await probe(sourceProject)).value,'source-only');
   const replay=await call(environmentPath+'/staging/promotions',input,201);assert.equal(replay.release.id,promoted.release.id);
   cases.push({name:'accepted exact replay across actual controller restart',status:'passed'});
-  if (channelsOnly) {
+  if (dependenciesOnly) {
+    cases.push({name:'actual first provider activation passes exact dependency health and assigned-host certification',status:'passed'});
+    const activate=async(route,body,terminal=201,headers={})=>{
+      const deadline=Date.now()+90000;
+      while(true){
+        const response=await fetch(origin+route,{method:'POST',signal:interruption.signal,headers:{origin,cookie,'x-clank-csrf':owner.csrfToken,...headers},body:body instanceof Uint8Array?body:JSON.stringify(body)});
+        const result=await response.json();
+        if(response.status!==503){assert.equal(response.status,terminal,JSON.stringify(result));return result}
+        assert.equal(result.error.code,'PROVIDER_DEPLOYMENT_PENDING');assert.ok(Date.now()<deadline,'The exact healthy or authority-failed provider operation must finish within its unchanged budget.');
+      }
+    };
+    const gatedUpload=(bundle,key,terminal=201,extra={})=>activate(`/api/projects/${targetProject.id}/releases`,bundle.bytes,terminal,{'content-type':'application/vnd.clank.deploy+gzip','x-clank-content-sha256':bundle.digest,'x-clank-idempotency-key':key,...extra});
+    const v2=await artifact('v2'),upgraded=(await gatedUpload(v2,'provider_dependency_target_02')).release;
+    assert.equal((await probe(targetProject)).label,'v2');assert.equal((await probe(targetProject)).value,'target-only');
+    assert.deepEqual(await readFile(join(options.dataDirectory,'projects',targetProject.id,'artifacts',upgraded.id+'.clank.gz')),v2.bytes);
+    cases.push({name:'real ordinary gated provider upload preserves exact bytes and initialized application state',status:'passed'});
+    const control=new DatabaseSync(join(options.dataDirectory,'control.sqlite'));
+    try{
+      for(const fault of ['service-replacement','health-failure']){
+        const checked=(await call(dependencyPath+'/check',{expectedVersion:1})).check;
+        await rpc('pause-ingress');
+        await call(`/api/projects/${targetProject.id}/secrets`,{values:{ENVIRONMENT_VALUE:'candidate-only',FAIL_HEALTH:'1'}},200,'PUT');
+        const bundle=await artifact('v3'),key='provider_dependency_'+fault.replaceAll('-','_')+'_01';
+        const flight=gatedUpload(bundle,key,409,{'x-clank-dependency-version':'1','x-clank-dependency-check':checked.id});flight.catch(()=>{});
+        const deadline=Date.now()+10000;
+        while(true){const row=control.prepare("SELECT a.candidate_release_id,r.provider_generation FROM clank_platform_dependency_activations a JOIN clank_platform_releases r ON r.id=a.candidate_release_id WHERE a.project_id=? AND a.state='staging' ORDER BY a.created_at DESC LIMIT 1").get(targetProject.id);if(row?.provider_generation!==null&&row?.provider_generation!==undefined)break;assert.ok(Date.now()<deadline,'The actual provider candidate must queue before the fault.');await new Promise(resolve=>setTimeout(resolve,25))}
+        if(fault==='service-replacement')await upload(dependencyService,dependencyBundle,'provider_dependency_service_02');
+        else await writeFile(dependencyPolicy,JSON.stringify({status:503}));
+        await rpc('resume-ingress');const rejected=await flight;
+        assert.equal(rejected.error.code,fault==='service-replacement'?'DEPENDENCY_CHANGED':'DEPENDENCY_NOT_READY');
+        assert.equal((await call(`/api/projects/${targetProject.id}`)).project.activeReleaseId,upgraded.id);
+        const restored=await probe(targetProject);assert.equal(restored.label,'v2');assert.equal(restored.secret,'staging');assert.equal(restored.value,'target-only');
+        assert.equal((await call(dependencyPath+'/activations')).activations.filter(row=>row.state==='staging'||row.state==='recovery-required').length,0);
+        await writeFile(dependencyPolicy,JSON.stringify({status:200}));
+        cases.push({name:`actual queued provider ${fault} rejects acceptance and restores the prior frozen writer without rechecking failed readiness`,status:'passed'});
+      }
+    }finally{control.close()}
+    await call(`/api/projects/${targetProject.id}/secrets`,{values:{ENVIRONMENT_VALUE:'staging'}},200,'PUT');
+    const reviewed=await call(dependencyPath),checked=(await call(dependencyPath+'/check',{expectedVersion:1})).check;
+    const rollbackRequest={releaseId:promoted.release.id,expectedActiveReleaseId:upgraded.id,expectedActivationSequence:reviewed.target.activationSequence,idempotencyKey:'provider_dependency_rollback_01',expectedDependencyVersion:1,dependencyCheckId:checked.id};
+    const rolledBack=await activate(`/api/projects/${targetProject.id}/rollback`,rollbackRequest,200,{'content-type':'application/json'});
+    assert.equal(rolledBack.release.id,promoted.release.id);assert.equal((await probe(targetProject)).label,'v1');assert.equal((await probe(targetProject)).value,'target-only');
+    await writeFile(dependencyPolicy,JSON.stringify({status:200}));
+    await agent.close();agent=null;await platform.close();platform=await openPlatform(options);agent=await openAgent();
+    const restartDeadline=Date.now()+30000;
+    while(true){const result=await call(dependencyPath+'/check',{expectedVersion:1});if(result.check.ready)break;assert.ok(Date.now()<restartDeadline,'The actual accepted service must finish startup before its dynamic health fault: '+JSON.stringify(result.check.observations));await new Promise(resolve=>setTimeout(resolve,500))}
+    await writeFile(dependencyPolicy,JSON.stringify({status:503}));
+    const before=(await call(dependencyPath)).target.activationSequence;
+    assert.equal((await call(`/api/projects/${targetProject.id}/rollback`,rollbackRequest)).release.id,promoted.release.id);
+    assert.equal((await call(dependencyPath)).target.activationSequence,before);
+    cases.push({name:'actual provider reviewed rollback and accepted replay across controller restart retain target data and never recheck unhealthy service readiness',status:'passed'});
+    await writeFile(dependencyPolicy,JSON.stringify({status:200}));
+    const readyDeadline=Date.now()+30000;
+    while(true){const result=await call(dependencyPath+'/check',{expectedVersion:1});if(result.check.ready)break;assert.ok(Date.now()<readyDeadline,'The actual accepted service restart must become healthy: '+JSON.stringify(result.check.observations));await new Promise(resolve=>setTimeout(resolve,500))}
+    const channelPath=`/api/projects/${sourceProject.id}/channels/stable`;
+    await call(channelPath,{sourceEnvironment:'development',releaseId:source.id,digest:v1.digest,expectedVersion:0},200,'PUT');
+    const channel=await activate(channelPath+'/promote',{targetEnvironment:'staging',expectedVersion:1,expectedEnvironmentVersion:1,expectedActiveReleaseId:promoted.release.id,idempotencyKey:'provider_dependency_channel_01'},201,{'content-type':'application/json'});
+    const receipt=(await call(dependencyPath+'/activations')).activations.find(row=>row.candidateReleaseId===channel.release.id);
+    assert.equal(receipt.state,'accepted');assert.equal(receipt.check.observations[0].projectId,dependencyService.id);assert.equal(channel.action.state,'accepted');
+    cases.push({name:'actual provider channel and environment acceptance commit their dependency receipt together',status:'passed'});
+    const changed=await artifact('v4','CREATE TABLE dependency_blocked_schema(id INTEGER PRIMARY KEY);');
+    const count=(await call(`/api/projects/${targetProject.id}/releases`)).releases.length;
+    assert.equal((await gatedUpload(changed,'provider_dependency_migration_01',409)).error.code,'DEPENDENCY_PROVIDER_MIGRATIONS_BLOCKED');
+    assert.equal((await call(`/api/projects/${targetProject.id}/releases`)).releases.length,count);
+    const nft='/usr/sbin/nft';originalNftMode=(await stat(nft)).mode&0o777;await chmod(nft,originalNftMode^1);
+    try{assert.equal((await gatedUpload(v2,'provider_dependency_host_changed_01',409)).error.code,'PROMOTION_HOST_CERTIFICATION_REQUIRED')}
+    finally{await chmod(nft,originalNftMode);originalNftMode=undefined}
+    assert.equal((await call(`/api/projects/${targetProject.id}/releases`)).releases.length,count);
+    cases.push({name:'gated ordinary provider activation rejects changed migrations and an actually changed host policy before staging',status:'passed'});
+    console.error('Actual provider deployment dependency acceptance verified.');
+  } else if (channelsOnly) {
     const channelPath=`/api/projects/${sourceProject.id}/channels/stable`;
     const pin=async(release,bundle,expectedVersion)=>call(channelPath,{sourceEnvironment:'development',releaseId:release.id,digest:bundle.digest,expectedVersion},200,'PUT');
     const activate=async(kind,request,terminal=201)=>{
@@ -297,6 +415,6 @@ try {
   }
 }
 cases.push({name:'owned provider stops, Docker containers/network/nft table retire and XFS quota usage/limits clear',status:'passed'});
-const result={protocol:'clank-provider-promotion-acceptance/1',status:'passed',mode:channelsOnly?'release-channels':authorityOnly?'authority-expiry':'health-restart',realGuest:true,node:process.version,cases};
+const result={protocol:'clank-provider-promotion-acceptance/1',status:'passed',mode:dependenciesOnly?'deployment-dependencies':channelsOnly?'release-channels':authorityOnly?'authority-expiry':'health-restart',realGuest:true,node:process.version,cases};
 await writeFile(join(root,'acceptance.json'),JSON.stringify(result,null,2)+'\n',{mode:0o600});
 console.log(JSON.stringify(result));

@@ -484,3 +484,8 @@ Workflow templates are also available through `clank create --template=approval-
 `--template=customer-portal`, and `--template=booking`. Each includes tested backend rules,
 authenticated UI/MCP flows, fixtures, and a deployment contract; see
 [Runnable workflow recipes](application-recipes.md#runnable-workflow-recipes).
+
+Require managed services before target activation with [deployment dependency gates](deployment-dependencies.md).
+The API/CLI accept an optional exact configuration version and credential-bound check ID; dashboard
+promotion and channel reviews capture these automatically. Target gates also apply to ordinary
+uploads and explicit rollback, with durable interruption recovery and audited human readiness approval.

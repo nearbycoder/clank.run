@@ -48,6 +48,9 @@ export interface PlatformPromotionRequest {
   readonly expectedVersion: number;
   readonly expectedActiveReleaseId: string | null;
   readonly idempotencyKey: string;
+  readonly dependencyOverride?: PlatformDependencyOverride;
+  readonly expectedDependencyVersion?: number;
+  readonly dependencyCheckId?: string;
 }
 export interface PlatformPromotion {
   readonly idempotencyKey: string;
@@ -66,6 +69,60 @@ export interface PlatformPromotion {
 
 export type PlatformQuotaKey = "organizationsPerAccount" | "projectsPerAccount" | "projectsPerOrganization" | "domainsPerProject" | "releasesPerProject" | "releaseStorageBytesPerProject" | "bucketStorageBytesPerProject" | "bucketObjectsPerProject" | "backupsPerProject" | "requestsPerMonthPerOrganization" | "transferBytesPerMonthPerOrganization" | "requestsPerMinutePerProject";
 export type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
+export interface PlatformDependencyRequirement {
+  readonly projectId: string;
+  readonly readiness: "active" | "healthy";
+  readonly digest?: string;
+}
+export interface PlatformDependencyConfiguration {
+  readonly version: number;
+  readonly requirements: readonly PlatformDependencyRequirement[];
+  readonly timeoutMs: number;
+  readonly overridePolicy: "deny" | "administrator";
+  readonly updatedAt: number | null;
+}
+export interface PlatformDependencyUpdate {
+  readonly expectedVersion: number;
+  readonly requirements: readonly PlatformDependencyRequirement[];
+  readonly timeoutMs: number;
+  readonly overridePolicy: "deny" | "administrator";
+}
+export interface PlatformDependencyOverride {
+  readonly expectedVersion: number;
+  readonly reason: string;
+  readonly confirmation: string;
+}
+export interface PlatformRollbackRequest {
+  readonly releaseId: string;
+  readonly restoreData?: boolean;
+  readonly confirmation?: string;
+  readonly idempotencyKey?: string;
+  readonly expectedActiveReleaseId?: string;
+  readonly expectedActivationSequence?: number;
+  readonly dependencyOverride?: PlatformDependencyOverride;
+  readonly expectedDependencyVersion?: number;
+  readonly dependencyCheckId?: string;
+}
+export interface PlatformDependencyObservation {
+  readonly projectId: string;
+  readonly readiness: "active" | "healthy";
+  readonly releaseId: string | null;
+  readonly digest: string | null;
+  readonly activatedAt: number | null;
+  readonly generation: number | null;
+  readonly activationSequence: number | null;
+  readonly ready: boolean;
+  readonly reason: "ready" | "inactive" | "digest-mismatch" | "runtime-unavailable" | "health-failed" | "health-timeout";
+}
+export interface PlatformDependencyCheck {
+  readonly id: string;
+  readonly version: number;
+  readonly ready: boolean;
+  readonly overridden: boolean;
+  readonly observations: readonly PlatformDependencyObservation[];
+  readonly checkedAt: number;
+}
+
 export interface PlatformReleaseChannelEntry {
   readonly version: number;
   readonly sourceEnvironment: PlatformEnvironmentName;
@@ -92,6 +149,9 @@ export interface PlatformChannelActivationRequest {
   readonly expectedEnvironmentVersion: number;
   readonly expectedActiveReleaseId: string | null;
   readonly idempotencyKey: string;
+  readonly dependencyOverride?: PlatformDependencyOverride;
+  readonly expectedDependencyVersion?: number;
+  readonly dependencyCheckId?: string;
 }
 export interface PlatformChannelRollbackRequest extends PlatformChannelActivationRequest {
   readonly fromVersion: number;
