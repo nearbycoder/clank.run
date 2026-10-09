@@ -10,6 +10,9 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 - Recognize Node's malformed-property-value coverage artifact diagnostic for the existing
   single bounded retry only after every test passes; keep test failures and coverage thresholds strict.
 
+- Drain admitted requests before stopping a failed canary candidate, with the existing two-second
+  limit and verified process-cleanup fence. Preserve the prior release and accepted data on rollback.
+
 - Reduce unmapped compiler output by removing complete erased declaration padding and compacting
   horizontal whitespace around erased types. Preserve token separators, runtime literal whitespace,
   CRLF/newline semantics and mapped debugging output without adding a minifier dependency.

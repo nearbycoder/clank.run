@@ -5114,6 +5114,18 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       if (rolloutPort !== undefined) reservedRolloutPorts.delete(rolloutPort);
       if (candidateRuntime) {
         try {
+          if (ingress) {
+            // Canary evaluation has removed the candidate from new traffic.
+            // A failed activation transaction can also leave the in-memory
+            // pointer on the candidate; retire that pointer before draining.
+            if (active.get(project.id) === candidateRuntime) {
+              if (previousRuntime && !previousWasStopped && previousRuntime.child.exitCode === null && previousRuntime.child.signalCode === null) {
+                active.set(project.id, previousRuntime);
+              } else active.delete(project.id);
+            }
+            const drained = await ingress.drain(`http://127.0.0.1:${candidateRuntime.port}`);
+            if (!drained) recordLog(project.id, releaseId, "platform", "Candidate drain reached its two-second limit; terminating remaining streams.");
+          }
           await stopRunning(candidateRuntime);
         } catch (stopError) {
           reportDeploymentError(stopError);

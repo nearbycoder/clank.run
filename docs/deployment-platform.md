@@ -179,6 +179,11 @@ A code-only candidate that fails startup or health never receives traffic and ne
 release. Automatic crash recovery uses the same durable project lock as deploy, rollback, backup,
 and deletion, so it cannot race a user deployment for the project's runtime ports.
 
+When a measured canary fails, Clank removes it from new traffic and gives requests already
+assigned to it the same bounded two-second drain before stopping the candidate. Requests that
+exceed that limit can fail during termination. Verified process cleanup still precedes rollback
+or writer replacement; an unresolved cleanup fence requires operator recovery.
+
 An unexpected worker or scheduler exit crashes and restarts the complete release group instead of
 leaving a healthy-looking web process with stale background work. Read
 [Durable jobs and cron](jobs-and-cron.md) for queue correctness and process-provider requirements.
