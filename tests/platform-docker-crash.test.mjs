@@ -50,7 +50,9 @@ test('real Docker controller crash removes old web and canary workers before imm
     }
     assert.ok(containers.some(container => container.name.includes('-worker-')));
     assert.equal(await fetch('http://127.0.0.1:4961/').then(response => response.text()), 'candidate');
-    database = new DatabaseSync(state.databasePath, { readOnly: true });
+    // The observer only selects, but a killed writer can leave a hot journal
+    // whose recovery requires a writable SQLite handle.
+    database = new DatabaseSync(state.databasePath);
     database.exec('PRAGMA busy_timeout = 5000');
     const oldStableBoundary = database.prepare("SELECT MAX(id) AS id FROM writer_events WHERE release='stable'").get().id;
     assert.ok(oldStableBoundary > 0);

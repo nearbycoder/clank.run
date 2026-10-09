@@ -1,0 +1,132 @@
+{
+  "feature": 25,
+  "title": "Import correction and upsert workflow",
+  "date": "2026-10-08",
+  "baseCommit": "22a530873fd54e02ee7c5551a4a68cf8d539b077",
+  "branch": "codex/reviewed-import-corrections",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/259",
+  "status": "local-release-validation-passed",
+  "acceptance": {
+    "source": "Immutable owner-scoped raw headers/rows; server-verified SHA-256 canonical identity and per-chunk checksum; changed source or initial mapping cannot reuse job identity. Invalid cells remain staged for inspection/correction.",
+    "corrections": "Durable mapping revisions and typed row overlays affect only unprocessed rows. Replacements retire superseded history; accepted batches and raw source are unchanged. Exact correction receipts survive restart; changed operation input conflicts.",
+    "preview": "Current source batch, canonical identity, correction revision, job version/progress, JSON target schema/import declaration and existing target versions bind each reviewed batch. Server recomputation inside SQLite prevents forged or stale acceptance. Only declared import fields appear in before/after values.",
+    "upsert": "Declared scalar non-null unique identity; exactly one authorized owner-scoped match. Ambiguous matches and repeated batch keys fail explicitly. Updates preserve unmapped fields; inserts use the full schema/defaults. Invalid batches write no targets or progress.",
+    "authority": "Current auth/owner fences on every new route and client response; unowned reads and writes require explicit policies. Read policy precedes existing values, and write policy checks original/proposed values. Exact replay rechecks current target access. Async policies fail closed with rejected promises contained.",
+    "atomic": "Target writes, cursor/counters, corrections and exact accepted result receipts commit together. Two actual process kills after target/receipt writes roll back the complete boundary. Lost initial response with a stable creation key resumes one job; lost update response replays once after restart. Independent connections accept one exact operation.",
+    "integrations": "Source-linked search success projects current imported versions; capacity failure rolls back target rows, index, job progress and receipt.",
+    "retention": "Bounded global jobs/chunks/staging, source bytes, target lookup/final insert count, correction rows/bytes and receipt rows/bytes. Completion/cancellation purges raw/correction payloads and document-history copies in pages, while source identities/job metadata/operation receipts remain. Admission rejects instead of dropping replay protection.",
+    "browser": "Actual file chooser/HTTP/SQLite flow verifies invalid preview, saved mapping/value corrections, explicit before/after review, stale version rejection and acceptance. Keyboard focus is restored after disabled actions, long values fit 390px, account/disposal responses are discarded and detected session revocation clears already displayed source. New upload control retains a creation key while mounted."
+  },
+  "validation": {
+    "focused": {
+      "tests": 55,
+      "pass": 55,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "sourceFeatureTests": 22,
+      "newUiRegressions": 4,
+      "path": "/tmp/clank-review-2026-10-08/import-focused.log",
+      "sha256": "e5b9f5ebd22747420bd857018e142b5dde2789f69c7911afdeef203d006437c1"
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 17,
+      "skipLibCheck": false,
+      "legacyStructuralClient": "Positive fixture implements the unchanged streaming-only DurableImportClient.",
+      "path": "/tmp/clank-review-2026-10-08/import-types.log",
+      "sha256": "77302b4dfcd3be1414a1982e057c1cd2de429b72dc5a52298e3b06fe7f57cebe"
+    },
+    "release": {
+      "status": "passed",
+      "node": "26.10.0",
+      "tests": 1799,
+      "pass": 1796,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 92.22,
+        "branches": 80.09,
+        "functions": 90.24
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 395,
+      "publishFileLimit": 395,
+      "publishBytes": 5725758,
+      "publishByteLimit": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/import-check.log",
+      "sha256": "b88fe9a485f773d053904dddff94c8d4ec8e251989a9c16d0315e4befeb2a0b0"
+    },
+    "browser": {
+      "path": "/tmp/clank-review-2026-10-08/import-browser-evidence.json",
+      "sha256": "a703b705db4f94e31165accfd68f4644ce69f55599e9ae10a2aa1b1c6be39c59"
+    },
+    "crashRecovery": {
+      "node": "24.21.0",
+      "tests": 3,
+      "pass": 3,
+      "fail": 0,
+      "path": "/tmp/clank-review-2026-10-08/import-crash-node24.log",
+      "sha256": "87f506c901d6865bfd3c9b69a43f5760ac4df3af07e86e98f21c21415197b389"
+    },
+    "hostedInitial": {
+      "head": "81e8091ea789724ad6b3f6ada8d3da2ca302c1eb",
+      "run": 37880667999,
+      "job": 113659388092,
+      "status": "failed",
+      "test": "controller SIGKILL stops canary writers before immediate startup admits the prior release",
+      "error": "SQLITE_READONLY_ROLLBACK (776)",
+      "diagnosis": "SELECT-only readOnly observer cannot recover a hot rollback journal left by SIGKILL. SQLite reference: https://www.sqlite.org/rescode.html#readonly_rollback",
+      "fix": "Use a writable SELECT-only observer in native and disposable Docker fixtures. Added a deterministic real process kill after dirty-page spill; readOnly fails with 776, writable observation recovers original rows and integrity. Runtime fencing assertions and isolation remain unchanged. Docker remains unexecuted without a disposable host."
+    },
+    "earlierChecks": [
+      {
+        "reason": "Passed before the additional displayed-source revocation regression, stable upload key and resource/compatibility tests.",
+        "status": "passed",
+        "path": "/tmp/clank-review-2026-10-08/import-check-before-revocation-display.log",
+        "sha256": "ef8e64f3afda79a0b4722fe4192f7490642cb56fee7ce9e250b78eef3cdcac07"
+      },
+      {
+        "reason": "Passed before separating the additive ReviewableImportClient from the unchanged legacy structural interface.",
+        "status": "passed",
+        "path": "/tmp/clank-review-2026-10-08/import-check-before-client-interface-split.log",
+        "sha256": "46f6ac76394ff6c343451ea21fb6ac2089e4d83e1aff92b557a35f59abe2e9bf"
+      }
+    ]
+  },
+  "compatibility": {
+    "default": "Streaming insert-only methods/outputs remain available. DurableImportClient structural implementations need no review methods; the factory returns its additive ReviewableImportClient subtype. Legacy routes cannot apply reviewable raw chunks.",
+    "migration": "Opt-in owned correction/operation tables plus defaulted job metadata/chunk checksums. Defaulted job/chunk metadata is shared by all upgraded import writers; review-only correction/operation tables remain opt-in. Streaming-only handles inspect review jobs but cannot cancel/retry/apply them. Register feature schema before a PITR seal; the existing recovery guard remains.",
+    "definition": "Drain/finish/cancel jobs before changing their import target JSON schema, fields, uniqueness, duplicate policy or batch size. Definition drift fails closed; direct SQL and older writers of reviewable metadata are unsupported.",
+    "rollback": "Finish/cancel reviewable jobs, drain writers and unmount their controls. Retain job/source identity and operation receipts; use the upgraded importer to inspect them. Ordinary CRUD remains usable.",
+    "dependencies": "No npm dependencies or new distribution files; unchanged 395-file/6 MiB gates."
+  },
+  "boundaries": {
+    "identity": "Canonical parsed data is attested, not verbatim CSV file bytes. Equivalent quoting/line endings can share identity.",
+    "privateSource": "Raw source belongs to its uploading account; target read policy controls existing target values. Workspace/account navigation must dispose/remount controls.",
+    "creationRetry": "Custom callers must supply a stable key to recover an unknown initial create response. Default keys represent new imports. Widget keys persist while mounted.",
+    "receiptResult": "Exact results describe their original acceptance; inspect for current progress. Deleted/revoked target access denies receipt retrieval. Capacity limits deliberately reject work rather than expire retry identities.",
+    "queryBounds": "Responses at most 1 MiB, correction/result records 64 KiB, canonical source 16 MiB, browser files 5 MiB/50000 rows. Smaller batches/windows are required for large values. Index unique fields for efficient bounded lookup.",
+    "physicalRetention": "Logical current payload limits do not erase SQLite/WAL/independent archived bytes. Metadata/receipt tombstones stay admitted under global bounds; retention administration remains feature39.",
+    "host": "Three privileged Docker/XFS skips remain, not certification."
+  },
+  "sources": {
+    "src/durable-import.ts": "9bc4ec4ac9b27ca68765bf2aa53927f6a82b4df15ca85fc7be8bcdd636129a0c",
+    "src/durable-import.d.ts": "0124db7a4aeff3a7e18f191387419e18b1c140ffea59309ddc711b939c985f35",
+    "tests/reviewable-import.test.mjs": "b30ba978e1b14b1a761c136e9593b7a98e214db6534d4c9edef12eca1cc3510a",
+    "tests/fixtures/reviewable-import-worker.mjs": "84dbc767062e4a7ee7296e59328a7cffc75731081a8154041ebe7385f2a51b18",
+    "tests/durable-features-ui.test.mjs": "09fd3edb66ed3f2c4df849dc0048907f5b66ef13fab98296615f4b510d9afb87",
+    "type-tests/reviewable-import.ts": "2b2d98d859e0389465b3693154e8d7b7450b4889c86e5645d1e145fd038bc385",
+    "docs/durable-data-workflows.md": "3c725696278b83b46ac3f1fc949e8969ddbb7fb9933eb6d6ebbd32701fdffd48",
+    "tests/platform-crash.test.mjs": "6736fb036f0002a48cffed71ab9add33bb898b1fc402258968dd2d1a1504f15a",
+    "tests/platform-docker-crash.test.mjs": "e8f21125b9d3fab0638645820c16067ecf6cb4554febd69222440c2ecb5243d1",
+    "tests/fixtures/sqlite-hot-journal-writer.mjs": "2853a9918fa32435e6c7a501463c73056a7e378310985b07c68185d559ab6c00"
+  }
+}
