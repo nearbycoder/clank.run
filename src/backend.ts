@@ -61,6 +61,7 @@ import {
   type JobSystemDefinition,
 } from "./jobs.ts";
 import {
+  BucketError,
   createBucketMcpTools,
   type BucketManager,
 } from "./buckets.ts";
@@ -2498,17 +2499,28 @@ export async function openBackend<
         return mcpServerCard(request);
       }
       if (options.buckets && (url.pathname === options.buckets.basePath || url.pathname.startsWith(`${options.buckets.basePath}/`))) {
-        const capabilityRequest = url.pathname.includes("/cap/") || url.pathname.includes("/public/");
+        const capabilityRequest = url.pathname.includes("/cap/") || url.pathname.includes("/version-cap/") || url.pathname.includes("/public/");
         if (!capabilityRequest && options.verifyOrigin !== false
           && !requestOriginAllowed(request, { allowedOrigins: options.allowedOrigins })) {
           return problem(403, "ORIGIN_MISMATCH", "Cross-origin bucket request rejected.");
         }
         const auth = authRuntime ? await authRuntime.resolve(request) : null;
+        const verifyCurrent = authRuntime && auth?.session ? () => {
+          const current = authRuntime!.refreshSession(auth.session!.id);
+          if (!current?.user || current.user.id !== auth.user?.id) throw new BucketError(401, "BUCKET_AUTH_REQUIRED", "Authentication is required.");
+        } : undefined;
         return options.buckets.handle(request, {
           authenticated: Boolean(auth?.user),
           userId: auth?.user?.id,
+          csrfToken: auth?.csrfToken,
+          verifyCurrent,
           verifyWrite: authRuntime && auth?.session
-            ? () => authRuntime!.verifyCsrf(request, auth)
+            ? async () => {
+              verifyCurrent?.();
+              try { await authRuntime!.verifyCsrf(request, auth); }
+              catch (error) { if (error instanceof AuthError) throw new BucketError(error.status, error.code, error.message); throw error; }
+              verifyCurrent?.();
+            }
             : undefined,
         });
       }

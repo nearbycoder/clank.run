@@ -22,6 +22,28 @@ export interface BucketImagePolicy {
   readonly variants?: Readonly<Record<string, BucketImageVariant>>;
 }
 
+/** Separate bounds for retired bytes; current-object quotas are unchanged. */
+export interface BucketVersionPolicy {
+  readonly maxAgeMs: number;
+  readonly maxPerObject: number;
+  readonly maxVersions: number;
+  readonly maxBytes: number;
+  readonly perOwnerMaxBytes: number;
+}
+
+export interface BucketVersion extends Omit<BucketObject, "id" | "url" | "visibility" | "cacheControl"> {
+  readonly id: string;
+  readonly objectId: string;
+  readonly retainedAt: number;
+  readonly expiresAt: number;
+}
+
+export interface BucketRestoreOptions extends BucketIdentity {
+  readonly operationId: string;
+  /** Require the current digest, or null to require an absent destination. */
+  readonly ifSha256: string | null;
+}
+
 export interface BucketDefinitionInput {
   readonly name: string;
   readonly description?: string;
@@ -38,6 +60,7 @@ export interface BucketDefinitionInput {
   readonly resumable?: boolean;
   readonly maxChunkBytes?: number;
   readonly image?: false | BucketImagePolicy;
+  readonly versions?: false | BucketVersionPolicy;
 }
 
 export interface BucketDefinition {
@@ -59,6 +82,7 @@ export interface BucketDefinition {
   readonly image: false | Readonly<Required<Omit<BucketImagePolicy, "variants">> & {
     variants: Readonly<Record<string, Readonly<Required<BucketImageVariant>>>>;
   }>;
+  readonly versions: false | BucketVersionPolicy;
 }
 
 export interface BucketImageMetadata {
@@ -157,6 +181,10 @@ export interface BucketReadIntent {
 export interface BucketRequestContext extends BucketIdentity {
   readonly authenticated?: boolean;
   readonly verifyWrite?: () => void | Promise<void>;
+  /** Current authenticated session's CSRF token for the built-in restore form. */
+  readonly csrfToken?: string;
+  /** Synchronous trusted credential refresh at history/restore commit boundaries. */
+  readonly verifyCurrent?: () => void;
 }
 
 export interface BucketImageTransformInput {
@@ -205,6 +233,10 @@ export interface BucketRuntime {
   delete(key: string, options?: BucketIdentity & { ifSha256?: string }): Promise<boolean>;
   createUploadIntent(input: BucketUploadIntentInput): Promise<BucketUploadIntent>;
   createReadIntent(key: string, options?: BucketIdentity & { expiresInMs?: number }): Promise<BucketReadIntent>;
+  listVersions(key: string, identity?: BucketIdentity): readonly BucketVersion[];
+  getVersion(key: string, versionId: string, identity?: BucketIdentity): Promise<{ readonly metadata: BucketVersion; readonly bytes: Uint8Array }>;
+  createVersionReadIntent(key: string, versionId: string, options?: BucketIdentity & { expiresInMs?: number }): Promise<BucketReadIntent>;
+  restoreVersion(key: string, versionId: string, options: BucketRestoreOptions): Promise<BucketObject>;
   transform(key: string, variant: string, options?: BucketIdentity & { signal?: AbortSignal }): Promise<BucketObject>;
 }
 
@@ -241,6 +273,9 @@ export interface BucketClient {
   upload(options: BucketUploadOptions): Promise<BucketObject>;
   delete(key: string, ifSha256?: string): Promise<boolean>;
   createReadIntent(key: string, expiresInMs?: number): Promise<BucketReadIntent>;
+  listVersions(key: string): Promise<readonly BucketVersion[]>;
+  createVersionReadIntent(key: string, versionId: string, expiresInMs?: number): Promise<BucketReadIntent>;
+  restoreVersion(key: string, versionId: string, options: Omit<BucketRestoreOptions, "userId">): Promise<BucketObject>;
 }
 
 export interface BucketMcpOptions<Context = unknown> {
@@ -278,7 +313,7 @@ export function defineBucket(input: BucketDefinitionInput): BucketDefinition {
   exactKeys(input as unknown as Record<string, unknown>, [
     "name", "description", "visibility", "ownership", "browserAccess", "allowedContentTypes",
     "maxObjectBytes", "maxObjects", "maxBytes", "perOwnerMaxObjects", "perOwnerMaxBytes",
-    "cacheControl", "resumable", "maxChunkBytes", "image",
+    "cacheControl", "resumable", "maxChunkBytes", "image", "versions",
   ], "bucket definition");
   const name = boundedName(input.name);
   const visibility = enumValue(input.visibility ?? "private", ["private", "public"], "visibility");
@@ -326,6 +361,7 @@ export function defineBucket(input: BucketDefinitionInput): BucketDefinition {
     "cacheControl",
   );
   const image = normalizeImagePolicy(input.image);
+  const versions = input.versions === undefined || input.versions === false ? false : normalizeVersionPolicy(input.versions);
   const description = boundedText(
     input.description ?? `${humanize(name)} application objects.`,
     "description",
@@ -348,6 +384,7 @@ export function defineBucket(input: BucketDefinitionInput): BucketDefinition {
     resumable,
     maxChunkBytes,
     image,
+    versions,
   });
 }
 
@@ -549,13 +586,26 @@ interface ReservationRow extends Record<string, unknown> {
   variant_name: string | null;
 }
 
+interface VersionRow extends Record<string, unknown> {
+  version_id: string;
+  bucket: string;
+  owner_id: string;
+  object_key: string;
+  storage_key: string;
+  size: number;
+  metadata_json: string;
+  retained_at: number;
+  expires_at: number;
+}
+
 interface Capability {
   v: 1;
   b: string;
-  o: "read" | "write" | "resume";
+  o: "read" | "history" | "write" | "resume";
   i: string;
   u: string;
   e: number;
+  g?: string;
 }
 
 export async function openBucketManager(options: OpenBucketManagerOptions): Promise<BucketManager> {
@@ -651,6 +701,19 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
   CREATE TABLE IF NOT EXISTS clank_bucket_garbage (
     storage_key TEXT PRIMARY KEY,
     created_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE TABLE IF NOT EXISTS clank_bucket_versions (
+    version_id TEXT PRIMARY KEY, bucket TEXT NOT NULL, owner_id TEXT NOT NULL,
+    object_key TEXT NOT NULL, storage_key TEXT NOT NULL UNIQUE, size INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL, retained_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
+  ) STRICT;
+  CREATE INDEX IF NOT EXISTS clank_bucket_versions_history
+    ON clank_bucket_versions(bucket, owner_id, object_key, retained_at DESC);
+  CREATE TABLE IF NOT EXISTS clank_bucket_restore_receipts (
+    bucket TEXT NOT NULL, owner_id TEXT NOT NULL, operation_id TEXT NOT NULL,
+    version_id TEXT NOT NULL, fingerprint TEXT NOT NULL, receipt TEXT NOT NULL,
+    retained_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+    PRIMARY KEY(bucket, owner_id, operation_id)
   ) STRICT;`);
   let closed = false;
   let transactionActive = false;
@@ -809,6 +872,95 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       .run(storageKey, finiteNow(now));
   };
 
+  const pruneVersions = (): void => {
+    const at = finiteNow(now);
+    const buckets = statement("SELECT DISTINCT bucket FROM clank_bucket_versions").all();
+    for (const item of buckets) {
+      const definition = definitions.get(String(item.bucket));
+      const policy = definition?.versions;
+      const rows = statement("SELECT *, rowid AS sequence FROM clank_bucket_versions WHERE bucket = ? ORDER BY retained_at DESC, rowid DESC").all(item.bucket) as VersionRow[];
+      let count = 0, bytes = 0;
+      const owners = new Map<string, number>(), objects = new Map<string, number>();
+      for (const row of rows) {
+        const expires = policy ? Math.min(Number(row.expires_at), Number(row.retained_at) + policy.maxAgeMs) : 0;
+        const owner = String(row.owner_id), object = JSON.stringify([owner, row.object_key]);
+        const size = safeStoredInteger(row.size, "retained size");
+        if (!policy || expires <= at || size > definition!.maxObjectBytes
+          || count >= policy.maxVersions || (objects.get(object) ?? 0) >= policy.maxPerObject
+          || bytes + size > policy.maxBytes || (owners.get(owner) ?? 0) + size > policy.perOwnerMaxBytes) {
+          statement("DELETE FROM clank_bucket_versions WHERE version_id = ?").run(row.version_id);
+          queueGarbage(String(row.storage_key));
+          continue;
+        }
+        if (expires !== Number(row.expires_at)) statement("UPDATE clank_bucket_versions SET expires_at = ? WHERE version_id = ?").run(expires, row.version_id);
+        count++; bytes += size;
+        owners.set(owner, (owners.get(owner) ?? 0) + size);
+        objects.set(object, (objects.get(object) ?? 0) + 1);
+      }
+    }
+    const receipts = statement("SELECT bucket, owner_id, operation_id, retained_at, expires_at FROM clank_bucket_restore_receipts").all();
+    for (const receipt of receipts) {
+      const policy = definitions.get(String(receipt.bucket))?.versions;
+      const expires = policy ? Math.min(Number(receipt.expires_at), Number(receipt.retained_at) + policy.maxAgeMs) : 0;
+      if (expires <= at) statement("DELETE FROM clank_bucket_restore_receipts WHERE bucket = ? AND owner_id = ? AND operation_id = ?").run(receipt.bucket, receipt.owner_id, receipt.operation_id);
+      else if (expires !== Number(receipt.expires_at)) statement("UPDATE clank_bucket_restore_receipts SET expires_at = ? WHERE bucket = ? AND owner_id = ? AND operation_id = ?").run(expires, receipt.bucket, receipt.owner_id, receipt.operation_id);
+    }
+  };
+
+  const retire = (definition: BucketDefinition, row: ObjectRow): void => {
+    if (!definition.versions) { queueGarbage(String(row.storage_key)); return; }
+    const at = finiteNow(now);
+    statement(`INSERT INTO clank_bucket_versions(version_id, bucket, owner_id, object_key, storage_key, size, metadata_json, retained_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(randomId("bucket_version"), definition.name, row.owner_id, row.object_key, row.storage_key,
+        row.size, JSON.stringify(row), at, integer(at + definition.versions.maxAgeMs, "retention deadline", 0, Number.MAX_SAFE_INTEGER));
+    pruneVersions();
+  };
+
+  const versionRow = (definition: BucketDefinition, owner: string, key: string, id: string): VersionRow => {
+    ensureOpen();
+    const row = statement("SELECT * FROM clank_bucket_versions WHERE bucket = ? AND owner_id = ? AND object_key = ? AND version_id = ?")
+      .get(definition.name, owner, key, id) as VersionRow | undefined;
+    if (!definition.versions || !row || Math.min(Number(row.expires_at), Number(row.retained_at) + definition.versions.maxAgeMs) <= finiteNow(now)
+      || Number(row.size) > definition.maxObjectBytes) {
+      throw new BucketError(404, "BUCKET_VERSION_NOT_FOUND", "Retained generation is unavailable or expired.");
+    }
+    return row;
+  };
+
+  const versionFromRow = (row: VersionRow): BucketVersion => {
+    const snapshot = JSON.parse(String(row.metadata_json)) as ObjectRow;
+    const original = objectFromRow(snapshot);
+    if (original.bucket !== row.bucket || (original.ownerId ?? "") !== row.owner_id || original.key !== row.object_key
+      || original.size !== Number(row.size) || snapshot.storage_key !== row.storage_key) throw new BucketError(500, "BUCKET_INTEGRITY_FAILED", "Retained metadata is inconsistent.");
+    const { id, url: _url, visibility: _visibility, cacheControl: _cache, ...data } = original;
+    const policy = definitionFor(String(row.bucket)).versions;
+    const retainedAt = safeStoredInteger(row.retained_at, "retainedAt"), expiresAt = safeStoredInteger(row.expires_at, "expiresAt");
+    return deepFreeze({ ...data, id: boundedId(row.version_id, "version id"), objectId: id, retainedAt,
+      expiresAt: policy ? Math.min(expiresAt, retainedAt + policy.maxAgeMs) : expiresAt });
+  };
+
+  const listVersions = (definition: BucketDefinition, keyInput: string, identity: BucketIdentity = {}): readonly BucketVersion[] => {
+    ensureOpen(); const key = bucketKey(keyInput), owner = ownerFor(definition, identity);
+    if (!definition.versions) return Object.freeze([]);
+    transaction(pruneVersions);
+    return Object.freeze((statement("SELECT * FROM clank_bucket_versions WHERE bucket = ? AND owner_id = ? AND object_key = ? ORDER BY retained_at DESC, rowid DESC LIMIT ?")
+      .all(definition.name, owner, key, definition.versions.maxPerObject) as VersionRow[]).map(versionFromRow));
+  };
+
+  const readVersion = async (definition: BucketDefinition, owner: string, key: string, id: string) => {
+    const row = versionRow(definition, owner, key, id), metadata = versionFromRow(row);
+    const stored = await options.store.get(String(row.storage_key));
+    if (!stored) throw new BucketError(500, "BUCKET_OBJECT_MISSING", "Retained bytes are missing.");
+    const bytes = copyBytes(stored.bytes);
+    if (bytes.byteLength !== metadata.size || stored.metadata.size !== metadata.size || stored.metadata.sha256 !== metadata.sha256
+      || normalizeContentType(stored.metadata.contentType) !== metadata.contentType || await sha256(bytes) !== metadata.sha256) {
+      throw new BucketError(500, "BUCKET_INTEGRITY_FAILED", "Retained bytes failed integrity verification.");
+    }
+    if (versionRow(definition, owner, key, id).storage_key !== row.storage_key) throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Retained generation changed.");
+    return Object.freeze({ metadata, bytes });
+  };
+
   const collectGarbage = async (limit = 100): Promise<number> => {
     const rows = statement("SELECT storage_key, CAST(rowid AS TEXT) AS cleanup_id FROM clank_bucket_garbage ORDER BY created_at, storage_key LIMIT ?")
       .all(limit);
@@ -836,6 +988,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     ensureOpen();
     const cutoff = finiteNow(now);
     const expired = transaction(() => {
+      pruneVersions();
       const rows = statement("SELECT * FROM clank_bucket_reservations WHERE expires_at <= ?")
         .all(cutoff) as ReservationRow[];
       statement("DELETE FROM clank_bucket_reservations WHERE expires_at <= ?").run(cutoff);
@@ -854,6 +1007,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     reserveOptions: {
       expectedSha256?: string;
       ifSha256?: string | null;
+      ifStorageKey?: string | null;
       expiresAt: number;
       resumable: boolean;
       variantOf?: string;
@@ -873,6 +1027,9 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     const createdAt = finiteNow(now);
     return transaction(() => {
       const existing = rowForKey(definition.name, owner, key);
+      if (reserveOptions.ifStorageKey !== undefined && (existing?.storage_key ?? null) !== reserveOptions.ifStorageKey) {
+        throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Bucket generation changed before this write.");
+      }
       if (reserveOptions.ifSha256 === null && existing) {
         throw new BucketError(409, "BUCKET_OBJECT_EXISTS", "Bucket object already exists.");
       }
@@ -936,7 +1093,9 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     return image;
   };
 
-  const finalize = async (reservation: ReservationRow, value: Uint8Array | ArrayBuffer): Promise<BucketObject> => {
+  const finalize = async (reservation: ReservationRow, value: Uint8Array | ArrayBuffer,
+    restore?: { readonly check: () => void; readonly accept: (object: BucketObject) => void },
+  ): Promise<BucketObject> => {
     ensureOpen();
     const bytes = copyBytes(value);
     if (bytes.byteLength !== safeStoredInteger(reservation.size, "size")) {
@@ -970,6 +1129,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
         throw new BucketError(502, "OBJECT_STORE_MISMATCH", "Object storage returned inconsistent upload metadata.");
       }
       row = transaction(() => {
+        restore?.check();
         const current = reservationRow(String(reservation.reservation_id));
         if (!current || current.lock_token !== lock || Number(current.expires_at) <= finiteNow(now)) {
           throw new BucketError(409, "UPLOAD_EXPIRED", "Upload capability expired before completion.");
@@ -1015,10 +1175,10 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
           );
         statement("DELETE FROM clank_bucket_reservations WHERE reservation_id = ?")
           .run(current.reservation_id);
-        if (current.replaces_storage_key && current.replaces_storage_key !== current.storage_key) {
-          queueGarbage(String(current.replaces_storage_key));
-        }
-        return rowForKey(definition.name, String(current.owner_id), String(current.object_key))!;
+        if (existing && current.replaces_storage_key && current.replaces_storage_key !== current.storage_key) retire(definition, existing);
+        const accepted = rowForKey(definition.name, String(current.owner_id), String(current.object_key))!;
+        restore?.accept(objectFromRow(accepted));
+        return accepted;
       });
     } catch (error) {
       removeReservation(String(reservation.reservation_id), lock);
@@ -1090,6 +1250,68 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     return Object.freeze({ metadata, bytes: new Uint8Array(stored.bytes) });
   };
 
+  const restoreVersion = async (definition: BucketDefinition, keyInput: string, idInput: string, input: BucketRestoreOptions,
+    verifyCurrent: () => void = () => undefined,
+  ): Promise<BucketObject> => {
+    ensureOpen();
+    guardCurrent(verifyCurrent);
+    const owner = ownerFor(definition, input), key = bucketKey(keyInput), id = boundedId(idInput, "version id");
+    const operation = input.operationId;
+    if (typeof operation !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(operation)) throw new BucketError(400, "INVALID_RESTORE_OPERATION", "A bounded restore operation ID is required.");
+    if (input.ifSha256 === undefined) throw new BucketError(400, "RESTORE_PRECONDITION_REQUIRED", "Restore requires an expected digest or expected absence.");
+    const expected = input.ifSha256 === null ? null : storedSha(input.ifSha256);
+    const fingerprint = JSON.stringify([key, id, expected]);
+    const replay = (): BucketObject | null => {
+      const receipt = statement("SELECT * FROM clank_bucket_restore_receipts WHERE bucket = ? AND owner_id = ? AND operation_id = ?").get(definition.name, owner, operation);
+      if (!receipt) return null;
+      if (!definition.versions || Math.min(Number(receipt.expires_at), Number(receipt.retained_at) + definition.versions.maxAgeMs) <= finiteNow(now)) {
+        throw new BucketError(410, "RESTORE_RECEIPT_EXPIRED", "Restore receipt expired.");
+      }
+      if (receipt.fingerprint !== fingerprint) throw new BucketError(409, "RESTORE_RETRY_CONFLICT", "Restore operation ID was used for different input.");
+      const object = JSON.parse(String(receipt.receipt)) as BucketObject;
+      if (!object || object.bucket !== definition.name || (object.ownerId ?? "") !== owner || object.key !== key) {
+        throw new BucketError(500, "BUCKET_INTEGRITY_FAILED", "Restore receipt ownership is inconsistent.");
+      }
+      storedSha(object.sha256); safeStoredInteger(object.size, "receipt size");
+      boundedId(object.id, "receipt object id");
+      return deepFreeze(object);
+    };
+    const old = replay(); if (old) return old;
+    const destination = rowForKey(definition.name, owner, key);
+    if ((expected === null && destination) || (expected !== null && destination?.sha256 !== expected)) {
+      throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Bucket object changed before restore.");
+    }
+    const source = versionRow(definition, owner, key, id);
+    const stored = await readVersion(definition, owner, key, id);
+    guardCurrent(verifyCurrent); const accepted = replay(); if (accepted) return accepted;
+    const reservation = await reserve(definition, key, stored.bytes.byteLength, stored.metadata.contentType, { userId: owner }, {
+      expectedSha256: stored.metadata.sha256, ifSha256: expected, expiresAt: finiteNow(now) + capabilityTtlMs,
+      ifStorageKey: destination?.storage_key ?? null,
+      resumable: false, variantOf: stored.metadata.variantOf ?? undefined, variant: stored.metadata.variant ?? undefined,
+    });
+    try {
+      return await finalize(reservation, stored.bytes, {
+        check() {
+          guardCurrent(verifyCurrent);
+          if (versionRow(definition, owner, key, id).storage_key !== source.storage_key) throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Retained generation changed.");
+          if (replay()) throw new BucketError(409, "RESTORE_ALREADY_ACCEPTED", "Restore was already accepted; retry to retrieve its receipt.");
+          if (Number(statement("SELECT count(*) AS n FROM clank_bucket_restore_receipts").get()!.n) >= 10000) throw new BucketError(429, "RESTORE_RECEIPT_CAPACITY", "Restore receipt capacity is full.");
+        },
+        accept(object) {
+          guardCurrent(verifyCurrent);
+          if (stored.metadata.expiresAt <= finiteNow(now)) throw new BucketError(404, "BUCKET_VERSION_NOT_FOUND", "Retained generation expired before commit.");
+          statement(`INSERT INTO clank_bucket_restore_receipts(bucket, owner_id, operation_id, version_id, fingerprint, receipt, retained_at, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(definition.name, owner, operation, id, fingerprint, JSON.stringify(object), source.retained_at, stored.metadata.expiresAt);
+        },
+      });
+    } catch (error) {
+      const removed = removeReservation(String(reservation.reservation_id));
+      if (removed) await cleanupReservation(removed);
+      throw error;
+    }
+  };
+
   const list = (definition: BucketDefinition, listOptions: BucketListOptions = {}): BucketListResult => {
     ensureOpen();
     const owner = ownerFor(definition, listOptions);
@@ -1140,7 +1362,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       if (current) {
         statement("DELETE FROM clank_bucket_objects WHERE bucket = ? AND owner_id = ? AND object_key = ?")
           .run(definition.name, owner, key);
-        queueGarbage(String(current.storage_key));
+        retire(definition, current);
       }
       return { current, reservation };
     });
@@ -1267,6 +1489,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       i: String(row.object_id),
       u: owner,
       e: expiresAt,
+      g: String(row.storage_key).split("/").at(-1)!,
     });
     return Object.freeze({
       protocol: "clank-bucket-read/1" as const,
@@ -1275,6 +1498,18 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       url: `${publicOrigin}${basePath}/${encodeURIComponent(definition.name)}/cap/${token}`,
       expiresAt,
     });
+  };
+
+  const createVersionReadIntent = async (definition: BucketDefinition, keyInput: string, idInput: string,
+    readOptions: BucketIdentity & { expiresInMs?: number } = {},
+  ): Promise<BucketReadIntent> => {
+    const key = bucketKey(keyInput), owner = ownerFor(definition, readOptions), id = boundedId(idInput, "version id");
+    const row = versionRow(definition, owner, key, id), metadata = versionFromRow(row);
+    const expiresAt = Math.min(metadata.expiresAt, finiteNow(now) + integer(readOptions.expiresInMs ?? capabilityTtlMs, "expiresInMs", 1000, 24 * 60 * 60_000));
+    const token = await signCapability({ v: 1, b: definition.name, o: "history", i: id, u: owner, e: expiresAt });
+    versionRow(definition, owner, key, id);
+    return Object.freeze({ protocol: "clank-bucket-read/1", bucket: definition.name, key,
+      url: `${publicOrigin}${basePath}/${encodeURIComponent(definition.name)}/version-cap/${token}`, expiresAt });
   };
 
   const transform = async (
@@ -1310,15 +1545,19 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     });
   };
 
-  const storedResponse = async (row: ObjectRow, request: Request): Promise<Response> => {
+  const storedResponse = async (row: ObjectRow, request: Request, valid: () => boolean = () => true): Promise<Response> => {
     const stored = await options.store.get(String(row.storage_key));
     if (!stored) throw new BucketError(500, "BUCKET_OBJECT_MISSING", "Bucket object bytes are missing.");
     const metadata = objectFromRow(row);
-    if (stored.metadata.sha256 !== metadata.sha256 || stored.metadata.size !== metadata.size) {
+    const bytes = copyBytes(stored.bytes);
+    if (stored.metadata.sha256 !== metadata.sha256 || stored.metadata.size !== metadata.size || bytes.byteLength !== metadata.size
+      || normalizeContentType(stored.metadata.contentType) !== metadata.contentType || await sha256(bytes) !== metadata.sha256) {
       throw new BucketError(500, "BUCKET_INTEGRITY_FAILED", "Bucket object failed integrity verification.");
     }
+    const current = rowForId(String(row.bucket), String(row.owner_id), String(row.object_id));
+    if (!valid() || current?.storage_key !== row.storage_key) throw new BucketError(404, "BUCKET_OBJECT_NOT_FOUND", "Bucket generation is no longer current.");
     const headers = objectHeaders(metadata);
-    return new Response(request.method === "HEAD" ? null : copyBytes(stored.bytes), { status: 200, headers });
+    return new Response(request.method === "HEAD" ? null : bytes, { status: 200, headers });
   };
 
   const handleResumable = async (request: Request, capability: Capability): Promise<Response> => {
@@ -1405,6 +1644,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     context: BucketRequestContext,
     write: boolean,
   ): Promise<void> => {
+    guardCurrent(context.verifyCurrent);
     if (definition.browserAccess === "server") {
       throw new BucketError(403, "BUCKET_SERVER_ONLY", "This bucket is only available to server actions and agents.");
     }
@@ -1424,6 +1664,7 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     if (selectedName && !selected) throw new BucketError(404, "BUCKET_NOT_FOUND", "Bucket not found.");
     const prefix = url.searchParams.get("prefix") ?? undefined;
     const cursor = url.searchParams.get("cursor") ?? undefined;
+    const historyKey = url.searchParams.get("history");
     const result = selected
       ? list(selected, { userId: context.userId, prefix, cursor, limit: 100 })
       : null;
@@ -1433,7 +1674,8 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
             userId: context.userId,
             expiresInMs: Math.min(capabilityTtlMs, 5 * 60_000),
           })).url;
-          return `<tr><td><a href="${escapeHtml(readUrl)}" rel="noreferrer">${escapeHtml(object.key)}</a></td><td>${escapeHtml(object.contentType)}</td><td>${escapeHtml(formatFileSize(object.size))}</td><td><code>${escapeHtml(object.sha256.slice(0, 12))}</code></td><td>${escapeHtml(new Date(object.updatedAt).toISOString())}</td></tr>`;
+          const history = selected!.versions ? ` <a href="${basePath}?bucket=${encodeURIComponent(selected!.name)}&amp;history=${encodeURIComponent(object.key)}">History</a>` : "";
+          return `<tr><td><a href="${escapeHtml(readUrl)}" rel="noreferrer">${escapeHtml(object.key)}</a>${history}</td><td>${escapeHtml(object.contentType)}</td><td>${escapeHtml(formatFileSize(object.size))}</td><td><code>${escapeHtml(object.sha256.slice(0, 12))}</code></td><td>${escapeHtml(new Date(object.updatedAt).toISOString())}</td></tr>`;
         }))
       : [];
     const bucketLinks = available.map((definition) => {
@@ -1447,13 +1689,31 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     const next = selected && result?.cursor
       ? `<a class="next" href="${basePath}?bucket=${encodeURIComponent(selected.name)}${prefix === undefined ? "" : `&amp;prefix=${encodeURIComponent(prefix)}`}&amp;cursor=${encodeURIComponent(result.cursor)}">Next page →</a>`
       : "";
-    const body = selected && result
+    let body = selected && result
       ? `<header><div><p>CLANK MANAGED STORAGE</p><h1>${escapeHtml(selected.name)}</h1><span>${escapeHtml(selected.description)}</span></div><div class="usage"><strong>${escapeHtml(formatFileSize(usage!.bytes))}</strong><span>${usage!.objects.toLocaleString("en-US")} objects · ${escapeHtml(formatFileSize(usage!.maxBytes))} limit</span></div></header>${query}<div class="table"><table><thead><tr><th>Key</th><th>Type</th><th>Size</th><th>SHA-256</th><th>Updated</th></tr></thead><tbody>${rows.length ? rows.join("") : `<tr><td colspan="5" class="empty">No matching objects.</td></tr>`}</tbody></table></div>${next}`
       : `<div class="empty-state"><h1>No browser-accessible buckets</h1><p>This app has no buckets exposed to signed-in people.</p></div>`;
-    return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(selected?.name ?? "Files")} · Clank storage</title><style>:root{color-scheme:dark;font-family:ui-sans-serif,system-ui,sans-serif;background:#090909;color:#f4f4f5}*{box-sizing:border-box}body{margin:0;display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100dvh}nav{border-right:1px solid #27272a;padding:28px 18px}nav strong{display:block;margin:0 10px 22px;font-size:14px}nav a{display:block;color:#a1a1aa;text-decoration:none;padding:10px;border-radius:8px;font-size:14px;overflow-wrap:anywhere}nav a:hover,nav a[aria-current]{background:#18181b;color:#fafafa}main{padding:clamp(24px,5vw,72px);min-width:0}header{display:flex;align-items:end;justify-content:space-between;gap:24px;margin-bottom:32px}header p{color:#86efac;font:700 11px ui-monospace,monospace;letter-spacing:.14em}h1{font-size:clamp(32px,6vw,64px);letter-spacing:-.05em;margin:4px 0}header span,.usage span{color:#a1a1aa}.usage{text-align:right}.usage strong{display:block;font-size:24px}.usage span{font-size:12px}form{display:flex;align-items:end;gap:10px;margin-bottom:18px}label{display:grid;gap:7px;color:#a1a1aa;font-size:12px;flex:1}input,button{font:inherit;color:#fafafa;background:#18181b;border:1px solid #3f3f46;border-radius:8px;min-height:42px;padding:9px 12px}button{cursor:pointer;font-weight:650}.table{overflow:auto;border:1px solid #27272a;border-radius:12px}table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:13px 15px;border-bottom:1px solid #27272a;font-size:12px}th{color:#a1a1aa;font-weight:500}td a{color:#f4f4f5}td code{color:#86efac}.empty{text-align:center;color:#71717a;padding:48px}.next{display:inline-flex;color:#f4f4f5;margin-top:18px}.empty-state{max-width:620px}.empty-state p{color:#a1a1aa}@media(max-width:700px){body{display:block}nav{border-right:0;border-bottom:1px solid #27272a;padding:14px;display:flex;gap:4px;overflow:auto}nav strong{margin:auto 8px;white-space:nowrap}nav a{white-space:nowrap}main{padding:24px 16px}header{display:grid;align-items:start}.usage{text-align:left}form{align-items:stretch;flex-direction:column}}</style></head><body><nav><strong>Storage</strong>${bucketLinks}</nav><main>${body}</main></body></html>`, {
+    let historyScript = "";
+    const nonce = randomId("history_script");
+    if (historyKey !== null && selected) {
+      const key = bucketKey(historyKey), current = stat(selected, key, context);
+      const versions = listVersions(selected, key, context);
+      const canRestore = Boolean(context.csrfToken && context.verifyWrite);
+      const historyRows = await Promise.all(versions.map(async version => {
+        const intent = await createVersionReadIntent(selected, key, version.id, { userId: context.userId, expiresInMs: Math.min(capabilityTtlMs, 5 * 60000) });
+        const restore = canRestore ? `<form data-restore data-version="${escapeHtml(version.id)}" data-sha="${current?.sha256 ?? "absent"}" data-operation="${randomId("restore")}"><button type="submit">Restore</button></form>` : "";
+        return `<tr><td><a href="${escapeHtml(intent.url)}" rel="noreferrer">Download</a></td><td>${escapeHtml(formatFileSize(version.size))}</td><td><code>${escapeHtml(version.sha256.slice(0, 12))}</code></td><td>${escapeHtml(new Date(version.retainedAt).toISOString())}</td><td>${escapeHtml(new Date(version.expiresAt).toISOString())}</td><td>${restore}</td></tr>`;
+      }));
+      body = `<a href="${basePath}?bucket=${encodeURIComponent(selected.name)}">Back to files</a><header><div><p>FILE HISTORY</p><h1>Retained versions</h1><span style="overflow-wrap:anywhere">${escapeHtml(key)}</span></div></header><p>Restoring preserves this generation and replaces the current file only if it has not changed.</p><div role="status" aria-live="polite" id="restore-status"></div><div class="table"><table><thead><tr><th>File</th><th>Size</th><th>SHA-256</th><th>Retained</th><th>Expires</th><th>Action</th></tr></thead><tbody>${historyRows.length ? historyRows.join("") : '<tr><td colspan="6" class="empty">No retained versions.</td></tr>'}</tbody></table></div>`;
+      if (canRestore) {
+        const literal = (value: string) => JSON.stringify(value).replaceAll("<", "\\u003c");
+        historyScript = `<script nonce="${nonce}">for(const form of document.querySelectorAll('[data-restore]'))form.addEventListener('submit',async event=>{event.preventDefault();const button=form.querySelector('button'),status=document.querySelector('#restore-status'),wasFocused=document.activeElement===button;button.disabled=true;status.textContent='Restoring file…';try{const response=await fetch(${literal(`${basePath}/${encodeURIComponent(selected.name)}/versions`)},{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','x-clank-csrf':${literal(context.csrfToken!)}},body:JSON.stringify({key:${literal(key)},versionId:form.dataset.version,operationId:form.dataset.operation,ifSha256:form.dataset.sha==='absent'?null:form.dataset.sha})});const result=await response.json();if(!response.ok)throw new Error(result.error?.message??'Restore could not be completed.');status.textContent='File restored.';for(const other of document.querySelectorAll('[data-restore]')){other.dataset.sha=result.object.sha256;other.dataset.operation=crypto.randomUUID();}}catch(error){status.textContent=error.message??'Restore could not be completed.';}finally{button.disabled=false;if(wasFocused&&document.activeElement===document.body)button.focus();}});</script>`;
+      }
+    }
+    guardCurrent(context.verifyCurrent);
+    return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(selected?.name ?? "Files")} · Clank storage</title><style>:root{color-scheme:dark;font-family:ui-sans-serif,system-ui,sans-serif;background:#090909;color:#f4f4f5}*{box-sizing:border-box}body{margin:0;display:grid;grid-template-columns:220px minmax(0,1fr);min-height:100dvh}nav{border-right:1px solid #27272a;padding:28px 18px}nav strong{display:block;margin:0 10px 22px;font-size:14px}nav a{display:block;color:#a1a1aa;text-decoration:none;padding:10px;border-radius:8px;font-size:14px;overflow-wrap:anywhere}nav a:hover,nav a[aria-current]{background:#18181b;color:#fafafa}main{padding:clamp(24px,5vw,72px);min-width:0}header{display:flex;align-items:end;justify-content:space-between;gap:24px;margin-bottom:32px}header p{color:#86efac;font:700 11px ui-monospace,monospace;letter-spacing:.14em}h1{font-size:clamp(32px,6vw,64px);letter-spacing:-.05em;margin:4px 0}header span,.usage span{color:#a1a1aa}.usage{text-align:right}.usage strong{display:block;font-size:24px}.usage span{font-size:12px}form{display:flex;align-items:end;gap:10px;margin-bottom:18px}label{display:grid;gap:7px;color:#a1a1aa;font-size:12px;flex:1}input,button{font:inherit;color:#fafafa;background:#18181b;border:1px solid #3f3f46;border-radius:8px;min-height:42px;padding:9px 12px}button{cursor:pointer;font-weight:650}.table{overflow:auto;border:1px solid #27272a;border-radius:12px}table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:13px 15px;border-bottom:1px solid #27272a;font-size:12px}th{color:#a1a1aa;font-weight:500}td a{color:#f4f4f5}td code{color:#86efac}.empty{text-align:center;color:#71717a;padding:48px}.next{display:inline-flex;color:#f4f4f5;margin-top:18px}.empty-state{max-width:620px}.empty-state p{color:#a1a1aa}@media(max-width:700px){body{display:block}nav{border-right:0;border-bottom:1px solid #27272a;padding:14px;display:flex;gap:4px;overflow:auto}nav strong{margin:auto 8px;white-space:nowrap}nav a{white-space:nowrap}main{padding:24px 16px}header{display:grid;align-items:start}.usage{text-align:left}form{align-items:stretch;flex-direction:column}}</style></head><body><nav><strong>Storage</strong>${bucketLinks}</nav><main>${body}</main>${historyScript}</body></html>`, {
       headers: {
         "cache-control": "no-store",
-        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        "content-security-policy": `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
         "content-type": "text/html; charset=utf-8",
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
@@ -1474,6 +1734,19 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       if (segments.length < 2) throw new BucketError(404, "BUCKET_ROUTE_NOT_FOUND", "Bucket route not found.");
       const [bucketName, operation, value, generation] = segments;
       const definition = definitionFor(bucketName!);
+      if (operation === "version-cap") {
+        if (!value || segments.length !== 3) throw new BucketError(404, "BUCKET_ROUTE_NOT_FOUND", "Bucket route not found.");
+        if (request.method !== "GET" && request.method !== "HEAD") throw new BucketError(405, "METHOD_NOT_ALLOWED", "Use GET or HEAD.");
+        const capability = await verifyCapability(value, "history");
+        if (capability.b !== definition.name) throw new BucketError(401, "INVALID_CAPABILITY", "Read capability is invalid.");
+        const row = statement("SELECT object_key FROM clank_bucket_versions WHERE bucket = ? AND owner_id = ? AND version_id = ?")
+          .get(definition.name, capability.u, capability.i);
+        if (!row) throw new BucketError(404, "BUCKET_VERSION_NOT_FOUND", "Retained generation is unavailable.");
+        const stored = await readVersion(definition, capability.u, String(row.object_key), capability.i);
+        if (capability.e <= finiteNow(now)) throw new BucketError(401, "INVALID_CAPABILITY", "Read capability expired.");
+        const headers = objectHeaders({ ...stored.metadata, id: stored.metadata.objectId, url: null, visibility: "private", cacheControl: "private, no-store" });
+        return new Response(request.method === "HEAD" ? null : stored.bytes, { headers });
+      }
       if (operation === "public") {
         if (definition.visibility !== "public" || !value || !generation || segments.length !== 4) {
           throw new BucketError(404, "BUCKET_OBJECT_NOT_FOUND", "Bucket object not found.");
@@ -1491,8 +1764,8 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
           const capability = await verifyCapability(value, "read");
           if (capability.b !== definition.name) throw new BucketError(401, "INVALID_CAPABILITY", "Read capability is invalid.");
           const row = rowForId(definition.name, capability.u, capability.i);
-          if (!row) throw new BucketError(404, "BUCKET_OBJECT_NOT_FOUND", "Bucket object not found.");
-          return await storedResponse(row, request);
+          if (!row || capability.g !== String(row.storage_key).split("/").at(-1)) throw new BucketError(404, "BUCKET_OBJECT_NOT_FOUND", "Bucket generation is no longer current.");
+          return await storedResponse(row, request, () => capability.e > finiteNow(now));
         }
         const operationName = request.method === "PUT" ? "write" : "resume";
         const capability = await verifyCapability(value, operationName);
@@ -1515,6 +1788,32 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
           cursor: url.searchParams.get("cursor") ?? undefined,
           limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
         }));
+      }
+      if (operation === "versions" && segments.length === 2) {
+        await requireBrowser(definition, context, request.method === "POST");
+        if (context.authenticated !== true) throw new BucketError(401, "BUCKET_AUTH_REQUIRED", "Sign in to inspect retained files.");
+        if (request.method === "GET") {
+          return jsonResponse({ versions: listVersions(definition, requiredString(url.searchParams.get("key"), "key"), { userId: context.userId }) });
+        }
+        if (request.method === "POST") {
+          const body = await readJson(request);
+          exactKeys(body, ["key", "versionId", "operationId", "ifSha256"], "restore version");
+          return jsonResponse({ object: await restoreVersion(definition, requiredString(body.key, "key"), requiredString(body.versionId, "versionId"), {
+            userId: context.userId, operationId: requiredString(body.operationId, "operationId"),
+            ifSha256: body.ifSha256 === null ? null : requiredString(body.ifSha256, "ifSha256"),
+          }, context.verifyCurrent) });
+        }
+      }
+      if (operation === "version-read-intents" && segments.length === 2 && request.method === "POST") {
+        await requireBrowser(definition, context, false);
+        if (context.authenticated !== true) throw new BucketError(401, "BUCKET_AUTH_REQUIRED", "Sign in to inspect retained files.");
+        const body = await readJson(request);
+        exactKeys(body, ["key", "versionId", "expiresInMs"], "version read intent");
+        guardCurrent(context.verifyCurrent);
+        const intent = await createVersionReadIntent(definition, requiredString(body.key, "key"), requiredString(body.versionId, "versionId"), {
+          userId: context.userId, expiresInMs: optionalNumber(body.expiresInMs, "expiresInMs"),
+        });
+        guardCurrent(context.verifyCurrent); return jsonResponse(intent);
       }
       if (operation === "object" && segments.length === 2) {
         const key = url.searchParams.get("key");
@@ -1576,6 +1875,10 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       delete: (key, deleteOptions) => deleteObject(definition, key, deleteOptions),
       createUploadIntent: (input) => createUploadIntent(definition, input),
       createReadIntent: (key, readOptions) => createReadIntent(definition, key, readOptions),
+      listVersions: (key, identity) => listVersions(definition, key, identity),
+      getVersion: (key, id, identity = {}) => readVersion(definition, ownerFor(definition, identity), bucketKey(key), boundedId(id, "version id")),
+      createVersionReadIntent: (key, id, readOptions) => createVersionReadIntent(definition, key, id, readOptions),
+      restoreVersion: (key, id, restoreOptions) => restoreVersion(definition, key, id, restoreOptions),
       transform: (key, variant, transformOptions = {}) => transform(definition, key, transformOptions, variant),
     });
     runtimes.set(name, value);
@@ -1720,6 +2023,18 @@ export function createBucketClient(nameInput: string, options: BucketClientOptio
         body: JSON.stringify({ key, expiresInMs }),
       }));
     },
+    async listVersions(key) {
+      return (await json<{ versions: readonly BucketVersion[] }>(await request(`${endpoint}/versions?key=${encodeURIComponent(key)}`, { credentials: "same-origin" }))).versions;
+    },
+    async createVersionReadIntent(key, versionId, expiresInMs) {
+      return json<BucketReadIntent>(await request(`${endpoint}/version-read-intents`, { method: "POST", credentials: "same-origin",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ key, versionId, expiresInMs }) }));
+    },
+    async restoreVersion(key, versionId, restoreOptions) {
+      const { operationId, ifSha256 } = restoreOptions;
+      return (await json<{ object: BucketObject }>(await request(`${endpoint}/versions`, { method: "POST", credentials: "same-origin",
+        headers: { "content-type": "application/json", ...csrfHeaders() }, body: JSON.stringify({ key, versionId, operationId, ifSha256 }) }))).object;
+    },
   });
 }
 
@@ -1784,7 +2099,7 @@ export function createBucketMcpTools<Context = unknown>(
     }, {
       name: `${prefix}_delete`,
       title: `Delete a ${definition.name} object`,
-      description: `Permanently deletes a ${definition.name} object.`,
+      description: `Deletes the current ${definition.name} object. Its retired bytes follow the declared retention policy.`,
       requiredScope: "agent:write",
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
       inputSchema: objectSchema({ key: { type: "string" }, ifSha256: { type: "string" } }, ["key"]),
@@ -1795,6 +2110,39 @@ export function createBucketMcpTools<Context = unknown>(
         }) };
       },
     });
+    if (definition.versions) {
+      tools.push({
+        name: `${prefix}_versions`, title: `Inspect retained ${definition.name} generations`,
+        description: "Lists bounded retained generations for the authenticated owner and exact file key.",
+        requiredScope: "agent:read", annotations: { readOnlyHint: true, openWorldHint: false },
+        inputSchema: objectSchema({ key: { type: "string" } }, ["key"]),
+        invoke(input, context) { return runtime.listVersions(requiredString(inputObject(input).key, "key"), identity(context)); },
+      }, {
+        name: `${prefix}_read_version`, title: `Read a retained ${definition.name} generation`,
+        description: "Reads an immutable retained generation, or returns an expiring capability for larger files.",
+        requiredScope: "agent:read", annotations: { readOnlyHint: true, openWorldHint: false },
+        inputSchema: objectSchema({ key: { type: "string" }, versionId: { type: "string" } }, ["key", "versionId"]),
+        async invoke(input, context) {
+          const value = inputObject(input), key = requiredString(value.key, "key"), id = requiredString(value.versionId, "versionId");
+          const owner = identity(context), stored = await runtime.getVersion(key, id, owner);
+          return stored.bytes.byteLength > maxInlineBytes
+            ? { version: stored.metadata, readIntent: await runtime.createVersionReadIntent(key, id, owner) }
+            : { version: stored.metadata, base64: base64Standard(stored.bytes) };
+        },
+      }, {
+        name: `${prefix}_restore_version`, title: `Restore a retained ${definition.name} generation`,
+        description: "Restores with an expected current digest (or expected absence) and a replay-safe operation ID.",
+        requiredScope: "agent:write", annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+        inputSchema: objectSchema({ key: { type: "string" }, versionId: { type: "string" }, operationId: { type: "string" }, ifSha256: { type: ["string", "null"] } }, ["key", "versionId", "operationId", "ifSha256"]),
+        invoke(input, context) {
+          const value = inputObject(input);
+          return runtime.restoreVersion(requiredString(value.key, "key"), requiredString(value.versionId, "versionId"), {
+            ...identity(context), operationId: requiredString(value.operationId, "operationId"),
+            ifSha256: value.ifSha256 === null ? null : requiredString(value.ifSha256, "ifSha256"),
+          });
+        },
+      });
+    }
     if (definition.image && Object.keys(definition.image.variants).length > 0) {
       tools.push({
         name: `${prefix}_transform`,
@@ -1891,6 +2239,7 @@ function normalizeDefinitions(
       resumable: raw.resumable,
       maxChunkBytes: raw.maxChunkBytes,
       image: raw.image,
+      versions: raw.versions,
     });
     if (map.has(definition.name)) throw new TypeError(`Duplicate bucket definition: ${definition.name}.`);
     map.set(definition.name, definition);
@@ -1903,6 +2252,27 @@ function boundedName(value: unknown): string {
     throw new TypeError("Bucket names must start with a lowercase letter and contain only lowercase letters, digits, and hyphens.");
   }
   return value;
+}
+
+function normalizeVersionPolicy(value: BucketVersionPolicy): BucketVersionPolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("versions must be a bounded retention policy.");
+  exactKeys(value, ["maxAgeMs", "maxPerObject", "maxVersions", "maxBytes", "perOwnerMaxBytes"], "version policy");
+  const maxBytes = integer(value.maxBytes, "retained maxBytes", 1, Number.MAX_SAFE_INTEGER);
+  return deepFreeze({
+    maxAgeMs: integer(value.maxAgeMs, "maxAgeMs", 1000, 365 * 86400000),
+    maxPerObject: integer(value.maxPerObject, "maxPerObject", 1, 100),
+    maxVersions: integer(value.maxVersions, "maxVersions", 1, 1000),
+    maxBytes,
+    perOwnerMaxBytes: integer(value.perOwnerMaxBytes, "retained perOwnerMaxBytes", 1, maxBytes),
+  });
+}
+
+function guardCurrent(verify?: () => void): void {
+  const result = verify?.() as unknown;
+  if (result && (typeof result === "object" || typeof result === "function") && typeof Reflect.get(result, "then") === "function") {
+    void Promise.resolve(result).catch(() => undefined);
+    throw new TypeError("Bucket credential refresh must be synchronous.");
+  }
 }
 
 function exactKeys(value: object, allowed: readonly string[], label: string): void {
