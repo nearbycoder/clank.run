@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile, writeFile, chmod, symlink, lstat } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, chmod, symlink, lstat, mkdir, readdir, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir, uptime } from 'node:os';
 import { createHmac } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { certifyLinuxHost, inspectLinuxHostCertification, requireCurrentLinuxHostCertification } from '../dist/host-certification.js';
 
 const profile = (mount) => ({ mode: 'docker-isolated', image: `node@sha256:${'a'.repeat(64)}`, user: '1000:1000',
@@ -15,6 +16,23 @@ const signed = async (directory, report) => {
   const key = await readFile(join(directory, 'key'));
   await writeFile(join(directory, 'report.json'), JSON.stringify({ report, signature: createHmac('sha256', key).update(JSON.stringify(report)).digest('hex') }));
 };
+
+// Concurrent build tests deliberately add/remove dist files. Bind this fixture
+// to its own installation rather than requiring that mutable tree to stay fixed.
+async function isolatedInstallation(root) {
+  const installation = join(root, 'installation'), distribution = join(installation, 'dist');
+  await mkdir(distribution, { recursive: true, mode: 0o700 });
+  await mkdir(join(installation, 'scripts'), { mode: 0o700 });
+  await writeFile(join(installation, 'package.json'), '{"type":"module"}', { mode: 0o600 });
+  const modules = (await readdir(new URL('../src/', import.meta.url)))
+    .filter(name => /\.tsx?$/.test(name) && !name.endsWith('.d.ts'))
+    .map(name => name.replace(/\.tsx?$/, '.js'));
+  for (const name of [...modules, 'agent-setup-prompt.js'])
+    await copyFile(new URL(`../dist/${name}`, import.meta.url), join(distribution, name));
+  const cli = join(installation, 'scripts/clank-provider.mjs');
+  await copyFile(new URL('../scripts/clank-provider.mjs', import.meta.url), cli);
+  return { cli, ...await import(pathToFileURL(join(distribution, 'host-certification.js')).href) };
+}
 
 test('certification captures only static bounded policies and rejects unsafe or unsupported input before writing', async () => {
   const root = await mkdtemp(join(tmpdir(), 'clank-cert-input-'));
@@ -41,6 +59,7 @@ test('certification captures only static bounded policies and rejects unsafe or 
 test('aborted actual attempts persist an authenticated blocked report; detached inspection rejects tampering, expiry and changed policy', async () => {
   const root = await mkdtemp(join(tmpdir(), 'clank-cert-state-'));
   try {
+    const { cli, certifyLinuxHost, inspectLinuxHostCertification, requireCurrentLinuxHostCertification } = await isolatedInstallation(root);
     const directory = join(root, 'reports'), selected = profile(root), signal = AbortSignal.abort();
     const report = await certifyLinuxHost({ directory, profile: selected, disposable: true, quotaId: 2147481001, signal });
     assert.equal(report.status, 'blocked'); assert.equal(report.checks.length, 7); assert.equal(report.checks.some(check => check.status === 'passed'), false);
@@ -50,7 +69,7 @@ test('aborted actual attempts persist an authenticated blocked report; detached 
     assert.equal((await inspectLinuxHostCertification({ directory, profile: selected })).reason, 'blocked');
     await assert.rejects(requireCurrentLinuxHostCertification({ directory, profile: selected }), { code: 'LINUX_HOST_CERTIFICATION_REQUIRED', reason: 'blocked' });
     const config = join(root, 'config.json'); await writeFile(config, JSON.stringify({ directory, profile: selected }));
-    const child = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', 'scripts/clank-provider.mjs', 'certification', '--config', config], { encoding: 'utf8', timeout: 30000 });
+    const child = spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', cli, 'certification', '--config', config], { encoding: 'utf8', timeout: 30000 });
     assert.equal(child.status, 1, child.stderr); assert.equal(JSON.parse(child.stdout).reason, 'blocked');
     assert.equal((await inspectLinuxHostCertification({ directory, profile: { ...selected, memory: '256m' } })).reason, 'policy-changed');
     const saved = await readFile(join(directory, 'report.json'), 'utf8'), envelope = JSON.parse(saved);

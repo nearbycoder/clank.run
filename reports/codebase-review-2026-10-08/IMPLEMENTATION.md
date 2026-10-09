@@ -20,6 +20,9 @@ privileged skips; coverage 92.12/80.47/90.42 line/branch/function. All 22 packed
 pass with 159 existing source diagnostics against the unchanged 163 allowance. Documentation,
 conformance and security checks pass. The 403-file package shrinks by 329,823 bytes to
 5,946,809, leaving 344,647 under the unchanged 6 MiB ceiling. No additional feature is counted.
+Hosted Node 22 exposed concurrent build output changes during a certification fixture. The
+fixture now uses a private immutable installation snapshot, preserving every strict admission
+assertion; all four focused cases and the revised complete local gate pass.
 See [compiler strip evidence](compiler-strip-review.json). Existing immutable artifact bytes
 are preserved; updated framework installations need fresh host certification.
 

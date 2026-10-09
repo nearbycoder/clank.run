@@ -69,6 +69,32 @@
       "cancelled": 0,
       "skipped": 3,
       "coverage": {
+        "lines": 92.11,
+        "branches": 80.39,
+        "functions": 90.43
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-check-isolated-7e4c4c0df0dcbbaec47e375f07bb5c3ff24ce5f6bebeb94e9e7a33c7b52a0ae7.log",
+      "sha256": "7e4c4c0df0dcbbaec47e375f07bb5c3ff24ce5f6bebeb94e9e7a33c7b52a0ae7"
+    },
+    "initialReleaseFailure": {
+      "status": "failed, corrected before final validation",
+      "failures": 1,
+      "reason": "Unchanged browser gzip ceilings caught native strip retaining core/forms source comments. No ceiling relaxation or skipped failure.",
+      "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-check-903065d740a803a884d055e5140da9f020c4f565fc829d127a6b1ded1b34e64f.log",
+      "sha256": "903065d740a803a884d055e5140da9f020c4f565fc829d127a6b1ded1b34e64f"
+    },
+    "priorRelease": {
+      "status": "passed",
+      "node": "22.16.0",
+      "tests": 1868,
+      "pass": 1865,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
         "lines": 92.12,
         "branches": 80.47,
         "functions": 90.42
@@ -79,12 +105,21 @@
       "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-check-final-4439953e0a6a6a54e133b713fbf56d7d14d861af67ecbd2fad63c993aa967876.log",
       "sha256": "4439953e0a6a6a54e133b713fbf56d7d14d861af67ecbd2fad63c993aa967876"
     },
-    "initialReleaseFailure": {
-      "status": "failed, corrected before final validation",
-      "failures": 1,
-      "reason": "Unchanged browser gzip ceilings caught native strip retaining core/forms source comments. No ceiling relaxation or skipped failure.",
-      "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-check-903065d740a803a884d055e5140da9f020c4f565fc829d127a6b1ded1b34e64f.log",
-      "sha256": "903065d740a803a884d055e5140da9f020c4f565fc829d127a6b1ded1b34e64f"
+    "certificationFixture": {
+      "tests": 4,
+      "pass": 4,
+      "fail": 0,
+      "scope": "Actual certification module/CLI loaded from a private immutable installation snapshot; strict blocked/tamper/expiry/binding assertions remain.",
+      "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-cert-isolated-a9b67e962139abc8201367f323e3744c8be1ed61f230ff0676dd7209115cecf3.log",
+      "sha256": "a9b67e962139abc8201367f323e3744c8be1ed61f230ff0676dd7209115cecf3"
+    },
+    "initialHostedFailure": {
+      "headRevision": "09b0d7c5210e285d76748ae6ba39cc8d8e48bc60",
+      "jobId": 113775151650,
+      "ciRun": 37916887050,
+      "reason": "Concurrent build test creates/removes dist/stale-build-output.js; certification correctly notices the framework change, but the ordinary fixture incorrectly required an unchanged installation. Snapshot fixture isolates its installation; no admission assertion relaxed.",
+      "path": "/tmp/clank-review-2026-10-08/compiler-strip-evidence/compiler-strip-hosted-failure-90f89ad593438cb5a4b50722fc2e4e78ad7a85410140efdee2c3793bc503bd15.log",
+      "sha256": "90f89ad593438cb5a4b50722fc2e4e78ad7a85410140efdee2c3793bc503bd15"
     }
   },
   "compatibility": {
@@ -102,7 +137,8 @@
     "src/core.d.ts": "30b48d7f9d0c11f9f4be63e275272b8ae5ba774ba3168e22aa6cbf04df14aaf2",
     "src/forms.ts": "360c351fcaa16f25a055c7ba1f5408a9b677f8319a81506d9d5aa546de60ef20",
     "docs/development-tools.md": "07f5db78429933583eaffcbc835d4e5869aa18f26ae642500e08c9f307f4dff7",
-    "CHANGELOG.md": "947a4edbf21cba532895c4e3ade174772f780bb7e4ae80788e3845b84e0fd6b0"
+    "CHANGELOG.md": "947a4edbf21cba532895c4e3ade174772f780bb7e4ae80788e3845b84e0fd6b0",
+    "tests/host-certification.test.mjs": "dbe8d2bbcfe6a0338da85a002cb69be0f49dc98891bcc5085bf5dbfcc520fbc1"
   },
   "preservedExistingFiles": 23,
   "roadmap": {
