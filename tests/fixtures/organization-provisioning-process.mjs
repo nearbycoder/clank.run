@@ -19,7 +19,7 @@ runtime=await openBackend(defineBackend({schema:defineDatabase({}),auth:defineAu
 })),{path:join(config.directory,'control.sqlite'),changePollIntervalMs:25});
 const server=await serve(async request=>{
  const path=new URL(request.url).pathname;
- const response=await (/^\/__clank\/(?:live|query|mcp)(?:\/|$)/u.test(path)?runtime:platform).handle(request);
+ const response=await (/^\/__clank\/(?:live|query|mcp|oauth)(?:\/|$)/u.test(path)?runtime:platform).handle(request);
  if(path.startsWith('/scim/v2/')&&response.ok&&request.method==='PATCH'&&request.headers.get('x-fixture-lose-response')==='accepted'){
   process.send({accepted:true});await new Promise(()=>{});
  }

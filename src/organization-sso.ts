@@ -2,7 +2,6 @@ import { AuthError, type AuthRuntime, type AuthUserId } from "./auth.ts";
 import type { SQLiteDatabase } from "./backend.ts";
 import { readJsonRequest, readRequestBytes, RequestInputError } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal, type SQLiteInternalChangeRecorder } from "./sqlite-internal.ts";
-import { createHash } from "node:crypto";
 
 export interface OrganizationProvisioningPolicy {
   /** Separate expiring SCIM credential; never an OIDC or offboarding credential. */
@@ -57,6 +56,9 @@ export interface OrganizationSso {
 
 /** OIDC authorization-code+PKCE sign-in with durable issuer/subject bindings and atomic offboarding. */
 export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRuntime<any>, options: OrganizationSsoOptions): OrganizationSso {
+  // The browser-compatible barrel may export this server API. Load the
+  // synchronous builtin only when a server actually opens its SSO service.
+  const { createHash } = (globalThis as any).process.getBuiltinModule("node:crypto");
   const sql = database[SQLITE_INTERNAL], prefix = options.prefix ?? "/__clank/sso";
   if (!/^\/[A-Za-z0-9_/-]+$/u.test(prefix) || prefix.endsWith("/") || prefix.includes("//")) throw new TypeError("Invalid SSO prefix.");
   const applicationOrigin = endpoint(options.applicationOrigin, options.allowInsecureLoopback).origin;

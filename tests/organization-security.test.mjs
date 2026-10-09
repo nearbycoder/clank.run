@@ -552,15 +552,26 @@ test('SCIM accepted disable survives controller SIGKILL and closes another proce
   const startDevice=await pcall(f,'/api/device/start',{clientName:'Cross-process CLI'},undefined,201);
   await pcall(f,'/api/device/approve',{code:startDevice.userCode},f.member);const cli=await pcall(f,'/api/device/token',{deviceCode:startDevice.deviceCode});
   let first=await start();const second=await start();
-  const oauth='scim-cross-process-generic-oauth-'+crypto.randomUUID(),digest=createHash('sha256').update(oauth).digest('base64url');
-  f.sql.prepare('INSERT INTO clank_oauth_clients(client_id,client_name,redirect_uris,created_at) VALUES(?,?,?,?)').run('scim-process-client','Cross-process MCP','[]',Date.now());
-  f.sql.prepare("INSERT INTO clank_oauth_tokens(token_hash,kind,family_id,client_id,user_id,scope,resource,expires_at,created_at) VALUES(?,'access',?,?,?,'agent:read',?,?,?)")
-   .run(digest,'scim-process-family','scim-process-client',f.member.user.id,origin+'/__clank/mcp',Date.now()+60000,Date.now());
   const browser={cookie:f.member.cookie};
   const initialBrowser=await http(second,'/api/projects/'+f.project.id,{headers:browser});
   assert.equal(initialBrowser.status,200,await initialBrowser.clone().text());
   assert.equal((await http(second,'/api/projects/'+f.project.id,{headers:{authorization:'Bearer '+cli.accessToken}})).status,200);
-  const mcp={method:'POST',headers:{authorization:'Bearer '+oauth,'content-type':'application/json',accept:'application/json, text/event-stream',
+  const registered=await http(second,'/__clank/oauth/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
+   client_name:'Cross-process SCIM agent',redirect_uris:[second.url+'/fixture/callback'],grant_types:['authorization_code','refresh_token'],response_types:['code'],token_endpoint_auth_method:'none'})});
+  assert.equal(registered.status,201,await registered.clone().text());const client=await registered.json();
+  const verifier=Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
+  const challenge=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier))).toString('base64url');
+  const authorization={client_id:client.client_id,redirect_uri:client.redirect_uris[0],response_type:'code',state:'scim-process-client-state',
+   code_challenge:challenge,code_challenge_method:'S256',scope:'agent:read',resource:origin+'/__clank/mcp'};
+  const consent=await http(second,'/__clank/oauth/authorize?'+new URLSearchParams(authorization),{headers:browser});
+  assert.equal(consent.status,200,await consent.clone().text());const html=await consent.text(),consentToken=/name="consent_token" value="([^"]+)"/u.exec(html)?.[1];assert.ok(consentToken);
+  const approved=await http(second,'/__clank/oauth/authorize',{method:'POST',redirect:'manual',headers:{...browser,origin,'content-type':'application/x-www-form-urlencoded'},
+   body:new URLSearchParams({...authorization,csrf_token:f.member.csrf,consent_token:consentToken,decision:'approve'})});
+  assert.equal(approved.status,303,await approved.clone().text());const callback=new URL(approved.headers.get('location'));assert.equal(callback.origin,second.url);assert.equal(callback.searchParams.get('state'),authorization.state);
+  const exchanged=await http(second,'/__clank/oauth/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({
+   grant_type:'authorization_code',client_id:client.client_id,code:callback.searchParams.get('code'),redirect_uri:client.redirect_uris[0],code_verifier:verifier,resource:authorization.resource})});
+  assert.equal(exchanged.status,200,await exchanged.clone().text());const delegated=await exchanged.json();assert.ok(delegated.access_token);
+  const mcp={method:'POST',headers:{authorization:'Bearer '+delegated.access_token,'content-type':'application/json',accept:'application/json, text/event-stream',
    'mcp-protocol-version':'2026-07-28','mcp-method':'tools/list'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{_meta:{
     'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientInfo':{name:'scim-fixture',version:'1'},'io.modelcontextprotocol/clientCapabilities':{}}}})};
   const listed=await http(second,'/__clank/mcp',mcp);assert.equal(listed.status,200,await listed.clone().text());
