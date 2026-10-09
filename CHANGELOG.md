@@ -8,6 +8,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   deadlines and exact retry receipts without holding worker leases. Require current
   reviewed-action execution for human decisions, fence resume tokens by current policy,
   and serialize resume, cancellation and timeout in SQLite transactions.
+  Wrap long approval previews on phones and return native HTML form decisions to the inbox;
+  preserve JSON and non-HTML client responses.
 
 - Fence retired organization offboarding credentials against the current persisted provider
   snapshot, including requests waiting for their body. Preserve dedicated and linking-disabled

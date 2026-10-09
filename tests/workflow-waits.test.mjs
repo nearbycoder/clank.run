@@ -223,6 +223,25 @@ test('affected-record changes and revoked sessions cannot commit a human wait', 
   } finally { await f.close(); }
 });
 
+test('native browser decision forms return to the approval inbox while JSON clients keep their response', async () => {
+  const f = await humanFixture(); try {
+    const owner = await register(f.runtime), caller = await f.runtime.caller(request('/', undefined, owner));
+    const itemId = caller.mutation('add', {}).value, run = caller.mutation('start', { label: 'Browser review' }).value;
+    const plan = f.runtime.reviewedActions.plan('resume', { workflowId: run.id, itemId, value: 'approved', key: 'browser-redirect-key-001' }, owner.auth);
+    const form = new Request(origin + '/__clank/approvals/decide', { method: 'POST', headers: { origin, cookie: owner.cookie,
+      accept: 'text/html,application/xhtml+xml', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ id: plan.id, decision: 'approve', csrf: owner.csrf }) });
+    const response = await f.runtime.handle(form);
+    assert.equal(response.status, 303); assert.equal(response.headers.get('location'), '/__clank/approvals');
+    assert.equal(f.runtime.reviewedActions.inbox(owner.auth)[0].status, 'approved');
+    assert.equal(f.runtime.jobs.getWorkflow(run.id).state, 'waiting');
+    const another = caller.mutation('start', { label: 'JSON review' }).value;
+    const jsonPlan = f.runtime.reviewedActions.plan('resume', { workflowId: another.id, itemId, value: 'approved', key: 'browser-redirect-key-002' }, owner.auth);
+    const jsonResponse = await f.runtime.handle(request('/__clank/approvals/decide', { id: jsonPlan.id, decision: 'approve' }, owner));
+    assert.equal(jsonResponse.status, 200); assert.equal((await jsonResponse.json()).plan.status, 'approved');
+  } finally { await f.close(); }
+});
+
 async function controller(path) {
   const child = fork(new URL('./fixtures/workflow-wait-process.mjs', import.meta.url), [path], { execArgv: ['--disable-warning=ExperimentalWarning'], stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let diagnostic = ''; child.stdout.on('data', data => { diagnostic += data; }); child.stderr.on('data', data => { diagnostic += data; });

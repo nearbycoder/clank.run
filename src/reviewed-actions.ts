@@ -340,6 +340,9 @@ export function openReviewedActions(database: SQLiteDatabase<any>, authRuntime: 
           await authRuntime.verifyCsrf(proof, auth);
         } else { await authRuntime.verifyCsrf(request, auth); input = await readJsonRequest(request, 8192); }
         const plan = runtime.decide(input.id, input.decision, auth);
+        if (type.startsWith("application/x-www-form-urlencoded") && request.headers.get("accept")?.includes("text/html")) {
+          return new Response(null, { status: 303, headers: { ...headers, location: prefix } });
+        }
         return Response.json({ plan }, { headers });
       } catch (error) {
         const known = error instanceof AuthError || error instanceof RequestInputError;

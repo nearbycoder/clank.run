@@ -348,6 +348,9 @@ private wait reads are not application record dependencies. The reviewed-action 
 requester and approver sessions, permission, expiry and declared record dependencies before its
 synchronous execution. A raw decision resume outside this accepted execution is refused, including
 after the reviewed action finishes. Owned runs require the reviewed requester to be their owner.
+The native approval inbox wraps long previews and returns HTML form decisions to the inbox with
+their updated status. JSON and non-HTML clients retain their decision response. Approval alone
+does not resume the wait; the authorized requester must commit the reviewed action.
 
 Inside that accepted action, or inside a separately authenticated external-event adapter, submit:
 
