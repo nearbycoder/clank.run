@@ -13,6 +13,9 @@ and its key as operator credentials; application tenants must never access them.
 ## Prepare an explicit disposable profile
 
 Use Node 22.16+, Bubblewrap, util-linux, nftables, iproute2, procps, XFS tools and Docker.
+V1 passing profiles require an operator process with real/effective UID 0, so every
+privileged attempt uses the same root-owned host-wide lock. Delegated capability profiles
+are unsupported; an unprivileged diagnostic attempt can only produce a blocked result.
 Preload an operator-selected Node image, then use its immutable `@sha256` reference.
 Mount a **new disposable** XFS filesystem with project accounting/enforcement (`prjquota`).
 Never point this proof at a shared Docker daemon, live project or a filesystem that may
@@ -129,6 +132,8 @@ code; local authentication does not claim protection from the host administrator
 
 Attempts are exclusive per private directory and, for root, across the host through
 `/run/clank-host-certification.attempt`. The old report is invalidated before probing. A
+root inspection also rejects this host-wide marker, including attempts using another
+private report directory, before reading a certificate and again after host sampling. A
 completed report is atomically renamed; a lost response can be recovered by inspection in
 a new process. A forced process death leaves an attempt marker, so inspection remains
 blocked even if an earlier report existed. Attempts are never automatically unlocked by

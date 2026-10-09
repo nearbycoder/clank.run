@@ -22,7 +22,7 @@
       "pass": 4,
       "fail": 0,
       "skipped": 0,
-      "path": "/tmp/clank-review-2026-10-08/host-certification-focused.log",
+      "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/host-certification-focused-059437efbf429a1448832a50b0d3f8ad1deba131b3611d3ebf1b1cad1a50a120.log",
       "sha256": "059437efbf429a1448832a50b0d3f8ad1deba131b3611d3ebf1b1cad1a50a120",
       "scope": "Initial ordinary focused run; same four tests also pass in the final full gate after subsequent review fixes."
     },
@@ -35,7 +35,7 @@
       "newDiagnostics": 0,
       "packedFixtures": 22,
       "skipLibCheck": false,
-      "path": "/tmp/clank-review-2026-10-08/host-certification-types-final.log",
+      "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/host-certification-types-final-16ea040c3b60684fd9817834e3ddef3267216b76c9a5ee8cbdd67a033ca54cd4.log",
       "sha256": "16ea040c3b60684fd9817834e3ddef3267216b76c9a5ee8cbdd67a033ca54cd4"
     },
     "release": {
@@ -47,7 +47,7 @@
       "cancelled": 0,
       "skipped": 3,
       "coverage": {
-        "lines": 87.56,
+        "lines": 87.54,
         "branches": 80.5,
         "functions": 90.43
       },
@@ -55,22 +55,22 @@
       "packagedConformance": "passed",
       "securityTreePackageHistory": "passed",
       "publishFiles": 403,
-      "unpackedBytes": 6276337,
+      "unpackedBytes": 6276632,
       "fileCeiling": 403,
       "byteCeiling": 6291456,
-      "path": "/tmp/clank-review-2026-10-08/host-certification-check-final.log",
-      "sha256": "f4c9daee7f1724a465eb2955a50f7f777b2491bc433a8c230e17d929c2c002d0"
+      "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/host-certification-check-final-b10ba714e15f5ed053f6217ed2b4791461a3fdc9647cdbbf3fdb05bad984cd2d.log",
+      "sha256": "b10ba714e15f5ed053f6217ed2b4791461a3fdc9647cdbbf3fdb05bad984cd2d"
     },
     "pack": {
-      "path": "/tmp/clank-review-2026-10-08/host-certification-pack-final.json",
-      "sha256": "2a4d79df17dec848bddbe4dbd194e4e250bed73964e9d945bf0f915bf1bf1cd3"
+      "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/host-certification-pack-final-c0ecf69d0be8cff8a408db6bdbd6be251696fad34907f373fa720e5fc68c2142.json",
+      "sha256": "c0ecf69d0be8cff8a408db6bdbd6be251696fad34907f373fa720e5fc68c2142"
     },
     "existingRealGuestProbes": {
       "tests": 23,
       "pass": 23,
       "fail": 0,
       "skipped": 0,
-      "path": "/tmp/clank-disposable-linux-cwb5c3a6/guest-existing-probes.log",
+      "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/guest-existing-probes-b2387becf1837d8c9238f78aac44e695506c6df8a298bdbffc61612bf14f86d1.log",
       "sha256": "b2387becf1837d8c9238f78aac44e695506c6df8a298bdbffc61612bf14f86d1",
       "scope": "Actual existing privileged Docker/XFS plus namespace and SQLite isolation/sandbox regressions. Supporting modules remain unchanged in final source."
     },
@@ -88,13 +88,13 @@
             "name": "allowed",
             "report": {
               "protocol": "clank-linux-host-certification/1",
-              "id": "7d32d8b4-2012-4da4-aea6-04f5eb61ee95",
+              "id": "d0220454-e3d7-4a6b-8015-bda4e23e927d",
               "status": "passed",
-              "createdAt": 1791537626990,
-              "expiresAt": 1791541226990,
-              "bootUptimeMs": 2535260,
+              "createdAt": 1791539240456,
+              "expiresAt": 1791542840456,
+              "bootUptimeMs": 4148729,
               "policyDigest": "e493b8490dd25cf2e870dfda7241b037affe6915508c278fe81f94ba221d06c5",
-              "hostDigest": "4df367dd5ab628a1c23003c905aa0553981dbc4278db5254bddb2f283056f0c5",
+              "hostDigest": "8e6fb672d7db8c822f8bf8a8666bcdc653b59f8faaee0040264f14bbf3c5d362",
               "checks": [
                 {
                   "capability": "namespaces",
@@ -138,13 +138,13 @@
             "name": "namespace-denied",
             "report": {
               "protocol": "clank-linux-host-certification/1",
-              "id": "9500511c-c790-48cc-862f-e96bd87fd98f",
+              "id": "6283fce5-c0a4-42e9-9344-333e270a3fa4",
               "status": "blocked",
-              "createdAt": 1791537628152,
-              "expiresAt": 1791541228152,
-              "bootUptimeMs": 2536360,
+              "createdAt": 1791539241675,
+              "expiresAt": 1791542841675,
+              "bootUptimeMs": 4149880,
               "policyDigest": "e493b8490dd25cf2e870dfda7241b037affe6915508c278fe81f94ba221d06c5",
-              "hostDigest": "0b58c8347d8606196c9009b4a1f212b3b9dca3c1c4f4968d49676896779439c5",
+              "hostDigest": "f9c42bc57de556b550cd48bae3b0cf70b3e02822b52ebf7a1646822ad97f727d",
               "checks": [
                 {
                   "capability": "namespaces",
@@ -188,13 +188,13 @@
             "name": "deny-all-egress",
             "report": {
               "protocol": "clank-linux-host-certification/1",
-              "id": "d55aa369-d9d7-48ae-8613-8b29b4c6d79d",
+              "id": "cb50a17d-27cb-46f5-bd7b-81660865657f",
               "status": "passed",
-              "createdAt": 1791537643413,
-              "expiresAt": 1791541243413,
-              "bootUptimeMs": 2551680,
+              "createdAt": 1791539256790,
+              "expiresAt": 1791542856790,
+              "bootUptimeMs": 4165050,
               "policyDigest": "6f80587bbf3a262832b718c74b9013b5298151e6c77e5662e882d73c1b1eca3b",
-              "hostDigest": "4df367dd5ab628a1c23003c905aa0553981dbc4278db5254bddb2f283056f0c5",
+              "hostDigest": "8e6fb672d7db8c822f8bf8a8666bcdc653b59f8faaee0040264f14bbf3c5d362",
               "checks": [
                 {
                   "capability": "namespaces",
@@ -238,13 +238,13 @@
             "name": "missing-image",
             "report": {
               "protocol": "clank-linux-host-certification/1",
-              "id": "4be11039-f591-4f16-896e-b7ab2b3623ae",
+              "id": "16a52f57-a0b6-45af-9637-83a7430d7fd6",
               "status": "blocked",
-              "createdAt": 1791537654434,
-              "expiresAt": 1791541254434,
-              "bootUptimeMs": 2562640,
+              "createdAt": 1791539267841,
+              "expiresAt": 1791542867841,
+              "bootUptimeMs": 4176050,
               "policyDigest": "ae2dfef734d4fc065604c530f09b4da009c2895a571ac801f10035c80cf5a41b",
-              "hostDigest": "0fa6fb9379ab578e658780f5edbd8c88434ad5b68456fc361ca3900eed8443a4",
+              "hostDigest": "d2c56f8b8d5ec447c022c694c326069648c8fd883f3ad187966be35288bfe3e1",
               "checks": [
                 {
                   "capability": "namespaces",
@@ -295,13 +295,13 @@
             "name": "cleanup-denied",
             "report": {
               "protocol": "clank-linux-host-certification/1",
-              "id": "c7a2c987-e3e6-4559-b3ab-4d1e00aa0efd",
+              "id": "82a1c127-93d2-4b5d-af45-440be9f42221",
               "status": "blocked",
-              "createdAt": 1791537669889,
-              "expiresAt": 1791541269889,
-              "bootUptimeMs": 2578160,
+              "createdAt": 1791539283474,
+              "expiresAt": 1791542883474,
+              "bootUptimeMs": 4191750,
               "policyDigest": "e493b8490dd25cf2e870dfda7241b037affe6915508c278fe81f94ba221d06c5",
-              "hostDigest": "4df367dd5ab628a1c23003c905aa0553981dbc4278db5254bddb2f283056f0c5",
+              "hostDigest": "8e6fb672d7db8c822f8bf8a8666bcdc653b59f8faaee0040264f14bbf3c5d362",
               "checks": [
                 {
                   "capability": "namespaces",
@@ -351,12 +351,12 @@
         "finalOwnedRuntimesEmpty": true,
         "finalOwnedLinksEmpty": true
       },
-      "path": "/tmp/clank-disposable-linux-cwb5c3a6/certification-acceptance.log",
-      "sha256": "e8b1c08d0c7599ffa473dfbb77f306c1b08f75fabca23ba8720350aed57ffb9a",
-      "compiledModuleSha256": "96f406dc28b80b038ddde38ee0f2fcb57c48a469d7e096af05c13a0be94413a2",
+      "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/certification-acceptance-10036730ccae5e988e70366483ccaf0a143b40eedde4c11d1bbadddc94607794.log",
+      "sha256": "10036730ccae5e988e70366483ccaf0a143b40eedde4c11d1bbadddc94607794",
+      "compiledModuleSha256": "b4aac2ec9952b4a215e7d2f39e149f01d62a731a2510fa74a511057f1d6b225b",
       "immutableSourceArchive": {
-        "path": "/tmp/clank-disposable-linux-cwb5c3a6/certification-source-final.tar",
-        "sha256": "e7e5968b899eff94c7849f843a54fd9ce381e496fdf57448c5ee29337bc9385c"
+        "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/certification-source-final-20155c5eef0985ec17e0da9f008ad6190a097b8b7d1b72b4820492e453b0201e.tar",
+        "sha256": "20155c5eef0985ec17e0da9f008ad6190a097b8b7d1b72b4820492e453b0201e"
       }
     }
   },
@@ -375,7 +375,7 @@
     "qemuPackages": {
       "count": 17,
       "verification": "Detached PGP signatures verified against installed distribution keyrings before extraction into a private scratch runtime; no system package install.",
-      "path": "/tmp/clank-disposable-linux-cwb5c3a6/verified-packages.json",
+      "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/verified-packages-f8eb82b6ba40b5a776ffb1a2e1e358e40ef2569aac099b8420d0fb942e59495e.json",
       "sha256": "f8eb82b6ba40b5a776ffb1a2e1e358e40ef2569aac099b8420d0fb942e59495e"
     },
     "image": {
@@ -386,11 +386,11 @@
       "verification": "Matched official HTTPS-distributed Debian SHA512SUMS; no detached signature provided by this directory."
     },
     "imageMetadata": {
-      "path": "/tmp/clank-disposable-linux-cwb5c3a6/verified-image.json",
+      "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/verified-image-23b66e4eb0c7c74842be9e91258d36c841049129c1c7f7c84b0a6a88a31de69a.json",
       "sha256": "23b66e4eb0c7c74842be9e91258d36c841049129c1c7f7c84b0a6a88a31de69a"
     },
     "launch": {
-      "path": "/tmp/clank-disposable-linux-cwb5c3a6/launch-boot-order.json",
+      "path": "/tmp/clank-review-2026-10-08/host-certification-evidence/launch-boot-order-cce0a9a01bc00ddde123e9bbcf7fb19cfaeeb160b24b4fee8ace9cadd924fbd3.json",
       "sha256": "cce0a9a01bc00ddde123e9bbcf7fb19cfaeeb160b24b4fee8ace9cadd924fbd3"
     },
     "cleanup": "Guest namespace setting and nft executable permissions restored. No owned provider runtimes, certification links/routes/firewall tables or test files remain; completed reserved quotas have zero usage and cleared limits. Interrupted/denied-cleanup markers removed only after exact explicit owned cleanup in the guarded driver. Guest remains available for subsequent provider feature verification."
@@ -401,24 +401,25 @@
     "Force the local Unix Docker daemon and a private clean launcher context.",
     "Boundly wait for XFS delayed deallocation; never clear a quota with outstanding usage.",
     "Retain attempt markers on uncertain final cleanup and verify potentially uncertain routes/links.",
+    "Check the host-wide attempt marker before and after sampling even when the active probe uses another private report directory.",
     "Use deferred imports inside the embedded runner to preserve the browser import contract.",
     "Fsync private keys/reports and the publication directory; verify current report bytes and expiry after fresh host sampling."
   ],
   "limits": [
-    "V1 static isolated-Docker profiles only; 4\u201364 MiB aligned persistent quota and 32\u2013128 inode limits, 128 MiB\u20132 GiB container memory, 0.1\u20134 CPUs and 16\u201332768 PIDs. Larger/different policies cannot reuse this certificate.",
+    "V1 passing profiles require real/effective root UID and the root-owned host-wide lock; delegated capability profiles are unsupported. Static isolated-Docker profiles only; 4\u201364 MiB aligned persistent quota and 32\u2013128 inode limits, 128 MiB\u20132 GiB container memory, 0.1\u20134 CPUs and 16\u201332768 PIDs. Larger/different policies cannot reuse this certificate.",
     "Controlled representative allowed/denied IPv4 addresses and selected pinned names are sampled; universal public allow policies without a denied-public control are unsupported. External availability/DNS and every possible exhaustion behavior are not attested.",
     "Certification is an expiring point-in-time measurement, not continuous monitoring or protection from a compromised host operator. Arbitrary external policy-file changes are not attested.",
     "Forced crash cleanup is explicit operator work; no age-based automatic unlock or recycled live quota assignment. A running SQLite task settles or hits its fixed deadline before cancellation cleanup.",
     "No production Railway certificate, production deployment, provider leadership/failover/handoff, fleet simulation or remote PITR acceptance is claimed. The existing ordinary gate still has its three privileged skips; the real guest suite separately runs with zero skips."
   ],
   "sourceHashes": {
-    "src/host-certification.ts": "edeadf09a3da52efcecbba69ca652aa4ea890ebe04abbdc3a6d48f6d257e4ff1",
+    "src/host-certification.ts": "0339e92cf2b1a7651cb9e856e07703cf630ce70366ed408236eab49189c257be",
     "src/host-certification.d.ts": "d9e842c9d1467e45ce4ffe5fb373aedec03d43462d479e332638a203fceb6d2f",
     "scripts/clank-provider.mjs": "d78cc944cbb0ffbadf9ca4d593628832032a20abcaa92e8f6433be1b65ee304b",
     "tests/host-certification.test.mjs": "aee06e311f9449b8a9a6fed59f5709f3198b9e05b71865ac988a4a472c4e5ca9",
-    "tests/fixtures/host-certification-guest.mjs": "51ae6a280f52e9bd6c12b05f6ede45ac086cd715a9e401a2cdb0a56bccbf5f26",
+    "tests/fixtures/host-certification-guest.mjs": "43de11098e0b5a18b92c42654d257fdc1228a4784a2e9189e0568a881fe3a386",
     "type-tests/host-certification.ts": "b1b79d45d1d60f31a880132851aea4e1998464a694c86cb05d1a29b885606b63",
-    "docs/linux-host-certification.md": "a5966cc8e0e84fc463c518fc6d6f13483f50180db651b727f86cd28f7090b032",
+    "docs/linux-host-certification.md": "2416b712e553e4c7f280b1b177c4ac0cfdeee3b88049b34b4e204fc1ae0bb3b2",
     "docs/api-reference.md": "b6e89ba4314687e9222eeded6a679eef52bb282e76da16dcc323a3efbc136c07",
     "docs-site/content-manifest.mjs": "b798b6561ed79f42fc38fd008b0951bb6ed9dc1aa1326bbf37ca6fab6530492b",
     "README.md": "57d3d37f6d411cad0f4955895dbbbcf956c2aec216c41bc72364c30888588fbf",

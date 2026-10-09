@@ -97,6 +97,8 @@ try {
     try {
       cleanupAttempt = JSON.parse(await readFile(join(cleanupOptions.directory, 'attempt'), 'utf8'));
       if (cleanupAttempt.owner) {
+        // A different private directory cannot admit an old report during a host-wide probe.
+        assert.equal((await inspectLinuxHostCertification(allowed.options)).reason, 'attempt-in-progress');
         cleanupPlan = await createLinuxDockerNetworkPlan(cleanupAttempt.owner, cleanupAttempt.projectId, profile.outboundNetwork);
         const tables = JSON.parse(execFileSync('/usr/sbin/nft', ['-j', 'list', 'tables'], { encoding: 'utf8' }));
         if (tables.nftables.some(entry => entry.table?.name === cleanupPlan.table)) { await chmod('/usr/sbin/nft', 0); deniedCleanup = true; break; }

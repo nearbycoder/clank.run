@@ -229,6 +229,8 @@ export async function certifyLinuxHost(options: CertifyLinuxHostOptions): Promis
       await check("sqlite-worker", () => migrationProbe(scratch!, true));
     } else for (const capability of ["migrations", "sqlite-worker"] as const) checks.push({ capability, status: "blocked", reason: "prerequisite-blocked" });
     const quota = await check("disk-quota", async () => {
+      // V1 green profiles use the root-owned host-wide lock; delegated capability profiles are unsupported.
+      ensure(process.getuid() === 0 && process.geteuid() === 0, "V1 privileged certification requires root.");
       await verifyUnusedQuota(profile, options.quotaId);
       quotaClaimed = true;
       await quotaProbe(scratch!, profile, options.quotaId, projectId, options.signal);
@@ -274,8 +276,14 @@ export async function inspectLinuxHostCertification(options: LinuxHostCertificat
   let pinned: any;
   try { pinned = await store(options.directory, false); } catch (error) { if ((error as any).code === "ENOENT") return freeze({ current: false, reason: "missing", report: null }); throw error; }
   const result = (reason: LinuxHostCertificationInspection["reason"], report: LinuxHostCertificationReport | null = null): LinuxHostCertificationInspection => freeze({ current: reason === "current", reason, report });
+  const running = async (): Promise<boolean> => {
+    for (const filename of [`${pinned.anchor}/attempt`, ...(process.getuid() === 0 ? ["/run/clank-host-certification.attempt"] : [])]) {
+      try { await fs.lstat(filename); return true; } catch (error) { if ((error as any).code !== "ENOENT") throw error; }
+    }
+    return false;
+  };
   try {
-    try { await fs.lstat(`${pinned.anchor}/attempt`); return result("attempt-in-progress"); } catch (error) { if ((error as any).code !== "ENOENT") throw error; }
+    if (await running()) return result("attempt-in-progress");
     let report: LinuxHostCertificationReport, snapshot: string | undefined;
     try {
       snapshot = String(await fileBytes(`${pinned.anchor}/report.json`, MAX_REPORT));
@@ -293,7 +301,7 @@ export async function inspectLinuxHostCertification(options: LinuxHostCertificat
     if (await digest(profile) !== report.policyDigest) return result("policy-changed", report);
     if (Date.now() < report.createdAt || Date.now() >= report.expiresAt || os.uptime() * 1000 < report.bootUptimeMs || os.uptime() * 1000 - report.bootUptimeMs >= report.expiresAt - report.createdAt) return result("expired", report);
     if (await binding(profile) !== report.hostDigest) return result("host-changed", report);
-    try { await fs.lstat(`${pinned.anchor}/attempt`); return result("attempt-in-progress"); } catch (error) { if ((error as any).code !== "ENOENT") throw error; }
+    if (await running()) return result("attempt-in-progress");
     let latest: string;
     try { latest = String(await fileBytes(`${pinned.anchor}/report.json`, MAX_REPORT)); } catch { return result("invalid-report"); }
     if (latest !== snapshot) return result("invalid-report");

@@ -274,14 +274,14 @@ Proposal [#269](https://github.com/nearbycoder/clank.run/issues/269) adds the op
 actual namespace, migration/SQLite worker rollback, exact XFS byte/inode/WAL rejection,
 the production Docker launcher, selected resources and controlled positive/negative egress.
 Private authenticated reports bind boot, policy, mount, framework/runtime/tool bytes and local
-Docker/image identity, expire and reject changed or tampered state. Unconfirmed cleanup retains
+Docker/image identity, expire and reject changed or tampered state. Root inspections also honor a host-wide attempt from a different private directory; passing V1 profiles require real/effective root UID. Unconfirmed cleanup retains
 attempt markers; there is no implicit image pull, caller probe callback or process fallback.
 
 The minimum-Node complete gate passes: 1,866 reported, 1,863 passed, zero failed/cancelled,
-three existing privileged skips; coverage 87.56% lines, 80.50% branches and 90.43% functions.
+three existing privileged skips; coverage 87.54% lines, 80.50% branches and 90.43% functions.
 Four new ordinary regressions and 22 packed type fixtures pass; source diagnostics remain
 159 against the unchanged 163 allowance. The exact optional module adds two distribution
-files: 403 files and 6,276,337 bytes, within the unchanged 6 MiB byte ceiling.
+files: 403 files and 6,276,632 bytes, within the unchanged 6 MiB byte ceiling.
 
 A fresh owned Debian 13 KVM guest has its own Docker daemon and new XFS disk, separate from
 the workstation and production. All 23 existing privileged/isolation regressions pass without
