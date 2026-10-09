@@ -215,6 +215,7 @@ export const s = {
         try { return parseAt(item, entry, [...path, index]); }
         catch (error) {
           if (error instanceof ValidationError) issues.push(...error.issues);
+          else throw error;
           return undefined as T;
         }
       });
@@ -252,7 +253,7 @@ export const s = {
           }
         }
         try { output[key] = parseAt(value, entry, [...path, key]); }
-        catch (error) { if (error instanceof ValidationError) issues.push(...error.issues); }
+        catch (error) { if (error instanceof ValidationError) issues.push(...error.issues); else throw error; }
       }
       if (issues.length) throw new ValidationError(issues);
       return output;
@@ -280,8 +281,11 @@ export const s = {
       const output: Record<string, unknown> = settings.strict === false ? { ...source } : {};
       const issues: ValidationIssue[] = [];
       for (const [key, value] of Object.entries(safeShape)) {
-        try { output[key] = parseAt(value, source[key], [...path, key]); }
-        catch (error) { if (error instanceof ValidationError) issues.push(...error.issues); }
+        try {
+          const parsed = parseAt(value, Object.hasOwn(source, key) ? source[key] : undefined, [...path, key]);
+          Object.defineProperty(output, key, { value: parsed, enumerable: true, writable: true, configurable: true });
+        }
+        catch (error) { if (error instanceof ValidationError) issues.push(...error.issues); else throw error; }
       }
       if (settings.strict !== false) {
         for (const key of Object.keys(source)) if (!Object.hasOwn(safeShape, key)) issues.push({ path: [...path, key], message: "Unknown property." });
@@ -322,7 +326,14 @@ export const s = {
     if (!message.trim()) throw new TypeError("s.refine() requires an error message.");
     return schemaValue((input, path) => {
       const value = parseAt(inner, input, path);
-      return predicate(value) ? value : issue(path, message);
+      const approved: unknown = predicate(value);
+      if (typeof approved !== "boolean") {
+        // Predicates are synchronous. Contain a rejected promise/thenable from
+        // an incorrectly implemented JavaScript predicate before failing closed.
+        void Promise.resolve(approved).catch(() => undefined);
+        throw new TypeError("s.refine() predicates must return booleans synchronously.");
+      }
+      return approved ? value : issue(path, message);
     }, { ...inner.toJSONSchema(), "x-clank-refinement": true }, description ?? inner.description);
   },
 
@@ -332,7 +343,7 @@ export const s = {
       const errors: ValidationIssue[] = [];
       for (const member of alternatives) {
         try { return parseAt(member, input, path) as Infer<T[number]>; }
-        catch (error) { if (error instanceof ValidationError) errors.push(...error.issues); }
+        catch (error) { if (error instanceof ValidationError) errors.push(...error.issues); else throw error; }
       }
       return issue(path, `Did not match any union member (${errors.map((entry) => entry.message).join("; ")}).`, "union", input);
     }, { anyOf: alternatives.map((member) => member.toJSONSchema()) }, description);

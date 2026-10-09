@@ -159,5 +159,21 @@
     "docs-site/content-manifest.mjs": "bf59728dec26fb52970fb9a9cd2be6b38db1688b21fde2f2171c5769b2d0e2db",
     "README.md": "8e5cf7fd29185487be62b256025498dabda1f2cff90b262c42b64f6f734be513",
     "CHANGELOG.md": "2d486a10658f1f1bc03c2d891d098b70c22b63f8e220c140884fb533eeddb838"
+  },
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/262",
+    "reviewedHead": "d7cc2897575c1020203ca955c72304456930dfef",
+    "mergeCommit": "803154168141500e77db33b0daa37d3857d8e11b",
+    "hostedChecks": {
+      "CodeQL": 113685763650,
+      "JavaScript and TypeScript analysis": 113685305022,
+      "Node 22.16": 113685303773,
+      "Packaged-release conformance": 113685303568,
+      "Semantic and packed consumer types": 113685303538,
+      "Node 24": 113685303358
+    },
+    "conclusion": "All six checks completed successfully on the reviewed head. CodeQL reported no new alerts. Its corrected fixture thread is resolved; no change requests remain. Protected squash merge succeeded, its tree matches the reviewed head, and both checkouts were synchronized.",
+    "authorReview": 5466091886,
+    "preservedUntrackedFiles": 23
   }
 }

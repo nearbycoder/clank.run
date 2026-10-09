@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, rename } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -38,9 +38,9 @@ test('SQLite host namespace denial is actionable without exposing arbitrary work
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
-function execute(sandbox) {
+function execute(sandbox, env = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(sandbox.executable, sandbox.arguments, { stdio: ['ignore', 'pipe', 'pipe', ...sandbox.descriptors], env: {} });
+    const child = spawn(sandbox.executable, sandbox.arguments, { stdio: ['ignore', 'pipe', 'pipe', ...sandbox.descriptors], env });
     let stdout = '', stderr = '';
     child.stdout.on('data', (value) => stdout += value);
     child.stderr.on('data', (value) => stderr += value);
@@ -48,6 +48,38 @@ function execute(sandbox) {
     child.on('close', (code) => code === 0 ? resolve(stdout) : reject(new Error(`exit ${code}: ${stderr} ${stdout}`)));
   });
 }
+
+test('PID namespace workers retain both real V8 profiles when their original filenames collide', linux, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'clank-sandbox-coverage-'));
+  const coverage = join(root, 'profiles'), tenant = join(root, 'tenant');
+  await mkdir(coverage); await mkdir(tenant);
+  await writeFile(join(coverage, 'parent-only'), 'private host coverage');
+  const previous = process.env.NODE_V8_COVERAGE;
+  process.env.NODE_V8_COVERAGE = coverage;
+  try {
+    for (const name of ['coverageFirst', 'coverageSecond']) {
+      const code = `function ${name}(){ return 1; } ${name}(); const fs = require('node:fs'), v8 = require('node:v8'); v8.takeCoverage(); const directory=process.env.NODE_V8_COVERAGE; const file=fs.readdirSync(directory).find(file=>JSON.parse(fs.readFileSync(directory+'/'+file,'utf8')).result.some(script=>script.functions.some(fn=>fn.functionName==='${name}'))); fs.renameSync(directory+'/'+file,directory+'/coverage-2-1700000000000-0.json'); v8.stopCoverage(); for(const file of fs.readdirSync(directory)) if(file!=='coverage-2-1700000000000-0.json')fs.unlinkSync(directory+'/'+file); console.log(fs.existsSync(${JSON.stringify(join(coverage, 'parent-only'))}) ? 'parent exposed' : 'private');`;
+      const sandbox = await prepareSQLiteSandbox('inspection', 'inspectSQLite', [join(tenant, 'app.sqlite')], ['--jitless', '--max-old-space-size=128', '--eval', code]);
+      try { assert.equal((await execute(sandbox, { NODE_V8_COVERAGE: coverage })).trim(), 'private'); }
+      finally { await sandbox.close(); }
+    }
+    const files = (await readdir(coverage)).filter(name => name !== 'parent-only');
+    assert.equal(files.length, 2);
+    const functions = new Set();
+    for (const file of files) {
+      assert.match(file, /^coverage-\d+-\d{13}-\d+\.json$/);
+      const profile = JSON.parse(await readFile(join(coverage, file), 'utf8'));
+      for (const script of profile.result) for (const fn of script.functions) {
+        if (/^coverage(First|Second)$/.test(fn.functionName) && fn.ranges.some(range => range.count > 0)) functions.add(fn.functionName);
+      }
+    }
+    assert.deepEqual([...functions].sort(), ['coverageFirst', 'coverageSecond']);
+    assert.equal(await readFile(join(coverage, 'parent-only'), 'utf8'), 'private host coverage');
+  } finally {
+    if (previous === undefined) delete process.env.NODE_V8_COVERAGE; else process.env.NODE_V8_COVERAGE = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('SQLite namespace denies hostile SQL and database symlinks outside the tenant', linux, async () => {
   const root = await mkdtemp(join(tmpdir(), 'clank-sandbox-sql-'));

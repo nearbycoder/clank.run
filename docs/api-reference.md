@@ -529,6 +529,8 @@ types.
   `VerifiedBlueprintRelease`, `VerifiedBlueprintCatalog`, `BlueprintRegistryFetchOptions`.
 
 - `s`: runtime schema builders and JSON Schema generation. Includes string, email, URL, date, date-time, number, boolean, literal, enum, array, record, object, optional, nullable, default, refinement, union, and numeric/boolean coercion.
+  Refinement predicates must return booleans synchronously; non-boolean results throw
+  `TypeError`, rejected thenables are contained, and actual predicate failures propagate.
 - `ValidationError`: aggregate issues with paths.
 - `defineAction(definition)` → callable `Action` with `.manifest` and `.definition`.
 - `ActionError`: explicit code/status/details error.
@@ -791,3 +793,12 @@ current-session/operator checks, capacity limits and upgrade/recovery boundaries
   atomic merge decisions and exact retry identities.
 - Types: `DocumentSelection`, `DocumentCursor`, `DocumentBranch`, `DocumentBranchSummary`,
   `DocumentBranchPreview`.
+
+## Search browsing
+
+`@clank.run/framework/search` exports `createSearchBrowsingClient` and `mountSearchBrowsing`.
+Enable `browsing: { policyRevision, maxSavedSearches?, maxSavedIdentities?, maxSavedBytes? }`
+on `openSearch` with a linked source and optional typed scalar `source.facets`. The client adds
+`browse`, `saved`, version-fenced `save` and `removeSaved`; legacy `SearchClient` stays compatible.
+See [search browsing](search-browsing.md) for complete authorized counts, cursor invalidation,
+compact retired keys, limits and rollback semantics.

@@ -285,6 +285,10 @@ corpus; `truncated` tells the UI to narrow the search. Ranking folds accents and
 the original spelling and text coordinates.
 Indexed titles are limited to 1,000 UTF-8 bytes and bodies to 1 MiB each.
 
+For complete authorized facets, stable result cursors and account-owned saved search definitions,
+enable [search browsing](search-browsing.md) on a linked source. Its overflow behavior is explicit
+and its paging contract is separate from legacy truncated search.
+
 ### Link an index to source rows
 
 For atomic indexing, declare the source once on the server. The application schema is required;

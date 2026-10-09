@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Ten of the forty proposed features are merged across seven feature batches. Retention administration (39) has passed local acceptance and awaits hosted checks; the other twenty-nine remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Eleven of the forty proposed features are merged across eight feature batches. Retention administration (39) merged in PR #262 after all six hosted checks; Search browsing (24), proposed in issue #263, has passed local acceptance and awaits hosted review/merge. The other twenty-eight remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -167,8 +167,41 @@ under the unchanged 6 MiB byte ceiling. See [retention evidence](retention-admin
 and [operator guide](../../docs/retention-administration.md) for source/log hashes and
 upgrade, source-transfer, lifetime receipt, protected-data and physical-retention boundaries.
 
-Ten features are merged; retention is ready for hosted review/merge; twenty-nine remain
+Eleven features are merged after PR #262; twenty-nine remain
 planned. No host certification or completion of the whole roadmap is claimed.
+
+## Search browsing and saved definitions
+
+Feature 24 starts from merged main `803154168141500e77db33b0daa37d3857d8e11b`, after
+[PR #262](https://github.com/nearbycoder/clank.run/pull/262) delivered retention through all six
+hosted checks. Proposal: [issue #263](https://github.com/nearbycoder/clank.run/issues/263).
+Source-linked search now provides declared scalar facets, complete authorized counts,
+AND equality filters, deterministic title/relevance paging and account-owned saved definitions.
+Cursors pin current authority, source/index and policy revisions; changed state conflicts
+instead of silently skipping or duplicating rows. Exact latest save/delete retries survive
+restart and lost committed responses, while compact retired keys prevent stale recreation.
+
+All 51 focused tests pass, including ten feature cases, four UI regressions, three parser
+regressions and real SQLite sandbox checks. Real independent processes accept one saved mutation and a real SIGKILL rolls
+back uncommitted SQL. Unicode ties/matching, ACL/cursor changes, revocation and candidate,
+source-byte, distinct-value, account, lifetime-key and metadata-byte bounds pass. Real browser
+keyboard/filter/paging, saved load/edit/reload, narrow width, account change, revocation and
+disposal checks pass. Disabled last-page focus loss is corrected. Object-schema review fixes
+inherited field lookup, literal-key prototype mutation and swallowed unexpected refinements.
+Refinements now require synchronous booleans and contain rejected thenables in a real strict
+Node process. Real V8 profiles with colliding namespace filenames are retained independently,
+and workers receive a private pinned coverage directory rather than the parent profile root.
+
+The complete Node 22.16 gate passes with 1,840 tests reported, 1,837 passed, zero failures/cancellations
+and three privileged-host skips. Coverage is 88.23% lines, 80.29% branches and 90.43% functions.
+All 19 packed consumer fixtures pass with the unchanged 163-diagnostic source baseline.
+Docs, packaged conformance and security checks pass: 399 files / 6,163,301 bytes under the
+unchanged 399-file / 6 MiB ceilings. See [search browsing evidence](search-browsing.json) and
+[guide](../../docs/search-browsing.md) for source/log hashes, latest-retry/tombstone limits and
+the existing source-search writer/PITR boundaries. The first hosted release job passed every runtime
+test but exhausted the single malformed-coverage-artifact retry. The private worker-profile fix
+passes the complete minimum-Node local gate; the revised head requires fresh hosted checks. Eleven features are merged; search browsing
+awaits hosted review/merge; twenty-eight remain planned.
 
 ## Review prerequisites
 
@@ -209,7 +242,7 @@ planned. No host certification or completion of the whole roadmap is claimed.
 | 21 | Typed PostgreSQL application backend | Planned | Pending |
 | 22 | Authorized cross-table aggregates | Planned | Pending |
 | 23 | Source-linked search indexes | Implemented | Proposal #257; atomic source writes/deletes/history restore, pre-opened independent writers, two actual process crashes, resumable fenced rebuild, bounded drift diagnosis, current owner/record authorization and 16 packed consumer fixtures. Real keyboard/mobile/scope/disposal/revocation checks and full release gate pass. |
-| 24 | Search facets and stable result cursors | Planned | Pending |
+| 24 | Search facets and stable result cursors | Ready for merge | Proposal #263; authorized facets, pinned paging and fenced saved definitions; 51 focused tests, 19 packed fixtures, complete release gate and actual browser controls. `search-browsing.json`. |
 | 25 | Import correction and upsert workflow | Implemented | Proposal #259; immutable server-verified source, separate durable corrections, version-fenced upserts, exact correction/apply receipts, two actual process crashes, lost responses/restart, ownership/current ACL and bounded admission. All 55 focused tests, 17 packed fixtures and full release gate pass; actual upload/keyboard/mobile/stale/account/disposal/revocation checks. |
 | 26 | Shared document cursor coordination | Implemented | Revision-aware, session-bound ephemeral cursors; edit/deletion rebasing, expiry/capacity, per-participant owned authorization, session/ACL/email-verification revocation and restart/reconnect tested. Keyboard/browser and mobile checks pass. |
 | 27 | Document suggestions and branches | Implemented | Named durable drafts, immutable proposals, before/after review, author/reviewer policies, document/branch fences, overlap/missing-history rejection, bounded payload/rebase bytes, transactional acceptance and exact restart replay tested. |
@@ -224,7 +257,7 @@ planned. No host certification or completion of the whole roadmap is claimed.
 | 36 | Project incident workspace | Planned | Pending |
 | 37 | SLO and error budget policies | Planned | Pending |
 | 38 | Project cost attribution and budgets | Planned | Pending |
-| 39 | Retention administration and holds | Ready for merge | Scoped inventory, exact purge receipts, restart-persistent holds, protected history admission, expired-retry fencing and competing scheduled runners; 63 focused tests, 18 packed fixtures, full release gate and actual browser controls. `retention-administration.json`. |
+| 39 | Retention administration and holds | Implemented | Scoped inventory, exact purge receipts, restart-persistent holds, protected history admission, expired-retry fencing and competing scheduled runners; 63 focused tests, 18 packed fixtures, full release gate and actual browser controls. `retention-administration.json`. |
 | 40 | Customer status pages | Planned | Pending |
 
 ## Validation and remaining work

@@ -1,0 +1,167 @@
+{
+  "feature": 24,
+  "title": "Search facets, stable cursors and saved definitions",
+  "date": "2026-10-09",
+  "baseCommit": "803154168141500e77db33b0daa37d3857d8e11b",
+  "branch": "codex/search-browsing",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/263",
+  "status": "local-release-validation-passed",
+  "acceptance": {
+    "authorization": "Current session/scope and synchronous record policy precede scalar projection, scoring, snippets and facet values. Current source owner/scope, version and title/body must match the registered index. Denied records never contribute facet values/counts or global ranking statistics; existing whole-scope admission can include denied entries.",
+    "facets": "At most eight declared typed scalar fields; missing optional values become null. AND equality filters preserve scalar types. Counts cover all authorized, filtered matching sources once, with explicit candidate/source-byte/distinct-value overflow rather than partial counts.",
+    "paging": "NFC lowercase title ordering or local relevance, with raw ID tie-breaking. Unicode composed/decomposed ties and accent matching pass. Current user/scope, canonical definition, generation/revision, declaration, policy and authorized source versions bind every cursor. Changed ACL/index/source/policy/definition fails explicitly, with no silent skipping or duplication.",
+    "saved": "Account/index/scope-owned caller keys, current revision fences, latest accepted fingerprints and exact results survive restart and lost committed HTTP responses. Old/changed retries conflict. Delete clears private payloads but preserves compact retired keys, which cannot be recreated. Changed declaration/policy/generation flags saved intent unusable with no stale definition payload.",
+    "recovery": "Independent real Node processes accept one save for a key. A real SIGKILL after uncommitted SQL insertion rolls back the complete host mutation boundary; reopening preserves the earlier accepted row and permits one new retry. Fresh scope/session revocation denies accepted receipt replay.",
+    "capacity": "Real candidate, accumulated source JSON, 101 distinct facet values, per-account, global lifetime identity and saved-byte fixtures reject without partial output or metadata changes. Unsupported protocol fails closed. Accepted identities are not evicted to admit writes.",
+    "compatibility": "Legacy manual/source search clients and binding format remain intact. Configuration/callbacks are captured before asynchronous opening. New metadata is opt-in; all public declarations and 19 packed consumer fixtures pass with no source baseline increase.",
+    "reviewFixes": "Actual browser testing found last-page disabled-button focus loss; the correction returns focus to Search. Optional prototype-name facets reproduced inherited schema-field lookup; object schemas now validate own fields and define literal keys without prototype mutation. Unexpected container refinement errors propagate instead of returning partial values or accepting another union branch. Refinements require synchronous booleans and contain rejected thenables in a real strict Node process. Separate pinned V8 directories and unique collector-compatible host names preserve colliding PID-namespace profiles without exposing the parent profile directory.",
+    "browser": {
+      "date": "2026-10-09",
+      "fixture": "tests/fixtures/search-browsing-browser.mjs",
+      "server": "disposable loopback application database",
+      "desktop": {
+        "clientWidth": 1280,
+        "scrollWidth": 1280,
+        "keyboardSearch": true,
+        "authorizedCounts": 6,
+        "categoryCounts": {
+          "alpha": 3,
+          "beta": 3
+        },
+        "filteredPaging": [
+          2,
+          1
+        ],
+        "saveLoad": true,
+        "loadFocus": "Saved search name",
+        "accountSwitch": "Only Bob record and other-account facet; Alice saved names/filters/forms cleared",
+        "revocation": "Results/facets/saved forms cleared",
+        "disposal": "All widget controls removed",
+        "consoleWarningsErrors": []
+      },
+      "mobile": {
+        "requestedWidth": 390,
+        "clientWidth": 390,
+        "scrollWidth": 390,
+        "keyboardSearchFilterPaging": true,
+        "lastPageFocus": "Search",
+        "saveLoadEdit": true,
+        "loadFocus": "Saved search name",
+        "pageReload": "Edited saved name persisted, new form private fields blank",
+        "accountSwitch": "Only Bob record and other-account facet; Alice saved names/filters/forms cleared",
+        "revocation": "Private results/facets/forms cleared",
+        "disposal": "All widget controls removed",
+        "consoleWarningsErrors": []
+      },
+      "evidence": "Actual browser AX/DOM/keyboard and native screenshot inspection; no screenshot file artifact claimed. Desktop discovered disabled-next focus loss; final mobile run verified the shipped correction. Delete semantics are covered by actual HTTP/restart/process tests and controlled UI regression, not claimed as a browser deletion test."
+    }
+  },
+  "validation": {
+    "focused": {
+      "tests": 51,
+      "pass": 51,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "newFeatureTests": 10,
+      "newUiTests": 4,
+      "newParserRegressions": 3,
+      "newCoverageRegressions": 1,
+      "path": "/tmp/clank-review-2026-10-08/search-browsing-focused.log",
+      "sha256": "916f9365fc1fd66f3a0ae5525e77a885b7d994eb27da3d96b5197287cfac0699"
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 19,
+      "skipLibCheck": false,
+      "path": "/tmp/clank-review-2026-10-08/search-browsing-types.log",
+      "sha256": "84bf0dc71f057446a9e4eca7374ee2ed407534aac5302ca8da1bf1c21ec5f074"
+    },
+    "release": {
+      "status": "passed",
+      "node": "22.16.0",
+      "tests": 1840,
+      "pass": 1837,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 88.23,
+        "branches": 80.29,
+        "functions": 90.43
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 399,
+      "unpackedBytes": 6163301,
+      "fileCeiling": 399,
+      "byteCeiling": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/search-browsing-check.log",
+      "sha256": "44b1e9ee1d88f0e056d73a6b6dbb85cfcc32ce610c3f80753ded2d6b39c01a83"
+    },
+    "pack": {
+      "path": "/tmp/clank-review-2026-10-08/search-browsing-pack.json",
+      "sha256": "8b7df11d84ba6e1ce99bbf393b6e8c6e5f03d3904e1f536290524ded9ebd8582"
+    },
+    "browser": {
+      "path": "/tmp/clank-review-2026-10-08/search-browsing-browser-evidence.json",
+      "sha256": "56db4d2e10efed0cd8085c9048b41707eeada6f73b54f9f7ee687ee145d3c456"
+    },
+    "reviewFixReproductions": {
+      "asyncRefinementBefore": {
+        "path": "/tmp/clank-review-2026-10-08/async-refine-reproduction.json",
+        "sha256": "636d3e6ac347a7a13305ccdcf2c957ee473df7f5c83cf4854da6bf415ad31e16"
+      },
+      "namespaceProfileCollisionBefore": {
+        "path": "/tmp/clank-review-2026-10-08/namespace-coverage-before.json",
+        "sha256": "b78a37b1de26b81275c7858bedc6d8ee53365b284950f90abbc6bf9bd526f408"
+      }
+    },
+    "hostedFirstHead": {
+      "head": "ed1e4b4a82bf18a8e20c86e56d5624c990e8bff0",
+      "job": "https://github.com/nearbycoder/clank.run/actions/runs/37892707670/job/113696974429",
+      "runtimeTestsPassed": 1835,
+      "runtimeTestsFailed": 0,
+      "failure": "Malformed experimental V8 coverage JSON after the existing single retry. Five other hosted checks passed. This head was not merged.",
+      "correction": "Private pinned worker profile directories and unique host profile names retain colliding namespace profiles; complete revised local Node 22.16 gate passes. Fresh hosted checks are required for the new head."
+    }
+  },
+  "limits": [
+    "Source-linked browsing only; legacy manual search retains its existing truncated contract.",
+    "Facets describe the complete match set after all filters, not disjunctive suggestions.",
+    "Cursors deliberately invalidate on the index revision, including hidden source writes; no hidden values or counts are returned.",
+    "Latest accepted save/delete retries are replayable; older mutations conflict and retired keys cannot be recreated.",
+    "Logical lifetime row/byte admission includes retained identities; SQLite/WAL and independent backup/archive storage is additional.",
+    "Unsupported direct source SQL and older source writers remain outside the registered-index contract.",
+    "Native saved-definition reads are explicit requests, not a live subscription API; source-linked FTS retains its documented PITR incompatibility.",
+    "Browser deletion is proven through actual HTTP/restart tests and a controlled UI regression, not claimed as an actual-browser delete.",
+    "Three privileged-host skips do not establish Linux provider certification."
+  ],
+  "sourceHashes": {
+    "src/search.ts": "3fb69bc109307de1628a7b5342f2c664083f3cbe6a52c196f25f5fcab5024939",
+    "src/search.d.ts": "206260bd7fa5ed5594face4f703c1a07d3c6ecaf42ef32b102ef912635580e82",
+    "src/ai.ts": "4cfff4000fc1b7dc5b7c7fb5f64cd0bad768c4e7caf3efa1580b2ebc5b874ad9",
+    "src/sqlite-sandbox.ts": "bb87e92148734d2fce9b537067d70c8889ac468455437be879674ef72b7af425",
+    "tests/sqlite-sandbox.test.mjs": "b2d0528c4414f60c84ae20a195f8d98e60127ad2f9ebee513396ef484f4c068b",
+    "tests/fixtures/schema-refinement-worker.mjs": "3c3e83433926cea7f3160792846060c76e914904c1d9e3a243c6ceea36f01f93",
+    "docs/ai-first.md": "33972a755285fd4aec3b29d15af4d28e4c3bbc38cf0c74df1318178f0d11633f",
+    "docs/sqlite-isolation.md": "5e190f0b17382362fa2027dc8a3ec58a0d862dfcb7bbb7eec52b61470f5adb6b",
+    "tests/search-browsing.test.mjs": "0f8d09027b48a418c5d66870828071dc0279fa742694295d3a2caa04b117be73",
+    "tests/search-browsing-ui.test.mjs": "bce99366b61be9277483ebb4dafd1db9173263e249cb02fc7f5f822b9ddc2389",
+    "tests/ai.test.mjs": "0b27a045530ca2c7596941a9c86cafef7ca7d4b31c4ec1f17c9971b7a0d43a3a",
+    "tests/fixtures/search-browsing-worker.mjs": "73ad6dad948f28cd2d350f0d879f669b593fb8bb71cf7865309d6d31cff5641b",
+    "tests/fixtures/search-browsing-browser.mjs": "3f7f772453963ba1a70591a10cc61cd3abdb25544fc5f1eb67aded97035f0846",
+    "type-tests/search-browsing.ts": "dc7af3dd73f92267fa3c93d8251daf1208d510e7e1188f153ad9d96411c4845e",
+    "docs/search-browsing.md": "23b1168585482a26f22b30b6ad38fb3b900d4e4e82aa9e4d0bf77fc9fac1acfb",
+    "docs/durable-data-workflows.md": "824dc3653d6e49ca00022377a86e9729a8ecf1c6c096be063bd74105894d193e",
+    "docs/api-reference.md": "8a13b7074bf9884b1403642b68125bf7eee4ddb6f999a912071068a24b06a89e",
+    "docs-site/content-manifest.mjs": "ac0ed6845ba295215f9dcc4a6b124432f714a8c58f892b96a2b136cadb2968ee",
+    "README.md": "6a1e26c9314cc8141e15ca5989c11834fad6e8748ef941c635fe24a2b9e1134c",
+    "CHANGELOG.md": "19cfefb49aa1ee83e2d33c5ba4d5d8fe508bfe8b02c2a0f4ec9146afd6cb77af"
+  }
+}
