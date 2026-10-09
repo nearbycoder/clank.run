@@ -16,7 +16,7 @@ comments keep the original browser byte ceilings; their transformed runtime code
 
 All ten compiler cases pass separately on Node 22.16, 24.21 and 26.10. The final minimum-Node
 release gate passes: 1,868 reported / 1,865 passed / zero failed/cancelled / three existing
-privileged skips; coverage 92.12/80.47/90.42 line/branch/function. All 22 packed type fixtures
+privileged skips; coverage 92.11/80.39/90.43 line/branch/function. All 22 packed type fixtures
 pass with 159 existing source diagnostics against the unchanged 163 allowance. Documentation,
 conformance and security checks pass. The 403-file package shrinks by 329,823 bytes to
 5,946,809, leaving 344,647 under the unchanged 6 MiB ceiling. No additional feature is counted.
