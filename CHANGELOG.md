@@ -4,6 +4,16 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add persistent development/staging/production bindings, exact-artifact promotion, durable
+  request receipts, migration policies, current authority fences and verified recovery through
+  the dashboard and CLI. Support certified co-located code-only provider targets; unresolved
+  cleanup, host proof or interrupted migration stays fenced.
+- Retain original local upload bytes within storage limits, snapshot migrations after prior
+  writers stop, contain rejected error observers, and recheck provider deployment/rollback
+  authority before activation.
+- Wait for managed runtime guardians to install their cleanup handlers before returning a
+  runtime handle, so immediate rollback/shutdown does not strand an uninitialized fence.
+
 - Add optional disposable fleet drills over actual coordinator, agent and Docker provider
   contracts, with lease loss, transport/storage faults, restarts, placement/fence timelines,
   current host-certification admission and ownership-verified cleanup.

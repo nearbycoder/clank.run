@@ -1,3 +1,4 @@
+import type { LinuxHostCertificationOptions } from "./host-certification.js";
 import type { ManagedCanaryOptions } from "./managed-canary.js";
 import type { ReleaseAttestationPolicy } from "./release-attestation.js";
 import type { PlatformOperationsOptions } from "./operations-monitor.js";
@@ -23,6 +24,46 @@ export interface DockerRunnerOptions {
 export type PlatformRunnerOptions = ProcessRunnerOptions | DockerRunnerOptions;
 export type PlatformHostingProfile = "trusted" | "isolated";
 export type PlatformProjectPlacement = "local" | "provider";
+
+/** The three persistent target names; a preview is not an environment target. */
+export type PlatformEnvironmentName = "development" | "staging" | "production";
+export type PlatformEnvironmentMigrationPolicy = "apply-safe" | "code-only";
+export interface PlatformEnvironment {
+  readonly name: PlatformEnvironmentName;
+  readonly projectId: string | null;
+  readonly version: number;
+  readonly migrationPolicy: PlatformEnvironmentMigrationPolicy;
+  readonly updatedAt: number;
+}
+export interface PlatformEnvironmentBindingRequest {
+  readonly projectId: string;
+  readonly expectedVersion: number;
+  readonly migrationPolicy?: PlatformEnvironmentMigrationPolicy;
+}
+/** All expected state is explicit. Retrying must preserve the entire request. */
+export interface PlatformPromotionRequest {
+  readonly sourceEnvironment: PlatformEnvironmentName;
+  readonly releaseId: string;
+  readonly digest: string;
+  readonly expectedVersion: number;
+  readonly expectedActiveReleaseId: string | null;
+  readonly idempotencyKey: string;
+}
+export interface PlatformPromotion {
+  readonly idempotencyKey: string;
+  readonly sourceEnvironment: PlatformEnvironmentName;
+  readonly sourceProjectId: string;
+  readonly sourceReleaseId: string;
+  readonly digest: string;
+  readonly targetEnvironment: PlatformEnvironmentName;
+  readonly targetProjectId: string;
+  readonly environmentVersion: number;
+  readonly targetReleaseId: string | null;
+  readonly state: "pending" | "staging" | "accepted" | "failed" | "recovery-required";
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
 export type PlatformQuotaKey = "organizationsPerAccount" | "projectsPerAccount" | "projectsPerOrganization" | "domainsPerProject" | "releasesPerProject" | "releaseStorageBytesPerProject" | "bucketStorageBytesPerProject" | "bucketObjectsPerProject" | "backupsPerProject" | "requestsPerMonthPerOrganization" | "transferBytesPerMonthPerOrganization" | "requestsPerMinutePerProject";
 export type PlatformQuotaValues = Record<PlatformQuotaKey, number>;
 export interface PlatformLimits {
@@ -134,6 +175,13 @@ export interface PlatformBillingOptions {
     pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
+  /**
+   * Private operator certificates for co-located, loopback provider nodes.
+   * Every provider promotion requires a current report under its exact node ID.
+   * The configured profile must be the node's actual Docker/XFS/egress policy.
+   * Remote and local Docker promotion remain blocked without an exact host proof.
+   */
+  providerPromotionHosts?: Readonly<Record<string, LinuxHostCertificationOptions>>;
     /** Opt-in scoped administration of acknowledged audit exports and durable holds. */
     retention?: Pick<RetentionAdministrationOptions, "policyRevision" | "maxResources" | "maxReceipts" | "maxReceiptBytes" | "maxHolds" | "maxSchedules" | "intervalMs">;
   releaseAttestations?: ReleaseAttestationPolicy;

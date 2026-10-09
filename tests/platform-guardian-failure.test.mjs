@@ -4,8 +4,40 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { spawn } from 'node:child_process';
 import { openPlatform } from '../dist/platform.js';
 import { createDeploymentBundle, deploymentDigest, parseDeploymentConfig } from '../dist/deploy.js';
+
+test('a delayed real guardian installs cleanup handlers before its runtime handle is admitted', { timeout: 15000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'clank-guardian-readiness-'));
+  // Exercise the emitted private boundary with an actual child process. Delay
+  // Node's evaluation to reproduce shutdown racing the guardian's startup.
+  const source = await readFile(new URL('../dist/platform.js', import.meta.url), 'utf8');
+  const guardian = source.slice(source.indexOf('async function spawnGuardedRuntime('), source.indexOf('async function writeReleaseLauncher('));
+  const stop = source.slice(source.indexOf('async function stopChild('), source.indexOf('async function waitForHealth('));
+  const runtime = new Function('base64Url', `${guardian}\n${stop}\nreturn { spawnGuardedRuntime, stopChild };`)(bytes => Buffer.from(bytes).toString('base64url'));
+  let child;
+  try {
+    const started = Date.now();
+    child = await runtime.spawnGuardedRuntime((command, args, options) => {
+      const delayed = [...args];
+      delayed[delayed.length - 1] = `await new Promise(resolve => setTimeout(resolve, 500));\n${delayed.at(-1)}`;
+      return spawn(command, delayed, options);
+    }, process.execPath, ['--input-type=module', '--eval', 'setInterval(() => {}, 1000);'], {
+      guardianDirectory: root, projectId: 'guardian-readiness', env: { PATH: process.env.PATH, HOME: process.env.HOME },
+    });
+    assert.ok(Date.now() - started >= 450, 'admission must wait for actual guardian initialization');
+    const fence = JSON.parse(await readFile(child.cleanupFence, 'utf8'));
+    assert.equal(fence.guardianPid, child.pid);
+    await runtime.stopChild(child);
+    assert.equal(child.signalCode, null, 'the guardian must handle shutdown itself');
+    assert.equal(child.exitCode, 0);
+    assert.deepEqual(await readdir(root), []);
+  } finally {
+    if (child) await runtime.stopChild(child);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 // This runs real platform orchestration with a local fake daemon, never real Docker.
 test('failed daemon cleanup fences initial-deploy data rollback and later writers in the same controller', {
@@ -36,7 +68,8 @@ test('failed daemon cleanup fences initial-deploy data rollback and later writer
     await writeFile(join(application, 'dist/server.mjs'), `import{DatabaseSync}from'node:sqlite';import{createServer}from'node:http';const db=new DatabaseSync(process.env.CLANK_DATABASE_PATH);db.exec('PRAGMA busy_timeout = 5000');const add=db.prepare('INSERT INTO writer_events(at) VALUES(?)');add.run(Date.now());setInterval(()=>add.run(Date.now()),20);createServer((q,s)=>{s.statusCode=q.url==='/healthz'?503:200;s.end('unhealthy writer');}).listen(Number(process.env.PORT),process.env.HOST);`);
     const bytes = await createDeploymentBundle(application, parseDeploymentConfig({ version: 1,
       entry: 'dist/server.mjs', include: ['dist', 'migrations'], database: { path: 'app.sqlite', migrations: 'migrations' },
-      health: { path: '/healthz', timeoutMs: 1000 }, env: {} }), { frameworkVersion: 'test', nodeVersion: process.versions.node });
+      // Establish the real daemon-owned writer before exercising refused cleanup.
+      health: { path: '/healthz', timeoutMs: 5000 }, env: {} }), { frameworkVersion: 'test', nodeVersion: process.versions.node });
     const deploy = key => platform.handle(new Request(origin + `/api/projects/${project.id}/releases`, {
       method: 'POST', headers: { origin, cookie: session.cookie, 'x-clank-csrf': session.csrf,
         'content-type': 'application/vnd.clank.deploy+gzip', 'content-length': String(bytes.byteLength),
@@ -44,9 +77,10 @@ test('failed daemon cleanup fences initial-deploy data rollback and later writer
     const digest = await deploymentDigest(bytes);
     await writeFile(join(root, 'fail-cleanup'), 'daemon unavailable');
     const failed = await deploy('guardian-failed-initial-0001');
-    assert.ok(failed.status >= 400, await failed.text());
+    const failure = await failed.json();
+    assert.ok(failed.status >= 400, JSON.stringify(failure));
     const fences = await readdir(join(root, 'platform/runtime-guardians'));
-    assert.equal(fences.length, 1);
+    assert.equal(fences.length, 1, JSON.stringify(failure));
     const fence = JSON.parse(await readFile(join(root, 'platform/runtime-guardians', fences[0]), 'utf8'));
     assert.equal(fence.cleanupFailed, true);
     const databasePath = join(root, 'platform/projects', project.id, 'data/app.sqlite');

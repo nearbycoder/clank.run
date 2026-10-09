@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext, Script } from "node:vm";
+import { installEnvironmentConsoleContext } from "./fixtures/platform-environment-console-context.mjs";
 import { compile } from "../scripts/compiler.mjs";
 
 const directory = await mkdtemp(join(tmpdir(), "clank-final-lists-"));
@@ -58,6 +59,7 @@ function fixture() {
     toast: (...args) => actions.push(["toast", ...args]), document: { body: element("body") },
     URL: { createObjectURL(blob) { blobs.push(blob); return "blob:csv"; }, revokeObjectURL() {} }, setTimeout() { return 1; }, clearTimeout() {},
   };
+  installEnvironmentConsoleContext(context, html);
   runInNewContext(`${source}\n${handlers}`, context);
   return { state, initial, q, context, actions, copies, loads, blobs,
     input(id, value) { q(`#${id}`).value = value; q(`#${id}`).oninput({ target: q(`#${id}`) }); },
@@ -254,7 +256,7 @@ test("043–049: controls have visible native labels, status counts and mobile l
   for (const id of ["member-count", "invitation-count", "release-count", "preview-count", "backup-count", "usage-project-count"]) assert.match(html, new RegExp(`id="${id}" role="status"`));
   assert.match(html, /Filters affect rows only. Totals and CSV include every project/);
   assert.match(html, /\.operational-id code\{[^}]*overflow-wrap:anywhere/);
-  assert.match(lines.find(line => line.startsWith("async function openProject(")), /if\(state.currentProject!==id\)\{state.releaseSearch="";state.releaseStatus="";state.releaseArtifacts="all";state.previewSort="expiry";state.backupSearch="";state.backupSort="newest"/);
+  assert.match(lines.find(line => line.startsWith("async function openProject(")), /if\(state.currentProject!==id\)\{saveEnvironmentDraft\(\);state.environmentProject=null;state.releaseSearch="";state.releaseStatus="";state.releaseArtifacts="all";state.previewSort="expiry";state.backupSearch="";state.backupSort="newest"/);
 });
 
 

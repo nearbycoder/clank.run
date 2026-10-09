@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
+import { installEnvironmentConsoleContext } from "./fixtures/platform-environment-console-context.mjs";
 import { filterConsoleLogSearch } from "../dist/platform-console-log-search.js";
 import { platformConsolePage } from "../dist/platform-console.js";
 
@@ -56,6 +57,7 @@ async function fixture() {
   const functions = ["renderLogs", "renderCurrentLogs", "updateLogSearch", "openProject", "loadProject", "returnToSignIn"]
     .map(name => html.match(new RegExp(`(?:async )?function ${name}\\([^\\n]+`))[0]).join("\n");
   const handlers = html.split("\n").filter(line => line.startsWith('q("#log-search') && /\.on/.test(line)).join("\n");
+  installEnvironmentConsoleContext(context, html);
   runInNewContext(`${functions}\n${handlers}`, context);
   return { html, state, context, requests };
 }

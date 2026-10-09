@@ -116,8 +116,10 @@ test('cancelled hydration cannot release a newer reservation in the same documen
   const controller = new AbortController(), first = hydrateComponentSpecimen(root, specimen, snapshot, { signal: controller.signal });
   controller.abort();
   const second = hydrateComponentSpecimen(root, specimen, { ...snapshot, fingerprint: '0'.repeat(64) });
-  await assert.rejects(first, /aborted/);
-  await assert.rejects(second, /revision does not match/, 'late cancellation leaves the replacement reservation intact');
+  await Promise.all([
+    assert.rejects(first, /aborted/),
+    assert.rejects(second, /revision does not match/, 'late cancellation leaves the replacement reservation intact'),
+  ]);
   await assert.rejects(hydrateComponentSpecimen(root, specimen, snapshot, { signal: controller.signal }), /aborted/);
 });
 

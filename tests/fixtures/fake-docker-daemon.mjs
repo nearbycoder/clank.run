@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export async function fakeDockerDaemon(root, args = process.argv.slice(2)) {
@@ -10,7 +11,7 @@ export async function fakeDockerDaemon(root, args = process.argv.slice(2)) {
   const operation = args[0];
   const containerFile = id => join(directory, `${id}.json`);
   const lookup = async target => {
-    for (const filename of await readdir(directory)) {
+    for (const filename of (await readdir(directory)).filter(name => name.endsWith('.json'))) {
       const record = JSON.parse(await readFile(join(directory, filename), 'utf8'));
       if (record.id === target || record.name === target) return record;
     }
@@ -55,7 +56,11 @@ export async function fakeDockerDaemon(root, args = process.argv.slice(2)) {
   });
   child.unref();
   record.pid = child.pid;
-  await writeFile(containerFile(record.id), JSON.stringify(record), { mode: 0o600 });
+  // Cleanup can inspect daemon-owned writers as soon as an app initializes.
+  // Publish a complete PID record without truncating the previous observation.
+  const temporary = containerFile(record.id) + '.tmp';
+  writeFileSync(temporary, JSON.stringify(record), { mode: 0o600 });
+  renameSync(temporary, containerFile(record.id));
   // Killing this attachment must not kill the daemon-owned application.
   setInterval(() => {}, 1000);
 }

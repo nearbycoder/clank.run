@@ -1,0 +1,229 @@
+{
+  "feature": "02 Artifact promotion across environments",
+  "date": "2026-10-09",
+  "baseCommit": "8b22c32d8dc05567d87ad4a9b95219818684fdd9",
+  "branch": "codex/environment-promotion",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/275",
+  "status": "acceptance-and-delivery-in-progress",
+  "implementation": "Persistent versioned development/staging/production bindings and exact-upload promotion with current authority, independent target secrets/data/buckets, migration policy, atomic acceptance receipts, interruption fences and verified local/certified co-located provider recovery. API, CLI and dashboard share the contract.",
+  "validation": {
+    "localContracts": {
+      "newTests": 12,
+      "scope": "Real local runtime, database, original upload, independent target state, production administration, revoked authority, deletion/configuration lease, actual controller SIGKILL, snapshots and CLI. Fresh complete gates remain pending."
+    },
+    "providerAuthorityExpiry": {
+      "status": "passed",
+      "cases": [
+        {
+          "name": "real current Docker/XFS host certificate",
+          "status": "passed",
+          "reportId": "b4804520-1969-4535-9d16-c2b8ea3384af",
+          "policyDigest": "fface2afd6bd11b44eba6665ab9cbf6cb192397a458bc349ef66d3d39720f789"
+        },
+        {
+          "name": "actual HTTP provider promotion preserves original bytes, non-root runtime and independent data/secrets/buckets",
+          "status": "passed",
+          "digest": "bcba60d8bdf8b04992b6e76cd1413cb675089907126e5e5039d9256296835b70"
+        },
+        {
+          "name": "accepted exact replay across actual controller restart",
+          "status": "passed"
+        },
+        {
+          "name": "actual staging provider source authority revocation fences publication and restores the exact prior target",
+          "status": "passed"
+        },
+        {
+          "name": "actual staging provider target authority revocation fences publication and restores the exact prior target",
+          "status": "passed"
+        },
+        {
+          "name": "actual queued provider source authority revocation fences publication and restores the exact prior target",
+          "status": "passed"
+        },
+        {
+          "name": "actual queued provider target authority revocation fences publication and restores the exact prior target",
+          "status": "passed"
+        },
+        {
+          "name": "actual host certificate expiry fences a queued provider promotion and blocks recovery until real recertification",
+          "status": "passed",
+          "expiredReportId": "27bb5c60-efb9-416d-b9f9-c19c4a12d70b",
+          "renewedReportId": "11c8dc02-ecff-48fc-b5e0-dbcd075582b9"
+        },
+        {
+          "name": "owned provider stops, Docker containers/network/nft table retire and XFS quota usage/limits clear",
+          "status": "passed"
+        }
+      ],
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/provider-authority-expiry-final-7a2b4733b94fc9291dd769d9679226c2db6f5e579280b10bc9b5609bfb506de6.json",
+        "sha256": "7a2b4733b94fc9291dd769d9679226c2db6f5e579280b10bc9b5609bfb506de6"
+      },
+      "log": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-guest-17-66d53004ddb01e389ef35c4b04c1059077c2edf5e4e11728b981cf392ec98fc9.log",
+        "sha256": "66d53004ddb01e389ef35c4b04c1059077c2edf5e4e11728b981cf392ec98fc9"
+      }
+    },
+    "providerHealthRestart": {
+      "status": "fresh-replay-running",
+      "scope": "Earlier eight actual cases passed; rerunning against the guardian readiness fix with bounded identical-request retries."
+    },
+    "runtimeGuardianRegression": {
+      "status": "passed",
+      "cases": 2,
+      "scope": "Actual delayed guardian startup and daemon refusal preserve cleanup enforcement. Only the fake daemon is simulated.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-guardian-atomic-clean-27d5c5449eac82a4014003cf87f86363999a65d81c345335d65ebdc3df6044bd.log",
+        "sha256": "27d5c5449eac82a4014003cf87f86363999a65d81c345335d65ebdc3df6044bd"
+      }
+    },
+    "types": {
+      "status": "passed",
+      "consumerFixtures": 24,
+      "existingDiagnostics": 159,
+      "baselineAllowance": 163,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-types-guardian-ready-8f7338a6ac409f46b9a299fa0f7ed1f3c20d049b4f1e52b21cc89b4d63fdd93c.log",
+        "sha256": "8f7338a6ac409f46b9a299fa0f7ed1f3c20d049b4f1e52b21cc89b4d63fdd93c"
+      }
+    },
+    "dashboard": {
+      "status": "passed",
+      "scope": "Actual keyboard promotion, stale review/retry, project navigation draft, phone width/error focus, revoked access and logout/account return clearing; unchanged dashboard source.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-dashboard-evidence-d0585250370c2d7d69a31201b440e17eba518e2e8e47d3f4832d7833c61db83f.json",
+        "sha256": "d0585250370c2d7d69a31201b440e17eba518e2e8e47d3f4832d7833c61db83f"
+      }
+    },
+    "documentation": {
+      "status": "passed",
+      "guides": 95,
+      "endpointChecks": 12,
+      "build": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-docs-reviewed-build-d69cb7aab8c34cb17a14aaac244f1b1064ea9fd20a9065b2380b5fe4c24dae48.log",
+        "sha256": "d69cb7aab8c34cb17a14aaac244f1b1064ea9fd20a9065b2380b5fe4c24dae48"
+      },
+      "doctor": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-docs-reviewed-doctor-6374e8f9935e405403193791f13c1ad9fac7963b98e737276f57850c1231d6f2.json",
+        "sha256": "6374e8f9935e405403193791f13c1ad9fac7963b98e737276f57850c1231d6f2"
+      },
+      "offlineArtifact": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-docs-reviewed-deploy-af93e13a44f23174623dce46938859e152ea7ad5c8c59a66c384dcdb18fe95f5.log",
+        "sha256": "af93e13a44f23174623dce46938859e152ea7ad5c8c59a66c384dcdb18fe95f5"
+      },
+      "httpMcpEvidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-docs-endpoints-efabb6e9ad393bebaf419f226e420fe7d7242570f7b95f58ae03569a8d6ea883.json",
+        "sha256": "efabb6e9ad393bebaf419f226e420fe7d7242570f7b95f58ae03569a8d6ea883"
+      },
+      "scope": "Desktop/phone home, search, guide and actual HTTP discovery/raw/JSON/LLM/MCP tool/list/search/read. No deployment uploaded."
+    },
+    "package": {
+      "files": 405,
+      "unpackedBytes": 6069495,
+      "maximumFiles": 405,
+      "maximumUnpackedBytes": 6291456,
+      "dependencies": 0,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-package-guardian-ready-78160a71b4b16f614612bf71c02fd6bb278c4e32e4ff4a750b63ad6b1fbd1f9c.json",
+        "sha256": "78160a71b4b16f614612bf71c02fd6bb278c4e32e4ff4a750b63ad6b1fbd1f9c"
+      }
+    },
+    "security": {
+      "status": "passed",
+      "scope": "Host current tree, packed text and all reachable original Git history.",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-security-guardian-ready-e5aa7592e49e66e49bb280f66986f00b6deb9a521b5392cc329086a43d4287a1.log",
+        "sha256": "e5aa7592e49e66e49bb280f66986f00b6deb9a521b5392cc329086a43d4287a1"
+      }
+    },
+    "completeRelease": {
+      "status": "pending",
+      "scope": "Fresh Node 22 and Node 26 complete gates are required after the guardian and fixture fixes; earlier successful Node 26 gate predates the guardian change."
+    }
+  },
+  "reviewFixes": [
+    {
+      "problem": "Target deletion could race environment binding.",
+      "fix": "Configuration shares family and target leases; actual delayed deletion test preserves the tombstone."
+    },
+    {
+      "problem": "Revocation before provider generation allocation could restore an already-published prior generation without committing the recovery receipt.",
+      "fix": "Compensation allocates a fresh verified acceptance generation; all four real staged/queued source/target revocation cases pass."
+    },
+    {
+      "problem": "Immediate shutdown could signal a guardian before its handlers were installed.",
+      "fix": "Admit its handle only after the private readiness handshake; delayed real startup and full managed canary exercise pass."
+    },
+    {
+      "problem": "The fake-daemon test truncated a PID record during shutdown and its cleanup could lose an owned writer.",
+      "fix": "Publish PID records atomically; verified private operator recovery stops only the identified fixture process group, and the fresh focused test passes."
+    }
+  ],
+  "diagnosticLimits": [
+    "The initial minimum gate exposed the guardian startup race. Subsequent Node 22/26 runs passed the canary but failed the fake-daemon cleanup fixture or its occupied port; those runs are not claimed as green complete gates.",
+    "Additional real Docker crash attempts under concurrent load failed before proving the intended crash boundary. A separate idle-guest replay is pending.",
+    "A healthy provider may correctly return 503 while converging; the driver retries the unchanged request within a bounded deadline. Runtime activation/backoff limits are unchanged."
+  ],
+  "ownedFixtureRecovery": {
+    "path": "/tmp/clank-review-2026-10-08/promotion-evidence/promotion-guardian-fixture-recovery-9db0ff74e37b97f484debc914488c48b551e85323c866e0f1b0ec67dffe1252d.json",
+    "sha256": "9db0ff74e37b97f484debc914488c48b551e85323c866e0f1b0ec67dffe1252d"
+  },
+  "boundaries": [
+    "Trusted local process hosting supports apply-safe and code-only policies.",
+    "Provider support requires a current operator certificate for the exact co-located loopback node, initialized code-only target and identical migration manifest.",
+    "Remote provider proof, provider apply-safe and legacy local Docker exact profile admission fail before staging.",
+    "Code-only recovery preserves committed writes, including unpublished candidate writes; it does not undo external effects.",
+    "Production Railway remains uncertified and was not modified.",
+    "Receipts retain at most 1,000 per family; history returns at most 100 currently authorized rows; new upload bytes remain charged."
+  ],
+  "sourceHashes": {
+    "CHANGELOG.md": "7a4f8a492d4295d63bf40c9008c4b3acf977aa820e52e3b931c8b68c605f8c61",
+    "README.md": "95ef52feb56d097b5481bedb4bf2ee218237dfe2d7532212d5e4631ea5255beb",
+    "docs-site/content-manifest.mjs": "f1eb39af5c0baa3e94d160cc0b1cd4bf3e8146aea0ad247f80e20b08dc691023",
+    "docs/api-reference.md": "911062fb4ff1dad37fcae21c85f6c0ed6160cfd4e1a5c2eff80c40f064395868",
+    "docs/cli.md": "5509dabb62d42205cd43357790463710d498dad91ed4c0dcd9990f8324d47840",
+    "docs/deployment-platform.md": "aed6f4f1160ec50b8d2b4715c63428abc741bf6cf387a97e36e2cf8b95886e38",
+    "docs/environment-promotions.md": "d103af90592cccec56ddf85850d5d97f0ae4d97641ed396f926b27d025914fdb",
+    "docs/release-lifecycle.md": "c6b99eb045229a186513d1194e16e4c3773b665f3e0704486ee4027a0b329975",
+    "scripts/cli-deploy.mjs": "e4d7f2ae63ccdbb90b6eb7cbbf422d48f0a3c7c165d4ad6a516abc5c1189c438",
+    "scripts/coverage-gate.mjs": "c3cc85428f2429e9c664aff7bbd32dc34d6429d5def5dbb36f48b44ee9d424fd",
+    "src/platform-console.ts": "d7d23e4b897e5f7e389a2c591cc3c6422aaa5e109f30edcbcfcd932ecdef66be",
+    "src/platform.d.ts": "289bd72f61482c2967a1ee797dd434e8231dbe62ff9796574fa08956806c76a4",
+    "src/platform.ts": "c2fcc1d300058aa91235bf127faa27d73535344602f9636e6c82eb2e281dd555",
+    "tests/compiler-cli.test.mjs": "769963fa96e7c0de7868930b4fb1c7be2228b92ab4cb9445ee5acb3db0c14c67",
+    "tests/component-harness.test.mjs": "bcc3f85eca73f7a5f4c1294ceec4f09a0573737b0d7130e00fa9bed1aa48838b",
+    "tests/fixtures/fake-docker-daemon.mjs": "76c8bbd681d2ce5cbeb7396319516b0f53d75cafb1130c73351ca9cdb5b59758",
+    "tests/fixtures/platform-environment-console-context.mjs": "3486f375af94e374580a0d7efe422673c84d776fad50a3606ec1c22ade904e09",
+    "tests/fixtures/platform-promotion-controller.mjs": "06f1ca83a73029aa1a8f11d3bfa2dc6ea01c773b08f1e6707953074c5d6e9015",
+    "tests/fixtures/platform-promotion-provider-guest.mjs": "6772827bab8bbb7b8ec2cb687058f6fc200cf2b338e80e141f4a9719e2434078",
+    "tests/fixtures/platform-promotion-provider-worker.mjs": "c3ca6aa5d92472e1ccb8ff6d5adb44218ce46f40385ffb490ee896028f59069e",
+    "tests/moon-034-log-scroll.test.mjs": "68e2ba40fa707799f5ce84ee7a27f383be51ac29eab40de5f66aef93058282cc",
+    "tests/moon-035-log-wrap.test.mjs": "32d14f98d6ce72ce9c3b2b5828183d4460a0dfc689513957e7f874c702b43ad7",
+    "tests/moon-036-037-activity-retention.test.mjs": "e8410927ea443baf520a8582fa1850c9e1ed46e8405437770fd610ef12ce5945",
+    "tests/moon-038-runtime-draft.test.mjs": "4a34443827804e31fbb42f9e604fc3a926f63938697934cfedb90cc47b814b67",
+    "tests/moon-043-051-dashboard-lists.test.mjs": "fb6452dc32e811c9c184579d8bb0334cca407b4984662bbe559a2382832c66b2",
+    "tests/platform-console-activity-action.test.mjs": "a7d7ae351bc9fca7e388b4073f1eb2efa1c6ec1b9e45702333e166d11c19ad3c",
+    "tests/platform-console-activity-search.test.mjs": "5c32510a7acd0cbb149677221af49577c2e9e01049ba83a47ea70ec70956b9e8",
+    "tests/platform-console-log-search.test.mjs": "deb942102e5d3ea7b89bbbe86b9e9cd847089e1f101f4aa5a8088560223aa8f6",
+    "tests/platform-console-log-stream.test.mjs": "110d1309666b2e37b45d85224426c28cf16107815158688b3a170a4ca7a98512",
+    "tests/platform-console-refresh.test.mjs": "286c61afb29daff60428abd7e3da583c115de8174b34ea295779666c2660daa7",
+    "tests/platform-console-traffic-table.test.mjs": "bdc51746b8597706bd108549183d9f969e296d21cd729ec1dc072f3233b4902c",
+    "tests/platform-environments.test.mjs": "22e321219514a7eeaef77d4b9f0bb4d2555c022be48548b2014e6de6be659b8b",
+    "tests/platform-guardian-failure.test.mjs": "8534decf9cc3eaff7453510337973a6edbd6ff67497c4cfac0758ebfbc5e8ffa",
+    "tests/platform.test.mjs": "7fc64a86a82931bd5b80e0e29da6d554412a0334fd42c0719729f36268d4ca7b",
+    "tests/resilience.test.mjs": "5db05b919808cff2695d8dfe89e544628dfcc3a4f91fd18cf6934fb03b0e8d57",
+    "type-tests/environment-promotion.ts": "3efaca7fbaf940bcc3e5ac58a51a8156a7bd72365d907f05ac86177134eab16e"
+  },
+  "preservedExistingFiles": 23,
+  "roadmap": {
+    "merged": 16,
+    "remainingUnmerged": 24,
+    "feature02": "Not yet counted as delivered."
+  },
+  "nextProposal": "https://github.com/nearbycoder/clank.run/issues/276",
+  "delivery": {
+    "status": "not-yet-opened",
+    "independentApproval": false
+  }
+}

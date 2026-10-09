@@ -826,10 +826,9 @@ test("deployed framework auth receives its exact managed public origin", async (
       "managed-auth-release-0001",
     );
     assert.equal(deployed.response.status, 201, JSON.stringify(deployed.body));
-    await assert.rejects(
-      stat(join(root, "platform", "projects", created.project.id, "artifacts")),
-      (error) => error?.code === "ENOENT",
-    );
+    const retained = join(root, "platform", "projects", created.project.id, "artifacts", `${deployed.body.release.id}.clank.gz`);
+    assert.deepEqual(await readFile(retained), artifact, "local releases retain their original verified bytes for promotion");
+    assert.equal((await stat(retained)).mode & 0o077, 0);
 
     const origin = "https://managed-auth.apps.example.test";
     const registration = await platform.handle(new Request(`${origin}/__clank/auth/register`, {
@@ -6841,11 +6840,12 @@ test("release storage quotas are enforced and cleanup preserves authorization an
     assert.equal(detail.usage.releases, 1);
     assert.equal(detail.usage.storageBytes, releases.usage.storageBytes);
     const finalControl = new DatabaseSync(join(root, "platform", "control.sqlite"), { readOnly: true });
-    const activeStorage = finalControl.prepare(`SELECT runtime_bytes, snapshot_bytes, storage_bytes, backup_path
+    const activeStorage = finalControl.prepare(`SELECT runtime_bytes, runner_artifact_bytes, snapshot_bytes, storage_bytes, backup_path
       FROM clank_platform_releases WHERE id = ?`).get(fourth.body.release.id);
     finalControl.close();
     assert.equal(activeStorage.snapshot_bytes, 0);
-    assert.equal(activeStorage.storage_bytes, activeStorage.runtime_bytes);
+    assert.ok(activeStorage.runner_artifact_bytes > 0, "the original upload stays accounted after snapshot cleanup");
+    assert.equal(activeStorage.storage_bytes, activeStorage.runtime_bytes + activeStorage.runner_artifact_bytes);
     assert.equal(activeStorage.backup_path, null);
     const audit = await payload(platform, jsonRequest(`/api/projects/${projectId}/audit`, {
       token: owner.accessToken,
@@ -7193,7 +7193,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /--bg:var\(--clank-canvas\);--panel:var\(--clank-surface\)/);
     assert.match(signedInHtml, /class="icon-sprite"[^>]*><defs>\s*<symbol id="nav-icon-overview"/);
     assert.match(signedInHtml, /\.nav-icon\{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex:0 0 18px;/);
-    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 16);
+    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 17);
     assert.doesNotMatch(signedInHtml, /<span class="nav-icon">[^<]/);
     assert.match(signedInHtml, /id="nav-usage" href="\/usage"/);
     assert.match(signedInHtml, /class="table mobile-card-table usage-table"/);
@@ -7260,6 +7260,7 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
       "/projects/my-todo/domains",
       "/projects/my-todo/deployments",
       "/projects/my-todo/previews",
+      "/projects/my-todo/environments",
       "/projects/my-todo/backups",
       "/projects/my-todo/storage",
       "/projects/my-todo/logs",

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
+import { installEnvironmentConsoleContext } from "./fixtures/platform-environment-console-context.mjs";
 import { compile } from "../scripts/compiler.mjs";
 
 const directory = await mkdtemp(join(tmpdir(), "clank-runtime-draft-"));
@@ -60,6 +61,7 @@ function fixture() {
     clear(node) { node.children = []; }, clearInterval() {}, clearTimeout() {},
     window: { scrollTo() {}, location: { assign: path => destinations.push(path) } },
   };
+  installEnvironmentConsoleContext(context, html);
   runInNewContext(source, context);
   context.renderRuntimePolicy(state.projectData.detail);
   const refresh = runtime => { state.projectData.detail = detail(state.currentProject, runtime); context.renderRuntimePolicy(state.projectData.detail); };
