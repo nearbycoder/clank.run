@@ -1,4 +1,8 @@
 export declare const SQLITE_INTERNAL: unique symbol;
+/** Fixed history predicate for every upgraded writer's automatic cleanup. */
+export declare function retentionHistoryProtection(connection: Pick<SQLiteInternal, "prepare">): string;
+/** Count held source history without materializing payloads; shared admission bound. */
+export declare function retentionHistoryUsage(connection: Pick<SQLiteInternal, "prepare">, protection?: string, now?: number): { records: number; bytes: number };
 export interface SQLiteStatement {
     all(...parameters: any[]): Array<Record<string, unknown>>;
     get(...parameters: any[]): Record<string, unknown> | undefined;
@@ -20,11 +24,15 @@ export interface SQLiteInternal {
     transaction<Value>(handler: (changes: SQLiteInternalChangeRecorder) => Value): Value;
     /** Re-scope reads inside an active transaction for independent participant/approval authorization. */
     readScoped<Value>(userId: string | null, handler: (db: import("./backend.js").ReadDatabase<any>) => Value): Value;
+    /** Re-scope generated metadata writes after independent current operator authorization. */
+    writeScoped<Value>(userId: string | null, handler: (db: import("./backend.js").WriteDatabase<any>) => Value): Value;
     /** Capture selective dependencies inside the current write transaction. */
     readTrackedScoped<Value>(userId: string | null, handler: (db: import("./backend.js").ReadDatabase<any>) => Value): import("./backend.js").TrackedResult<Value>;
     /** Retire persisted and pending snapshots of a record deleted in this write transaction. */
     purgeDeletedHistory(table: string, id: string): void;
 }
+/** Every upgraded source writer consults persisted holds, including preopened connections. */
+export declare function isRetentionHeld(connection: Pick<SQLiteInternal, "prepare">, kind: "import" | "collaboration" | "audit", id: string, now?: number): boolean;
 /** Internal hook used by the point-in-time journal. All callbacks are synchronous. */
 export interface SQLiteCaptureConnection {
     readonly path: string;

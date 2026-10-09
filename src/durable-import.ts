@@ -1,9 +1,9 @@
-import { BackendActionError, defineBackend, defineDatabase, defineTable, openBackend, type DatabaseSchema, type Id, type ReadDatabase, type SyncClientOptions } from "./backend.ts";
+import { BackendActionError, defineBackend, defineDatabase, openBackend, type DatabaseSchema, type Id, type ReadDatabase, type SyncClientOptions } from "./backend.ts";
 import type { AuthDefinition, AuthRequest } from "./auth.ts";
 import { s } from "./ai.ts";
-import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
+import { SQLITE_INTERNAL, isRetentionHeld, type SQLiteInternal } from "./sqlite-internal.ts";
 import { parseCsv, planCsvImport, type CsvColumn } from "./csv-import.ts";
-import { featureInput, featureTables, featureTransport, requireFeatureAccess, type FeatureMutation, type FeatureQuery } from "./feature-service.ts";
+import { featureInput, featureTables, importMetadataTables, featureTransport, requireFeatureAccess, type FeatureMutation, type FeatureQuery } from "./feature-service.ts";
 
 export type DurableImportState = "uploading" | "ready" | "running" | "failed" | "cancelled" | "completed";
 export interface DurableImportIssue { readonly row: number; readonly code: "INVALID_ROW" | "FORBIDDEN" | "DUPLICATE"; }
@@ -81,14 +81,7 @@ export async function openDurableImport(options: DurableImportOptions): Promise<
   const reviewLimits = { source: review?.maxSourceBytes ?? 16 * 1024 * 1024, corrections: review?.maxCorrections ?? 100000, receipts: review?.maxReceipts ?? 100000, correctionBytes: review?.maxCorrectionBytes ?? 16 * 1024 * 1024, receiptBytes: review?.maxReceiptBytes ?? 32 * 1024 * 1024, targets: review?.maxTargetRecords ?? 50000 };
   if (review && unique.some(field => { const json = target.fields[field]!.toJSONSchema(); return !["string", "number", "integer", "boolean"].includes(String(json.type)) && !["string", "number", "boolean"].includes(typeof json.const); })) throw new TypeError("Reviewable unique fields must be scalar string, number or boolean values.");
   if (review && (Object.values(reviewLimits).some(value => !Number.isSafeInteger(value) || value < 1) || reviewLimits.source > 16 * 1024 * 1024 || reviewLimits.corrections > 100000 || reviewLimits.receipts > 100000 || reviewLimits.targets > 50000 || reviewLimits.correctionBytes > 64 * 1024 * 1024 || reviewLimits.receiptBytes > 128 * 1024 * 1024 || review.duplicates && !["error", "skip", "upsert"].includes(review.duplicates) || review.duplicates === "upsert" && !unique.length || target.ownership !== "user" && !review.authorizeRead)) throw new TypeError("Reviewable imports need bounded limits, unique upsert fields and explicit unowned read authorization.");
-  const schema = defineDatabase(featureTables(options.schema, {
-    durableImportJobs: defineTable({ key: s.string(), name: s.string(), state: s.enum(["uploading", "ready", "running", "failed", "cancelled", "completed"] as const), uploadedRows: s.number(), processedRows: s.number(), insertedRows: s.number(), skippedRows: s.number(), chunks: s.number(), nextChunk: s.number(), nextOffset: s.number(), issues: s.string(), review: s.default(s.string({ max: 65536 }), "") }).owned().index("by_key", ["key"]),
-    durableImportChunks: defineTable({ jobId: s.string(), sequence: s.number(), contents: s.string({ max: 4 * 1024 * 1024 }), rows: s.number(), digest: s.default(s.string(), "") }).owned().index("by_job", ["jobId", "sequence"]),
-    ...(review ? {
-      durableImportCorrections: defineTable({ jobId: s.string(), row: s.number(), values: s.string({ max: 65536 }) }).owned().index("by_row", ["jobId", "row"]),
-      durableImportOperations: defineTable({ key: s.string(), jobId: s.string(), fingerprint: s.string(), result: s.string({ max: 65536 }), targets: s.string({ max: 65536 }) }).owned().index("by_key", ["key"]),
-    } : {}),
-  }));
+  const schema = defineDatabase(featureTables(options.schema, importMetadataTables(Boolean(review))));
   const output = (row: any): DurableImportJob => ({ id: row._id, name: row.name, state: row.state, uploadedRows: row.uploadedRows, processedRows: row.processedRows, insertedRows: row.insertedRows, skippedRows: row.skippedRows, chunks: row.chunks, issues: JSON.parse(row.issues), ...(row.review ? { review: publicReview(JSON.parse(row.review)) } : {}) });
   const getJob = (context: any, id: string) => { const row = context.db.table("durableImportJobs").get(id); requireFeatureAccess(Boolean(row)); return row; };
   const normalize = (value: unknown): Record<string, unknown> => {
@@ -97,6 +90,7 @@ export async function openDurableImport(options: DurableImportOptions): Promise<
   };
   let native: SQLiteInternal;
   const retirePayload = (context: any, id: string) => {
+    if (isRetentionHeld(native, "import", id)) return;
     const chunks = context.db.table("durableImportChunks");
     // Page IDs instead of materializing every payload. Legacy jobs may have
     // exceeded today's admission limit; every page still has bounded memory.
@@ -205,6 +199,7 @@ export async function openDurableImport(options: DurableImportOptions): Promise<
     const row = context.db.table("durableImportOperations").query().where("key", key).first();
     if (!row) return;
     if (row.jobId !== job._id || row.fingerprint !== fingerprint) return conflict("IMPORT_OPERATION_REUSED", "Operation ID belongs to different reviewed input.");
+    if (row.expired) throw new BackendActionError(410, "IMPORT_OPERATION_EXPIRED", "This retained operation identity has expired; it cannot execute again.");
     // Retained receipts never bypass current record authorization, even after payload retirement.
     for (const id of JSON.parse(row.targets)) {
       const record = context.db.table(options.table).get(id);
@@ -216,7 +211,7 @@ export async function openDurableImport(options: DurableImportOptions): Promise<
     const result = output(job), serialized = JSON.stringify(result), ids = JSON.stringify(targets);
     const capacity = native.prepare("SELECT count(*) AS count, coalesce(sum(length(CAST(json_extract(_data, '$.result') AS BLOB)) + length(CAST(json_extract(_data, '$.targets') AS BLOB))), 0) AS bytes FROM clank_durableImportOperations").get()!;
     if (Number(capacity.count) >= reviewLimits.receipts || new TextEncoder().encode(serialized).length > 65536 || Number(capacity.bytes) + new TextEncoder().encode(serialized + ids).length > reviewLimits.receiptBytes) throw new BackendActionError(503, "IMPORT_RECEIPT_CAPACITY", "Import operation receipt capacity reached; review retention before accepting work.");
-    context.db.table("durableImportOperations").insert({ key, jobId: job._id, fingerprint, result: serialized, targets: ids });
+    context.db.table("durableImportOperations").insert({ key, jobId: job._id, fingerprint, result: serialized, targets: ids, expired: false });
     return result;
   };
   const backend = defineBackend({ schema, auth: options.auth }).functions(({ query, mutation }) => ({
@@ -301,7 +296,7 @@ export async function openDurableImport(options: DurableImportOptions): Promise<
           try { for (const [field, value] of Object.entries(row.values)) values[field] = target.fields[field]!.parse(value); } catch { return featureInput("Correction values must match target field types."); }
           const old = table.query().where("jobId", input.id).where("row", row.row).first(), contents = JSON.stringify({ ...(old ? JSON.parse(old.values) : {}), ...values });
           if (new TextEncoder().encode(contents).length > 65536) return featureInput("Row corrections exceed 64 KiB.");
-          if (old) { table.delete(old._id); native.purgeDeletedHistory("durableImportCorrections", old._id); }
+          if (old) { table.delete(old._id); if (!isRetentionHeld(native, "import", input.id)) native.purgeDeletedHistory("durableImportCorrections", old._id); }
           table.insert({ jobId: input.id, row: row.row, values: contents });
         }
         const capacity = native.prepare("SELECT count(*) AS count, coalesce(sum(length(CAST(json_extract(_data, '$.values') AS BLOB))), 0) AS bytes FROM clank_durableImportCorrections").get()!;

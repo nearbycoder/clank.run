@@ -3,6 +3,7 @@ import type { ReleaseAttestationPolicy } from "./release-attestation.js";
 import type { PlatformOperationsOptions } from "./operations-monitor.js";
 import type { OrganizationSsoOptions } from "./organization-sso.js";
 import type { AuditExportOptions } from "./audit-export.js";
+import type { RetentionAdministrationOptions } from "./retention-administration.js";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.js";
 import type { ObjectStore } from "./object-storage.js";
 import type { BackupObjectRepositoryOptions } from "./recovery.js";
@@ -133,6 +134,8 @@ export interface PlatformBillingOptions {
     pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
+    /** Opt-in scoped administration of acknowledged audit exports and durable holds. */
+    retention?: Pick<RetentionAdministrationOptions, "policyRevision" | "maxResources" | "maxReceipts" | "maxReceiptBytes" | "maxHolds" | "maxSchedules" | "intervalMs">;
   releaseAttestations?: ReleaseAttestationPolicy;
   /** Optional trusted credential probe. Without it, rotation validation checks format/encryption only. */
   validateSecret?: SecretRotationOptions["validate"];

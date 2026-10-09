@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Nine of the forty proposed features are implemented across six feature batches; the other thirty-one remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Ten of the forty proposed features are merged across seven feature batches. Retention administration (39) has passed local acceptance and awaits hosted checks; the other twenty-nine remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -133,8 +133,42 @@ SELECT-only observer and deterministic hot-journal regression pass all three cra
 92.22% lines, 80.09% branches and 90.24% functions. Documentation, conformance and security pass;
 the package has 395 files and 5,725,758 bytes under unchanged bounds. See
 [reviewable imports](reviewable-imports.json) for exact evidence and retention/migration boundaries.
-Ten features have acceptance evidence; thirty remain planned. Hosted review/merge is still pending
-for this batch; local validation does not replace those checks.
+Ten features have acceptance evidence; thirty remain planned. [PR #260](https://github.com/nearbycoder/clank.run/pull/260) merged as
+`55a6509248d635346910b59fa8d21708660d1ff8` after all six fresh hosted checks passed,
+with no unresolved threads. The protected merge tree matches reviewed head `632ed519`;
+both checkouts were synchronized and the seven/sixteen preexisting files preserved.
+
+## Retention administration and holds
+
+Feature 39 starts from merged main `55a6509248d635346910b59fa8d21708660d1ff8`.
+Proposal: [issue #261](https://github.com/nearbycoder/clank.run/issues/261).
+Scoped operators receive one per-database inventory, private-snapshot purge review, durable
+versioned holds and periodic schedules over imports, collaboration receipts/history and
+acknowledged platform audit exports. Current source associations, session and role checks
+apply to new work and exact receipt replay. Purge, retry retirement and acceptance commit
+atomically. Expired import identities and collaboration revision floors prevent re-execution.
+
+Holds protect source payload and history across already-open upgraded writers, including
+both global and per-document database history cleanup. A real 100,000-snapshot fixture
+proves capacity rollback preserves evidence. Acknowledged held audit envelopes remain
+without redelivery; outbox bounds apply backpressure, while signed pending delivery continues.
+Scheduled occurrences revalidate session/policy and execute once across independent processes.
+
+All 63 focused tests pass, including 17 feature tests, four operator UI regressions, real
+SIGKILL rollback boundaries, process contention, revoked authority, malformed metadata,
+source/receipt/history capacity and independent audit checkpoint continuity. Real browser
+keyboard/focus, hold/review/purge, persisted rules, account switching, revocation, disposal
+and 390px/1280px layout checks pass. All 18 packed consumer fixtures pass with no new
+source diagnostics above the existing 163. The full release gate reports 1,822 tests,
+1,819 passed, zero failures/cancellations and three privileged-host skips; coverage is
+92.27% lines, 80.18% branches and 90.32% functions. Documentation, conformance and security
+pass. Exactly four distribution files bring the package to 399 files and 5,808,460 bytes,
+under the unchanged 6 MiB byte ceiling. See [retention evidence](retention-administration.json)
+and [operator guide](../../docs/retention-administration.md) for source/log hashes and
+upgrade, source-transfer, lifetime receipt, protected-data and physical-retention boundaries.
+
+Ten features are merged; retention is ready for hosted review/merge; twenty-nine remain
+planned. No host certification or completion of the whole roadmap is claimed.
 
 ## Review prerequisites
 
@@ -190,7 +224,7 @@ for this batch; local validation does not replace those checks.
 | 36 | Project incident workspace | Planned | Pending |
 | 37 | SLO and error budget policies | Planned | Pending |
 | 38 | Project cost attribution and budgets | Planned | Pending |
-| 39 | Retention administration and holds | Planned | Pending |
+| 39 | Retention administration and holds | Ready for merge | Scoped inventory, exact purge receipts, restart-persistent holds, protected history admission, expired-retry fencing and competing scheduled runners; 63 focused tests, 18 packed fixtures, full release gate and actual browser controls. `retention-administration.json`. |
 | 40 | Customer status pages | Planned | Pending |
 
 ## Validation and remaining work

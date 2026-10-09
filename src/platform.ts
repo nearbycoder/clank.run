@@ -3,6 +3,8 @@ import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions }
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
 import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
 import { rehearseRecovery } from "./rehearsal.ts";
+import { createRetentionController, dispatchRetention } from "./retention-internal.ts";
+import type { RetentionAdministrationOptions } from "./retention-administration.ts";
 import { openAuditExporter, type AuditExportOptions } from "./audit-export.ts";
 import { forecastUsage } from "./usage-forecast.ts";
 import { openOrganizationSso, type OrganizationSsoOptions } from "./organization-sso.ts";
@@ -19,7 +21,7 @@ import {
   type AuthUserId,
   type DefaultAuthProfile,
 } from "./auth.ts";
-import { defineDatabase, openSQLite, type SQLiteDatabase } from "./backend.ts";
+import { BackendActionError, defineDatabase, openSQLite, type SQLiteDatabase } from "./backend.ts";
 import {
   decodeDeploymentBundle,
   deploymentDigest,
@@ -363,6 +365,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 }>);
 
 export interface ClankPlatformOptions {
+  /** Opt-in scoped administration of acknowledged audit exports and durable holds. */
+  retention?: Pick<RetentionAdministrationOptions, "policyRevision" | "maxResources" | "maxReceipts" | "maxReceiptBytes" | "maxHolds" | "maxSchedules" | "intervalMs">;
   /** Require signatures from project-scoped build keys before artifact extraction. */
   releaseAttestations?: ReleaseAttestationPolicy;
   /** Optional trusted credential probe. Without it, rotation validation checks format/encryption only. */
@@ -1074,10 +1078,24 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   }) : undefined;
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
+  let retentionController: Awaited<ReturnType<typeof createRetentionController>> | undefined;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
   const usageOpenedAt = Date.now();
   try {
     if (options.auditExport) auditExporter = await openAuditExporter(storage.internal, options.auditExport);
+    if (options.retention) retentionController = await createRetentionController({ ...options.retention, native: storage.internal, kinds: ["audit"],
+      refresh(userId, sessionId) { const auth = storage.auth.refreshSession(sessionId); return auth?.user?.id === userId ? auth : null; },
+      scope(_context, resource) { return resource.organizationId ? `organization:${resource.organizationId}` : resource.ownerId ? `account:${resource.ownerId}` : "platform"; },
+      authorize({ auth }, scope, operation) {
+        if (!auth.user || !auth.session) return false;
+        if (operation !== "read" && options.freshAuthentication?.required) storage.auth.requireFreshAuthentication(auth, freshAuthenticationAge);
+        if (auth.user.role === PLATFORM_ADMIN_ROLE) return true;
+        if (scope === `account:${auth.user.id}`) return true;
+        if (!scope.startsWith("organization:")) return false;
+        const role = storage.internal.prepare("SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?").get(scope.slice(13), auth.user.id)?.role;
+        return role === "owner" || role === "admin";
+      },
+    });
     invitationDeliveries = createPlatformInvitationDeliveryScheduler({
       internal: storage.internal,
       publicUrl,
@@ -1089,6 +1107,8 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
     pruneUsageStorage(storage.internal, usageOpenedAt, limits.usageRetentionMonths);
     reconcileBackupObjectBinding(storage.internal, backupObjects);
   } catch (error) {
+    retentionController?.close();
+    await auditExporter?.close();
     storage.auth.close();
     storage.database.close();
     throw error;
@@ -6278,6 +6298,20 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
 
       const principal = await requirePlatformPrincipal(storage, request);
       if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) requireCurrentPlatformPrincipal(storage, principal);
+      const retentionRoute = /^\/api\/retention\/(query|mutation)\/([A-Za-z]+)$/.exec(url.pathname);
+      if (retentionRoute && request.method === "POST") {
+        if (!retentionController) throw new PlatformError(404, "NOT_FOUND", "Retention administration is not configured.");
+        if (principal.tokenId || principal.impersonation || !principal.sessionId) throw new PlatformError(403, "RETENTION_BROWSER_REQUIRED", "Retention administration requires an operator browser session.");
+        const input = await readJsonRequest(request, 2 * 1024 * 1024);
+        const invoke = () => {
+          requireCurrentPlatformPrincipal(storage, principal);
+          const auth = storage.auth.refreshSession(principal.sessionId!);
+          if (!auth) throw new PlatformError(401, "UNAUTHENTICATED", "Sign in to continue.");
+          return dispatchRetention(retentionController!, auth, retentionRoute[1]!, retentionRoute[2]!, input);
+        };
+        const value = retentionRoute[1] === "query" ? storage.database.read(invoke) : storage.internal.transaction(invoke);
+        return api({ ok: true, value, version: storage.database.version });
+      }
       if (url.pathname === "/api/billing" && request.method === "GET") {
         if (!billing) throw new PlatformError(404, "NOT_FOUND", "Billing is not configured.");
         if (principal.projectId) {
@@ -8437,6 +8471,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       }
       throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
     } catch (error) {
+      if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
       if (error instanceof RequestInputError) return problem(error.status, error.code, error.message);
       if (error instanceof AuthError) return problem(error.status, error.code, error.message, error.retryAfter);
@@ -8507,6 +8542,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   backupScheduler.start();
   invitationDeliveries.start();
   auditExporter?.start();
+  if (options.retention?.intervalMs !== undefined && options.retention.intervalMs !== false) retentionController?.start();
   operationsMonitor?.start();
 
   return {
@@ -8530,6 +8566,7 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
       previewCleanupTimer = undefined;
       await previewCleanupFlight?.catch(() => undefined);
       await operationsMonitor?.close();
+      retentionController?.close();
       await auditExporter?.close();
       await invitationDeliveries.close();
       await backupScheduler.close();

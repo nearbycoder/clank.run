@@ -69,6 +69,7 @@ export * from "./search.js";
 export * from "./bulk-edit.js";
 export * from "./collaborative-documents.js";
 export * from "./durable-import.js";
+export * from "./retention-administration.js";
 export * from "./dev-updates.js";
 export * from "./release-attestation.js";
 export * from "./usage-forecast.js";

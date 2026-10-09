@@ -35,6 +35,8 @@ import {
 } from "./security.ts";
 import {
   SQLITE_INTERNAL,
+  retentionHistoryProtection,
+  retentionHistoryUsage,
   updateSourceSearch,
   type SQLiteInternal,
 } from "./sqlite-internal.ts";
@@ -1110,8 +1112,11 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         }
         prepared("DELETE FROM clank_changes WHERE revision < ?")
           .run(Math.max(1, committedVersion - retention + 1));
-        prepared("DELETE FROM clank_document_revisions WHERE revision < ?")
-          .run(Math.max(1, committedVersion - historyRetention + 1));
+        const holdProtection = retentionHistoryProtection(native), holdNow = Date.now();
+        const heldHistory = retentionHistoryUsage(native, holdProtection, holdNow);
+        if (heldHistory.records > 100000 || heldHistory.bytes > 128 * 1024 * 1024) throw new BackendActionError(503, "RETENTION_CAPACITY", "Held source history exceeds 100,000 records or 128 MiB; review retention before admitting writes.");
+        prepared(`DELETE FROM clank_document_revisions WHERE revision < ?${holdProtection}`)
+          .run(Math.max(1, committedVersion - historyRetention + 1), ...(holdProtection ? [holdNow] : []));
         const historyCutoff = prepared(`SELECT revision, sequence
           FROM clank_document_revisions
           WHERE table_name = ? AND document_id = ?
@@ -1119,7 +1124,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           LIMIT 1 OFFSET ?`);
         const pruneDocumentHistory = prepared(`DELETE FROM clank_document_revisions
           WHERE table_name = ? AND document_id = ?
-          AND (revision < ? OR (revision = ? AND sequence <= ?))`);
+          AND (revision < ? OR (revision = ? AND sequence <= ?))${holdProtection}`);
         for (const record of changes.records.values()) {
           const cutoff = historyCutoff.get(record.table, record.id, historyPerDocument);
           if (!cutoff) continue;
@@ -1131,6 +1136,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
             cutoffRevision,
             cutoffRevision,
             cutoffSequence,
+            ...(holdProtection ? [holdNow] : []),
           );
         }
       }
@@ -1257,6 +1263,12 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         if (!transactionActive && !readActive) throw new Error("Scoped internal reads require an active database transaction.");
         const value = handler(makeReader(undefined, userId));
         assertSynchronous(value, "query");
+        return value;
+      },
+      writeScoped(userId, handler) {
+        if (!transactionActive || !activeChanges) throw new Error("Scoped internal writes require an active write transaction.");
+        const value = handler(makeWriter(activeChanges, userId));
+        assertSynchronous(value, "mutation");
         return value;
       },
       readTrackedScoped(userId, handler) {

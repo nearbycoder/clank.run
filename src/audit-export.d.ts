@@ -17,12 +17,15 @@ export interface AuditExportOptions {
   intervalMs?: number;
   batchSize?: number;
   timeoutMs?: number;
+  /** Backpressure bounds include acknowledged envelopes protected by a hold. */
+  maxOutboxEntries?: number;
+  maxOutboxBytes?: number;
   onError?: (error: unknown) => void;
 }
 export interface AuditExporter {
   flush(): Promise<number>;
   start(): void;
-  status(): { exportedThrough: AuditExportCheckpoint; pending: number };
+  status(): { exportedThrough: AuditExportCheckpoint; pending: number; retainedAcknowledged: number };
   close(): Promise<void>;
 }
 export declare function openAuditExporter(internal: SQLiteInternal, options: AuditExportOptions): Promise<AuditExporter>;

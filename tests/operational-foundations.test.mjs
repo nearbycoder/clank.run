@@ -118,3 +118,35 @@ test('audit destination cancellation bounds shutdown even when a callback ignore
     assert.equal(exporter.status().exportedThrough.sequence, 0); assert.equal(exporter.status().pending, 1);
   } finally { await exporter.close(); database.close(); }
 });
+
+test('audit capture capacity still delivers pending entries and held acknowledgements apply backpressure', async () => {
+  const database = await openSQLite(defineDatabase({}), { path: ':memory:' }), internal = database[SQLITE_INTERNAL];
+  internal.exec("CREATE TABLE clank_platform_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,actor_user_id TEXT,actor_token_id TEXT,project_id TEXT,organization_id TEXT,action TEXT,metadata TEXT,created_at INTEGER); CREATE TABLE clank_retention_state(singleton INTEGER PRIMARY KEY,protocol INTEGER,revision INTEGER); INSERT INTO clank_retention_state VALUES(1,1,1); CREATE TABLE clank_retention_holds(kind TEXT,resource_id TEXT,scope TEXT,reason TEXT,expires_at INTEGER,version INTEGER); INSERT INTO clank_retention_holds VALUES('audit','1','org','Keep',NULL,1);");
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519'), batches = []; let fail = true;
+  const exporter = await openAuditExporter(internal, { keyId: 'bounded', privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), maxOutboxEntries: 1, destination: async entries => { batches.push(entries); if (fail) throw Error('Offline'); } });
+  const append = action => internal.prepare("INSERT INTO clank_platform_audit(actor_user_id,action,metadata,created_at) VALUES('actor',?,'{}',0)").run(action);
+  try {
+    append('first'); await assert.rejects(exporter.flush(), /Offline/); append('second'); fail = false;
+    assert.equal(await exporter.flush(), 1); assert.equal(exporter.status().pending, 0); assert.equal(exporter.status().retainedAcknowledged, 1);
+    await assert.rejects(exporter.flush(), /retention capacity/); assert.equal(batches.length, 2);
+    const checkpoint = await verifyAuditExport(batches[1], { bounded: publicKey.export({ format: 'pem', type: 'spki' }) });
+    internal.prepare('DELETE FROM clank_retention_holds').run(); internal.prepare('DELETE FROM clank_audit_export_outbox WHERE sequence<=?').run(checkpoint.sequence);
+    assert.equal(await exporter.flush(), 1); assert.equal((await verifyAuditExport(batches[2], { bounded: publicKey.export({ format: 'pem', type: 'spki' }) }, checkpoint)).sequence, 2);
+  } finally { await exporter.close(); database.close(); }
+});
+
+test('invalid new audit events cannot starve already signed delivery and rejected error observers stay contained', async () => {
+  const database = await openSQLite(defineDatabase({}), { path: ':memory:' }), internal = database[SQLITE_INTERNAL];
+  internal.exec("CREATE TABLE clank_platform_audit(id INTEGER PRIMARY KEY AUTOINCREMENT,actor_user_id TEXT,actor_token_id TEXT,project_id TEXT,organization_id TEXT,action TEXT,metadata TEXT,created_at INTEGER); INSERT INTO clank_platform_audit(action,metadata,created_at) VALUES('first','{}',0)");
+  const { privateKey, publicKey } = generateKeyPairSync('ed25519'), batches = []; let fail = true, entered, observer;
+  const observed = new Promise(resolve => { observer = resolve; });
+  const exporter = await openAuditExporter(internal, { keyId: 'bounded', privateKey: privateKey.export({ format: 'pem', type: 'pkcs8' }), destination: async entries => { batches.push(entries); if (fail) throw Error('Offline'); if (entered) { entered(); await new Promise(() => {}); } }, onError: () => { observer(); return Promise.reject(Error('Rejected observer')); } });
+  try {
+    await assert.rejects(exporter.flush(), /Offline/); fail = false;
+    internal.prepare("INSERT INTO clank_platform_audit(action,metadata,created_at) VALUES('large',?,0)").run(JSON.stringify({ value: 'x'.repeat(262144) }));
+    await assert.rejects(exporter.flush(), /size bound/); assert.equal(exporter.status().pending, 0); assert.equal(exporter.status().exportedThrough.sequence, 1);
+    assert.equal((await verifyAuditExport(batches[1], { bounded: publicKey.export({ format: 'pem', type: 'spki' }) })).sequence, 1);
+    internal.prepare("UPDATE clank_platform_audit SET metadata='{}' WHERE id=2").run(); const started = new Promise(resolve => { entered = resolve; });
+    const pending = exporter.flush(), rejected = assert.rejects(pending, /cancelled|deadline/); await started; await exporter.close(); await rejected; await observed; await new Promise(resolve => setImmediate(resolve));
+  } finally { await exporter.close(); database.close(); }
+});

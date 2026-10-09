@@ -66,6 +66,7 @@ export * from "./search.ts";
 export * from "./bulk-edit.ts";
 export * from "./collaborative-documents.ts";
 export * from "./durable-import.ts";
+export * from "./retention-administration.ts";
 export * from "./dev-updates.ts";
 export * from "./release-attestation.ts";
 export * from "./usage-forecast.ts";

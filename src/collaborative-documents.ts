@@ -1,8 +1,8 @@
-import { BackendActionError, defineBackend, defineDatabase, defineTable, openBackend, type DatabaseSchema, type ReadDatabase, type WriteDatabase, type SyncClientOptions } from "./backend.ts";
+import { BackendActionError, defineBackend, defineDatabase, openBackend, type DatabaseSchema, type ReadDatabase, type WriteDatabase, type SyncClientOptions } from "./backend.ts";
 import type { AuthDefinition, AuthRequest, AuthRuntime } from "./auth.ts";
 import { s } from "./ai.ts";
-import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
-import { featureInput, featureTables, featureTransport, requireFeatureAccess, type FeatureMutation, type FeatureQuery } from "./feature-service.ts";
+import { SQLITE_INTERNAL, isRetentionHeld, type SQLiteInternal } from "./sqlite-internal.ts";
+import { featureInput, featureTables, collaborativeMetadataTables, featureTransport, requireFeatureAccess, type FeatureMutation, type FeatureQuery } from "./feature-service.ts";
 
 export interface CollaborativeDocument { readonly id: string; readonly text: string; readonly revision: number; readonly acceptedRevision?: number; }
 export interface CollaborativeEdit { readonly documentId: string; readonly operationId: string; readonly baseRevision: number; readonly start: number; readonly deleteCount: number; readonly insert: string; }
@@ -55,12 +55,7 @@ export async function openCollaborativeDocuments(options: CollaborativeDocuments
   if (options.schema?.tables.collaborativeDocs || options.schema?.tables.collaborativeOperations || options.schema?.tables.collaborativeReceipts || options.schema?.tables.collaborativeBranches) throw new TypeError("Collaboration table names are reserved.");
   const cryptoModule = "node:crypto";
   const { createHash } = await import(cryptoModule) as { createHash(algorithm: "sha256"): { update(value: string): { digest(encoding: "hex"): string } } };
-  const schema = defineDatabase(featureTables(options.schema, {
-    collaborativeBranches: defineTable({ key: s.string(), documentId: s.string(), name: s.string({ min: 1, max: 100 }), authorId: s.string(), baseRevision: s.number(), baseText: s.string({ max: maximum }), text: s.string({ max: maximum }), status: s.enum(["draft", "proposed", "accepted", "rejected"]), acceptedRevision: s.nullable(s.number()), decidedFromVersion: s.nullable(s.number()), decidedAgainstRevision: s.nullable(s.number()) }).index("by_document", ["documentId"]).index("by_key", ["documentId", "key"]),
-    collaborativeDocs: defineTable({ key: s.string({ min: 1, max: 200 }), text: s.string({ max: maximum }), revision: s.number({ integer: true, min: 1 }) }).index("by_key", ["key"]),
-    collaborativeReceipts: defineTable({ documentId: s.string(), userId: s.string(), operationId: s.string(), request: s.string(), revision: s.number() }).index("by_receipt", ["documentId", "userId", "operationId"]),
-    collaborativeOperations: defineTable({ documentId: s.string(), revision: s.number(), start: s.number(), deleteCount: s.number(), insert: s.string(), baseLength: s.number() }).index("by_document", ["documentId"]),
-  }));
+  const schema = defineDatabase(featureTables(options.schema, collaborativeMetadataTables(maximum)));
   const output = (row: any, acceptedRevision?: number): CollaborativeDocument => ({ id: row.key, text: row.text, revision: row.revision, ...(acceptedRevision === undefined ? {} : { acceptedRevision }) });
   let native: SQLiteInternal;
   type ReadContext = { auth: AuthRequest<any>; db: ReadDatabase<typeof schema> };
@@ -72,7 +67,8 @@ export async function openCollaborativeDocuments(options: CollaborativeDocuments
     const row = context.db.table("collaborativeDocs").query().where("key", id).first(); requireFeatureAccess(Boolean(row)); return row!;
   };
   const history = (context: ReadContext, id: string, base: number, revision: number) => {
-    if (base > revision || base < revision - retained) throw new BackendActionError(409, "COLLAB_EDIT_CONFLICT", "Required document revision is outside the retained window.");
+    const current = context.db.table("collaborativeDocs").query().where("key", id).first();
+    if (!current || base < current.retiredThrough || base > revision || base < revision - retained) throw new BackendActionError(409, "COLLAB_EDIT_CONFLICT", "Required document revision is outside the retained window.");
     const bytes = Number(native.prepare("SELECT coalesce(sum(bytes), 0) AS bytes FROM (SELECT length(CAST(_data AS BLOB)) AS bytes FROM clank_collaborativeOperations WHERE json_extract(_data, '$.documentId') = ? AND json_extract(_data, '$.revision') > ? ORDER BY json_extract(_data, '$.revision') LIMIT ?)").get(id, base, retained)?.bytes ?? 0);
     if (bytes > 16 * 1024 * 1024) throw new BackendActionError(409, "COLLAB_EDIT_CONFLICT", "Rebase history exceeds its byte budget; reload the document and review changes against its current revision.");
     const rows = context.db.table("collaborativeOperations").query().where("documentId", id).where("revision", "gt", base).orderBy("revision", "asc").limit(retained).collect();
@@ -84,7 +80,7 @@ export async function openCollaborativeDocuments(options: CollaborativeDocuments
       const table = context.db.table("collaborativeDocs"), operations = context.db.table("collaborativeOperations"), current = table.query().where("key", input.documentId).first(); requireFeatureAccess(Boolean(current));
       const request = createHash("sha256").update(JSON.stringify(input)).digest("hex"), receipt = context.db.table("collaborativeReceipts").query().where("documentId", input.documentId).where("userId", context.auth.user!.id).where("operationId", input.operationId).first();
       if (receipt) { if (receipt.request !== request) throw new BackendActionError(409, "EDIT_KEY_REUSED", "Operation ID was already used for a different edit."); return output(current, receipt.revision); }
-      if (input.baseRevision > current!.revision || input.baseRevision < current!.revision - retained) throw new BackendActionError(409, "COLLAB_EDIT_CONFLICT", "Document history changed. Review your changes against the current document.");
+      if (input.baseRevision < current!.retiredThrough || input.baseRevision > current!.revision || input.baseRevision < current!.revision - retained) throw new BackendActionError(409, "COLLAB_EDIT_CONFLICT", "Document history changed. Review your changes against the current document.");
       const intervening = history(context, input.documentId, input.baseRevision, current!.revision);
       const baseLength = intervening[0]?.baseLength ?? current!.text.length;
       if (input.start > baseLength || input.start + input.deleteCount > baseLength) return featureInput("Text edit exceeds its base document.");
@@ -98,17 +94,17 @@ export async function openCollaborativeDocuments(options: CollaborativeDocuments
       const text = current!.text.slice(0, start) + input.insert + current!.text.slice(start + input.deleteCount);
       if (text.length > maximum) return featureInput("Document exceeds its character limit.");
       const revision = current!.revision + 1;
-      const receipts = context.db.table("collaborativeReceipts");
+      const receipts = context.db.table("collaborativeReceipts"), held = isRetentionHeld(native, "collaboration", input.documentId);
       // Every expired receipt refers to an edit whose original base revision is
       // now outside the rebase window. An exact retry cannot execute again.
-      for (const expired of receipts.query().where("documentId", input.documentId).where("revision", "lte", revision - retainedReceipts).limit(retainedReceipts).collect()) {
+      if (!held) for (const expired of receipts.query().where("documentId", input.documentId).where("revision", "lte", revision - retainedReceipts).limit(retainedReceipts).collect()) {
         receipts.delete(expired._id); native.purgeDeletedHistory("collaborativeReceipts", expired._id);
       }
       if (Number(native.prepare("SELECT count(*) AS count FROM clank_collaborativeReceipts").get()?.count ?? 0) >= maxReceipts) throw new BackendActionError(503, "COLLAB_RECEIPT_CAPACITY", "Collaboration receipt capacity reached; retire inactive documents through retention administration.");
       table.patch(current!._id, { text, revision }, { ifVersion: current!._version });
       operations.insert({ documentId: input.documentId, revision, start, deleteCount: input.deleteCount, insert: input.insert, baseLength: current!.text.length });
       receipts.insert({ documentId: input.documentId, userId: context.auth.user!.id, operationId: input.operationId, request, revision });
-      for (const expired of operations.query().where("documentId", input.documentId).where("revision", "lte", revision - retained).limit(retained).collect()) {
+      if (!held) for (const expired of operations.query().where("documentId", input.documentId).where("revision", "lte", revision - retained).limit(retained).collect()) {
         operations.delete(expired._id); native.purgeDeletedHistory("collaborativeOperations", expired._id);
       }
       return output({ ...current, text, revision }, revision);
@@ -223,7 +219,7 @@ export async function openCollaborativeDocuments(options: CollaborativeDocuments
       return branchOutput(getBranch(context, input.documentId, input.id));
     } }),
     read: query({ args: { id: s.string({ min: 1, max: 200 }) }, agent: false, handler: (context, { id }) => { requireFeatureAccess(options.authorize(context as any, id, "read")); const row = context.db.table("collaborativeDocs").query().where("key", id).first(); requireFeatureAccess(Boolean(row)); return output(row); } }),
-    create: mutation({ args: { id: s.string({ min: 1, max: 200 }), text: s.default(s.string({ max: maximum }), "") }, agent: false, handler: (context, { id, text }) => { requireFeatureAccess(options.authorize(context as any, id, "create")); const table = context.db.table("collaborativeDocs"); if (table.query().where("key", id).first()) throw new BackendActionError(409, "DOCUMENT_EXISTS", "Document already exists."); const key = table.insert({ key: id, text, revision: 1 }); return output(table.get(key)); } }),
+    create: mutation({ args: { id: s.string({ min: 1, max: 200 }), text: s.default(s.string({ max: maximum }), "") }, agent: false, handler: (context, { id, text }) => { requireFeatureAccess(options.authorize(context as any, id, "create")); const table = context.db.table("collaborativeDocs"); if (table.query().where("key", id).first()) throw new BackendActionError(409, "DOCUMENT_EXISTS", "Document already exists."); const key = table.insert({ key: id, text, revision: 1, retiredThrough: 0 }); return output(table.get(key)); } }),
     edit: mutation({ args: { documentId: s.string({ min: 1, max: 200 }), operationId: s.string({ min: 1, max: 100 }), baseRevision: s.number({ integer: true, min: 1 }), start: s.number({ integer: true, min: 0 }), deleteCount: s.number({ integer: true, min: 0 }), insert: s.string({ max: maximum }) }, agent: false, handler: (context, input) => {
       return applyEdit(context, input);
     } }),
