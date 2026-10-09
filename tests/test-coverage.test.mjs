@@ -48,6 +48,7 @@ const measuredCoverage = {
 
 test("Node 26 wrapped JSON coverage failures allow only the existing bounded artifact retry", async () => {
   const errors = [
+    "Expected ',' or '}' after property value in JSON at position 8192 (line 1 column 8193)",
     "Unexpected non-whitespace character after JSON at position 103245 (line 1 column 103246)",
     "Unterminated string in JSON at position 266240 (line 1 column 266241)",
   ];

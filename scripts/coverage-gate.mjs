@@ -54,7 +54,7 @@ export function isRetryableCoverageArtifactFailure(result) {
   const cancelled = Number(output.match(/# cancelled (\d+)(?:\r?\n|$)/u)?.[1] ?? -1);
   const skipped = Number(output.match(/# skipped (\d+)(?:\r?\n|$)/u)?.[1] ?? -1);
   const todo = Number(output.match(/# todo (\d+)(?:\r?\n|$)/u)?.[1] ?? -1);
-  return /^# Warning: Could not report code coverage\. (?:SyntaxError: |Error \[ERR_OPERATION_FAILED\]: Operation failed: failed to parse coverage file [^\r\n]{1,4096}: )(?:Unexpected end of JSON input|Unexpected non-whitespace character after JSON at position \d+ \(line \d+ column \d+\)|Unterminated string in JSON at position \d+ \(line \d+ column \d+\))(?:\r?\n|$)/mu.test(output)
+  return /^# Warning: Could not report code coverage\. (?:SyntaxError: |Error \[ERR_OPERATION_FAILED\]: Operation failed: failed to parse coverage file [^\r\n]{1,4096}: )(?:Unexpected end of JSON input|Unexpected non-whitespace character after JSON at position \d+ \(line \d+ column \d+\)|Unterminated string in JSON at position \d+ \(line \d+ column \d+\)|Expected ',' or '\}' after property value in JSON at position \d+ \(line \d+ column \d+\))(?:\r?\n|$)/mu.test(output)
     && tests > 0
     && passed > 0
     && failed === 0

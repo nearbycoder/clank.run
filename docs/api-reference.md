@@ -691,6 +691,8 @@ grant inspection, reduction, and revocation.
 - `AuthClient`: `.user`, `.session`, `.authenticated`, `.loading`, `.error`, `.reload`, `.register`, `.login`, `.logout`, `.logoutAll`, `.changePassword`.
 - `AuthRequest`: `.user`, `.session`, `.csrfToken`, `.requireUser()`, `.requireRole()`.
 - `AuthError`: explicit safe auth code, status, and optional retry delay.
+- `openOrganizationSso(database, auth, options)`: organization OIDC authentication and opt-in verified identity linking with a persistent policy revision. See [organization and account security](organization-security.md) for provider verification, scoped offboarding, migration and retry requirements.
+- `createOrganizationIdentityClient({ auth, url?, prefix?, fetch? })`: account-bound browser identity inventory, fresh provider linking and versioned unlink receipts. `AccountSecurity({ auth, identities?, onIdentityRedirect? })` supplies the corresponding account controls. Both are exported from `@clank.run/framework/account-security`.
 - Types: `AuthDefinition`, `AuthDefinitionOptions`, `AuthUser`, `AuthSession`, `AuthState`, `AuthRegisterInput`, `AuthLoginInput`, `AuthUserId`, `DefaultAuthProfile`.
 
 ## Full-stack backend

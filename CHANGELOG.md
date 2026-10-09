@@ -4,6 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add opt-in verified organization identity linking with fresh local and provider authentication,
+  durable subject ownership, versioned unlink receipts and organization-scoped offboarding.
+  Preserve unrelated organization access and expose guarded native account-security controls.
+- Recognize Node's malformed-property-value coverage artifact diagnostic for the existing
+  single bounded retry only after every test passes; keep test failures and coverage thresholds strict.
+
 - Reduce unmapped compiler output by removing complete erased declaration padding and compacting
   horizontal whitespace around erased types. Preserve token separators, runtime literal whitespace,
   CRLF/newline semantics and mapped debugging output without adding a minifier dependency.

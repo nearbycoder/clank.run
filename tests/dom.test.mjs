@@ -913,3 +913,29 @@ test('missing text, absent elements, client nodes and asynchronous views retain 
     assert.doesNotMatch(exportHydrationSnapshot(inspector.snapshot()), /private expected text/);
   } finally { inspector.dispose(); console.warn = warn; }
 });
+
+test("organization identity inventory and redirects cannot outlive account/session changes or disposal", async () => {
+  const user=signal({id:"alice"}),session=signal({id:"alice-session"}),pending=[];let delayed=false,redirected=[];
+  const record={id:"sso_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",organizationId:"private-team",issuer:"https://private-issuer.test",subject:"private-subject",version:1,active:true,linkedAt:0};
+  const inventory={enabled:true,policyRevision:1,providers:[{organizationId:"new-team",issuer:"https://new-issuer.test"}],identities:[record]};
+  const auth={user,session,listSessions:async()=>[],listPasskeys:async()=>[]};
+  const identities={list:()=>delayed?new Promise(resolve=>pending.push(resolve)):Promise.resolve(inventory),start:()=>new Promise(resolve=>pending.push(resolve))};
+  const root=new FakeElement("main"),dispose=render(root,h(AccountSecurity,{auth,identities,onIdentityRedirect:url=>redirected.push(url)}));
+  const find=(node,text)=>{if(node.localName==="button"&&node.textContent===text)return node;for(const child of node.childNodes){const result=find(child,text);if(result)return result}};
+  const click=text=>find(root,text).listeners.get("click")({}),settle=()=>new Promise(resolve=>setImmediate(resolve));
+  try {
+    click("Refresh organization identities");await settle();assert.match(root.textContent,/private-subject/);
+    click("Link organization identity");session.value={id:"alice-session-2"};pending.shift()({authorizationUrl:"https://old-provider.test/authorize",expiresAt:Date.now()+1000});await settle();assert.deepEqual(redirected,[]);assert.doesNotMatch(root.textContent,/private-subject/);
+    delayed=true;click("Refresh organization identities");await settle();user.value={id:"bob"};session.value={id:"bob-session"};pending.shift()(inventory);await settle();assert.doesNotMatch(root.textContent,/private-subject|private-issuer/);
+    click("Refresh organization identities");await settle();dispose();pending.shift()(inventory);await settle();assert.equal(root.textContent,"");assert.equal(user.observers.size,0);assert.equal(session.observers.size,0);
+  } finally {dispose()}
+});
+
+test("organization unlink controls retain the exact version and retry key after a lost response", async () => {
+  const user=signal({id:"alice"}),session=signal({id:"alice-session"}),requests=[];
+  const record={id:"sso_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",organizationId:"company",issuer:"https://issuer.test",subject:"subject",version:7,active:true,linkedAt:0};
+  const identities={list:async()=>({enabled:true,policyRevision:1,providers:[],identities:[record]}),unlink:async input=>{requests.push({...input});throw new Error("Response lost; retry the same request.")}};
+  const auth={user,session,listSessions:async()=>[],listPasskeys:async()=>[]};const root=new FakeElement("main"),dispose=render(root,h(AccountSecurity,{auth,identities}));
+  const find=(node,text)=>{if(node.localName==="button"&&node.textContent===text)return node;for(const child of node.childNodes){const result=find(child,text);if(result)return result}},click=text=>find(root,text).listeners.get("click")({}),settle=()=>new Promise(resolve=>setImmediate(resolve));
+  try {click("Refresh organization identities");await settle();click("Unlink identity from company");await settle();click("Unlink identity from company");await settle();assert.equal(requests.length,2);assert.deepEqual(requests[0],requests[1]);assert.equal(requests[0].expectedVersion,7);assert.match(requests[0].idempotencyKey,/^[a-f0-9-]{36}$/u);user.value=null;session.value=null;assert.doesNotMatch(root.textContent,/issuer.test|Response lost|subject/);}finally{dispose()}
+});

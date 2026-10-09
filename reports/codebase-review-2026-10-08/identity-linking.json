@@ -1,0 +1,312 @@
+{
+  "featureId": "11",
+  "feature": "Verified multi-organization identity linking",
+  "date": "2026-10-09",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/283",
+  "baseCommit": "5b5ced7dbd72c0c5544ca65a7ab05a1148910447",
+  "branch": "codex/organization-identity-linking",
+  "status": "implemented; awaiting fresh hosted checks and protected merge",
+  "mergedFeatureCount": 20,
+  "remainingUnmergedFeatures": 20,
+  "publicContract": {
+    "server": "OrganizationSsoOptions.identityLinking with positive increasing policyRevision and bounded active/retained identities; optional scoped onOffboard context",
+    "browser": "createOrganizationIdentityClient and optional AccountSecurity identity controls in the existing module",
+    "routes": [
+      "GET /__clank/sso/identities",
+      "POST /__clank/sso/link/{organizationId}",
+      "POST /__clank/sso/unlink"
+    ],
+    "sharedMode": "Explicit linking/unlinking persists shared account mode; dedicated accounts retain prior global-disable offboarding"
+  },
+  "boundaries": {
+    "localProof": "Original browser account/session with real local MFA or user-verified passkey within five minutes; origin and CSRF checked",
+    "providerProof": "Code/PKCE/signed JWT with nonce, exact issuer/audience and signed fresh auth_time; provider email never selects or merges accounts",
+    "authority": "Current policy/provider configuration, original session, identity generation and revocations rechecked around asynchronous work and the transaction",
+    "ownership": "Retained issuer/subject ownership cannot transfer to another local account, including inactive bindings and another organization",
+    "offboarding": "Exact organization identity, membership and project grants removed; all browser/recovery/generic OAuth credentials and broad platform tokens revoked; unrelated scoped organization/project credentials preserved",
+    "lastOwner": "Voluntary unlink requires another enabled owner; disabled owner rows do not count. Explicit provider offboarding remains authoritative. Last-owner operator recovery belongs to feature 13",
+    "independentOperator": "Existing independent platform root authority is separate from organization membership"
+  },
+  "retryAndCapacity": {
+    "callback": "Accepted exact state/code/browser/session receipt survives controller restart while policy and active identity/version remain current; pre-acceptance interruption consumes state",
+    "unlink": "Current identity/version and stable 16\u2013128-character key; exact receipt survives restart and later explicit relink without repeating removal; changed input rejects",
+    "stateLifetimeMs": 600000,
+    "stateGlobalLimit": 1000,
+    "statePerAccountLimit": 10,
+    "activeDefault": 10,
+    "retainedDefault": 50,
+    "retainedMaximum": 100,
+    "unlinkReceiptPerAccountLimit": 100,
+    "receiptEviction": "No silent eviction",
+    "clientDeadlineMs": 15000,
+    "clientResponseMaximumBytes": 262144
+  },
+  "migrationAndRollback": {
+    "migration": "Transactional replacement of legacy global user uniqueness preserves identity, revocation and audit rows; adds stable IDs, versions, account mode/generation, policy, link/unlink receipts",
+    "policy": "Increase policyRevision for provider/secret/profile/allowlist/policy changes; reject older live policy revisions",
+    "disabledOption": "Stops link/unlink admission while shared offboarding mode remains durable",
+    "downgrade": "Older binaries cannot safely enforce shared identities; stop admission, remove extra bindings with the upgraded controller and restore a separately verified compatible snapshot preserving revocations",
+    "hooks": "Custom synchronous entitlement hooks must adopt scoped linked-account removal before enabling the option"
+  },
+  "validation": {
+    "focused": {
+      "tests": 74,
+      "pass": 74,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "includes": "68 actual identity/platform/client/DOM checks plus six strict coverage regressions"
+    },
+    "types": {
+      "packedPositiveNegativeFixtures": 28,
+      "existingSourceDiagnostics": 159,
+      "baselineAllowance": 163,
+      "newDiagnostics": 0,
+      "baselineChanged": false,
+      "packedOpenApiExamples": "passed"
+    },
+    "node26": {
+      "tests": 1965,
+      "pass": 1962,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": [
+        91.91,
+        80.62,
+        90.12
+      ],
+      "fullReleaseGate": "passed",
+      "ordinaryUid": 1000,
+      "log": "identity-linking-node26-gate-05.log"
+    },
+    "node22": {
+      "tests": 1965,
+      "pass": 1962,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": [
+        91.9,
+        80.64,
+        90.17
+      ],
+      "fullReleaseGate": "passed",
+      "ordinaryUid": 1000,
+      "log": "identity-linking-node22-gate-05.log"
+    },
+    "processProof": {
+      "status": "passed",
+      "checks": [
+        "real password+MFA and fresh provider code/PKCE/ES256 acceptance",
+        "accepted callback exact replay survives actual controller SIGKILL/restart",
+        "lost accepted unlink receipt survives second actual SIGKILL/restart and fresh local login",
+        "fresh explicit relink increments original binding and replay cannot unlink it again",
+        "one durable unlink event/receipt and verified owned process cleanup"
+      ],
+      "controllerRestarts": 2,
+      "productionHostModified": false
+    },
+    "browser": {
+      "realKeyboard": "Local password/MFA then actual disposable provider password form, authorization callback and versioned link/unlink",
+      "finalClient": "Source 04 client equals final source 05; real lost accepted unlink clears auth and controls, explicit relink increments version",
+      "phone": "Two-provider identity inventory at 390px/375px content verified before final transport-only changes; no identity UI layout changes afterward",
+      "revocation": "Real session revocation before inventory response cannot repaint controls; second account sees zero prior-account identities",
+      "retries": "Lost response browser finding reproduced and fixed; actual server receipts remain one accepted removal",
+      "viewportOverrides": "reset",
+      "providerScope": "Two real HTTP/code/PKCE/ES256 disposable IdPs; no external enterprise tenant certification"
+    },
+    "docs": {
+      "canonicalGuides": 98,
+      "words": 169047,
+      "build": "passed",
+      "doctor": {
+        "passed": 6,
+        "warnings": 1,
+        "failed": 0,
+        "warning": "Optional project link absent"
+      },
+      "offlineArtifact": "0835da7d1ccbb12fcd9755e829babde05a678c63c19c61a55a060d976f3491b5",
+      "uploaded": false,
+      "httpEndpoints": 8,
+      "mcp": "discovery, tools/list, docs.search and docs.read passed",
+      "browser": "Desktop/phone home, actual search and long guide verified; final active-owner/deadline text verified at both widths",
+      "agentFormatBrowser": "All six raw/JSON/LLM/discovery navigation attempts blocked by the in-app browser at each width; verified separately through HTTP/MCP, no rendered-format claim"
+    }
+  },
+  "package": {
+    "files": 405,
+    "fileLimit": 405,
+    "unpackedBytes": 6129809,
+    "byteLimit": 6291456,
+    "remainingBytes": 161647,
+    "compressedBytes": 1469460,
+    "newDependencies": 0
+  },
+  "reviewFindings": {
+    "resolved": [
+      "Lost accepted unlink errors, malformed/oversized bodies and transport failures now reload real authority; account/session changes fence results",
+      "Disabled co-owner regression failed before the final query; enabled owners are now required",
+      "Known malformed-property-value experimental coverage artifact receives only the existing single retry after every test passes; actual failures and coverage shortfalls are never retried"
+    ],
+    "retainedForSeparateMaintenance": [
+      "Source 03 full run caught an existing candidate rollback terminating an admitted request with 502. Final source 05 gates passed without relaxing that test. Read analysis identifies missing candidate ingress drain before verified cleanup; deterministic held-response regression and a separate maintenance PR are next."
+    ]
+  },
+  "sourceHashes": {
+    "src/organization-sso.ts": "f27a97546143045c73a02f610dd69703b61efaaa35e24cc47d0b65ef42e5e181",
+    "src/organization-sso.d.ts": "30f121149369b150b090976bd69bcb74152ededa2ba7d8fc7a0ae8ca86153f44",
+    "src/account-security.ts": "85f0b19365394dd005eaa80329c5256bfa6425e27951ba247c2c84b90b52b805",
+    "src/account-security.d.ts": "fe5a821588969df3d3dcd7fcd5be2bc2632a3d51c896565d329c9c2ddd7f68a8",
+    "src/platform.ts": "21da5d1b21e973e5740b298e4e88ce5ad9eb3d6b7da22f837851a7825aa4bbb2",
+    "tests/organization-security.test.mjs": "9343362f57eca400476a648b686ee80308c5c3ba4c54451d9d802605707b3edb",
+    "tests/dom.test.mjs": "66703937c3ba151cc6336b1e3a41e22f1bb1adf25ac760abde859eebf30b306c",
+    "type-tests/organization-identity-linking.ts": "a172f1a601d0de890b5fceb2aaf0b3e6f823e0fe0b8b9c51ba33068abdba55cd",
+    "tests/fixtures/organization-identity-browser.mjs": "30336e214453dfa0c3aea198955166fecd3cf3b7dfc1501040c6998e206e3d54",
+    "tests/fixtures/organization-identity-browser-entry.mjs": "5066a61a37c17b17829ff22f43139710d4cdeba7f26e64c19d1cd51d0df305d5",
+    "docs/organization-security.md": "f8ac0dd029065340424050b3ded70e4f2540547ddb6c4051b151a47817b4782c",
+    "docs/auth.md": "245e24d57f1b0e8b3d4ecd5386a90c2c5be279689cefcb4159f726bc8a5861da",
+    "CHANGELOG.md": "aaa566099924da2f6d1e513cef706b46d09f5268bd795b8a696dfda6cab2452e",
+    "scripts/coverage-gate.mjs": "d645381d24b186aaf9903cc8938e5b49cf2fb650777be8fabe8b4f6d4ab27329",
+    "tests/test-coverage.test.mjs": "3a6e8c715ca7c34034d8efd38614add8d5cab39d4f1230fe211d64efae869558",
+    "docs/api-reference.md": "4995089c17386ea0cc55a0a87ab36b55be66e435c1083f492fdb79a0b23b2c37"
+  },
+  "privateEvidence": {
+    "identity-linking-source-05.json": {
+      "sha256": "55a2324754241b09aed68bb5a98f3753c5e1c0b2763122039b32a79eee34134e",
+      "bytes": 2705,
+      "immutablePrivateCopy": "55a2324754241b09aed68bb5a98f3753c5e1c0b2763122039b32a79eee34134e.json"
+    },
+    "identity-linking-source-05.tar": {
+      "sha256": "5f8040b357fa7fe78524764b6959cda1db1b878e89beb2ac0f2a34221a639d33",
+      "bytes": 1341440,
+      "immutablePrivateCopy": "5f8040b357fa7fe78524764b6959cda1db1b878e89beb2ac0f2a34221a639d33.tar"
+    },
+    "identity-linking-focused-11.log": {
+      "sha256": "0b8fd1305feb138d7a7bc4326c40f93cf9d28dff46391d51cc51b082ffffc74d",
+      "bytes": 7720,
+      "immutablePrivateCopy": "0b8fd1305feb138d7a7bc4326c40f93cf9d28dff46391d51cc51b082ffffc74d.log"
+    },
+    "identity-linking-types-07.log": {
+      "sha256": "a600664de2ee5f6292c0d4f3ae0e4112b60ef1e08e63e9b8765eb96a9fbe48d6",
+      "bytes": 257,
+      "immutablePrivateCopy": "a600664de2ee5f6292c0d4f3ae0e4112b60ef1e08e63e9b8765eb96a9fbe48d6.log"
+    },
+    "identity-linking-coverage-regression-02.log": {
+      "sha256": "3106cf5ab4c0ac8f63906e28ba2a878f045ad659e5f66b8f0d7b1e0a76f7a2eb",
+      "bytes": 661,
+      "immutablePrivateCopy": "3106cf5ab4c0ac8f63906e28ba2a878f045ad659e5f66b8f0d7b1e0a76f7a2eb.log"
+    },
+    "identity-linking-node26-gate-05.log": {
+      "sha256": "f222cd2ae3c7f61fbe6ccb3e44e6fc6bafc25f6eb942c7a3691947220e4efebd",
+      "bytes": 513350,
+      "immutablePrivateCopy": "f222cd2ae3c7f61fbe6ccb3e44e6fc6bafc25f6eb942c7a3691947220e4efebd.log"
+    },
+    "identity-linking-node22-gate-05.log": {
+      "sha256": "40462c7d31dc9ce1c8056f1d9492154318a9131c1e50fe6460f82ab23cf50c12",
+      "bytes": 513477,
+      "immutablePrivateCopy": "40462c7d31dc9ce1c8056f1d9492154318a9131c1e50fe6460f82ab23cf50c12.log"
+    },
+    "identity-linking-node26-gate-02.log": {
+      "sha256": "40f8ca3785becca7e2e12f97960fbd0694a758b8dfecd1cdb0344f2b2e75554e",
+      "bytes": 467557,
+      "immutablePrivateCopy": "40f8ca3785becca7e2e12f97960fbd0694a758b8dfecd1cdb0344f2b2e75554e.log"
+    },
+    "identity-linking-node26-gate-03.log": {
+      "sha256": "4e41a28db601cfc441b79380438c1227d142eb9b35e975546dadaaa29e6ea0a2",
+      "bytes": 513255,
+      "immutablePrivateCopy": "4e41a28db601cfc441b79380438c1227d142eb9b35e975546dadaaa29e6ea0a2.log"
+    },
+    "identity-linking-disabled-owner-before-01.log": {
+      "sha256": "8bbc892ac17b039260f495dc88ca09ae0105c57be3ea75f12e971158f9430af6",
+      "bytes": 1370,
+      "immutablePrivateCopy": "8bbc892ac17b039260f495dc88ca09ae0105c57be3ea75f12e971158f9430af6.log"
+    },
+    "identity-linking-process-proof-02.json": {
+      "sha256": "c90925dcde9a142f0677b0a20c672d155520bb2a6a75ab65f592887c42951569",
+      "bytes": 574,
+      "immutablePrivateCopy": "c90925dcde9a142f0677b0a20c672d155520bb2a6a75ab65f592887c42951569.json"
+    },
+    "identity-linking-process-proof-03.log": {
+      "sha256": "a797652d28f72b3fffa29cbc55c1bfdb5ca2087cbcee49afd7de40a6587033e6",
+      "bytes": 525,
+      "immutablePrivateCopy": "a797652d28f72b3fffa29cbc55c1bfdb5ca2087cbcee49afd7de40a6587033e6.log"
+    },
+    "identity-linking-process-proof-02.mjs": {
+      "sha256": "f66c7fee890159efb55be6edf464d1da4396f45c17b9fc1a29bb5e23d57a77ae",
+      "bytes": 5696,
+      "immutablePrivateCopy": "f66c7fee890159efb55be6edf464d1da4396f45c17b9fc1a29bb5e23d57a77ae.mjs"
+    },
+    "identity-linking-browser-proof-04.json": {
+      "sha256": "e823a3ffd273fe7b058834fd6cc07de211bab264775395706f6a09256b45b6d6",
+      "bytes": 466,
+      "immutablePrivateCopy": "e823a3ffd273fe7b058834fd6cc07de211bab264775395706f6a09256b45b6d6.json"
+    },
+    "identity-linking-browser-journal-01.json": {
+      "sha256": "3f6d8065af914efdf79fd4c216f572822a73562390f22144461afc9a86b07dd0",
+      "bytes": 887,
+      "immutablePrivateCopy": "3f6d8065af914efdf79fd4c216f572822a73562390f22144461afc9a86b07dd0.json"
+    },
+    "identity-linking-browser-journal-02.json": {
+      "sha256": "580174ed43e615fd0989ff9d894955f01dc4a27b8b01788366f0a255c3dfcd15",
+      "bytes": 846,
+      "immutablePrivateCopy": "580174ed43e615fd0989ff9d894955f01dc4a27b8b01788366f0a255c3dfcd15.json"
+    },
+    "identity-linking-browser-journal-04.json": {
+      "sha256": "2a44ace9276ff7e58a0254c38d75a63a6859fda7e55e6991a1aba96f38fad77f",
+      "bytes": 1015,
+      "immutablePrivateCopy": "2a44ace9276ff7e58a0254c38d75a63a6859fda7e55e6991a1aba96f38fad77f.json"
+    },
+    "identity-linking-phone-01.png": {
+      "sha256": "e6d2da0c05bf01de50694ff5e5d187c5973445d272d1c7b2edd56485d2384a79",
+      "bytes": 132093,
+      "immutablePrivateCopy": "e6d2da0c05bf01de50694ff5e5d187c5973445d272d1c7b2edd56485d2384a79.png"
+    },
+    "identity-linking-cleared-04.png": {
+      "sha256": "a6f0cda5dd663b56887fc2d86ee6911c6dd2494d275b969c15899e336c9daf73",
+      "bytes": 47723,
+      "immutablePrivateCopy": "a6f0cda5dd663b56887fc2d86ee6911c6dd2494d275b969c15899e336c9daf73.png"
+    },
+    "identity-linking-docs-browser-05.json": {
+      "sha256": "62612e442240f2dcc81b88dc2c2112008bcc3f9e1d40e00be26b57331fc7f301",
+      "bytes": 4014,
+      "immutablePrivateCopy": "62612e442240f2dcc81b88dc2c2112008bcc3f9e1d40e00be26b57331fc7f301.json"
+    },
+    "identity-linking-docs-build-05.log": {
+      "sha256": "a980a5b3019ddc7e19836bffe63cad1f3bb0ac331f5b2f0ae19e294ddeaa72e6",
+      "bytes": 114,
+      "immutablePrivateCopy": "a980a5b3019ddc7e19836bffe63cad1f3bb0ac331f5b2f0ae19e294ddeaa72e6.log"
+    },
+    "identity-linking-docs-doctor-05.log": {
+      "sha256": "edb9bf12470322913c671ba22fd26395f713958f08bc10e21e7ec70c88d15d39",
+      "bytes": 607,
+      "immutablePrivateCopy": "edb9bf12470322913c671ba22fd26395f713958f08bc10e21e7ec70c88d15d39.log"
+    },
+    "identity-linking-docs-offline-05.log": {
+      "sha256": "d59bd3372d2b9419f5be83953f48159a78ac6257129c4c41b455ff104209ae0b",
+      "bytes": 453,
+      "immutablePrivateCopy": "d59bd3372d2b9419f5be83953f48159a78ac6257129c4c41b455ff104209ae0b.log"
+    },
+    "identity-linking-docs-endpoints-05.log": {
+      "sha256": "668a72ea8f989acddd8c7ad94e889a807f57568dc77feb211bdddf10c6ee64f8",
+      "bytes": 552,
+      "immutablePrivateCopy": "668a72ea8f989acddd8c7ad94e889a807f57568dc77feb211bdddf10c6ee64f8.log"
+    },
+    "identity-linking-pack-04.json": {
+      "sha256": "cbd54cd5e4830d1fb88b6147e732208ffc892c4f9bd9e91ba80dc63d1535f673",
+      "bytes": 42315,
+      "immutablePrivateCopy": "cbd54cd5e4830d1fb88b6147e732208ffc892c4f9bd9e91ba80dc63d1535f673.json"
+    },
+    "canary-candidate-drain-review-01.txt": {
+      "sha256": "8797a096950837c0a411498e9c3203650d87532769b491c0d7c23d347f832a3a",
+      "bytes": 1197,
+      "immutablePrivateCopy": "8797a096950837c0a411498e9c3203650d87532769b491c0d7c23d347f832a3a.txt"
+    }
+  },
+  "delivery": {
+    "hostedChecks": "pending",
+    "merge": "pending",
+    "independentReview": false,
+    "productionHostCertified": false
+  }
+}

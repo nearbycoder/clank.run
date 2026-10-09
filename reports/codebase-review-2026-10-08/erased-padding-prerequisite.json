@@ -3,7 +3,7 @@
   "date": "2026-10-09",
   "baseCommit": "114945b36b0ce367ffac3e914ebcf90ff4753b08",
   "branch": "codex/erased-type-padding-prerequisite",
-  "status": "implemented; hosted review and protected merge pending",
+  "status": "merged",
   "finding": "Release-window package had only 24824 bytes under the unchanged 6 MiB ceiling. Native stripping left horizontal indentation and spaces between erased type words.",
   "change": "Compact complete horizontal runs containing erased syntax and remove padding on fully erased lines. Keep every newline, token separators and unchanged literal/comment whitespace. Mapped and transform-only output remains unchanged.",
   "package": {
@@ -130,6 +130,10 @@
     "source-01.json": {
       "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/48b2a2a2d97d4a409c44d9be7eac4d9ba06a20e32c570fbfa7f570624731c663-erased-padding-source-01.json",
       "sha256": "48b2a2a2d97d4a409c44d9be7eac4d9ba06a20e32c570fbfa7f570624731c663"
+    },
+    "hostedMerge": {
+      "path": "/tmp/clank-review-2026-10-08/erased-padding-evidence/6a44626a1d9ee5844fefc65af743d680467b6efe74f30d9efeab21159c9bc39e-erased-padding-hosted-merge-01.json",
+      "sha256": "6a44626a1d9ee5844fefc65af743d680467b6efe74f30d9efeab21159c9bc39e"
     }
   },
   "compatibility": {
@@ -146,5 +150,20 @@
     "Three existing privileged skips are not claimed as host certification.",
     "Production Railway remains uncertified.",
     "Author review is non-independent."
-  ]
+  ],
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/284",
+    "reviewedHead": "d2220113d5571ba5e672d65bb4cde71a6e6fdffd",
+    "reviewedTree": "ebfce5d9f38ec4b04a4938bfc5fba5af925bee93",
+    "mergeCommit": "5b5ced7dbd72c0c5544ca65a7ab05a1148910447",
+    "mergeTree": "ebfce5d9f38ec4b04a4938bfc5fba5af925bee93",
+    "hostedChecks": "all six passed",
+    "codeql": "no new alerts",
+    "unresolvedThreads": 0,
+    "authorCommentReview": 5474861407,
+    "independentApproval": false,
+    "protectedMerge": "expected-head squash; no bypass",
+    "bothMainCheckouts": "synchronized",
+    "preExistingFilesPreserved": 23
+  }
 }
