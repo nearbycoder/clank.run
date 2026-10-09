@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { spawn } from 'node:child_process';
-import { createServer } from 'node:net';
+import { reservePlatformTestPorts } from './platform-test-ports.mjs';
 import { openPlatform } from '../../dist/platform.js';
 import { createDeploymentBundle, deploymentDigest, parseDeploymentConfig } from '../../dist/deploy.js';
 
@@ -27,6 +27,7 @@ async function childPlatform(options) {
   });
   await initialized;
   return {
+    diagnostics: () => stderr,
     async handle(request) {
       const body = request.body ? Buffer.from(await request.arrayBuffer()).toString('base64') : null;
       return new Promise((resolve, reject) => { const id = ++sequence; pending.set(id, { resolve, reject });
@@ -39,28 +40,23 @@ async function childPlatform(options) {
 export async function fixture(t, subprocess = false, overrides = {}) {
   const origin = overrides.publicUrl ?? 'http://127.0.0.1:4200';
   const root = await mkdtemp(join(tmpdir(), 'clank-environment-'));
-  // Other desktop applications can occupy a previously free fixed test port.
-  // Probe a fresh bounded range for this fixture; never terminate its occupant.
-  let appPortStart;
-  for(let attempt=0;attempt<20&&appPortStart===undefined;attempt++){
-    const start=35000+Math.floor(Math.random()*25000),probes=[];
-    try {
-      for(let port=start;port<=start+30;port++){
-        const probe=createServer();probes.push(probe);
-        await new Promise((resolve,reject)=>{probe.once('error',reject);probe.listen(port,'127.0.0.1',resolve)});
-      }
-      appPortStart=start;
-    } catch(error){if(error.code!=='EADDRINUSE')throw error}
-    finally{await Promise.all(probes.filter(probe=>probe.listening).map(probe=>new Promise((resolve,reject)=>probe.close(error=>error?reject(error):resolve()))))}
-  }
-  assert.ok(appPortStart!==undefined,'An available owned application port range is required.');
+  const ports = await reservePlatformTestPorts(), appPortStart = ports.start;
   const options = { dataDirectory: join(root, 'platform'), publicUrl: origin, signup: true,
     appPortStart, appPortEnd: appPortStart+30, backups: { intervalMs: false }, previews: { cleanupIntervalMs: false },
     ingress: { baseDomain: 'apps.example.test', domainRecheckIntervalMs: false }, ...overrides };
   const open = () => subprocess ? childPlatform(options) : openPlatform(options);
-  let platform = await open();
+  let platform;
   const servers = [];
-  t.after(async () => { for (const server of servers) await server.close(); await platform.close(); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => {
+    for (const server of servers) await server.close();
+    await platform?.close();
+    const fences = (await readdir(join(root, 'platform/runtime-guardians')).catch(error => {
+      if (error.code === 'ENOENT') return []; throw error;
+    })).filter(name => name.endsWith('.json'));
+    assert.deepEqual(fences, [], 'Unverified fixture runtime fences must retain their root and port lease.');
+    await rm(root, { recursive: true, force: true }); await ports.release();
+  });
+  platform = await open();
   const request = (path, body, method = body === undefined ? 'GET' : 'POST', account) => new Request(origin + path, {
     method, headers: { origin, ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       ...(account ? { cookie: account.cookie, 'x-clank-csrf': account.csrf } : {}) },
@@ -68,6 +64,7 @@ export async function fixture(t, subprocess = false, overrides = {}) {
   });
   const call = async (path, body, expected = 200, method, account = owner) => {
     const response = await platform.handle(request(path, body, method, account)), data = await response.json();
+    if (response.status !== expected && platform.diagnostics) t.diagnostic(platform.diagnostics());
     assert.equal(response.status, expected, JSON.stringify(data)); return data;
   };
   const account = async email => {
