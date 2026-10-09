@@ -40,6 +40,74 @@ export type TableIndexes<Table> = Table extends TableDefinition<any, infer Index
 export type TableOwned<Table> = Table extends TableDefinition<any, any, infer Owned> ? Owned : false;
 export type Comparison = "eq" | "neq" | "lt" | "lte" | "gt" | "gte";
 type QueryField<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> = keyof DocumentFor<Schema, Name> & string;
+export type AggregateScalar = string | number | boolean | null;
+type AggregateKeys<Value, Kind> = {
+    [Key in keyof Value & string]: [
+        Exclude<Value[Key], undefined>
+    ] extends [never] ? never : Exclude<Value[Key], undefined> extends Kind | null ? [
+        Exclude<Value[Key], null | undefined>
+    ] extends [never] ? null extends Kind ? Key : never : Key : never;
+}[keyof Value & string];
+/** A direct reference declared with s.id(target), optionally nullable or optional. */
+export type AggregateJoin<DB extends DatabaseSchema<any>, Name extends TableName<DB>> = {
+    [Target in TableName<DB>]: {
+        readonly table: Target;
+        readonly via: AggregateKeys<TableValue<DB["tables"][Name]>, Id<Target>>;
+    };
+}[TableName<DB>];
+type AggregateSource<Joins> = "root" | (keyof Joins & string);
+type AggregateTable<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins, Source> = Source extends "root" ? Name : Source extends keyof Joins ? Joins[Source] extends {
+    readonly table: infer Target extends TableName<DB>;
+} ? Target : never : never;
+type AggregateFields<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins, Kind> = {
+    [Source in AggregateSource<Joins>]: {
+        readonly source: Source;
+        readonly field: AggregateKeys<TableValue<DB["tables"][AggregateTable<DB, Name, Joins, Source>]>, Kind>;
+    };
+}[AggregateSource<Joins>];
+export type AggregateField<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins = {}> = AggregateFields<DB, Name, Joins, AggregateScalar>;
+export type AggregateMeasure<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins = {}> = {
+    readonly count: true;
+    readonly sum?: never;
+} | {
+    readonly sum: AggregateFields<DB, Name, Joins, number>;
+    readonly count?: never;
+};
+export interface AggregateLimits {
+    /** Candidate source rows: default 1,000, maximum 10,000. */
+    readonly maxRows?: number;
+    /** Distinct related table/ID lookups, including misses: default 1,000, maximum 10,000. */
+    readonly maxRelated?: number;
+    /** Combined stored UTF-8 source and distinct related JSON: default 2 MiB, maximum 8 MiB. */
+    readonly maxBytes?: number;
+    /** Output groups: default 100, maximum 1,000. */
+    readonly maxGroups?: number;
+    /** Serialized UTF-8 result: default 64 KiB, maximum 256 KiB. */
+    readonly maxOutputBytes?: number;
+}
+export interface AggregateOptions<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins, Measures extends Record<string, AggregateMeasure<DB, Name, Joins>>, Group extends AggregateField<DB, Name, Joins> | undefined> {
+    readonly joins?: Joins;
+    readonly measures: Measures;
+    readonly groupBy?: Group;
+    /** Every source needs an explicit synchronous policy. Its db retains caller scope and tracked dependencies. */
+    readonly authorize: {
+        readonly [Source in AggregateSource<Joins>]: (record: Readonly<DocumentFor<DB, AggregateTable<DB, Name, Joins, Source>>>, db: ReadDatabase<DB>) => boolean;
+    };
+    readonly limits?: AggregateLimits;
+}
+type AggregateGroup<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins, Group> = Group extends {
+    readonly source: infer Source;
+    readonly field: infer Field;
+} ? Field extends keyof TableValue<DB["tables"][AggregateTable<DB, Name, Joins, Source>]> ? Exclude<TableValue<DB["tables"][AggregateTable<DB, Name, Joins, Source>]>[Field], undefined> | null : never : null;
+export interface AggregateResult<DB extends DatabaseSchema<any>, Name extends TableName<DB>, Joins, Measures, Group> {
+    readonly protocol: "clank-aggregate/1";
+    readonly groups: readonly {
+        readonly group: AggregateGroup<DB, Name, Joins, Group>;
+        readonly values: {
+            readonly [Measure in keyof Measures]: number;
+        };
+    }[];
+}
 export interface QueryBuilder<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> {
     where<Field extends QueryField<Schema, Name>>(field: Field, value: DocumentFor<Schema, Name>[Field]): QueryBuilder<Schema, Name>;
     where<Field extends QueryField<Schema, Name>>(field: Field, comparison: Comparison, value: DocumentFor<Schema, Name>[Field]): QueryBuilder<Schema, Name>;
@@ -47,6 +115,15 @@ export interface QueryBuilder<Schema extends DatabaseSchema<any>, Name extends T
     limit(count: number): QueryBuilder<Schema, Name>;
     collect(): Array<DocumentFor<Schema, Name>>;
     first(): DocumentFor<Schema, Name> | null;
+    /** Complete authorized totals; rejects limit(), oversized plans and asynchronous policies. */
+    aggregate<const Measures extends Record<string, AggregateMeasure<Schema, Name>>, const Group extends AggregateField<Schema, Name> | undefined = undefined>(options: AggregateOptions<Schema, Name, {}, Measures, Group> & {
+        readonly joins?: undefined;
+    }): AggregateResult<Schema, Name, {}, Measures, Group>;
+    aggregate<const Joins extends Record<string, AggregateJoin<Schema, Name>>, const Measures extends Record<string, AggregateMeasure<Schema, Name, Joins>>, const Group extends AggregateField<Schema, Name, Joins> | undefined = undefined>(options: AggregateOptions<Schema, Name, Joins, Measures, Group> & {
+        readonly joins: Joins & {
+            readonly root?: never;
+        };
+    }): AggregateResult<Schema, Name, Joins, Measures, Group>;
 }
 export interface ReadTable<Schema extends DatabaseSchema<any>, Name extends TableName<Schema>> {
     get(id: Id<Name>): DocumentFor<Schema, Name> | null;

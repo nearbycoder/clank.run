@@ -1,0 +1,89 @@
+{
+  "feature": 22,
+  "title": "Authorized cross-table aggregates",
+  "date": "2026-10-09",
+  "baseCommit": "3481fc206a55eb3cc1c2d991497597f30619ec86",
+  "branch": "codex/authorized-aggregates",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/267",
+  "status": "local-release-validation-passed",
+  "acceptance": {
+    "contract": "QueryBuilder.aggregate preserves nominal direct s.id target fields, typed source aliases, declared numeric/scalar projections and exact result measure names. At most four inner references, sixteen measures and thirty-two filters; count/sum/group result protocol clank-aggregate/1 is immutable and deterministic.",
+    "authorization": "Caller owner SQL scopes both source candidates and each parent before metadata admission or decoding. Explicit synchronous policies run before contribution, roots before reference traversal. Missing, null, denied and other-owner references exclude the root from all measures. Repeated parents are decoded once, with independent alias policy caches and one contribution per accepted root.",
+    "bounds": "Native maxRows+1 ID/UTF-8 byte metadata precedes source JSON materialization. Parent metadata precedes each first scoped get. Combined stored bytes, distinct lookups including misses, groups, output bytes and numeric overflow fail without partial totals. Other-owner oversized records do not poison scoped admission. limit() is rejected.",
+    "consistency": "Real Node SQLite WAL writer commits a related update during the root policy callback. The active aggregate retains its original parent snapshot, a subsequent read sees the new commit, and reopening reproduces the same ordered result. Builders/readers retained after a transaction cannot aggregate in a later active transaction.",
+    "live": "Actual authenticated backend subscriptions with disabled and evicted caches remain quiet for other owners, unrelated parent/ACL IDs and other tables. Referenced parents, ACL revocation/restoration and source updates recompute. Revoking the session prevents later protected results and one-shot aggregate queries.",
+    "reviewFixes": "Inherited table/query/index field names fail closed. Actual declared constructor/toString names remain valid, with a real SQLite query/aggregate test. Plan and callback captures resist configuration mutation; policies cannot rewrite top-level numeric fields, and rejected asynchronous policies/thenables are contained.",
+    "compatibility": "Existing collect/first/filter and trusted undefined/null scope behavior retain their contracts. Existing public declarations are preserved; only aggregate types and builder overloads are added. No new exports, distribution modules, dependencies, storage tables or migration."
+  },
+  "validation": {
+    "focused": {
+      "tests": 10,
+      "pass": 10,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "path": "/tmp/clank-review-2026-10-08/aggregates-focused.log",
+      "sha256": "9cb5b375a179fa2198f36d72174a9e27da857f2855712b8ebf0366cf2cdce75f"
+    },
+    "consumerTypes": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 159,
+      "baselineAllowance": 163,
+      "newDiagnostics": 0,
+      "packedFixtures": 21,
+      "skipLibCheck": false,
+      "path": "/tmp/clank-review-2026-10-08/aggregates-types.log",
+      "sha256": "8414b7b380aa65c07d118141ddb667bf8a43a7b2620af3ceb813ae80292a2c4e"
+    },
+    "release": {
+      "status": "passed",
+      "node": "22.16.0",
+      "tests": 1862,
+      "pass": 1859,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 88.01,
+        "branches": 80.47,
+        "functions": 90.47
+      },
+      "documentation": "passed",
+      "packagedConformance": "passed",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 401,
+      "unpackedBytes": 6218111,
+      "fileCeiling": 401,
+      "byteCeiling": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/aggregates-check.log",
+      "sha256": "448f706e9f93697ab47d345b1d2e95f117b1b1f2862de55e8031bc8c2a6e1caf"
+    },
+    "pack": {
+      "path": "/tmp/clank-review-2026-10-08/aggregates-pack.json",
+      "sha256": "47eb3cffbd1fa15a70b6284de3a6982874a2674acb6fa0863e7a2496ecb180ab"
+    }
+  },
+  "limits": [
+    "Inner references exclude roots when any declared join is unavailable; related sums contribute once per accepted root, rather than once per unique parent.",
+    "Limits cover materialized candidates, related lookups, stored JSON and output, not SQLite internal scanning, trusted schema parsing/defaults or arbitrary policy computation/additional reads.",
+    "Policy-denied source candidates affect admission within the current owner scope, never successful totals/groups; failures must not be converted to complete zero results.",
+    "Policies are trusted pure synchronous boolean application callbacks; this API does not sandbox arbitrary JavaScript side effects.",
+    "IEEE 754 arithmetic retains decimal rounding; non-finite results and unsafe integer intermediates with integer operands reject.",
+    "Root dependencies remain owner/table-wide; only related and policy get dependencies are ID-selective.",
+    "No new privileged-host certification, production deployment or browser UI is claimed for this backend capability. The existing three Docker/XFS skips remain."
+  ],
+  "sourceHashes": {
+    "src/backend.ts": "a062e1193172542ff8ed8ddc8be714d7d335c87fdc3de4b8e50454d34e01626e",
+    "src/backend.d.ts": "c80641a55bd98d64422a3377f1ca19ed2938ff7ff12558c06f4f599be8a441ca",
+    "tests/aggregates.test.mjs": "63b34220f10882224bbaabf929f2b3af60a97c02e32a9d2763859271e703deb3",
+    "type-tests/aggregates.ts": "c92671e4e76d0b140af67bd702e8231d337d137318b60c63c4ba983db77ef75b",
+    "docs/authorized-aggregates.md": "c8bc361f68ecb6527d0edeea766b608fcfcf3d1bb854f17ea6fb890308f3ab4d",
+    "docs/database.md": "e2cf38a2b63a29069cefe6872b9ef8a499eec6db8848b593089edea56c0fbfbb",
+    "docs/api-reference.md": "0d54d94a2cf7ca4991c60d9e5076ed5f7033e07c3cecb300d43f05602b52cfeb",
+    "docs-site/content-manifest.mjs": "4ee90a685267f0a026b3f0275cbf9bcba2de289ea9005fecda5deff8ef7ea670",
+    "README.md": "24f3e0496c5065d121fe53e1faeb128bb829efd7fbe690bf67600a7b20fc0c7e",
+    "CHANGELOG.md": "1970360282d006b20f6537f96eefc5b3be592ba43f3b0cfc4161d5857f41bc6a"
+  }
+}

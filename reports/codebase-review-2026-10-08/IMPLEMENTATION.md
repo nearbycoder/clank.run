@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twelve of the forty proposed features are merged across nine feature batches. Search browsing (24) merged in [PR #264](https://github.com/nearbycoder/clank.run/pull/264) after all six hosted checks at the revised head. Both checkouts match main `22356868facd64e4470a11564b0b87122ed82659`. Twenty-eight features remain; component harness (32), proposed in issue #265, has passed local acceptance and is under review in [PR #266](https://github.com/nearbycoder/clank.run/pull/266). The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Thirteen of the forty proposed features are merged across ten feature batches. The component harness (32) merged in [PR #266](https://github.com/nearbycoder/clank.run/pull/266) after all six checks at its revised head, with both CodeQL threads resolved. Both checkouts match main `3481fc206a55eb3cc1c2d991497597f30619ec86`, and 23 existing files are preserved. Twenty-seven features remain; authorized aggregates (22), proposed in [issue #267](https://github.com/nearbycoder/clank.run/issues/267), are now in progress. Earlier delivery snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -232,9 +232,36 @@ packaged conformance and security pass. Exactly two distribution files bring the
 See [harness evidence](component-harness.json) and [guide](../../docs/component-harness.md).
 Hosted CodeQL review found two fixture alerts on the first head. Case-insensitive HTML
 assertions and fixed prebuilt fixture pages now pass actual HTTP injection regressions; the
-revised head requires fresh hosted checks. The feature is under review in
-[PR #266](https://github.com/nearbycoder/clank.run/pull/266); twelve features remain merged and twenty-eight remain
-unmerged until hosted checks and protected merge complete.
+revised head passed all six fresh hosted checks. [PR #266](https://github.com/nearbycoder/clank.run/pull/266)
+merged as `3481fc206a55eb3cc1c2d991497597f30619ec86`, matching the reviewed head
+`a8dc8940aa9a491ad373ded359e853095cf1bda6` tree. Both CodeQL threads are resolved and
+there are no requested changes. Both checkouts were synchronized and 23 existing files preserved.
+Thirteen features are merged; twenty-seven remain. Authorized aggregates (22) are next under proposal #267.
+
+## Authorized aggregates: feature 22
+
+Proposal [#267](https://github.com/nearbycoder/clank.run/issues/267) adds typed count/sum/group
+projections to existing query builders. Direct declared references use the caller's ownership
+scope, explicit per-source policies and the current SQLite snapshot. Native JSON admission
+precedes materialization; related lookups, groups, output and numeric overflow fail without
+partial totals. Missing or denied inner references never contribute. Policy ACL reads retain
+tracked dependencies; unrelated owners and parent IDs stay quiet. Retained builders/readers
+cannot aggregate in a later transaction. Inherited table/query/index field names are rejected
+while explicitly declared literal names remain valid.
+
+All ten focused tests pass, including a real concurrent WAL writer and restart, native-driver
+materialization instrumentation, owner isolation, capacity/Unicode/arithmetic failures, plan
+captures, separate alias policies and real authenticated live session revocation. All 21 packed
+consumer fixtures pass without new source diagnostics (159 actual; the allowance remains 163).
+The full Node 22.16 gate reports 1,862 tests, 1,859 passed, zero failures/cancellations and three
+existing privileged-host skips. Coverage is 88.01% lines, 80.47% branches and 90.47% functions.
+Documentation, packed conformance and security pass; the package remains 401 files / 6,218,111
+bytes under the unchanged 401-file / 6 MiB limits. No modules, dependencies or migrations are
+added. See [aggregate evidence](authorized-aggregates.json) and [guide](../../docs/authorized-aggregates.md).
+SQLite internal scans, trusted schema parsing and extra policy reads are outside admission
+limits; denied source candidates can affect admission in the owner's scope, never successful
+values or totals. This is backend validation and does not claim privileged host certification.
+Thirteen features remain merged; feature 22 is locally validated and awaiting reviewed delivery.
 
 ## Review prerequisites
 
@@ -273,7 +300,7 @@ unmerged until hosted checks and protected merge complete.
 | 19 | Durable human waits in workflows | Planned | Pending |
 | 20 | Workflow compensation steps | Planned | Pending |
 | 21 | Typed PostgreSQL application backend | Planned | Pending |
-| 22 | Authorized cross-table aggregates | Planned | Pending |
+| 22 | Authorized cross-table aggregates | Validated, awaiting merge | Proposal #267; typed owner/policy-scoped count/sum/group, native JSON admission and selective related/ACL updates. Ten real SQLite regressions, 21 packed fixtures and full minimum-Node release gate pass. `authorized-aggregates.json`. |
 | 23 | Source-linked search indexes | Implemented | Proposal #257; atomic source writes/deletes/history restore, pre-opened independent writers, two actual process crashes, resumable fenced rebuild, bounded drift diagnosis, current owner/record authorization and 16 packed consumer fixtures. Real keyboard/mobile/scope/disposal/revocation checks and full release gate pass. |
 | 24 | Search facets and stable result cursors | Implemented | Proposal #263; authorized facets, pinned paging and fenced saved definitions; 51 focused tests, 19 packed fixtures, complete release gate and actual browser controls. `search-browsing.json`. |
 | 25 | Import correction and upsert workflow | Implemented | Proposal #259; immutable server-verified source, separate durable corrections, version-fenced upserts, exact correction/apply receipts, two actual process crashes, lost responses/restart, ownership/current ACL and bounded admission. All 55 focused tests, 17 packed fixtures and full release gate pass; actual upload/keyboard/mobile/stale/account/disposal/revocation checks. |
@@ -283,7 +310,7 @@ unmerged until hosted checks and protected merge complete.
 | 29 | Durable media processing jobs | Planned | Pending |
 | 30 | Offline attachment queue | Planned | Pending |
 | 31 | Hydration mismatch inspector | Implemented | Optional metadata capture, pre-cleanup child paths, original TSX locations, patch/remount reasons, immutable bounded history and redacted JSON. Unit/packed consumer and real keyboard/mobile/cleanup checks pass. DOM gzip budget remains 12,000 bytes. |
-| 32 | Interactive component contract harness | In PR review | PR #266 / proposal #265; 19 focused tests, 20 packed type fixtures, eight actual Chrome journeys/96 steps and full Node 22.16 gate pass. Fresh hosted checks/merge pending. |
+| 32 | Interactive component contract harness | Implemented | PR #266 merged after all six fresh checks; 19 focused tests, 20 packed type fixtures, eight actual Chrome journeys/96 steps, minimum-Node release gate and CodeQL pass. |
 | 33 | OpenAPI export for backend functions | Implemented | Runtime schemas, cookie/CSRF and replay contracts; unsupported/coercive/refined shapes rejected; actual positive/negative authenticated HTTP requests tested against the packed artifact. `tests/openapi.test.mjs`, `type-tests/openapi.ts`. |
 | 34 | Local provider fleet simulator | Planned | Pending |
 | 35 | Translation extraction and review workflow | Implemented | Canonical catalog extraction, locale/source/current fences, placeholder/key/plural validation and reviewed diff acceptance. Node tests, packed types and real browser keyboard/mobile checks confirm the server/browser revision matches. |

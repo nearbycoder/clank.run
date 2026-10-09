@@ -4,6 +4,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add typed, caller-scoped count/sum/group projections over declared references, with explicit
+  record policies, native JSON admission, bounded output and selective related/ACL live updates.
+  Reject inherited table, query-field and index-field names while preserving declared literal keys.
+
 - Add optional typed component specimens with SSR/hydration, owned reset/disposal, common UI
   contracts, native controls and deterministic assertion exports. Extend browser journeys with
   native focus/key input, focus/layout assertions and ARIA checked-state inspection. Wait for

@@ -127,6 +127,11 @@ Singleton records, such as one profile per user, should accept `version: number 
 
 ## Consistent reads
 
+Typed `query().aggregate()` adds authorized count/sum/group projections over declared fields and
+direct references in the same snapshot. Every source needs a synchronous policy, and capacity
+checks fail before partial totals can escape. See [authorized aggregates](authorized-aggregates.md)
+for typing, owner/ACL boundaries, admission limits and selective live dependencies.
+
 Queries run inside a short deferred SQLite read transaction. The global revision is read in the same snapshot as the application rows, so a query cannot combine rows from different commits.
 
 Returned documents, cached query outputs, and change metadata are immutable at runtime. One subscriber cannot accidentally alter the snapshot delivered to another subscriber.

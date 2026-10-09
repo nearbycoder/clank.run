@@ -353,6 +353,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Authentication API](https://docs.clank.run/docs/auth)
 - [Security and deployment](https://docs.clank.run/docs/security)
 - [Database revisions and correctness](https://docs.clank.run/docs/database)
+- [Authorized count, sum and group projections](https://docs.clank.run/docs/authorized-aggregates)
 - [Platform security](https://docs.clank.run/docs/platform-security)
 - [Server primitives](https://docs.clank.run/docs/server)
 - [Architecture](https://docs.clank.run/docs/architecture)
