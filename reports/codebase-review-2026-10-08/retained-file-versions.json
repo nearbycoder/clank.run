@@ -5,7 +5,7 @@
   "baseCommit": "7eaaed08a28fbc340dc86d3203a65dba43e03765",
   "branch": "codex/retained-file-versions",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/253",
-  "status": "local-release-validation-passed",
+  "status": "merged",
   "acceptance": {
     "generations": "Opt-in immutable retired generations for replacement and deletion; opaque owner/key-bound history IDs, private capabilities and verified bytes.",
     "fencing": "Current signed reads bind provider generations; stale signed/public reads recheck generation after I/O. Restore snapshots the destination generation before reads and fences it through reservation/commit, including identical-digest replacements.",
@@ -101,5 +101,17 @@
     "type-tests/bucket-versions.ts": "876cbdefc026006cd1422a66e25c006cf67a2db59a28603433c2170e4f8e86af",
     "tests/bucket-versions.test.mjs": "ab45e63fd4dd80408d43eb79c44a39324473afd17c10535df88be411ddf62205",
     "docs/buckets.md": "41c8b0c0a91e60210345c3d1f8f51b901f9f1eec675fe07fbe65d2ef03a6cf95"
+  },
+  "delivery": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/254",
+    "reviewedHead": "95c8f6542f836c0a913ead9fb45f3b90af5f5691",
+    "mergeCommit": "054f1f03b12e153093880148a43d3641762b79c6",
+    "authorCommentReview": 5464839828,
+    "independentApproval": false,
+    "hostedChecks": "all six passed",
+    "ciRun": 37871658130,
+    "codeqlRun": 37871657856,
+    "merge": "protected squash with expected head; no bypass",
+    "bothCheckouts": "synchronized; preexisting untracked files preserved"
   }
 }

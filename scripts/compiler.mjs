@@ -25,6 +25,7 @@ export function compile(source, options = {}) {
     }
     throw error;
   }
+  if (stripOnly && options.sourceMap === false) javascript = compactErasedPadding(transformed, javascript);
   // Strip mode preserves line positions. TSX maps to the lowered module just as
   // transform mode does; supply line mappings without the removed Node option.
   if (stripOnly && options.sourceMap !== false) {
@@ -47,6 +48,28 @@ export function compile(source, options = {}) {
     },
   );
   return javascript;
+}
+
+// Native stripping replaces type syntax with spaces. Compact only changed
+// positions, retaining a separator: value<T>instanceof must stay two tokens.
+// Every unchanged character/newline survives, including runtime literal spaces.
+function compactErasedPadding(source, javascript) {
+  if (source.length !== javascript.length) return javascript;
+  const parts = [];
+  let copied = 0;
+  for (let index = 0; index < javascript.length; index++) {
+    if (javascript[index] !== " " || source[index] === " ") continue;
+    let end = index + 1;
+    while (end < javascript.length && javascript[end] === " " && source[end] !== " ") end++;
+    if (end - index > 1) {
+      parts.push(javascript.slice(copied, index), " ");
+      copied = end;
+    }
+    index = end - 1;
+  }
+  if (!copied) return javascript;
+  parts.push(javascript.slice(copied));
+  return parts.join("");
 }
 
 function withoutStripTypesWarning(operation) {
