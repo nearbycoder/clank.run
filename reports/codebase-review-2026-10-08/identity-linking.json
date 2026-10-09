@@ -3,9 +3,9 @@
   "feature": "Verified multi-organization identity linking",
   "date": "2026-10-09",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/283",
-  "baseCommit": "5b5ced7dbd72c0c5544ca65a7ab05a1148910447",
+  "baseCommit": "bd270fce34c9516e2d1d5a88f06060b4b6483c8f",
   "branch": "codex/organization-identity-linking",
-  "status": "implemented; awaiting fresh hosted checks and protected merge",
+  "status": "implemented; awaiting fresh combined release gates, hosted checks and protected merge",
   "mergedFeatureCount": 20,
   "remainingUnmergedFeatures": 20,
   "publicContract": {
@@ -63,7 +63,9 @@
       "baselineAllowance": 163,
       "newDiagnostics": 0,
       "baselineChanged": false,
-      "packedOpenApiExamples": "passed"
+      "packedOpenApiExamples": "passed",
+      "sourceScope": "Fresh merged canary-repair and identity-linking source; pinned semantic/packed check passed without new diagnostics or allowances.",
+      "log": "identity-linking-types-08.log"
     },
     "node26": {
       "tests": 1965,
@@ -79,7 +81,7 @@
       "fullReleaseGate": "passed",
       "ordinaryUid": 1000,
       "log": "identity-linking-node26-gate-05.log",
-      "sourceScope": "Final runtime/type/test/guide source 05. Later source 06 changes only the manual provider fixture callback guard and acceptance-report metadata; its actual HTTP rejection/valid/restart proof passes and fresh hosted checks cover the updated head."
+      "sourceScope": "Historical source 05 runtime/type/test/guide acceptance before the merged canary drain repair. The hardened provider fixture has separate HTTP/restart evidence; this combined branch requires fresh full release gates and hosted checks recorded in PR #285."
     },
     "node22": {
       "tests": 1965,
@@ -95,7 +97,7 @@
       "fullReleaseGate": "passed",
       "ordinaryUid": 1000,
       "log": "identity-linking-node22-gate-05.log",
-      "sourceScope": "Final runtime/type/test/guide source 05. Later source 06 changes only the manual provider fixture callback guard and acceptance-report metadata; its actual HTTP rejection/valid/restart proof passes and fresh hosted checks cover the updated head."
+      "sourceScope": "Historical source 05 runtime/type/test/guide acceptance before the merged canary drain repair. The hardened provider fixture has separate HTTP/restart evidence; this combined branch requires fresh full release gates and hosted checks recorded in PR #285."
     },
     "processProof": {
       "status": "passed",
@@ -135,15 +137,20 @@
       "mcp": "discovery, tools/list, docs.search and docs.read passed",
       "browser": "Desktop/phone home, actual search and long guide verified; final active-owner/deadline text verified at both widths",
       "agentFormatBrowser": "All six raw/JSON/LLM/discovery navigation attempts blocked by the in-app browser at each width; verified separately through HTTP/MCP, no rendered-format claim"
+    },
+    "combinedHeadAcceptance": {
+      "status": "pending fresh acceptance",
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/285",
+      "required": "Full ordinary-user Node 26/minimum-Node release gates plus all fresh hosted checks before expected-head merge"
     }
   },
   "package": {
     "files": 405,
     "fileLimit": 405,
-    "unpackedBytes": 6129809,
+    "unpackedBytes": 6130854,
     "byteLimit": 6291456,
-    "remainingBytes": 161647,
-    "compressedBytes": 1469460,
+    "remainingBytes": 160602,
+    "compressedBytes": 1469766,
     "newDependencies": 0
   },
   "reviewFindings": {
@@ -151,18 +158,17 @@
       "Lost accepted unlink errors, malformed/oversized bodies and transport failures now reload real authority; account/session changes fence results",
       "Disabled co-owner regression failed before the final query; enabled owners are now required",
       "Known malformed-property-value experimental coverage artifact receives only the existing single retry after every test passes; actual failures and coverage shortfalls are never retried",
-      "Hosted CodeQL flagged the disposable IdP callback redirect. The fixture now admits only its exact configured callback/client and constructs a fixed destination; real GET/POST foreign-origin and wrong-path refusals pass, followed by valid PKCE/JWT acceptance and two SIGKILL/restart receipt proofs."
+      "Hosted CodeQL flagged the disposable IdP callback redirect. The fixture now admits only its exact configured callback/client and constructs a fixed destination; real GET/POST foreign-origin and wrong-path refusals pass, followed by valid PKCE/JWT acceptance and two SIGKILL/restart receipt proofs.",
+      "The admitted-candidate rollback 502 also reproduced in hosted Node 24/conformance. PR #286 merged its drain-before-verified-stop repair after two exact negative regressions, all 28 dependency tests, full ordinary-user Node 26/22 gates and all six hosted checks; no test assertion was relaxed and failed application tests were not retried."
     ],
-    "retainedForSeparateMaintenance": [
-      "Source 03 full run caught an existing candidate rollback terminating an admitted request with 502. Final source 05 gates passed without relaxing that test. Read analysis identifies missing candidate ingress drain before verified cleanup; deterministic held-response regression and a separate maintenance PR are next."
-    ]
+    "retainedForSeparateMaintenance": []
   },
   "sourceHashes": {
     "src/organization-sso.ts": "f27a97546143045c73a02f610dd69703b61efaaa35e24cc47d0b65ef42e5e181",
     "src/organization-sso.d.ts": "30f121149369b150b090976bd69bcb74152ededa2ba7d8fc7a0ae8ca86153f44",
     "src/account-security.ts": "85f0b19365394dd005eaa80329c5256bfa6425e27951ba247c2c84b90b52b805",
     "src/account-security.d.ts": "fe5a821588969df3d3dcd7fcd5be2bc2632a3d51c896565d329c9c2ddd7f68a8",
-    "src/platform.ts": "21da5d1b21e973e5740b298e4e88ce5ad9eb3d6b7da22f837851a7825aa4bbb2",
+    "src/platform.ts": "7b2514993fe1a2776233cc729971e5e6aeca7f1530b8b34e68e7b1b2efc9ee08",
     "tests/organization-security.test.mjs": "9343362f57eca400476a648b686ee80308c5c3ba4c54451d9d802605707b3edb",
     "tests/dom.test.mjs": "66703937c3ba151cc6336b1e3a41e22f1bb1adf25ac760abde859eebf30b306c",
     "type-tests/organization-identity-linking.ts": "a172f1a601d0de890b5fceb2aaf0b3e6f823e0fe0b8b9c51ba33068abdba55cd",
@@ -170,7 +176,7 @@
     "tests/fixtures/organization-identity-browser-entry.mjs": "5066a61a37c17b17829ff22f43139710d4cdeba7f26e64c19d1cd51d0df305d5",
     "docs/organization-security.md": "f8ac0dd029065340424050b3ded70e4f2540547ddb6c4051b151a47817b4782c",
     "docs/auth.md": "245e24d57f1b0e8b3d4ecd5386a90c2c5be279689cefcb4159f726bc8a5861da",
-    "CHANGELOG.md": "aaa566099924da2f6d1e513cef706b46d09f5268bd795b8a696dfda6cab2452e",
+    "CHANGELOG.md": "fa1d3c98dfbf7b0e2a88e243ce6343b0b6c25cca5fed5d81346d6c963dc2960d",
     "scripts/coverage-gate.mjs": "d645381d24b186aaf9903cc8938e5b49cf2fb650777be8fabe8b4f6d4ab27329",
     "tests/test-coverage.test.mjs": "3a6e8c715ca7c34034d8efd38614add8d5cab39d4f1230fe211d64efae869558",
     "docs/api-reference.md": "4995089c17386ea0cc55a0a87ab36b55be66e435c1083f492fdb79a0b23b2c37"
@@ -332,5 +338,44 @@
     "merge": "pending",
     "independentReview": false,
     "productionHostCertified": false
+  },
+  "mergedMaintenance": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/286",
+    "reviewedHead": "1c24b047f7bbce1cc58155a6ff18d0e8300ac59b",
+    "reviewedTree": "1df74fc3d9458c806dead647fcdf7cba8a4032ec",
+    "mergedMain": "bd270fce34c9516e2d1d5a88f06060b4b6483c8f",
+    "mergedTreeEqualsReviewed": true,
+    "hostedChecksPassed": 6,
+    "newCodeqlAlerts": 0,
+    "unresolvedThreads": 0,
+    "independentReview": false,
+    "fullGates": {
+      "node26": {
+        "tests": 1948,
+        "pass": 1945,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 3,
+        "coverage": [
+          91.88,
+          80.51,
+          90.1
+        ]
+      },
+      "node22": {
+        "tests": 1948,
+        "pass": 1945,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 3,
+        "coverage": [
+          91.87,
+          80.53,
+          90.14
+        ]
+      }
+    },
+    "countedAsNewFeature": false,
+    "privateEvidence": "/tmp/clank-review-2026-10-08/canary-drain-verification-02.json"
   }
 }

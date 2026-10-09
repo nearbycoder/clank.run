@@ -2,14 +2,14 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty features are merged across seventeen feature batches. Scheduled release windows (05) merged in [PR #282](https://github.com/nearbycoder/clank.run/pull/282) after all six fresh hosted checks at reviewed head `4c06c2f5d35940872afa6d1fa947c97c25b04597`, no new CodeQL alerts, no unresolved threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Both main checkouts match `5b5ced7dbd72c0c5544ca65a7ab05a1148910447` after the compiler prerequisite in PR #284, and all 23 existing files are preserved. Twenty features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Earlier snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty features are merged across seventeen feature batches. Scheduled release windows (05) merged in [PR #282](https://github.com/nearbycoder/clank.run/pull/282) after all six fresh hosted checks at reviewed head `4c06c2f5d35940872afa6d1fa947c97c25b04597`, no new CodeQL alerts, no unresolved threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Both main checkouts match `bd270fce34c9516e2d1d5a88f06060b4b6483c8f` after the compiler prerequisite in PR #284 and canary drain repair in PR #286, and all 23 existing files are preserved. Twenty features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Earlier snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
 ## Verified organization identity linking
 
 Feature 11 is implemented under [proposal #283](https://github.com/nearbycoder/clank.run/issues/283)
-and awaits fresh hosted checks and protected merge. Existing signed-in users can explicitly link
+and incorporates the merged canary drain repair; fresh combined release gates, hosted checks and protected merge remain required. Existing signed-in users can explicitly link
 organization identities after real local MFA/passkey and fresh provider authentication. Stable
 issuer/subject ownership, current policy/session/generation fences and versioned receipts prevent
 email-only merging, stale callbacks or receipt replay from removing a later relink. Transactional
