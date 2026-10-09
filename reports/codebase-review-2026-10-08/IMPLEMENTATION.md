@@ -2,14 +2,14 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty features are merged across seventeen feature batches. Scheduled release windows (05) merged in [PR #282](https://github.com/nearbycoder/clank.run/pull/282) after all six fresh hosted checks at reviewed head `4c06c2f5d35940872afa6d1fa947c97c25b04597`, no new CodeQL alerts, no unresolved threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Both main checkouts match `bd270fce34c9516e2d1d5a88f06060b4b6483c8f` after the compiler prerequisite in PR #284 and canary drain repair in PR #286, and all 23 existing files are preserved. Twenty features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Earlier snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty features are merged across seventeen feature batches. Scheduled release windows (05) merged in [PR #282](https://github.com/nearbycoder/clank.run/pull/282) after all six fresh hosted checks at reviewed head `4c06c2f5d35940872afa6d1fa947c97c25b04597`, no new CodeQL alerts, no unresolved threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Both main checkouts match `508e588d80bb52dd0990f89b5f3438ebcc220666` after the compiler prerequisite in PR #284, canary drain repair in PR #286 and fixture isolation in PR #288, and all 23 existing files are preserved. Twenty features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Earlier snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
 ## Verified organization identity linking
 
 Feature 11 is implemented under [proposal #283](https://github.com/nearbycoder/clank.run/issues/283)
-and incorporates the merged canary drain repair; fresh combined release gates, hosted checks and protected merge remain required. Existing signed-in users can explicitly link
+and incorporates the merged canary drain and concurrent-fixture repairs; fresh combined release gates, hosted checks and protected merge remain required. Existing signed-in users can explicitly link
 organization identities after real local MFA/passkey and fresh provider authentication. Stable
 issuer/subject ownership, current policy/session/generation fences and versioned receipts prevent
 email-only merging, stale callbacks or receipt replay from removing a later relink. Transactional
@@ -24,20 +24,22 @@ query rejects it. Forced provider offboarding remains authoritative. Last-owner 
 belongs to feature 13; independent platform operator authority remains a separate grant.
 
 All 74 focused checks and 28 packed positive/negative type fixtures pass without new source
-allowances. The final complete Node 22/26 release gates pass. Two actual SIGKILL/restart cycles
+allowances. Earlier identity-only Node 22/26 gates passed; the fresh combined gates are running. Two actual SIGKILL/restart cycles
 preserve accepted callback/unlink receipts and one durable removal; an old receipt cannot remove
 a fresh relink. Actual keyboard/provider/MFA flows and account/revocation isolation are verified.
 Lost accepted responses now reload current auth for HTTP errors, malformed/oversized bodies and
 network failures. The client enforces a fifteen-second deadline and 256 KiB streaming limit.
 
-The unchanged package contract contains 405 files / 6,129,809 unpacked bytes, with 161,647 bytes
+The unchanged package contract contains 405 files / 6,130,854 unpacked bytes, with 160,602 bytes
 remaining. Documentation build, doctor, offline artifact and HTTP/MCP checks pass. Desktop/phone
 HTML, search and final guide text are verified; blocked browser agent-format navigation is
 reported separately from successful HTTP/MCP verification. Hosted CodeQL also identified a fixture callback redirect; the destination is now fixed, and
 actual GET/POST foreign-origin and wrong-path refusals plus valid/restart flows pass. No external
 enterprise IdP tenant certification or production host certification is claimed. A full-suite run also caught candidate
-cleanup terminating an admitted canary request; a separate maintenance fix with a deterministic
-held-response proof follows this feature. See [immutable acceptance evidence](identity-linking.json).
+cleanup terminating an admitted canary request; PR #286 merged its repair with deterministic
+held-response proofs. The subsequent combined run exposed concurrent fixture installation/port
+collisions; PR #288 merged test isolation after both full gates and all six hosted checks. Actual
+failed tests were not retried; the fresh combined acceptance remains pending. See [immutable acceptance evidence](identity-linking.json).
 
 ## Erased-line package prerequisite
 

@@ -3,7 +3,7 @@
   "feature": "Verified multi-organization identity linking",
   "date": "2026-10-09",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/283",
-  "baseCommit": "bd270fce34c9516e2d1d5a88f06060b4b6483c8f",
+  "baseCommit": "508e588d80bb52dd0990f89b5f3438ebcc220666",
   "branch": "codex/organization-identity-linking",
   "status": "implemented; awaiting fresh combined release gates, hosted checks and protected merge",
   "mergedFeatureCount": 20,
@@ -139,9 +139,14 @@
       "agentFormatBrowser": "All six raw/JSON/LLM/discovery navigation attempts blocked by the in-app browser at each width; verified separately through HTTP/MCP, no rendered-format claim"
     },
     "combinedHeadAcceptance": {
-      "status": "pending fresh acceptance",
+      "status": "fresh full release gates running; final report metadata and hosted checks pending",
       "pullRequest": "https://github.com/nearbycoder/clank.run/pull/285",
-      "required": "Full ordinary-user Node 26/minimum-Node release gates plus all fresh hosted checks before expected-head merge"
+      "required": "Full ordinary-user Node 26/minimum-Node release gates plus all fresh hosted checks before expected-head merge",
+      "sourceArchive": "identity-linking-source-09.tar",
+      "archiveSha256": "c8b07bcba665b7722dc2ecd3f3b9704f367371aea91e4bd22164d2b0ee813cba",
+      "sourceHead": "f3cdc6b2b349949df541dd2a1c41339e5d710a40",
+      "sourceTree": "99601871bc199529d3af74561537c9daff4c5f1e",
+      "scope": "Source tree remains identical after integrating the reviewed PR #288 squash merge; subsequent acceptance-report edits are recorded separately from runtime/test/guide hashes."
     }
   },
   "package": {
@@ -159,7 +164,8 @@
       "Disabled co-owner regression failed before the final query; enabled owners are now required",
       "Known malformed-property-value experimental coverage artifact receives only the existing single retry after every test passes; actual failures and coverage shortfalls are never retried",
       "Hosted CodeQL flagged the disposable IdP callback redirect. The fixture now admits only its exact configured callback/client and constructs a fixed destination; real GET/POST foreign-origin and wrong-path refusals pass, followed by valid PKCE/JWT acceptance and two SIGKILL/restart receipt proofs.",
-      "The admitted-candidate rollback 502 also reproduced in hosted Node 24/conformance. PR #286 merged its drain-before-verified-stop repair after two exact negative regressions, all 28 dependency tests, full ordinary-user Node 26/22 gates and all six hosted checks; no test assertion was relaxed and failed application tests were not retried."
+      "The admitted-candidate rollback 502 also reproduced in hosted Node 24/conformance. PR #286 merged its drain-before-verified-stop repair after two exact negative regressions, all 28 dependency tests, full ordinary-user Node 26/22 gates and all six hosted checks; no test assertion was relaxed and failed application tests were not retried.",
+      "PR #288 merged isolated certification and atomically leased application fixture ports after negative old-fixture regressions, final targeted ownership checks, both full ordinary-user gates and all six hosted checks. The fresh combined identity source is being verified; old opaque controller recovery failure is not assigned an unproven cause."
     ],
     "retainedForSeparateMaintenance": []
   },
@@ -179,7 +185,12 @@
     "CHANGELOG.md": "fa1d3c98dfbf7b0e2a88e243ce6343b0b6c25cca5fed5d81346d6c963dc2960d",
     "scripts/coverage-gate.mjs": "d645381d24b186aaf9903cc8938e5b49cf2fb650777be8fabe8b4f6d4ab27329",
     "tests/test-coverage.test.mjs": "3a6e8c715ca7c34034d8efd38614add8d5cab39d4f1230fe211d64efae869558",
-    "docs/api-reference.md": "4995089c17386ea0cc55a0a87ab36b55be66e435c1083f492fdb79a0b23b2c37"
+    "docs/api-reference.md": "4995089c17386ea0cc55a0a87ab36b55be66e435c1083f492fdb79a0b23b2c37",
+    "tests/fixtures/platform-environment-fixture.mjs": "f39a8689adb59ab4f891237f8544a698396c83dcd0fb8dd09cdf8e48f9ab26b8",
+    "tests/fixtures/platform-promotion-controller.mjs": "508f3419f87c794ae0573f993c85b3c8a1db8f579463f84dc0a388de720411c4",
+    "tests/fixtures/platform-test-ports.mjs": "14e96f93d108678540a4e4a3fda91b62d55067fb3dce72751164eb0a6f225ae6",
+    "tests/host-certification.test.mjs": "52701747e8218607f8012efd845a03db641545f6d5ae5cb0b61d8d33d8db19a0",
+    "tests/platform-fixture-isolation.test.mjs": "b1383bdf3dd24ccd25393a1bd943c6933c0ceafe9f942d42dd921b7dbfc51276"
   },
   "privateEvidence": {
     "identity-linking-source-05.json": {
@@ -377,5 +388,80 @@
     },
     "countedAsNewFeature": false,
     "privateEvidence": "/tmp/clank-review-2026-10-08/canary-drain-verification-02.json"
+  },
+  "mergedVerificationMaintenance": {
+    "kind": "test-only concurrent verification maintenance",
+    "base": "bd270fce34c9516e2d1d5a88f06060b4b6483c8f",
+    "reviewedHead": "cff7d0ca3ba330d680137354c852ca9a059b4ae3",
+    "reviewedTree": "2f728bc7a722e8f300514391c818b89f177c5a7a",
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/288",
+    "status": "merged",
+    "independentReview": false,
+    "authorComment": 5475688999,
+    "targeted": {
+      "final": {
+        "tests": 3,
+        "pass": 3,
+        "fail": 0
+      },
+      "earlierInterruptionCertification": {
+        "tests": 35,
+        "pass": 35,
+        "scope": "before final teardown guard"
+      },
+      "negative": [
+        "Identical random selection overlaps old fixture ports",
+        "Old teardown erases synthetic unverified fence instead of rejecting"
+      ]
+    },
+    "productionChanges": false,
+    "countedAsNewFeature": false,
+    "evidence": {
+      "concurrent-fixtures-source-03.tar": "5cf2511d5288d205d14406f830fb4812a4e2de6b9c6a8c3390b39802123f33dd",
+      "concurrent-fixtures-source-03.json": "e0c88a60639ec46d7b5e8427df1ebead23eefdf9e4e866582006768578b32af3",
+      "concurrent-fixtures-unit-04.log": "05f22396562b6aa1841e3ae1b134edf02c868ccc50754809d91b47be746b6ebd",
+      "concurrent-fixtures-focused-01.log": "247189722069f05021e81cfc8a7301cc442572a3380d57924daa71e1dcdbe06f",
+      "concurrent-fixtures-port-before-02.log": "01fde7c8a5cc808f062adf879cae380078d2dc53441c5ace14193e0e21942a5b",
+      "concurrent-fixtures-fence-before-01.log": "ed5470f48bac1099ced5cf7fc715a696f7abe3937c0257acc5a4547fb1204e20",
+      "concurrent-fixtures-node26-gate-03.log": "c426845a415bad26752e2506bfdccdd6d7b2d9bb66efb9702f57ab858f81f1e1",
+      "concurrent-fixtures-node22-gate-03.log": "0b7e7e5d4ed5add04a9c62257415371510174605582162d7f4f54012a31a1525"
+    },
+    "mergedMain": "508e588d80bb52dd0990f89b5f3438ebcc220666",
+    "mergedTreeEqualsReviewed": true,
+    "hostedChecksPassed": 6,
+    "newCodeqlAlerts": 0,
+    "unresolvedThreads": 0,
+    "fullGates": {
+      "node26": {
+        "tests": 1951,
+        "pass": 1948,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 3,
+        "coverage": [
+          91.73,
+          80.48,
+          89.93
+        ]
+      },
+      "node22": {
+        "tests": 1951,
+        "pass": 1948,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 3,
+        "coverage": [
+          91.72,
+          80.51,
+          89.97
+        ]
+      }
+    }
+  },
+  "failedCombinedAcceptance": {
+    "publishedHead": "b59f4d87dcbf04e86fe3df77782baa974830a7c2",
+    "hostedConformance": "Host certification read a global stale-build marker concurrently removed by the compiler test; one actual test failed. No test failure retry.",
+    "localSource07": "Controller recovery remained fenced (cause not proven by old opaque fixture diagnostics); a release-window fixture also collided with an occupied application port. Canary drain tests passed.",
+    "repair": "PR #288 isolates host-certification installation, holds atomic application-port leases through verified shutdown, preserves unverified fixture fences, and exposes bounded owned controller diagnostics. Full source09 acceptance must pass before PR #285 merges."
   }
 }
