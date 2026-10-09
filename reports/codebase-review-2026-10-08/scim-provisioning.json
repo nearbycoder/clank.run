@@ -1,0 +1,164 @@
+{
+  "featureId": "12",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/287",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/289",
+  "status": "implementation-verified-awaiting-protected-merge",
+  "acceptedFeatureCountBeforeMerge": 21,
+  "contract": {
+    "scope": "Existing organization and exact OIDC issuer; bounded SCIM Users/Groups plus discovery; no bulk, sort, compound filters, nested groups or enterprise extensions",
+    "identity": "Immutable externalId equals signed OIDC sub; metadata never selects/merges an account; fresh signed proof binds/reactivates exact source-owned inactive versions; independent unlink/offboarding wins",
+    "roles": "Only explicit viewer/developer group mappings; preserve manual floors/overrides and unrelated workspace credentials; native adoption requires fresh browser MFA/passkey and exact reviewed assignment/version/current role",
+    "versions": "Required exact If-Match on resource edits, with atomic embedded User/Group representation version changes",
+    "replay": "Exact current-authorized canonical receipt returns historical status/body/ETag without reapplying later-removed authority; changed input rejects",
+    "expiry": "Separate 32-1024 character credential, absolute expiry at most 366 days, positive policy revision and current persisted policy; expiry denies new SCIM calls without expiring memberships",
+    "deactivation": "Exact identity/workspace grants removed, all browser/recovery/generic OAuth and broad credentials revoked; unrelated scoped credentials preserved; cross-process durable live access closes"
+  },
+  "limits": {
+    "bodyBytes": 65536,
+    "singleResourceBytes": 131072,
+    "listBytes": 1048576,
+    "pageSize": 100,
+    "patchOperations": 20,
+    "emails": 10,
+    "groupMembers": 128,
+    "usersIncludingDeletedPerOrganization": 1000,
+    "groupsPerOrganization": 100,
+    "globalResources": 10000,
+    "receiptsPerOrganization": 1000,
+    "globalReceipts": 10000,
+    "nativeAssignmentsPerOrganization": 2000,
+    "nativeAssignmentsGlobal": 20000,
+    "nativeAdoptionReceiptsPerOrganization": 1000,
+    "nativeAdoptionReceiptsGlobal": 10000,
+    "authoritativeEviction": false
+  },
+  "migration": {
+    "protocol": 1,
+    "transaction": "Schema/policy/projection reconciliation commit together; thrown or unsupported asynchronous hooks roll back all writes and publication",
+    "disabled": "Deny new SCIM admission; retain ownership, inactive/deleted denials and receipts",
+    "rollback": "Verified compatible binary/schema snapshot; no deletion of authority/tombstones to downgrade",
+    "deletedAccount": "Retain subject/local UID ownership and allow metadata maintenance without recreating orphan membership or transferring ownership"
+  },
+  "runtimeEvidence": {
+    "sourceHead": "54878cab129ed29ecbe0a3c98fad81322cadb0fb",
+    "sourceTree": "e0c6473fe7a5bc0fb95b7b1bf6de4832aaf91d9b",
+    "integratedMainRepairHead": "f62c1e2a05060c1fad00e7efbf6dac2f4bd3dd66",
+    "sourceFiles": 1039,
+    "sourceArchiveSha256": "5a5047d0d1921ba97674453dec091654c05c0c1ca9289ff7940a206e96aed18c",
+    "postProofEdits": "Only report metadata; every runtime/test/type/canonical-guide/build input remains hash-equal",
+    "disposable": "Debian 13/Linux 6.12.111; ordinary UID 1000 on explicit QEMU disposable host; four CPUs/4 GiB; minimum Node 22.16 and Node 26.10",
+    "acceptanceIndexSha256": "05c56c9cd6354246c973944fcd83c43660bd996b9bc87bb2280c5ba232b45700"
+  },
+  "validation": {
+    "focused": {
+      "reported": 40,
+      "passed": 40,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "rawSha256": "f686f95f6a46b7f4c4134a5d999f1e4d6a23226e6ae8baa7477b6b83315e059f"
+    },
+    "types": {
+      "sourceExisting": 159,
+      "sourceNew": 0,
+      "unchangedBaseline": 163,
+      "packedFixtures": 29,
+      "packedOpenApiExamples": true,
+      "rawSha256": "75e2dbe8553b895060da028eb4a02951dc2aa94c49fc4466b62f250e303effc7"
+    },
+    "fullNode26": {
+      "reported": 1985,
+      "passed": 1982,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coveragePercent": {
+        "lines": 91.8,
+        "branches": 80.72,
+        "functions": 90.01
+      },
+      "releaseGateComplete": true,
+      "rawSha256": "83f7ee825d405ef00edf8a618419da357124621610230f1b4377b134a6b85d8f"
+    },
+    "fullNode22": {
+      "reported": 1985,
+      "passed": 1982,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coveragePercent": {
+        "lines": 91.8,
+        "branches": 80.74,
+        "functions": 90.04
+      },
+      "releaseGateComplete": true,
+      "rawSha256": "31fe046eefc36af0b43111633cdc4828c181dce46ba62d6dba31b41684a58578"
+    },
+    "package": {
+      "files": 405,
+      "unpackedBytes": 6192353,
+      "unchangedCeilingBytes": 6291456,
+      "headroomBytes": 99103,
+      "dependencies": 0,
+      "rawSha256": "4b37dafabd3bba909f63a65721f4cfdbf235d66db4be7e2fd1414e3cff7b164a"
+    },
+    "docs": {
+      "guides": 98,
+      "build": true,
+      "doctor": "6 pass, one optional unlinked-project warning, zero failed",
+      "offlineArtifact": "c512e0cf2667bb236682ef38998802470d5bf247689279ce9b63cabcd0f82550",
+      "uploaded": false,
+      "httpAndMcp": "Home/guide/raw/index/guide JSON/LLM files/discovery and read-only MCP search/read pass",
+      "browser": "Home/search/long guide and actual SCIM content verified at desktop 1280x900 and phone 390x844; no horizontal overflow",
+      "agentFormatBrowser": "ERR_BLOCKED_BY_CLIENT retained for machine-format navigation; separate HTTP/MCP pass, not claimed as browser rendered"
+    }
+  },
+  "processProof": {
+    "delegation": "Real registration, consent, OAuth code/PKCE and CLI device approval",
+    "interruption": "Actual accepted SCIM write held before response; controller SIGKILL and verified exit lose response; restarted controller returns durable exact receipt once",
+    "revocation": "Separate controller closes an already-open actual protected live stream and rejects old browser/CLI/MCP credentials",
+    "historicReplay": "An old disable receipt after later activation returns historical response without applying disable again or reactivating identity",
+    "cleanup": "Owned child processes terminated and verified exited"
+  },
+  "retainedFailures": [
+    {
+      "run": "source01 local and hosted",
+      "cause": "Eager Node crypto import broke browser-compatible barrel",
+      "repair": "Load synchronous server builtin only inside openOrganizationSso; existing barrel regression passes"
+    },
+    {
+      "run": "hosted CodeQL initial",
+      "cause": "Manually seeded OAuth credential in process fixture",
+      "repair": "Real OAuth consent/code/PKCE replaces manual seed; finding resolved/outdated"
+    },
+    {
+      "run": "deleted-account reproduction",
+      "cause": "Native metadata maintenance recreated orphan membership and returned 500",
+      "repair": "Retain subject ownership without recreating a missing local user membership; regression passes"
+    },
+    {
+      "run": "source03 local",
+      "cause": "Random generated project ID started with -- and was parsed as option",
+      "repair": "Separate merged PR290 honors CLI option terminator; final combined gates pass"
+    },
+    {
+      "run": "source03 hosted conformance",
+      "cause": "Signed auth_time test input became valid at second boundary",
+      "repair": "Separate merged PR290 uses clearly invalid signed timestamps without changing production policy"
+    }
+  ],
+  "review": {
+    "freshHostedChecks": "Required at final metadata head before protected merge; recorded in PR",
+    "independentReview": false,
+    "authorReview": "Explicitly non-independent COMMENT; no self-approval",
+    "newCodeQlAlerts": "Final head must report none",
+    "unresolvedThreads": "Final head must report zero",
+    "merge": "Expected-head protected squash with reviewed tree equality; no protection bypass"
+  },
+  "limitations": [
+    "No external enterprise IdP tenant interoperability/certification claimed",
+    "Production Railway host remains uncertified",
+    "Live-controller offboarding credential rotation is a separate repair in PR292/proposal291 and is not claimed as SCIM acceptance",
+    "This is not automatic supervisor leadership certification"
+  ]
+}
