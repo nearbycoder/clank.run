@@ -1,6 +1,6 @@
 # Organization and account security
 
-`openOrganizationSso(database, auth, options)` provides OIDC authorization-code sign-in with PKCE. For a hosted control plane configure `openPlatform({ organizationSso: { applicationOrigin, providers } })`; each provider has an existing `organizationId`, exact `issuer`, `clientId`, optional `clientSecret`, and a separate random `offboardingToken` of at least 32 characters. Start a browser flow at `/__clank/sso/start/{organizationId}` and register `{applicationOrigin}/__clank/sso/callback` with the identity provider. Platform sign-ins provision viewer membership; administrators can change that role through the workspace member API.
+`openOrganizationSso(database, auth, options)` provides OIDC authorization-code sign-in with PKCE. For a hosted control plane configure `openPlatform({ organizationSso: { applicationOrigin, providers } })`; each provider has an existing `organizationId`, exact `issuer`, `clientId`, optional `clientSecret`, and a separate random `offboardingToken` of at least 32 characters. Start a browser flow at `/__clank/sso/start/{organizationId}` and register `{applicationOrigin}/__clank/sso/callback` with the identity provider. Platform sign-ins provision viewer membership unless scoped provisioning below is enabled; administrators can change that role through the workspace member API.
 
 The issuer and discovery issuer must match exactly. Discovery, token exchange and JWKS retrieval use HTTPS, bounded responses and deadlines, no redirects, public-address DNS validation and a pinned connection. Additional endpoint origins require explicit `endpointOrigins` entries. `allowInsecureLoopback: true` enables numeric loopback HTTP for local fixtures only. Tokens require RS256 or ES256 signatures, exact issuer, audience/authorized party, nonce, expiry, issuance time, and a verified email. State is browser-bound, durable, expiring and consumed once. These checks follow the [OIDC Core](https://openid.net/specs/openid-connect-core-1_0.html) and [Discovery](https://openid.net/specs/openid-connect-discovery-1_0.html) specifications.
 
@@ -86,6 +86,121 @@ linking stops new link/unlink admission but keeps upgraded offboarding semantics
 an older binary with shared accounts is unsafe: stop admission, remove extra identities using the
 upgraded controller, and restore a separately verified compatible schema/snapshot that preserves
 required revocations. Merely deleting new tables or toggling the option is not a safe downgrade.
+
+## Scoped user and group provisioning
+
+SCIM provisioning is opt-in for an existing organization and OIDC issuer. Configure a separate
+32–1,024-character random `provisioning.token`, an absolute millisecond `expiresAt`, and a positive
+`identityLinking.policyRevision`. Credentials may expire at most 366 days after configuration.
+Increase the revision when rotating credentials, changing expiry or group mappings, or disabling
+provisioning. An older live controller cannot write against a newer persisted policy. Credential
+expiry stops provisioning requests; it does not expire existing memberships. The persisted policy
+contains the credential fingerprint, never its plaintext value.
+
+```ts
+const platform = await openPlatform({
+  dataDirectory: "/private/platform", publicUrl: "https://platform.example.test",
+  organizationSso: {
+    applicationOrigin: "https://platform.example.test",
+    identityLinking: { policyRevision: 2 },
+    providers: [{
+      organizationId: "existing-workspace-id", issuer: "https://identity.example.test",
+      clientId: "clank", offboardingToken: process.env.ORGANIZATION_OFFBOARD_TOKEN!,
+      provisioning: {
+        token: process.env.ORGANIZATION_SCIM_TOKEN!, expiresAt: 1_800_000_000_000,
+        groupRoles: [{ externalId: "engineering", role: "developer" }],
+      },
+    }],
+  },
+});
+```
+
+Use the organization's base URL `/scim/v2/{organizationId}` and its provisioning bearer credential.
+`ServiceProviderConfig`, `Schemas` and `ResourceTypes` describe the supported profile. `Users` and
+`Groups` support scoped GET/list, POST, PUT, PATCH and DELETE. This is a bounded profile of
+[SCIM core schemas](https://www.rfc-editor.org/rfc/rfc7643.html) and
+[the HTTP protocol](https://www.rfc-editor.org/rfc/rfc7644.html), without bulk, sorting, arbitrary
+filters, nested groups, password changes or enterprise extensions. Verify your IdP's provisioning
+mapping against the published discovery documents before connecting it.
+
+A User's required, immutable `externalId` must equal the signed OIDC `sub` for that exact issuer.
+`userName`, display names and email fields are provisioning metadata. They never select or merge
+a local account, create a password, issue a session, or replace the verified account profile.
+Provisioned resources remain unbound until verified OIDC sign-in or the fresh explicit linking
+flow above proves ownership. Provisioning-enabled issuers reject unprovisioned sign-in. Existing
+email collisions still require explicit linking with fresh local and provider proof.
+
+Users accept `userName`, `active`, `displayName`, the six core name attributes, and at most ten
+email entries. Groups accept immutable `externalId`, `displayName` and at most 128 direct User
+resource references from their own organization and issuer. Read-only `id`, `meta`, User `groups`
+and member `display` may be echoed in a full response replacement; they confer no authority.
+Only server-configured external group IDs contribute `viewer` or `developer`. Provisioning
+cannot confer administrator, owner or platform operator authority. A verified active User without
+a mapped group has no source-owned workspace role.
+
+Retrieve the current resource and supply its exact ETag in `If-Match` for PUT, PATCH or DELETE.
+Missing conditions return 428; changed versions return 412. Related User/Group representations
+advance together when an edit changes embedded membership or display data. PATCH accepts one to
+twenty atomic operations: User scalar/name/email attributes, Group display name, whole direct
+member arrays and `members[value eq "{id}"]` removal. `add` appends multi-valued attributes;
+`replace` replaces them. Unknown paths, unsupported extensions, conflicting field spellings and
+foreign or deleted member references reject the entire transaction.
+
+List filters support one equality expression on User `id`, `externalId`, `userName` or `active`,
+and Group `id`, `externalId` or `displayName`. Name equality uses NFC/case normalization; resource
+IDs and external subjects remain exact. Pages use one-based `startIndex` and `count` from zero
+through 100. Responses include `totalResults`, `startIndex`, `itemsPerPage` and `Resources`.
+Request bodies are bounded at 64 KiB, individual resource responses at 128 KiB and list responses
+at 1 MiB; an oversized page can return fewer resources than requested. Unsupported projection,
+sort, compound filter or repeated query parameters fail explicitly.
+
+An optional `X-Clank-Idempotency-Key` contains 16–128 letters, digits, underscores or hyphens.
+Retain the exact method, resource path, `If-Match` and body until the outcome is known. Exact
+accepted retries return the historical status/body/ETag after restart, even if the current resource
+has changed or was deleted. Changed input with that key returns 409. A historical response does
+not reapply authority. Requests still require the current credential and policy. Each organization
+retains at most 1,000 accepted receipts, 1,000 Users including deleted resources, and 100 Groups;
+global limits are 10,000 receipts and 10,000 combined resources. Capacity rejects new work without
+silently deleting ownership, revocations or retry receipts.
+
+Setting `active: false` or deleting a bound User removes that organization's membership and project
+overrides, revokes all browser/recovery/generic OAuth credentials and broad platform credentials,
+and denies pending device approvals. Credentials scoped exclusively to unrelated workspaces and
+their memberships remain. Existing live subscriptions close after their controller observes the
+durable auth change. Setting `active: true` does not restore a session or identity binding: fresh
+signed OIDC proof must reactivate the exact SCIM-owned inactive version. Independent unlink or
+provider offboarding cannot be undone by toggling SCIM state. Explicit linking may prove a
+voluntarily unlinked identity again, while provider-offboarding tombstones remain authoritative.
+Deleting and recreating a subject produces a new resource ID, retains its local ownership and
+does not inherit old group references. Local account deletion cannot transfer that ownership.
+
+The native platform records independent membership floors and manual assignment ownership.
+Mapped roles can contribute to an existing independent role; removal of a group cannot remove
+that independent grant. Human member edits, removal and accepted invitations take precedence over
+later group updates and repeated sign-in. Explicit SCIM deactivation remains authoritative and
+removes the affected workspace's grants. To deliberately resume source ownership, an owner or
+administrator first reviews `GET /api/organizations/{organizationId}/provisioning/{userId}`.
+POST to the same path with its exact `resourceId`, `expectedVersion`, `expectedCurrentRole`
+(including `null`), a stable `idempotencyKey`, and `confirmed: true`. This mutation always requires
+the current browser's local MFA or passkey verification within five minutes, Origin and CSRF,
+regardless of the platform's general step-up setting. Only an owner can adopt another owner's
+assignment. Changed versions or an unverified/inactive resource fail; accepted retry receipts
+describe the historical adoption and never repeat a later-removed grant. Native ownership records
+are bounded at 2,000 per organization/20,000 globally, and adoption receipts at 1,000/10,000.
+
+Embedded applications must supply synchronous `onProvisioning(userId, organizationId, assignment)`
+and persist equivalent role ownership in the same database transaction. `active` means a current
+verified binding is eligible; `deactivated` distinguishes an explicit provisioning disable/delete
+from a pending or independently unlinked binding. Preserve independent grants in the latter case.
+Hooks cannot return promises or perform external side effects. Policy publication and bound-user
+reconciliation commit together; a failed hook rolls both back. `provisioningAssignment` is a
+server-only lookup whose caller must authorize its own administrative surface.
+
+Back up the control database before enabling provisioning. The upgrade retains private resource,
+subject ownership, membership provenance and receipt tables. Disabling configuration denies new
+SCIM calls and preserves inactive/deleted subject denials and all retained evidence. Stop
+admission and restore a separately verified compatible binary/schema snapshot for rollback.
+Deleting the new tables or running an older binary against upgraded state is unsafe.
 
 ## Recent authentication
 

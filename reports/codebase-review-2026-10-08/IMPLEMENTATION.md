@@ -2,14 +2,66 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty features are merged across seventeen feature batches. Scheduled release windows (05) merged in [PR #282](https://github.com/nearbycoder/clank.run/pull/282) after all six fresh hosted checks at reviewed head `4c06c2f5d35940872afa6d1fa947c97c25b04597`, no new CodeQL alerts, no unresolved threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Both main checkouts match `508e588d80bb52dd0990f89b5f3438ebcc220666` after the compiler prerequisite in PR #284, canary drain repair in PR #286 and fixture isolation in PR #288, and all 23 existing files are preserved. Twenty features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Earlier snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-one features are merged across eighteen feature batches. Scheduled release windows (05) merged in [PR #282](https://github.com/nearbycoder/clank.run/pull/282) after all six fresh hosted checks at reviewed head `4c06c2f5d35940872afa6d1fa947c97c25b04597`, no new CodeQL alerts, no unresolved threads and an author review explicitly recorded as non-independent. The protected squash merge has the exact reviewed tree. Verified organization identity linking (11) merged in [PR #285](https://github.com/nearbycoder/clank.run/pull/285) after fresh combined full Node 26/22 gates and all six hosted checks. Both main checkouts match `1f31092814d9eb2f60025796eac5b2699561c5a8`, with the exact reviewed tree and all 23 existing files preserved. Nineteen features remain; scoped provisioning (12) is verified for protected merge in [PR #289](https://github.com/nearbycoder/clank.run/pull/289) under [proposal #287](https://github.com/nearbycoder/clank.run/issues/287). It is not counted before that merge. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. Earlier snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
+
+## Scoped provisioning verified for protected merge
+
+Feature 12 is implemented under [proposal #287](https://github.com/nearbycoder/clank.run/issues/287)
+and awaits final protected merge in [PR #289](https://github.com/nearbycoder/clank.run/pull/289).
+Separate expiring credentials, exact resource versions, atomic PATCH and retained retry receipts
+scope Users/Groups to an organization and issuer. Signed OIDC subject proof binds/reactivates
+identities; metadata cannot select accounts or transfer retained ownership. Deactivation revokes
+live/browser/CLI/MCP access while preserving unrelated scopes. Native manual grants remain
+independent until fresh, versioned reviewed adoption. Policy publication and membership projection
+commit together, including rollback on failed or unsupported asynchronous hooks.
+
+All 40 focused checks and all 29 packed positive/negative type fixtures pass, with 159 existing
+source diagnostics and no new allowance against the unchanged 163 baseline. The actual process
+drill obtains real OAuth consent/code/PKCE credentials, kills a controller after its accepted
+write before the response, and replays once after restart. A second process closes an already-open
+live stream and rejects old browser/CLI/MCP credentials. Historical receipts cannot reapply later
+removed authority. Deleted local accounts retain subject ownership without orphan membership.
+
+Fresh combined full Node 26/minimum Node 22 gates each pass 1,985 reported / 1,982 passed /
+zero failed or cancelled / three existing skips. Coverage is 91.80/80.72/90.01 on Node 26 and
+91.80/80.74/90.04 on Node 22. The immutable source04 snapshot is runtime head
+`54878cab129ed29ecbe0a3c98fad81322cadb0fb`, tree `e0c6473fe7a5bc0fb95b7b1bf6de4832aaf91d9b`;
+integrating merged PR #290 preserves that exact tree at `f62c1e2a05060c1fad00e7efbf6dac2f4bd3dd66`.
+Subsequent edits are report metadata only. The package remains 405 files / 6,192,353 unpacked
+bytes with 99,103 bytes below the unchanged 6 MiB ceiling and zero dependencies.
+
+Documentation build, doctor, offline artifact and HTTP/MCP checks pass. Home/search/long guide and
+actual SCIM content are verified at desktop/phone widths. Browser-blocked machine-format navigation
+is recorded separately from successful HTTP/MCP reads. Initial browser-barrel, manually seeded
+OAuth, deleted-account projection and source03 CLI/time-fixture failures are retained; each had
+a concrete repair before fresh acceptance. No independent review, external enterprise IdP tenant
+certification or production host certification is claimed. Final hosted checks, author COMMENT
+review and expected-head merge must accept the final report head; this still counts 21 merged
+features. See [immutable scoped provisioning evidence](scim-provisioning.json).
+
+## CLI positional and signed-time repair
+
+[PR #290](https://github.com/nearbycoder/clank.run/pull/290) merged after both complete ordinary-user
+Linux Node 26/22 release gates: 1,971 reported / 1,968 passed / zero failed or cancelled / three
+existing skips. All six hosted checks pass at `e42ff81a2380fa3ff0464268c2fc4bcfcd9fb861`, with no
+new CodeQL alerts or unresolved threads. The expected-head protected squash is
+`1f31092814d9eb2f60025796eac5b2699561c5a8`, exactly matching reviewed tree
+`fbd5c20ca0b854bf712944a4e3068e3ad2444275`. Both main checkouts are synchronized and all 23 existing
+files are preserved. The author COMMENT review is explicitly non-independent.
+
+Generated IDs beginning with `--` now work after the deployment CLI option terminator; literal
+help/JSON/option-looking identities remain values, while earlier invalid options still reject
+before network I/O. The real managed environment CLI journey uses that escape. Signed-provider
+refusal fixtures use clearly invalid timestamps so an HTTP/JWK second boundary cannot make them
+valid; production freshness/skew policy is unchanged. The red regression and subsequent focused,
+full and hosted evidence are retained by hash. This maintenance repair adds no roadmap feature.
 
 ## Verified organization identity linking
 
 Feature 11 is implemented under [proposal #283](https://github.com/nearbycoder/clank.run/issues/283)
-and incorporates the merged canary drain and concurrent-fixture repairs; fresh combined release gates, hosted checks and protected merge remain required. Existing signed-in users can explicitly link
+and merged in [PR #285](https://github.com/nearbycoder/clank.run/pull/285) with the canary drain and concurrent-fixture repairs after all fresh acceptance gates. Existing signed-in users can explicitly link
 organization identities after real local MFA/passkey and fresh provider authentication. Stable
 issuer/subject ownership, current policy/session/generation fences and versioned receipts prevent
 email-only merging, stale callbacks or receipt replay from removing a later relink. Transactional
@@ -24,7 +76,10 @@ query rejects it. Forced provider offboarding remains authoritative. Last-owner 
 belongs to feature 13; independent platform operator authority remains a separate grant.
 
 All 74 focused checks and 28 packed positive/negative type fixtures pass without new source
-allowances. Earlier identity-only Node 22/26 gates passed; the fresh combined gates are running. Two actual SIGKILL/restart cycles
+allowances. Fresh combined full Node 22/26 gates each pass 1,970 reported / 1,967 passed /
+zero failed or cancelled / three existing skips. Coverage is 91.75/80.61/89.96 on Node 26 and
+91.75/80.63/90.00 on minimum Node 22. All six hosted checks pass with no new CodeQL alerts or
+unresolved threads; author review is explicitly non-independent. Two actual SIGKILL/restart cycles
 preserve accepted callback/unlink receipts and one durable removal; an old receipt cannot remove
 a fresh relink. Actual keyboard/provider/MFA flows and account/revocation isolation are verified.
 Lost accepted responses now reload current auth for HTTP errors, malformed/oversized bodies and
@@ -39,7 +94,7 @@ enterprise IdP tenant certification or production host certification is claimed.
 cleanup terminating an admitted canary request; PR #286 merged its repair with deterministic
 held-response proofs. The subsequent combined run exposed concurrent fixture installation/port
 collisions; PR #288 merged test isolation after both full gates and all six hosted checks. Actual
-failed tests were not retried; the fresh combined acceptance remains pending. See [immutable acceptance evidence](identity-linking.json).
+failed tests were not retried; the fresh combined acceptance passed before protected merge. See [immutable acceptance evidence](identity-linking.json).
 
 ## Erased-line package prerequisite
 

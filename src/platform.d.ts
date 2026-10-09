@@ -395,7 +395,7 @@ export interface ClankPlatformOptions {
     signup?: boolean | "bootstrap";
     /** Bounded password-hashing admission. Hash strength remains at the framework defaults. */
     authentication?: { concurrency?: number; maxQueue?: number };
-    organizationSso?: Omit<OrganizationSsoOptions, "onProvision" | "onOffboard">;
+    organizationSso?: Omit<OrganizationSsoOptions, "onProvision" | "onOffboard" | "onProvisioning">;
     freshAuthentication?: { required?: boolean; maxAgeMs?: number };
     masterKey?: string | Uint8Array;
     maxArtifactBytes?: number;

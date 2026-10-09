@@ -5,6 +5,7 @@ import {createHash,generateKeyPairSync,sign} from 'node:crypto';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {spawn} from 'node:child_process';
 import {defineAuth,defineBackend,defineDatabase,openBackend,createAuthClient,renderToString} from '../dist/index.js';
 import {openOrganizationSso} from '../dist/organization-sso.js';
 import {AccountSecurity,PasswordRecoveryForm,EmailVerificationForm,createOrganizationIdentityClient} from '../dist/account-security.js';
@@ -178,6 +179,95 @@ async function loginLocal(runtime,email='local@example.test'){
  const response=await runtime.handle(req('/__clank/auth/login',{email,password:'password-for-tests'}));const result=await response.json();assert.equal(response.status,200,JSON.stringify(result));return{cookie:response.headers.get('set-cookie').split(';')[0],csrf:result.csrfToken,user:result.user,session:result.session};
 }
 async function identityOffboard(f,organization='company',subject='employee-1') {const provider=f.options.providers.find(provider=>provider.organizationId===organization);return f.sso.handle(new Request(origin+'/__clank/sso/offboard/'+organization,{method:'POST',headers:{authorization:'Bearer '+provider.offboardingToken,'content-type':'application/json'},body:JSON.stringify({subject})}));}
+
+async function provisioningIdentityFixture() {
+ const f=await identityFixture(),assignments=[],token='separate-scim-organization-identity-proof-token';
+ const options={...f.options,identityLinking:{policyRevision:2},providers:f.options.providers.map(provider=>provider.organizationId==='company'
+  ?{...provider,provisioning:{token,expiresAt:Date.now()+600000,groupRoles:[{externalId:'developers',role:'developer'}]}}:provider),
+  onProvision(){throw new Error('Managed identities must use provisioning ownership hooks.')},
+  onProvisioning(userId,organizationId,assignment){assignments.push({userId,organizationId,...assignment})}};
+ await f.reopen(options);
+ const scim=async(path,body,method=body===undefined?'GET':'POST',etag,expected=200,retryKey)=>{
+  const response=await f.sso.handle(new Request(origin+'/scim/v2/company/'+path,{method,headers:{authorization:'Bearer '+token,
+   ...(body===undefined?{}:{'content-type':'application/scim+json'}),...(etag?{'if-match':etag}:{}),...(retryKey?{'x-clank-idempotency-key':retryKey}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})}));
+  const result=response.status===204?null:await response.json();assert.equal(response.status,expected,JSON.stringify(result));return{response,body:result};
+ };
+ return{...f,get runtime(){return f.runtime},get sql(){return f.sql},get sso(){return f.sso},options,assignments,scim};
+}
+
+test('SCIM binding requires signed OIDC proof; disable and reactivation retain ownership and independent offboarding denial',async()=>{
+ const f=await provisioningIdentityFixture(),USER='urn:ietf:params:scim:schemas:core:2.0:User',GROUP='urn:ietf:params:scim:schemas:core:2.0:Group',PATCH='urn:ietf:params:scim:api:messages:2.0:PatchOp';try{
+  assert.equal((await flow(f)).status,403);assert.equal(Number(f.sql.prepare('SELECT count(*) AS n FROM clank_auth_users').get().n),0);
+  const created=await f.scim('Users',{schemas:[USER],externalId:'employee-1',userName:'metadata-name@example.test',emails:[{value:'metadata@example.test'}]},'POST',undefined,201);
+  await f.scim('Groups',{schemas:[GROUP],externalId:'developers',displayName:'Developers',members:[{value:created.body.id}]},'POST',undefined,201);
+  assert.equal(f.assignments.length,0);
+  const signed=await flow(f);assert.equal(signed.status,303,await signed.clone().text());const cookie=signed.headers.get('set-cookie').split(';')[0];
+  const context=await f.runtime.auth.resolve(new Request(origin,{headers:{cookie}}));assert.equal(context.user.email,'employee@example.test');
+  const userId=context.user.id;assert.equal(f.assignments.at(-1).userId,userId);assert.equal(f.assignments.at(-1).role,'developer');assert.equal(f.assignments.at(-1).active,true);
+  assert.equal(f.sql.prepare('SELECT user_id FROM clank_scim_users WHERE id=?').get(created.body.id).user_id,userId);
+  const current=await f.scim('Users/'+created.body.id);
+  const disabled=await f.scim('Users/'+created.body.id,{schemas:[PATCH],Operations:[{op:'replace',path:'active',value:false}]},'PATCH',current.response.headers.get('etag'),200,'signed_disable_resource_01');
+  assert.equal((await f.runtime.auth.resolve(new Request(origin,{headers:{cookie}}))).user,null);
+  assert.equal(f.assignments.at(-1).deactivated,true);assert.equal((await flow(f)).status,403);
+  const inactive=f.sql.prepare('SELECT active,version FROM clank_sso_identities WHERE user_id=?').get(userId);assert.equal(inactive.active,0);
+  await f.scim('Users/'+created.body.id,{schemas:[PATCH],Operations:[{op:'replace',path:'active',value:true}]},'PATCH',disabled.response.headers.get('etag'));
+  assert.equal(f.sql.prepare('SELECT active FROM clank_sso_identities WHERE user_id=?').get(userId).active,0);
+  assert.equal(f.assignments.at(-1).active,false);assert.equal(f.assignments.at(-1).deactivated,false);
+  const reactivated=await flow(f);assert.equal(reactivated.status,303,await reactivated.clone().text());
+  assert.equal(f.sql.prepare('SELECT version FROM clank_sso_identities WHERE user_id=?').get(userId).version,inactive.version+1);
+  const fresh=await f.scim('Users/'+created.body.id);
+  const again=await f.scim('Users/'+created.body.id,{schemas:[PATCH],Operations:[{op:'replace',path:'active',value:false}]},'PATCH',fresh.response.headers.get('etag'));
+  assert.equal((await identityOffboard(f)).status,200);
+  await f.scim('Users/'+created.body.id,{schemas:[PATCH],Operations:[{op:'replace',path:'active',value:true}]},'PATCH',again.response.headers.get('etag'));
+  assert.equal((await flow(f)).status,403);assert.equal(Number(f.sql.prepare('SELECT count(*) AS n FROM clank_auth_users').get().n),1);
+ }finally{await f.close()}
+});
+
+test('SCIM cannot select an existing email account or turn an independently unlinked binding into an automatic sign-in',async()=>{
+ const f=await provisioningIdentityFixture(),USER='urn:ietf:params:scim:schemas:core:2.0:User',PATCH='urn:ietf:params:scim:api:messages:2.0:PatchOp';try{
+  const local=await register(f.runtime,'employee@example.test');await f.fresh(local);
+  const created=await f.scim('Users',{schemas:[USER],externalId:'employee-1',userName:'employee@example.test'},'POST',undefined,201);
+  assert.equal((await flow(f)).status,409);assert.equal(f.sql.prepare('SELECT user_id FROM clank_scim_users WHERE id=?').get(created.body.id).user_id,null);
+  const linking=await linkingFlow(f,local);assert.equal((await linking.finish()).status,303);
+  const bound=f.sql.prepare('SELECT id,active,version FROM clank_sso_identities WHERE user_id=?').get(local.user.id);assert.equal(bound.active,1);
+  await identityCall(f,'unlink',{identityId:bound.id,expectedVersion:bound.version,idempotencyKey:'independent_scim_unlink_01'},local);
+  assert.equal((await flow(f)).status,403);
+  const before=await f.scim('Users/'+created.body.id);
+  const disabled=await f.scim('Users/'+created.body.id,{schemas:[PATCH],Operations:[{op:'replace',path:'active',value:false}]},'PATCH',before.response.headers.get('etag'));
+  assert.equal(f.sql.prepare('SELECT disabled_version FROM clank_scim_subjects WHERE resource_id=?').get(created.body.id).disabled_version,null);
+  await f.scim('Users/'+created.body.id,{schemas:[PATCH],Operations:[{op:'replace',path:'active',value:true}]},'PATCH',disabled.response.headers.get('etag'));
+  assert.equal((await flow(f)).status,403);
+  const returned=await loginLocal(f.runtime,'employee@example.test');await f.fresh(returned);
+  const explicit=await linkingFlow(f,returned);assert.equal((await explicit.finish()).status,303);
+  assert.equal(f.sql.prepare('SELECT user_id FROM clank_scim_users WHERE id=?').get(created.body.id).user_id,local.user.id);
+ }finally{await f.close()}
+});
+
+test('SCIM policy reconciliation rolls back all membership writes and publication when a synchronous or asynchronous hook fails',async()=>{
+ const f=await provisioningIdentityFixture();try{
+  await f.scim('Users',{schemas:['urn:ietf:params:scim:schemas:core:2.0:User'],externalId:'employee-1',userName:'metadata@example.test'},'POST',undefined,201);
+  assert.equal((await flow(f)).status,303);
+  f.sql.exec("CREATE TABLE provisioning_hook_proof(role TEXT NOT NULL); INSERT INTO provisioning_hook_proof VALUES('before')");
+  const replacement={...f.options,identityLinking:{policyRevision:3},providers:f.options.providers.map(provider=>provider.organizationId==='company'
+   ?{...provider,provisioning:{...provider.provisioning,groupRoles:[{externalId:'developers',role:'viewer'}]}}:provider)};
+  for(const asynchronous of [false,true]){
+   assert.throws(()=>openOrganizationSso(f.runtime.database,f.runtime.auth,{...replacement,onProvisioning(){
+    f.sql.prepare('UPDATE provisioning_hook_proof SET role=?').run('uncommitted');
+    if(asynchronous)return Promise.reject(new Error('unsupported asynchronous hook'));
+    throw new Error('transactional hook rejected');
+   }}),asynchronous?/synchronous/:/transactional hook/);
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(f.sql.prepare('SELECT role FROM provisioning_hook_proof').get().role,'before');
+   assert.equal(f.sql.prepare('SELECT revision FROM clank_sso_policy').get().revision,2);
+   assert.equal((await f.scim('Users')).body.totalResults,1);
+  }
+  const current=openOrganizationSso(f.runtime.database,f.runtime.auth,{...replacement,onProvisioning(){f.sql.prepare('UPDATE provisioning_hook_proof SET role=?').run('accepted')}});
+  assert.equal(f.sql.prepare('SELECT revision FROM clank_sso_policy').get().revision,3);
+  assert.equal(f.sql.prepare('SELECT role FROM provisioning_hook_proof').get().role,'accepted');
+  const request=new Request(origin+'/scim/v2/company/Users',{headers:{authorization:'Bearer '+f.options.providers[0].provisioning.token}});
+  assert.equal((await f.sso.handle(request.clone())).status,401);assert.equal((await current.handle(request)).status,200);
+ }finally{await f.close()}
+});
 
 test('verified linking retains the local profile, spans two organizations and replays accepted callbacks after SQLite reopen',async()=>{
  const f=await identityFixture();try{
@@ -358,6 +448,176 @@ async function verifyPlatformPasskey(f,owner){
  const credential={id:credentialId,rawId:credentialId,type:'public-key',response:{clientDataJSON:client.toString('base64url'),authenticatorData:data.toString('base64url'),signature:sign('sha256',Buffer.concat([data,createHash('sha256').update(client).digest()]),privateKey).toString('base64url'),userHandle:null}};
  await pcall(f,'/__clank/auth/reauthenticate/passkey/finish',{challengeId:start.challengeId,challenge:start.options.challenge,credential},owner);
 }
+
+async function nativeProvisioningFixture() {
+ const f=await platformFixture(),idp=await mockIdp(),token='native-platform-scim-separate-provisioning-token';
+ const owner=await register(f.platform,'scim-owner@example.test'),member=await register(f.platform,'local@example.test');
+ const project=(await pcall(f,'/api/projects',{name:'Provisioned workspace'},owner,201)).project;
+ await addMember(f,project,owner,member);
+ const settings={applicationOrigin:origin,allowInsecureLoopback:true,identityLinking:{policyRevision:1},providers:[{
+  organizationId:project.organizationId,issuer:idp.issuer,clientId:'clank-client',offboardingToken:'native-platform-scim-independent-offboarding-token',
+  provisioning:{token,expiresAt:Date.now()+600000,groupRoles:[{externalId:'developers',role:'developer'}]}}]};
+ await f.reopen({organizationSso:settings});
+ const scim=async(path,body,method=body===undefined?'GET':'POST',etag,expected=200,retryKey)=>{
+  const response=await f.platform.handle(new Request(origin+'/scim/v2/'+project.organizationId+'/'+path,{method,headers:{authorization:'Bearer '+token,
+   ...(body===undefined?{}:{'content-type':'application/scim+json'}),...(etag?{'if-match':etag}:{}),...(retryKey?{'x-clank-idempotency-key':retryKey}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})}));
+  const result=response.status===204?null:await response.json();assert.equal(response.status,expected,JSON.stringify(result));return{response,body:result};
+ };
+ const created=await scim('Users',{schemas:['urn:ietf:params:scim:schemas:core:2.0:User'],externalId:'employee-1',userName:'metadata@example.test'},'POST',undefined,201);
+ const group=await scim('Groups',{schemas:['urn:ietf:params:scim:schemas:core:2.0:Group'],externalId:'developers',displayName:'Developers',members:[{value:created.body.id}]},'POST',undefined,201);
+ await verifyPlatformPasskey(f,member);const linked={sso:{handle:request=>f.platform.handle(request)},options:settings};
+ const proof=await linkingFlow(linked,member,project.organizationId);assert.equal((await proof.finish()).status,303);
+ const signed=async()=>{
+  const start=await f.platform.handle(req('/__clank/sso/start/'+project.organizationId));assert.equal(start.status,303);
+  const authorized=await fetch(start.headers.get('location'),{redirect:'manual'});
+  const response=await f.platform.handle(new Request(authorized.headers.get('location'),{headers:{cookie:start.headers.get('set-cookie').split(';')[0]}}));
+  assert.equal(response.status,303,await response.clone().text());return response;
+ };
+ const patch=async(path,operations)=>{const current=await scim(path);return scim(path,{schemas:['urn:ietf:params:scim:api:messages:2.0:PatchOp'],Operations:operations},'PATCH',current.response.headers.get('etag'));};
+ return{...f,get platform(){return f.platform},idp,owner,member,project,settings,created,group,scim,patch,signed,
+  async close(){await idp.close();await f.close()}};
+}
+
+test('native SCIM respects manual role changes and removals until a fresh versioned adoption, with historical retry receipts',async()=>{
+ const f=await nativeProvisioningFixture();try{
+  const path=`/api/organizations/${f.project.organizationId}/provisioning/${f.member.user.id}`;
+  const role=()=>f.sql.prepare('SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(f.project.organizationId,f.member.user.id)?.role??null;
+  assert.equal(role(),'developer');
+  await pcall(f,`/api/organizations/${f.project.organizationId}/members/${f.member.user.id}`,{role:'viewer'},f.owner,200,'PATCH');
+  await f.patch('Groups/'+f.group.body.id,[{op:'remove',path:'members'}]);
+  await f.patch('Groups/'+f.group.body.id,[{op:'add',value:{members:[{value:f.created.body.id}]}}]);
+  await f.signed();assert.equal(role(),'viewer');
+  await pcall(f,`/api/organizations/${f.project.organizationId}/members/${f.member.user.id}`,undefined,f.owner,200,'DELETE');
+  await f.patch('Groups/'+f.group.body.id,[{op:'replace',path:'displayName',value:'Managed developers'}]);
+  await f.signed();assert.equal(role(),null);
+  const preview=(await pcall(f,path,undefined,f.owner)).assignment;
+  assert.equal(preview.manualOverride,true);assert.equal(preview.eligible,true);assert.equal(preview.desiredRole,'developer');
+  const input={resourceId:preview.resourceId,expectedVersion:preview.version,expectedCurrentRole:null,idempotencyKey:'reviewed_native_adoption_01',confirmed:true};
+  const freshRequired=await pcall(f,path,input,f.owner,403);assert.equal(freshRequired.error.code,'FRESH_AUTH_REQUIRED');
+  await verifyPlatformPasskey(f,f.owner);
+  await pcall(f,path,{...input,expectedVersion:preview.version-1},f.owner,409);
+  const accepted=await pcall(f,path,input,f.owner);assert.equal(role(),'developer');assert.equal(accepted.assignment.manualOverride,false);
+  const audits=()=>Number(f.sql.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='organization.provisioning.adopt'").get().n);
+  assert.equal(audits(),1);
+  await pcall(f,`/api/organizations/${f.project.organizationId}/members/${f.member.user.id}`,undefined,f.owner,200,'DELETE');
+  const replay=await pcall(f,path,input,f.owner);assert.deepEqual(replay,accepted);assert.equal(role(),null);assert.equal(audits(),1);
+  await pcall(f,path,{...input,expectedCurrentRole:'viewer'},f.owner,409);
+  await f.reopen({organizationSso:f.settings});assert.deepEqual(await pcall(f,path,input,f.owner),accepted);assert.equal(role(),null);
+ }finally{await f.close()}
+});
+
+test('native SCIM deactivation revokes exact workspace and broad credentials while preserving unrelated membership and scopes',async()=>{
+ const f=await nativeProvisioningFixture();try{
+  const otherOwner=await register(f.platform,'scim-other-owner@example.test');
+  const other=(await pcall(f,'/api/projects',{name:'Unrelated workspace'},otherOwner,201)).project;
+  await addMember(f,other,otherOwner,f.member);
+  for(const project of [f.project,other])await pcall(f,`/api/projects/${project.id}/members/${f.member.user.id}`,{permissions:['read','tokens']},project===other?otherOwner:f.owner,200,'PUT');
+  const scoped=await pcall(f,`/api/projects/${f.project.id}/tokens`,{name:'Managed scope',permissions:['read']},f.member,201);
+  const unrelated=await pcall(f,`/api/projects/${other.id}/tokens`,{name:'Other scope',permissions:['read']},f.member,201);
+  const start=await pcall(f,'/api/device/start',{clientName:'Managed broad CLI'},undefined,201);
+  await pcall(f,'/api/device/approve',{code:start.userCode},f.member);const broad=await pcall(f,'/api/device/token',{deviceCode:start.deviceCode});
+  await f.patch('Users/'+f.created.body.id,[{op:'replace',path:'active',value:false}]);
+  const bearer=(token,project)=>f.platform.handle(new Request(origin+'/api/projects/'+project.id,{headers:{authorization:'Bearer '+token}}));
+  assert.equal((await bearer(scoped.token.accessToken,f.project)).status,401);
+  assert.equal((await bearer(unrelated.token.accessToken,other)).status,200);
+  assert.equal((await bearer(broad.accessToken,other)).status,401);
+  await pcall(f,'/api/projects',undefined,f.member,401);
+  assert.equal(f.sql.prepare('SELECT disabled FROM clank_auth_users WHERE id=?').get(f.member.user.id).disabled,0);
+  assert.equal(f.sql.prepare('SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(other.organizationId,f.member.user.id).role,'viewer');
+  await f.patch('Users/'+f.created.body.id,[{op:'replace',path:'active',value:true}]);
+  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(f.project.organizationId,f.member.user.id).n,0);
+  await f.signed();assert.equal(f.sql.prepare('SELECT role FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').get(f.project.organizationId,f.member.user.id).role,'developer');
+  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_platform_project_members WHERE project_id=? AND user_id=?').get(f.project.id,f.member.user.id).n,0);
+ }finally{await f.close()}
+});
+
+test('native SCIM retains deleted local ownership without recreating an account or blocking resource maintenance',async()=>{
+ const f=await nativeProvisioningFixture();try{
+  const oldId=f.member.user.id;
+  f.sql.prepare('DELETE FROM clank_auth_users WHERE id=?').run(oldId);
+  assert.equal(f.sql.prepare('SELECT user_id FROM clank_scim_subjects WHERE subject=?').get('employee-1').user_id,oldId);
+  assert.equal(f.sql.prepare('SELECT 1 FROM clank_sso_identities WHERE user_id=?').get(oldId),undefined);
+  await f.patch('Users/'+f.created.body.id,[{op:'replace',path:'displayName',value:'Retained metadata'}]);
+  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_platform_memberships WHERE user_id=?').get(oldId).n,0);
+  const replacement=await register(f.platform,'replacement-local@example.test');await verifyPlatformPasskey(f,replacement);
+  const proof=await linkingFlow({sso:{handle:request=>f.platform.handle(request)}},replacement,f.project.organizationId);
+  const denied=await proof.finish();assert.equal(denied.status,409,await denied.clone().text());
+  assert.equal(f.sql.prepare('SELECT user_id FROM clank_scim_subjects WHERE subject=?').get('employee-1').user_id,oldId);
+ }finally{await f.close()}
+});
+
+test('SCIM accepted disable survives controller SIGKILL and closes another process live stream and browser, CLI and MCP access',async()=>{
+ const f=await nativeProvisioningFixture(),children=new Set();let reader;
+ async function stop(child,signal='SIGTERM'){
+  if(child.exitCode!==null||child.signalCode!==null){children.delete(child);return}
+  const exited=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Owned provisioning child did not exit')),10000);
+   child.once('exit',()=>{clearTimeout(timer);resolve()})});child.kill(signal);await exited;children.delete(child);
+ }
+ async function start(){
+  const child=spawn(process.execPath,['--disable-warning=ExperimentalWarning','tests/fixtures/organization-provisioning-process.mjs'],{
+   cwd:new URL('../',import.meta.url),env:{...process.env,CLANK_SCIM_PROCESS_FIXTURE:JSON.stringify({directory:f.dir,options:f.settings,organizationId:f.project.organizationId})},stdio:['ignore','ignore','pipe','ipc']});
+  children.add(child);let errors='';child.stderr.on('data',data=>{errors=(errors+data).slice(-4096)});
+  const ready=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Provisioning child startup deadline: '+errors)),10000);
+   child.once('error',reject);child.once('exit',()=>{clearTimeout(timer);reject(new Error('Provisioning child startup failed: '+errors))});
+   child.on('message',message=>{if(message.ready){clearTimeout(timer);resolve(message)}})});
+  return{child,url:'http://127.0.0.1:'+ready.port};
+ }
+ const proxy={'x-forwarded-proto':'https','x-forwarded-host':'security.test'};
+ const http=(worker,path,init={})=>fetch(worker.url+path,{...init,headers:{...proxy,...init.headers}});
+ async function deadline(pending,message){let timer;try{return await Promise.race([pending,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),5000)})])}finally{clearTimeout(timer)}}
+ try{
+  const startDevice=await pcall(f,'/api/device/start',{clientName:'Cross-process CLI'},undefined,201);
+  await pcall(f,'/api/device/approve',{code:startDevice.userCode},f.member);const cli=await pcall(f,'/api/device/token',{deviceCode:startDevice.deviceCode});
+  let first=await start();const second=await start();
+  const browser={cookie:f.member.cookie};
+  const initialBrowser=await http(second,'/api/projects/'+f.project.id,{headers:browser});
+  assert.equal(initialBrowser.status,200,await initialBrowser.clone().text());
+  assert.equal((await http(second,'/api/projects/'+f.project.id,{headers:{authorization:'Bearer '+cli.accessToken}})).status,200);
+  const registered=await http(second,'/__clank/oauth/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
+   client_name:'Cross-process SCIM agent',redirect_uris:[second.url+'/fixture/callback'],grant_types:['authorization_code','refresh_token'],response_types:['code'],token_endpoint_auth_method:'none'})});
+  assert.equal(registered.status,201,await registered.clone().text());const client=await registered.json();
+  const verifier=Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
+  const challenge=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier))).toString('base64url');
+  const authorization={client_id:client.client_id,redirect_uri:client.redirect_uris[0],response_type:'code',state:'scim-process-client-state',
+   code_challenge:challenge,code_challenge_method:'S256',scope:'agent:read',resource:origin+'/__clank/mcp'};
+  const consent=await http(second,'/__clank/oauth/authorize?'+new URLSearchParams(authorization),{headers:browser});
+  assert.equal(consent.status,200,await consent.clone().text());const html=await consent.text(),consentToken=/name="consent_token" value="([^"]+)"/u.exec(html)?.[1];assert.ok(consentToken);
+  const approved=await http(second,'/__clank/oauth/authorize',{method:'POST',redirect:'manual',headers:{...browser,origin,'content-type':'application/x-www-form-urlencoded'},
+   body:new URLSearchParams({...authorization,csrf_token:f.member.csrf,consent_token:consentToken,decision:'approve'})});
+  assert.equal(approved.status,303,await approved.clone().text());const callback=new URL(approved.headers.get('location'));assert.equal(callback.origin,second.url);assert.equal(callback.searchParams.get('state'),authorization.state);
+  const exchanged=await http(second,'/__clank/oauth/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({
+   grant_type:'authorization_code',client_id:client.client_id,code:callback.searchParams.get('code'),redirect_uri:client.redirect_uris[0],code_verifier:verifier,resource:authorization.resource})});
+  assert.equal(exchanged.status,200,await exchanged.clone().text());const delegated=await exchanged.json();assert.ok(delegated.access_token);
+  const mcp={method:'POST',headers:{authorization:'Bearer '+delegated.access_token,'content-type':'application/json',accept:'application/json, text/event-stream',
+   'mcp-protocol-version':'2026-07-28','mcp-method':'tools/list'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list',params:{_meta:{
+    'io.modelcontextprotocol/protocolVersion':'2026-07-28','io.modelcontextprotocol/clientInfo':{name:'scim-fixture',version:'1'},'io.modelcontextprotocol/clientCapabilities':{}}}})};
+  const listed=await http(second,'/__clank/mcp',mcp);assert.equal(listed.status,200,await listed.clone().text());
+  assert.ok((await listed.json()).result.tools.some(tool=>tool.name.includes('protected')));
+  const live=await http(second,'/__clank/live/protected?args=%7B%7D',{headers:browser});assert.equal(live.status,200);
+  reader=live.body.getReader();assert.equal((await reader.read()).done,false);
+  const current=await f.scim('Users/'+f.created.body.id),retryKey='process_accepted_disable_01';
+  const input={schemas:['urn:ietf:params:scim:api:messages:2.0:PatchOp'],Operations:[{op:'replace',path:'active',value:false}]};
+  const accepted=new Promise(resolve=>first.child.on('message',message=>{if(message.accepted)resolve()}));
+  const request={method:'PATCH',headers:{authorization:'Bearer '+f.settings.providers[0].provisioning.token,'content-type':'application/scim+json',
+   'if-match':current.response.headers.get('etag'),'x-clank-idempotency-key':retryKey},body:JSON.stringify(input)};
+  const lost=http(first,'/scim/v2/'+f.project.organizationId+'/Users/'+f.created.body.id,{...request,headers:{...request.headers,'x-fixture-lose-response':'accepted'}})
+   .then(()=>{throw new Error('Lost accepted response unexpectedly returned')},()=>undefined);
+  await deadline(accepted,'SCIM commit was not reached');
+  await stop(first.child,'SIGKILL');await lost;
+  const closed=await deadline(reader.read(),'Cross-process live stream stayed authorized');
+  assert.equal(closed.done,true);reader=undefined;
+  for(const headers of [browser,{authorization:'Bearer '+cli.accessToken}])assert.equal((await http(second,'/api/projects/'+f.project.id,{headers})).status,401);
+  assert.equal((await http(second,'/__clank/mcp',mcp)).status,401);
+  first=await start();const replay=await http(first,'/scim/v2/'+f.project.organizationId+'/Users/'+f.created.body.id,request);
+  assert.equal(replay.status,200,await replay.clone().text());assert.equal((await replay.json()).active,false);
+  assert.equal(Number(f.sql.prepare('SELECT count(*) AS n FROM clank_scim_receipts WHERE key=?').get(retryKey).n),1);
+  const afterDisable=await f.scim('Users/'+f.created.body.id);await f.scim('Users/'+f.created.body.id,{...input,Operations:[{op:'replace',path:'active',value:true}]},'PATCH',afterDisable.response.headers.get('etag'));
+  const old=await http(first,'/scim/v2/'+f.project.organizationId+'/Users/'+f.created.body.id,request);assert.equal((await old.json()).active,false);
+  assert.equal((await f.scim('Users/'+f.created.body.id)).body.active,true);
+  assert.equal(f.sql.prepare('SELECT active FROM clank_sso_identities WHERE user_id=?').get(f.member.user.id).active,0);
+  await stop(first.child);await stop(second.child);
+ }finally{await reader?.cancel();for(const child of children)await stop(child);await f.close()}
+});
 
 test('platform partial offboarding revokes only affected project scopes, all broad credentials, and preserves unrelated organization access',async()=>{
  const f=await platformFixture(),first=await mockIdp(),second=await mockIdp();try{
