@@ -1,0 +1,1988 @@
+{
+  "feature": "34 Local provider fleet simulator",
+  "date": "2026-10-09",
+  "baseCommit": "b6a61c4749bc3f87c31228ec69d895692b9aa92a",
+  "branch": "codex/local-provider-fleet",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/273",
+  "status": "validated; reviewed PR delivery pending",
+  "implementation": "Optional fixed-scenario API and private-config provider CLI run actual coordinator, two provider services and two agents in separate processes. Real leases, HTTP transfer, Docker ingress, SQLite, mount faults and fencing drive every pass.",
+  "validation": {
+    "release": {
+      "node": "26.10.0",
+      "reported": 1873,
+      "passed": 1870,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "skipScope": "Existing privileged tests require an explicitly disposable environment; the separate real guest driver passes without skips.",
+      "coverage": {
+        "lines": 91.83,
+        "branches": 80.39,
+        "functions": 90.12
+      },
+      "documentation": "passed",
+      "conformance": "passed",
+      "dependencyContract": "passed",
+      "securityTreePackageHistory": "passed",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-check-reviewed-f2630a2f23c5d2aa7ed9d46ac23bf55194ef5ead1b2df2bd24148a6395babbf1.log",
+        "sha256": "f2630a2f23c5d2aa7ed9d46ac23bf55194ef5ead1b2df2bd24148a6395babbf1"
+      }
+    },
+    "minimumNode": {
+      "node": "22.16.0",
+      "focusedTests": 28,
+      "passed": 28,
+      "failed": 0,
+      "skipped": 0,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-focused-final-39fe6398d6fd3637aaab0937bfd252a8d07f65028bcd237d847e3728d0ae016f.log",
+        "sha256": "39fe6398d6fd3637aaab0937bfd252a8d07f65028bcd237d847e3728d0ae016f"
+      },
+      "fullLocalGate": "All tests passed, but V8 coverage JSON was truncated at position 327680. The existing narrow retry did not recognize it, so the gate failed closed. Full local minimum-Node coverage is not claimed. Hosted minimum-Node checks remain required.",
+      "failedCoverageEvidence": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-check-e97e71b5c469a47e8fe5bc89b7daa517602d97c8e69e8e41196aa10dba8bfeeb.log",
+        "sha256": "e97e71b5c469a47e8fe5bc89b7daa517602d97c8e69e8e41196aa10dba8bfeeb"
+      }
+    },
+    "consumerTypes": {
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 159,
+      "baselineAllowance": 163,
+      "packedFixtures": 23,
+      "skipLibCheck": false,
+      "status": "passed",
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-types-reviewed-1ec36e2b8940ab8172edb92a76314a107c3493353beff6a6d112b2455e0157d3.log",
+        "sha256": "1ec36e2b8940ab8172edb92a76314a107c3493353beff6a6d112b2455e0157d3"
+      }
+    },
+    "disposableLinux": {
+      "node": "v22.16.0",
+      "realGuest": true,
+      "certification": "Fresh current profile, all seven actual capabilities passed before drills.",
+      "cases": [
+        {
+          "name": "takeover",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "takeover",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 3000,
+              "transportDelayMs": 1500
+            },
+            "status": "passed",
+            "reason": "verified",
+            "artifactSha256": "35d457b0e2f29b9b9b117ef1c5511bf033fc3531eacccf597d11119fe299836c",
+            "checks": [
+              {
+                "name": "host",
+                "status": "passed"
+              },
+              {
+                "name": "processes",
+                "status": "passed"
+              },
+              {
+                "name": "baseline",
+                "status": "passed"
+              },
+              {
+                "name": "fault",
+                "status": "passed"
+              },
+              {
+                "name": "recovery",
+                "status": "passed"
+              },
+              {
+                "name": "fences",
+                "status": "passed"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 344,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 2,
+                "elapsedMs": 427,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 3,
+                "elapsedMs": 510,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 4,
+                "elapsedMs": 601,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 5,
+                "elapsedMs": 607,
+                "node": "coordinator",
+                "event": "desired",
+                "generation": 1
+              },
+              {
+                "sequence": 6,
+                "elapsedMs": 662,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 7,
+                "elapsedMs": 1380,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 8,
+                "elapsedMs": 1515,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 9,
+                "elapsedMs": 1515,
+                "node": "fleet",
+                "event": "fault"
+              },
+              {
+                "sequence": 10,
+                "elapsedMs": 1550,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 11,
+                "elapsedMs": 1580,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 12,
+                "elapsedMs": 2102,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 13,
+                "elapsedMs": 4570,
+                "node": "node-b",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 14,
+                "elapsedMs": 5289,
+                "node": "node-b",
+                "event": "executed",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 15,
+                "elapsedMs": 5338,
+                "node": "fleet",
+                "event": "restored",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 16,
+                "elapsedMs": 5338,
+                "node": "fleet",
+                "event": "stale-rejected"
+              },
+              {
+                "sequence": 17,
+                "elapsedMs": 5345,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 18,
+                "elapsedMs": 5902,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 19,
+                "elapsedMs": 5907,
+                "node": "coordinator",
+                "event": "stopped"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lease-loss",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "lease-loss",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 3000,
+              "transportDelayMs": 1500
+            },
+            "status": "passed",
+            "reason": "verified",
+            "artifactSha256": "35d457b0e2f29b9b9b117ef1c5511bf033fc3531eacccf597d11119fe299836c",
+            "checks": [
+              {
+                "name": "host",
+                "status": "passed"
+              },
+              {
+                "name": "processes",
+                "status": "passed"
+              },
+              {
+                "name": "baseline",
+                "status": "passed"
+              },
+              {
+                "name": "fault",
+                "status": "passed"
+              },
+              {
+                "name": "recovery",
+                "status": "passed"
+              },
+              {
+                "name": "fences",
+                "status": "passed"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 341,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 2,
+                "elapsedMs": 425,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 3,
+                "elapsedMs": 508,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 4,
+                "elapsedMs": 604,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 5,
+                "elapsedMs": 608,
+                "node": "coordinator",
+                "event": "desired",
+                "generation": 1
+              },
+              {
+                "sequence": 6,
+                "elapsedMs": 613,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 7,
+                "elapsedMs": 1342,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 8,
+                "elapsedMs": 1463,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 9,
+                "elapsedMs": 1463,
+                "node": "fleet",
+                "event": "fault"
+              },
+              {
+                "sequence": 10,
+                "elapsedMs": 1518,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 11,
+                "elapsedMs": 3519,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 12,
+                "elapsedMs": 4583,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 13,
+                "elapsedMs": 4852,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 14,
+                "elapsedMs": 4859,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 15,
+                "elapsedMs": 5590,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 16,
+                "elapsedMs": 6743,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 17,
+                "elapsedMs": 6750,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 18,
+                "elapsedMs": 6766,
+                "node": "fleet",
+                "event": "restored",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 19,
+                "elapsedMs": 6766,
+                "node": "fleet",
+                "event": "stale-rejected"
+              },
+              {
+                "sequence": 20,
+                "elapsedMs": 6773,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 21,
+                "elapsedMs": 6773,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 22,
+                "elapsedMs": 6801,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 23,
+                "elapsedMs": 7358,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 24,
+                "elapsedMs": 7366,
+                "node": "coordinator",
+                "event": "stopped"
+              }
+            ]
+          }
+        },
+        {
+          "name": "slow-transport",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "slow-transport",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 3000,
+              "transportDelayMs": 1500
+            },
+            "status": "passed",
+            "reason": "verified",
+            "artifactSha256": "35d457b0e2f29b9b9b117ef1c5511bf033fc3531eacccf597d11119fe299836c",
+            "checks": [
+              {
+                "name": "host",
+                "status": "passed"
+              },
+              {
+                "name": "processes",
+                "status": "passed"
+              },
+              {
+                "name": "baseline",
+                "status": "passed"
+              },
+              {
+                "name": "fault",
+                "status": "passed"
+              },
+              {
+                "name": "recovery",
+                "status": "passed"
+              },
+              {
+                "name": "fences",
+                "status": "passed"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 345,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 2,
+                "elapsedMs": 429,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 3,
+                "elapsedMs": 512,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 4,
+                "elapsedMs": 602,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 5,
+                "elapsedMs": 606,
+                "node": "coordinator",
+                "event": "desired",
+                "generation": 1
+              },
+              {
+                "sequence": 6,
+                "elapsedMs": 611,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 7,
+                "elapsedMs": 1341,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 8,
+                "elapsedMs": 1468,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 9,
+                "elapsedMs": 1468,
+                "node": "fleet",
+                "event": "fault"
+              },
+              {
+                "sequence": 10,
+                "elapsedMs": 1511,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 11,
+                "elapsedMs": 2264,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 12,
+                "elapsedMs": 2332,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 13,
+                "elapsedMs": 3276,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 14,
+                "elapsedMs": 4507,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 15,
+                "elapsedMs": 4514,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 16,
+                "elapsedMs": 4533,
+                "node": "fleet",
+                "event": "restored",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 17,
+                "elapsedMs": 4533,
+                "node": "fleet",
+                "event": "stale-rejected"
+              },
+              {
+                "sequence": 18,
+                "elapsedMs": 4540,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 19,
+                "elapsedMs": 4541,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 20,
+                "elapsedMs": 4570,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 21,
+                "elapsedMs": 5164,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 22,
+                "elapsedMs": 5169,
+                "node": "coordinator",
+                "event": "stopped"
+              }
+            ]
+          }
+        },
+        {
+          "name": "disk-read-only",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "disk-read-only",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 3000,
+              "transportDelayMs": 1500
+            },
+            "status": "passed",
+            "reason": "verified",
+            "artifactSha256": "35d457b0e2f29b9b9b117ef1c5511bf033fc3531eacccf597d11119fe299836c",
+            "checks": [
+              {
+                "name": "host",
+                "status": "passed"
+              },
+              {
+                "name": "processes",
+                "status": "passed"
+              },
+              {
+                "name": "baseline",
+                "status": "passed"
+              },
+              {
+                "name": "fault",
+                "status": "passed"
+              },
+              {
+                "name": "recovery",
+                "status": "passed"
+              },
+              {
+                "name": "fences",
+                "status": "passed"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 321,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 2,
+                "elapsedMs": 401,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 3,
+                "elapsedMs": 471,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 4,
+                "elapsedMs": 546,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 5,
+                "elapsedMs": 549,
+                "node": "coordinator",
+                "event": "desired",
+                "generation": 1
+              },
+              {
+                "sequence": 6,
+                "elapsedMs": 553,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 7,
+                "elapsedMs": 1007,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 8,
+                "elapsedMs": 1069,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 9,
+                "elapsedMs": 1069,
+                "node": "fleet",
+                "event": "fault"
+              },
+              {
+                "sequence": 10,
+                "elapsedMs": 1120,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 11,
+                "elapsedMs": 1130,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 12,
+                "elapsedMs": 1245,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 13,
+                "elapsedMs": 2184,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 14,
+                "elapsedMs": 3455,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 15,
+                "elapsedMs": 3461,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 16,
+                "elapsedMs": 3509,
+                "node": "fleet",
+                "event": "restored",
+                "generation": 2,
+                "fence": 3
+              },
+              {
+                "sequence": 17,
+                "elapsedMs": 3509,
+                "node": "fleet",
+                "event": "stale-rejected"
+              },
+              {
+                "sequence": 18,
+                "elapsedMs": 3517,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 19,
+                "elapsedMs": 3519,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 20,
+                "elapsedMs": 3546,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 21,
+                "elapsedMs": 3999,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 22,
+                "elapsedMs": 4005,
+                "node": "coordinator",
+                "event": "stopped"
+              }
+            ]
+          }
+        },
+        {
+          "name": "coordinator-restart",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "coordinator-restart",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 3000,
+              "transportDelayMs": 1500
+            },
+            "status": "passed",
+            "reason": "verified",
+            "artifactSha256": "35d457b0e2f29b9b9b117ef1c5511bf033fc3531eacccf597d11119fe299836c",
+            "checks": [
+              {
+                "name": "host",
+                "status": "passed"
+              },
+              {
+                "name": "processes",
+                "status": "passed"
+              },
+              {
+                "name": "baseline",
+                "status": "passed"
+              },
+              {
+                "name": "fault",
+                "status": "passed"
+              },
+              {
+                "name": "recovery",
+                "status": "passed"
+              },
+              {
+                "name": "fences",
+                "status": "passed"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 341,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 2,
+                "elapsedMs": 425,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 3,
+                "elapsedMs": 509,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 4,
+                "elapsedMs": 605,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 5,
+                "elapsedMs": 609,
+                "node": "coordinator",
+                "event": "desired",
+                "generation": 1
+              },
+              {
+                "sequence": 6,
+                "elapsedMs": 614,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 7,
+                "elapsedMs": 1341,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 8,
+                "elapsedMs": 1461,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 9,
+                "elapsedMs": 1461,
+                "node": "fleet",
+                "event": "fault"
+              },
+              {
+                "sequence": 10,
+                "elapsedMs": 1465,
+                "node": "coordinator",
+                "event": "stopped"
+              },
+              {
+                "sequence": 11,
+                "elapsedMs": 1466,
+                "node": "node-b",
+                "event": "failed"
+              },
+              {
+                "sequence": 12,
+                "elapsedMs": 1511,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 13,
+                "elapsedMs": 1518,
+                "node": "node-b",
+                "event": "failed"
+              },
+              {
+                "sequence": 14,
+                "elapsedMs": 1547,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 15,
+                "elapsedMs": 1577,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 16,
+                "elapsedMs": 2792,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 17,
+                "elapsedMs": 2800,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 18,
+                "elapsedMs": 2845,
+                "node": "fleet",
+                "event": "restored",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 19,
+                "elapsedMs": 2845,
+                "node": "fleet",
+                "event": "stale-rejected"
+              },
+              {
+                "sequence": 20,
+                "elapsedMs": 2854,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 21,
+                "elapsedMs": 2855,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 22,
+                "elapsedMs": 2888,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 23,
+                "elapsedMs": 3363,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 24,
+                "elapsedMs": 3368,
+                "node": "coordinator",
+                "event": "stopped"
+              }
+            ]
+          }
+        },
+        {
+          "name": "provider-restart",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "provider-restart",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 3000,
+              "transportDelayMs": 1500
+            },
+            "status": "passed",
+            "reason": "verified",
+            "artifactSha256": "35d457b0e2f29b9b9b117ef1c5511bf033fc3531eacccf597d11119fe299836c",
+            "checks": [
+              {
+                "name": "host",
+                "status": "passed"
+              },
+              {
+                "name": "processes",
+                "status": "passed"
+              },
+              {
+                "name": "baseline",
+                "status": "passed"
+              },
+              {
+                "name": "fault",
+                "status": "passed"
+              },
+              {
+                "name": "recovery",
+                "status": "passed"
+              },
+              {
+                "name": "fences",
+                "status": "passed"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 299,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 2,
+                "elapsedMs": 365,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 3,
+                "elapsedMs": 429,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 4,
+                "elapsedMs": 498,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 5,
+                "elapsedMs": 501,
+                "node": "coordinator",
+                "event": "desired",
+                "generation": 1
+              },
+              {
+                "sequence": 6,
+                "elapsedMs": 504,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 7,
+                "elapsedMs": 966,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 8,
+                "elapsedMs": 1068,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 9,
+                "elapsedMs": 1068,
+                "node": "fleet",
+                "event": "fault"
+              },
+              {
+                "sequence": 10,
+                "elapsedMs": 1071,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 11,
+                "elapsedMs": 1382,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 12,
+                "elapsedMs": 1464,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 13,
+                "elapsedMs": 2761,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 14,
+                "elapsedMs": 2777,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 15,
+                "elapsedMs": 2828,
+                "node": "fleet",
+                "event": "restored",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 16,
+                "elapsedMs": 2828,
+                "node": "fleet",
+                "event": "stale-rejected"
+              },
+              {
+                "sequence": 17,
+                "elapsedMs": 2843,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 18,
+                "elapsedMs": 2851,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 19,
+                "elapsedMs": 2910,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 20,
+                "elapsedMs": 3485,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 21,
+                "elapsedMs": 3496,
+                "node": "coordinator",
+                "event": "stopped"
+              }
+            ]
+          }
+        },
+        {
+          "name": "cancelled-during-real-lease",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "lease-loss",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 30000,
+              "transportDelayMs": 1500
+            },
+            "status": "blocked",
+            "reason": "aborted",
+            "artifactSha256": "35d457b0e2f29b9b9b117ef1c5511bf033fc3531eacccf597d11119fe299836c",
+            "checks": [
+              {
+                "name": "host",
+                "status": "passed"
+              },
+              {
+                "name": "processes",
+                "status": "passed"
+              },
+              {
+                "name": "baseline",
+                "status": "passed"
+              },
+              {
+                "name": "fault",
+                "status": "blocked"
+              },
+              {
+                "name": "recovery",
+                "status": "blocked"
+              },
+              {
+                "name": "fences",
+                "status": "blocked"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 552,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 2,
+                "elapsedMs": 700,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 3,
+                "elapsedMs": 851,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 4,
+                "elapsedMs": 1021,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 5,
+                "elapsedMs": 1028,
+                "node": "coordinator",
+                "event": "desired",
+                "generation": 1
+              },
+              {
+                "sequence": 6,
+                "elapsedMs": 1038,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 7,
+                "elapsedMs": 2833,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 8,
+                "elapsedMs": 2992,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 9,
+                "elapsedMs": 2992,
+                "node": "fleet",
+                "event": "fault"
+              },
+              {
+                "sequence": 10,
+                "elapsedMs": 3011,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 11,
+                "elapsedMs": 3051,
+                "node": "fleet",
+                "event": "failed"
+              },
+              {
+                "sequence": 12,
+                "elapsedMs": 3090,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 13,
+                "elapsedMs": 4072,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 14,
+                "elapsedMs": 4132,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 15,
+                "elapsedMs": 4460,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 16,
+                "elapsedMs": 4469,
+                "node": "coordinator",
+                "event": "stopped"
+              }
+            ]
+          }
+        },
+        {
+          "name": "parent-killed-during-real-lease",
+          "blockedUntilOwnedCleanup": true,
+          "childrenExited": true
+        },
+        {
+          "name": "cleanup-denied",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "lease-loss",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 30000,
+              "transportDelayMs": 1500
+            },
+            "status": "blocked",
+            "reason": "cleanup-failed",
+            "artifactSha256": "35d457b0e2f29b9b9b117ef1c5511bf033fc3531eacccf597d11119fe299836c",
+            "checks": [
+              {
+                "name": "host",
+                "status": "passed"
+              },
+              {
+                "name": "processes",
+                "status": "passed"
+              },
+              {
+                "name": "baseline",
+                "status": "passed"
+              },
+              {
+                "name": "fault",
+                "status": "blocked"
+              },
+              {
+                "name": "recovery",
+                "status": "blocked"
+              },
+              {
+                "name": "fences",
+                "status": "blocked"
+              },
+              {
+                "name": "cleanup",
+                "status": "blocked"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 293,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 2,
+                "elapsedMs": 373,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 3,
+                "elapsedMs": 455,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 4,
+                "elapsedMs": 539,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 5,
+                "elapsedMs": 542,
+                "node": "coordinator",
+                "event": "desired",
+                "generation": 1
+              },
+              {
+                "sequence": 6,
+                "elapsedMs": 546,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 7,
+                "elapsedMs": 1024,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 8,
+                "elapsedMs": 1130,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 9,
+                "elapsedMs": 1130,
+                "node": "fleet",
+                "event": "fault"
+              },
+              {
+                "sequence": 10,
+                "elapsedMs": 1138,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 11,
+                "elapsedMs": 1184,
+                "node": "fleet",
+                "event": "failed"
+              },
+              {
+                "sequence": 12,
+                "elapsedMs": 1192,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 13,
+                "elapsedMs": 1609,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 14,
+                "elapsedMs": 1615,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 15,
+                "elapsedMs": 1640,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 16,
+                "elapsedMs": 1697,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 17,
+                "elapsedMs": 1702,
+                "node": "coordinator",
+                "event": "stopped"
+              }
+            ]
+          },
+          "markerRetainedUntilOwnedCleanup": true
+        },
+        {
+          "name": "reserved-quota-unchanged",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "takeover",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 3000,
+              "transportDelayMs": 1500
+            },
+            "status": "blocked",
+            "reason": "scenario-failed",
+            "artifactSha256": null,
+            "checks": [
+              {
+                "name": "host",
+                "status": "blocked"
+              },
+              {
+                "name": "processes",
+                "status": "blocked"
+              },
+              {
+                "name": "baseline",
+                "status": "blocked"
+              },
+              {
+                "name": "fault",
+                "status": "blocked"
+              },
+              {
+                "name": "recovery",
+                "status": "blocked"
+              },
+              {
+                "name": "fences",
+                "status": "blocked"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 206,
+                "node": "fleet",
+                "event": "failed"
+              }
+            ]
+          }
+        },
+        {
+          "name": "insufficient-validity",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "takeover",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 3000,
+              "transportDelayMs": 1500
+            },
+            "status": "blocked",
+            "reason": "certification-required",
+            "artifactSha256": null,
+            "checks": [
+              {
+                "name": "host",
+                "status": "blocked"
+              },
+              {
+                "name": "processes",
+                "status": "blocked"
+              },
+              {
+                "name": "baseline",
+                "status": "blocked"
+              },
+              {
+                "name": "fault",
+                "status": "blocked"
+              },
+              {
+                "name": "recovery",
+                "status": "blocked"
+              },
+              {
+                "name": "fences",
+                "status": "blocked"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 163,
+                "node": "fleet",
+                "event": "failed"
+              }
+            ]
+          }
+        },
+        {
+          "name": "actual-cli-provider-restart",
+          "report": {
+            "protocol": "clank-fleet-report/1",
+            "scenario": {
+              "protocol": "clank-fleet-scenario/1",
+              "kind": "provider-restart",
+              "nodeTtlMs": 5000,
+              "operationLeaseMs": 3000,
+              "transportDelayMs": 1500
+            },
+            "status": "passed",
+            "reason": "verified",
+            "artifactSha256": "35d457b0e2f29b9b9b117ef1c5511bf033fc3531eacccf597d11119fe299836c",
+            "checks": [
+              {
+                "name": "host",
+                "status": "passed"
+              },
+              {
+                "name": "processes",
+                "status": "passed"
+              },
+              {
+                "name": "baseline",
+                "status": "passed"
+              },
+              {
+                "name": "fault",
+                "status": "passed"
+              },
+              {
+                "name": "recovery",
+                "status": "passed"
+              },
+              {
+                "name": "fences",
+                "status": "passed"
+              },
+              {
+                "name": "cleanup",
+                "status": "passed"
+              }
+            ],
+            "timeline": [
+              {
+                "sequence": 1,
+                "elapsedMs": 248,
+                "node": "coordinator",
+                "event": "started"
+              },
+              {
+                "sequence": 2,
+                "elapsedMs": 306,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 3,
+                "elapsedMs": 364,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 4,
+                "elapsedMs": 426,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 5,
+                "elapsedMs": 430,
+                "node": "coordinator",
+                "event": "desired",
+                "generation": 1
+              },
+              {
+                "sequence": 6,
+                "elapsedMs": 433,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 7,
+                "elapsedMs": 850,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 1,
+                "fence": 1
+              },
+              {
+                "sequence": 8,
+                "elapsedMs": 950,
+                "node": "node-b",
+                "event": "started"
+              },
+              {
+                "sequence": 9,
+                "elapsedMs": 950,
+                "node": "fleet",
+                "event": "fault"
+              },
+              {
+                "sequence": 10,
+                "elapsedMs": 953,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 11,
+                "elapsedMs": 1184,
+                "node": "node-a",
+                "event": "started"
+              },
+              {
+                "sequence": 12,
+                "elapsedMs": 1226,
+                "node": "node-a",
+                "event": "claimed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 13,
+                "elapsedMs": 1883,
+                "node": "node-a",
+                "event": "executed",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 14,
+                "elapsedMs": 1888,
+                "node": "node-a",
+                "event": "failed"
+              },
+              {
+                "sequence": 15,
+                "elapsedMs": 1912,
+                "node": "fleet",
+                "event": "restored",
+                "generation": 2,
+                "fence": 2
+              },
+              {
+                "sequence": 16,
+                "elapsedMs": 1912,
+                "node": "fleet",
+                "event": "stale-rejected"
+              },
+              {
+                "sequence": 17,
+                "elapsedMs": 1917,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 18,
+                "elapsedMs": 1919,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 19,
+                "elapsedMs": 1946,
+                "node": "node-b",
+                "event": "stopped"
+              },
+              {
+                "sequence": 20,
+                "elapsedMs": 2402,
+                "node": "node-a",
+                "event": "stopped"
+              },
+              {
+                "sequence": 21,
+                "elapsedMs": 2406,
+                "node": "coordinator",
+                "event": "stopped"
+              }
+            ]
+          }
+        }
+      ],
+      "preAborted": {
+        "protocol": "clank-fleet-report/1",
+        "scenario": {
+          "protocol": "clank-fleet-scenario/1",
+          "kind": "takeover",
+          "nodeTtlMs": 5000,
+          "operationLeaseMs": 3000,
+          "transportDelayMs": 1500
+        },
+        "status": "blocked",
+        "reason": "aborted",
+        "artifactSha256": null,
+        "checks": [
+          {
+            "name": "host",
+            "status": "blocked"
+          },
+          {
+            "name": "processes",
+            "status": "blocked"
+          },
+          {
+            "name": "baseline",
+            "status": "blocked"
+          },
+          {
+            "name": "fault",
+            "status": "blocked"
+          },
+          {
+            "name": "recovery",
+            "status": "blocked"
+          },
+          {
+            "name": "fences",
+            "status": "blocked"
+          },
+          {
+            "name": "cleanup",
+            "status": "passed"
+          }
+        ],
+        "timeline": [
+          {
+            "sequence": 1,
+            "elapsedMs": 0,
+            "node": "fleet",
+            "event": "failed"
+          }
+        ]
+      },
+      "finalMountEmpty": true,
+      "finalOwnedRuntimesEmpty": true,
+      "imagesUnchanged": true,
+      "evidence": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-guest-release-550882bf87f81984027976772941ebf84e6a144d8a758ff988c819b56bd14b63.log",
+        "sha256": "550882bf87f81984027976772941ebf84e6a144d8a758ff988c819b56bd14b63"
+      },
+      "installation": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-framework-final.tar-82c5b05adfe18ec9406c25fb258919501f5c95baf1677ade2056fb047b56de67.gz",
+        "sha256": "82c5b05adfe18ec9406c25fb258919501f5c95baf1677ade2056fb047b56de67"
+      },
+      "compiledHashes": {
+        "dist/fleet-simulator.js": "6929a7f9742d9913170cb8993359bff206535076dd7d0094c89d0f797c8b5ce6",
+        "dist/deploy.js": "c0e60c2378e2248b75dfc5e4295f9e798b728288ca72ac6970eb43d3a698db21",
+        "dist/sqlite-sandbox.js": "09923194da9c5a44cc98c5e478955a739ef8e20e0e7359592d0ac050749f533c",
+        "dist/host-certification.js": "5239a2f994064ac5a4a57a295aacec4e4d5a6611045f8f387fde0d79a49012c5"
+      },
+      "scope": "Owned Debian 13 KVM guest with its own Docker daemon, dedicated new XFS disk, preloaded immutable image. No production certification or host-global changes."
+    },
+    "documentation": {
+      "doctor": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-docs-doctor-e9e1f451f573835c5fc83bb1bd83956348c8713453f6dfe16c44271a7156d18f.log",
+        "sha256": "e9e1f451f573835c5fc83bb1bd83956348c8713453f6dfe16c44271a7156d18f"
+      },
+      "deploymentArtifact": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-docs-deploy-check-0929d035c0db59db5cb00e6156011ac5e60324b1475057b6bbd0bce064079117.log",
+        "sha256": "0929d035c0db59db5cb00e6156011ac5e60324b1475057b6bbd0bce064079117"
+      },
+      "actualHttpAgentEndpoints": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-docs-endpoints-03a405f469c77cc464048dcfed06929fcadb1910bbab2a2cd505dd64637f560f.log",
+        "sha256": "03a405f469c77cc464048dcfed06929fcadb1910bbab2a2cd505dd64637f560f"
+      },
+      "browser": "Actual desktop 1280px and phone 390px search/navigation/guide checks passed; no horizontal overflow. Owned server stopped, browser tab closed.",
+      "desktop": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-docs-desktop-eca4e19a3826728f1bb0e0d6f417cb52ce2ba556f371b71905ebeb14733720cd.png",
+        "sha256": "eca4e19a3826728f1bb0e0d6f417cb52ce2ba556f371b71905ebeb14733720cd"
+      },
+      "mobile": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-docs-mobile-37bf7aee26188270b2a66e173684d8d89b386627b93f05d69a89e8fa7e3981da.png",
+        "sha256": "37bf7aee26188270b2a66e173684d8d89b386627b93f05d69a89e8fa7e3981da"
+      }
+    }
+  },
+  "fixes": [
+    {
+      "file": "src/sqlite-sandbox.ts",
+      "problem": "Non-root provider administrative ambient capabilities caused Bubblewrap to reject SQLite workers.",
+      "change": "Clear inheritable/ambient capabilities and set NoNewPrivs in the SQLite child before Bubblewrap; preserve provider state and sandbox restrictions.",
+      "evidence": "Real migrations and SQLite work in every guest drill with the capability-bearing actual production provider."
+    },
+    {
+      "file": "src/deploy.ts",
+      "problem": "Provider umask 077 altered approved artifact file modes, causing verified release staging to fail.",
+      "change": "Restore verified modes after exclusive file creation. All four allowed modes and exact bytes have a child-process regression under umask 077.",
+      "redEvidence": {
+        "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-umask-before-705fb1ae40c23ceb56d3859201db0c07dcdc3d6629298e7e3705d4aecd754d5b.log",
+        "sha256": "705fb1ae40c23ceb56d3859201db0c07dcdc3d6629298e7e3705d4aecd754d5b"
+      }
+    },
+    {
+      "file": "src/host-certification.ts",
+      "change": "Bind setpriv, mount and umount executable bytes/permissions in host certification."
+    }
+  ],
+  "package": {
+    "files": 405,
+    "fileLimit": 405,
+    "unpackedBytes": 5992002,
+    "byteLimit": 6291456,
+    "remainingBytes": 299454,
+    "dependenciesAdded": 0,
+    "change": "Proposal #273 adds exactly one optional JS/declaration pair; root browser entry stays unchanged.",
+    "evidence": {
+      "path": "/tmp/clank-review-2026-10-08/fleet-evidence/fleet-pack-reviewed-06f1ae37f3409efb39035f5bc5101875dfcb662e63a36e6140278b77eea1e24f.json",
+      "sha256": "06f1ae37f3409efb39035f5bc5101875dfcb662e63a36e6140278b77eea1e24f"
+    }
+  },
+  "boundaries": [
+    "Portable takeover initializes only a fixed synthetic database on node B. It proves placement, artifact identity and credential/fence rejection; it does not establish database replication.",
+    "The separate stopped stateful placement proves control-store pinning, not live stateful failover.",
+    "No automatic supervisor leadership is included.",
+    "A current root-operated host certificate and explicit disposable authorization are required; production Railway remains uncertified.",
+    "Parent death or unconfirmed owned cleanup retains the host admission marker until ownership-verified cleanup. No automatic unlock or broad resource deletion.",
+    "Framework/native-tool changes invalidate old certificates; recertification is required."
+  ],
+  "sourceHashes": {
+    "src/fleet-simulator.ts": "e3e9c66c019818434beb43b290da2e7df81a614cf7587223fbd17e8cb4667269",
+    "src/fleet-simulator.d.ts": "f32c14fc6e85ad72fb8b92dd830b4e41958e53a456d16d19fe013115c79b0f8b",
+    "scripts/clank-provider.mjs": "b8efd075c48cc036b4f5d9438a1eb1cbec8540bf6dcc7d2e867a45a2b947709d",
+    "src/deploy.ts": "e403f8ba109d3fd647359ef93d0c7aba95e76121dea6352a325998a808036ddd",
+    "src/sqlite-sandbox.ts": "a93ee15f84aef73260122bc094043a6cfb00e06e91761401fbe6c672ce648304",
+    "src/host-certification.ts": "e8a513fd18da587f53bb8cc60eadb9794911ff802e20ef65c3498da40b6035d2",
+    "tests/fleet-simulator.test.mjs": "a1e1b58b9c554aed9c46461faaad94750ebbbcf0b1a91ee8b94ce5d0041bb2ff",
+    "tests/fixtures/fleet-simulator-guest.mjs": "f4993b15b8e69658e156b8842153e62cc65bc1605ba303d485e4321e810ec98c",
+    "tests/migrations-deploy.test.mjs": "673b0776e8ed5b8ca3fcc0a13109b21f7ab30d554e07256cb2cf5b3c976e9718",
+    "type-tests/fleet-simulator.ts": "b9112f72117d1afea82bdd99d417b5f4d90fdd5c7399fcab0ddd283e4c7351f4",
+    "docs/local-provider-fleet.md": "189c24a5cebcaeb3002d2c56c2536f54a5f4b5c71044edc12fe9c60457d1afb8",
+    "docs/sqlite-isolation.md": "715f461292a6890ff1cb0e66222a3033ee6b0721f4600ddde5227afafd2fb04b",
+    "docs/api-reference.md": "2ab8cc9d82603aa85bba5a3493eed94ca23a1c5abc328bf78e39c26a358360d2",
+    "package.json": "cb06c9ed6f5ab4a98de8a61d0fa8d5903b00d8a77c8f78fbb323a78819502602",
+    "scripts/security-audit.mjs": "e50e2c22aebf1112ab466aab22f442a6490aa9cf4d341df468d6cabc0e192925",
+    "docs-site/content-manifest.mjs": "f618c4aafa1faade88026c00e9389a2d5cb3b4ea1ef232e00da76a64f54476a3"
+  },
+  "preservedExistingFiles": 23,
+  "roadmap": {
+    "merged": 15,
+    "remainingUnmerged": 25,
+    "feature34": "Acceptance validated; not counted merged until protected delivery."
+  }
+}

@@ -2,9 +2,42 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Fifteen of the forty proposed features are merged across twelve feature batches. Linux host certification (01) merged in [PR #270](https://github.com/nearbycoder/clank.run/pull/270) after all six checks at reviewed head `fb50d74e23ae069629cf0f8579c0d8248abb6949`, with no new CodeQL alerts or unresolved threads. Both main checkouts match `7050c989a5af8ad957212b915b68728cf13b1d9f`, and 23 existing files are preserved. Twenty-five features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. The next delivery prepares package capacity under proposal #271, then implements the local provider fleet simulator (34). Earlier snapshots below retain their original validation scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Fifteen of the forty proposed features are merged across twelve feature batches. Linux host certification (01) merged in [PR #270](https://github.com/nearbycoder/clank.run/pull/270) after all six checks at reviewed head `fb50d74e23ae069629cf0f8579c0d8248abb6949`, with no new CodeQL alerts or unresolved threads. Both main checkouts match `b6a61c4749bc3f87c31228ec69d895692b9aa92a`, and 23 existing files are preserved. Twenty-five features remain. Disposable reference-profile certification has real acceptance evidence; production Railway remains uncertified. The package prerequisite merged in [PR #272](https://github.com/nearbycoder/clank.run/pull/272) after all six fresh checks, preserving byte ceilings. The local provider fleet simulator (34) has complete local and real disposable-host acceptance under proposal #273; reviewed PR delivery is pending. Earlier snapshots below retain their original validation scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
+
+## Local provider fleet simulator
+
+Proposal [#273](https://github.com/nearbycoder/clank.run/issues/273) adds fixed, portable
+scenarios and bounded placement/fence timelines through an optional API and the provider CLI.
+Actual coordinator, provider and agent processes exercise takeover, lease loss, slow HTTP
+transport, a private read-only mount and coordinator/provider restarts. A current host
+certificate and explicit disposable authorization are required.
+
+The real Node 22.16 Debian guest passes all six faults and six additional acceptance cases:
+live cancellation, parent SIGKILL, denied owned cleanup, an already-reserved quota, insufficient
+certificate lifetime and the actual CLI. Cleanup failure and parent death retain admission
+fencing until verified recovery. Exact artifacts, increasing fences, revoked/stale access,
+real ingress and committed migration/data state are checked. Portable takeover initializes a
+synthetic database; the separate stopped stateful placement proves control-store pinning.
+Database replication and automatic supervisor leadership are outside this feature.
+
+The drills exposed two existing defects: capability-bearing non-root providers could not
+launch Bubblewrap SQLite workers, and umask 077 changed verified artifact modes. Child-only
+capability clearing and explicit restoration of verified modes fix those paths.
+
+All 28 focused minimum-Node tests and 23 packed consumer fixtures pass, with 159 existing
+source diagnostics against the unchanged 163 allowance. The final Node 26 release gate
+reports 1,873 tests / 1,870 passed / zero failures or cancellations / three existing
+privileged skips, and coverage 91.83/80.39/90.12. Documentation, conformance and security
+pass. The 405-file package is 5,992,002 bytes under the unchanged 6 MiB ceiling. Desktop/phone
+docs search, navigation, guide and real HTTP/agent endpoints pass. An earlier local Node 22
+full gate failed closed on truncated V8 coverage JSON despite all tests passing; its full
+coverage result is not claimed, and hosted Node 22 remains required.
+
+See [fleet acceptance evidence](fleet-simulator.json). Feature 34 is validated locally and
+on the actual disposable host; protected reviewed PR delivery is pending. The merged count
+remains fifteen until that delivery completes. Production Railway remains uncertified.
 
 ## Minimum-Node package prerequisite
 
@@ -363,7 +396,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 31 | Hydration mismatch inspector | Implemented | Optional metadata capture, pre-cleanup child paths, original TSX locations, patch/remount reasons, immutable bounded history and redacted JSON. Unit/packed consumer and real keyboard/mobile/cleanup checks pass. DOM gzip budget remains 12,000 bytes. |
 | 32 | Interactive component contract harness | Implemented | PR #266 merged after all six fresh checks; 19 focused tests, 20 packed type fixtures, eight actual Chrome journeys/96 steps, minimum-Node release gate and CodeQL pass. |
 | 33 | OpenAPI export for backend functions | Implemented | Runtime schemas, cookie/CSRF and replay contracts; unsupported/coercive/refined shapes rejected; actual positive/negative authenticated HTTP requests tested against the packed artifact. `tests/openapi.test.mjs`, `type-tests/openapi.ts`. |
-| 34 | Local provider fleet simulator | Planned | Pending |
+| 34 | Local provider fleet simulator | Acceptance validated; PR delivery pending | [Actual coordinator/provider drills](fleet-simulator.json) |
 | 35 | Translation extraction and review workflow | Implemented | Canonical catalog extraction, locale/source/current fences, placeholder/key/plural validation and reviewed diff acceptance. Node tests, packed types and real browser keyboard/mobile checks confirm the server/browser revision matches. |
 | 36 | Project incident workspace | Planned | Pending |
 | 37 | SLO and error budget policies | Planned | Pending |

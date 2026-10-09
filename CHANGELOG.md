@@ -4,6 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add optional disposable fleet drills over actual coordinator, agent and Docker provider
+  contracts, with lease loss, transport/storage faults, restarts, placement/fence timelines,
+  current host-certification admission and ownership-verified cleanup.
+- Clear inherited host capabilities before Linux SQLite sandbox startup, and preserve verified
+  deployment file modes when extracting under a restrictive provider umask.
+
 - Compact native type-erasure padding in unmapped erasable builds on Node 22/24 as well as
   Node 26. Keep Node 22/24 transformation for enums, parameter properties and runtime namespaces,
   and preserve mapped compiler output. Future build digests change; stored artifacts do not.

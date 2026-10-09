@@ -1,5 +1,11 @@
 # SQLite worker isolation
 
+Linux workers use util-linux `setpriv` to clear inherited and ambient host capabilities
+before starting Bubblewrap. This supports dedicated non-root providers with explicit quota
+or network administration privileges without giving those privileges to SQLite work. The
+provider's own capability state is unchanged. `setpriv`, `prlimit` and `bwrap` must all be
+installed; inability to clear capabilities or create namespaces fails closed.
+
 On Linux, Clank opens application databases only inside a private Bubblewrap filesystem namespace for migration planning/execution, backup/restore, platform job inspection/mutation, recovery inspection, preview sanitization, bucket usage, and rehearsal inspection. This contains application-controlled database paths and SQLite sidecars even when an application substitutes symbolic links or replaces a directory while a request is starting.
 
 Install `bubblewrap` and `util-linux` at their standard `/usr/bin/bwrap` and `/usr/bin/prlimit` paths. The host must permit unprivileged user namespaces and Bubblewrap mount, PID, IPC, and network namespaces. Namespace setup fails closed; Clank never retries a failed sandbox operation outside the sandbox. Containerized control planes need an operator-configured environment that permits this nested sandbox. Installing the executables alone does not prove that the container's seccomp or AppArmor policy permits namespaces.

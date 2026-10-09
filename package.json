@@ -115,6 +115,7 @@
     "./provider-runtime": { "types": "./dist/provider-runtime.d.ts", "import": "./dist/provider-runtime.js" },
     "./provider-docker": { "types": "./dist/provider-docker.d.ts", "import": "./dist/provider-docker.js" },
     "./host-certification": { "types": "./dist/host-certification.d.ts", "import": "./dist/host-certification.js" },
+    "./fleet-simulator": { "types": "./dist/fleet-simulator.d.ts", "import": "./dist/fleet-simulator.js" },
     "./provider-service": { "types": "./dist/provider-service.d.ts", "import": "./dist/provider-service.js" },
     "./data-plane": { "types": "./dist/data-plane.d.ts", "import": "./dist/data-plane.js" },
     "./forms": { "types": "./dist/forms.d.ts", "import": "./dist/forms.js" },

@@ -155,7 +155,7 @@ async function binding(profile: LinuxHostCertificationProfile): Promise<string> 
   const runtime = await fileBytes(await fs.realpath(process.execPath), 256 * MB);
   const tools: unknown[] = [];
   let toolBytes = 0;
-  for (const executable of ["/usr/bin/bwrap", "/usr/bin/prlimit", "/usr/bin/unshare", "/usr/bin/nsenter", "/usr/sbin/ip", "/usr/sbin/nft", "/usr/sbin/xfs_quota", "/usr/bin/docker", "/usr/sbin/sysctl"]) {
+  for (const executable of ["/usr/bin/bwrap", "/usr/bin/prlimit", "/usr/bin/unshare", "/usr/bin/nsenter", "/usr/bin/setpriv", "/usr/bin/mount", "/usr/bin/umount", "/usr/sbin/ip", "/usr/sbin/nft", "/usr/sbin/xfs_quota", "/usr/bin/docker", "/usr/sbin/sysctl"]) {
     try {
       const resolved = await fs.realpath(executable), stat = await fs.stat(resolved), bytes = await fileBytes(resolved, 64 * MB); toolBytes += bytes.byteLength;
       ensure(toolBytes <= 128 * MB, "Certification tool bytes exceed their bound.");
