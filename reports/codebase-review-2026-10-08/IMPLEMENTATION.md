@@ -9,7 +9,7 @@ A feature is complete only when its documented acceptance evidence exists. Propo
 ## Scoped provisioning in progress
 
 Feature 12 is in implementation under [proposal #287](https://github.com/nearbycoder/clank.run/issues/287).
-The focused HTTP, signed identity and native membership suite passes 39 checks, including an
+The focused HTTP, signed identity and native membership suite passes 40 checks, including an
 actual accepted-write SIGKILL/restart and a separate process's live/browser/CLI/MCP revocation.
 All 29 packed type fixtures pass without new source diagnostics. Full release gates and hosted
 review remain pending; this does not change the accepted 21/40 feature count.
@@ -19,6 +19,12 @@ loads only when the server API is called, and the existing browser-barrel regres
 Hosted CodeQL flagged a manually seeded OAuth fixture; the process drill now obtains delegated
 credentials through real registration, consent and code/PKCE exchange. The corrected 39-check
 suite and all 29 packed fixtures pass; fresh complete gates remain required before acceptance.
+
+Review also reproduced a native metadata edit returning 500 after the local account was deleted.
+The projection now preserves retained subject ownership without recreating an orphan membership.
+A regression verifies maintenance succeeds and fresh proof cannot transfer the retained subject
+to a replacement account. The final focused suite passes 40 checks; full source03 gates remain
+required for this additional runtime change.
 
 ## Verified organization identity linking
 

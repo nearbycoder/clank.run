@@ -529,6 +529,21 @@ test('native SCIM deactivation revokes exact workspace and broad credentials whi
  }finally{await f.close()}
 });
 
+test('native SCIM retains deleted local ownership without recreating an account or blocking resource maintenance',async()=>{
+ const f=await nativeProvisioningFixture();try{
+  const oldId=f.member.user.id;
+  f.sql.prepare('DELETE FROM clank_auth_users WHERE id=?').run(oldId);
+  assert.equal(f.sql.prepare('SELECT user_id FROM clank_scim_subjects WHERE subject=?').get('employee-1').user_id,oldId);
+  assert.equal(f.sql.prepare('SELECT 1 FROM clank_sso_identities WHERE user_id=?').get(oldId),undefined);
+  await f.patch('Users/'+f.created.body.id,[{op:'replace',path:'displayName',value:'Retained metadata'}]);
+  assert.equal(f.sql.prepare('SELECT count(*) AS n FROM clank_platform_memberships WHERE user_id=?').get(oldId).n,0);
+  const replacement=await register(f.platform,'replacement-local@example.test');await verifyPlatformPasskey(f,replacement);
+  const proof=await linkingFlow({sso:{handle:request=>f.platform.handle(request)}},replacement,f.project.organizationId);
+  const denied=await proof.finish();assert.equal(denied.status,409,await denied.clone().text());
+  assert.equal(f.sql.prepare('SELECT user_id FROM clank_scim_subjects WHERE subject=?').get('employee-1').user_id,oldId);
+ }finally{await f.close()}
+});
+
 test('SCIM accepted disable survives controller SIGKILL and closes another process live stream and browser, CLI and MCP access',async()=>{
  const f=await nativeProvisioningFixture(),children=new Set();let reader;
  async function stop(child,signal='SIGTERM'){

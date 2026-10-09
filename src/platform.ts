@@ -17368,7 +17368,10 @@ function applyProvisioningAssignment(internal: SQLiteInternal, organizationId: s
     }
     return;
   }
-  if (manual) return;
+  // Subject/provenance records deliberately outlive local account deletion.
+  // Retain that ownership without trying to recreate a membership whose FK
+  // target is gone; metadata maintenance must still be able to commit.
+  if (manual || !internal.prepare("SELECT 1 FROM clank_auth_users WHERE id=?").get(userId)) return;
   const roles: OrganizationRole[] = ["viewer", "developer", "admin", "owner"];
   const desired = assignment.active ? assignment.role : null;
   const effective = floor && desired ? roles.indexOf(floor) > roles.indexOf(desired) ? floor : desired : floor ?? desired;
