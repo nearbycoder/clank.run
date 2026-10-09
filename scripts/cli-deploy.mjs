@@ -2151,7 +2151,7 @@ async function environmentCommand(args) {
     promote: ["json", "expected-version", "from", "release", "digest", "expected-active", "key", "attestation", "dependency-version", "dependency-check"],
     history: ["json"], recover: ["json", "confirm"],
   }[action];
-  for (const argument of args) {
+  for (const argument of optionArguments(args)) {
     if (!argument.startsWith("--")) continue;
     const name = argument.slice(2).split("=", 1)[0];
     if (!allowed.includes(name)) throw new CliError(`--${name} does not apply to environment ${action}.`);
@@ -2224,7 +2224,7 @@ async function releaseWindowCommand(args) {
   const action=args.shift(),values=positionals(args);
   const allowed={list:["json"],queue:["json","request","attestation"],show:["json"],cancel:["json","expected-version"],recover:["json","expected-version","confirm"]}[action];
   if(!allowed)throw new CliError(COMMANDS["release-window"].usage);
-  for(const argument of args){if(!argument.startsWith("--"))continue;const name=argument.slice(2).split("=",1)[0];if(!allowed.includes(name))throw new CliError(`--${name} does not apply to release-window ${action}.`)}
+  for(const argument of optionArguments(args)){if(!argument.startsWith("--"))continue;const name=argument.slice(2).split("=",1)[0];if(!allowed.includes(name))throw new CliError(`--${name} does not apply to release-window ${action}.`)}
   const named=["show","cancel","recover"].includes(action),id=named?values.shift():null;
   if(named&&(typeof id!=="string"||!/^window_[A-Za-z0-9_-]{16,128}$/.test(id)))throw new CliError("Pass the exact schedule ID from release-window list.");
   if(values.length>1)throw new CliError(COMMANDS["release-window"].usage);
@@ -2255,7 +2255,7 @@ async function dependencyCommand(args) {
   const allowed = { get: ["json"], configure: ["json", "config", "expected-version"], check: ["json", "expected-version"],
     history: ["json"], activations: ["json"], recover: ["json", "confirm"] }[action];
   if (!allowed) throw new CliError(COMMANDS.dependency.usage);
-  for (const argument of args) {
+  for (const argument of optionArguments(args)) {
     if (!argument.startsWith("--")) continue;
     const name = argument.slice(2).split("=", 1)[0];
     if (!allowed.includes(name)) throw new CliError(`--${name} does not apply to dependency ${action}.`);
@@ -2304,7 +2304,7 @@ async function channelCommand(args) {
     retire: ["json", "expected-version", "confirm"],
   }[action];
   if (!allowed) throw new CliError(COMMANDS.channel.usage);
-  for (const argument of args) {
+  for (const argument of optionArguments(args)) {
     if (!argument.startsWith("--")) continue;
     const name = argument.slice(2).split("=", 1)[0];
     if (!allowed.includes(name)) throw new CliError(`--${name} does not apply to channel ${action}.`);
@@ -3841,7 +3841,13 @@ function plainRecord(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
+function optionArguments(args) {
+  const end = args.indexOf("--");
+  return end === -1 ? args : args.slice(0, end);
+}
+
 function option(args, name) {
+  args = optionArguments(args);
   const exactIndex = args.indexOf(`--${name}`);
   if (exactIndex !== -1) return args[exactIndex + 1];
   return args.find((entry) => entry.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -3860,6 +3866,7 @@ function placementOption(args) {
 }
 
 function validateOptions(command, args) {
+  args = optionArguments(args);
   const valueOptions = new Set(VALUE_OPTIONS[command] ?? []);
   const booleanOptions = new Set(BOOLEAN_OPTIONS[command] ?? []);
   const knownOptions = [...valueOptions, ...booleanOptions];
@@ -3895,13 +3902,14 @@ function validateOptions(command, args) {
 }
 
 function flag(args, name) {
-  return args.includes(`--${name}`);
+  return optionArguments(args).includes(`--${name}`);
 }
 
 function positionals(args) {
   const output = [];
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--") { output.push(...args.slice(index + 1)); break; }
     if (argument.startsWith("--")) {
       if (!argument.includes("=") && ![
         "--dry-run",
