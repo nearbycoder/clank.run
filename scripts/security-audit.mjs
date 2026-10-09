@@ -177,11 +177,9 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 }
 // The forty-feature release adds reviewed public APIs, declarations, internal
 // workers, and CLI helpers while preserving the zero-dependency contract.
-// OpenAPI and translation review add four reviewed dist artifacts to the prior
-// 387-file package. Keep three files of headroom rather than removing this gate.
-// Keep a bounded envelope around 391 files (about 5.5 MiB on Node 22/24;
-// Node 26 retains more source whitespace through native type stripping).
-if ((packResult?.entryCount ?? 0) > 394) fail("Published package unexpectedly exceeds 394 files.");
+// Agent budgets add exactly two distribution files to the 393-file package.
+// Proposal #251 preserves the existing byte ceiling and allows no file headroom.
+if ((packResult?.entryCount ?? 0) > 395) fail("Published package unexpectedly exceeds 395 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 

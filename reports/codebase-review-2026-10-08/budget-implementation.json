@@ -1,0 +1,106 @@
+{
+  "feature": 16,
+  "title": "Agent operation budgets",
+  "date": "2026-10-08",
+  "baseCommit": "a20aa1986a7d81719ef5242068dc6005d4adaf79",
+  "branch": "codex/agent-operation-budgets",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/251",
+  "status": "local-release-validation-passed",
+  "acceptance": {
+    "durability": "SQLite grant/receipt rows and scoped writes commit together; exact retries recheck current credentials and action authorization before receipt replay.",
+    "accounting": "One accepted call, write invocations, distinct affected rows and registered external-outbox cost. Clients cannot choose costs.",
+    "concurrency": "Actual four-process contention on one SQLite database: exactly one accepts and inserts; three receive BUDGET_EXCEEDED. Independent-connection replay is also tested.",
+    "failure": "Caught overspending is latched and rolls back all local writes; callback, async and bounded JSON failures debit nothing. Retained read/write/query methods cannot act after transaction completion.",
+    "authority": "Owner/principal management boundaries, current credentials under the write lock, current action authorization, definition revisions, revoked/expired grants and closed replay.",
+    "retention": "Bounded live grant/receipt admission; owner-scoped terminal retirement after a configured horizon; IDs never reused.",
+    "transport": "Actual MCP server HTTP call and exact retry return one receipt/debit; exhaustion returns a safe tool error.",
+    "recovery": "Actual encrypted SQLite recovery restores an accepted operation boundary with its row, grant debit and receipt; the restored ledger returns that receipt without another debit. Service schema bootstraps before epoch capture. Older restores also restore older revocation state and require current credential/remote-effect reconciliation."
+  },
+  "validation": {
+    "focused": {
+      "tests": 22,
+      "pass": 22,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "path": "/tmp/clank-review-2026-10-08/budget-focused.log",
+      "sha256": "1f3e9aa2cd3520f9f59fe2dc426d7c9bde1d6eaa75a014ba0d4224b6308c295f"
+    },
+    "types": {
+      "status": "passed",
+      "typescript": "5.9.3",
+      "nodeTypes": "26.6.4",
+      "sourceDiagnostics": 163,
+      "newDiagnostics": 0,
+      "packedConsumerFixtures": 14,
+      "skipLibCheck": false,
+      "packedOpenApi": "passed",
+      "path": "/tmp/clank-review-2026-10-08/budget-types.log",
+      "sha256": "55c44c9156312fff4c29e75a7b585d9fa47d89cedaa6da630d6c698ca4de0531"
+    },
+    "release": {
+      "tests": 1726,
+      "pass": 1723,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "status": "passed",
+      "node": "26.10.0",
+      "coverage": {
+        "lines": 92.11,
+        "branches": 79.85,
+        "functions": 90.08
+      },
+      "documentation": "passed",
+      "packedReleaseConformance": "passed",
+      "dependencyContract": "zero npm dependencies",
+      "securityTreePackageHistory": "passed",
+      "publishFiles": 395,
+      "publishFileLimit": 395,
+      "publishBytes": 6143110,
+      "publishByteLimit": 6291456,
+      "path": "/tmp/clank-review-2026-10-08/budget-check.log",
+      "sha256": "f6aa7d78c1e4cbb1a63f94fe233c00a9caeaf4ecbce0ab8b5570aaf0ea0272ad",
+      "scope": "Complete release gate against final implementation source with 21 budget tests, followed by all 22 focused tests including the additional encrypted PITR restore/replay case. Final hosted checks exercise the submitted test set."
+    },
+    "jsonThenRegressionBefore": {
+      "tests": 1,
+      "pass": 0,
+      "fail": 1,
+      "scope": "An isolated regression against the pre-fix build rejects valid finite JSON with a non-callable then field.",
+      "path": "/tmp/clank-review-2026-10-08/budget-then-before.log",
+      "sha256": "fa596084a8d2092a883d534f24ec730a4d6f3cebe6403b25009ca59a1b9c8347"
+    },
+    "latestDocumentation": {
+      "status": "passed",
+      "path": "/tmp/clank-review-2026-10-08/budget-docs.log",
+      "sha256": "34480eccd3f728f6ad1825077267f607ec972c387daa3579e8f011ae91bfd3c4"
+    }
+  },
+  "compatibility": {
+    "publicContract": "New opt-in module; existing default calls unchanged.",
+    "persistentSchema": "Additive clank_agent_budget_grants and clank_agent_budget_receipts tables; ordinary backup/recovery capture includes them.",
+    "rollback": "Disable protected actions until the budget adapter is restored. An unbudgeted fallback removes their protection.",
+    "dependencies": "Zero npm dependencies, existing Node/SQLite primitives.",
+    "distribution": "Two additional dist files; explicit 395-file limit, unchanged 6 MiB ceiling."
+  },
+  "boundaries": {
+    "adapter": "Identity and management callbacks must use current authenticated server context. Client fields are not credentials. Local writes must use context.db.",
+    "externalEffects": "Count accepted transactional outbox work; use the supplied stable grant/operation ID with an idempotent provider. No exactly-once claim for unrelated network effects.",
+    "clock": "Grant expiry uses the authoritative operator clock; configure and monitor host clock health.",
+    "roadmap": "Feature 16 has local acceptance evidence; seven features implemented and thirty-three remain planned. Hosted checks and protected merge follow.",
+    "host": "Production namespace restrictions and disposable Docker/XFS certification are unchanged."
+  },
+  "sources": {
+    "src/agent-budgets.ts": "34584f819a6815849e04edca435e1a553897e7aef730f98302245dedcf04748e",
+    "src/agent-budgets.d.ts": "702a4cfd5d5d4aadb8334f9249ed379e62b978f601231308e0aeee9270b39103",
+    "src/index.ts": "0ce9236c886fc8718aeb05f9bfd4f27205a58f75191f5f13ad357acd865e1c49",
+    "src/index.d.ts": "1d95ee61d9006e90cb071dd3dc35bd3b783b326a5e20c963cfca10c5c609c7bb",
+    "package.json": "e4607fb371f546a1014149cba3e31de3d6cc801bcfca6a9f69566602b21a72a0",
+    "scripts/security-audit.mjs": "fce8c328f31ef9beca840b490995a0ec5b14439e45ef2e7c8f64743e5353d02b",
+    "tests/agent-budgets.test.mjs": "9ae6cada99698e9ec21132da7f2f59233135a6c2a7cf8fbc0aa65136b4f7a44b",
+    "tests/fixtures/budget-contender.mjs": "e34d69164ca5a33a3eb61ddbc2347fce958fb11ea9199bad25aef68dced8f2f3",
+    "type-tests/agent-budgets.ts": "4b735f1c0d4134e5d4b30b381211d1296e60e2fa9c0e474ee2ed24c87f82e71d",
+    "docs/governance.md": "e9830d01c0bc73069060fa11f80ad52b8456cc8011118d6b763ad811abebc390"
+  }
+}

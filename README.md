@@ -75,7 +75,7 @@ clank workbench schema schema-current.json schema-target.json --json
 ```
 
 [Read the workbench guide →](https://docs.clank.run/docs/workbench)
-[Governance and approvals →](https://docs.clank.run/docs/governance) ·
+[Governance, approvals and durable agent budgets →](https://docs.clank.run/docs/governance) ·
 [Revision and release lifecycle →](https://docs.clank.run/docs/release-lifecycle)
 
 The generated app is already a working product—not an empty component. It includes:

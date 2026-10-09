@@ -2,7 +2,7 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Six of the forty proposed features are implemented across three review batches; the other thirty-four remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Seven of the forty proposed features are implemented across four feature batches; the other thirty-three remain planned. The first batch is [PR #245](https://github.com/nearbycoder/clank.run/pull/245); the document batch is [PR #246](https://github.com/nearbycoder/clank.run/pull/246) and depends on it. Hydration inspection is [PR #247](https://github.com/nearbycoder/clank.run/pull/247) on `codex/hydration-mismatch-inspection` and depends on the document batch.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
@@ -41,6 +41,25 @@ coverage, package conformance and security checks pass. Results and remaining li
 in [storage and runner review](storage-runner-review.json).
 The roadmap remains six implemented and thirty-four planned.
 
+## Agent budget feature batch
+
+Feature 16 adds an opt-in durable budget ledger over the existing SQLite application database.
+Proposal: [issue #251](https://github.com/nearbycoder/clank.run/issues/251). Registered actions
+automatically count accepted calls, write invocations and distinct affected records, with a
+declared external-operation debit for transactional outbox work. Current owner/principal and
+action authorization are required even when returning an exact retained receipt.
+
+All 22 focused tests pass, including four independent processes competing for one accepted
+call, independent connections, restart replay, changed retries/revisions, revocation/expiry,
+ownership, capacity/retirement and rollback after caught overspending or invalid output. A real
+MCP adapter proves accepted retries spend once. An additional encrypted PITR test restores the
+row, grant debit and receipt at the same commit boundary, then proves replay spends nothing. All 14 packed consumer fixtures pass with zero new source diagnostics against the 163-error
+baseline. The full release gate passes: 1,726 tests reported, 1,723 passed, zero failures/cancellations
+and three privileged-host skips. Coverage is 92.11% lines, 79.85% branches and 90.08% functions.
+Documentation, conformance, dependency and security checks pass. See
+[budget implementation](budget-implementation.json) for source/log hashes and explicit boundaries. The byte ceiling stays 6 MiB; exactly
+two additional distribution files use the explicit 395-file ceiling in the proposal.
+
 ## Review prerequisites
 
 | Item | State | Evidence |
@@ -72,7 +91,7 @@ The roadmap remains six implemented and thirty-four planned.
 | 13 | Organization security policy console | Planned | Pending |
 | 14 | Temporary privileged access | Planned | Pending |
 | 15 | Organization service accounts | Planned | Pending |
-| 16 | Agent operation budgets | Planned | Pending |
+| 16 | Agent operation budgets | Implemented | Proposal #251; 22 focused tests, actual four-process contention, atomic rollback, restart/exact replay, ownership/revocation/expiry, bounded retention, real MCP calls and 14 packed consumer fixtures. Full release gate passes. |
 | 17 | Approval quorum policies | Planned | Pending |
 | 18 | Reviews bound to affected records | Implemented | Opt-in tracked reads, requester identity fence, affected-row/ACL changes, unrelated writes, journal gaps, restart and receipt replay tested in `tests/reviewed-actions.test.mjs`. Default remains conservative. |
 | 19 | Durable human waits in workflows | Planned | Pending |

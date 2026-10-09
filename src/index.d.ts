@@ -13,6 +13,7 @@ export * from "./hydration-inspection.js";
 export * from "./router.js";
 export * from "./ai.js";
 export * from "./agent-contract.js";
+export * from "./agent-budgets.js";
 export * from "./journey.js";
 export * from "./collaboration.js";
 export * from "./analytics.js";
