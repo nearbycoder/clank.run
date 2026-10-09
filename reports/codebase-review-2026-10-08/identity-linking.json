@@ -5,7 +5,7 @@
   "proposal": "https://github.com/nearbycoder/clank.run/issues/283",
   "baseCommit": "508e588d80bb52dd0990f89b5f3438ebcc220666",
   "branch": "codex/organization-identity-linking",
-  "status": "implemented; awaiting fresh combined release gates, hosted checks and protected merge",
+  "status": "implemented and merged through protected PR #285 after fresh combined acceptance",
   "mergedFeatureCount": 20,
   "remainingUnmergedFeatures": 20,
   "publicContract": {
@@ -68,36 +68,38 @@
       "log": "identity-linking-types-08.log"
     },
     "node26": {
-      "tests": 1965,
-      "pass": 1962,
+      "tests": 1970,
+      "pass": 1967,
       "fail": 0,
       "cancelled": 0,
       "skipped": 3,
       "coverage": [
-        91.91,
-        80.62,
-        90.12
+        91.75,
+        80.61,
+        89.96
       ],
-      "fullReleaseGate": "passed",
       "ordinaryUid": 1000,
-      "log": "identity-linking-node26-gate-05.log",
-      "sourceScope": "Historical source 05 runtime/type/test/guide acceptance before the merged canary drain repair. The hardened provider fixture has separate HTTP/restart evidence; this combined branch requires fresh full release gates and hosted checks recorded in PR #285."
+      "fullReleaseGate": "passed",
+      "log": "identity-linking-node26-gate-09.log",
+      "sha256": "cd12373b5285ca8c7592a52e71f5e15212c10fc27783e3072bf513137bff57fb",
+      "sourceScope": "All runtime/test/type/canonical-guide hashes equal final head; only three review metadata files differ after immutable source capture."
     },
     "node22": {
-      "tests": 1965,
-      "pass": 1962,
+      "tests": 1970,
+      "pass": 1967,
       "fail": 0,
       "cancelled": 0,
       "skipped": 3,
       "coverage": [
-        91.9,
-        80.64,
-        90.17
+        91.75,
+        80.63,
+        90.0
       ],
-      "fullReleaseGate": "passed",
       "ordinaryUid": 1000,
-      "log": "identity-linking-node22-gate-05.log",
-      "sourceScope": "Historical source 05 runtime/type/test/guide acceptance before the merged canary drain repair. The hardened provider fixture has separate HTTP/restart evidence; this combined branch requires fresh full release gates and hosted checks recorded in PR #285."
+      "fullReleaseGate": "passed",
+      "log": "identity-linking-node22-gate-09.log",
+      "sha256": "87f15b8335aa0713826a77e0c9842d5205647cb3684472acf3e303e37fc084f3",
+      "sourceScope": "All runtime/test/type/canonical-guide hashes equal final head; only three review metadata files differ after immutable source capture."
     },
     "processProof": {
       "status": "passed",
@@ -139,14 +141,18 @@
       "agentFormatBrowser": "All six raw/JSON/LLM/discovery navigation attempts blocked by the in-app browser at each width; verified separately through HTTP/MCP, no rendered-format claim"
     },
     "combinedHeadAcceptance": {
-      "status": "fresh full release gates running; final report metadata and hosted checks pending",
+      "status": "passed and merged",
       "pullRequest": "https://github.com/nearbycoder/clank.run/pull/285",
       "required": "Full ordinary-user Node 26/minimum-Node release gates plus all fresh hosted checks before expected-head merge",
       "sourceArchive": "identity-linking-source-09.tar",
       "archiveSha256": "c8b07bcba665b7722dc2ecd3f3b9704f367371aea91e4bd22164d2b0ee813cba",
       "sourceHead": "f3cdc6b2b349949df541dd2a1c41339e5d710a40",
       "sourceTree": "99601871bc199529d3af74561537c9daff4c5f1e",
-      "scope": "Source tree remains identical after integrating the reviewed PR #288 squash merge; subsequent acceptance-report edits are recorded separately from runtime/test/guide hashes."
+      "scope": "Source tree remains identical after integrating the reviewed PR #288 squash merge; subsequent acceptance-report edits are recorded separately from runtime/test/guide hashes.",
+      "reviewedHead": "8cb0b76c134cc4a87918371123c5932fe98e402b",
+      "reviewedTree": "9ca5c28a8fe20a01b58ba63ff4f086c81667d051",
+      "mergedMain": "2ce344a4301e4aa1ac42e4284ff28a8a2d7eb1ec",
+      "mergedTreeEqualsReviewed": true
     }
   },
   "package": {
@@ -345,10 +351,21 @@
     }
   },
   "delivery": {
-    "hostedChecks": "pending",
-    "merge": "pending",
+    "hostedChecks": {
+      "passed": 6,
+      "head": "8cb0b76c134cc4a87918371123c5932fe98e402b",
+      "newCodeqlAlerts": 0,
+      "unresolvedThreads": 0
+    },
+    "merge": {
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/285",
+      "commit": "2ce344a4301e4aa1ac42e4284ff28a8a2d7eb1ec",
+      "reviewedTree": "9ca5c28a8fe20a01b58ba63ff4f086c81667d051",
+      "mergedTreeEqualsReviewed": true
+    },
     "independentReview": false,
-    "productionHostCertified": false
+    "productionHostCertified": false,
+    "authorReview": 5475792253
   },
   "mergedMaintenance": {
     "pullRequest": "https://github.com/nearbycoder/clank.run/pull/286",
@@ -463,5 +480,47 @@
     "hostedConformance": "Host certification read a global stale-build marker concurrently removed by the compiler test; one actual test failed. No test failure retry.",
     "localSource07": "Controller recovery remained fenced (cause not proven by old opaque fixture diagnostics); a release-window fixture also collided with an occupied application port. Canary drain tests passed.",
     "repair": "PR #288 isolates host-certification installation, holds atomic application-port leases through verified shutdown, preserves unverified fixture fences, and exposes bounded owned controller diagnostics. Full source09 acceptance must pass before PR #285 merges."
+  },
+  "historicalIdentityOnlyAcceptance": {
+    "node26": {
+      "tests": 1965,
+      "pass": 1962,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": [
+        91.91,
+        80.62,
+        90.12
+      ],
+      "fullReleaseGate": "passed",
+      "ordinaryUid": 1000,
+      "log": "identity-linking-node26-gate-05.log",
+      "sourceScope": "Historical source 05 runtime/type/test/guide acceptance before the merged canary drain repair. The hardened provider fixture has separate HTTP/restart evidence; this combined branch requires fresh full release gates and hosted checks recorded in PR #285."
+    },
+    "node22": {
+      "tests": 1965,
+      "pass": 1962,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": [
+        91.9,
+        80.64,
+        90.17
+      ],
+      "fullReleaseGate": "passed",
+      "ordinaryUid": 1000,
+      "log": "identity-linking-node22-gate-05.log",
+      "sourceScope": "Historical source 05 runtime/type/test/guide acceptance before the merged canary drain repair. The hardened provider fixture has separate HTTP/restart evidence; this combined branch requires fresh full release gates and hosted checks recorded in PR #285."
+    }
+  },
+  "roadmapAccounting": {
+    "mergedFeatures": 21,
+    "featureBatches": 18,
+    "remainingFeatures": 19,
+    "nextFeature": 12,
+    "nextProposal": "https://github.com/nearbycoder/clank.run/issues/287",
+    "nextFeatureImplemented": false
   }
 }
