@@ -101,9 +101,10 @@ The prompt uses the same installation and verification steps as the rest of this
 CLI is convenient; the `npm exec --package` alternative also works before a project exists.
 After installation, the application's npm scripts use its own local Clank dependency.
 
-Linux control planes and database-helper operations additionally require working Bubblewrap
+By default, Linux control planes and database-helper operations require working Bubblewrap
 namespaces and util-linux. Verify those prerequisites when using those workflows; do not disable
-isolation to make a check pass. See [SQLite worker isolation](sqlite-isolation.md). You do not need
+isolation to make a check pass. Explicit trusted process hosting has a separate operator setting;
+see [SQLite worker isolation](sqlite-isolation.md). You do not need
 a hosted account, production credentials, or a separate SQLite server to start developing locally.
 
 ## 1. Install Clank

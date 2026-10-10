@@ -344,6 +344,10 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
 - `PlatformRuntime`: Fetch `.handle`, `.publicUrl`, `.dataDirectory`, resolved `.hostingProfile`,
   `.runnerKind`, and async `.close()`.
 - Runners: dependency-free process runner or constrained Docker runner.
+- `openPlatform({ sqliteIsolation })`: `namespace` by default; `trusted-process` requires an
+  explicit `hostingProfile: "trusted"`, process runner, and non-public signup. The policy is
+  scoped to that platform's startup, requests, and background work, without changing other
+  platforms or standalone database helpers. See [SQLite worker isolation](sqlite-isolation.md).
 - `openPlatform({ invitations })`: durable, encrypted, cross-instance-leased invitation delivery
   through any `EmailService`, while retaining manual copy-once fallback.
 - Types: `ClankPlatformOptions`, `PlatformBackupOptions`, `PlatformJobOperationsOptions`,
