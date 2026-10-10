@@ -2,7 +2,7 @@
   "featureId": "20",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/296",
   "pullRequest": "https://github.com/nearbycoder/clank.run/pull/297",
-  "status": "verified-awaiting-final-hosted-checks-and-protected-merge",
+  "status": "merged",
   "acceptedFeatureCountBeforeMerge": 23,
   "contract": {
     "declaration": "Optional graph.step compensate: registered cleanup job declaring agent.idempotent=true with synchronous typed mapper, or bounded explicit manual reason",
@@ -219,15 +219,30 @@
   "evidenceIndexSha256": "3d0d9c525beb1c80dcaf6f0daa7f6160db8741745f8d3c25a39508b011353ced",
   "review": {
     "independent": false,
-    "freshHostedChecks": "Required at final report head",
-    "newCodeQlAlerts": "Must be zero",
-    "unresolvedThreads": "Must be zero",
-    "merge": "Normal protected expected-head squash, then exact tree comparison and safe checkout sync"
+    "authorComment": 5476778312,
+    "freshHostedChecks": "All six passed at final metadata head",
+    "newCodeQlAlerts": 0,
+    "unresolvedThreads": 0,
+    "analysisAnnotation": "Only scheduled ubuntu-latest Ubuntu26 migration notice",
+    "merge": "Normal protected expected-head squash, exact tree comparison and safe checkout sync verified"
   },
   "limitations": [
     "External effects remain at least once and require durable provider idempotency/current business authorization; local abort cannot fence ignored remote requests",
     "Private recovery tables do not invalidate application-record query caches; explicitly use authorized uncached progress polling",
     "Manual intervention has no automatic resolution/retry API; export evidence and resolve provider state before deliberate inactive purge",
     "Production Railway/provider topology is not certified by disposable/local acceptance"
-  ]
+  ],
+  "accepted": {
+    "head": "f968235499389d41cc20ae65e89b892e0e6a1cf5",
+    "merge": "d89d52514b259823b8ac28de04f95da642c905bf",
+    "tree": "0ead1fc75dc10831b5c271c8e202127c3b97e66c",
+    "exactTreeVerified": true,
+    "bothMainCheckoutsSynchronized": true,
+    "preservedFiles": 23
+  },
+  "counts": {
+    "merged": 24,
+    "featureBatches": 21,
+    "remaining": 16
+  }
 }
