@@ -183,7 +183,8 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // Four deliberate public/private service-account runtime and declaration files.
 // Proposal #309 adds exactly one optional policy runtime and its declaration.
 // Proposal #313 adds exactly platform-supervisor.js and its declaration.
-if ((packResult?.entryCount ?? 0) > 415) fail("Published package unexpectedly exceeds 415 files.");
+// Proposal #322 adds two runtime modules and their declarations; the 6 MiB bound stays unchanged.
+if ((packResult?.entryCount ?? 0) > 419) fail("Published package unexpectedly exceeds 419 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 

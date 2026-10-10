@@ -11,6 +11,12 @@ export function installEnvironmentConsoleContext(context, html) {
   const resetSecurity=html.match(/^function resetOrganizationSecurity\([^\n]+/m)?.[0];
   assert.ok(resetSecurity,'Shared organization security reset must be present.');
   runInNewContext(resetSecurity,context);
+  context.temporaryAccessView ??= null;
+  context.temporaryAccessScope ??= null;
+  context.temporaryAccessGeneration ??= 0;
+  const resetTemporary=html.match(/^function disposeTemporaryAccess\([^\n]+/m)?.[0];
+  assert.ok(resetTemporary,'Shared temporary-access reset must be present.');
+  runInNewContext(resetTemporary,context);
   context.state.environmentDrafts ??= new Map();
   context.state.environmentHistoryGeneration ??= 0;
   context.state.environmentProject ??= null;

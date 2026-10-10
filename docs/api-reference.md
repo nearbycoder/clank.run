@@ -913,3 +913,5 @@ compact retired keys, limits and rollback semantics.
 Project dependency configuration, checks, retained activations and verified recovery use
 `/api/projects/:id/dependencies`. See [deployment dependency gates](deployment-dependencies.md)
 for strict bodies, version/check binding, upload headers, rollback fencing and human override scope.
+
+- `createTemporaryAccessClient` and `createTemporaryAccessView` expose current-session, bounded native preview grants with expected versions, exact retry intents and explicit revocation. `TemporaryAccessError` supplies bounded transport error codes/status. See [temporary preview access](temporary-access.md) for mandatory native freshness, restart invalidation and the restricted creation header.

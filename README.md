@@ -318,6 +318,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Organization and account security](docs/organization-security.md)
 - [Organization security policy console](docs/organization-security-policies.md)
 - [Dedicated organization service accounts](docs/service-accounts.md)
+- [Temporary preview access](docs/temporary-access.md)
 - [Operational recovery, canaries, and alerts](docs/operational-recovery.md)
 - [Signed application releases](docs/release-attestations.md)
 - [Recurring reminders and notification delivery](docs/reminders-and-delivery.md)

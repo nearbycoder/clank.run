@@ -20,6 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./temporary-access": { "types": "./dist/temporary-access.d.ts", "import": "./dist/temporary-access.js" },
     "./organization-security-policy": { "types": "./dist/organization-security-policy.d.ts", "import": "./dist/organization-security-policy.js" },
     "./media-processing": { "types": "./dist/media-processing.d.ts", "import": "./dist/media-processing.js" },
     "./service-accounts": { "types": "./dist/service-accounts.d.ts", "import": "./dist/service-accounts.js" },
