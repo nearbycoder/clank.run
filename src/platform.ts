@@ -1,6 +1,6 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
 import { openPlatformPointInTime, type PlatformPointInTimeOptions } from "./platform-point-in-time.ts";
-export type { PlatformPointInTimeOptions, PlatformPointInTimePolicy, PlatformPointInTimeCheckpoint } from "./platform-point-in-time.ts";
+export type { PlatformPointInTimeOptions, PlatformPointInTimePolicy, PlatformPointInTimeCheckpoint, PlatformPointInTimeResolution } from "./platform-point-in-time.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
 import { createOperationalMonitor, type OperationalSignal, type PlatformOperationsOptions } from "./operations-monitor.ts";
@@ -8948,7 +8948,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           requireCurrentProjectAuthority();
           if(request.method!=="GET"){
             if(principal.machine||principal.impersonation)throw new PlatformError(403,"HUMAN_AUTH_REQUIRED","Recovery changes require current human authority.");
-            requireOrganizationAdministration(accessibleProject(storage.internal,project.id,principal,operation==="point-in-time"?"tokens":"rollback").role);
+            requireOrganizationAdministration(accessibleProject(storage.internal,project.id,principal,operation==="point-in-time"||operation==="point-in-time/resolve"?"tokens":"rollback").role);
           }
           if(fresh){
             const current=principal.sessionId?storage.auth.refreshSession(principal.sessionId):null;
@@ -8980,6 +8980,16 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           const input=plainObject(await readJsonRequest(request,4096));exact(input,["operationId","expectedVersion"]);authority();const operationId=boundedString(input.operationId,"operationId",1,128),version=integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER);
           const current=()=>{authority();if(controller.policy(project.id)?.version!==version)throw new PlatformError(409,"RECOVERY_POLICY_STALE","Review the current recovery policy version.");};
           const checkpoint=await perform(()=>withProjectLock(project.id,async()=>{current();const result=await controller.capture(project.id,operationId,current);current();return result;}));return api({ok:true,checkpoint},201);
+        }
+        if(operation==="point-in-time/resolve"&&request.method==="POST"){
+          const input=plainObject(await readJsonRequest(request,4096));exact(input,["operationId","pendingOperationId","expectedVersion","confirmation"]);authority(true);
+          const configured={operationId:boundedString(input.operationId,"operationId",1,128),pendingOperationId:boundedString(input.pendingOperationId,"pendingOperationId",1,128),expectedVersion:integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER-1)};
+          if(input.confirmation!==`abandon-recovery ${project.slug} ${configured.pendingOperationId}`)throw new PlatformError(400,"CONFIRMATION_REQUIRED",`Pass confirmation "abandon-recovery ${project.slug} ${configured.pendingOperationId}".`);
+          const receipt=await perform(()=>storage.internal.transaction(changes=>{
+            authority(true);const prior=storage.internal.prepare("SELECT 1 FROM clank_platform_pitr_operations WHERE project=? AND id=? AND kind='resolve' AND state='accepted'").get(project.id,configured.operationId);
+            const result=controller.resolve(project.id,principal.userId,configured,()=>authority(true));
+            if(!prior){audit(storage.internal,principal.userId,principal.tokenId,project.id,"recovery.resolve",{...result});changes.record("__platform",project.id);}return result;
+          }));return api({ok:true,receipt,policy:controller.policy(project.id)});
         }
         throw new PlatformError(404,"NOT_FOUND","Recovery endpoint not found.");
       }

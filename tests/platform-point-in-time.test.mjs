@@ -2,7 +2,7 @@ import {pointInTimeReceiptCount} from './fixtures/point-in-time-receipts.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fork} from 'node:child_process';
-import {mkdtemp,mkdir,rm,readdir} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,readdir,readFile,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
@@ -51,7 +51,7 @@ test('real provider HTTP commits an encrypted archive, checkpoint, receipt and h
   assert.equal(f.internal.prepare('SELECT state,reserved_bytes FROM clank_platform_pitr_operations WHERE id=?').get('checkpoint_native_01').state,'accepted');
   await f.reopen();assert.deepEqual(await f.capture(),checkpoint);assert.equal(f.resolutions,1);assert.deepEqual(f.controller.archive('project_native',checkpoint.id,f.current),bytes);
   for(const table of ['checkpoints','archives'])assert.equal(f.internal.prepare('SELECT count(*) AS n FROM clank_platform_pitr_'+table).get().n,1);
-  assert.deepEqual(await readdir(join(f.root,'recovery')),[]);
+  assert.deepEqual(await readdir(join(f.root,'recovery')),['protocol']);
 }));
 
 test('a native failure at final acknowledgment rolls back the archive and horizon together; the exact provider receipt is recoverable',async()=>fixture(async f=>{
@@ -105,4 +105,38 @@ test('closing during a stalled registered-source lookup aborts the manual export
   f.enable();let entered;const started=new Promise(resolve=>{entered=resolve;});f.sourceOverride=()=>{entered();return new Promise(()=>{});};
   const pending=f.capture('closing_native_capture'),rejected=assert.rejects(pending,/controller closed/);await started;await f.controller.close();await rejected;
   assert.equal(f.controller.checkpoints('project_native').length,0);assert.equal(f.controller.policy('project_native').pendingOperationId,'closing_native_capture');assert.equal(f.internal.prepare('SELECT lease,lease_until FROM clank_platform_pitr_policies').get().lease,null);
+}));
+
+test('the independent enrollment marker refuses a reset after all native recovery tables are lost',async()=>fixture(async f=>{
+  f.enable();await f.capture();const marker=await readFile(join(f.root,'recovery/protocol'));
+  for(const suffix of ['archives','checkpoints','operations','policies','state'])f.internal.exec('DROP TABLE clank_platform_pitr_'+suffix);
+  await assert.rejects(f.reopen(),/Partial platform recovery protocol/);assert.deepEqual(await readFile(join(f.root,'recovery/protocol')),marker);
+  assert.equal(f.internal.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name LIKE 'clank_platform_pitr_%'").get().n,0);
+}));
+
+test('a missing or malformed enrollment marker preserves an existing native catalog and refuses automatic migration',async()=>fixture(async f=>{
+  f.enable();const accepted=await f.capture(),marker=join(f.root,'recovery/protocol');await writeFile(marker,'unknown protocol\n');
+  await assert.rejects(f.reopen(),/Invalid retained platform recovery enrollment/);assert.equal(f.internal.prepare('SELECT length(contents) AS n FROM clank_platform_pitr_archives WHERE id=?').get(accepted.id).n,accepted.bytes);
+  await rm(marker);await assert.rejects(f.reopen(),/Unmarked retained platform recovery protocol/);assert.equal(f.internal.prepare('SELECT sequence FROM clank_platform_pitr_checkpoints').get().sequence,3);
+  await assert.rejects(readFile(marker),{code:'ENOENT'});
+}));
+
+test('a disabled failed export can be abandoned once with its original binding retained, then scheduling resumes under a new policy',async()=>fixture(async f=>{
+  f.enable();f.internal.exec("CREATE TRIGGER refuse_ack BEFORE UPDATE OF state ON clank_platform_pitr_operations WHEN NEW.state='accepted' BEGIN SELECT RAISE(ABORT,'owned native acknowledgment fault'); END;");
+  await assert.rejects(f.capture());f.internal.exec('DROP TRIGGER refuse_ack');const before=f.internal.prepare('SELECT receipt FROM clank_platform_pitr_operations WHERE id=?').get('checkpoint_native_01').receipt;
+  const input={operationId:'resolve_native_01',pendingOperationId:'checkpoint_native_01',expectedVersion:1};assert.throws(()=>f.controller.resolve('project_native','owner_native',input,f.current),/Disable and review/);
+  f.enable({operationId:'disable_native_02',expectedVersion:1,enabled:false});assert.throws(()=>f.controller.resolve('project_native','owner_native',input,f.current),/Disable and review/);
+  const receipt=f.controller.resolve('project_native','owner_native',{...input,expectedVersion:2},f.current);assert.equal(receipt.version,3);assert.equal(receipt.state,'abandoned');assert.equal(f.controller.policy('project_native').pendingOperationId,null);
+  const abandoned=f.internal.prepare('SELECT state,receipt,reserved_bytes FROM clank_platform_pitr_operations WHERE id=?').get('checkpoint_native_01');assert.equal(abandoned.state,'abandoned');assert.equal(abandoned.reserved_bytes,0);assert.equal(abandoned.receipt,before);assert.equal(pointInTimeReceiptCount(f.node),1);
+  await f.reopen();assert.deepEqual(f.controller.resolve('project_native','owner_native',{...input,expectedVersion:2},f.current),receipt);assert.equal(f.resolutions,1);
+  assert.throws(()=>f.controller.resolve('project_native','owner_native',{...input,expectedVersion:3},f.current),/retry conflict/);
+  f.enable({operationId:'reenable_native_04',expectedVersion:3,enabled:true});assert.equal((await f.capture('checkpoint_after_resolution')).sequence,3);assert.equal(pointInTimeReceiptCount(f.node),2);
+}));
+
+test('resolution refuses a live native export lease and revoked current authority without changing its retained intent',async()=>fixture(async f=>{
+  f.enable();f.internal.exec("CREATE TRIGGER refuse_ack BEFORE UPDATE OF state ON clank_platform_pitr_operations WHEN NEW.state='accepted' BEGIN SELECT RAISE(ABORT,'owned native acknowledgment fault'); END;");await assert.rejects(f.capture());f.internal.exec('DROP TRIGGER refuse_ack');
+  f.enable({operationId:'disable_native_02',expectedVersion:1,enabled:false});f.internal.prepare('UPDATE clank_platform_pitr_policies SET lease=?,lease_until=?').run('native_live_lease',Date.now()+120000);
+  const input={operationId:'resolve_native_01',pendingOperationId:'checkpoint_native_01',expectedVersion:2};assert.throws(()=>f.controller.resolve('project_native','owner_native',input,f.current),/active native lease/);
+  f.internal.prepare('UPDATE clank_platform_pitr_policies SET lease=NULL,lease_until=NULL').run();f.internal.prepare('UPDATE native_owners SET active=0').run();assert.throws(()=>f.controller.resolve('project_native','owner_native',input,f.current),/revoked/);
+  assert.equal(f.internal.prepare('SELECT state FROM clank_platform_pitr_operations WHERE id=?').get('checkpoint_native_01').state,'pending');assert.equal(f.internal.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind=?').get('resolve').n,0);
 }));

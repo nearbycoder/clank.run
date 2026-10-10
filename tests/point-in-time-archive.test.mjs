@@ -40,6 +40,20 @@ test('native encrypted archive recovers a known committed boundary after complet
   });
 });
 
+test('a restored database enrolls a separate capture epoch without source export receipts or an old operation identity',async t=>{
+  const f=await fixture(t);await f.scope.run(async()=>{
+    const id=f.database.transaction(db=>db.table('records').insert({value:'source first'})),operationId='new_epoch_same_operation',archive=await exportPointInTimeRecovery(f.recovery,{operationId});
+    f.database.transaction(db=>db.table('records').patch(id,{value:'source second'}));const options=request(f,archive,1,'separate-epoch.sqlite');await restorePointInTimeArchive(archive,options);
+    const native=new DatabaseSync(options.targetPath,{readOnly:true});try{assert.equal(native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name GLOB 'clank_pitr_*'").get().n,0);}finally{native.close();}
+    const restored=await openSQLite(schema,{path:options.targetPath});let capture;
+    try{
+      capture=await openPointInTimeRecovery(restored,{directory:join(f.root,'new-epoch'),encryptionKey:f.key,exportIntervalMs:false});assert.notEqual(capture.status().epoch,archive.epoch);
+      restored.transaction(db=>db.table('records').patch(id,{value:'separate mutation'}));const next=await exportPointInTimeRecovery(capture,{operationId});assert.equal(next.sequence,1);assert.notEqual(next.epoch,archive.epoch);
+      assert.equal(restored.read(db=>db.table('records').get(id)).value,'separate mutation');assert.equal(f.database.read(db=>db.table('records').get(id)).value,'source second');assert.deepEqual(await exportPointInTimeRecovery(f.recovery,{operationId}),archive);
+    }finally{await capture?.close();restored.close();}
+  });
+});
+
 test('copied status/JSON handles and closed native handles cannot export a provider checkpoint',async t=>{
   const f=await fixture(t);await f.scope.run(async()=>{
     await assert.rejects(exportPointInTimeRecovery({...f.recovery}),/current native/);

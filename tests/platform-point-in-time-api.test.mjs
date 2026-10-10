@@ -17,7 +17,7 @@ test('recovery is disabled by default without creating recovery protocol tables'
 });
 
 test('native current human policy configuration requires a real signed fresh assertion, records one audit per operation, and returns current policy beside a historical receipt',async t=>{
-  const f=await setup(t);await f.call(f.path,f.input,403,'PUT');assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_policies').get().n,0);await signedStepUp(f,f.native);
+  const f=await setup(t);await f.call(f.path,f.input,403,'PUT');await f.call(f.path+'/resolve',{operationId:'resolve_before_verification',pendingOperationId:'missing_pending',expectedVersion:1,confirmation:'abandon-recovery '+f.development.slug+' missing_pending'},403);assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_policies').get().n,0);await signedStepUp(f,f.native);
   const first=await f.call(f.path,f.input,200,'PUT');assert.equal(first.receipt.version,1);assert.equal(first.policy.version,1);assert.equal(first.policy.enabled,false);assert.equal(f.sources,0);
   await f.call(f.path,{...f.input,operationId:'unsupported_source_enable',expectedVersion:1,enabled:true},409,'PUT');assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,1);
   await f.call(f.path,f.input,200,'PUT');assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.policy'").get().n,1);
@@ -29,6 +29,9 @@ test('native current human policy configuration requires a real signed fresh ass
   assert.equal(f.native.prepare('SELECT version FROM clank_platform_pitr_policies').get().version,2);assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,2);
   f.native.exec('DROP TRIGGER refuse_recovery_audit');await f.call(f.path,interrupted,200,'PUT');assert.equal(f.native.prepare('SELECT version FROM clank_platform_pitr_policies').get().version,3);
   assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.policy'").get().n,3);
+  const resolution={operationId:'resolve_missing_export',pendingOperationId:'missing_pending',expectedVersion:3,confirmation:'abandon-recovery '+f.development.slug+' missing_pending'};
+  await f.call(f.path+'/resolve',{...resolution,confirmation:'incorrect confirmation'},400);await f.call(f.path+'/resolve',resolution,409);
+  assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,3);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.resolve'").get().n,0);
   const foreign=await f.account('foreign-recovery@example.test');await f.call(f.path,undefined,404,undefined,foreign);
 });
 

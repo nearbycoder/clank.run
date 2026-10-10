@@ -41,6 +41,13 @@ export interface PlatformPointInTimeCheckpoint {
   readonly bytes: number;
   readonly sha256: string;
 }
+export interface PlatformPointInTimeResolution {
+  readonly projectId: string;
+  readonly operationId: string;
+  readonly pendingOperationId: string;
+  readonly version: number;
+  readonly state: "abandoned";
+}
 const identifier=(value:string)=>{if(typeof value!=="string"||!/^[A-Za-z0-9_-]{1,128}$/u.test(value))throw new TypeError("Invalid recovery identifier.");return value;};
 const operationIdentifier=(value:string)=>{if(typeof value!=="string"||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(value))throw new TypeError("Invalid recovery operation identifier.");return value;};
 const number=(value:number,min:number,max:number)=>{if(!Number.isSafeInteger(value)||value<min||value>max)throw new TypeError("Invalid bounded recovery number.");return value;};
@@ -67,9 +74,24 @@ export async function openPlatformPointInTime(options:{
   await fs.mkdir(configuredDirectory,{recursive:true,mode:0o700});
   if((await fs.lstat(configuredDirectory)).isSymbolicLink())throw new Error("Recovery archive directory cannot be a symbolic link.");
   await fs.chmod(configuredDirectory,0o700);const directory=await fs.realpath(configuredDirectory);
+  const tableNames=()=>internal.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('clank_platform_pitr_state','clank_platform_pitr_policies','clank_platform_pitr_operations','clank_platform_pitr_checkpoints','clank_platform_pitr_archives')").all();
+  const nativeFsName="node:fs",constants=(await import(nativeFsName)).constants,markerPath=path.join(directory,"protocol"),markerContents="clank-platform-pitr/1\n";
+  let enrolled=false;
+  try{
+    const marker=await fs.open(markerPath,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+    try{const stat=await marker.stat();if(!stat.isFile()||stat.nlink!==1||stat.size!==new TextEncoder().encode(markerContents).byteLength||await marker.readFile("utf8")!==markerContents)throw new Error("Invalid retained platform recovery enrollment marker.");}finally{await marker.close();}
+  }catch(error){
+    if((error as {code?:string}).code!=="ENOENT")throw error;
+    if(tableNames().length!==0||(await fs.readdir(directory)).length!==0)throw new Error("Unmarked retained platform recovery protocol; preserve its evidence for operator recovery.");
+    // Publish enrollment before bootstrap. A crash between the two must refuse
+    // a reset on the next boot; an operator can inspect this bounded marker.
+    const marker=await fs.open(markerPath,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+    try{await marker.writeFile(markerContents);await marker.sync();}finally{await marker.close();}
+    const parent=await fs.open(directory,constants.O_RDONLY|constants.O_DIRECTORY);try{await parent.sync();}finally{await parent.close();}enrolled=true;
+  }
   internal.transaction(()=>{
-  const names=internal.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('clank_platform_pitr_state','clank_platform_pitr_policies','clank_platform_pitr_operations','clank_platform_pitr_checkpoints','clank_platform_pitr_archives')").all();
-  if(names.length!==0&&names.length!==5)throw new Error("Partial platform recovery protocol; preserve its retained evidence.");
+  const names=tableNames();
+  if(enrolled?names.length!==0:names.length!==5)throw new Error("Partial platform recovery protocol; preserve its retained evidence.");
   if(names.length===5&&internal.prepare("SELECT protocol FROM clank_platform_pitr_state WHERE id=1").get()?.protocol!==1)throw new Error("Unsupported retained platform recovery protocol.");
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_pitr_state(id INTEGER PRIMARY KEY CHECK(id=1),protocol INTEGER NOT NULL CHECK(protocol=1)) STRICT;
     CREATE TABLE IF NOT EXISTS clank_platform_pitr_policies(project TEXT PRIMARY KEY,version INTEGER NOT NULL,owner TEXT NOT NULL,enabled INTEGER NOT NULL,interval INTEGER NOT NULL,next_at INTEGER,pending TEXT,lease TEXT,lease_until INTEGER,epoch TEXT,sequence INTEGER,digest TEXT,error TEXT) STRICT;
@@ -121,6 +143,20 @@ export async function openPlatformPointInTime(options:{
     internal.prepare(`INSERT INTO clank_platform_pitr_policies VALUES(?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL,NULL,NULL)
       ON CONFLICT(project) DO UPDATE SET version=excluded.version,owner=excluded.owner,enabled=excluded.enabled,interval=excluded.interval,next_at=excluded.next_at,error=NULL`).run(project,version,owner,input.enabled?1:0,input.intervalMs,input.enabled?Date.now()+input.intervalMs:null);
     const receipt=policy(project)!;internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?, 'configure',?,'accepted',?,0,?)").run(project,input.operationId,fingerprint,JSON.stringify(receipt),Date.now());return receipt;
+  });
+  const resolve=(project:string,owner:string,input:{operationId:string;pendingOperationId:string;expectedVersion:number},assertCurrent:()=>void):PlatformPointInTimeResolution=>transaction(()=>{
+    protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");identifier(project);identifier(owner);operationIdentifier(input.operationId);operationIdentifier(input.pendingOperationId);number(input.expectedVersion,1,Number.MAX_SAFE_INTEGER-1);assertOwner(project,owner);
+    const fingerprint=JSON.stringify({owner,...input}),old=internal.prepare("SELECT kind,state,fingerprint,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,input.operationId);
+    if(old){if(old.kind!=="resolve"||old.state!=="accepted"||old.fingerprint!==fingerprint)throw new Error("Recovery resolution retry conflict.");return Object.freeze(JSON.parse(String(old.receipt)));}
+    const current=row(project);
+    if(!current||current.owner!==owner||current.version!==input.expectedVersion||current.enabled!==0||current.pending!==input.pendingOperationId)throw new Error("Disable and review the exact current pending recovery operation before resolving it.");
+    if(current.lease_until!==null&&Number(current.lease_until)>Date.now())throw new Error("Recovery export still has an active native lease.");
+    const pending=internal.prepare("SELECT kind,state,reserved_bytes FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,input.pendingOperationId);
+    if(pending?.kind!=="export"||pending.state!=="pending")throw new Error("Retained pending recovery intent changed.");number(Number(pending.reserved_bytes),maxBytes,maxBytes);capacity();synchronous(assertCurrent);assertOwner(project,owner);
+    const receipt=Object.freeze({projectId:project,operationId:input.operationId,pendingOperationId:input.pendingOperationId,version:input.expectedVersion+1,state:"abandoned" as const});
+    internal.prepare("UPDATE clank_platform_pitr_operations SET state='abandoned',reserved_bytes=0 WHERE project=? AND id=? AND state='pending'").run(project,input.pendingOperationId);
+    internal.prepare("UPDATE clank_platform_pitr_policies SET version=?,pending=NULL,lease=NULL,lease_until=NULL,error=NULL WHERE project=?").run(receipt.version,project);
+    internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?,'resolve',?,'accepted',?,0,?)").run(project,input.operationId,fingerprint,JSON.stringify(receipt),Date.now());return receipt;
   });
   const performCapture=async(project:string,operationId:string,assertCurrent:()=>void):Promise<PlatformPointInTimeCheckpoint>=>{
     identifier(project);operationIdentifier(operationId);protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");
@@ -190,5 +226,5 @@ export async function openPlatformPointInTime(options:{
     for(const r of rows){if(closed)return;const project=String(r.project),operation=r.pending===null?"scheduled_"+crypto.randomUUID().replaceAll("-",""):String(r.pending);try{await capture(project,operation,()=>{if(closed)throw new Error("Recovery scheduler closed.");});}catch(error){report(error);}}
   };
   const schedule=()=>{if(closed||timer)return;timer=setTimeout(()=>{timer=undefined;flight=run().catch(report).finally(()=>{flight=undefined;schedule();});},1000);timer.unref?.();};
-  return Object.freeze({policy,configure,capture,archive,checkpoints(project:string){protocol();return internal.prepare("SELECT * FROM clank_platform_pitr_checkpoints WHERE project=? ORDER BY created_at DESC,id DESC LIMIT ?").all(identifier(project),maxArchives).map(checkpoint);},start(){schedule();},async close(){closed=true;if(timer)clearTimeout(timer);for(const cancellation of cancellations)cancellation.abort(new Error("Recovery controller closed."));await Promise.allSettled([...captures]);await flight;}});
+  return Object.freeze({policy,configure,resolve,capture,archive,checkpoints(project:string){protocol();return internal.prepare("SELECT * FROM clank_platform_pitr_checkpoints WHERE project=? ORDER BY created_at DESC,id DESC LIMIT ?").all(identifier(project),maxArchives).map(checkpoint);},start(){schedule();},async close(){closed=true;if(timer)clearTimeout(timer);for(const cancellation of cancellations)cancellation.abort(new Error("Recovery controller closed."));await Promise.allSettled([...captures]);await flight;}});
 }
