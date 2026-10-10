@@ -23,3 +23,18 @@ test('overlapping dashboard reads retain the current result and cannot replace i
   runInNewContext(load,context);const first=context.loadDashboard(true),second=context.loadDashboard(true),newer={account:{id:'owner-account'},currentVersion:2};responses[1](newer);await second;responses[0]({account:{id:'owner-account'},currentVersion:1});await first;
   assert.equal(state.dashboard,newer);assert.deepEqual(renders,[newer]);
 });
+
+test('revoked policy administration clears the selected private draft and keeps unrelated authorized workspace drafts',async()=>{
+  const html=await source(),load=html.match(/^async function loadOrganizationSecurity\([^\n]+/mu)?.[0];assert.ok(load);
+  for(const kind of ['role-removed','403','404']) {
+    const currentScope='selected-scope',otherScope='other-authorized-scope',selected={requirements:{factor:'passkey'},dirty:true},unrelated={requirements:{factor:'mfa-or-passkey'},dirty:true};
+    const view={scope:currentScope,generation:0,owner:JSON.stringify(['owner@example.test','owner-session']),draft:selected,drafts:new Map([[currentScope,selected],[otherScope,unrelated]])};
+    let reads=0,resets=0;
+    const context={initial:{authenticated:true,organizationSecurityEnabled:true,email:'owner@example.test',authSessionId:'owner-session'},state:{workspaceId:'selected-workspace'},organizationSecurityView:view,
+      securityScope:()=>currentScope,securityWorkspaces:()=>[{id:'selected-workspace',role:kind==='role-removed'?'viewer':'owner'}],securityCurrent:scope=>scope===currentScope&&view.scope===scope,
+      securityPath:()=>'/policy',securityRequest:async()=>{reads++;throw Object.assign(new Error('Policy access revoked.'),{status:Number(kind)});},
+      resetOrganizationSecurity(){resets++;view.scope=null;view.draft=null;},handleAuthFailure:()=>false,toast(){},fillSecurityPolicy(){throw new Error('Revoked policy rendered');}};
+    runInNewContext(load,context);await context.loadOrganizationSecurity();
+    assert.equal(reads,kind==='role-removed'?0:1);assert.equal(resets,1);assert.equal(view.draft,null);assert.equal(view.drafts.has(currentScope),false);assert.equal(view.drafts.get(otherScope),unrelated);
+  }
+});
