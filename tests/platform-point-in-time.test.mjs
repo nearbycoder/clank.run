@@ -12,6 +12,19 @@ import {createSQLiteTaskScope} from '../dist/sqlite-task.js';
 import {openPlatformPointInTime} from '../dist/platform-point-in-time.js';
 const token='owned_native_provider_credential_0123456789';
 
+test('a preserved project verification workspace still fences export after native abandonment and controller restart',async()=>fixture(async f=>{
+  const directory=join(f.root,'recovery'),workspace=join(directory,'.verify-'+createHash('sha256').update('project_native').digest('hex'));await mkdir(workspace,{mode:0o700});await writeFile(join(workspace,'unknown-sentinel'),'preserve unknown workspace',{flag:'wx'});
+  f.enable();await assert.rejects(f.capture(),{code:'EEXIST'});
+  f.enable({operationId:'disable_workspace_02',expectedVersion:1,enabled:false});f.controller.resolve('project_native','owner_native',{operationId:'resolve_workspace_03',pendingOperationId:'checkpoint_native_01',expectedVersion:2},f.current);
+  await f.reopen();f.enable({operationId:'enable_workspace_04',expectedVersion:3,enabled:true});await assert.rejects(f.capture('checkpoint_after_workspace_abandon'),{code:'EEXIST'});
+  assert.equal((await readdir(directory)).filter(name=>name.startsWith('.verify-')).length,1);assert.equal(await readFile(join(workspace,'unknown-sentinel'),'utf8'),'preserve unknown workspace');assert.equal(f.controller.checkpoints('project_native').length,0);assert.equal(pointInTimeReceiptCount(f.node),2);
+}));
+
+test('unknown legacy random verification state blocks a new export without deleting or adopting it',async()=>fixture(async f=>{
+  const directory=join(f.root,'recovery'),workspace=join(directory,'.verify-owned-legacy');await mkdir(workspace,{mode:0o700});await writeFile(join(workspace,'unknown-sentinel'),'preserve legacy workspace',{flag:'wx'});f.enable();await assert.rejects(f.capture(),/Legacy recovery verification workspace/);
+  assert.deepEqual((await readdir(directory)).filter(name=>name.startsWith('.verify-')),['.verify-owned-legacy']);assert.equal(await readFile(join(workspace,'unknown-sentinel'),'utf8'),'preserve legacy workspace');assert.equal(f.controller.checkpoints('project_native').length,0);
+}));
+
 async function fixture(run,configuration={}){
   const root=await mkdtemp(join(tmpdir(),'clank-platform-pitr-')),node=join(root,'provider');await mkdir(node);
   const scope=await createSQLiteTaskScope('trusted-process');

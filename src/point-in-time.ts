@@ -432,8 +432,8 @@ export async function restorePointInTimeArchive(archive: PointInTimeArchive, opt
   const encoded = JSON.stringify(archive);
   if((globalThis as any).Buffer.byteLength(encoded)>limits.bytes) throw new Error("Recovery archive exceeds its encoded byte bound.");
   const captured = JSON.parse(encoded) as PointInTimeArchive;
-  const fsName="node:fs/promises", pathName="node:path", cryptoName="node:crypto", osName="node:os";
-  const [fs,path,crypto,os] = await Promise.all([import(fsName),import(pathName),import(cryptoName),import(osName)]);
+  const fsName="node:fs/promises", pathName="node:path", cryptoName="node:crypto";
+  const [fs,path,crypto] = await Promise.all([import(fsName),import(pathName),import(cryptoName)]);
   let temporary: string | undefined;
   try {
     current();
@@ -468,7 +468,11 @@ export async function restorePointInTimeArchive(archive: PointInTimeArchive, opt
     const required=new Set(["epoch.json","head.json",`base/${epoch.manifest.baseBackupId}/manifest.json`,`base/${epoch.manifest.baseBackupId}/database.enc`]);
     for(let sequence=1;sequence<=captured.sequence;sequence++)required.add(`${String(sequence).padStart(16,"0")}.json`);
     if(required.size!==names.size || [...required].some(name=>!names.has(name)))throw new Error("Recovery archive has a missing or foreign file.");
-    const repository: string=await fs.mkdtemp(path.join(os.tmpdir(),"clank-pitr-archive-"));temporary=repository;
+    const destination=path.resolve(targetPath),parent=path.dirname(destination);
+    await fs.mkdir(parent,{recursive:true,mode:0o700});current();
+    const repository: string=path.join(parent,".clank-pitr-"+crypto.createHash("sha256").update(destination).digest("hex")+"-archive");
+    // EEXIST preserves a possible live or interrupted worker and bounds exact retries.
+    await fs.mkdir(repository,{mode:0o700});temporary=repository;
     current();
     await fs.mkdir(path.join(repository,"base",epoch.manifest.baseBackupId),{recursive:true,mode:0o700});
     for(const [name,bytes] of decoded) {
@@ -491,8 +495,8 @@ export async function restorePointInTime(options: PointInTimeRestoreOptions): Pr
   if ((options.throughSequence === undefined) === (options.asOf === undefined)) throw new TypeError("Choose exactly one committed sequence or asOf timestamp.");
   if (options.throughSequence !== undefined) bounded(options.throughSequence, "throughSequence", 0, Number.MAX_SAFE_INTEGER);
   if (options.asOf !== undefined) bounded(options.asOf, "asOf", 0, Number.MAX_SAFE_INTEGER);
-  const fsName = "node:fs/promises", pathName = "node:path", cryptoName = "node:crypto", osName = "node:os", constantsName = "node:fs";
-  const [fs, path, crypto, os, { constants }] = await Promise.all([import(fsName), import(pathName), import(cryptoName), import(osName), import(constantsName)]);
+  const fsName = "node:fs/promises", pathName = "node:path", cryptoName = "node:crypto", constantsName = "node:fs";
+  const [fs, path, crypto, { constants }] = await Promise.all([import(fsName), import(pathName), import(cryptoName), import(constantsName)]);
   current();
   const readBounded = async (filename: string, maximum: number): Promise<string> => {
     const handle = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -513,7 +517,10 @@ export async function restorePointInTime(options: PointInTimeRestoreOptions): Pr
   const head = JSON.parse(await readBounded(path.join(directory, "head.json"), 64 * 1024));
   if (head.mac !== crypto.createHmac("sha256", key).update(JSON.stringify(head.checkpoint)).digest("hex") || head.checkpoint.epoch !== encoded.manifest.epoch
     || !Number.isSafeInteger(head.checkpoint.sequence) || head.checkpoint.sequence < 0) throw new Error("Recovery export checkpoint authentication failed.");
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "clank-pitr-"));cleanup=async()=>{await fs.rm(root,{recursive:true,force:true});};current();
+  const destination=path.resolve(options.targetPath),parent=path.dirname(destination);
+  await fs.mkdir(parent,{recursive:true,mode:0o700});current();
+  const root=path.join(parent,".clank-pitr-"+crypto.createHash("sha256").update(destination).digest("hex")+"-replay");
+  await fs.mkdir(root,{mode:0o700});cleanup=async()=>{await fs.rm(root,{recursive:true,force:true});};current();
   const temporary = path.join(root, "replay.sqlite");
   const manager = await openBackupManager({ repositoryDirectory: path.join(directory, "base"), encryptionKey: key, keyId: encoded.manifest.keyId, maxDatabaseBytes: 512 * 1024 * 1024 });
   try {

@@ -262,7 +262,11 @@ export async function openPlatformPointInTime(options:{
       try{while(true){const part=await reader.read();current();sourceCurrent();if(part.done)break;bytes+=part.value.byteLength;if(bytes>maxBytes)throw new Error("Recovery provider archive exceeds its byte bound.");chunks.push(part.value);}}finally{await reader.cancel().catch(()=>undefined);reader.releaseLock();}
       const encoded=(globalThis as any).Buffer.concat(chunks),archive=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(encoded)) as PointInTimeArchive;
       if(archive.operationId!==operationId||archive.epoch!==configured.epoch&&configured.epoch!==null||configured.sequence!==null&&(archive.sequence<Number(configured.sequence)||archive.sequence===configured.sequence&&archive.digest!==configured.digest))throw new Error("Recovery checkpoint replays or changes its retained epoch/horizon.");
-      const verificationDirectory=await fs.mkdtemp(path.join(directory,".verify-"));
+      // One workspace per project also blocks allocation after an interrupted
+      // operation is abandoned. Never reclaim a possible old worker's files.
+      const verificationDirectory=path.join(directory,".verify-"+crypto.createHash("sha256").update(project).digest("hex"));
+      if((await fs.readdir(directory)).some((name:string)=>name.startsWith(".verify-")&&!/^\.verify-[0-9a-f]{64}$/u.test(name)))throw new Error("Legacy recovery verification workspace requires operator reconciliation.");
+      current();sourceCurrent();await fs.mkdir(verificationDirectory,{mode:0o700});
       try{await restorePointInTimeArchive(archive,{encryptionKey:key,targetPath:path.join(verificationDirectory,"verified.sqlite"),confirmation:"restore point in time",throughSequence:archive.sequence,expectedEpoch:archive.epoch,expectedSequence:archive.sequence,expectedDigest:archive.digest,expectedBinding:binding,operationId,maxArchiveBytes:maxBytes,maxEntries,assertCurrent(){current();sourceCurrent();}});}finally{await fs.rm(verificationDirectory,{recursive:true,force:true});}
       current();sourceCurrent();const id="pitr_"+crypto.createHash("sha256").update(project+"\0"+operationId).digest("hex"),digest=crypto.createHash("sha256").update(encoded).digest("hex");
       return internal.transaction(()=>{
