@@ -1,0 +1,89 @@
+{
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/319",
+  "status": "verified-maintenance-hosted-pending",
+  "newFeature": false,
+  "scope": "Private SDK release layout now recognizes unambiguous division when no closing slash exists before the line ending. All other ambiguous fallback behavior remains. Public compiler, mapped output and examples retain their formatting contract.",
+  "fullReleaseGates": {
+    "head": "015c3cdf2e23009aa140205f2a1db0ea552ce444",
+    "tree": "5c9f270310b75383e2b435d3256b73eb64e37066",
+    "tarSha256": "4e26844954580a12b693c612a83222d245dbd354e50803bbe336568f5db79f80",
+    "inputs": 1108,
+    "ordinaryUid": 1000,
+    "scope": "Complete unmodified scripts/check.mjs, native Node26 and minimum22.16, exact source-01. Three existing unsupported-host skips remain. Private SDK indentation change only; this is maintenance, no new feature acceptance.",
+    "results": {
+      "26": {
+        "log": "release-division-layout-node26-gate-01.log",
+        "sha256": "8895e9efbcbdb32ba7af60a072036de2cde8916193e3dd370be9c3fdcda51cac",
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "suites": 0,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.52,
+          81.01,
+          90.07
+        ]
+      },
+      "22": {
+        "log": "release-division-layout-node22-gate-01.log",
+        "sha256": "501ec39f78ff8a27737d8f3ff227bacce3f7e722c4670b3bb5697a3621eb50bf",
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "suites": 0,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.52,
+          81.04,
+          90.11
+        ]
+      }
+    }
+  },
+  "equivalence": {
+    "26": {
+      "modules": 153,
+      "proofSha256": "e36c28893ab4ab3f8301f5352054a6e12ef4c4ab04bfe3a670def60d3524e1e2",
+      "tokensCommentsLineEndings": "identical"
+    },
+    "22": {
+      "modules": 153,
+      "proofSha256": "076242fbd9709b86c405e17135ec5f9d79d8472e061598dea0351dfe29abc130",
+      "tokensCommentsLineEndings": "identical"
+    }
+  },
+  "introspection": {
+    "modules": 12,
+    "scope": "Actual output is byte-identical to the preceding private build for durable workflow revisions, native media job handler and browser functions serialized with toString. Source search found no job/workflow factory calls in newly compacted platform, schedules, services, lifecycle, auth, organization-sso or recovery modules. Public compiler and user examples remain unchanged. Ordinary SDK function toString indentation is intentionally formatting-dependent; no function-text policy was normalized or weakened.",
+    "proofSha256": "65bfb82636b07a7660c654e763f95361d5b7fd7673423ac12153d98a99e341a0"
+  },
+  "consumerTypes": {
+    "fixtures": 34,
+    "sourceDiagnostics": 159,
+    "newDiagnostics": 0,
+    "baseline": 163
+  },
+  "package": {
+    "files": 413,
+    "unpackedBytes": 5952766,
+    "headroom": 338690,
+    "savedBytes": 189521,
+    "limitUnchanged": 6291456,
+    "zeroDependencies": true
+  },
+  "evidence": {
+    "index": "/tmp/clank-review-2026-10-08/release-division-layout-evidence-01/index.json",
+    "sha256": "b86d12c3ab007123ffa2844f809a6aaa6ebf41d173b703a4201dda5a5e322574",
+    "files": 24,
+    "mode": "0400"
+  }
+}
