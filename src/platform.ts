@@ -1,5 +1,6 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
 import { openPlatformPointInTime, type PlatformPointInTimeOptions } from "./platform-point-in-time.ts";
+import { createMcpServer } from "./mcp.ts";
 export type { PlatformPointInTimeOptions, PlatformPointInTimePolicy, PlatformPointInTimeCheckpoint, PlatformPointInTimeResolution } from "./platform-point-in-time.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
@@ -857,6 +858,7 @@ interface TokenPrincipal {
 const admittedTokenAuthority = new WeakMap<TokenPrincipal, string>();
 function machineProjectPermission(operation: string, method: string): ProjectPermission {
   if(method==='GET' && ['', 'usage', 'releases', 'backups', 'point-in-time'].includes(operation)) return 'read';
+  if(method==='POST' && operation==='point-in-time/mcp') return 'read';
   if(method==='GET' && operation==='logs') return 'logs';
   if(method==='GET' && operation==='audit') return 'audit';
   if(operation==='secrets' && ['GET','PUT'].includes(method) || /^secrets\/[^/]+$/u.test(operation) && method==='DELETE') return 'secrets';
@@ -8953,12 +8955,12 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         accessibleProject(storage.internal,project.id,principal,permission);
         machineResponseGuards.set(request,()=>{requireCurrentPlatformPrincipal(storage,principal);accessibleProject(storage.internal,project.id,principal,permission);});
       }
-      if (request.method !== "GET" && request.method !== "HEAD") {
+      if (request.method !== "GET" && request.method !== "HEAD" && !(operation==="point-in-time/mcp"&&request.method==="POST")) {
         if(recoveryPendingTarget(project.id))throw new PlatformError(409,"RECOVERY_DESTINATION_PENDING","The reserved recovery destination remains stopped until its exact restore is verified and accepted.");
         requireNoEvacuation(project.id);
       }
       const requireCurrentProjectAuthority = () => {
-        if (request.method !== "GET" && request.method !== "HEAD") {
+        if (request.method !== "GET" && request.method !== "HEAD" && !(operation==="point-in-time/mcp"&&request.method==="POST")) {
           if(recoveryPendingTarget(project.id))throw new PlatformError(409,"RECOVERY_DESTINATION_PENDING","The reserved recovery destination remains stopped until its exact restore is verified and accepted.");
           requireNoEvacuation(project.id);
         }
@@ -8971,7 +8973,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         const controller=pointInTime;
         const authority=(fresh=false)=>{
           requireCurrentProjectAuthority();
-          if(request.method!=="GET"){
+          if(request.method!=="GET"&&operation!=="point-in-time/mcp"){
             if(principal.machine||principal.impersonation)throw new PlatformError(403,"HUMAN_AUTH_REQUIRED","Recovery changes require current human authority.");
             requireOrganizationAdministration(accessibleProject(storage.internal,project.id,principal,operation==="point-in-time"||operation==="point-in-time/resolve"?"tokens":"rollback").role);
           }
@@ -8982,10 +8984,34 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           }
         };
         const perform=async<T>(work:()=>Promise<T>|T):Promise<T>=>{try{return await work();}catch(error){if(error instanceof PlatformError||error instanceof AuthError)throw error;try{void Promise.resolve(options.onError?.(error)).catch(()=>undefined);}catch{}throw new PlatformError(409,"RECOVERY_CONFLICT","Recovery state or provider authority changed; refresh its status or recover the retained operation.");}};
-        if(operation==="point-in-time"&&request.method==="GET"){
+        const metadata=()=>{
           authority();const restores=storage.internal.prepare("SELECT id,state,receipt FROM clank_platform_pitr_operations WHERE project=? AND kind='restore' ORDER BY created_at DESC,id DESC LIMIT 100").all(project.id).map(row=>{
             const value=JSON.parse(String(row.receipt));return row.state==="accepted"?value:{operationId:row.id,state:row.state,checkpointId:value.intent.checkpointId,destinationProjectId:value.intent.destinationId,sequence:value.intent.throughSequence,error:value.error??null};
-          });return api({ok:true,policy:controller.policy(project.id),checkpoints:controller.checkpoints(project.id),restores});
+          });const result={ok:true,policy:controller.policy(project.id),checkpoints:controller.checkpoints(project.id),restores};authority();return result;
+        };
+        if(operation==="point-in-time"&&request.method==="GET")return api(metadata());
+        if(operation==="point-in-time/mcp"&&request.method==="POST"){
+          if(url.searchParams.size)throw new PlatformError(422,"INVALID_RECOVERY_INPUT","Recovery MCP does not accept query parameters.");
+          authority();
+          const annotations={readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false};
+          const transport=createMcpServer({name:"clank-project-recovery",version:"1.0.0",sessions:false,allowedOrigins:[publicUrl],maxRequestBytes:16384,maxResponseBytes:1024*1024,
+            instructions:"Inspect current recovery metadata and prepare an exact browser-only restore request. These tools cannot change recovery state or create a destination. A current human administrator must review and submit the restore with fresh browser authentication.",
+            authenticate:async()=>{authority();return{context:null,scopes:new Set(["agent:read"])};},tools:[{
+              name:"recovery.status",description:"Inspect this project's current recovery policy, retained checkpoint horizons and bounded restore receipts.",inputSchema:{type:"object",properties:{},additionalProperties:false},annotations,
+              invoke(input){exact(plainObject(input),[]);return metadata();},
+            },{
+              name:"recovery.restore_plan",description:"Prepare an exact human browser restore into a new suspended project from a currently retained checkpoint. No mutation is submitted.",annotations,
+              inputSchema:{type:"object",properties:{operationId:{type:"string",minLength:1,maxLength:128},checkpointId:{type:"string",minLength:69,maxLength:69},expectedVersion:{type:"integer",minimum:1},throughSequence:{type:"integer",minimum:0},name:{type:"string",minLength:1,maxLength:100},slug:{type:"string",minLength:1,maxLength:50}},required:["operationId","checkpointId","expectedVersion","throughSequence","name","slug"],additionalProperties:false},
+              invoke(raw){
+                authority();const input=plainObject(raw);exact(input,["operationId","checkpointId","expectedVersion","throughSequence","name","slug"]);
+                const body={operationId:boundedString(input.operationId,"operationId",1,128),checkpointId:boundedString(input.checkpointId,"checkpointId",69,69),expectedVersion:integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER),throughSequence:integerInRange(input.throughSequence,"throughSequence",0,Number.MAX_SAFE_INTEGER),name:boundedString(input.name,"name",1,100),slug:normalizeSlug(boundedString(input.slug,"slug",1,50))};
+                if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(body.operationId)||!/^pitr_[0-9a-f]{64}$/u.test(body.checkpointId)||body.slug!==input.slug)throw new PlatformError(422,"INVALID_RECOVERY_INPUT","Use exact recovery identifiers and a canonical destination slug.");
+                const policy=controller.policy(project.id),checkpoint=controller.checkpoints(project.id).find(item=>item.id===body.checkpointId);
+                if(!policy||policy.version!==body.expectedVersion||!checkpoint||body.throughSequence>checkpoint.sequence)throw new PlatformError(409,"RECOVERY_POINT_UNAVAILABLE","Review the current policy version and retained checkpoint horizon.");
+                authority();return{browserOnly:true,method:"POST",path:`/api/projects/${project.id}/point-in-time/restores`,request:{...body,confirmation:`restore-recovery ${project.slug} ${checkpoint.id} ${body.throughSequence} ${body.slug}`},authorization:"Current human workspace administration and fresh browser passkey or MFA verification are required. No restore was submitted."};
+              },
+            }]});
+          const response=await transport.handle(request);authority();return response;
         }
         if(operation==="point-in-time"&&request.method==="PUT"){
           const input=plainObject(await readJsonRequest(request,4096));exact(input,["operationId","expectedVersion","enabled","intervalMs","confirmation"]);authority(true);

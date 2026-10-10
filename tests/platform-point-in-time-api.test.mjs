@@ -2,6 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';import {Dat
 import {signedStepUp} from './fixtures/platform-recovery-fresh-auth.mjs';
 import {readFile} from 'node:fs/promises';
 import {fixture} from './fixtures/platform-environment-fixture.mjs';
+import {recoveryMcpRequest} from './fixtures/platform-recovery-mcp.mjs';
 
 async function setup(t,overrides={}){let sources=0;const f=await fixture(t,false,{...overrides,pointInTime:{source:async()=>{sources++;throw new Error('No registered captured provider in this API fixture.');}}}),native=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));native.exec('PRAGMA busy_timeout=5000');t.after(()=>native.close());const path=`/api/projects/${f.development.id}/point-in-time`,input={operationId:'native_recovery_configuration',expectedVersion:0,enabled:false,intervalMs:60000,confirmation:'configure-recovery '+f.development.slug};return {...f,native,path,input,get sources(){return sources;}};}
 
@@ -54,5 +55,18 @@ test('real native machine read grants inspect only their current project recover
   await call(`/api/projects/${f.staging.id}/point-in-time`,404);
   await call(f.path,403,{...f.input,operationId:'machine_cannot_configure',expectedVersion:1},'PUT');await call(f.path+'/checkpoints',403,{operationId:'machine_cannot_capture',expectedVersion:1});await call(f.path+'/restores',403,{});await call(f.path+'/resolve',403,{});
   assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,1);assert.equal(f.sources,0);
+  const rpc=async(method,params={},path=f.path+'/mcp')=>{const response=await fetch(recoveryMcpRequest(origin,path,method,params,{authorization:'Bearer '+issued.accessToken})),data=await response.json();assert.equal(response.status,200,JSON.stringify(data));assert.equal(response.headers.get('mcp-session-id'),null);return data;};
+  assert.equal((await rpc('server/discover')).result.cacheScope,'private');const tools=(await rpc('tools/list')).result.tools;assert.deepEqual(tools.map(tool=>tool.name),['recovery_status','recovery_restore_plan']);assert.ok(tools.every(tool=>tool.annotations.readOnlyHint&&tool.annotations.idempotentHint&&!tool.annotations.destructiveHint));
+  const read=(await rpc('tools/call',{name:'recovery_status',arguments:{}})).result;assert.equal(read.isError,false);assert.equal(read.structuredContent.policy.version,1);
+  assert.equal((await rpc('tools/call',{name:'recovery_status',arguments:{foreignProject:f.staging.id}})).result.isError,true);
+  assert.equal((await rpc('tools/call',{name:'recovery_restore_plan',arguments:{operationId:'machine_plan',checkpointId:'pitr_'+'1'.repeat(64),expectedVersion:1,throughSequence:2,name:'Plan only',slug:'plan-only'}})).result.isError,true);
+  assert.ok((await rpc('tools/call',{name:'recovery_restore',arguments:{}})).error);await call(`/api/projects/${f.staging.id}/point-in-time/mcp`,404,{});
+  assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,1);assert.equal(f.sources,0);
   assert.equal(Number(f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.development.organizationId,f.owner.user.id).changes),1);await call(f.path,403);
+  await call(f.path+'/mcp',403,{});
+});
+
+test('read-only native recovery MCP revalidates a browser principal after a held body and accepts no mutation',async t=>{
+  const f=await setup(t);let entered,deliver;const reading=new Promise(resolve=>{entered=resolve;}),release=new Promise(resolve=>{deliver=resolve;});const request=recoveryMcpRequest(f.options.publicUrl,f.path+'/mcp','tools/call',{name:'recovery_status',arguments:{}},{origin:f.options.publicUrl,cookie:f.owner.cookie,'x-clank-csrf':f.owner.csrf});const bytes=new Uint8Array(await request.arrayBuffer()),body=new ReadableStream({async pull(controller){entered();await release;controller.enqueue(bytes);controller.close();}},{highWaterMark:0});
+  const pending=f.handle(new Request(request.url,{method:'POST',headers:request.headers,duplex:'half',body}));await reading;f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.development.organizationId,f.owner.user.id);deliver();const response=await pending;assert.ok([403,404].includes(response.status),JSON.stringify(await response.json()));assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,0);assert.equal(f.sources,0);
 });
