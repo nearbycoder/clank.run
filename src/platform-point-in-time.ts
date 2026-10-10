@@ -135,6 +135,23 @@ export async function openPlatformPointInTime(options:{
     synchronous(assertCurrent);assertOwner(project,owner);return new Uint8Array(stored);
   };
   const capacity=()=>{if(Number(internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations").get()!.n)>=10000)throw new Error("Retained recovery operation capacity is full.");};
+  const reservedBytes=()=>{
+    const invalid=()=>new Error("Invalid retained recovery byte reservation.");
+    if(internal.prepare(`SELECT 1 FROM clank_platform_pitr_operations o
+      LEFT JOIN clank_platform_pitr_checkpoints c ON c.project=o.project AND c.operation=o.id
+      LEFT JOIN clank_platform_pitr_archives a ON a.id=c.id
+      WHERE o.reserved_bytes<0 OR o.reserved_bytes>?
+      OR (o.kind!='export' AND o.reserved_bytes!=0)
+      OR (o.kind='export' AND (o.state NOT IN ('pending','accepted','abandoned')
+        OR (o.state='pending' AND o.reserved_bytes!=?)
+        OR (o.state='abandoned' AND o.reserved_bytes!=0)
+        OR (o.state='accepted' AND (c.id IS NULL OR a.id IS NULL OR c.bytes<1 OR c.bytes>? OR o.reserved_bytes!=c.bytes OR length(a.contents)!=c.bytes)))) LIMIT 1`).get(maxTotalBytes,maxBytes,maxBytes))throw invalid();
+    if(internal.prepare(`SELECT 1 FROM clank_platform_pitr_checkpoints c LEFT JOIN clank_platform_pitr_operations o ON o.project=c.project AND o.id=c.operation
+      WHERE o.id IS NULL OR o.kind!='export' OR o.state!='accepted' LIMIT 1`).get()
+      ||internal.prepare("SELECT 1 FROM clank_platform_pitr_archives a LEFT JOIN clank_platform_pitr_checkpoints c ON c.id=a.id WHERE c.id IS NULL LIMIT 1").get())throw invalid();
+    const total=Number(internal.prepare("SELECT coalesce(sum(reserved_bytes),0) AS n FROM clank_platform_pitr_operations").get()!.n);
+    if(!Number.isSafeInteger(total)||total<0||total>maxTotalBytes)throw invalid();return total;
+  };
   let closed=false,timer:ReturnType<typeof setTimeout>|undefined,flight:Promise<void>|undefined;
   const captures=new Set<Promise<unknown>>(),cancellations=new Set<AbortController>();
   const performRestore=async(project:string,id:string,input:{targetPath:string;throughSequence:number},assertCurrent:()=>void)=>{
@@ -206,13 +223,16 @@ export async function openPlatformPointInTime(options:{
       if(current.pending&&current.pending!==operationId || current.lease_until!==null&&Number(current.lease_until)>Date.now())throw new Error("Recovery export already has an active owner or retained operation.");
       if(Number(internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_checkpoints WHERE project=?").get(project)!.n)>=maxArchives)throw new Error("Recovery checkpoint capacity is full; retained archives are preserved.");
       if(!internal.prepare("SELECT 1 FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,operationId)){
-        capacity();if(Number(internal.prepare("SELECT coalesce(sum(reserved_bytes),0) AS n FROM clank_platform_pitr_operations").get()!.n)+maxBytes>maxTotalBytes)throw new Error("Recovery archive byte capacity is full.");
-        internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?,'export',?,'pending',NULL,?,?)").run(project,operationId,JSON.stringify({version,owner}),maxBytes,Date.now());
+        capacity();if(reservedBytes()+maxBytes>maxTotalBytes)throw new Error("Recovery archive byte capacity is full.");
+        const inserted=internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?,'export',?,'pending',NULL,?,?)").run(project,operationId,JSON.stringify({version,owner}),maxBytes,Date.now());
+        if(Number(inserted.changes)!==1)throw new Error("Recovery reservation acknowledgment changed.");
       }else{
-        const operation=internal.prepare("SELECT kind,fingerprint,state FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,operationId)!;
-        if(operation.kind!=="export"||operation.state!=="pending"||operation.fingerprint!==JSON.stringify({version,owner}))throw new Error("Recovery export retry conflict.");
+        reservedBytes();const operation=internal.prepare("SELECT kind,fingerprint,state,reserved_bytes FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,operationId)!;
+        if(operation.kind!=="export"||operation.state!=="pending"||operation.fingerprint!==JSON.stringify({version,owner})||operation.reserved_bytes!==maxBytes)throw new Error("Recovery export retry conflict.");
       }
-      internal.prepare("UPDATE clank_platform_pitr_policies SET pending=?,lease=?,lease_until=?,error=NULL WHERE project=? AND version=?").run(operationId,lease,Date.now()+120000,project,version);
+      const leaseUntil=Date.now()+120000,claimed=internal.prepare("UPDATE clank_platform_pitr_policies SET pending=?,lease=?,lease_until=?,error=NULL WHERE project=? AND version=?").run(operationId,lease,leaseUntil,project,version),retained=row(project),intent=internal.prepare("SELECT kind,state,fingerprint,reserved_bytes FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,operationId);
+      synchronous(assertCurrent);assertOwner(project,owner);
+      if(Number(claimed.changes)!==1||!retained||retained.owner!==owner||retained.version!==version||retained.enabled!==1||retained.pending!==operationId||retained.lease!==lease||retained.lease_until!==leaseUntil||intent?.kind!=="export"||intent.state!=="pending"||intent.fingerprint!==JSON.stringify({version,owner})||intent.reserved_bytes!==maxBytes)throw new Error("Recovery reservation acknowledgment changed.");
     });
     let key:Uint8Array|undefined;const cancellation=new AbortController();cancellations.add(cancellation);
     const deadline=setTimeout(()=>cancellation.abort(new Error("Recovery export deadline exceeded.")),30000);deadline.unref?.();

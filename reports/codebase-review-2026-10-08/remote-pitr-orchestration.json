@@ -39,7 +39,6 @@
   "scope": "Native provider/controller and authenticated platform restore integration verified on Node 22 and 26, including killed source/controller processes and original lease expiration. Private console workflow implemented with focused tests. Complete feature 10 acceptance remains pending.",
   "pending": [
     "Actual recovery browser flows, keyboard/focus/mobile and live access loss",
-    "Read-only MCP recovery inspection and browser restore preparation",
     "Canonical documentation/offline HTTP MCP verification and complete ordinary-user release gates",
     "Fresh hosted checks and normal protected expected-head merge"
   ],
@@ -90,5 +89,71 @@
       "newDiagnostics": 0,
       "unchangedBaseline": 163
     }
+  },
+  "consoleFocusedIntegration": {
+    "source": {
+      "head": "d7eb6c11353a340f3de930b1f73cabefe2e06a98",
+      "tree": "423ebe5c9aeeb19f26344e0786330c9cbb506cf3",
+      "tarSha256": "54c8b5672820a6fc00427d74f6d7ac924dacfe0927c9584580e44940ceb0a7cc"
+    },
+    "ordinaryUid": 1000,
+    "scope": "Focused private recovery SDK/controller/public project restore/packed CLI and six console tests using a simulated DOM. Actual source volume loss, controller SIGKILL, unchanged native 120000 ms lease, same stopped destination, independent keys, native rollback and ignored policy/checkpoint/resolution updates, signed human sessions and current machine HTTP metadata. Does not include the subsequent uncommitted MCP changes, real browser verification, full release gates or hardware/production host certification. Feature 10 remains uncounted.",
+    "nodes": {
+      "26": {
+        "log": "remote-pitr-platform-node26-14.log",
+        "sha256": "6601c84c9f308f3d92e0673eebee3a5ae8b99a18d63e2000ae794cec72e27322",
+        "exit": 0,
+        "tests": 70,
+        "pass": 70,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "22": {
+        "log": "remote-pitr-platform-node22-14.log",
+        "sha256": "729214f22508a62191d96534a3b307b70ce6dc9f90ac1cd809ef163faeeb3feb",
+        "exit": 0,
+        "tests": 70,
+        "pass": 70,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "mcpFocusedIntegration": {
+    "source": {
+      "head": "c15770e43dfdbaf301d8e2f796f1b6cad678d4d1",
+      "tree": "2e5961b54a4bf100549f13d58426cbb1995d1c75",
+      "tarSha256": "b922efcaa6840fc7d3c455935e9ef4185d5eb2b43da0c2274055f22eda353567"
+    },
+    "ordinaryUid": 1000,
+    "scope": "Focused private recovery SDK/controller/public project restore/packed CLI and six simulated-DOM console tests. Includes actual HTTP stateless read-only MCP discovery/status/planning, current native machine read grants, foreign project denial, browser origin/CSRF denial and late request-body revocation; positive plan after source volume deletion leaves zero restore intents before explicit human REST restore. Includes actual source/controller SIGKILL and unchanged native 120000 ms lease. Excludes subsequent export-reservation changes, full release gates, actual recovery browser flows and production host/hardware certification. Feature 10 remains uncounted.",
+    "nodes": {
+      "26": {
+        "log": "remote-pitr-platform-node26-16.log",
+        "sha256": "3be84cf3845afdf91437d0c340d35a92efd6ef86834aea2489f0bcdaffd9eeee",
+        "exit": 0,
+        "tests": 71,
+        "pass": 71,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "22": {
+        "log": "remote-pitr-platform-node22-16.log",
+        "sha256": "aa90319cc9ecddc8255a7d40a0c98cd133cce74a5214c98a968a47a678b98403",
+        "exit": 0,
+        "tests": 71,
+        "pass": 71,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "browserVerification": {
+    "status": "pending",
+    "scope": "Owned disposable Linux provider fixture with actual platform API and native SQLite catalog. The testing browser displayed the ordinary sign-in form and corrected synthetic inputs, but no successful browser sign-in or recovery submission has been observed. No prepared browser credential or security bypass was used. Console interaction and device passkey verification are not counted as passed."
   }
 }

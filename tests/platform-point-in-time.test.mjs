@@ -113,6 +113,23 @@ test('bounded archive capacity refuses another native intent and preserves the a
   f.enable();const accepted=await f.capture();await assert.rejects(f.capture('second_checkpoint'),/checkpoint capacity/);assert.equal(f.resolutions,1);assert.equal(f.internal.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind=?').get('export').n,1);assert.equal(f.controller.archive('project_native',accepted.id,f.current).byteLength,accepted.bytes);
 },{maxArchivesPerProject:1}));
 
+test('ignored native export reservation writes roll back before provider lookup and preserve exact retry',async()=>fixture(async f=>{
+  f.enable();
+  for(const [name,statement] of [['intent',"BEFORE INSERT ON clank_platform_pitr_operations WHEN NEW.kind='export'"],['lease',"BEFORE UPDATE OF lease ON clank_platform_pitr_policies WHEN NEW.lease IS NOT NULL"]]){
+    f.internal.exec('CREATE TRIGGER ignore_reservation '+statement+' BEGIN SELECT RAISE(IGNORE); END;');
+    await assert.rejects(f.capture(),/reservation acknowledgment changed/,name);assert.equal(f.resolutions,0);assert.equal(f.controller.policy('project_native').pendingOperationId,null);assert.equal(f.internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind='export'").get().n,0);assert.equal(f.controller.checkpoints('project_native').length,0);f.internal.exec('DROP TRIGGER ignore_reservation');
+  }
+  assert.equal((await f.capture()).sequence,3);assert.equal(f.resolutions,1);assert.equal(pointInTimeReceiptCount(f.node),1);
+}));
+
+test('invalid native byte reservations cannot subtract from archive capacity or start a provider export',async()=>fixture(async f=>{
+  f.enable();f.internal.prepare('UPDATE clank_platform_pitr_operations SET reserved_bytes=-1 WHERE id=?').run('configure_native_01');
+  await assert.rejects(f.capture(),/Invalid retained recovery byte reservation/);assert.equal(f.resolutions,0);assert.equal(f.controller.policy('project_native').pendingOperationId,null);assert.equal(f.controller.checkpoints('project_native').length,0);assert.equal(f.internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind='export'").get().n,0);
+  f.internal.prepare('UPDATE clank_platform_pitr_operations SET reserved_bytes=0 WHERE id=?').run('configure_native_01');const accepted=await f.capture();assert.equal(accepted.sequence,3);assert.equal(f.resolutions,1);
+  f.internal.prepare('UPDATE clank_platform_pitr_operations SET reserved_bytes=0 WHERE id=?').run(accepted.operationId);await assert.rejects(f.capture('second_checkpoint'),/Invalid retained recovery byte reservation/);assert.equal(f.resolutions,1);assert.equal(f.controller.checkpoints('project_native').length,1);
+  f.internal.prepare('UPDATE clank_platform_pitr_operations SET reserved_bytes=? WHERE id=?').run(accepted.bytes,accepted.operationId);await assert.rejects(f.capture('second_checkpoint'),/archive byte capacity/);assert.equal(f.resolutions,1);assert.equal(f.controller.archive('project_native',accepted.id,f.current).byteLength,accepted.bytes);
+},{maxTotalArchiveBytes:1024*1024}));
+
 test('corrupted encrypted catalog bytes refuse replay without changing accepted receipts or the retained horizon',async()=>fixture(async f=>{
   f.enable();const accepted=await f.capture(),before=f.controller.policy('project_native');f.internal.prepare('UPDATE clank_platform_pitr_archives SET contents=? WHERE id=?').run(new Uint8Array([1,2,3]),accepted.id);
   await assert.rejects(f.capture(),/missing or corrupt/);assert.throws(()=>f.controller.archive('project_native',accepted.id,f.current),/missing or corrupt/);assert.deepEqual(f.controller.policy('project_native'),before);assert.equal(f.resolutions,1);
