@@ -20,6 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./project-slo": { "types": "./dist/project-slo.d.ts", "import": "./dist/project-slo.js" },
     "./component-harness": { "types": "./dist/component-harness.d.ts", "import": "./dist/component-harness.js" },
     "./retention-administration": { "types": "./dist/retention-administration.d.ts", "import": "./dist/retention-administration.js" },
     "./point-in-time": { "types": "./dist/point-in-time.d.ts", "import": "./dist/point-in-time.js" },

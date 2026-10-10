@@ -6139,6 +6139,7 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     assert.deepEqual(ownerDetail.access, {
       role: "owner",
       canUseIncidents: true,
+      canManageSlos: true,
       canDelete: true,
       canOperateJobs: true,
       canManageRuntime: true,
@@ -6146,6 +6147,7 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     assert.deepEqual(developerDetail.access, {
       role: "developer",
       canUseIncidents: false,
+      canManageSlos: false,
       canDelete: false,
       canOperateJobs: true,
       canManageRuntime: true,
@@ -6186,6 +6188,7 @@ test("site deletion is admin-only, path-safe, auditable, and releases every mana
     assert.deepEqual(adminDetail.access, {
       role: "admin",
       canUseIncidents: true,
+      canManageSlos: true,
       canDelete: true,
       canOperateJobs: true,
       canManageRuntime: true,
@@ -7196,8 +7199,9 @@ test("platform signup defaults to one-time first-account bootstrap", async () =>
     assert.match(signedInHtml, /--bg:var\(--clank-canvas\);--panel:var\(--clank-surface\)/);
     assert.match(signedInHtml, /class="icon-sprite"[^>]*><defs>\s*<symbol id="nav-icon-overview"/);
     assert.match(signedInHtml, /\.nav-icon\{width:18px;height:18px;display:flex;align-items:center;justify-content:center;flex:0 0 18px;/);
-    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 18);
+    assert.equal((signedInHtml.match(/<span class="nav-icon"><svg aria-hidden="true"><use href="#nav-icon-[^"]+"><\/use><\/svg><\/span>/g) ?? []).length, 19);
     assert.match(signedInHtml, /data-project-tab="incidents"/);
+    assert.match(signedInHtml, /data-project-tab="slo"/);
     assert.doesNotMatch(signedInHtml, /<span class="nav-icon">[^<]/);
     assert.match(signedInHtml, /id="nav-usage" href="\/usage"/);
     assert.match(signedInHtml, /class="table mobile-card-table usage-table"/);

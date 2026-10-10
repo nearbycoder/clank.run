@@ -19,7 +19,7 @@ export declare class ProjectIncidentError extends Error {
   readonly code:string;
   constructor(status:number,code:string,message:string);
 }
-export declare function openProjectIncidents(sql:SQLiteInternal,options:PlatformIncidentOptions,hooks:{release(projectId:string,releaseId:string):IncidentRelease|null;alert(projectId:string,id:string):{readonly state:"open"|"resolved";readonly observedAt:number}|null}):Promise<{
+export declare function openProjectIncidents(sql:SQLiteInternal,options:PlatformIncidentOptions,hooks:{release(projectId:string,releaseId:string):IncidentRelease|null;alert(projectId:string,id:string):{readonly state:"open"|"resolved"|"unknown";readonly observedAt:number}|null}):Promise<{
   close():void;
   owners(authority:IncidentAuthority):readonly ProjectIncidentOwner[];
   list(projectId:string,authority:IncidentAuthority,query:URLSearchParams):ProjectIncidentPage;

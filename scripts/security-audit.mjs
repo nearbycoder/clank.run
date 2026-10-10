@@ -181,7 +181,8 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // The 6 MiB byte ceiling remains unchanged; no file headroom is reserved.
 // Proposal #273 adds only the optional fleet module and its declaration.
 // Proposal #300 adds the incident client/controller and their declarations.
-if ((packResult?.entryCount ?? 0) > 409) fail("Published package unexpectedly exceeds 409 files.");
+// Proposal #302 adds the SLO client/controller and their declarations.
+if ((packResult?.entryCount ?? 0) > 413) fail("Published package unexpectedly exceeds 413 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 

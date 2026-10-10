@@ -1,6 +1,7 @@
 export { renderAgentActivity } from "./agent-activity.ts";
 export type { AgentActivityOptions, AgentActivity, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.ts";
 export * from "./offline.ts";
+export * from "./project-slo.ts";
 export type { MutationReceiptOptions } from "./mutation-receipts.ts";
 export * from "./notifications.ts";
 export * from "./core.ts";

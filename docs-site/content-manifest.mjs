@@ -129,7 +129,8 @@ export const groups = [
       ["conformance", "docs/conformance.md"],
       ["recovery", "docs/recovery.md"],
       ["operational-recovery", "docs/operational-recovery.md"],
-      ["project-incidents", "docs/project-incidents.md"]
+      ["project-incidents", "docs/project-incidents.md"],
+      ["service-objectives", "docs/service-objectives.md"]
     ]
   },
   {

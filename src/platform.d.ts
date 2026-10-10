@@ -311,6 +311,8 @@ export interface PlatformBillingOptions {
 }
 export interface ClankPlatformOptions {
   incidents?: import("./platform-incidents.js").PlatformIncidentOptions;
+  /** Bounded native-ingress completion objectives and durable burn metadata. */
+  slos?: import("./platform-slo.js").PlatformSloOptions;
   /**
    * Private operator certificates for co-located, loopback provider nodes.
    * Every provider promotion requires a current report under its exact node ID.

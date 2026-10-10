@@ -5,6 +5,7 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 ## Unreleased
 
 - Add persistent project incidents with current-access-fenced ownership, recovery notes, resolution, release/error/trace/job/workflow/alert references, bounded readonly diagnostic adapters and exact retry receipts. The native console and shared browser client use the same contract; inactive release cleanup retains safe context.
+- Add project service objectives with explicit native-ingress completion coverage, exact request/latency budget arithmetic, retained burn alerts, current-access-fenced policies and exact retry receipts. Restarts, missing measurements and overlapping collectors cannot establish compliance; native console edits preserve their original expected version.
 
 - Reduce framework release size by removing only leading indentation in known
   JavaScript code regions. Preserve comments, licenses, literals and line endings;
