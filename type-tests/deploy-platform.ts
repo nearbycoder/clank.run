@@ -11,6 +11,27 @@ import {
   type ObjectStore,
   type PlatformRunnerOptions,
 } from "@clank.run/framework";
+import type {
+  DockerDeploymentRuntimeCandidate,
+  DockerDeploymentRuntimeLaunchInput,
+} from "@clank.run/framework/provider-docker";
+
+declare const preparedDockerInput: DockerDeploymentRuntimeLaunchInput;
+const isolatedDockerInput: DockerDeploymentRuntimeLaunchInput = {
+  ...preparedDockerInput,
+  isolatedReadOnly: true,
+};
+void isolatedDockerInput;
+const invalidIsolatedDockerInput: DockerDeploymentRuntimeLaunchInput = {
+  ...preparedDockerInput,
+  // @ts-expect-error isolation cannot be enabled with a string or a guessed profile
+  isolatedReadOnly: "true",
+};
+void invalidIsolatedDockerInput;
+declare const isolatedDockerCandidate: DockerDeploymentRuntimeCandidate;
+isolatedDockerCandidate.isolatedReadOnly satisfies true | undefined;
+// @ts-expect-error candidate identity and isolation cannot be edited by a consumer
+isolatedDockerCandidate.isolatedReadOnly = true;
 
 const config: DeploymentConfig = parseDeploymentConfig({
   version: 1,
