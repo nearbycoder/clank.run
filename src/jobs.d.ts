@@ -153,12 +153,27 @@ export interface WorkflowStepContext<Input> {
     readonly input: Input;
     result<Step extends AnyWorkflowStepDefinition>(step: Step): WorkflowStepOutput<Step>;
 }
+export interface WorkflowCompensationContext<Input, Output> {
+  readonly input: Input;
+  readonly workflowId: string;
+  readonly step: string;
+  readonly forwardJobId: string;
+  /** Pass this stable occurrence key to the provider's durable idempotency contract. */
+  readonly operationKey: string;
+  readonly outcome: Readonly<{ state: "succeeded"; result: Output extends void ? null : Output } | { state: "failed" | "cancelled" }>;
+}
+
+export type WorkflowCompensationDefinition<Input, Output, Job extends AnyJobDefinition = AnyJobDefinition> =
+  Readonly<{ job: Job; args: (context: WorkflowCompensationContext<Input, Output>) => JobInput<Job> }>
+  | Readonly<{ manual: string }>;
+
 export interface WorkflowStepDefinition<Input, Job extends AnyJobDefinition> {
     readonly kind: "workflow-step";
     readonly job: Job;
     readonly needs: readonly AnyWorkflowStepDefinition[];
     readonly description?: string;
     readonly args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
+    readonly compensate?: WorkflowCompensationDefinition<Input, JobOutput<Job>>;
 }
 export interface WorkflowWaitRequest { readonly title: string; readonly data?: unknown; }
 export interface WorkflowWaitStepDefinition<Input, Output> {
@@ -221,10 +236,11 @@ export interface WorkflowGraphBuilder<Input> {
     request: (context: WorkflowStepContext<Input>) => WorkflowWaitRequest;
   }): WorkflowWaitStepDefinition<Input, Output>;
 
-    step<Job extends AnyJobDefinition>(job: Job, definition: {
+    step<Job extends AnyJobDefinition, CompensationJob extends AnyJobDefinition = AnyJobDefinition>(job: Job, definition: {
         needs?: readonly AnyWorkflowStepDefinition[];
         description?: string;
         args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
+        compensate?: WorkflowCompensationDefinition<Input, JobOutput<Job>, CompensationJob>;
     }): WorkflowStepDefinition<Input, Job>;
 }
 export declare function defineWorkflow<
@@ -320,7 +336,30 @@ export interface StoredWorkflowRun {
     readonly completedAt: number | null;
     readonly cancelRequested: boolean;
     readonly steps: readonly StoredWorkflowStep[];
+    readonly compensation?: StoredWorkflowCompensation;
 }
+export type WorkflowCompensationState = "dormant" | "waiting" | "running" | "succeeded" | "manual" | "not-needed";
+export type WorkflowCompensationStepState = "dormant" | "blocked" | "queued" | "running" | "succeeded" | "failed" | "manual" | "skipped";
+export interface StoredWorkflowCompensationStep {
+  readonly step: string;
+  readonly position: number;
+  readonly state: WorkflowCompensationStepState;
+  readonly job: string | null;
+  readonly jobId: string | null;
+  readonly forwardJobId: string | null;
+  readonly operationKey: string;
+  readonly result?: unknown;
+  readonly error?: string;
+  readonly updatedAt: number;
+  readonly completedAt: number | null;
+}
+export interface StoredWorkflowCompensation {
+  readonly state: WorkflowCompensationState;
+  readonly steps: readonly StoredWorkflowCompensationStep[];
+  readonly updatedAt: number;
+  readonly completedAt: number | null;
+}
+
 export interface WorkflowListOptions {
     state?: WorkflowState;
     name?: string;
@@ -335,6 +374,7 @@ export interface WorkflowEvent {
     readonly createdAt: number;
 }
 export interface WorkflowPurgeOptions {
+    includeUnresolvedCompensations?: boolean;
     states?: readonly Extract<WorkflowState, "succeeded" | "failed" | "cancelled">[];
     before?: number;
     limit?: number;

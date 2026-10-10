@@ -4,6 +4,12 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add explicit workflow compensation with typed idempotent cleanup jobs or manual barriers.
+  Reserve bounded recovery capacity with the run, freeze stable cleanup occurrences and arguments,
+  execute in reverse dependency order after forward attempts settle, and retain original failure
+  alongside recovery progress. Fence changed definitions and stale workers; protect unresolved
+  evidence and active job references from retention and operator purge.
+
 - Add typed durable decision/event waits to workflow graphs. Persist bounded requests,
   deadlines and exact retry receipts without holding worker leases. Require current
   reviewed-action execution for human decisions, fence resume tokens by current policy,
