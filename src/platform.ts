@@ -7049,8 +7049,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (ingress && normalizeHostname(url.hostname) !== publicHostname) {
         return await ingress.handle(request);
       }
-      if(normalizeHostname(url.hostname)!==publicHostname)return problem(404,'NOT_FOUND','Platform host not found.');
       const statusAdmin=/^\/projects\/([A-Za-z0-9_-]{8,128})\/status$/u.exec(url.pathname),statusSubscriber=/^\/status\/([a-z][a-z0-9-]{2,63})\/preferences$/u.exec(url.pathname);
+      if(normalizeHostname(url.hostname)!==publicHostname&&(statusAdmin||/^\/(?:api\/)?status(?:\/|$)/u.test(url.pathname)||/^\/api\/projects\/[A-Za-z0-9_-]{8,128}\/status-page(?:\/|$)/u.test(url.pathname)))return problem(404,'NOT_FOUND','Status host not found.');
       if((statusAdmin||statusSubscriber)&&(request.method==='GET'||request.method==='POST')){
         if(url.search)throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Status forms do not accept query fields.');
         if(request.headers.has('authorization'))throw new CustomerStatusError(403,'STATUS_HUMAN_REQUIRED','Use a current human browser session.');

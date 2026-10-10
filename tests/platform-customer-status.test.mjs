@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {step} from './fixtures/customer-status-passkey.mjs';
 import {fixture} from './fixtures/platform-environment-fixture.mjs';
 import {reservePlatformTestPorts} from './fixtures/platform-test-ports.mjs';
+import {openPlatform} from '../dist/platform.js';
 
 async function setup(t,subprocess=false,extra={}){
  const ports=await reservePlatformTestPorts();t.after(()=>ports.release());
@@ -19,6 +20,24 @@ async function setup(t,subprocess=false,extra={}){
  return {...f,db,path,configuration,create,review,commit,publicPage};
 }
 const copy={title:'Checkout is recovering',message:'Try the checkout again shortly.',state:'monitoring',components:['checkout']};
+test('a replaced status controller preserves unrelated routes and current domain reservations without restoring its publication authority',async t=>{
+ const f=await setup(t,false,dnsOptions(async()=>[])),created=await f.create();
+ const domain=(await f.call(f.path+'/domains/begin',{hostname:'retained.customer.test',expectedVersion:created.version,operationId:'status_replacement_domain_01'},201)).domain;
+ const second=await openPlatform(f.options);t.after(()=>second.close());
+ assert.equal((await f.handle(new Request(f.options.publicUrl+'/healthz'))).status,200);
+ assert.equal((await f.handle(new Request(f.options.publicUrl+'/livez'))).status,200);
+ await f.call('/api/dashboard',undefined,200,'GET');
+ await f.call(`/api/projects/${f.staging.id}/domains`,{hostname:domain.hostname},409);
+ await f.call(f.path,undefined,409,'GET');
+ assert.equal((await second.handle(new Request('https://unknown.customer.test/api/status/customer-health'))).status,404);
+ assert.equal((await second.handle(new Request('https://'+domain.hostname+'/api/dashboard'))).status,404);
+});
+test('status routes require the canonical host without changing legacy non-ingress health routing',async t=>{
+ const f=await setup(t,false,{ingress:undefined});
+ assert.equal((await f.handle(new Request('https://unrelated.customer.test/healthz'))).status,200);
+ for(const path of ['/status/customer-health','/status/customer-health/preferences','/api/status/customer-health',f.path,`/projects/${f.development.id}/status`])
+  assert.equal((await f.handle(new Request('https://unrelated.customer.test'+path))).status,404,path);
+});
 test('native status publication requires actual recent assurance and public HTTP never copies a private incident',async t=>{
  const f=await setup(t),password=await f.account('status-password@example.test');
  const member={...f.owner};f.db.prepare("UPDATE clank_auth_sessions SET authentication_method='password',authenticated_at=0 WHERE user_id=?").run(f.owner.user.id);
