@@ -72,6 +72,7 @@ export const groups = [
       ["conversational-build", "docs/conversational-build.md"],
       ["workbench", "docs/workbench.md"],
       ["governance", "docs/governance.md"],
+      ["approval-quorums", "docs/approval-quorums.md"],
       ["browser-journeys", "docs/browser-journeys.md"],
       ["admin-studio", "docs/admin-studio.md"],
       ["blueprints", "docs/blueprints.md"],

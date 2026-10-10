@@ -33,6 +33,8 @@ export interface SQLiteInternal {
     writeScoped<Value>(userId: string | null, handler: (db: import("./backend.js").WriteDatabase<any>) => Value): Value;
     /** Capture selective dependencies inside the current write transaction. */
     readTrackedScoped<Value>(userId: string | null, handler: (db: import("./backend.js").ReadDatabase<any>) => Value): import("./backend.js").TrackedResult<Value>;
+    /** Pending native mutations before the journal flush. */
+    readDependenciesChanged(dependencies: readonly { readonly table: string; readonly id?: string; readonly ownerId?: string | null }[]): boolean;
     /** Retire persisted and pending snapshots of a record deleted in this write transaction. */
     purgeDeletedHistory(table: string, id: string): void;
 }
