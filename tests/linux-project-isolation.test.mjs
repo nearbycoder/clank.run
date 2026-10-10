@@ -1,11 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, statfs } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, statfs, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createLinuxDockerNetworkPlan, enforceLinuxProjectDiskQuota } from '../dist/linux-project-isolation.js';
+import { createLinuxDockerNetworkPlan, enforceLinuxProjectDiskQuota, removeLinuxDockerNetworkPolicy } from '../dist/linux-project-isolation.js';
+
+test('nft cleanup verifies exact ownership and absence, including retries and lost delete acknowledgments', {skip:process.platform!=='linux'}, async()=>{
+  const root=await mkdtemp(join(tmpdir(),'clank-nft-cleanup-'));
+  const plan=await createLinuxDockerNetworkPlan('cleanup-provider','cleanup_project',{allowCidrs:[]}),statePath=join(root,'state.json'),executable=join(root,'nft.mjs');
+  const other={family:'inet',name:'unrelated_operator_policy',comment:'leave-intact'};
+  try {
+    await writeFile(executable,`#!/usr/bin/env node
+import {readFile,writeFile} from 'node:fs/promises';
+const file=${JSON.stringify(statePath)},state=JSON.parse(await readFile(file,'utf8')),args=process.argv.slice(2);
+state.commands.push(args);await writeFile(file,JSON.stringify(state));
+if(args.join(' ')==='-j list tables'){
+ if(state.mode==='list-failure'){process.stderr.write('controlled listing failure');process.exit(1);}
+ process.stdout.write(JSON.stringify(state.mode==='malformed'?{nftables:[{table:{name:state.table.name}}]}:{nftables:[{table:state.other},...(state.present?[{table:state.table}]:[])]}));
+}else if(args.join(' ')==='-j list table inet '+state.table.name){process.stdout.write(JSON.stringify({nftables:state.present?[{table:state.table}]:[]}));}
+else if(args.join(' ')==='delete table inet '+state.table.name){if(state.mode!=='retained'){state.present=false;await writeFile(file,JSON.stringify(state));}if(state.mode==='uncertain'){process.stderr.write('controlled lost delete acknowledgment');process.exit(2);}}
+else process.exit(3);
+`,{mode:0o700});
+    for(const mode of ['normal','absent','uncertain','foreign','retained','malformed','list-failure']) {
+      const original={mode,present:mode!=='absent',table:{family:'inet',name:plan.table,comment:mode==='foreign'?'another-owner':plan.ownership},other,commands:[]};
+      await writeFile(statePath,JSON.stringify(original));
+      if(['normal','absent','uncertain'].includes(mode)){
+        await removeLinuxDockerNetworkPolicy(plan,executable);await removeLinuxDockerNetworkPolicy(plan,executable);
+        const state=JSON.parse(await readFile(statePath,'utf8'));assert.equal(state.present,false);assert.equal(state.commands.filter(args=>args[0]==='delete').length,mode==='absent'?0:1);
+      }else{
+        await assert.rejects(removeLinuxDockerNetworkPolicy(plan,executable),mode==='foreign'?/ownership/:mode==='retained'?/did not converge/:mode==='malformed'?/verify.*absence/:/listing failure/);
+        const state=JSON.parse(await readFile(statePath,'utf8'));assert.equal(state.present,true);assert.equal(state.commands.filter(args=>args[0]==='delete').length,mode==='retained'?1:0);
+      }
+      assert.deepEqual(JSON.parse(await readFile(statePath,'utf8')).other,other);
+    }
+  }finally{await rm(root,{recursive:true,force:true});}
+});
 
 test('outbound policies strictly validate routes and pinned hostnames', async () => {
   const plan = await createLinuxDockerNetworkPlan('provider', 'project', { allowCidrs: ['1.1.1.0/24'], hosts: { 'api.example.com': '1.1.1.1' } });

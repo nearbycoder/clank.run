@@ -17,6 +17,32 @@ import type {
   DockerDeploymentRuntimeCandidate,
   DockerDeploymentRuntimeLaunchInput,
 } from "@clank.run/framework/provider-docker";
+import type { DeploymentProviderDataApplyInput } from "@clank.run/framework/provider-data";
+import type { DeploymentProviderCanaryBinding, DeploymentProviderCanaryController, DeploymentProviderCanaryOptions, DeploymentProviderService } from "@clank.run/framework/provider-service";
+
+declare const canaryPrimary: DeploymentProviderCanaryBinding;
+declare const providerDataInput: DeploymentProviderDataApplyInput;
+declare const canaryService: DeploymentProviderService;
+const codeOnlyProviderInput: DeploymentProviderDataApplyInput = {...providerDataInput,codeOnly:true};
+void codeOnlyProviderInput;
+const invalidCodeOnlyProviderInput: DeploymentProviderDataApplyInput = {
+  ...providerDataInput,
+  // @ts-expect-error code-only verification requires a boolean
+  codeOnly:"true",
+};
+void invalidCodeOnlyProviderInput;
+const providerCanaryOptions: DeploymentProviderCanaryOptions = {readPaths:["/healthz"],maxConcurrent:2,maxOperations:8,maximumDurationMs:60_000};
+void providerCanaryOptions;
+void canaryService.canaries?.prepare({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_01",runtime:providerDataInput.runtime,signal:providerDataInput.signal});
+// @ts-expect-error an admitted canary must have an explicit abort signal
+void canaryService.canaries?.prepare({primary:canaryPrimary,controllerEpoch:3,operationId:"canary_typed_02",runtime:providerDataInput.runtime});
+declare const preparedProviderCanary: Awaited<ReturnType<DeploymentProviderCanaryController["prepare"]>>;
+preparedProviderCanary.route.generation satisfies 1;
+preparedProviderCanary.route.token satisfies string;
+// @ts-expect-error callers cannot substitute an admitted route credential
+preparedProviderCanary.route.token="changed";
+// @ts-expect-error approved public paths remain read-only
+preparedProviderCanary.route.readPaths.push("/private");
 
 declare const preparedDockerInput: DockerDeploymentRuntimeLaunchInput;
 const isolatedDockerInput: DockerDeploymentRuntimeLaunchInput = {
