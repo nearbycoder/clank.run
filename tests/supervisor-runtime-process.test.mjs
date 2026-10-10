@@ -79,7 +79,14 @@ for(const interruption of ['SIGKILL','SIGSTOP'])test(`existing standby restores 
   const current=await second.status();assert.equal(current.status.state,'leader');assert.equal(current.status.epoch,2);assert.deepEqual(current.errors,[]);
   const afterResponse=await probe(second);assert.equal(afterResponse.status,200);const after=await afterResponse.json();assert.equal(after.value,before.value);assert.notEqual(after.pid,before.pid);
   until=Date.now()+10000;while(writers.all().length!==2){assert.ok(Date.now()<until,'A single replacement job worker must resume.');await sleep(25);}assert.equal(count.get(old[0]).count,oldCount);
-  let backups;do{backups=await json(second,`/api/projects/${project.id}/backups`,undefined,session);if(backups.backups.length)break;assert.ok(Date.now()<until,'A due durable backup must run under the new owner.');await sleep(25);}while(true);
+  // The encrypted archive is visible before createBackup resolves and the
+  // scheduler records its durable completion. Observe that acknowledgment too.
+  until=Date.now()+10000;let backups;do{backups=await json(second,`/api/projects/${project.id}/backups`,undefined,session);
+    assert.ok(backups.backups.length<=1,'The replacement owner must publish only one backup.');
+    assert.equal(backups.automation.lastError,null);
+    if(backups.backups.length===1&&backups.automation.lastBackupId===backups.backups[0].id&&!backups.automation.running)break;
+    assert.ok(Date.now()<until,'The new owner must acknowledge the due durable backup.');await sleep(25);
+  }while(true);
   assert.equal(backups.backups.length,1);assert.equal(backups.backups[0].reason,'automatic scheduled backup');assert.equal(backups.automation.lastBackupId,backups.backups[0].id);assert.equal(backups.automation.lastError,null);
   const encrypted=await readFile(join(f.dataDirectory,'projects',project.id,'recovery',backups.backups[0].id,'database.enc'));assert.equal(encrypted.includes(Buffer.from('retained tenant data')),false);
   await sleep(150);assert.equal(writers.all().length,2);assert.equal(count.get(old[0]).count,oldCount);assert.equal((await json(second,`/api/projects/${project.id}/backups`,undefined,session)).backups.length,1);
