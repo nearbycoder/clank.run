@@ -82,3 +82,4 @@ export type { ManagedCanaryStage, ManagedCanaryOptions, ManagedCanaryReport } fr
 
 export * from "./openapi.js";
 export * from "./translation-review.js";
+export * from "./service-accounts.js";
