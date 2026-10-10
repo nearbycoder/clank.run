@@ -58,6 +58,8 @@ export interface ReviewedActionsOptions {
   readonly retentionMs?: number;
   /** Best-effort wakeup only. Poll durable inbox/events after process restarts. */
   readonly onChange?: (event: ReviewedApprovalEvent) => void;
+  /** Current server admission, repeated inside each guarded read/write transaction. */
+  readonly authorizeCaller?: (current: AuthRequest<any>) => undefined;
 }
 export interface ReviewedActions {
   readonly tools: readonly McpTool<AuthRequest<any> | null>[];

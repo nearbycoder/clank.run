@@ -312,6 +312,7 @@ export interface PlatformBillingOptions {
     pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
+  organizationSecurity?: {readonly operatorRecovery?: boolean};
   serviceAccounts?: PlatformServiceAccountOptions;
   /**
    * Private operator certificates for co-located, loopback provider nodes.

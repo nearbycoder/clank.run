@@ -1,3 +1,4 @@
+import type {OrganizationSecurityPolicyOptions, OrganizationSecurityPolicyController} from "./organization-security-policy.js";
 import { createLiveReplayStore, applyLiveSplice, type LiveResumeOptions } from "./live-resume.js";
 import type { DatabaseQueryDiagnostic } from "./query-advisor.js";
 import type { AgentActivityOptions, AgentActivityFilter, AgentActivitySnapshot } from "./agent-activity.js";
@@ -491,9 +492,11 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
   inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
     inspectAgentActivity(filter?: AgentActivityFilter): AgentActivitySnapshot;
     readonly reviewedActions: ReviewedActions | undefined;
+  readonly organizationSecurity: OrganizationSecurityPolicyController | undefined;
     close(): void;
 }
 export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extends SQLiteOptions {
+  organizationSecurity?: {readonly organizationId: string; readonly policy: OrganizationSecurityPolicyOptions};
   /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
   liveResume?: LiveResumeOptions;
     agentActivity?: AgentActivityOptions;

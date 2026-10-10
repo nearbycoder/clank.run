@@ -113,6 +113,8 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
     sql.exec("CREATE TABLE IF NOT EXISTS clank_sso_unlinks (user_id TEXT NOT NULL, key TEXT NOT NULL, input TEXT NOT NULL, receipt TEXT NOT NULL, PRIMARY KEY(user_id,key))");
     sql.exec("CREATE TABLE IF NOT EXISTS clank_sso_revocations (organization TEXT NOT NULL, issuer TEXT NOT NULL, subject TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(organization, issuer, subject))");
     sql.exec(`CREATE TABLE IF NOT EXISTS clank_sso_events (id INTEGER PRIMARY KEY AUTOINCREMENT, organization TEXT NOT NULL, user_id TEXT NOT NULL, event TEXT NOT NULL, at INTEGER NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS clank_sso_session_bindings(session_id TEXT NOT NULL REFERENCES clank_auth_sessions(id) ON DELETE CASCADE,
+      organization TEXT NOT NULL,user_id TEXT NOT NULL,identity_id TEXT NOT NULL,identity_version INTEGER NOT NULL,PRIMARY KEY(session_id,organization))`);
     // Publish the complete operator snapshot inside the schema/policy transaction.
     // Dedicated accounts and linking-disabled deployments need the same live fence.
     sql.exec("CREATE TABLE IF NOT EXISTS clank_sso_offboarding_credentials (organization TEXT PRIMARY KEY, issuer TEXT NOT NULL, fingerprint TEXT NOT NULL)");
@@ -309,6 +311,8 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
               if(existing) sql.prepare("UPDATE clank_sso_identities SET active=1,version=?,linked_at=? WHERE id=?").run(version,Date.now(),identityId);
               else sql.prepare("INSERT INTO clank_sso_identities(id,organization,issuer,subject,user_id,version,linked_at) VALUES(?,?,?,?,?,?,?)").run(identityId,provider.organizationId,provider.issuer,claims.sub,id,version,Date.now());
               advance(id,true);if (!scim.bind(provider.organizationId,provider.issuer,String(claims.sub),id)) sync(options.onProvision?.(id,provider.organizationId));
+              sql.prepare(`INSERT INTO clank_sso_session_bindings VALUES(?,?,?,?,?) ON CONFLICT(session_id,organization) DO UPDATE SET identity_id=excluded.identity_id,identity_version=excluded.identity_version`)
+                .run(current.session!.id,provider.organizationId,id,identityId,version);
               sql.prepare("UPDATE clank_sso_states SET identity_id=?,identity_version=?,code_hash=? WHERE state=? AND consumed=1").run(identityId,version,codeHash,stateHash);
               changes.record("__auth",id,id);audit(provider.organizationId,id,"linked");
             });
@@ -345,6 +349,22 @@ export function openOrganizationSso(database: SQLiteDatabase<any>, auth: AuthRun
           catch (error) { auth.revokeUserSessions(userId as AuthUserId); throw error; }
           if(Number(sql.prepare("SELECT generation FROM clank_sso_accounts WHERE user_id=?").get(userId)?.generation??0)!==generation || !sql.prepare("SELECT 1 FROM clank_sso_identities WHERE id=? AND version=? AND active=1").get(binding.id,binding.version) || sql.prepare("SELECT 1 FROM clank_sso_revocations WHERE organization=? AND issuer=? AND subject=?").get(provider.organizationId,provider.issuer,claims.sub)) {
             auth.revokeUserSessions(userId as AuthUserId);throw new AuthError("SSO_OFFBOARDED","This identity changed before the session was published.",403);
+          }
+          const issued = await session.clone().json() as {session?: {id?: string}};
+          try {sql.transaction(() => {
+            // Record authentication to this exact organization, not mere identity enrollment.
+            const current = issued.session?.id ? auth.refreshSession(issued.session.id) : null;
+            if (current?.user?.id !== userId || Number(sql.prepare("SELECT generation FROM clank_sso_accounts WHERE user_id=?").get(userId)?.generation??0)!==generation
+              || !sql.prepare("SELECT 1 FROM clank_sso_identities WHERE id=? AND version=? AND active=1").get(binding.id,binding.version)) throw new AuthError("SSO_OFFBOARDED","This identity changed before its session proof was published.",403);
+            sql.prepare("INSERT INTO clank_sso_session_bindings VALUES(?,?,?,?,?)").run(current.session!.id,provider.organizationId,userId,binding.id,binding.version);
+          });} catch (error) {
+            // A failed proof publication must not leave this unpublished session usable.
+            // Existing sessions belong to separate sign-in operations.
+            if (issued.session?.id) sql.transaction(changes => {
+              sql.prepare('DELETE FROM clank_auth_sessions WHERE id=? AND user_id=?').run(issued.session!.id!,userId);
+              changes.record('__auth',userId,userId);
+            });
+            throw error;
           }
           return new Response(null, { status: 303, headers: { ...headers, location: `${applicationOrigin}/`, "set-cookie": session.headers.get("set-cookie")! } });
         }

@@ -20,6 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./organization-security-policy": { "types": "./dist/organization-security-policy.d.ts", "import": "./dist/organization-security-policy.js" },
     "./service-accounts": { "types": "./dist/service-accounts.d.ts", "import": "./dist/service-accounts.js" },
     "./component-harness": { "types": "./dist/component-harness.d.ts", "import": "./dist/component-harness.js" },
     "./retention-administration": { "types": "./dist/retention-administration.d.ts", "import": "./dist/retention-administration.js" },

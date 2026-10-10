@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add opt-in organization security policy review, versioned changes, persistent enrollment grace and independent last-administrator recovery. Fence current browser, CLI and MCP authority, including held requests, exact refresh retries and direct reviewed actions.
+
 - Add opt-in dedicated organization service accounts with scoped expiring credentials, current machine authority, signed human administration, encrypted exact rotation receipts and explicit machine audit/budget attribution.
 
 - Revalidate the exact admitted credential and scope for held platform-token requests at current-authority boundaries.

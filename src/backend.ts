@@ -3,6 +3,7 @@ import type { DatabaseQueryDiagnostic } from "./query-advisor.ts";
 import { openAgentActivity, type AgentActivityOptions, type AgentActivityFilter, type AgentActivitySnapshot } from "./agent-activity.ts";
 import { openReviewedActions, type ReviewedActions, type ReviewedActionsOptions, type ReviewedRecordChange } from "./reviewed-actions.ts";
 import { openMutationReceipts, type MutationReceiptOptions } from "./mutation-receipts.ts";
+import {openOrganizationSecurityPolicies, assertOrganizationSecurityProtocol, type OrganizationSecurityPolicyOptions, type OrganizationSecurityPolicyController} from "./organization-security-policy.ts";
 import type { Tracer } from "./observability.ts";
 import { batch, signal, type Cleanup, type ReactiveSignal } from "./core.ts";
 import {
@@ -1950,6 +1951,7 @@ export interface BackendRuntime<
   /** First-class application buckets, when configured for this backend. */
   readonly buckets: BucketManager | undefined;
   readonly reviewedActions: ReviewedActions | undefined;
+  readonly organizationSecurity: OrganizationSecurityPolicyController | undefined;
   readonly version: number;
   /** Deterministic revision of the MCP-visible backend action contract. */
   readonly contractRevision: string | null;
@@ -1978,6 +1980,8 @@ export interface QueryDiagnostic {
 }
 
 export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extends SQLiteOptions {
+  /** One organization and the same native auth/control store. No implicit remote policy replication. */
+  organizationSecurity?: {readonly organizationId: string; readonly policy: OrganizationSecurityPolicyOptions};
   /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
   liveResume?: LiveResumeOptions;
   agentActivity?: AgentActivityOptions;
@@ -2100,6 +2104,14 @@ export async function openBackend<
       })
     : undefined;
   let authRuntime: AuthRuntime<AuthProfileOf<Auth>> | undefined;
+  let organizationSecurity: OrganizationSecurityPolicyController | undefined;
+  const authorizeOrganizationCaller = (current: AuthRequest<any> | null) => {
+    const internal=database[SQLITE_INTERNAL];
+    assertOrganizationSecurityProtocol(internal);
+    if(organizationSecurity) organizationSecurity.authorizeAuth(options.organizationSecurity!.organizationId,current);
+    else if(internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'").get()
+      && internal.prepare('SELECT 1 FROM clank_organization_security_policies LIMIT 1').get()) throw new AuthError('ORGANIZATION_POLICY_UNCONFIGURED','Reopen this backend with its organization security binding.',503);
+  };
   let activity: ReturnType<typeof openAgentActivity> | undefined;
   let reviewedActions: ReviewedActions | undefined;
   const activityRevisions = new WeakMap<Request, { beforeRevision: number; afterRevision: number; receiptId?: string; changes?: readonly ReviewedRecordChange[]; compensationAvailable?: boolean }>();
@@ -2113,11 +2125,23 @@ export async function openBackend<
           allowedOrigins: options.allowedOrigins,
         }) as AuthRuntime<AuthProfileOf<Auth>>
       : undefined;
+    assertOrganizationSecurityProtocol(database[SQLITE_INTERNAL]);
+    if (options.organizationSecurity) {
+      if (!authRuntime) throw new TypeError("Organization security requires authenticated application functions.");
+      organizationSecurity = openOrganizationSecurityPolicies(database, authRuntime, options.organizationSecurity.policy);
+    } else if (database[SQLITE_INTERNAL].prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_organization_security_policies' AND type='table'").get()
+      && database[SQLITE_INTERNAL].prepare("SELECT 1 FROM clank_organization_security_policies LIMIT 1").get()) throw new TypeError("Bind this backend to its persisted organization security policy before opening application admission.");
     if (options.reviewedActions) {
       if (!authRuntime) throw new TypeError("Reviewed actions require application authentication.");
-      reviewedActions = openReviewedActions(database, authRuntime, { allowedOrigins: options.allowedOrigins, ...options.reviewedActions, prefix: options.reviewedActions.prefix ?? `${prefix}/approvals` });
+      reviewedActions = openReviewedActions(database, authRuntime, { allowedOrigins: options.allowedOrigins, ...options.reviewedActions, prefix: options.reviewedActions.prefix ?? `${prefix}/approvals`, authorizeCaller(current) {
+        authorizeOrganizationCaller(current);
+        const result = options.reviewedActions!.authorizeCaller?.(current);
+        if (result !== undefined) throw new TypeError('Reviewed action admission must complete synchronously without a result.');
+      }});
     }
   } catch (error) {
+    organizationSecurity?.close();
+    authRuntime?.close();
     jobsRuntime?.close();
     if (!options.database) database.close();
     throw error;
@@ -2166,6 +2190,7 @@ export async function openBackend<
   };
 
   const authorize = (fn: AnyBackendFunction, auth: AuthRequest<any> | null) => {
+    authorizeOrganizationCaller(auth);
     if (fn.access !== "required") return;
     if (!auth?.user) throw new AuthError("UNAUTHENTICATED", "Authentication is required.", 401);
     if (definition.auth?.emailVerification.required) auth.requireVerified();
@@ -2205,7 +2230,7 @@ export async function openBackend<
     const diagnostic = queryDiagnostic(path);
     const diagnosticStarted = diagnostic ? performance.now() : 0;
     let tracked;
-    try { tracked = database.tracked((db) => fn.handler(handlerContext(db, auth, "query") as any, args), scopeFor(auth)); }
+    try { tracked = database.tracked((db) => {authorize(fn, auth); return fn.handler(handlerContext(db, auth, "query") as any, args);}, scopeFor(auth)); }
     finally { if (diagnostic) { diagnostic.runs++; diagnostic.durationMs = performance.now() - diagnosticStarted; } }
     assertSynchronous(tracked.value, "query");
     const value = finalizeBackendOutput(fn, tracked.value, maxResponseBytes);
@@ -2226,6 +2251,7 @@ export async function openBackend<
     const args = fn.args.parse(input ?? {});
     const value = database.transaction(
       (db) => {
+        authorize(fn, auth);
         const execute = () => {
           const output = fn.handler(handlerContext(db, auth, "mutation") as any, args);
           assertSynchronous(output, "mutation");
@@ -2318,6 +2344,7 @@ export async function openBackend<
       if (authRuntime && currentAuth?.session) {
         currentAuth = authRuntime.refreshSession(currentAuth.session.id) ?? anonymous;
       }
+      authorizeOrganizationCaller(currentAuth);
       return currentAuth;
     };
     return {
@@ -2363,6 +2390,7 @@ export async function openBackend<
     ? createProjectOAuth({
         database,
         auth: authRuntime,
+        organizationSecurity: organizationSecurity ? {organizationId: options.organizationSecurity!.organizationId, controller: organizationSecurity} : undefined,
         mcpPath,
         oauthPrefix,
         applicationName: agentTitle,
@@ -2612,6 +2640,7 @@ export async function openBackend<
   const runtime: BackendRuntime<Schema, Functions, Auth, Jobs> = {
     definition,
     reviewedActions,
+    organizationSecurity,
     database,
     auth: authRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["auth"],
     jobs: jobsRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["jobs"],
@@ -2651,6 +2680,28 @@ export async function openBackend<
     async handle(request) {
       ensureOpen();
       const url = new URL(request.url);
+      const securityRoute = new RegExp('^'+prefix+'/organizations/([A-Za-z0-9_-]{8,128})/security-policy(?:/(preview|recover))?$','u').exec(url.pathname);
+      if (securityRoute) {
+        try {
+          if (!organizationSecurity || securityRoute[1] !== options.organizationSecurity?.organizationId) return problem(404,'NOT_FOUND','Organization security is unavailable.');
+          if (url.search || request.headers.has('authorization')) return problem(403,'ORGANIZATION_POLICY_BROWSER','Use your current human browser session.');
+          if (options.verifyOrigin !== false && !requestOriginAllowed(request,{allowedOrigins:options.allowedOrigins})) return problem(403,'ORIGIN_MISMATCH','Cross-origin policy request rejected.');
+          const current = await authRuntime!.resolve(request), operation = securityRoute[2];
+          if (request.method === 'GET' && !operation) return Response.json({ok:true,policy:organizationSecurity.read(securityRoute[1]!,current)});
+          if (request.method !== 'POST') return problem(404,'NOT_FOUND','Organization security endpoint not found.');
+          await authRuntime!.verifyCsrf(request,current);
+          const input = await readJsonRequest(request,16*1024);
+          if (operation === 'preview') {
+            if (!input || typeof input !== 'object' || Object.keys(input).length !== 1 || !Object.hasOwn(input,'requirements')) return problem(422,'ORGANIZATION_POLICY_INPUT','Choose exact preview fields.');
+            return Response.json({ok:true,preview:organizationSecurity.preview(securityRoute[1]!,current,(input as any).requirements)});
+          }
+          const policy = operation === 'recover' ? organizationSecurity.recover(securityRoute[1]!,current,input as any) : organizationSecurity.change(securityRoute[1]!,current,input as any);
+          return Response.json({ok:true,policy});
+        } catch (error) {
+          if (error instanceof AuthError || error instanceof RequestInputError) return problem(error.status,error.code,error.message);
+          options.onError?.(error); return problem(500,'ORGANIZATION_POLICY_ERROR','Security policy operation failed. Refresh current state before retrying.');
+        }
+      }
       if (reviewedActions?.handles(request)) return reviewedActions.handle(request);
       if (oauth?.handles(request)) return oauth.handle(request);
       if (mcp && url.pathname === mcpPath) return mcp.handle(request);
@@ -2670,6 +2721,7 @@ export async function openBackend<
         const verifyCurrent = authRuntime && auth?.session ? () => {
           const current = authRuntime!.refreshSession(auth.session!.id);
           if (!current?.user || current.user.id !== auth.user?.id) throw new BucketError(401, "BUCKET_AUTH_REQUIRED", "Authentication is required.");
+          authorizeOrganizationCaller(current);
         } : undefined;
         return options.buckets.handle(request, {
           authenticated: Boolean(auth?.user),
@@ -2831,6 +2883,7 @@ export async function openBackend<
       replayStore?.clear();
       mcp?.close();
       jobsRuntime?.close();
+      organizationSecurity?.close();
       authRuntime?.close();
       options.buckets?.close();
       database.close();
