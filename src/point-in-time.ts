@@ -127,6 +127,7 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   if ((await fs.lstat(directory)).isSymbolicLink()) throw new Error("Recovery directory cannot be a symbolic link.");
   await fs.chmod(directory, 0o700);
+  const retainedRepositoryFiles = await fs.readdir(directory);
   const internal = database[SQLITE_INTERNAL];
   if (!internal.captureTransactions) throw new Error("Database does not support transactional recovery capture.");
   let connection!: SQLiteCaptureConnection;
@@ -141,8 +142,17 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
     connection.exec("BEGIN IMMEDIATE");
     try {
     if (connection.path === ":memory:") throw new Error("Recovery requires a file-backed SQLite database.");
-    connection.exec(`CREATE TABLE IF NOT EXISTS clank_pitr_state(id INTEGER PRIMARY KEY CHECK(id=1),epoch TEXT NOT NULL,key_id TEXT NOT NULL,key_hash TEXT NOT NULL,schema_hash TEXT NOT NULL,state_hash TEXT NOT NULL,sequence INTEGER NOT NULL,digest TEXT NOT NULL,committed_at INTEGER NOT NULL,base_id TEXT NOT NULL DEFAULT '',exported INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS clank_pitr_journal(sequence INTEGER PRIMARY KEY, envelope TEXT NOT NULL);`);
+    const retainedTables=connection.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('clank_pitr_state','clank_pitr_journal')").all();
+    if(retainedTables.length===0&&retainedRepositoryFiles.length!==0 || retainedTables.length!==0&&retainedTables.length!==2 || retainedTables.length===2
+      && (connection.prepare("SELECT count(*) AS n FROM clank_pitr_state").get()!.n!==1 || !connection.prepare("SELECT 1 FROM clank_pitr_state WHERE id=1").get()))throw new Error("Recovery retained epoch is missing or partial; preserve it for verified operator recovery.");
+    const remoteExports=connection.prepare("SELECT 1 AS found FROM sqlite_schema WHERE type='table' AND name='clank_pitr_remote_exports'").get();
+    const retainedState=retainedTables.length===2?connection.prepare("SELECT * FROM clank_pitr_state WHERE id=1").get():undefined;
+    if(retainedState?.remote_exports_protocol!==undefined&&(retainedState.remote_exports_protocol!==1||!remoteExports)||remoteExports&&retainedState?.remote_exports_protocol===undefined)throw new Error("Retained remote export protocol is missing or unsupported; preserve its evidence.");
+    if(retainedRepositoryFiles.includes("remote-exports"))throw new Error("Legacy remote export files require verified operator import; preserve their evidence.");
+    connection.exec(`CREATE TABLE IF NOT EXISTS clank_pitr_state(id INTEGER PRIMARY KEY CHECK(id=1),epoch TEXT NOT NULL,key_id TEXT NOT NULL,key_hash TEXT NOT NULL,schema_hash TEXT NOT NULL,state_hash TEXT NOT NULL,sequence INTEGER NOT NULL,digest TEXT NOT NULL,committed_at INTEGER NOT NULL,base_id TEXT NOT NULL DEFAULT '',exported INTEGER NOT NULL DEFAULT 0,remote_exports_protocol INTEGER NOT NULL DEFAULT 1);
+      CREATE TABLE IF NOT EXISTS clank_pitr_journal(sequence INTEGER PRIMARY KEY, envelope TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS clank_pitr_remote_exports(operation TEXT PRIMARY KEY,max_bytes INTEGER NOT NULL,max_entries INTEGER NOT NULL,archive TEXT NOT NULL,bytes INTEGER NOT NULL CHECK(bytes>0)) STRICT;`);
+    if(!connection.prepare("PRAGMA table_info(clank_pitr_state)").all().some(column=>column.name==="remote_exports_protocol"))connection.exec("ALTER TABLE clank_pitr_state ADD COLUMN remote_exports_protocol INTEGER NOT NULL DEFAULT 1");
     schema = shape();
     const current = stateDigest();
     const existing = connection.prepare("SELECT * FROM clank_pitr_state WHERE id=1").get();
@@ -247,28 +257,19 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
     if (closed || exporting) throw new Error("Recovery archive exporter is closed or busy.");
     exporting = true;
     try {
-      let receipts: string | undefined;
       if(bounds.operationId!==undefined){
         if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(bounds.operationId)) throw new TypeError("Invalid recovery export operationId.");
-        receipts=path.join(directory,"remote-exports");
-        await fs.mkdir(receipts,{recursive:true,mode:0o700});
-        if((await fs.lstat(receipts)).isSymbolicLink())throw new Error("Recovery receipt directory cannot be a symbolic link.");
-        const filename=path.join(receipts,bounds.operationId+".json");
-        const {constants}=await import("node:fs");let retained;
-        try{retained=await fs.open(filename,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);}catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+        if(state().remote_exports_protocol!==1)throw new Error("Retained remote export protocol is unsupported.");
+        assertSealed();
+        const retained=connection.prepare("SELECT max_bytes,max_entries,archive,bytes FROM clank_pitr_remote_exports WHERE operation=?").get(bounds.operationId);
         if(retained){
-          try{
-            const stat=await retained.stat();if(!stat.isFile()||stat.nlink!==1||stat.size>limits.bytes+1024)throw new Error("Invalid bounded recovery receipt.");
-            const bytes=new Uint8Array(stat.size+1);let length=0;
-            while(length<bytes.length){const read=await retained.read(bytes,length,bytes.length-length,length);if(!read.bytesRead)break;length+=read.bytesRead;}
-            if(length!==stat.size)throw new Error("Recovery receipt changed while reading.");
-            const record=JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(bytes.subarray(0,length))),{authentication,...content}=record.archive??{};
-            if(record.maxArchiveBytes!==limits.bytes||record.maxEntries!==limits.entries||content.operationId!==bounds.operationId||content.epoch!==status().epoch
+            if(typeof retained.archive!=="string"||!Number.isSafeInteger(retained.bytes)||Number(retained.bytes)<1||Number(retained.bytes)>limits.bytes||(globalThis as any).Buffer.byteLength(retained.archive)!==retained.bytes)throw new Error("Invalid bounded recovery receipt.");
+            const archive=JSON.parse(retained.archive),{authentication,...content}=archive??{};
+            if(retained.max_bytes!==limits.bytes||retained.max_entries!==limits.entries||content.operationId!==bounds.operationId||content.epoch!==status().epoch
               || JSON.stringify(content.binding)!==JSON.stringify(bounds.binding??null)
               || authentication!==crypto.createHmac("sha256",key).update(JSON.stringify(content)).digest("hex"))throw new Error("Recovery receipt retry conflict or authentication failure.");
             assertSealed();if(closed)throw new Error("Recovery source closed during receipt read.");
-            return Object.freeze(record.archive) as PointInTimeArchive;
-          }finally{await retained.close();}
+            return Object.freeze(archive) as PointInTimeArchive;
         }
       }
       assertSealed(); await flush(); assertSealed();
@@ -333,19 +334,17 @@ export async function openPointInTimeRecovery(database: SQLiteDatabase<any>, opt
       const content = {protocol:"clank-pitr-archive/1" as const,epoch:String(checkpoint.epoch),keyId,sequence:Number(checkpoint.sequence),digest:String(checkpoint.digest),committedAt:Number(checkpoint.committedAt),operationId:bounds.operationId??null,binding:bounds.binding??null,files:Object.freeze(files)};
       const archive = Object.freeze({...content,authentication:crypto.createHmac("sha256",key).update(JSON.stringify(content)).digest("hex")});
       if((globalThis as any).Buffer.byteLength(JSON.stringify(archive))>limits.bytes) throw new Error("Recovery archive exceeds its encoded byte bound.");
-      if(receipts){
-        const names=await fs.readdir(receipts);if(names.length>=maxRemoteExports)throw new Error("Recovery export receipt capacity is exhausted; retained receipts are preserved.");
-        let bytes=0;for(const name of names){
-          if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}\.json$/u.test(name))throw new Error("Recovery receipt directory contains unresolved evidence.");
-          const stat=await fs.lstat(path.join(receipts,name));if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)throw new Error("Invalid retained recovery receipt file.");bytes+=stat.size;
-        }
-        const encoded=JSON.stringify({maxArchiveBytes:limits.bytes,maxEntries:limits.entries,archive});
-        if(bytes+(globalThis as any).Buffer.byteLength(encoded)>maxRemoteExportBytes)throw new Error("Recovery export receipt byte capacity is exhausted; retained receipts are preserved.");
-        assertSealed();if(closed)throw new Error("Recovery source closed during export.");
-        const temporary=path.join(receipts,`.pending-${crypto.randomUUID()}`),file=await fs.open(temporary,"wx",0o600);
-        try{await file.writeFile(encoded);await file.sync();}finally{await file.close();}
-        try{await fs.link(temporary,path.join(receipts,bounds.operationId+".json"));}finally{await fs.rm(temporary,{force:true});}
-        const parent=await fs.open(receipts,"r");try{await parent.sync();}finally{await parent.close();}
+      if(bounds.operationId!==undefined){
+        const encoded=JSON.stringify(archive),bytes=(globalThis as any).Buffer.byteLength(encoded);
+        connection.exec("BEGIN IMMEDIATE");
+        try{
+          assertSealed();if(closed)throw new Error("Recovery source closed during export.");
+          const retained=connection.prepare("SELECT count(*) AS count,coalesce(sum(bytes),0) AS bytes FROM clank_pitr_remote_exports").get()!;
+          if(Number(retained.count)>=maxRemoteExports)throw new Error("Recovery export receipt capacity is exhausted; retained receipts are preserved.");
+          if(!Number.isSafeInteger(retained.bytes)||Number(retained.bytes)<0||Number(retained.bytes)+bytes>maxRemoteExportBytes)throw new Error("Recovery export receipt byte capacity is exhausted; retained receipts are preserved.");
+          connection.prepare("INSERT INTO clank_pitr_remote_exports VALUES(?,?,?,?,?)").run(bounds.operationId,limits.bytes,limits.entries,encoded,bytes);
+          assertSealed();connection.exec("COMMIT");
+        }catch(error){connection.exec("ROLLBACK");throw error;}
         assertSealed();if(closed)throw new Error("Recovery source closed after export receipt publication.");
       }
       return archive;
@@ -407,6 +406,7 @@ export async function restorePointInTimeArchive(archive: PointInTimeArchive, opt
   const confirmation = options.confirmation, through = bounded(options.throughSequence,"throughSequence",0,Number.MAX_SAFE_INTEGER);
   const expected = {epoch:options.expectedEpoch,sequence:bounded(options.expectedSequence,"expectedSequence",0,limits.entries),digest:options.expectedDigest};
   const expectedBinding=options.expectedBinding===undefined?undefined:providerBinding(options.expectedBinding);
+  const expectedOperation=options.operationId;
   if(confirmation!=="restore point in time" || through>expected.sequence || !/^[0-9a-f-]{36}$/u.test(expected.epoch) || !/^[0-9a-f]{64}$/u.test(expected.digest)) throw new TypeError("An exact independently retained recovery horizon and confirmation are required.");
   // The serialized request is captured before the first await; callers cannot
   // replace files or the expected horizon while verification is in progress.
@@ -422,6 +422,7 @@ export async function restorePointInTimeArchive(archive: PointInTimeArchive, opt
     if(typeof authentication!=="string" || !/^[0-9a-f]{64}$/u.test(authentication)
       || !crypto.timingSafeEqual(actualMac,(globalThis as any).Buffer.from(authentication,"hex"))) throw new Error("Recovery archive authentication failed.");
     if(captured.protocol!=="clank-pitr-archive/1" || captured.epoch!==expected.epoch || captured.sequence!==expected.sequence || captured.digest!==expected.digest
+      || expectedOperation!==undefined&&captured.operationId!==expectedOperation
       || expectedBinding!==undefined&&JSON.stringify(captured.binding)!==JSON.stringify(expectedBinding)
       || !Array.isArray(captured.files) || captured.files.length!==captured.sequence+4 || !Number.isSafeInteger(captured.committedAt) || captured.committedAt<0) throw new Error("Recovery archive does not match its retained horizon.");
     const names = new Set<string>(), decoded = new Map<string,Uint8Array>();

@@ -24,9 +24,11 @@ await scope.run(async()=>{
     if(!current||current.project!==binding.projectId||current.node!==binding.nodeId||current.release!==binding.releaseId||current.generation!==binding.generation||current.active!==1)throw new Error('Native provider ownership changed.');
     if(revokeAfterAssertion){revokeAfterAssertion=false;queueMicrotask(()=>control.prepare('UPDATE provider_binding SET active=0 WHERE id=1').run());}
   }});
+  let holdFirstCheckpoint=!!input.holdFirstCheckpoint;
   const server=await serve(request=>scope.run(async()=>{
     const response=await provider.handle(request);
-    if(request.headers.get('x-owned-fixture-hold')==='after-receipt'&&response.status===200){
+    if((request.headers.get('x-owned-fixture-hold')==='after-receipt'||holdFirstCheckpoint)&&response.status===200){
+      holdFirstCheckpoint=false;
       const archive=await response.clone().json();process.send({published:true,sequence:archive.sequence,digest:archive.digest,sha256:createHash('sha256').update(JSON.stringify(archive)).digest('hex')});
       await new Promise(()=>{});
     }

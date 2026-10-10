@@ -1,3 +1,4 @@
+import {pointInTimeReceiptCount} from './fixtures/point-in-time-receipts.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fork} from 'node:child_process';
@@ -15,11 +16,12 @@ function message(worker,predicate){return new Promise((resolve,reject)=>{
   function done(error,value){clearTimeout(timer);worker.off('message',receive);worker.off('exit',exit);error?reject(error):resolve(value);}
   worker.on('message',receive);worker.once('exit',exit);
 });}
-async function fixture(t){const root=await mkdtemp(join(tmpdir(),'clank-pitr-provider-proof-')),node=join(root,'node');await mkdir(node);t.after(()=>rm(root,{recursive:true,force:true}));return {root,node};}
+async function fixture(t){const root=await mkdtemp(join(tmpdir(),'clank-pitr-provider-proof-')),node=join(root,'node'),children=[];await mkdir(node);
+  t.after(async()=>{for(const {worker,closed} of children){if(worker.exitCode===null&&worker.signalCode===null)worker.kill('SIGKILL');await closed;}await rm(root,{recursive:true,force:true});});return {root,node,children};}
 async function start(t,f){
   const worker=fork(new URL('./fixtures/point-in-time-provider-worker.mjs',import.meta.url),[JSON.stringify({root:f.node,token})],{stdio:['ignore','ignore','pipe','ipc']});
   let stderr='';worker.stderr.on('data',bytes=>stderr=(stderr+bytes).slice(-4096));const closed=new Promise(resolve=>worker.once('close',resolve));
-  t.after(async()=>{if(worker.exitCode===null&&worker.signalCode===null){worker.kill('SIGKILL');await closed;}});
+  f.children.push({worker,closed});
   let ready;try{ready=await message(worker,value=>value.ready);}catch(error){throw new Error(error.message+' '+stderr);}
   return {...ready,worker,closed};
 }
@@ -32,7 +34,7 @@ test('actual SIGKILL after a durable provider checkpoint before HTTP delivery re
   const second=await start(t,f),wrote=message(second.worker,value=>value.wrote);second.worker.send({write:'later mutation four'});assert.equal((await wrote).sequence,4);
   const response=await checkpoint(second,'remote_exact_01');assert.equal(response.status,200);const archive=await response.json();
   assert.equal(archive.sequence,3);assert.equal(archive.digest,native.digest);assert.equal(createHash('sha256').update(JSON.stringify(archive)).digest('hex'),native.sha256);
-  assert.equal((await readdir(join(f.node,'repository','remote-exports'))).length,1);
+  assert.equal(pointInTimeReceiptCount(f.node),1);
   await writeFile(join(f.root,'off-node-checkpoint.json'),JSON.stringify(archive),{flag:'wx',mode:0o600});
   second.worker.kill('SIGKILL');await second.closed;await rm(f.node,{recursive:true});
   const scope=await createSQLiteTaskScope('trusted-process');await scope.run(async()=>{
@@ -49,7 +51,7 @@ test('real HTTP provider credentials and exact generation binding reject stale/f
   }
   const deactivated=message(source.worker,value=>value.deactivated);source.worker.send({deactivate:true});await deactivated;
   const response=await checkpoint(source,'after_ownership_loss');assert.equal(response.status,503);assert.equal((await response.json()).error.code,'RECOVERY_UNAVAILABLE');
-  await assert.rejects(readdir(join(f.node,'repository','remote-exports')),{code:'ENOENT'});
+  assert.equal(pointInTimeReceiptCount(f.node),0);
 });
 
 test('a real persisted generation/ownership change during asynchronous checkpoint export prevents the HTTP archive response',async t=>{

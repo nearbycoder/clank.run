@@ -111,3 +111,61 @@ test('durable remote export receipts replay the exact encrypted horizon after re
     try{assert.deepEqual(await exportPointInTimeRecovery(recovery,{operationId:'checkpoint_exact_01'}),archive);assert.equal(recovery.status().committedThrough,2);}finally{await recovery.close();database.close();}
   });
 });
+
+test('native provider receipt insertion failure preserves application state and allows one exact unaccepted operation retry',async t=>{
+  const f=await fixture(t);await f.scope.run(async()=>{
+    f.database.transaction(db=>db.table('records').insert({value:'retained'}));const before=f.recovery.status();await f.recovery.close();f.database.close();
+    const fault=new DatabaseSync(f.source);try{fault.exec("CREATE TRIGGER clank_pitr_refuse_export BEFORE INSERT ON clank_pitr_remote_exports BEGIN SELECT RAISE(ABORT,'owned native receipt fault'); END;");}finally{fault.close();}
+    const database=await openSQLite(schema,{path:f.source}),recovery=await openPointInTimeRecovery(database,{directory:f.directory,encryptionKey:f.key,exportIntervalMs:false}),internal=database[Symbol.for('clank.sqlite.internal')];
+    try{
+      await assert.rejects(exportPointInTimeRecovery(recovery,{operationId:'failed_native_receipt'}),/owned native receipt fault/);
+      assert.equal(internal.prepare('SELECT count(*) AS n FROM clank_pitr_remote_exports').get().n,0);assert.equal(recovery.status().committedThrough,before.committedThrough);assert.equal(database.read(db=>db.table('records').collect())[0].value,'retained');
+      internal.exec('DROP TRIGGER clank_pitr_refuse_export');const archive=await exportPointInTimeRecovery(recovery,{operationId:'failed_native_receipt'});assert.equal(archive.sequence,1);assert.equal(internal.prepare('SELECT count(*) AS n FROM clank_pitr_remote_exports').get().n,1);
+    }finally{await recovery.close();database.close();}
+  });
+});
+
+test('native encrypted receipt corruption survives reopen as refused evidence instead of being regenerated',async t=>{
+  const f=await fixture(t);await f.scope.run(async()=>{
+    f.database.transaction(db=>db.table('records').insert({value:'retained'}));const archive=await exportPointInTimeRecovery(f.recovery,{operationId:'corrupt_native_receipt'});await f.recovery.close();f.database.close();
+    const corrupted=JSON.stringify({...archive,authentication:'0'.repeat(64)}),native=new DatabaseSync(f.source);try{native.prepare('UPDATE clank_pitr_remote_exports SET archive=?,bytes=?').run(corrupted,Buffer.byteLength(corrupted));}finally{native.close();}
+    const database=await openSQLite(schema,{path:f.source}),recovery=await openPointInTimeRecovery(database,{directory:f.directory,encryptionKey:f.key,exportIntervalMs:false});
+    try{await assert.rejects(exportPointInTimeRecovery(recovery,{operationId:'corrupt_native_receipt'}),/authentication failure/);assert.equal(database[Symbol.for('clank.sqlite.internal')].prepare('SELECT archive FROM clank_pitr_remote_exports').get().archive,corrupted);assert.equal(recovery.status().epoch,archive.epoch);}finally{await recovery.close();database.close();}
+  });
+});
+
+test('missing native provider receipt storage cannot silently reset an enrolled protocol',async t=>{
+  const f=await fixture(t);await f.scope.run(async()=>{
+    f.database.transaction(db=>db.table('records').insert({value:'retained'}));const archive=await exportPointInTimeRecovery(f.recovery,{operationId:'retained_native_receipt'}),epoch=await readFile(join(f.directory,'epoch.json'),'utf8');await f.recovery.close();f.database.close();
+    const native=new DatabaseSync(f.source);try{native.exec('DROP TABLE clank_pitr_remote_exports');}finally{native.close();}
+    const database=await openSQLite(schema,{path:f.source});try{
+      await assert.rejects(openPointInTimeRecovery(database,{directory:f.directory,encryptionKey:f.key,exportIntervalMs:false}),/remote export protocol is missing or unsupported/);
+      const observer=new DatabaseSync(f.source,{readOnly:true});try{observer.exec('PRAGMA busy_timeout=5000');assert.equal(observer.prepare('SELECT epoch,remote_exports_protocol FROM clank_pitr_state').get().epoch,archive.epoch);assert.equal(observer.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name='clank_pitr_remote_exports'").get().n,0);}finally{observer.close();}
+      assert.equal(await readFile(join(f.directory,'epoch.json'),'utf8'),epoch);
+    }finally{database.close();}
+  });
+});
+
+test('the retained legacy native recovery schema migrates atomically without changing its epoch or journal horizon',async t=>{
+  const f=await fixture(t);await f.scope.run(async()=>{
+    f.database.transaction(db=>db.table('records').insert({value:'retained'}));await f.recovery.flush();const before=f.recovery.status();await f.recovery.close();f.database.close();
+    const legacy=new DatabaseSync(f.source);try{legacy.exec('DROP TABLE clank_pitr_remote_exports; ALTER TABLE clank_pitr_state DROP COLUMN remote_exports_protocol');}finally{legacy.close();}
+    const database=await openSQLite(schema,{path:f.source}),recovery=await openPointInTimeRecovery(database,{directory:f.directory,encryptionKey:f.key,exportIntervalMs:false});
+    try{assert.deepEqual(recovery.status(),before);assert.equal(database.read(db=>db.table('records').collect())[0].value,'retained');assert.equal((await exportPointInTimeRecovery(recovery,{operationId:'migrated_native_receipt'})).sequence,1);}finally{await recovery.close();database.close();}
+  });
+});
+
+for(const fault of ['missing-row','missing-journal','missing-both'])test(`native ${fault} corruption preserves the retained recovery repository instead of resetting its epoch`,async t=>{
+  const f=await fixture(t);await f.scope.run(async()=>{
+    f.database.transaction(db=>db.table('records').insert({value:'retained'}));await f.recovery.flush();
+    const epoch=await readFile(join(f.directory,'epoch.json'),'utf8'),envelope=await readFile(join(f.directory,'0000000000000001.json'),'utf8');
+    await f.recovery.close();f.database.close();const corrupt=new DatabaseSync(f.source);
+    try{if(fault==='missing-row')corrupt.exec('DELETE FROM clank_pitr_state');else if(fault==='missing-journal')corrupt.exec('DROP TABLE clank_pitr_journal');else corrupt.exec('DROP TABLE clank_pitr_state; DROP TABLE clank_pitr_journal');}finally{corrupt.close();}
+    const database=await openSQLite(schema,{path:f.source});try{
+      await assert.rejects(openPointInTimeRecovery(database,{directory:f.directory,encryptionKey:f.key,exportIntervalMs:false}),/retained epoch is missing or partial/);
+      assert.equal(await readFile(join(f.directory,'epoch.json'),'utf8'),epoch);assert.equal(await readFile(join(f.directory,'0000000000000001.json'),'utf8'),envelope);
+      assert.equal(database.read(db=>db.table('records').collect())[0].value,'retained');
+      const inspect=new DatabaseSync(f.source,{readOnly:true});try{if(fault==='missing-row')assert.equal(inspect.prepare('SELECT count(*) AS n FROM clank_pitr_state').get().n,0);if(fault==='missing-both')assert.equal(inspect.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name IN ('clank_pitr_state','clank_pitr_journal')").get().n,0);}finally{inspect.close();}
+    }finally{database.close();}
+  });
+});
