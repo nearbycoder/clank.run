@@ -165,3 +165,9 @@ test('controller shutdown cancels a stalled independent key lookup before its na
   f.enable();const checkpoint=await f.capture();let entered;const started=new Promise(resolve=>{entered=resolve;});f.keyOverride=()=>{entered();return new Promise(()=>{});};const targetPath=join(f.root,'closed-restore.sqlite'),pending=f.controller.restore('project_native',checkpoint.id,{targetPath,throughSequence:2},f.current),rejected=assert.rejects(pending,/controller closed/);
   await started;await f.controller.close();await rejected;await assert.rejects(readFile(targetPath),{code:'ENOENT'});assert.equal(f.controller.checkpoints('project_native').length,1);
 }));
+
+test('the durable scheduler captures a due native provider checkpoint and advances its retained horizon once',async()=>fixture(async f=>{
+  f.enable({intervalMs:1000});f.controller.start();const until=Date.now()+10000;let checkpoints=[];
+  while(Date.now()<until){checkpoints=f.controller.checkpoints('project_native');if(checkpoints.length)break;await new Promise(resolve=>setTimeout(resolve,20));}
+  await f.controller.close();assert.equal(checkpoints.length,1);assert.equal(checkpoints[0].sequence,3);assert.match(checkpoints[0].operationId,/^scheduled_[0-9a-f]{32}$/u);assert.equal(f.controller.policy('project_native').digest,checkpoints[0].digest);assert.equal(f.controller.policy('project_native').pendingOperationId,null);assert.equal(pointInTimeReceiptCount(f.node),1);
+}));

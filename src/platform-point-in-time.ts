@@ -65,13 +65,15 @@ export async function openPlatformPointInTime(options:{
   directory:string;
   configuration:PlatformPointInTimeOptions;
   assertOwner(projectId:string,ownerId:string):void;
+  scheduledCapture?(project:string,operationId:string,assertCurrent:()=>void):Promise<PlatformPointInTimeCheckpoint>;
   onError?:(error:unknown)=>void;
 }){
-  const {internal}=options,source=options.configuration.source,restoreKey=options.configuration.restoreKey,ownerAssertion=options.assertOwner,onError=options.onError;
+  const {internal}=options,source=options.configuration.source,restoreKey=options.configuration.restoreKey,ownerAssertion=options.assertOwner,onError=options.onError,scheduledCapture=options.scheduledCapture;
   const assertOwner=(project:string,owner:string)=>synchronous(()=>ownerAssertion(project,owner));
   const maxBytes=number(options.configuration.maxArchiveBytes??32*1024*1024,4096,256*1024*1024),maxEntries=number(options.configuration.maxEntries??10000,1,100000),maxArchives=number(options.configuration.maxArchivesPerProject??30,1,1000),maxTotalBytes=number(options.configuration.maxTotalArchiveBytes??2*1024*1024*1024,maxBytes,128*1024*1024*1024),configuredDirectory=options.directory;
   if(typeof source!=="function"||typeof ownerAssertion!=="function")throw new TypeError("Registered recovery sources and current owner authorization are required.");
   if(restoreKey!==undefined&&typeof restoreKey!=="function")throw new TypeError("Recovery restore keys require an operator key resolver.");
+  if(scheduledCapture!==undefined&&typeof scheduledCapture!=="function")throw new TypeError("Recovery scheduling requires the native project operation guard.");
   const fsName="node:fs/promises",pathName="node:path",cryptoName="node:crypto";
   const [fs,path,crypto]=await Promise.all([import(fsName),import(pathName),import(cryptoName)]);
   await fs.mkdir(configuredDirectory,{recursive:true,mode:0o700});
@@ -149,7 +151,7 @@ export async function openPlatformPointInTime(options:{
       current();const value=await new Promise<Uint8Array>((resolve,reject)=>{
         const cleanup=()=>cancellation.signal.removeEventListener("abort",aborted),aborted=()=>{cleanup();reject(cancellation.signal.reason);};
         if(cancellation.signal.aborted){aborted();return;}cancellation.signal.addEventListener("abort",aborted,{once:true});
-        void Promise.resolve().then(()=>restoreKey(project,retained)).then(value=>{cleanup();resolve(value);},error=>{cleanup();reject(error);});
+        void Promise.resolve().then(()=>restoreKey.call(options.configuration,project,retained)).then(value=>{cleanup();resolve(value);},error=>{cleanup();reject(error);});
       });current();if(!(value instanceof Uint8Array)||value.byteLength!==32)throw new Error("Recovery key is unavailable.");key=new Uint8Array(value);
       const result=await restorePointInTimeArchive(JSON.parse(new TextDecoder("utf-8",{fatal:true}).decode(encoded)),{encryptionKey:key,targetPath,confirmation:"restore point in time",throughSequence,expectedEpoch:retained.epoch,expectedSequence:retained.sequence,expectedDigest:retained.digest,expectedBinding:retained.binding,operationId:retained.operationId,maxArchiveBytes:maxBytes,maxEntries,assertCurrent:current});current();return result;
     }catch(error){report(error);throw error;}finally{clearTimeout(deadline);cancellations.delete(cancellation);key?.fill(0);}
@@ -210,10 +212,10 @@ export async function openPlatformPointInTime(options:{
       const connection=await new Promise<PlatformPointInTimeSource>((resolve,reject)=>{
         const aborted=()=>{cleanup();reject(cancellation.signal.reason);},cleanup=()=>cancellation.signal.removeEventListener("abort",aborted);
         if(cancellation.signal.aborted){aborted();return;}cancellation.signal.addEventListener("abort",aborted,{once:true});
-        void Promise.resolve().then(()=>source(project)).then(value=>{cleanup();resolve(value);},error=>{cleanup();reject(error);});
+        void Promise.resolve().then(()=>source.call(options.configuration,project)).then(value=>{cleanup();resolve(value);},error=>{cleanup();reject(error);});
       });current();
       const binding=providerBinding(connection.binding),origin=new URL(connection.origin),token=connection.token,sourceAssertion=connection.assertCurrent;
-      const sourceCurrent=()=>synchronous(sourceAssertion);
+      const sourceCurrent=()=>synchronous(()=>sourceAssertion.call(connection));
       if(binding.projectId!==project||origin.username||origin.password||origin.pathname!=="/"||origin.search||origin.hash||!(origin.protocol==="https:"||origin.protocol==="http:"&&["127.0.0.1","[::1]","localhost"].includes(origin.hostname))||typeof token!=="string"||!/^[A-Za-z0-9_-]{32,512}$/u.test(token)||typeof sourceAssertion!=="function")throw new Error("Recovery source is not a registered private provider origin.");
       identifier(binding.projectId);identifier(binding.nodeId);identifier(binding.releaseId);number(binding.generation,1,Number.MAX_SAFE_INTEGER);
       if(!(connection.encryptionKey instanceof Uint8Array)||connection.encryptionKey.byteLength!==32)throw new Error("Recovery source key is unavailable.");key=new Uint8Array(connection.encryptionKey);
@@ -248,7 +250,7 @@ export async function openPlatformPointInTime(options:{
   };
   const run=async()=>{
     if(closed)return;protocol();const rows=internal.prepare("SELECT project,pending FROM clank_platform_pitr_policies WHERE enabled=1 AND next_at<=? AND (lease_until IS NULL OR lease_until<=?) ORDER BY next_at,project LIMIT 5").all(Date.now(),Date.now());
-    for(const r of rows){if(closed)return;const project=String(r.project),operation=r.pending===null?"scheduled_"+crypto.randomUUID().replaceAll("-",""):String(r.pending);try{await capture(project,operation,()=>{if(closed)throw new Error("Recovery scheduler closed.");});}catch(error){report(error);}}
+    for(const r of rows){if(closed)return;const project=String(r.project),operation=r.pending===null?"scheduled_"+crypto.randomUUID().replaceAll("-",""):String(r.pending);try{await (scheduledCapture??capture)(project,operation,()=>{if(closed)throw new Error("Recovery scheduler closed.");});}catch(error){report(error);}}
   };
   const schedule=()=>{if(closed||timer)return;timer=setTimeout(()=>{timer=undefined;flight=run().catch(report).finally(()=>{flight=undefined;schedule();});},1000);timer.unref?.();};
   return Object.freeze({policy,configure,resolve,capture,archive,restore,checkpoints(project:string){protocol();return internal.prepare("SELECT * FROM clank_platform_pitr_checkpoints WHERE project=? ORDER BY created_at DESC,id DESC LIMIT ?").all(identifier(project),maxArchives).map(checkpoint);},start(){schedule();},async close(){closed=true;if(timer)clearTimeout(timer);for(const cancellation of cancellations)cancellation.abort(new Error("Recovery controller closed."));await Promise.allSettled([...captures]);await flight;}});
