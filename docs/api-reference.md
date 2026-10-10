@@ -749,7 +749,10 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
 - `defineJobs({ schema }).jobs(builders)`: inference-first nested job tree sharing an application
   database schema.
 - `defineWorkflow({ args, graph, returns?, output?, agent? })`: typed acyclic graph over ordinary
-  jobs and durable waits. `step(job, { needs?, args })` declares explicit result flow;
+  jobs and durable waits. `step(job, { needs?, args, compensate? })` declares explicit result flow;
+  `compensate: { job, args }` declares a registered job with `agent.idempotent: true`, while
+  `{ manual: reason }` preserves an explicit irreversible boundary. Cleanup mappers receive
+  typed input, run/step/original-job identities, stable operation key and discriminated outcome.
   `wait({ mode, needs?, timeoutMs, returns, request })` declares a typed decision/event result
   without a runnable job. Wait mappers are synchronous; deadlines are 1 second through 30 days.
 - `defineWorkflows(jobSystem, tree)`: registers stable nested workflow paths on a job system.
@@ -775,6 +778,14 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
 - `JobRuntime.getWorkflowWait(workflowId, step)`: trusted server ticket containing the persisted
   request, owner, deadline, state/version and secret resume token. Ordinary inventory/events
   omit tokens. Independently authorize every adapter exposing a ticket or accepting an event.
+- `StoredWorkflowRun.compensation?`: separate retained recovery state and ordered per-step
+  job/result/error evidence. The original failed/cancelled outcome is preserved. Automatic
+  cleanup runs one job at a time in reverse dependency order after forward children settle;
+  manual barriers and exhausted cleanup stop upstream work. Successful runs report `not-needed`.
+- `JobRuntime.purgeWorkflows({ includeUnresolvedCompensations: true, ... })`: trusted-operator
+  opt-in to delete inactive manual recovery evidence. Routine purge protects unresolved
+  recovery and its referenced jobs; active jobs remain protected even with this opt-in.
+  See [workflow compensation](jobs-and-cron.md#workflow-compensation).
 - `JobRuntime.resumeWorkflowWait({ waitId, expectedVersion, resumeToken, idempotencyKey, choice,
   result? })`: synchronous transactional resume/deny. Human decisions require current accepted
   reviewed-action execution by the run owner; external adapters authenticate their provider.
@@ -793,7 +804,10 @@ See [Service drivers](services.md) and [Invitations and email delivery](invitati
 - Types: `JobDefinition`, `JobHandlerContext`, `JobPublisher`, `JobHandle`, `StoredJob`, `JobEvent`,
   `JobStats`, `JobRetryOptions`, `CronDefinition`, `JobWorkerOptions`, `JobSchedulerOptions`,
   `JobRetentionOptions`, `WorkflowDefinition`, `WorkflowStepDefinition`, `WorkflowHandle`,
-  `StoredWorkflowRun`, `StoredWorkflowStep`, `WorkflowEvent`, and `WorkflowManifestEntry`.
+  `StoredWorkflowRun`, `StoredWorkflowStep`, `WorkflowEvent`, `WorkflowManifestEntry`,
+  `WorkflowCompensationContext`, `WorkflowCompensationDefinition`, `WorkflowCompensationState`,
+  `WorkflowCompensationStepState`, `StoredWorkflowCompensation`, and
+  `StoredWorkflowCompensationStep`.
 
 See [Durable jobs and cron](jobs-and-cron.md) for transaction, lease, retry, scheduling, process,
 deployment, and at-least-once semantics.

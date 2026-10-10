@@ -255,12 +255,27 @@ export interface WorkflowStepContext<Input> {
   result<Step extends AnyWorkflowStepDefinition>(step: Step): WorkflowStepOutput<Step>;
 }
 
+export interface WorkflowCompensationContext<Input, Output> {
+  readonly input: Input;
+  readonly workflowId: string;
+  readonly step: string;
+  readonly forwardJobId: string;
+  /** Pass this stable occurrence key to the provider's durable idempotency contract. */
+  readonly operationKey: string;
+  readonly outcome: Readonly<{ state: "succeeded"; result: Output extends void ? null : Output } | { state: "failed" | "cancelled" }>;
+}
+
+export type WorkflowCompensationDefinition<Input, Output, Job extends AnyJobDefinition = AnyJobDefinition> =
+  Readonly<{ job: Job; args: (context: WorkflowCompensationContext<Input, Output>) => JobInput<Job> }>
+  | Readonly<{ manual: string }>;
+
 export interface WorkflowStepDefinition<Input, Job extends AnyJobDefinition> {
   readonly kind: "workflow-step";
   readonly job: Job;
   readonly needs: readonly AnyWorkflowStepDefinition[];
   readonly description?: string;
   readonly args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
+  readonly compensate?: WorkflowCompensationDefinition<Input, JobOutput<Job>>;
 }
 
 export interface WorkflowWaitRequest { readonly title: string; readonly data?: unknown; }
@@ -328,12 +343,13 @@ export interface WorkflowGraphBuilder<Input> {
     returns: Schema<Output>;
     request: (context: WorkflowStepContext<Input>) => WorkflowWaitRequest;
   }): WorkflowWaitStepDefinition<Input, Output>;
-  step<Job extends AnyJobDefinition>(
+  step<Job extends AnyJobDefinition, CompensationJob extends AnyJobDefinition = AnyJobDefinition>(
     job: Job,
     definition: {
       needs?: readonly AnyWorkflowStepDefinition[];
       description?: string;
       args: (context: WorkflowStepContext<Input>) => JobInput<Job>;
+      compensate?: WorkflowCompensationDefinition<Input, JobOutput<Job>, CompensationJob>;
     },
   ): WorkflowStepDefinition<Input, Job>;
 }
@@ -374,12 +390,30 @@ export function defineWorkflow<
         throw new TypeError("A workflow step cannot have more than 100 dependencies.");
       }
       const description = optionalText(stepDefinition.description, "workflow step description", 16 * 1024);
+      let compensate: WorkflowCompensationDefinition<any, any> | undefined;
+      if (stepDefinition.compensate !== undefined) {
+        const value = stepDefinition.compensate;
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Workflow compensation must declare an idempotent job or a manual reason.");
+        if ("manual" in value) {
+          if (Object.keys(value).some(key => key !== "manual") || typeof value.manual !== "string" || !value.manual.trim() || value.manual.length > 2000) {
+            throw new TypeError("Manual compensation requires one bounded nonempty reason.");
+          }
+          compensate = Object.freeze({ manual: value.manual });
+        } else {
+          if (Object.keys(value).some(key => !["job", "args"].includes(key)) || !isJobDefinition(value.job)
+            || value.job.agent === false || value.job.agent.idempotent !== true || typeof value.args !== "function") {
+            throw new TypeError("Automatic compensation requires a registered job declaring agent.idempotent=true and a synchronous args mapper.");
+          }
+          compensate = Object.freeze({ job: value.job, args: value.args });
+        }
+      }
       const step = {
         kind: "workflow-step" as const,
         job,
         needs: Object.freeze([...(stepDefinition.needs ?? [])]),
         ...(description ? { description } : {}),
         args: stepDefinition.args,
+        ...(compensate ? { compensate } : {}),
       };
       created.add(step);
       return Object.freeze(step) as WorkflowStepDefinition<InferJobArgs<Args>, typeof job>;
@@ -447,6 +481,9 @@ export function defineWorkflows<
       const jobName = jobPath(step.job);
       if (jobs.get(jobName) !== step.job) {
         throw new TypeError(`Workflow step ${path}.${stepName} uses a job outside this job system.`);
+      }
+      if (step.compensate && "job" in step.compensate && jobs.get(jobPath(step.compensate.job)) !== step.compensate.job) {
+        throw new TypeError(`Workflow compensation ${path}.${stepName} uses a job outside this job system.`);
       }
     }
     Object.defineProperty(workflow, WORKFLOW_PATH, { value: path, enumerable: false });
@@ -541,6 +578,29 @@ export interface StoredWorkflowRun {
   readonly completedAt: number | null;
   readonly cancelRequested: boolean;
   readonly steps: readonly StoredWorkflowStep[];
+  readonly compensation?: StoredWorkflowCompensation;
+}
+
+export type WorkflowCompensationState = "dormant" | "waiting" | "running" | "succeeded" | "manual" | "not-needed";
+export type WorkflowCompensationStepState = "dormant" | "blocked" | "queued" | "running" | "succeeded" | "failed" | "manual" | "skipped";
+export interface StoredWorkflowCompensationStep {
+  readonly step: string;
+  readonly position: number;
+  readonly state: WorkflowCompensationStepState;
+  readonly job: string | null;
+  readonly jobId: string | null;
+  readonly forwardJobId: string | null;
+  readonly operationKey: string;
+  readonly result?: unknown;
+  readonly error?: string;
+  readonly updatedAt: number;
+  readonly completedAt: number | null;
+}
+export interface StoredWorkflowCompensation {
+  readonly state: WorkflowCompensationState;
+  readonly steps: readonly StoredWorkflowCompensationStep[];
+  readonly updatedAt: number;
+  readonly completedAt: number | null;
 }
 
 export interface WorkflowListOptions {
@@ -565,6 +625,8 @@ export interface WorkflowPurgeOptions {
   before?: number;
   /** Maximum runs removed in this transaction. Defaults to 1,000. */
   limit?: number;
+  /** Explicit trusted-operator deletion of manual recovery evidence. Never permits active recovery. */
+  includeUnresolvedCompensations?: boolean;
 }
 
 export interface JobPublisher<Definition extends JobSystemDefinition<any, any>> {
@@ -861,6 +923,13 @@ interface WorkflowWaitRow extends Record<string, unknown> {
   created_at: number; deadline: number;
 }
 
+interface WorkflowCompensationRow extends Record<string, unknown> {
+  workflow_id: string; step_name: string; position: number; state: WorkflowCompensationStepState;
+  job_name: string | null; job_id: string | null; forward_job_id: string | null;
+  payload: string | null; result: string | null; error: string | null;
+  updated_at: number; completed_at: number | null;
+}
+
 export function openJobs<Definition extends JobSystemDefinition<any, any>>(
   definition: Definition,
   options: OpenJobsOptions & { database: SQLiteDatabase<Definition["schema"]> },
@@ -873,6 +942,9 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
   ensureJobSchema(internal);
   const registry = flattenJobs(definition.jobs);
   const workflowRegistry = flattenWorkflows(definition.workflows ?? {});
+  const compensationsEnabled = [...workflowRegistry.values()].some(workflow => Object.values(workflow.steps).some(step => step.kind === "workflow-step" && step.compensate))
+    || Boolean(internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_workflow_compensation_state'").get());
+  if (compensationsEnabled) ensureWorkflowCompensationSchema(internal);
   const waitConfig = options.workflowWaits ? Object.freeze({ ...options.workflowWaits }) : undefined;
   if (waitConfig && (typeof waitConfig.signingKey !== "string" || waitConfig.signingKey.length < 32
     || waitConfig.signingKey.length > 1024 || !Number.isSafeInteger(waitConfig.policyRevision) || waitConfig.policyRevision < 1)) {
@@ -1029,6 +1101,10 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     const ownerId = scope?.userId ?? null;
     const startedAt = now();
     const create = (): WorkflowHandle => {
+      if (compensationsEnabled && workflowCompensationOrder(workflow).length
+        && internal.prepare("SELECT protocol FROM clank_workflow_compensation_state WHERE singleton=1").get()?.protocol !== 1) {
+        throw new Error("Current workflow compensation protocol is required.");
+      }
       const id = workflowId();
       const inserted = internal.prepare(`INSERT OR IGNORE INTO clank_workflow_runs (
         id, name, definition_hash, state, input, output, error, owner_id, idempotency_key,
@@ -1069,8 +1145,9 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
           startedAt,
         );
       }
+      if (compensationsEnabled) reserveWorkflowCompensations(internal, id, workflow, startedAt);
       workflowEvent(internal, id, "started", null, startedAt, { name });
-      reconcileWorkflowCore(id);
+      reconcileWorkflow(id);
       return Object.freeze({ id, deduplicated: false });
     };
     return internal.inTransaction ? create() : internal.transaction(create);
@@ -1348,16 +1425,159 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     return changed;
   };
 
-  const reconcileWorkflow = (workflowIdValue: string): number =>
-    internal.inTransaction
-      ? reconcileWorkflowCore(workflowIdValue)
-      : internal.transaction(() => reconcileWorkflowCore(workflowIdValue));
+  const markCompensationManual = (id: string, message: string): number => {
+    const current = now();
+    for (const row of internal.prepare("SELECT job_id FROM clank_workflow_compensations WHERE workflow_id=? AND state IN ('queued','running')").all(id)) {
+      if (row.job_id) requestJobCancellation(String(row.job_id), current);
+    }
+    internal.prepare(`UPDATE clank_workflow_compensations SET state='manual',error=coalesce(error,?),updated_at=?
+      WHERE workflow_id=? AND state IN ('dormant','blocked','queued','running')`).run(message, current, id);
+    const changed = internal.prepare("UPDATE clank_workflow_compensation_runs SET state='manual',updated_at=?,completed_at=NULL WHERE workflow_id=? AND state!='manual'").run(current,id);
+    if (Number(changed.changes)) workflowEvent(internal,id,"compensation_manual",null,current,{error:message});
+    return Number(changed.changes);
+  };
+
+  const settleCompensationForwards = (id: string, current: number): { changed: number; settling: boolean } => {
+    let changed = 0, settling = false;
+    for (const forward of internal.prepare("SELECT * FROM clank_workflow_steps WHERE workflow_id=?").all(id) as WorkflowStepRow[]) {
+      if (forward.state === "blocked") {
+        updateWorkflowStep(internal,forward,"cancelled",current); changed++;
+      } else if (forward.state === "queued" || forward.state === "running") {
+        if (!forward.job_id) return { changed: changed + markCompensationManual(id,"An unfinished forward step has no retained job."), settling: true };
+        requestJobCancellation(forward.job_id,current);
+        const job = internal.prepare("SELECT * FROM clank_jobs WHERE id=?").get(forward.job_id) as JobRow | undefined;
+        if (!job) return { changed: changed + markCompensationManual(id,"A forward job was removed before compensation captured its outcome."), settling: true };
+        if (["queued","retry","running"].includes(job.state)) { settling=true; continue; }
+        const state = job.state === "succeeded" ? "succeeded" : job.state === "dead" ? "failed" : "cancelled";
+        updateWorkflowStep(internal,forward,state,current,{
+          ...(state === "succeeded" ? { result:job.result === null ? null : JSON.parse(job.result) } : {}),
+          ...(job.error ? {error:job.error} : {}),
+        });
+        changed++;
+      }
+    }
+    return { changed, settling };
+  };
+
+  const reconcileCompensationCore = (id: string): number => {
+    if (!compensationsEnabled) return 0;
+    const recovery = internal.prepare("SELECT * FROM clank_workflow_compensation_runs WHERE workflow_id=?").get(id);
+    if (!recovery || ["succeeded","not-needed"].includes(String(recovery.state))) return 0;
+    if (internal.prepare("SELECT protocol FROM clank_workflow_compensation_state WHERE singleton=1").get()?.protocol !== 1) {
+      throw new Error("Current workflow compensation protocol is required.");
+    }
+    const run = internal.prepare("SELECT * FROM clank_workflow_runs WHERE id=?").get(id) as WorkflowRow | undefined;
+    if (!run) throw new Error("Compensation has no retained workflow.");
+    if (run.state === "running") return 0;
+    const current = now();
+    if (recovery.state === "manual") return settleCompensationForwards(id,current).changed;
+    if (run.state === "succeeded") {
+      internal.prepare("UPDATE clank_workflow_compensations SET state='skipped',updated_at=?,completed_at=? WHERE workflow_id=? AND state='dormant'").run(current,current,id);
+      internal.prepare("UPDATE clank_workflow_compensation_runs SET state='not-needed',updated_at=?,completed_at=? WHERE workflow_id=?").run(current,current,id);
+      return 1;
+    }
+    const workflow = workflowRegistry.get(run.name);
+    if (!workflow || run.definition_hash !== recovery.definition_hash || run.definition_hash !== workflowDefinitionRevision(workflow)) {
+      cancelWorkflowChildren(id,current);
+      return markCompensationManual(id,"Current retained workflow definition is required for automatic compensation.");
+    }
+    let { changed, settling } = settleCompensationForwards(id,current);
+    const forwards = internal.prepare("SELECT * FROM clank_workflow_steps WHERE workflow_id=?").all(id) as WorkflowStepRow[];
+    const forwardByName = new Map(forwards.map(row=>[row.step_name,row]));
+    if (internal.prepare("SELECT state FROM clank_workflow_compensation_runs WHERE workflow_id=?").get(id)?.state === "manual") return changed;
+    if (recovery.state === "dormant") {
+      internal.prepare("UPDATE clank_workflow_compensation_runs SET state='waiting',updated_at=? WHERE workflow_id=?").run(current,id);
+      workflowEvent(internal,id,"compensation_started",null,current,{outcome:run.state});changed++;
+    }
+    if (settling) return changed;
+    const rows = internal.prepare("SELECT * FROM clank_workflow_compensations WHERE workflow_id=? ORDER BY position").all(id) as WorkflowCompensationRow[];
+    const order = workflowCompensationOrder(workflow);
+    if (rows.length !== order.length || rows.some((row,index)=>row.step_name!==order[index] || row.position!==index
+      || row.job_name !== ("job" in (workflow.steps[row.step_name] as WorkflowStepDefinition<any,AnyJobDefinition>).compensate!
+        ? jobPath(((workflow.steps[row.step_name] as WorkflowStepDefinition<any,AnyJobDefinition>).compensate as {job:AnyJobDefinition}).job) : null))) {
+      return markCompensationManual(id,"Retained compensation declarations do not match the current graph.") + changed;
+    }
+    for (const row of rows) {
+      if (row.state !== "dormant") continue;
+      const forward=forwardByName.get(row.step_name)!;
+      const job=forward.job_id ? internal.prepare("SELECT * FROM clank_jobs WHERE id=?").get(forward.job_id) as JobRow | undefined : undefined;
+      if (forward.job_id && !job) return markCompensationManual(id,"A retained forward job is required to establish compensation identity.") + changed;
+      row.forward_job_id=forward.job_id;
+      row.state=!job || Number(job.attempts)===0 ? "skipped" : row.job_name === null ? "manual" : "blocked";
+      internal.prepare("UPDATE clank_workflow_compensations SET state=?,forward_job_id=?,updated_at=?,completed_at=? WHERE workflow_id=? AND step_name=?")
+        .run(row.state,row.forward_job_id,current,row.state === "skipped" ? current : null,id,row.step_name);
+      changed++;
+    }
+    for (const row of rows) {
+      if (!["queued","running"].includes(row.state)) continue;
+      const job=row.job_id ? internal.prepare("SELECT * FROM clank_jobs WHERE id=?").get(row.job_id) as JobRow | undefined : undefined;
+      if (!job) return markCompensationManual(id,"A compensation job was removed before its outcome was retained.") + changed;
+      if (job.state === "queued" || job.state === "retry") return changed;
+      if (job.state === "running") {
+        if (row.state !== "running") {
+          internal.prepare("UPDATE clank_workflow_compensations SET state='running',updated_at=? WHERE workflow_id=? AND step_name=?").run(current,id,row.step_name);changed++;
+        }
+        return changed;
+      }
+      row.state=job.state === "succeeded" ? "succeeded" : "failed";
+      internal.prepare("UPDATE clank_workflow_compensations SET state=?,result=?,error=?,updated_at=?,completed_at=? WHERE workflow_id=? AND step_name=?")
+        .run(row.state,job.result,job.error ?? (row.state === "failed" ? "Compensation job was cancelled." : null),current,current,id,row.step_name);
+      workflowEvent(internal,id,`compensation_${row.state}`,row.step_name,current,{jobId:row.job_id});changed++;
+    }
+    const next=rows.find(row=>row.state !== "succeeded" && row.state !== "skipped");
+    if (!next) {
+      internal.prepare("UPDATE clank_workflow_compensation_runs SET state='succeeded',updated_at=?,completed_at=? WHERE workflow_id=?").run(current,current,id);
+      workflowEvent(internal,id,"compensation_completed",null,current,{});
+      return changed+1;
+    }
+    if (next.state === "manual" || next.state === "failed") {
+      return markCompensationManual(id,next.error ?? "Compensation requires manual intervention.") + changed;
+    }
+    if (next.state !== "blocked") return changed;
+    try {
+      const forward=forwardByName.get(next.step_name)!;
+      const step=workflow.steps[next.step_name] as WorkflowStepDefinition<any,AnyJobDefinition>;
+      const compensation=step.compensate!;
+      if (!("job" in compensation) || !next.forward_job_id) throw new Error("Automatic compensation requires its original job identity.");
+      const raw=compensation.args(Object.freeze({ input:workflow.args.parse(JSON.parse(run.input)),workflowId:id,
+        step:next.step_name,forwardJobId:next.forward_job_id,operationKey:`workflow-compensation:${id}:${next.step_name}`,
+        outcome:Object.freeze(forward.state === "succeeded" ? {state:"succeeded" as const,result:forward.result === null ? null : JSON.parse(forward.result)}
+          : {state:forward.state === "cancelled" ? "cancelled" as const : "failed" as const}),
+      }));
+      if (raw && typeof (raw as any).then === "function") {
+        void Promise.resolve(raw).catch(()=>undefined);throw new TypeError("Compensation args mappers must be synchronous.");
+      }
+      const payload=boundedJson(compensation.job.args.parse(raw),Math.min(maxPayloadBytes,64*1024),"Compensation arguments");
+      const handle=enqueue(run.owner_id === null ? undefined : {userId:run.owner_id},compensation.job,JSON.parse(payload),
+        {idempotencyKey:`workflow-compensation:${id}:${next.step_name}`},undefined,run.trace_context);
+      if (handle.deduplicated) throw new Error("Compensation occurrence key already belongs to another retained job.");
+      internal.prepare("UPDATE clank_workflow_compensations SET state='queued',job_id=?,payload=?,updated_at=? WHERE workflow_id=? AND step_name=? AND state='blocked'")
+        .run(handle.id,payload,current,id,next.step_name);
+      internal.prepare("UPDATE clank_workflow_compensation_runs SET state='running',updated_at=? WHERE workflow_id=?").run(current,id);
+      workflowEvent(internal,id,"compensation_queued",next.step_name,current,{jobId:handle.id});
+      return changed+1;
+    } catch (error) {
+      const message=safeError(error,maxErrorBytes);
+      internal.prepare("UPDATE clank_workflow_compensations SET state='failed',error=?,updated_at=?,completed_at=? WHERE workflow_id=? AND step_name=?")
+        .run(message,current,current,id,next.step_name);
+      return markCompensationManual(id,message)+changed+1;
+    }
+  };
+
+  const reconcileWorkflow = (workflowIdValue: string): number => {
+    const reconcile=()=>reconcileWorkflowCore(workflowIdValue)+reconcileCompensationCore(workflowIdValue);
+    return internal.inTransaction ? reconcile() : internal.transaction(reconcile);
+  };
 
   const advanceWorkflows = (advanceOptions: { limit?: number } = {}): number => {
     ensureOpen();
     const limit = integer(advanceOptions.limit ?? 100, "workflow advance limit", 1, 1_000);
     const rows = internal.prepare(`SELECT id FROM clank_workflow_runs
-      WHERE state = 'running' ORDER BY updated_at ASC, id ASC LIMIT ?`).all(limit);
+      WHERE state = 'running' ${compensationsEnabled ? `OR EXISTS(SELECT 1 FROM clank_workflow_compensation_runs c
+        WHERE c.workflow_id=clank_workflow_runs.id AND (c.state IN ('dormant','waiting','running')
+          OR c.state='manual' AND EXISTS(SELECT 1 FROM clank_workflow_steps s JOIN clank_jobs j ON j.id=s.job_id
+            WHERE s.workflow_id=c.workflow_id AND s.state IN ('queued','running') AND j.state NOT IN ('queued','retry','running'))))` : ""}
+      ORDER BY updated_at ASC, id ASC LIMIT ?`).all(limit);
     let changed = 0;
     for (const row of rows) changed += reconcileWorkflow(String(row.id));
     return changed;
@@ -1437,7 +1657,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         requester, approver: wait.mode === "decision" ? review!.approver : null });
       internal.prepare("INSERT INTO clank_workflow_wait_receipts VALUES(?,?,?,?,?)").run(wait.id, input.idempotencyKey, digest, requester, JSON.stringify(receipt));
       workflowEvent(internal, run.id, state === "resumed" ? "wait_resumed" : "wait_denied", wait.step_name, acceptedAt, { waitId: wait.id, version: receipt.version, reviewPlanId: receipt.reviewPlanId });
-      reconcileWorkflowCore(run.id);
+      reconcileWorkflow(run.id);
       return receipt;
     };
     return internal.inTransaction ? accept() : internal.transaction(accept);
@@ -1445,6 +1665,9 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
 
   const purgeWorkflows = (purgeOptions: WorkflowPurgeOptions = {}): number => {
     ensureOpen();
+    if (purgeOptions.includeUnresolvedCompensations !== undefined && typeof purgeOptions.includeUnresolvedCompensations !== "boolean") {
+      throw new TypeError("includeUnresolvedCompensations must be an explicit boolean.");
+    }
     const states = purgeOptions.states ?? ["succeeded", "cancelled"];
     if (states.length === 0) return 0;
     const normalizedStates = [...new Set(states.map((state) => {
@@ -1459,10 +1682,20 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       const rows = internal.prepare(`SELECT id FROM clank_workflow_runs
         WHERE state IN (${normalizedStates.map(() => "?").join(", ")})
           AND completed_at IS NOT NULL AND completed_at < ?
+          ${compensationsEnabled ? `AND NOT EXISTS (SELECT 1 FROM clank_workflow_compensation_runs c WHERE c.workflow_id=clank_workflow_runs.id
+            AND c.state NOT IN ('succeeded','not-needed'${purgeOptions.includeUnresolvedCompensations === true ? ",'manual'" : ""}))
+            AND NOT EXISTS (SELECT 1 FROM clank_workflow_compensations c JOIN clank_jobs j ON j.id=c.job_id OR j.id=c.forward_job_id
+              WHERE c.workflow_id=clank_workflow_runs.id AND j.state IN ('queued','retry','running'))
+            AND NOT EXISTS (SELECT 1 FROM clank_workflow_steps s JOIN clank_jobs j ON j.id=s.job_id
+              WHERE s.workflow_id=clank_workflow_runs.id AND j.state IN ('queued','retry','running'))` : ""}
         ORDER BY completed_at ASC, id ASC LIMIT ?`).all(...normalizedStates, before, limit);
       if (rows.length === 0) return 0;
       const ids = rows.map((row) => String(row.id));
       const placeholders = ids.map(() => "?").join(", ");
+      if (compensationsEnabled) {
+        internal.prepare(`DELETE FROM clank_workflow_compensations WHERE workflow_id IN (${placeholders})`).run(...ids);
+        internal.prepare(`DELETE FROM clank_workflow_compensation_runs WHERE workflow_id IN (${placeholders})`).run(...ids);
+      }
       if (waitsEnabled) {
         internal.prepare(`DELETE FROM clank_workflow_wait_receipts WHERE wait_id IN (SELECT id FROM clank_workflow_waits WHERE workflow_id IN (${placeholders}))`).run(...ids);
         internal.prepare(`DELETE FROM clank_workflow_waits WHERE workflow_id IN (${placeholders})`).run(...ids);
@@ -1493,6 +1726,11 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       const rows = internal.prepare(`SELECT id FROM clank_jobs
         WHERE state IN (${normalizedStates.map(() => "?").join(", ")})
           AND completed_at IS NOT NULL AND completed_at < ?
+          ${compensationsEnabled ? `AND NOT EXISTS (SELECT 1 FROM clank_workflow_compensations c
+            JOIN clank_workflow_compensation_runs r ON r.workflow_id=c.workflow_id
+            WHERE (c.job_id=clank_jobs.id OR c.forward_job_id=clank_jobs.id
+              OR EXISTS(SELECT 1 FROM clank_workflow_steps s WHERE s.workflow_id=c.workflow_id AND s.job_id=clank_jobs.id))
+              AND r.state NOT IN ('succeeded','not-needed'))` : ""}
         ORDER BY completed_at ASC, id ASC LIMIT ?`).all(
         ...normalizedStates,
         before,
@@ -1530,6 +1768,38 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     }
   };
 
+  const assertCompensationClaim = (job: JobRow): "compensation" | "forward" | null => {
+    if (!compensationsEnabled) return null;
+    const forward=internal.prepare(`SELECT w.*,r.definition_hash AS recovery_hash,r.state AS recovery_state
+      FROM clank_workflow_steps s JOIN clank_workflow_runs w ON w.id=s.workflow_id
+      JOIN clank_workflow_compensation_runs r ON r.workflow_id=w.id WHERE s.job_id=?`).get(job.id);
+    if (forward) {
+      const workflow=workflowRegistry.get(String(forward.name));
+      if (internal.prepare("SELECT protocol FROM clank_workflow_compensation_state WHERE singleton=1").get()?.protocol !== 1
+        || !workflow || workflowDefinitionRevision(workflow) !== forward.definition_hash || forward.recovery_hash !== forward.definition_hash
+        || forward.state !== "running" || forward.cancel_requested !== 0 || forward.recovery_state !== "dormant" || forward.owner_id !== job.owner_id) {
+        throw new Error("Current forward workflow occurrence and compensation protocol are required.");
+      }
+      return "forward";
+    }
+    const row = internal.prepare(`SELECT c.*,r.state AS recovery_state,r.definition_hash AS recovery_hash,
+      w.name AS workflow_name,w.definition_hash AS workflow_hash,w.state AS workflow_state,w.owner_id AS workflow_owner
+      FROM clank_workflow_compensations c JOIN clank_workflow_compensation_runs r ON r.workflow_id=c.workflow_id
+      JOIN clank_workflow_runs w ON w.id=c.workflow_id WHERE c.job_id=?`).get(job.id);
+    if (!row) return null;
+    const workflow=workflowRegistry.get(String(row.workflow_name));
+    if (internal.prepare("SELECT protocol FROM clank_workflow_compensation_state WHERE singleton=1").get()?.protocol !== 1
+      || !workflow || workflowDefinitionRevision(workflow) !== row.workflow_hash || row.recovery_hash !== row.workflow_hash
+      || !["failed","cancelled"].includes(String(row.workflow_state)) || !["waiting","running"].includes(String(row.recovery_state))
+      || !["queued","running"].includes(String(row.state)) || row.job_name !== job.name || row.workflow_owner !== job.owner_id
+      || row.payload !== job.payload
+      || job.idempotency_key !== `workflow-compensation:${row.workflow_id}:${row.step_name}`
+      || internal.prepare("SELECT 1 FROM clank_workflow_compensations WHERE workflow_id=? AND position<? AND state NOT IN ('succeeded','skipped')").get(row.workflow_id,row.position)) {
+      throw new Error("Current workflow compensation occurrence and definition are required.");
+    }
+    return "compensation";
+  };
+
   const claim = (workerId: string, queues: readonly string[], leaseMs: number): ClaimedJob | null => {
     maybeCleanup();
     return internal.transaction(() => {
@@ -1555,6 +1825,13 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         ORDER BY priority DESC, run_at ASC, created_at ASC, id ASC
         LIMIT 1`).get(claimedAt, ...queues, claimedAt) as JobRow | undefined;
       if (!row) return null;
+      try { assertCompensationClaim(row); }
+      catch (error) {
+        const compensation=internal.prepare("SELECT workflow_id FROM clank_workflow_compensations WHERE job_id=?").get(row.id);
+        if (compensation) markCompensationManual(String(compensation.workflow_id),safeError(error,maxErrorBytes));
+        requestJobCancellation(row.id,claimedAt);
+        return null;
+      }
       const token = crypto.randomUUID();
       const updated = internal.prepare(`UPDATE clank_jobs
         SET state = 'running', attempts = attempts + 1, lease_token = ?,
@@ -1600,6 +1877,16 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
   };
 
   const executeClaim = async (claimed: ClaimedJob, workerId: string, leaseMs: number): Promise<void> => {
+    let compensationClaim: "compensation" | "forward" | null = null;
+    try { compensationClaim=internal.transaction(()=>assertCompensationClaim(claimed.row)); }
+    catch (error) {
+      internal.transaction(()=>{
+        const compensation=internal.prepare("SELECT workflow_id FROM clank_workflow_compensations WHERE job_id=?").get(claimed.row.id);
+        if (compensation) markCompensationManual(String(compensation.workflow_id),safeError(error,maxErrorBytes));
+        requestJobCancellation(claimed.row.id,now());
+      });
+      return;
+    }
     const definition = registry.get(claimed.row.name);
     if (!definition) {
       settleFailure(internal, claimed, now(), "Job definition is not present in this release.", 0, true, maxErrorBytes);
@@ -1617,6 +1904,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     const assertClaim = () => {
       ensureOpen();
       controller.signal.throwIfAborted();
+      if (compensationClaim) assertCompensationClaim(claimed.row);
       if (!active || !internal.prepare(`SELECT id FROM clank_jobs
         WHERE id = ? AND state = 'running' AND lease_token = ? AND lease_owner = ?
           AND cancel_requested = 0 AND lease_until > ?`).get(claimed.row.id, claimed.token, workerId, now())) {
@@ -1663,7 +1951,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     const context: JobHandlerContext<any, any> = Object.freeze({
       db: Object.freeze({
         read<Value>(handler: (db: ReadDatabase<any>) => Value): Value {
-          return database.read(handler, scope);
+          return compensationClaim ? publish(()=>database.read(handler,scope)) : database.read(handler, scope);
         },
         transaction<Value>(handler: (db: WriteDatabase<any>) => Value): Value {
           return database.transaction(db => {
@@ -1691,9 +1979,11 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       ]);
       if (stale) return;
       const parsed = definition.returns ? definition.returns.parse(output) : output;
-      const result = boundedJson(parsed ?? null, maxResultBytes, "Job result");
+      const result = boundedJson(parsed ?? null, compensationClaim === "compensation" ? Math.min(maxResultBytes,64*1024) : maxResultBytes, "Job result");
       const completedAt = now();
-      const settled = internal.prepare(`UPDATE clank_jobs
+      const settle = () => {
+        if (compensationClaim) assertClaim();
+        return internal.prepare(`UPDATE clank_jobs
         SET state = 'succeeded', result = ?, error = NULL, completed_at = ?,
           updated_at = ?, lease_token = NULL, lease_owner = NULL, lease_until = NULL
         WHERE id = ? AND state = 'running' AND lease_token = ? AND lease_owner = ?
@@ -1704,7 +1994,9 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
         claimed.row.id,
         claimed.token,
         workerId,
-      );
+        );
+      };
+      const settled=compensationClaim ? internal.transaction(settle) : settle();
       if (Number(settled.changes) === 1) {
         span?.setStatus("ok");
         event(internal, claimed.row.id, "succeeded", completedAt, {
@@ -1968,6 +2260,10 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       const retriedAt = now();
       const runAt = integer(retryOptions.runAt ?? retriedAt, "job retry runAt", 0, Number.MAX_SAFE_INTEGER);
       const retry = () => {
+        const jobIdValue = identifier(id, "job id", 128, true);
+        if (compensationsEnabled && (internal.prepare("SELECT 1 FROM clank_workflow_compensations WHERE job_id=?").get(jobIdValue)
+          || internal.prepare(`SELECT 1 FROM clank_workflow_steps s JOIN clank_workflow_compensation_runs r
+            ON r.workflow_id=s.workflow_id WHERE s.job_id=?`).get(jobIdValue))) return false;
         const result = internal.prepare(`UPDATE clank_jobs
           SET state = 'queued', attempts = 0, run_at = ?, result = NULL, error = NULL,
             completed_at = NULL, lease_token = NULL, lease_owner = NULL, lease_until = NULL,
@@ -1975,7 +2271,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
           WHERE id = ? AND state IN ('dead', 'cancelled')`).run(
           runAt,
           retriedAt,
-          identifier(id, "job id", 128, true),
+          jobIdValue,
         );
         if (Number(result.changes) === 1) event(internal, id, "retried", retriedAt, { runAt });
         return Number(result.changes) === 1;
@@ -2575,6 +2871,7 @@ function storedWorkflow(internal: SQLiteInternal, row: WorkflowRow): StoredWorkf
   const waits = internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_workflow_waits'").get()
     ? internal.prepare("SELECT step_name,mode FROM clank_workflow_waits WHERE workflow_id=? AND state='pending'").all(row.id) : [];
   const pending = new Map(waits.map(wait => [String(wait.step_name), String(wait.mode)]));
+  const compensation = storedWorkflowCompensation(internal, row.id);
   return Object.freeze({
     id: String(row.id),
     name: String(row.name),
@@ -2587,6 +2884,7 @@ function storedWorkflow(internal: SQLiteInternal, row: WorkflowRow): StoredWorkf
     updatedAt: Number(row.updated_at),
     completedAt: row.completed_at === null || row.completed_at === undefined ? null : Number(row.completed_at),
     cancelRequested: Number(row.cancel_requested) === 1,
+    ...(compensation ? { compensation } : {}),
     steps: Object.freeze(steps.map((step) => Object.freeze({
       name: String(step.step_name),
       job: String(step.job_name),
@@ -2950,8 +3248,89 @@ function workflowWaitCanonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function ensureWorkflowCompensationSchema(internal: SQLiteInternal): void {
+  internal.transaction(() => {
+    internal.exec(`CREATE TABLE IF NOT EXISTS clank_workflow_compensation_state (
+      singleton INTEGER PRIMARY KEY CHECK(singleton=1), protocol INTEGER NOT NULL)`);
+    const previous = internal.prepare("SELECT protocol FROM clank_workflow_compensation_state WHERE singleton=1").get();
+    if (previous && previous.protocol !== 1) throw new Error("Unsupported persisted workflow compensation protocol.");
+    internal.prepare("INSERT OR IGNORE INTO clank_workflow_compensation_state VALUES(1,1)").run();
+    internal.exec(`CREATE TABLE IF NOT EXISTS clank_workflow_compensation_runs (
+      workflow_id TEXT PRIMARY KEY, definition_hash TEXT NOT NULL CHECK(length(definition_hash)=16),
+      state TEXT NOT NULL CHECK(state IN ('dormant','waiting','running','succeeded','manual','not-needed')),
+      updated_at INTEGER NOT NULL, completed_at INTEGER)`);
+    internal.exec(`CREATE INDEX IF NOT EXISTS clank_workflow_compensation_runs_active
+      ON clank_workflow_compensation_runs(state,updated_at,workflow_id)`);
+    internal.exec(`CREATE TABLE IF NOT EXISTS clank_workflow_compensations (
+      workflow_id TEXT NOT NULL, step_name TEXT NOT NULL, position INTEGER NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('dormant','blocked','queued','running','succeeded','failed','manual','skipped')),
+      job_name TEXT, job_id TEXT, forward_job_id TEXT,
+      payload TEXT CHECK(payload IS NULL OR json_valid(payload)),
+      result TEXT CHECK(result IS NULL OR json_valid(result)), error TEXT,
+      updated_at INTEGER NOT NULL, completed_at INTEGER,
+      PRIMARY KEY(workflow_id,step_name), UNIQUE(workflow_id,position)) WITHOUT ROWID`);
+    internal.exec(`CREATE INDEX IF NOT EXISTS clank_workflow_compensations_job
+      ON clank_workflow_compensations(job_id) WHERE job_id IS NOT NULL`);
+  });
+}
+
+function workflowCompensationOrder(workflow: RuntimeWorkflowDefinition): string[] {
+  const names = workflowStepNames(workflow);
+  const visited = new Set<string>();
+  const order: string[] = [];
+  const visit = (name: string) => {
+    if (visited.has(name)) return;
+    visited.add(name);
+    const step = workflow.steps[name]!;
+    for (const dependency of step.needs.map(value => names.get(value)!).sort()) visit(dependency);
+    if (step.kind === "workflow-step" && step.compensate) order.push(name);
+  };
+  for (const name of Object.keys(workflow.steps).sort()) visit(name);
+  return order.reverse();
+}
+
+function reserveWorkflowCompensations(internal: SQLiteInternal, id: string, workflow: RuntimeWorkflowDefinition, createdAt: number): void {
+  const order = workflowCompensationOrder(workflow);
+  if (!order.length) return;
+  if (internal.prepare("SELECT protocol FROM clank_workflow_compensation_state WHERE singleton=1").get()?.protocol !== 1) {
+    throw new Error("Current workflow compensation protocol is required.");
+  }
+  if (Number(internal.prepare("SELECT count(*) AS count FROM clank_workflow_compensations").get()?.count) + order.length > 10_000) {
+    throw new RangeError("Retained workflow compensation capacity is full.");
+  }
+  internal.prepare("INSERT INTO clank_workflow_compensation_runs VALUES(?,?,'dormant',?,NULL)")
+    .run(id, workflowDefinitionRevision(workflow), createdAt);
+  order.forEach((name, position) => {
+    const step = workflow.steps[name] as WorkflowStepDefinition<any, AnyJobDefinition>;
+    const compensation = step.compensate!;
+    internal.prepare(`INSERT INTO clank_workflow_compensations
+      VALUES(?,?,?,'dormant',?,NULL,NULL,NULL,NULL,?,?,NULL)`)
+      .run(id, name, position, "job" in compensation ? jobPath(compensation.job) : null,
+        "manual" in compensation ? compensation.manual : null, createdAt);
+  });
+}
+
+function storedWorkflowCompensation(internal: SQLiteInternal, id: string): StoredWorkflowCompensation | undefined {
+  if (!internal.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='clank_workflow_compensation_runs'").get()) return;
+  const run = internal.prepare("SELECT * FROM clank_workflow_compensation_runs WHERE workflow_id=?").get(id);
+  if (!run) return;
+  const rows = internal.prepare("SELECT * FROM clank_workflow_compensations WHERE workflow_id=? ORDER BY position").all(id) as WorkflowCompensationRow[];
+  return Object.freeze({ state: run.state as WorkflowCompensationState, updatedAt: Number(run.updated_at),
+    completedAt: run.completed_at === null ? null : Number(run.completed_at),
+    steps: Object.freeze(rows.map(row => Object.freeze({
+      step: row.step_name, position: row.position, state: row.state, job: row.job_name,
+      jobId: row.job_id, forwardJobId: row.forward_job_id,
+      operationKey: `workflow-compensation:${id}:${row.step_name}`,
+      ...(row.result === null ? {} : { result: JSON.parse(row.result) }),
+      ...(row.error === null ? {} : { error: row.error }),
+      updatedAt: row.updated_at, completedAt: row.completed_at,
+    }))),
+  });
+}
+
 function workflowDefinitionRevision(workflow: RuntimeWorkflowDefinition): string {
   const names = workflowStepNames(workflow);
+  const hasCompensation = Object.values(workflow.steps).some(step=>step.kind === "workflow-step" && step.compensate);
   const source = JSON.stringify({
     args: workflow.args.toJSONSchema(),
     returns: workflow.returns?.toJSONSchema() ?? null,
@@ -2966,6 +3345,13 @@ function workflowDefinitionRevision(workflow: RuntimeWorkflowDefinition): string
       returns: step.job.returns?.toJSONSchema() ?? null,
       needs: step.needs.map((dependency) => names.get(dependency)).sort(),
       mapper: Function.prototype.toString.call(step.args),
+      ...(hasCompensation ? { handler: Function.prototype.toString.call(step.job.handler) } : {}),
+      ...(step.compensate ? { compensate: "manual" in step.compensate ? { manual: step.compensate.manual } : {
+        job: jobPath(step.compensate.job), args: step.compensate.job.args.toJSONSchema(),
+        returns: step.compensate.job.returns?.toJSONSchema() ?? null,
+        mapper: Function.prototype.toString.call(step.compensate.args),
+        handler: Function.prototype.toString.call(step.compensate.job.handler),
+      } } : {}),
     })),
   });
   let first = 0x811c9dc5;

@@ -390,6 +390,110 @@ startup. Existing graphs keep their previous revisions and stored states. Back u
 enabling waits; rollback requires a verified compatible binary/schema/configuration snapshot.
 An older binary cannot safely coordinate pending new waits.
 
+## Workflow compensation
+
+Declare cleanup beside a forward step when a later failure must release an external resource.
+Clank schedules the declared job after forward children settle, in reverse dependency order.
+The original run stays `failed` or `cancelled`; `getWorkflow(runId).compensation` separately
+reports recovery progress. A successful run reports `not-needed` and never executes cleanup.
+This is a recovery protocol over ordinary jobs, not a transaction across external providers.
+
+```ts
+const reservations = defineJobs({ schema }).jobs(({ job }) => ({
+  reserve: job({
+    args: { resource: s.string() },
+    returns: s.object({ reservation: s.string() }),
+    handler: (context, input) => provider.reserve({
+      resource: input.resource,
+      operationKey: context.job.id,
+    }),
+  }),
+  release: job({
+    args: { resource: s.string(), originalJobId: s.string(), operationKey: s.string() },
+    returns: s.object({ released: s.literal(true) }),
+    agent: { idempotent: true },
+    handler: (_context, input) => provider.release(input),
+  }),
+}));
+const reserveResource = defineWorkflow({
+  args: { resource: s.string() },
+  graph: graph => ({
+    reserve: graph.step(reservations.jobs.reserve, {
+      args: ({ input }) => ({ resource: input.resource }),
+      compensate: {
+        job: reservations.jobs.release,
+        args: context => ({
+          resource: context.input.resource,
+          originalJobId: context.forwardJobId,
+          operationKey: context.operationKey,
+        }),
+      },
+    }),
+  }),
+});
+const background = defineWorkflows(reservations, { reserveResource });
+```
+
+Here `provider` is an application adapter with current business/provider authorization and a
+durable idempotency contract. Forward attempts use their original job ID; cleanup receives a
+stable `workflow-compensation:<runId>:<stepName>` operation key. The adapter must find and release
+the original reservation even when the forward handler failed after the provider accepted it.
+It must accept cleanup of a resource that was never reserved. A declaration of
+`agent.idempotent: true` is required for an automatic cleanup job; it states a business contract
+and does not make arbitrary effects idempotent. Never use the attempt number as an operation key.
+
+The synchronous cleanup mapper receives validated workflow `input`, `workflowId`, `step`,
+`forwardJobId`, `operationKey`, and `outcome`. A succeeded outcome includes its typed `result`
+(a void result is stored as `null`). Failed/cancelled outcomes have no claimed result: an
+attempted remote effect may have succeeded before the local failure. Arguments are validated,
+limited to 64 KiB or the smaller configured payload limit, and frozen with one queue occurrence
+before execution. Cleanup results have the corresponding 64 KiB/configured result limit; errors
+use the existing job error bound. Async, malformed or oversized mapper output records a visible
+failed recovery step and manual intervention without starting that cleanup job.
+
+Forward failure, explicit cancellation, denied/timed-out waits and output failure trigger
+recovery. Never-attempted steps are skipped. Workers first request cancellation and wait for
+active forward attempts to settle, then queue at most one cleanup job for that run. Independent
+branches use deterministic name/dependency ordering; dependent cleanup always precedes its
+predecessor's cleanup. Cleanup retries retain the same job ID, arguments and operation key.
+The queue refuses a cleanup payload that differs from its frozen declaration. Operator
+`retry(jobId)` cannot reset retained forward/cleanup attempts in a compensation run; automatic
+job retries follow the declared retry policy. Preserve manual evidence for provider inspection.
+If a worker dies after the provider accepts cleanup, the next worker replays that operation
+after the lease expires. The provider must return the same durable receipt rather than apply
+the effect again. Local fencing cannot stop a handler that ignores abort from sending remote
+requests after losing its lease, so the external idempotency contract remains necessary.
+
+For an irreversible boundary, declare `compensate: { manual: "Inspect the captured payment" }`.
+The reason is 1–2000 characters. When that attempted step is reached, or an automatic cleanup
+exhausts retries/is cancelled, recovery becomes `manual` and stops automatic upstream cleanup.
+Later dependent cleanup may already have completed. Steps without a compensation declaration
+have no inferred inverse; choose a declaration or manual barrier for every effect that needs
+recovery. Inspect the original outcome, ordered recovery steps, original/cleanup job IDs,
+results/errors and `workflowEvents` through a currently authorized server query. These methods
+are trusted server APIs; expose no unauthenticated operator endpoint. Cleanup uses the original
+run's owner scope and fenced database/job publisher context, while handlers remain responsible
+for current business/provider permissions.
+
+At start, one transaction reserves capacity with the run and ready jobs: at most 100 graph
+steps and 10,000 retained compensation declarations globally. Capacity refuses new admission
+without evicting recovery authority. Routine workflow/job retention protects unresolved
+recovery and all referenced forward/cleanup jobs. `purgeWorkflows` can remove completed recovery
+with its terminal run. A trusted operator may explicitly opt in to deleting inactive manual
+evidence with `includeUnresolvedCompensations: true`; even that opt-in cannot purge an active
+forward/cleanup job. Export the evidence and resolve provider state before this irreversible
+deletion. There is no automatic retry of a manual barrier or assertion that it was resolved.
+
+Private tables use protocol 1 and are created only for declared or retained compensation.
+Unknown protocols fail startup and stale-controller admission/advancement. Changed/missing
+retained definitions stop automatic recovery and preserve manual evidence. Compensation graph
+revisions also cover forward/cleanup handler source, cleanup schema and mapper/manual reason;
+ordinary graphs preserve their previous revision bytes. Function source cannot capture mutable
+external configuration: keep mappers pure and put versioned business configuration in validated
+workflow input. All controllers must use the same definition/configuration. Back up before
+enabling this contract; an older worker binary does not honor its recovery fences or retention.
+Rollback requires a verified compatible binary/database/configuration snapshot.
+
 ## Add cron schedules
 
 Schedules live on a job definition and enqueue the same validated handler:
