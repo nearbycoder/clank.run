@@ -659,12 +659,12 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 12 | SCIM user and group provisioning | Implemented and merged | Proposal #287 / merged PR #289; [SCIM acceptance](scim-provisioning.json). |
 | 13 | Organization security policy console | In progress; not counted | Proposal #309; native runtime, client, declarations and docs checked; full release gates and native console interaction pending. |
 | 14 | Temporary privileged access | Planned | Pending |
-| 15 | Organization service accounts | Planned | Pending |
+| 15 | Organization service accounts | Implemented and merged | Proposal #306 / merged PR #308; [accepted native runtime, process, type, package, docs and protected-delivery evidence](service-accounts.json). |
 | 16 | Agent operation budgets | Implemented | Proposal #251; 22 focused tests, actual four-process contention, atomic rollback, restart/exact replay, ownership/revocation/expiry, bounded retention, real MCP calls and 14 packed consumer fixtures. Full release gate passes. |
 | 17 | Approval quorum policies | Planned | Pending |
 | 18 | Reviews bound to affected records | Implemented | Opt-in tracked reads, requester identity fence, affected-row/ACL changes, unrelated writes, journal gaps, restart and receipt replay tested in `tests/reviewed-actions.test.mjs`. Default remains conservative. |
 | 19 | Durable human waits in workflows | Implemented | Proposal #293 / merged PR #295; [accepted runtime, browser, process and type evidence](workflow-waits.json). |
-| 20 | Workflow compensation steps | Verified; merge pending | Proposal #296 / PR #297; [final runtime, process, browser and packed type acceptance](workflow-compensation.json). |
+| 20 | Workflow compensation steps | Implemented and merged | Proposal #296 / merged PR #297; [final runtime, process, browser, packed types and protected delivery](workflow-compensation.json). |
 | 21 | Typed PostgreSQL application backend | Planned | Pending |
 | 22 | Authorized cross-table aggregates | Implemented | Proposal #267; typed owner/policy-scoped count/sum/group, native JSON admission and selective related/ACL updates. Ten real SQLite regressions, 21 packed fixtures and full minimum-Node release gate pass. `authorized-aggregates.json`. |
 | 23 | Source-linked search indexes | Implemented | Proposal #257; atomic source writes/deletes/history restore, pre-opened independent writers, two actual process crashes, resumable fenced rebuild, bounded drift diagnosis, current owner/record authorization and 16 packed consumer fixtures. Real keyboard/mobile/scope/disposal/revocation checks and full release gate pass. |
@@ -680,8 +680,8 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 33 | OpenAPI export for backend functions | Implemented | Runtime schemas, cookie/CSRF and replay contracts; unsupported/coercive/refined shapes rejected; actual positive/negative authenticated HTTP requests tested against the packed artifact. `tests/openapi.test.mjs`, `type-tests/openapi.ts`. |
 | 34 | Local provider fleet simulator | Implemented and merged | [Actual coordinator/provider drills](fleet-simulator.json) |
 | 35 | Translation extraction and review workflow | Implemented | Canonical catalog extraction, locale/source/current fences, placeholder/key/plural validation and reviewed diff acceptance. Node tests, packed types and real browser keyboard/mobile checks confirm the server/browser revision matches. |
-| 36 | Project incident workspace | Planned | Pending |
-| 37 | SLO and error budget policies | Planned | Pending |
+| 36 | Project incident workspace | Draft; not counted | Proposal #300 / draft PR #301; runtime, process and packed types checked; current-main integration and native console acceptance pending. |
+| 37 | SLO and error budget policies | Draft; not counted | Proposal #302 / draft PR #303; known traffic arithmetic, process and packed types checked; current-main integration and native console acceptance pending. |
 | 38 | Project cost attribution and budgets | Planned | Pending |
 | 39 | Retention administration and holds | Implemented | Scoped inventory, exact purge receipts, restart-persistent holds, protected history admission, expired-retry fencing and competing scheduled runners; 63 focused tests, 18 packed fixtures, full release gate and actual browser controls. `retention-administration.json`. |
 | 40 | Customer status pages | Planned | Pending |
