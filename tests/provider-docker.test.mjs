@@ -30,7 +30,7 @@ async function orphanNetworkFixture(name) {
   const network={Name:plan.network,Id:'a'.repeat(64),Driver:'bridge',Options:{'com.docker.network.bridge.name':plan.bridge},Labels:{'run.clank.owner':owner,'run.clank.project':projectId},Containers:{}};
   await writeFile(networkPath,JSON.stringify(network));
   await writeFile(policyPath,JSON.stringify({present:true,commands:[]}));
-  await writeFile(nftExecutable,`#!/usr/bin/env node
+  await writeFile(nftExecutable,`#!${process.execPath}
 import {readFile,writeFile} from 'node:fs/promises';
 const file=${JSON.stringify(policyPath)},state=JSON.parse(await readFile(file,'utf8')),args=process.argv.slice(2),table=${JSON.stringify({family:'inet',name:plan.table,comment:plan.ownership})};
 state.commands.push(args);await writeFile(file,JSON.stringify(state));

@@ -12,7 +12,7 @@ test('nft cleanup verifies exact ownership and absence, including retries and lo
   const plan=await createLinuxDockerNetworkPlan('cleanup-provider','cleanup_project',{allowCidrs:[]}),statePath=join(root,'state.json'),executable=join(root,'nft.mjs');
   const other={family:'inet',name:'unrelated_operator_policy',comment:'leave-intact'};
   try {
-    await writeFile(executable,`#!/usr/bin/env node
+    await writeFile(executable,`#!${process.execPath}
 import {readFile,writeFile} from 'node:fs/promises';
 const file=${JSON.stringify(statePath)},state=JSON.parse(await readFile(file,'utf8')),args=process.argv.slice(2);
 state.commands.push(args);await writeFile(file,JSON.stringify(state));
