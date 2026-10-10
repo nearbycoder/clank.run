@@ -168,7 +168,21 @@ export async function openMediaProcessing(input: OpenMediaProcessingOptions): Pr
     const fresh=freshCaller(caller);synchronous(options.authorize(fresh, transform, operation));return fresh;
   };
   const rowById = (id: string, connection: Connection = sql) => connection.prepare("SELECT * FROM clank_media_operations WHERE id=?").get(id);
-  const inputFor = (row: Record<string, unknown>): { source: BucketProcessingSource; destinationKey: string; destinationGeneration: string | null } => JSON.parse(String(row.input));
+  const inputFor = (row: Record<string, unknown>): { source: BucketProcessingSource; destinationKey: string; destinationGeneration: string | null } => {
+    try {
+      const input=JSON.parse(String(row.input)),transform=transformFor(String(row.transform_name));
+      if(!input || typeof input!=="object" || Array.isArray(input)
+        || Object.keys(input).sort().join(",")!=="destinationGeneration,destinationKey,source"
+        || !input.source || typeof input.source!=="object" || Array.isArray(input.source)
+        || input.source.bucket!==transform.sourceBucket) throw new Error("Invalid persisted media input.");
+      const sourceKey=text(input.source.key,"persisted source key",512),destinationKey=text(input.destinationKey,"persisted destination key",512);
+      text(input.source.generation,"persisted source generation",200);
+      if(input.destinationGeneration!==null) text(input.destinationGeneration,"persisted destination generation",200);
+      if(row.fingerprint!==JSON.stringify([transform.name,sourceKey,destinationKey])
+        || transform.sourceBucket===transform.destinationBucket && sourceKey===destinationKey) throw new Error("Changed persisted media input.");
+      return input;
+    } catch { fail("MEDIA_INPUT_INVALID","Persisted media input no longer matches its declared operation."); }
+  };
   const guard = (row: Record<string, unknown>, context?: JobHandlerContext<any,any>, connection: Connection = sql) => {
     current(connection); if (context) assertJobAttemptCurrent(context);
     if (Number(row.expires_at) <= now()) fail("MEDIA_EXPIRED", "This media operation and its retry authority expired.", 410);

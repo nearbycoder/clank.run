@@ -40,7 +40,16 @@ test('actual SIGKILL after bucket and receipt commit reclaims the lease and sett
   const exited=new Promise(resolve=>child.once('exit',(code,signal)=>resolve({code,signal})));
   const publication=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Owned media worker did not publish: '+output)),15000);child.once('message',value=>{clearTimeout(timer);resolve(value);});child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',()=>{clearTimeout(timer);reject(new Error('Owned media worker exited before publication: '+output));});});
   assert.equal(publication.kind,'published');assert.equal(publication.operation,queued.id);assert.equal(publication.job,queued.jobId);
-  const inspection=new DatabaseSync(join(f.root,'catalog.sqlite'),{readOnly:true}),before=inspection.prepare('SELECT result,output_generation FROM clank_media_operations WHERE id=?').get(queued.id),lease=inspection.prepare('SELECT lease_until FROM clank_jobs WHERE id=?').get(queued.jobId);assert.ok(before.result);assert.ok(before.output_generation);inspection.close();
+  const inspection=new DatabaseSync(join(f.root,'catalog.sqlite'),{readOnly:true});
+  // The live native worker can briefly hold a catalog lock while renewing its
+  // attempt. Match the catalog's bounded wait before inspecting committed rows.
+  inspection.exec('PRAGMA busy_timeout=5000');
+  let before,lease;
+  try {
+    before=inspection.prepare('SELECT result,output_generation FROM clank_media_operations WHERE id=?').get(queued.id);
+    lease=inspection.prepare('SELECT lease_until FROM clank_jobs WHERE id=?').get(queued.jobId);
+    assert.ok(before.result);assert.ok(before.output_generation);
+  } finally { inspection.close(); }
   child.kill('SIGKILL');assert.equal((await exited).signal,'SIGKILL');assert.equal(f.requests,1);assert.equal(ledgerCount(f),1);
   await new Promise(resolve=>setTimeout(resolve,Math.max(0,Number(lease.lease_until)-Date.now()+50)));
   const reopened=await f.open(),fresh=await f.caller(reopened);

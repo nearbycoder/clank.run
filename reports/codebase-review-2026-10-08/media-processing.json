@@ -5,7 +5,7 @@
   "counted": false,
   "base": "e81ef931baff736eeb675daee3427b185644933a",
   "nativeEvidence": {
-    "newFocusedChecks": 27,
+    "newFocusedChecks": 30,
     "existingBucketJobRegressions": 65,
     "actualSigkillAfterPublicationBeforeSettlement": true,
     "actualTwoWorkerProcesses": true,
@@ -13,7 +13,8 @@
     "providerAcceptedOperations": 1,
     "providerAttemptsForLostResponse": 2,
     "sameNativeCatalogPublicationReceipt": true,
-    "heldSourceDestinationSessionPolicyCancelLeaseExpiryProtocolFences": true
+    "heldSourceDestinationSessionPolicyCancelLeaseExpiryProtocolFences": true,
+    "persistedInputMatchesDeclaredTransformAndLogicalOperation": true
   },
   "types": {
     "consumerFixtures": 33,
@@ -44,5 +45,21 @@
     "Expired operation IDs remain bounded tombstones; admission stops at configured capacity"
   ],
   "acceptedFeatures": 25,
-  "remainingFeatures": 15
+  "remainingFeatures": 15,
+  "priorFullGates": {
+    "source": "0b96ec8ff94cf973f36ce83991bb90a04258c1d0",
+    "bothPassed": true,
+    "tests": 2073,
+    "pass": 2070,
+    "fail": 0,
+    "skipped": 3,
+    "currentSourceRequiresFreshFullGates": true
+  },
+  "hostedFailure": {
+    "source": "0b96ec8ff94cf973f36ce83991bb90a04258c1d0",
+    "node24ActualFailure": "tests/media-processing-process.test.mjs:43:102 observer SQLite connection had no busy timeout",
+    "node22AndConformance": "Truncated diagnostics exclude the assertion; failure retained without an inferred location",
+    "fixtureFix": "Read-only observer uses bounded 5000ms SQLite busy timeout; original publication/crash assertions unchanged",
+    "ciRuntimeReporter": "spec keeps failure assertions at the end of bounded CI logs"
+  }
 }

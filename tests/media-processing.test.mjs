@@ -31,6 +31,22 @@ async function fixture(t,changes={}) {
 }
 const input={operationId:'media-operation-01',transform:'uppercase',sourceKey:'source',destinationKey:'output'};
 
+for(const mutation of ['undeclared-source-bucket','changed-logical-destination','malformed-source-generation']){
+  test(`malformed persisted input refuses ${mutation} before any adapter or publication effect`,async t=>{
+    const f=await fixture(t),owner=await f.caller(f.owner),queued=f.controller.enqueue(owner,input);
+    const frozen=JSON.parse(f.sql.prepare('SELECT input FROM clank_media_operations WHERE id=?').get(queued.id).input);
+    if(mutation==='undeclared-source-bucket')frozen.source.bucket='shared-media';
+    if(mutation==='changed-logical-destination')frozen.destinationKey='unapproved-output';
+    if(mutation==='malformed-source-generation')frozen.source.generation={};
+    f.sql.prepare('UPDATE clank_media_operations SET input=? WHERE id=?').run(JSON.stringify(frozen),queued.id);
+    assert.throws(()=>f.controller.get(owner,queued.id),error=>error.code==='MEDIA_INPUT_INVALID');
+    await f.controller.workOnce();assert.equal(f.calls,0);
+    assert.equal(f.sql.prepare('SELECT result FROM clank_media_operations WHERE id=?').get(queued.id).result,null);
+    assert.equal(f.bucket.stat('output',{userId:f.owner.user.id}),null);
+    assert.equal(f.bucket.stat('unapproved-output',{userId:f.owner.user.id}),null);
+  });
+}
+
 test('native jobs process verified source bytes, persist progress and publish one owner-scoped output with an exact retry receipt',async t=>{
   const f=await fixture(t),owner=await f.caller(f.owner),other=await f.caller(f.other);
   const queued=f.controller.enqueue(owner,input);assert.equal(queued.state,'queued');assert.equal(f.controller.enqueue(owner,input).jobId,queued.jobId);
