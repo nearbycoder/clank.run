@@ -136,7 +136,7 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
       return undefined;
     };
     return Object.freeze<SupervisorLease>({options,databasePath:catalog,owner,processBirth,
-      acquire(){ensureOpen();return transaction(()=>{
+      acquire(){ensureOpen();try{return transaction(()=>{
         assertConfiguration();const at=now(),row=readLease();
         if(tokenHash){assertCurrent();return true;}
         if(Number(row.updated_at)>at)fail("SUPERVISOR_CLOCK_REGRESSION","Persisted supervisor clock is in the future.");
@@ -146,7 +146,12 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
         native.prepare("UPDATE clank_platform_supervisor_lease SET epoch=?,owner=?,token_hash=?,expires_at=?,updated_at=?,controller_pid=?,controller_birth=? WHERE singleton=1")
           .run(candidateEpoch,owner,candidateHash,at+options.leaseMs,at,proc.pid,processBirth);
         epoch=candidateEpoch;tokenHash=candidateHash;return true;
-      });},
+      });}catch(error){
+        // A standby owns no duties while another native writer holds the catalog.
+        // Its next poll can retry; an existing owner must still fence on failure.
+        if(!tokenHash&&(error as {code?:string}).code==="ERR_SQLITE_ERROR"&&(error as {errcode?:number}).errcode===5)return false;
+        throw error;
+      }},
       renew(){ensureOpen();transaction(()=>{assertCurrent();const at=now();native.prepare("UPDATE clank_platform_supervisor_lease SET expires_at=?,updated_at=? WHERE singleton=1 AND epoch=? AND owner=? AND token_hash=?")
         .run(at+options.leaseMs,at,epoch,owner,tokenHash);});},
       assertCurrent,
