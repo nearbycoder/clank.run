@@ -24,6 +24,28 @@ test('two independent native connections admit one ownership epoch and retained 
   assert.equal(f.observer.prepare('SELECT count(*) AS count FROM clank_platform_supervisor_lease').get().count,1);
 });
 
+test('an unowned standby defers native catalog contention without creating an epoch or reporting lost authority',async t=>{
+  const f=await fixture(t);
+  f.observer.exec('BEGIN IMMEDIATE');
+  try{
+    assert.equal(f.first.acquire(),false);
+    const retained=f.observer.prepare('SELECT * FROM clank_platform_supervisor_lease').get();
+    assert.equal(retained.epoch,0);assert.equal(retained.owner,null);assert.equal(retained.token_hash,null);
+  }finally{f.observer.exec('ROLLBACK');}
+  assert.equal(f.first.acquire(),true);assert.equal(f.first.status('leader').epoch,1);
+});
+
+test('catalog contention never lets an existing owner silently retain or renew unchecked authority',async t=>{
+  const f=await fixture(t);assert.equal(f.first.acquire(),true);
+  f.observer.exec('BEGIN IMMEDIATE');
+  try{
+    for(const invoke of [()=>f.first.acquire(),()=>f.first.renew(),()=>f.first.release()])
+      assert.throws(invoke,error=>error.code==='ERR_SQLITE_ERROR'&&error.errcode===5);
+    assert.equal(f.observer.prepare('SELECT epoch FROM clank_platform_supervisor_lease').get().epoch,1);
+  }finally{f.observer.exec('ROLLBACK');}
+  f.first.renew();assert.equal(f.first.assertCurrent(),undefined);
+});
+
 test('expired ownership cannot be renewed or reacquired by a controller retaining its old capability',async t=>{
   const f=await fixture(t),second=await f.open();f.first.acquire();
   f.observer.exec('UPDATE clank_platform_supervisor_lease SET expires_at=0');
