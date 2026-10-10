@@ -718,6 +718,12 @@ grant inspection, reduction, and revocation.
 - `DocumentFor<Database, Table>`: inferred fields plus branded `_id`, `_creationTime`, `_version`, and `_ownerId` for owned tables.
 - `Id<Table>` / `DocumentId<Table>` / `s.id(table)`: nominal table-specific IDs.
 - `openSQLite(schema, options?)`: opens Node's built-in synchronous SQLite engine.
+- `openPostgres(schema, options)`: opens the bounded PostgreSQL application subset with verified
+  TLS/SCRAM, trusted owner scopes, native transactions, retained revisions and explicit reconnect.
+  History, aggregates and SQLite-native services are unsupported. See [PostgreSQL application
+  databases](postgres-application.md) for exact startup and unknown-commit behavior.
+- `ApplicationDatabase<Schema>`: portable generated-table core; `SQLiteDatabase` retains its
+  private native services and `PostgresDatabase` exposes its capability tuple and `.reconnect()`.
 - `createSQLiteDatabase(schema, connection, options?)`: wraps a compatible connection.
 - `QueryBuilder.aggregate({ joins?, groupBy?, measures, authorize, limits? })`: typed complete
   counts/sums/groups over declared root fields and direct references. Requires caller-scoped

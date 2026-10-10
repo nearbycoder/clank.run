@@ -46,6 +46,7 @@ export * from "./ui.js";
 export * from "./server.js";
 export * from "./auth.js";
 export * from "./backend.js";
+export * from "./postgres.js";
 export * from "./deploy.js";
 export * from "./migrations.js";
 export * from "./jobs.js";
