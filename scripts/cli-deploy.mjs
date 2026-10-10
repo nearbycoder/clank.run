@@ -227,6 +227,10 @@ const COMMANDS = Object.freeze({
     usage: "clank backup <create|list|verify|restore>",
     summary: "Create, verify, list, or restore encrypted backups.",
   },
+  recovery: {
+    usage: "clank recovery <status|checkpoint|restore-plan> [directory] [--key <id>] [--expected-version <n>] [--request <json-file>] [--json]",
+    summary: "Inspect retained recovery horizons, request an exact checkpoint, or prepare a browser-approved restore.",
+  },
   secrets: {
     usage: "clank secrets <list|set|delete|rotations|stage|validate|activate|rollback>",
     summary: "Manage write-only runtime secrets.",
@@ -287,6 +291,7 @@ const VALUE_OPTIONS = Object.freeze({
   logs: ["limit"],
   rollback: ["confirm", "key", "expected-active", "expected-activation", "dependency-version", "dependency-check"],
   backup: ["reason", "confirm"],
+  recovery: ["key", "expected-version", "request"],
   secrets: ["from-env"],
 });
 const BOOLEAN_OPTIONS = Object.freeze({
@@ -307,6 +312,7 @@ const BOOLEAN_OPTIONS = Object.freeze({
   dependency: ["json"],
   "release-window": ["json"],
   channel: ["json"],
+  recovery: ["json"],
   preview: [
     "json",
     "acknowledge-data-loss",
@@ -361,6 +367,7 @@ export async function run(command, args) {
       case "logs": return await logs(args);
       case "rollback": return await rollback(args);
       case "backup": return await backupCommand(args);
+      case "recovery": return await recoveryCommand(args);
       case "secrets": return await secrets(args);
       case "migrate": return await migrate(args);
       case "inspect": return await inspectArtifact(args);
@@ -612,6 +619,9 @@ Platform:
   clank backup list
   clank backup verify <backup-id>
   clank backup restore <backup-id> --confirm="restore-backup <slug> <id>"
+  clank recovery status [directory] --json
+  clank recovery checkpoint [directory] --key <id> --expected-version <n>
+  clank recovery restore-plan [directory] --request <json-file> --json
   clank secrets list
   clank secrets set NAME               Read a secret value from stdin
   clank secrets rotations              Inspect versions and running consumers
@@ -3295,6 +3305,39 @@ async function rollback(args) {
   });
   if (flag(args, "json")) console.log(JSON.stringify(payload, null, 2));
   else console.log(`Active release: ${payload.release.id}`);
+}
+
+async function recoveryCommand(args) {
+  const action=args.shift(),allowed={status:["json"],checkpoint:["key","expected-version","json"],"restore-plan":["request","json"]}[action];
+  if(!allowed)throw new CliError(COMMANDS.recovery.usage);
+  for(const argument of optionArguments(args)){const name=argument.slice(2).split("=",1)[0];if(argument.startsWith("--")&&!allowed.includes(name))throw new CliError(`--${name} does not apply to recovery ${action}.`);}
+  const values=positionals(args);if(values.length>1)throw new CliError(COMMANDS.recovery.usage);
+  let request;
+  if(action==="restore-plan"){
+    const file=option(args,"request");if(!file)throw new CliError("Pass --request with the proposed operationId, checkpointId, expectedVersion, throughSequence, name and slug.");
+    request=await readBoundedJsonFile(resolve(file),"Recovery restore plan",8192);
+    const keys=["operationId","checkpointId","expectedVersion","throughSequence","name","slug"];
+    if(!request||typeof request!=="object"||Array.isArray(request)||Object.keys(request).length!==keys.length||keys.some(key=>!Object.hasOwn(request,key))||typeof request.operationId!=="string"||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(request.operationId)||typeof request.checkpointId!=="string"||!/^pitr_[0-9a-f]{64}$/u.test(request.checkpointId)||!Number.isSafeInteger(request.expectedVersion)||request.expectedVersion<1||!Number.isSafeInteger(request.throughSequence)||request.throughSequence<0||typeof request.name!=="string"||!request.name.trim()||request.name.length>100||typeof request.slug!=="string"||request.slug.length>50||!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(request.slug))throw new CliError("Use an exact bounded recovery plan with a canonical destination slug and retained checkpoint.");
+  }
+  let checkpoint;
+  if(action==="checkpoint"){
+    const operationId=option(args,"key"),expectedVersion=positiveIntegerOption(args,"expected-version",undefined,Number.MAX_SAFE_INTEGER);
+    if(typeof operationId!=="string"||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u.test(operationId)||expectedVersion===undefined)throw new CliError("Pass a stable --key and the current --expected-version from recovery status.");checkpoint={operationId,expectedVersion};
+  }
+  const {profile,link}=await linkedContext(resolve(values[0]??".")),base=`/api/projects/${encodeURIComponent(link.projectId)}/point-in-time`;
+  let payload=await platformRequest(profile.server,base+(checkpoint?"/checkpoints":""),{token:profile.token,...(checkpoint?{method:"POST",body:checkpoint,timeoutMs:PLATFORM_DEPLOY_TIMEOUT_MS}:{})});
+  if(request){
+    const retained=payload.checkpoints?.find(value=>value.id===request.checkpointId);
+    if(payload.policy?.version!==request.expectedVersion||!retained||!Number.isSafeInteger(retained.sequence)||request.throughSequence>retained.sequence)throw new CliError("Refresh the recovery horizon and policy version before preparing this restore.");
+    const source=await platformRequest(profile.server,`/api/projects/${encodeURIComponent(link.projectId)}`,{token:profile.token});
+    if(typeof source.project?.slug!=="string")throw new CliError("Current recovery source metadata is unavailable.");
+    payload={ok:true,browserOnly:true,method:"POST",path:base+"/restores",request:{...request,confirmation:`restore-recovery ${source.project.slug} ${request.checkpointId} ${request.throughSequence} ${request.slug}`},authorization:"Fresh current human browser administration required; no restore was submitted."};
+  }
+  if(flag(args,"json")||request){console.log(JSON.stringify(payload,null,2));return;}
+  if(payload.checkpoint){console.log(`Retained ${payload.checkpoint.id} through sequence ${payload.checkpoint.sequence}.`);return;}
+  console.log(`Recovery policy ${payload.policy?.version??0}: ${payload.policy?.enabled?"enabled":"disabled"}.`);
+  for(const retained of payload.checkpoints??[])console.log(`${retained.id}  epoch ${retained.epoch}  through sequence ${retained.sequence}`);
+  for(const restore of payload.restores??[])console.log(`${restore.operationId}  ${restore.state}  destination ${restore.destinationProjectId}`);
 }
 
 async function backupCommand(args) {

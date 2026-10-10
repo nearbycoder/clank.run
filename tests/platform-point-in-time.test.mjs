@@ -65,6 +65,12 @@ test('a native failure at final acknowledgment rolls back the archive and horizo
   f.internal.exec('DROP TRIGGER refuse_ack');await f.reopen();const accepted=await f.capture();assert.equal(accepted.sequence,3);assert.equal(pointInTimeReceiptCount(f.node),1);
 }));
 
+test('a native ignored checkpoint acknowledgment cannot publish an archive or advance the retained horizon',async()=>fixture(async f=>{
+  f.enable();f.internal.exec("CREATE TRIGGER ignore_checkpoint_ack BEFORE UPDATE OF state ON clank_platform_pitr_operations WHEN NEW.state='accepted' BEGIN SELECT RAISE(IGNORE); END;");
+  await assert.rejects(f.capture(),/checkpoint acknowledgment changed/);assert.equal(f.controller.checkpoints('project_native').length,0);assert.equal(f.internal.prepare('SELECT count(*) AS n FROM clank_platform_pitr_archives').get().n,0);assert.equal(f.controller.policy('project_native').epoch,null);assert.equal(f.controller.policy('project_native').pendingOperationId,'checkpoint_native_01');assert.equal(pointInTimeReceiptCount(f.node),1);
+  f.internal.exec('DROP TRIGGER ignore_checkpoint_ack');await f.reopen();assert.equal((await f.capture()).sequence,3);assert.equal(pointInTimeReceiptCount(f.node),1);
+}));
+
 test('a pending checkpoint preserves its original provider generation through a controller restart and refuses a changed source before another request',async()=>fixture(async f=>{
   f.enable();f.internal.exec("CREATE TRIGGER refuse_ack BEFORE UPDATE OF state ON clank_platform_pitr_operations WHEN NEW.state='accepted' BEGIN SELECT RAISE(ABORT,'owned native acknowledgment fault'); END;");
   await assert.rejects(f.capture());f.internal.exec('DROP TRIGGER refuse_ack');await f.reopen();

@@ -3,7 +3,7 @@ import {signedStepUp} from './fixtures/platform-recovery-fresh-auth.mjs';
 import {readFile} from 'node:fs/promises';
 import {fixture} from './fixtures/platform-environment-fixture.mjs';
 
-async function setup(t){let sources=0;const f=await fixture(t,false,{pointInTime:{source:async()=>{sources++;throw new Error('No registered captured provider in this API fixture.');}}}),native=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));native.exec('PRAGMA busy_timeout=5000');t.after(()=>native.close());const path=`/api/projects/${f.development.id}/point-in-time`,input={operationId:'native_recovery_configuration',expectedVersion:0,enabled:false,intervalMs:60000,confirmation:'configure-recovery '+f.development.slug};return {...f,native,path,input,get sources(){return sources;}};}
+async function setup(t,overrides={}){let sources=0;const f=await fixture(t,false,{...overrides,pointInTime:{source:async()=>{sources++;throw new Error('No registered captured provider in this API fixture.');}}}),native=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));native.exec('PRAGMA busy_timeout=5000');t.after(()=>native.close());const path=`/api/projects/${f.development.id}/point-in-time`,input={operationId:'native_recovery_configuration',expectedVersion:0,enabled:false,intervalMs:60000,confirmation:'configure-recovery '+f.development.slug};return {...f,native,path,input,get sources(){return sources;}};}
 
 test('recovery is disabled by default without creating recovery protocol tables',async t=>{
   const f=await fixture(t);await f.call(`/api/projects/${f.development.id}/point-in-time`,undefined,404);const native=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'),{readOnly:true});try{native.exec('PRAGMA busy_timeout=5000');assert.equal(native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name='clank_platform_pitr_state'").get().n,0);}finally{native.close();}
@@ -43,4 +43,16 @@ test('recovery configuration revalidates native workspace membership after a hel
   const pending=f.handle(new Request(f.options.publicUrl+f.path,{method:'PUT',duplex:'half',headers:{origin:f.options.publicUrl,cookie:f.owner.cookie,'x-clank-csrf':f.owner.csrf,'content-type':'application/json'},body}));
   await reading;assert.equal(Number(f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.development.organizationId,f.owner.user.id).changes),1);deliver();
   const response=await pending;assert.ok([403,404].includes(response.status),JSON.stringify(await response.json()));assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,0);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.policy'").get().n,0);assert.equal(f.sources,0);
+});
+
+test('real native machine read grants inspect only their current project recovery metadata, cannot mutate it, and fail after owner revocation',async t=>{
+  const f=await setup(t,{serviceAccounts:{}});await signedStepUp(f,f.native);await f.call(f.path,f.input,200,'PUT');
+  const accounts=`/api/organizations/${f.development.organizationId}/service-accounts`,account=(await f.call(accounts,{name:'Recovery observer',ownerId:f.owner.user.id,operationId:'recovery_observer_create'},201)).account;
+  const issued=(await f.call(accounts+'/'+account.id+'/credentials',{projectId:f.development.id,permissions:['read'],expiresAt:Date.now()+600000,expectedVersion:account.version,operationId:'recovery_observer_credential'},201)).issued,origin=await f.serve();
+  const call=async(path,status,body,method=body===undefined?'GET':'POST')=>{const response=await fetch(origin+path,{method,headers:{authorization:'Bearer '+issued.accessToken,...(body===undefined?{}:{'content-type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})}),value=await response.json();assert.equal(response.status,status,JSON.stringify(value));return value;};
+  const metadata=await call(f.path,200);assert.equal(metadata.policy.version,1);assert.deepEqual(metadata.checkpoints,[]);assert.deepEqual(metadata.restores,[]);assert.ok(!JSON.stringify(metadata).includes(issued.accessToken));
+  await call(`/api/projects/${f.staging.id}/point-in-time`,404);
+  await call(f.path,403,{...f.input,operationId:'machine_cannot_configure',expectedVersion:1},'PUT');await call(f.path+'/checkpoints',403,{operationId:'machine_cannot_capture',expectedVersion:1});await call(f.path+'/restores',403,{});await call(f.path+'/resolve',403,{});
+  assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,1);assert.equal(f.sources,0);
+  assert.equal(Number(f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.development.organizationId,f.owner.user.id).changes),1);await call(f.path,403);
 });

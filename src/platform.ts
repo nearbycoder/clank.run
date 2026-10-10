@@ -856,7 +856,7 @@ interface TokenPrincipal {
 // Request-local authority never becomes a persisted credential or an audit field.
 const admittedTokenAuthority = new WeakMap<TokenPrincipal, string>();
 function machineProjectPermission(operation: string, method: string): ProjectPermission {
-  if(method==='GET' && ['', 'usage', 'releases', 'backups'].includes(operation)) return 'read';
+  if(method==='GET' && ['', 'usage', 'releases', 'backups', 'point-in-time'].includes(operation)) return 'read';
   if(method==='GET' && operation==='logs') return 'logs';
   if(method==='GET' && operation==='audit') return 'audit';
   if(operation==='secrets' && ['GET','PUT'].includes(method) || /^secrets\/[^/]+$/u.test(operation) && method==='DELETE') return 'secrets';
