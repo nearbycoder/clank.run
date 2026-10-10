@@ -1409,6 +1409,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   }
   const paths = await prepareDirectories(options.dataDirectory);
   await assertPlatformSupervisorMode(paths.controlDatabase,Boolean(leadership));
+  await assertPlatformRecoveryMode(paths.controlDatabase,paths.root+"/point-in-time",Boolean(options.pointInTime));
   const runtimeGuardianDirectory = await prepareRuntimeGuardians(paths.root);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
@@ -8957,7 +8958,10 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         requireNoEvacuation(project.id);
       }
       const requireCurrentProjectAuthority = () => {
-        if (request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          if(recoveryPendingTarget(project.id))throw new PlatformError(409,"RECOVERY_DESTINATION_PENDING","The reserved recovery destination remains stopped until its exact restore is verified and accepted.");
+          requireNoEvacuation(project.id);
+        }
         requireCurrentPlatformPrincipal(storage, principal);
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
@@ -10950,6 +10954,17 @@ async function assertPlatformSupervisorMode(path:string,enabled:boolean):Promise
     await fs.stat(path);const sqlite=await import(sqliteName),observer=new sqlite.DatabaseSync(path,{readOnly:true});
     try{observer.exec("PRAGMA busy_timeout=5000");if(observer.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_state'").get())throw new PlatformSupervisorError("SUPERVISOR_MODE_REQUIRED","This catalog requires its configured supervisor topology; quiesce and recover before changing modes.");}
     finally{observer.close();}
+  }catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+}
+
+async function assertPlatformRecoveryMode(databasePath:string,directory:string,enabled:boolean):Promise<void>{
+  if(enabled)return;
+  const fsName="node:fs/promises",sqliteName="node:sqlite",fs=await import(fsName);
+  const required=()=>new PlatformError(409,"RECOVERY_MODE_REQUIRED","This enrolled catalog requires its registered recovery configuration; preserve its marker, archives and pending destinations for operator recovery.");
+  try{const stat=await fs.lstat(directory);if(!stat.isDirectory()||stat.isSymbolicLink()||(await fs.readdir(directory)).length!==0)throw required();}catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+  try{
+    await fs.stat(databasePath);const sqlite=await import(sqliteName),observer=new sqlite.DatabaseSync(databasePath,{readOnly:true});
+    try{observer.exec("PRAGMA busy_timeout=5000");if(observer.prepare("SELECT 1 FROM sqlite_schema WHERE name IN ('clank_platform_pitr_state','clank_platform_pitr_policies','clank_platform_pitr_operations','clank_platform_pitr_checkpoints','clank_platform_pitr_archives') LIMIT 1").get())throw required();}finally{observer.close();}
   }catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
 }
 

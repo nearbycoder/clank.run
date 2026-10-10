@@ -1,11 +1,21 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';
 import {signedStepUp} from './fixtures/platform-recovery-fresh-auth.mjs';
+import {readFile} from 'node:fs/promises';
 import {fixture} from './fixtures/platform-environment-fixture.mjs';
 
 async function setup(t){let sources=0;const f=await fixture(t,false,{pointInTime:{source:async()=>{sources++;throw new Error('No registered captured provider in this API fixture.');}}}),native=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));native.exec('PRAGMA busy_timeout=5000');t.after(()=>native.close());const path=`/api/projects/${f.development.id}/point-in-time`,input={operationId:'native_recovery_configuration',expectedVersion:0,enabled:false,intervalMs:60000,confirmation:'configure-recovery '+f.development.slug};return {...f,native,path,input,get sources(){return sources;}};}
 
 test('recovery is disabled by default without creating recovery protocol tables',async t=>{
   const f=await fixture(t);await f.call(`/api/projects/${f.development.id}/point-in-time`,undefined,404);const native=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'),{readOnly:true});try{native.exec('PRAGMA busy_timeout=5000');assert.equal(native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name='clank_platform_pitr_state'").get().n,0);}finally{native.close();}
+});
+
+test('native platform enrollment cannot be bypassed by omitting its configuration or losing all recovery tables',async t=>{
+  const f=await setup(t),configuration=f.options.pointInTime,marker=join(f.options.dataDirectory,'point-in-time/protocol');assert.equal(await readFile(marker,'utf8'),'clank-platform-pitr/1\n');
+  delete f.options.pointInTime;await assert.rejects(f.restart(),error=>error.code==='RECOVERY_MODE_REQUIRED');assert.equal(f.native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name LIKE 'clank_platform_pitr_%'").get().n,5);
+  f.options.pointInTime=configuration;await f.restart();
+  for(const name of ['archives','checkpoints','operations','policies','state'])f.native.exec('DROP TABLE clank_platform_pitr_'+name);
+  delete f.options.pointInTime;await assert.rejects(f.restart(),error=>error.code==='RECOVERY_MODE_REQUIRED');assert.equal(f.native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name LIKE 'clank_platform_pitr_%'").get().n,0);assert.equal(await readFile(marker,'utf8'),'clank-platform-pitr/1\n');
+  f.options.pointInTime=configuration;await assert.rejects(f.restart(),/Partial platform recovery protocol/);assert.equal(f.native.prepare("SELECT count(*) AS n FROM sqlite_schema WHERE name LIKE 'clank_platform_pitr_%'").get().n,0);
 });
 
 test('native current human policy configuration requires a real signed fresh assertion, records one audit per operation, and returns current policy beside a historical receipt',async t=>{
