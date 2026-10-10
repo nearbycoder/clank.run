@@ -5,13 +5,16 @@ import {fixture} from './fixtures/platform-environment-fixture.mjs';
 import {capturedProvider} from './fixtures/platform-point-in-time-provider.mjs';
 import {signedStepUp} from './fixtures/platform-recovery-fresh-auth.mjs';
 import {recoveryMcpRequest} from './fixtures/platform-recovery-mcp.mjs';
+import {reservePlatformTestPorts} from './fixtures/platform-test-ports.mjs';
 
-async function setup(t,controllerProcess=false){
+async function setup(t,controllerProcess=false,http=false){
   const provider=await capturedProvider(t),errors=[];let gate;
   const restoreKey=provider.configuration.restoreKey;
   provider.configuration.restoreKey=async(...args)=>{await gate?.();return restoreKey(...args);};
   const holdDirectory=join(provider.root,'key-lookup-barrier');if(controllerProcess)await mkdir(holdDirectory);
-  const f=await fixture(t,controllerProcess?'tests/fixtures/platform-point-in-time-project-controller.mjs':false,{pointInTime:controllerProcess?{...provider.descriptor,holdDirectory}:provider.configuration,deploymentAgents:{registrationToken:provider.registrationToken,placement:{default:'local',activationTimeoutMs:30000}},onError(error){errors.push(error);t.diagnostic(String(error?.stack??error));}});
+  const publicPorts=http?await reservePlatformTestPorts():null;let f;
+  try{f=await fixture(t,controllerProcess?'tests/fixtures/platform-point-in-time-project-controller.mjs':false,{...(publicPorts?{publicUrl:'http://127.0.0.1:'+publicPorts.start}:{}),pointInTime:controllerProcess?{...provider.descriptor,holdDirectory}:provider.configuration,deploymentAgents:{registrationToken:provider.registrationToken,placement:{default:'local',activationTimeoutMs:30000}},onError(error){errors.push(error);t.diagnostic(String(error?.stack??error));}});}catch(error){await publicPorts?.release();throw error;}
+  if(publicPorts)t.after(()=>publicPorts.release());
   const native=new DatabaseSync(join(f.options.dataDirectory,'control.sqlite'));native.exec('PRAGMA busy_timeout=5000');t.after(()=>native.close());
   await provider.openAgent(f);
   const project=(await f.call('/api/projects',{name:'Captured source',slug:'captured-source',placement:'provider'},201)).project,artifact=await provider.artifact(),release=await f.upload(project,artifact,'owned_native_captured_release');
@@ -26,8 +29,9 @@ async function setup(t,controllerProcess=false){
 function target(f){const row=f.native.prepare("SELECT id,active_release_id,runtime_policy FROM clank_platform_projects WHERE slug='recovered-point-two'").get();assert.ok(row);return row;}
 
 test('a native provider is killed and its volume deleted before a separate suspended project restores the retained mutation ledger and portable release',async t=>{
-  const f=await setup(t),origin=await f.serve();
-  const plannedInput={...f.input};delete plannedInput.confirmation;const planResponse=await fetch(recoveryMcpRequest(origin,f.path+'/mcp','tools/call',{name:'recovery_restore_plan',arguments:plannedInput},{origin:f.options.publicUrl,cookie:f.owner.cookie,'x-clank-csrf':f.owner.csrf}));assert.equal(planResponse.status,200);const plan=(await planResponse.json()).result;assert.equal(plan.isError,false);assert.equal(plan.structuredContent.browserOnly,true);assert.deepEqual(plan.structuredContent.request,f.input);assert.equal(plan.structuredContent.method,'POST');assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind='restore'").get().n,0);
+  const f=await setup(t,false,true),origin=await f.serve();
+  const plannedInput={...f.input};delete plannedInput.confirmation;const planResponse=await fetch(recoveryMcpRequest(origin,f.path+'/mcp','tools/call',{name:'recovery_restore_plan',arguments:plannedInput},{origin,cookie:f.owner.cookie,'x-clank-csrf':f.owner.csrf})),planBody=await planResponse.json();assert.equal(planResponse.status,200,JSON.stringify(planBody));const plan=planBody.result;assert.equal(plan.isError,false);assert.equal(plan.structuredContent.browserOnly,true);assert.deepEqual(plan.structuredContent.request,f.input);assert.equal(plan.structuredContent.method,'POST');assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind='restore'").get().n,0);
+  const withoutCsrf=await fetch(recoveryMcpRequest(origin,f.path+'/mcp','tools/call',{name:'recovery_status',arguments:{}},{origin,cookie:f.owner.cookie}));assert.equal(withoutCsrf.status,403);const crossOrigin=await fetch(recoveryMcpRequest(origin,f.path+'/mcp','tools/call',{name:'recovery_status',arguments:{}},{origin:'https://foreign.example.test',cookie:f.owner.cookie,'x-clank-csrf':f.owner.csrf}));assert.equal(crossOrigin.status,403);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind='restore'").get().n,0);
   await f.call(f.path+'/restores',{...f.input,confirmation:'wrong'},400);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_projects WHERE slug='recovered-point-two'").get().n,0);
   const accepted=(await f.call(f.path+'/restores',f.input,201)).receipt,project=target(f);assert.equal(accepted.sequence,2);assert.equal(project.id,accepted.destinationProjectId);assert.equal(project.active_release_id,accepted.releaseId);assert.equal(project.runtime_policy,'suspended');assert.notEqual(project.id,f.project.id);
   assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.restore.reserve'").get().n,1);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.restore.accept'").get().n,1);
