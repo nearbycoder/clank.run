@@ -549,6 +549,13 @@ for host admission, fixed faults, operator reservations, proof limits and interr
 - `deploymentProviderDiagnosticsPath(projectId)`: exact provider-private path for current
   generation logs and resource attribution. It uses the separate memory-only control token and
   returns `DEPLOYMENT_PROVIDER_DIAGNOSTICS_MEDIA_TYPE`.
+- `deploymentProviderCanaryPath(projectId, "binding" | "prepare" | "inspect" | "stop" | "retire")`:
+  exact authenticated provider canary controls. Binding issuance persists a private credential
+  digest receipt; old credentials grant only exact retained cleanup. Responses use
+  `DEPLOYMENT_PROVIDER_CANARY_CONTROL_PROTOCOL` and `DEPLOYMENT_PROVIDER_CANARY_CONTROL_MEDIA_TYPE`.
+  Only exact prepare returns a private candidate route token. `canaries.controlTimeoutMs`
+  bounds HTTP handling; an uncertain timeout requires durable retirement retry. See
+  [the HTTP contract and restart limits](provider-service.md#authenticated-provider-canary-controls).
 - `inspect(projectId)`, `snapshot(projectId)`, `diagnostics(projectId, logLimit?)`, and `close()`:
   serialized non-secret durable progress, consistent backup input, bounded runtime visibility, and
   revoke/drain/verified-stop shutdown.
