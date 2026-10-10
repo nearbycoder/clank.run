@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { access, cp, mkdir, readFile, readdir, rename, rm, watch, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { watch } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compile } from "./compiler.mjs";
 
@@ -223,6 +224,7 @@ async function compileTailwind() {
   }));
 }
 
+let compiledSources = "";
 async function build() {
   const started = performance.now();
   const files = await filesUnder(input);
@@ -257,6 +259,7 @@ async function build() {
   for (const path of await filesUnder(output)) {
     if (!path.includes(".clank-build-") && !expectedOutputs.has(path)) await rm(path, { force: true });
   }
+  compiledSources = JSON.stringify(files.sort());
   console.log(`Compiled ${files.length} files in ${(performance.now() - started).toFixed(1)}ms.`);
 }
 
@@ -268,14 +271,10 @@ try {
 }
 
 if (command === "watch") {
-  // fs.promises.watch is lazy: advance the iterator to register the underlying
-  // watcher before telling callers it is safe to make their first edit.
-  const events = watch(input, { recursive: true });
-  let event = events.next();
-  console.log(`Watching ${input}`);
   let queued;
   let rebuilding = false;
   let dirty = false;
+  let stopped = false;
   const rebuild = async () => {
     if (rebuilding) { dirty = true; return; }
     rebuilding = true;
@@ -283,19 +282,57 @@ if (command === "watch") {
       dirty = false;
       try { await build(); }
       catch (error) { console.error(`clank: ${error instanceof Error ? error.message : String(error)}`); }
-    } while (dirty);
+    } while (dirty && !stopped);
     rebuilding = false;
   };
+  // Recursive native watchers can lose a directory deletion during a rename,
+  // including on minimum Node. Reconcile names periodically, without polling
+  // file contents or creating a second writer. A failed unchanged inventory
+  // waits for another change rather than retrying a bad build indefinitely.
+  let observedSources = compiledSources;
+  let reconciliation;
+  const reconcile = async () => {
+    try {
+      const inventory = JSON.stringify((await filesUnder(input)).sort());
+      if (!stopped && inventory !== observedSources) {
+        observedSources = inventory;
+        if (inventory !== compiledSources) await rebuild();
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") console.error(`clank: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      if (!stopped) reconciliation = setTimeout(() => void reconcile(), 1000);
+    }
+  };
+  reconciliation = setTimeout(() => void reconcile(), 1000);
   // Every source entry is copied or compiled. Directory events and arbitrary
   // static extensions must trigger the same rebuild as TypeScript changes.
-  try {
-    while (!(await event).done) {
-      clearTimeout(queued);
-      queued = setTimeout(() => void rebuild(), 40);
-      event = events.next();
-    }
-  } finally {
+  const schedule = () => {
+    if (stopped) return;
     clearTimeout(queued);
-    await events.return();
+    queued = setTimeout(() => void rebuild(), 40);
+  };
+  // Minimum Node's recursive async iterator omits an error listener. Keep a
+  // permanent listener for transient scandir ENOENT during directory moves.
+  const events = watch(input, {recursive: true}, schedule);
+  events.on("error", error => {
+    if (error?.code === "ENOENT") schedule();
+    else { console.error(`clank: ${error.message}`); process.exitCode = 1; events.close(); }
+  });
+  const stop = () => events.close();
+  const closed = new Promise(resolve => events.once("close", resolve));
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  console.log(`Watching ${input}`);
+  try {
+    await closed;
+  } finally {
+    stopped = true;
+    clearTimeout(reconciliation);
+    clearTimeout(queued);
+    events.close();
+    process.removeListener("SIGINT", stop);
+    process.removeListener("SIGTERM", stop);
+    while (rebuilding) await new Promise(resolve => setTimeout(resolve, 10));
   }
 }

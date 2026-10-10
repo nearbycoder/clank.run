@@ -89,6 +89,40 @@ test("092: watch reconciles renamed and deleted source directories", async (t) =
   await until(async () => await content(join(root, "dist", "new", "asset.bin")) === null, "Directory removal left stale outputs");
 });
 
+test("092b: watch survives a transient recursive scan error and lost directory notifications", async (t) => {
+  const root = await directory(t);
+  await mkdir(join(root, "src", "old"));
+  await writeFile(join(root, "src", "old", "asset.bin"), "retained");
+  const preload = join(root, "lost-notifications.mjs");
+  await writeFile(preload, `
+import fs from "node:fs";
+import {syncBuiltinESMExports} from "node:module";
+const original = fs.watch;
+fs.watch = (path, options, listener) => {
+  const events = original(path, options, options?.recursive ? () => {} : listener);
+  if (options?.recursive) queueMicrotask(() => events.emit("error", Object.assign(new Error("Owned transient recursive scan error"), {code: "ENOENT"})));
+  return events;
+};
+const originalAsync = fs.promises.watch;
+fs.promises.watch = (...args) => {
+  const events = originalAsync(...args);
+  events.next().catch(() => undefined);
+  return {
+    [Symbol.asyncIterator]() { return this; },
+    next() { return new Promise(() => {}); },
+    return() { return events.return(); },
+  };
+};
+syncBuiltinESMExports();
+`);
+  await watching(t, root, [], preload);
+  await rename(join(root, "src", "old"), join(root, "src", "new"));
+  await until(async () => await content(join(root, "dist", "new", "asset.bin")) === "retained"
+    && await content(join(root, "dist", "old", "asset.bin")) === null, "Lost rename notifications left stale outputs");
+  await rm(join(root, "src", "new"), {recursive: true});
+  await until(async () => await content(join(root, "dist", "new", "asset.bin")) === null, "Lost deletion notifications left stale outputs");
+});
+
 test("093: watch coalesces changes during a slow build without overlapping writers", async (t) => {
   const root = await directory(t);
   const tailwind = join(root, "node_modules", "@tailwindcss", "cli", "dist");
@@ -98,19 +132,12 @@ test("093: watch coalesces changes during a slow build without overlapping write
   await writeFile(preload, `
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-const originalWatch = fs.promises.watch;
+const originalWatch = fs.watch;
 let registered = false;
-fs.promises.watch = (...args) => {
+fs.watch = (...args) => {
   const events = originalWatch(...args);
-  return {
-    [Symbol.asyncIterator]() { return this; },
-    next(...args) {
-      const pending = events.next(...args);
-      registered = true;
-      return pending;
-    },
-    return(...args) { return events.return(...args); },
-  };
+  if (args[1]?.recursive) registered = true;
+  return events;
 };
 syncBuiltinESMExports();
 const originalLog = console.log;
