@@ -1,7 +1,7 @@
 {
   "feature": 6,
   "proposal": "https://github.com/nearbycoder/clank.run/issues/313",
-  "status": "native-source01-passed-hosted-identity-defect-repaired-awaiting-updated-gates",
+  "status": "verified-awaiting-final-hosted-head-and-protected-merge",
   "counted": false,
   "base": "0729abca3ed24743b2af1a25089071e7107a81f7",
   "implemented": [
@@ -20,8 +20,8 @@
     "One actual packaged platform CLI takeover and one strict environment contract check"
   ],
   "pending": [
-    "Both complete ordinary-user native Node26/minimum Node22 release gates on the hashed committed source",
-    "Fresh hosted checks, CodeQL/review-thread review and normal protected PR merge"
+    "Fresh hosted checks and review-thread review on the final report-only head",
+    "Normal protected expected-head squash, exact tree verification and preserved-file checks"
   ],
   "acceptedFeatures": 26,
   "remainingFeatures": 14,
@@ -137,5 +137,59 @@
       "supervisor-hosted-failure-01-2.json",
       "supervisor-hosted-failure-01-3.json"
     ]
+  },
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/314",
+  "nativeSource02": {
+    "source": "064628015bcab9b4cfc16d769f010724234efb2c",
+    "tree": "ff02731af086fb9eacdc634e10ebbb8be8cd3aa4",
+    "tarSha256": "effe95b1576c8b383188ecf7752c5c55c15620c137d5637fd1bd14aad7089a71",
+    "inputs": 1108,
+    "ordinaryUid": 1000,
+    "results": {
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 2108,
+          "pass": 2105,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.04,
+          90.11
+        ],
+        "logSha256": "cac04369dbd6f98735cca46f58643ad32c5c4bee3c70a8c8612bc79a0c7e18c6"
+      },
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 2108,
+          "pass": 2105,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.01,
+          90.07
+        ],
+        "logSha256": "fd6689fca55a136f48db62783bbc37fa6850a3b420aaf0ffead72bf1158741f6"
+      }
+    }
+  },
+  "immutableEvidence": {
+    "files": 95,
+    "indexSha256": "cde1856375a32dcc284c2e68f224d08377b28afd8f6380f297ccada30f337847"
+  },
+  "hostedSource02": {
+    "head": "064628015bcab9b4cfc16d769f010724234efb2c",
+    "allSix": "success",
+    "newCodeQLAlerts": 0,
+    "unresolvedThreads": 0,
+    "annotations": "Actual Ubuntu 26 runner-migration notice read; no actionable annotation.",
+    "proofSha256": "6b99ebc67af66d00e39102a9394fbde88d101bc85137104bb35262e962ea7533"
   }
 }
