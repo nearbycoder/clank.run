@@ -1,5 +1,21 @@
+import { normalizeSupervisorOptions } from "../dist/platform-supervisor.js";
+
 const HOSTING_PROFILES = new Set(["trusted", "isolated"]);
 const RUNNER_KINDS = new Set(["process", "docker"]);
+
+/** Explicit same-host topology; partial environment settings never enable it. */
+export function resolvePlatformSupervisor(environment) {
+  const names=["CLANK_SUPERVISOR_ID","CLANK_SUPERVISOR_REVISION","CLANK_SUPERVISOR_LEASE_MS","CLANK_SUPERVISOR_POLL_MS"];
+  if(names.every(name=>environment[name]===undefined))return undefined;
+  const integer=name=>{
+    const input=environment[name];
+    if(typeof input!=="string"||! /^[1-9][0-9]*$/u.test(input)||!Number.isSafeInteger(Number(input)))throw new TypeError(`${name} must be a positive decimal integer.`);
+    return Number(input);
+  };
+  return normalizeSupervisorOptions({configurationId:environment.CLANK_SUPERVISOR_ID,configurationRevision:integer("CLANK_SUPERVISOR_REVISION"),
+    ...(environment.CLANK_SUPERVISOR_LEASE_MS===undefined?{}:{leaseMs:integer("CLANK_SUPERVISOR_LEASE_MS")}),
+    ...(environment.CLANK_SUPERVISOR_POLL_MS===undefined?{}:{pollIntervalMs:integer("CLANK_SUPERVISOR_POLL_MS")})});
+}
 
 /**
  * Resolve the operator's deployment trust boundary before the control plane

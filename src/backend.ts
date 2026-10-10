@@ -472,6 +472,37 @@ interface DatabaseSyncConstructor {
   new(path: string): DatabaseSyncLike;
 }
 
+function assertGuardedSQLiteSQL(sql:string,readPragmas=false):void {
+  if(readPragmas&&/^\s*PRAGMA\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:table_info|table_xinfo|index_list|index_info|index_xinfo|database_list|foreign_key_list)\s*(?:\([^;]*\))?\s*;?\s*$/iu.test(sql))return;
+  const forbidden=new Set(["BEGIN","COMMIT","END","ROLLBACK","SAVEPOINT","RELEASE","ATTACH","DETACH","PRAGMA","VACUUM"]);
+  let index=0,words:string[]=[],trigger=false,body=false,ended=false,cases=0;
+  while(index<sql.length){
+    const character=sql[index]!,next=sql[index+1];
+    if(character==='-'&&next==='-'){index+=2;while(index<sql.length&&sql[index]!=='\n')index++;continue;}
+    if(character==='/'&&next==='*'){index+=2;while(index<sql.length&&!(sql[index]==='*'&&sql[index+1]==='/'))index++;if(index>=sql.length)throw new Error("Unterminated guarded SQL comment.");index+=2;continue;}
+    if(character==="'"||character==='"'||character==='`'||character==='['){
+      const close=character==='['?']':character;index++;let closed=false;
+      while(index<sql.length){if(sql[index]===close){if(close!==']'&&sql[index+1]===close){index+=2;continue;}index++;closed=true;break;}index++;}
+      if(!closed)throw new Error("Unterminated guarded SQL literal.");if(!words.length)words.push("QUOTED");continue;
+    }
+    if(character===';'){
+      if(!trigger||ended){words=[];trigger=false;body=false;ended=false;cases=0;}index++;continue;
+    }
+    if(/[A-Za-z_]/u.test(character)){
+      const start=index++;while(index<sql.length&&/[A-Za-z0-9_]/u.test(sql[index]!))index++;
+      const word=sql.slice(start,index).toUpperCase();
+      if(!words.length&&forbidden.has(word))throw new Error("Native write authority forbids raw transaction controls and connection-changing SQL.");
+      if(ended)throw new Error("Unexpected SQL after guarded trigger body.");
+      words.push(word);
+      trigger=trigger||words[0]==='CREATE'&&(words[1]==='TRIGGER'||['TEMP','TEMPORARY'].includes(words[1]??'')&&words[2]==='TRIGGER');
+      if(trigger){if(!body&&word==='BEGIN')body=true;else if(body&&word==='CASE')cases++;else if(body&&word==='END'){if(cases)cases--;else ended=true;}}
+      continue;
+    }
+    index++;
+  }
+  if(trigger&&!ended)throw new Error("Incomplete guarded trigger body.");
+}
+
 export interface SQLiteOptions {
   /** Opt-in metadata-only SQL plans and execution statistics, bounded to 500 shapes. */
   queryDiagnostics?: boolean;
@@ -651,6 +682,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   let closed = false;
   const recoveryRequired = !!native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_pitr_state'").get();
   let capture: import("./sqlite-internal.ts").SQLiteTransactionCapture | undefined;
+  let writeGuard: (() => void) | undefined;
   let transactionActive = false;
   let activeChanges: ReturnType<typeof changesForTransaction> | undefined;
   let readActive = false;
@@ -1211,6 +1243,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     try {
       native.exec("BEGIN IMMEDIATE");
       began = true;
+      writeGuard?.();
       capture?.before();
       value = handler(changes);
       assertSynchronous(value, "mutation");
@@ -1284,6 +1317,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         }
       }
       capture?.commit();
+      writeGuard?.();
       native.exec("COMMIT");
     } catch (error) {
       if (began) {
@@ -1372,6 +1406,16 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       native.close();
     },
     [SQLITE_INTERNAL]: {
+      guardWrites(guard) {
+        ensureOpen();
+        if (writeGuard || transactionActive || readActive || typeof guard !== "function") throw new Error("Native write authority requires an idle database and can only be installed once.");
+        const connection=Object.freeze({prepare:(sql:string)=>native.prepare(sql)});
+        writeGuard=()=>{
+          const value=guard(connection);
+          if(value!==undefined){void Promise.resolve(value).catch(()=>undefined);throw new TypeError("Native write authority must synchronously return undefined.");}
+        };
+        try { writeGuard(); } catch(error) { writeGuard=undefined; throw error; }
+      },
       captureTransactions(factory) {
         ensureOpen();
         if (capture || transactionActive || readActive) throw new Error("Recovery capture requires an idle database and can only be installed once.");
@@ -1383,8 +1427,9 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       },
       exec(sql) {
         ensureOpen();
-        if (capture) {
-          if (/\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|ATTACH|DETACH|PRAGMA|VACUUM)\b/iu.test(sql)) throw new Error("Recovery capture forbids raw transaction controls and connection-changing SQL.");
+        if (capture || writeGuard) {
+          if(writeGuard)assertGuardedSQLiteSQL(sql);
+          if (capture&&/\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|ATTACH|DETACH|PRAGMA|VACUUM)\b/iu.test(sql)) throw new Error("Recovery capture forbids raw transaction controls and connection-changing SQL.");
           if (transactionActive) native.exec(sql); else runTransaction(() => native.exec(sql));
         } else {
           if (recoveryRequired) throw new Error("This database requires point-in-time recovery capture before schema access.");
@@ -1394,9 +1439,10 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       prepare(sql) {
         let statement = prepared(sql);
         const invoke = <Value>(handler: () => Value): Value => {
-          if ((capture || recoveryRequired) && readActive && !/^\s*(?:SELECT|EXPLAIN)\b/iu.test(sql)) throw new Error("Recovery forbids service writes inside a read snapshot.");
+          if(writeGuard)assertGuardedSQLiteSQL(sql,true);
+          if ((capture || recoveryRequired || writeGuard) && readActive && !/^\s*(?:SELECT|EXPLAIN)\b/iu.test(sql)) throw new Error(capture || recoveryRequired ? "Recovery forbids service writes inside a read snapshot." : "Native write authority forbids service writes inside a read snapshot.");
           if (capture) statement = native.prepare(sql);
-          return (capture || recoveryRequired) && !transactionActive && !readActive ? runTransaction(() => handler()) : handler();
+          return (capture || recoveryRequired || writeGuard) && !transactionActive && !readActive ? runTransaction(() => handler()) : handler();
         };
         return { all: (...args) => invoke(() => statement.all(...args)), get: (...args) => invoke(() => statement.get(...args)), run: (...args) => invoke(() => statement.run(...args)) };
       },

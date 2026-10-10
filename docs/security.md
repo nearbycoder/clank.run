@@ -196,7 +196,7 @@ Also:
 - configure email verification, recovery, MFA, passkeys, and bot protection to match the application's risk;
 - log internal exceptions through `onError` without returning them to clients;
 - keep Node and Clank patched and back up the database.
-- run one active built-in process supervisor per project/data directory until a remote worker/leader topology is configured;
+- run one active built-in supervisor per catalog, or explicitly configure [same-host automatic leadership](supervisor-leadership.md) in dedicated Linux coordinator processes;
 - keep every app's web, worker, and scheduler roles on the same durable SQLite volume, or provide a
   reviewed transactional shared-store implementation;
 - alert on dead letters, oldest-due age, lease expiry, and background restart loops;
