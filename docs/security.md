@@ -157,7 +157,7 @@ do not sandbox handler code. See [Durable jobs, workflow graphs, and cron](jobs-
 
 See [Platform security](platform-security.md) for the runner trust boundary.
 
-Linux database workers use pinned tenant directories inside bounded Bubblewrap namespaces, including descriptor-based backup publication. Hosts must provide the required namespace permissions and tools; failed setup refuses database work. See [SQLite worker isolation](sqlite-isolation.md). Non-Linux hosts still need an external filesystem/native-memory sandbox or trusted deployers.
+Linux database workers default to pinned tenant directories inside bounded Bubblewrap namespaces, including descriptor-based backup publication. Hosts must provide the required namespace permissions and tools; failed setup refuses database work. Explicit trusted process hosting can opt into bounded helpers with host-user filesystem/network authority and restricted signup. See [SQLite worker isolation](sqlite-isolation.md). Non-Linux hosts still need an external filesystem/native-memory sandbox or trusted deployers.
 
 ## Recommended production setup
 

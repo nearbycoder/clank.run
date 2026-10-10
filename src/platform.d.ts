@@ -343,6 +343,8 @@ export interface ClankPlatformOptions {
      * Docker runner. Defaults from the selected runner for programmatic callers.
      */
     hostingProfile?: PlatformHostingProfile;
+    /** Defaults to namespaces. trusted-process requires explicit trusted process hosting and closed public signup. */
+    sqliteIsolation?: "namespace" | "trusted-process";
     runner?: PlatformRunnerOptions;
     /**
      * Enables the authenticated remote deployment-node coordination API.

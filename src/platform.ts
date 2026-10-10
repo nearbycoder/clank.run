@@ -9,7 +9,7 @@ import { openAuditExporter, type AuditExportOptions } from "./audit-export.ts";
 import { forecastUsage } from "./usage-forecast.ts";
 import { openOrganizationSso, type OrganizationSsoOptions, type OrganizationProvisioningAssignment } from "./organization-sso.ts";
 import { captureLogLines, redactLogSecrets } from "./security.ts";
-import { runSQLiteTask } from "./sqlite-task.ts";
+import { createSQLiteTaskScope, runSQLiteTask } from "./sqlite-task.ts";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
 import {openPlatformServiceAccounts, assertServiceAccountProtocol, ServiceAccountError, type PlatformServiceAccountOptions, type ServiceAccountAuthority, type AuthenticatedServiceAccount} from "./platform-service-accounts.ts";
 import {
@@ -575,6 +575,8 @@ export interface ClankPlatformOptions {
    * Docker runner. Defaults from the selected runner for programmatic callers.
    */
   hostingProfile?: PlatformHostingProfile;
+  /** Defaults to namespaces. trusted-process requires explicit trusted process hosting and closed public signup. */
+  sqliteIsolation?: "namespace" | "trusted-process";
   runner?: PlatformRunnerOptions;
   /**
    * Enables the authenticated remote deployment-node coordination API.
@@ -960,6 +962,25 @@ const MAX_ACTIVE_RUNNER_ENROLLMENTS = 50;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
+  const sqliteIsolation = options.sqliteIsolation ?? "namespace";
+  if (sqliteIsolation !== "namespace" && sqliteIsolation !== "trusted-process") {
+    throw new TypeError('sqliteIsolation must be "namespace" or "trusted-process".');
+  }
+  if (sqliteIsolation === "trusted-process" && (options.hostingProfile !== "trusted"
+    || (options.runner?.kind ?? "process") !== "process" || options.signup === true)) {
+    throw new TypeError('sqliteIsolation "trusted-process" requires explicit trusted process hosting without public signup.');
+  }
+  const scope = await createSQLiteTaskScope(sqliteIsolation);
+  // Startup/recovery timers inherit this instance's policy. Requests and close
+  // re-enter it explicitly so another platform or caller cannot change it.
+  const runtime = await scope.run(() => openPlatformScoped(options));
+  return { ...runtime,
+    handle: request => scope.run(() => runtime.handle(request)),
+    close: () => scope.run(() => runtime.close()),
+  };
+}
+
+async function openPlatformScoped(options: ClankPlatformOptions): Promise<PlatformRuntime> {
   const authentication = {
     concurrency: integerInRange(options.authentication?.concurrency ?? 2, "authentication.concurrency", 1, 16),
     maxQueue: integerInRange(options.authentication?.maxQueue ?? 16, "authentication.maxQueue", 1, 128),

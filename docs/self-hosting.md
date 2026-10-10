@@ -36,6 +36,7 @@ configured worker/scheduler processes for each active project.
 | `CLANK_AUTH_CONCURRENCY` | `2` | Concurrent platform password hashes, bounded to 1–16; hash strength is unchanged |
 | `CLANK_AUTH_MAX_QUEUE` | `16` | Waiting platform password operations, bounded to 1–128; overload returns `503 AUTH_BUSY` |
 | `CLANK_RUNNER` | selected by hosting profile | `process` or `docker` |
+| `CLANK_SQLITE_ISOLATION` | `namespace` | `trusted-process` explicitly permits bounded SQLite helpers without namespaces, only with trusted process hosting and restricted signup; see [SQLite worker isolation](sqlite-isolation.md#trusted-process-hosting) |
 | `CLANK_DOCKER_IMAGE` | Node image | Pin by digest in production |
 | `CLANK_APP_MEMORY` | `512m` | Container memory |
 | `CLANK_APP_CPUS` | `1` | Container CPUs |

@@ -1,6 +1,22 @@
 // Tenant-controlled schemas, triggers and SQL must never execute on the shared
-// control-plane event loop. Linux workers additionally have a private filesystem namespace.
-import { prepareSQLiteSandbox, type PinnedSQLiteDirectory } from "./sqlite-sandbox.ts";
+// control-plane event loop. Linux workers default to a private filesystem namespace.
+import { prepareSQLiteSandbox, SQLITE_RESOURCE_LIMITS, type PinnedSQLiteDirectory } from "./sqlite-sandbox.ts";
+type SQLiteTaskIsolation = "namespace" | "trusted-process";
+interface TaskContext {
+  run<T>(isolation: SQLiteTaskIsolation, callback: () => T): T;
+  getStore(): SQLiteTaskIsolation | undefined;
+}
+let context: TaskContext | undefined;
+let contextReady: Promise<TaskContext> | undefined;
+
+/** Internal, per-platform policy. Standalone helpers always default to namespaces. */
+export async function createSQLiteTaskScope(isolation: SQLiteTaskIsolation): Promise<{ run<T>(callback: () => T): T }> {
+  if (isolation !== "namespace" && isolation !== "trusted-process") throw new TypeError("Invalid SQLite task isolation.");
+  const moduleName = "node:async_hooks";
+  contextReady ??= import(moduleName).then(({ AsyncLocalStorage }) => context = new AsyncLocalStorage());
+  const storage = await contextReady;
+  return { run: callback => storage.run(isolation, callback) };
+}
 const MAX_ACTIVE_TASKS = 2;
 const MAX_WAITING_TASKS = 16;
 export const SQLITE_TASK_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
@@ -125,7 +141,15 @@ export async function runSQLiteTask<T>(
     const process = (globalThis as any).process;
     let executable = process.execPath;
     const childArguments = ["--jitless", "--max-old-space-size=128", "--input-type=module", "--eval", BOOTSTRAP];
-    if (process.platform === "linux") {
+    if (process.platform === "linux" && context?.getStore() === "trusted-process") {
+      // Explicit trusted hosting still keeps native SQLite off the event loop,
+      // clears inherited/ambient capabilities and preloads/secrets, and enforces
+      // the same kernel limits.
+      // This mode makes no filesystem or network isolation claim.
+      executable = "/usr/bin/setpriv";
+      childArguments.unshift("--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs",
+        "/usr/bin/prlimit", ...SQLITE_RESOURCE_LIMITS, "--", process.execPath);
+    } else if (process.platform === "linux") {
       sandbox = await prepareSQLiteSandbox(module, operation, args, childArguments, directories);
       executable = sandbox.executable;
       childArguments.splice(0, childArguments.length, ...sandbox.arguments);
