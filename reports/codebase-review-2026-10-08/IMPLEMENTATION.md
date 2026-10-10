@@ -662,7 +662,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 03 | Persistent release channels | Implemented and merged | Proposal #276 / merged PR #278; [acceptance](release-channels.json). |
 | 04 | Deployment dependency gates | Implemented and merged | Proposal #279 / merged PR #281; [acceptance](deployment-dependencies.json). |
 | 05 | Scheduled release windows | Implemented and merged | Proposal #280 / merged PR #282; [acceptance and protected delivery](release-windows.json). |
-| 06 | Automatic supervisor leadership | Verified full native/hosted source gates; final-head/protected merge pending, not counted | Proposal #313; [current evidence](supervisor-leadership.json). |
+| 06 | Automatic supervisor leadership | Accepted; protected merge #314 | Proposal #313; [retained native and hosted evidence](supervisor-leadership.json). |
 | 07 | Online provider node handoff | Planned | Pending |
 | 08 | Provider managed canaries | Planned | Pending |
 | 09 | Isolated shadow traffic | Planned | Pending |
@@ -670,7 +670,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 11 | Verified multi-organization identity linking | Implemented and merged | Proposal #283 / merged PR #285; [identity linking acceptance](identity-linking.json). |
 | 12 | SCIM user and group provisioning | Implemented and merged | Proposal #287 / merged PR #289; [SCIM acceptance](scim-provisioning.json). |
 | 13 | Organization security policy console | Draft; not counted | Proposal #309 / draft PR #310; native runtime, packed types, canonical docs, both release gates and six fresh hosted checks pass; actual native policy-panel acceptance remains blocked. |
-| 14 | Temporary privileged access | Proposal; not counted | Proposal #322; current-main organization-policy foundation integration in progress; scoped elevation implementation pending. |
+| 14 | Temporary privileged access | Native implementation and complete Linux gates; not counted | [Proposal #322](https://github.com/nearbycoder/clank.run/issues/322); native scoped preview grants, recent authentication, exact receipts, in-flight commit fencing and restart retirement. Both Node 26/22 full checks pass 2,159 reported / 2,156 passed / zero failed or cancelled / three existing skips. 36 packed type fixtures and documentation HTTP/MCP plus phone rendering pass. Real browser grant/keyboard/revocation and recipient preview console experience, dependency #310, hosted checks and protected merge remain pending. See [temporary access evidence](temporary-access.json). |
 | 15 | Organization service accounts | Implemented and merged | Proposal #306 / merged PR #308; [accepted native authority, process recovery and protected delivery](service-accounts.json). |
 | 16 | Agent operation budgets | Implemented | Proposal #251; 22 focused tests, actual four-process contention, atomic rollback, restart/exact replay, ownership/revocation/expiry, bounded retention, real MCP calls and 14 packed consumer fixtures. Full release gate passes. |
 | 17 | Approval quorum policies | Planned | Pending |

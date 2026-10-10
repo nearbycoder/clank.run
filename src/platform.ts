@@ -13,6 +13,7 @@ import { createSQLiteTaskScope, runSQLiteTask } from "./sqlite-task.ts";
 import { openSecretRotations, type SecretRotationOptions, type SecretRevision } from "./secret-rotation.ts";
 import {openPlatformServiceAccounts, assertServiceAccountProtocol, ServiceAccountError, type PlatformServiceAccountOptions, type ServiceAccountAuthority, type AuthenticatedServiceAccount} from "./platform-service-accounts.ts";
 import {openOrganizationSecurityPolicies, assertOrganizationSecurityProtocol, type OrganizationSecurityPolicyController} from "./organization-security-policy.ts";
+import {openPlatformTemporaryAccess, type TemporaryAccessAuthority} from "./platform-temporary-access.ts";
 import {
   AuthError,
   defineAuth,
@@ -548,6 +549,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 export interface ClankPlatformOptions {
   /** Opt-in native organization policies. Recovery requires independent current platform operator authority. */
   organizationSecurity?: {readonly operatorRecovery?: boolean};
+  /** Opt-in current-human grants for creating a new isolated project preview. Requires organization security. */
+  temporaryAccess?: {readonly maxGrants?: number; readonly maxReceipts?: number};
   /** Same-host Linux coordinators; each must occupy a dedicated process. Lost leadership terminates that process. */
   supervisor?: PlatformSupervisorOptions;
   /** Opt-in dedicated organization machine identities with project-scoped credentials. */
@@ -856,6 +859,7 @@ interface TokenPrincipal {
 const admittedTokenAuthority = new WeakMap<TokenPrincipal, string>();
 const organizationSecurityStores = new WeakMap<SQLiteInternal, {controller: OrganizationSecurityPolicyController; auth: AuthRuntime<any>}>();
 const admittedOrganizationScopes = new WeakMap<TokenPrincipal, Set<string>>();
+const admittedTemporaryAccess = new WeakMap<TokenPrincipal, {readonly projectId: string; readonly grantId: string; readonly assertCurrent: () => void}>();
 function authorizeOrganizationPolicy(internal: SQLiteInternal, principal: TokenPrincipal, organizationId: string): void {
   let scopes = admittedOrganizationScopes.get(principal);
   if (!scopes) admittedOrganizationScopes.set(principal, scopes = new Set());
@@ -1479,6 +1483,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let serviceAccounts: ReturnType<typeof openPlatformServiceAccounts> | undefined;
   let organizationSecurity: OrganizationSecurityPolicyController | undefined;
+  let temporaryAccess: ReturnType<typeof openPlatformTemporaryAccess> | undefined;
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
   let retentionController: Awaited<ReturnType<typeof createRetentionController>> | undefined;
   let invitationDeliveries: ReturnType<typeof createPlatformInvitationDeliveryScheduler>;
@@ -1507,6 +1512,21 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       });
       organizationSecurityStores.set(storage.internal,{controller:organizationSecurity,auth:storage.auth});
     }
+    if (options.temporaryAccess && !organizationSecurity) throw new TypeError('Temporary access requires native organization security enforcement.');
+    if (!options.temporaryAccess && storage.internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_temporary_access_grants'").get()
+      && storage.internal.prepare("SELECT 1 FROM clank_platform_temporary_access_grants WHERE state='active' LIMIT 1").get()) throw new TypeError('Reopen with temporary access and explicitly revoke retained grants before disabling it.');
+    if (options.temporaryAccess) temporaryAccess = openPlatformTemporaryAccess(storage.internal, {
+      ...options.temporaryAccess,
+      membership(projectId,userId) {
+        const row = storage.internal.prepare(`SELECT p.organization_id,m.role,m.created_at,m.updated_at FROM clank_platform_projects p
+          JOIN clank_platform_memberships m ON m.organization_id=p.organization_id AND m.user_id=?
+          JOIN clank_auth_users u ON u.id=m.user_id AND u.disabled=0 WHERE p.id=? AND p.parent_project_id IS NULL`).get(userId,projectId);
+        if (!row) return null;
+        const policy = storage.internal.prepare('SELECT version FROM clank_organization_security_policies WHERE organization_id=?').get(row.organization_id);
+        return {organizationId:String(row.organization_id),role:String(row.role),createdAt:Number(row.created_at),updatedAt:Number(row.updated_at),policyVersion:Number(policy?.version??0)};
+      },
+      audit(actorId,projectId,action,metadata) {audit(storage.internal,actorId,null,projectId,action,{...metadata},true);},
+    });
     serviceAccounts = options.serviceAccounts ? openPlatformServiceAccounts(storage.internal, options.serviceAccounts, {
     hash: syncHash, encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey),
     eligibleOwner(organizationId, ownerId, projectId, permissions) {
@@ -1543,6 +1563,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   } catch (error) {
     organizationSecurityStores.delete(storage.internal);
     organizationSecurity?.close();
+    temporaryAccess?.close();
     serviceAccounts?.close();
     retentionController?.close();
     await auditExporter?.close();
@@ -7148,6 +7169,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             platformRole,
             billingEnabled: billing !== null,
             organizationSecurityEnabled: Boolean(organizationSecurity),
+            temporaryAccessEnabled: Boolean(temporaryAccess),
             hostingProfile,
             runnerKind: runner.kind,
             signupMode: signupPolicy,
@@ -8949,6 +8971,22 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       const matched = /^\/api\/projects\/([A-Za-z0-9_-]{8,128})(?:\/(.*))?$/.exec(url.pathname);
       if (!matched) throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
       const operation = matched[2] ?? "";
+      const temporaryAuthority = (): TemporaryAccessAuthority => ({userId:principal.userId,assertCurrent(fresh) {
+        if (principal.machine || principal.tokenId || principal.impersonation || !principal.sessionId) throw new PlatformError(403,'HUMAN_AUTH_REQUIRED','Temporary access requires your current human browser session.');
+        requireCurrentPlatformPrincipal(storage,principal);
+        const current=storage.auth.refreshSession(principal.sessionId);
+        if (current?.user?.id!==principal.userId) throw new PlatformError(401,'UNAUTHENTICATED','Sign in with your current account.');
+        const target=projectById(storage.internal,matched[1]!);
+        if (!target?.organizationId || target.parentProjectId) throw new PlatformError(404,'PROJECT_NOT_FOUND','Parent project not found.');
+        authorizeOrganizationPolicy(storage.internal,principal,target.organizationId);
+        if (fresh) storage.auth.requireFreshAuthentication(current,300000);
+      }});
+      const elevationHeader = request.headers.get('x-clank-temporary-access');
+      if (elevationHeader !== null) {
+        if (!temporaryAccess || operation!=='previews' || request.method!=='POST') throw new PlatformError(403,'TEMPORARY_ACCESS_SCOPE','Temporary access permits only a new preview creation.');
+        accessibleProject(storage.internal,matched[1]!,principal,'read');
+        admittedTemporaryAccess.set(principal,{projectId:matched[1]!,grantId:elevationHeader,assertCurrent:temporaryAccess.capture(matched[1]!,temporaryAuthority(),elevationHeader)});
+      }
       const requiredPermission: ProjectPermission = !operation && request.method === "DELETE"
         ? "tokens"
         : operation === "members" || operation.startsWith("members/")
@@ -9001,6 +9039,16 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      if (operation==='temporary-access' && request.method==='GET' || operation==='temporary-access' && request.method==='POST' || operation==='temporary-access/revoke' && request.method==='POST') {
+        if (!temporaryAccess) throw new PlatformError(503,'TEMPORARY_ACCESS_DISABLED','Temporary access is not configured.');
+        for (const key of url.searchParams.keys()) throw new PlatformError(422,'TEMPORARY_ACCESS_INPUT',`Unexpected query field: ${key}.`);
+        const authority=temporaryAuthority();
+        if (request.method==='GET') return api({ok:true,snapshot:temporaryAccess.read(project.id,authority)});
+        const input=plainObject(await readJsonRequest(request,8192));requireCurrentProjectAuthority();
+        const result=operation.endsWith('/revoke') ? temporaryAccess.revoke(project.id,authority,input as unknown as import('./temporary-access.ts').TemporaryAccessRevoke)
+          : temporaryAccess.create(project.id,authority,input as unknown as import('./temporary-access.ts').TemporaryAccessCreate);
+        return api({ok:true,result},operation.endsWith('/revoke')?200:201);
+      }
       if (operation === "dependencies" && request.method === "GET") {
         requireCurrentProjectAuthority();
         const configuration = dependencyConfiguration(project.id);
@@ -9628,6 +9676,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           const existingRow = storage.internal.prepare(`SELECT * FROM clank_platform_projects
             WHERE parent_project_id = ? AND preview_name = ?`).get(current.id, previewName);
           if (existingRow) {
+            if (admittedTemporaryAccess.has(principal)) throw new PlatformError(409,"TEMPORARY_ACCESS_NEW_PREVIEW","This grant permits a new isolated preview; it cannot refresh an existing preview.");
             const existingId = projectRow(existingRow).id;
             const refreshed = await withProjectLock(existingId, async () => {
               requireCurrentProjectAuthority();
@@ -9687,7 +9736,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                 );
               }
               port = allocatePort(storage.internal, appPortStart, appPortEnd, unavailableApplicationPorts());
-              storage.internal.prepare(`INSERT INTO clank_platform_projects
+              const insertedPreview = storage.internal.prepare(`INSERT INTO clank_platform_projects
                 (id, owner_id, organization_id, name, slug, port, active_release_id, database_path,
                   placement, parent_project_id, preview_name, preview_expires_at,
                   runtime_policy, idle_timeout_ms, created_at, updated_at)
@@ -9708,6 +9757,13 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
                   now,
                   now,
                 );
+              if (admittedTemporaryAccess.has(principal)) {
+                const saved=projectById(storage.internal,id);
+                if (Number(insertedPreview.changes)!==1 || !saved || saved.ownerId!==principal.userId || saved.organizationId!==current.organizationId || saved.parentProjectId!==current.id || saved.previewName!==previewName || saved.previewExpiresAt!==expiresAt || saved.slug!==slug || saved.port!==port || saved.activeReleaseId!==null || saved.databasePath!==null) throw new PlatformError(503,'TEMPORARY_ACCESS_WRITE','The isolated preview was not stored as reviewed.');
+                requireCurrentProjectAuthority();
+                audit(storage.internal,principal.userId,null,id,'preview.create',{organizationId:current.organizationId,parentProjectId:current.id,previewName,slug,port,placement:current.placement,expiresAt,isolatedData:true,temporaryAccessGrantId:admittedTemporaryAccess.get(principal)!.grantId},true);
+                requireCurrentProjectAuthority();
+              }
               changes.record("__platform", current.organizationId!);
             });
           } catch (error) {
@@ -9718,7 +9774,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             throw error;
           }
           const preview = projectById(storage.internal, id)!;
-          audit(storage.internal, principal.userId, principal.tokenId, id, "preview.create", {
+          if (!admittedTemporaryAccess.has(principal)) audit(storage.internal, principal.userId, principal.tokenId, id, "preview.create", {
             organizationId: current.organizationId,
             parentProjectId: current.id,
             previewName,
@@ -10843,6 +10899,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       serviceAccounts?.close();
       organizationSecurityStores.delete(storage.internal);
       organizationSecurity?.close();
+    temporaryAccess?.close();
       retentionController?.close();
       await auditExporter?.close();
       await invitationDeliveries.close();
@@ -12261,8 +12318,11 @@ function accessibleProject(
   ) {
     throw new PlatformError(403, "TOKEN_SCOPE_DENIED", `This token cannot perform ${permission} operations.`);
   }
+  const elevation = admittedTemporaryAccess.get(principal);
+  if (elevation && elevation.projectId===id && permission==='previews') elevation.assertCurrent();
   if (!projectMembershipAllows(internal, project, principal.userId, permission, role)) {
-    throw new PlatformError(403, "ROLE_DENIED", `The ${role} role cannot perform ${permission} operations.`);
+    if (!elevation || elevation.projectId!==id || permission!=='previews') throw new PlatformError(403, "ROLE_DENIED", `The ${role} role cannot perform ${permission} operations.`);
+    elevation.assertCurrent();
   }
   if ((permission === "deploy" || permission === "rollback") && role !== "owner" && role !== "admin"
     && internal.prepare("SELECT 1 FROM clank_platform_environments WHERE project_id=? AND name='production'").get(project.id)) {
@@ -15082,6 +15142,7 @@ function audit(
   projectId: string | null,
   action: string,
   metadata: Record<string, unknown>,
+  verifyStored = false,
 ): void {
   if(tokenId && internal.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_machine_credentials'").get()) {
     const machine=internal.prepare('SELECT account_id,generation FROM clank_platform_machine_credentials WHERE token_id=?').get(tokenId);
@@ -15096,10 +15157,17 @@ function audit(
       ? metadata.organizationId
       : null
     : String(projectOrganization.organization_id);
-  internal.prepare(`INSERT INTO clank_platform_audit
+  const encoded = JSON.stringify(metadata), createdAt = Date.now();
+  const inserted = internal.prepare(`INSERT INTO clank_platform_audit
     (actor_user_id, actor_token_id, project_id, organization_id, action, metadata, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .run(userId, tokenId, projectId, organizationId, action, JSON.stringify(metadata), Date.now());
+    .run(userId, tokenId, projectId, organizationId, action, encoded, createdAt);
+  if (verifyStored) {
+    const row = internal.prepare("SELECT actor_user_id,actor_token_id,project_id,organization_id,action,metadata,created_at FROM clank_platform_audit WHERE id=?").get(inserted.lastInsertRowid);
+    if (Number(inserted.changes) !== 1 || !row || row.actor_user_id !== userId || row.actor_token_id !== tokenId
+      || row.project_id !== projectId || row.organization_id !== organizationId || row.action !== action
+      || row.metadata !== encoded || Number(row.created_at) !== createdAt) throw new PlatformError(503, "AUDIT_WRITE_FAILED", "The reviewed operation audit was not durably stored.");
+  }
 }
 
 function runnerIdentity(value: unknown, name: string, maximum: number): string {

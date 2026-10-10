@@ -315,6 +315,8 @@ export interface PlatformBillingOptions {
 }
 export interface ClankPlatformOptions {
   organizationSecurity?: {readonly operatorRecovery?: boolean};
+  /** Current-human grants for a new isolated preview; requires organization security. */
+  temporaryAccess?: {readonly maxGrants?: number; readonly maxReceipts?: number};
     /** Same-host Linux coordinators; each occupies a dedicated process terminated after leadership loss. */
     supervisor?: PlatformSupervisorOptions;
   serviceAccounts?: PlatformServiceAccountOptions;

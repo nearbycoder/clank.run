@@ -1,4 +1,5 @@
 /// <reference path="./jsx.d.ts" />
+export * from "./temporary-access.js";
 export * from "./organization-security-policy.js";
 
 export { renderAgentActivity } from "./agent-activity.js";
