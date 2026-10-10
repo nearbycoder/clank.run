@@ -44,6 +44,7 @@ export * from "./ui.ts";
 export * from "./server.ts";
 export * from "./auth.ts";
 export * from "./backend.ts";
+export * from "./postgres.ts";
 export * from "./deploy.ts";
 export * from "./migrations.ts";
 export * from "./jobs.ts";

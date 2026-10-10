@@ -71,6 +71,22 @@ test('native machine operations carry machine audit identity and lose authority 
   f.db.prepare('UPDATE clank_platform_machine_credentials SET expires_at=? WHERE id=?').run(Date.now()-1,key.credential.id);
   await machine(origin,'/api/service-account',key.accessToken,401);
 });
+test('machine credentials cannot inherit their human owner incident access after current-main integration',async t=>{
+  const f=await setup(t),key=await issued(f,['read','logs','deploy','rollback','jobs','secrets','audit']),origin=await f.serve();
+  const endpoint=`/api/projects/${f.development.id}/incidents`;
+  const input={title:'Human recovery record',severity:'critical',ownerId:f.owner.user.id,operationId:'incident_human_create_01'};
+  const incident=(await f.call(endpoint,input,201)).incident;
+  const current=await machine(origin,`/api/projects/${f.development.id}`,key.accessToken);
+  assert.equal(current.access.canUseIncidents,false);
+  for(const path of [endpoint,endpoint+'/owners',endpoint+'/'+incident.id]) await machine(origin,path,key.accessToken,403);
+  await machine(origin,endpoint,key.accessToken,403,{...input,operationId:'incident_machine_create_01'});
+  await machine(origin,endpoint+'/'+incident.id+'/change',key.accessToken,403,{expectedVersion:1,operationId:'incident_machine_note_01',change:{kind:'note',text:'Must not persist.'}});
+  const detail=(await f.call(endpoint+'/'+incident.id)).detail;
+  assert.equal(detail.incident.version,1);assert.equal(detail.notes.length,0);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_platform_incidents').get().n,1);
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM clank_platform_incident_receipts').get().n,1);
+  assert.equal(f.db.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action LIKE 'incident.%'").get().n,1);
+});
 test('real held native HTTP machine writes reject rotated keys without secret or audit effects',async t=>{
   const f=await setup(t),key=await issued(f,['read','secrets']),origin=await f.serve();
   const payload=JSON.stringify({values:{HELD_MACHINE_FIXTURE:'must never commit'}});

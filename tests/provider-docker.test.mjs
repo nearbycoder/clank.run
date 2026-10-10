@@ -991,3 +991,13 @@ test("provider Docker refuses launches when required disk or outbound isolation 
     assert.equal((await fixture.audit()).some((entry) => entry.command === "create"), false);
   } finally { await fixture.close(); }
 });
+
+test('isolated read-only candidates refuse a missing network boundary and declared background writers before launch',async()=>{
+  const fixture=await dockerFixture('readonly-boundary');try{
+    const prepared=await fixture.prepared(),signal=new AbortController().signal,plain=await fixture.open();
+    await assert.rejects(plain.launch({prepared,signal,isolatedReadOnly:true}),/outbound network/);
+    await assert.rejects(plain.launch({prepared,signal,isolatedReadOnly:'true'}),/boolean/);
+    const bounded=await fixture.open({outboundNetwork:{allowCidrs:[]}}),withJobs={...prepared,config:parseDeploymentConfig({...prepared.config,jobs:{entry:prepared.config.entry,workers:1,scheduler:false}})};
+    await assert.rejects(bounded.launch({prepared:withJobs,signal,isolatedReadOnly:true}),/background/);assert.deepEqual(bounded.inspect(),[]);assert.equal((await fixture.audit()).some(entry=>entry.command==='create'),false);
+  }finally{await fixture.close();}
+});

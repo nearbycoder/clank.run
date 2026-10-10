@@ -1,5 +1,8 @@
 # Database revisions and correctness
 
+SQLite is the default store. The [PostgreSQL application subset](postgres-application.md)
+reuses typed table/function contracts with an explicit supported-operation and service boundary.
+
 Clank uses Node's built-in SQLite as a transactional document store. Application fields live as validated JSON, while identity, ownership, creation time, and document version live in dedicated columns.
 
 There are two different revision concepts:
@@ -41,7 +44,12 @@ The `clank_` and legacy `proact_` SQL namespaces are reserved. Safe application 
 
 ## Commit sequence
 
-Every mutation uses one synchronous `BEGIN IMMEDIATE` transaction:
+Every mutation uses one synchronous `BEGIN IMMEDIATE` transaction. Write contexts and tables
+expire when that transaction ends: retaining one cannot write later, borrow a subsequent
+transaction or bypass its revision journal. Pure read builders retain their existing deferred
+read behavior; use `read` or `tracked` when rows must share one consistent snapshot.
+
+The mutation sequence is:
 
 ```mermaid
 flowchart LR
