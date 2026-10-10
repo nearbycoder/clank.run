@@ -887,6 +887,44 @@ test("provider canary reservation excludes ordinary reconciliation while native 
   } finally {releasePreflight();await preparing?.catch(()=>{});await opened?.service.close();await fixture.close();}
 });
 
+test("a delayed canary journal read cannot reclaim a retired project from its ordinary runtime", {timeout:30_000}, async () => {
+  const fixture=await serviceFixture("canary-retired-journal-read");let opened,heldRequest,releaseRead;
+  const originalDigest=crypto.subtle.digest;
+  try {
+    opened=await fixture.open({canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_retired_read_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:1,operationId:"canary_retired_read_01",
+      runtime:await fixture.runtime({generation:2,releaseId:"release_retired_read_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    const prepared=await opened.service.canaries.prepare(input);
+    const ordinary=await fixture.runtime({projectId:prepared.candidateProjectId,generation:1,releaseId:"release_reused_ordinary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"ordinary")});
+    const identity=[input.primary.projectId,input.primary.incarnation,input.controllerEpoch,input.operationId,input.runtime.sha256].join("\n");
+    let reachedRead,pauseOnce=true;
+    const entered=new Promise(resolve=>{reachedRead=resolve;}),held=new Promise(resolve=>{releaseRead=resolve;});
+    // Hold the request after it read the running native journal, before its
+    // asynchronous identity check returns. Other lifecycle checks still run.
+    crypto.subtle.digest=async function(algorithm,bytes) {
+      if (pauseOnce && new TextDecoder().decode(bytes)===identity) {pauseOnce=false;reachedRead();await held;}
+      return originalDigest.call(this,algorithm,bytes);
+    };
+    const request=()=>new Request(`http://provider.test${prepared.route.path}/healthz`);
+    heldRequest=opened.service.handle(request());
+    await entered;
+    assert.equal((await opened.service.canaries.stop(input)).phase,"stopped");
+    assert.equal(await fixture.data.inspect(prepared.candidateProjectId),null);
+    await opened.service.reconcile(providerInput(ordinary,2));
+    assert.equal((await opened.service.handle(request())).status,200);
+    releaseRead();assert.equal((await heldRequest).status,503);
+    assert.equal((await opened.service.handle(request())).status,200,"A completed retirement cannot be reversed by a stale request read.");
+    await opened.service.reconcile(providerInput(ordinary,3));
+    assert.equal((await opened.service.inspect(prepared.candidateProjectId)).releaseId,ordinary.manifest.releaseId);
+    assert.equal((await opened.service.inspect("project_service_01")).releaseId,primary.manifest.releaseId);
+  } finally {
+    releaseRead?.();await heldRequest?.catch(()=>{});crypto.subtle.digest=originalDigest;
+    await opened?.service.close();await fixture.close();
+  }
+});
+
 test("provider ownership rejects a second live service while checkpoint preparation and close are pending", async () => {
   const fixture=await serviceFixture("canary-held-replacement");let first,second,release;
   const held=new Promise(resolve=>{release=resolve;});let reached;const ready=new Promise(resolve=>{reached=resolve;});

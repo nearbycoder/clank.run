@@ -528,12 +528,14 @@ async function openOwnedDeploymentProviderService(
     if (raw === null) return null;
     const journal = providerCanaryJournal(raw, projectId);
     if (journal.current.candidateProjectId !== await candidateId(journal.current)) throw new Error("Provider canary ownership identity is invalid.");
-    if (journal.current.phase!=="stopped") canaryProjectOwners.set(journal.current.candidateProjectId,projectId);
     return journal;
   };
   const stopCanary = async (projectId: string, expected?: Pick<DeploymentProviderCanaryState,"primary"|"operationId"|"controllerEpoch">): Promise<DeploymentProviderCanaryState | null> => {
     const journal = await readCanary(projectId);
     if (journal && expected && (!sameCanaryBinding(journal.current.primary,expected.primary) || journal.current.operationId!==expected.operationId || journal.current.controllerEpoch!==expected.controllerEpoch)) throw new Error("Provider canary cleanup identity is stale.");
+    // Reconstruct ownership only during serialized lifecycle or startup cleanup.
+    // An asynchronous request read must not reclaim an already retired identity.
+    if (journal && journal.current.phase!=="stopped") canaryProjectOwners.set(journal.current.candidateProjectId,projectId);
     const timer = canaryTimers.get(projectId);
     if (timer) clearTimeout(timer);
     canaryTimers.delete(projectId);
