@@ -121,6 +121,9 @@ import {
   trustedClientAddress,
 } from "./security.ts";
 import { SQLITE_INTERNAL, type SQLiteInternal } from "./sqlite-internal.ts";
+import { openSupervisorLease, armSupervisorGuardian, waitForSupervisorCleanup, normalizeSupervisorOptions,
+  PlatformSupervisorError, type SupervisorLease, type PlatformSupervisorOptions, type PlatformSupervisorStatus } from "./platform-supervisor.ts";
+export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.ts";
 import { ensureDeploymentComparisons, recordDeploymentActivation, deploymentComparisonWindows } from "./platform-comparisons.ts";
 import type { ObjectStore } from "./object-storage.ts";
 import {
@@ -542,6 +545,8 @@ const PLATFORM_QUOTA_DEFINITIONS = Object.freeze({
 }>);
 
 export interface ClankPlatformOptions {
+  /** Same-host Linux coordinators; each must occupy a dedicated process. Lost leadership terminates that process. */
+  supervisor?: PlatformSupervisorOptions;
   /** Opt-in dedicated organization machine identities with project-scoped credentials. */
   serviceAccounts?: PlatformServiceAccountOptions;
   /**
@@ -700,6 +705,8 @@ export interface ClankPlatformOptions {
 export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
 
 export interface PlatformRuntime {
+  /** Local status contains no lease token or process authority. Present only for the opt-in coordinator topology. */
+  readonly supervisor?: () => PlatformSupervisorStatus;
   readonly handle: (request: Request) => Promise<Response>;
   /** Resolve a current machine credential for trusted server-side budget adapters. */
   authenticateServiceAccount(request: Request): AuthenticatedServiceAccount;
@@ -962,6 +969,10 @@ const MAX_ACTIVE_RUNNER_ENROLLMENTS = 50;
 
 /** Opens Clank's self-hostable deployment control plane and release supervisor. */
 export async function openPlatform(options: ClankPlatformOptions): Promise<PlatformRuntime> {
+  // Standby activation can be delayed indefinitely. Capture ordinary operator
+  // configuration before the first await; changing the caller's input must not
+  // turn off leadership or change the trust policy during later takeover.
+  if(options.supervisor)options=captureSupervisorPlatformOptions(options);
   const sqliteIsolation = options.sqliteIsolation ?? "namespace";
   if (sqliteIsolation !== "namespace" && sqliteIsolation !== "trusted-process") {
     throw new TypeError('sqliteIsolation must be "namespace" or "trusted-process".');
@@ -973,14 +984,104 @@ export async function openPlatform(options: ClankPlatformOptions): Promise<Platf
   const scope = await createSQLiteTaskScope(sqliteIsolation);
   // Startup/recovery timers inherit this instance's policy. Requests and close
   // re-enter it explicitly so another platform or caller cannot change it.
-  const runtime = await scope.run(() => openPlatformScoped(options));
+  const runtime = await scope.run(() => options.supervisor ? openClusterPlatformScoped(options) : openPlatformScoped(options));
   return { ...runtime,
     handle: request => scope.run(() => runtime.handle(request)),
     close: () => scope.run(() => runtime.close()),
   };
 }
 
-async function openPlatformScoped(options: ClankPlatformOptions): Promise<PlatformRuntime> {
+function captureSupervisorPlatformOptions(input:ClankPlatformOptions):ClankPlatformOptions {
+  const active=new Set<object>();let size=0;
+  const copy=(value:any,depth:number,root=false):any=>{
+    if(value===null||typeof value!=="object")return value;
+    if(++size>10000||depth>32||active.has(value))throw new TypeError("Supervisor configuration must be bounded and acyclic.");
+    if(value instanceof Uint8Array)return new Uint8Array(value);
+    const prototype=Object.getPrototypeOf(value);
+    // Registered adapters and class instances retain their native identity.
+    // Their implementation/state must be kept compatible by the operator.
+    if(!root&&!Array.isArray(value)&&(prototype!==Object.prototype&&prototype!==null
+      ||Object.values(Object.getOwnPropertyDescriptors(value)).some(item=>typeof item.value==="function")))return value;
+    active.add(value);const result:any=Array.isArray(value)?[]:Object.create(prototype);
+    for(const [key,item] of Object.entries(Object.getOwnPropertyDescriptors(value))){
+      if(key==="length"&&Array.isArray(value))continue;
+      if(!("value" in item))throw new TypeError("Supervisor configuration accessors are not supported.");
+      Object.defineProperty(result,key,{value:copy(item.value,depth+1),enumerable:item.enumerable,writable:false,configurable:false});
+    }
+    active.delete(value);return Object.freeze(result);
+  };
+  const captured=copy(input,0,true);
+  return Object.freeze({...captured,supervisor:normalizeSupervisorOptions(captured.supervisor)});
+}
+
+let processSupervisorActive=false;
+async function openClusterPlatformScoped(options:ClankPlatformOptions):Promise<PlatformRuntime> {
+  const configuration=normalizeSupervisorOptions(options.supervisor!),proc=(globalThis as any).process;
+  if(processSupervisorActive)throw new TypeError("Automatic leadership requires one supervisor in its own dedicated coordinator process.");
+  const publicUrl=normalizePublicUrl(options.publicUrl),runnerKind=options.runner?.kind??"process",hostingProfile=options.hostingProfile??(runnerKind==="docker"?"isolated":"trusted");
+  if(hostingProfile!=="trusted"&&hostingProfile!=="isolated"||hostingProfile==="isolated"&&runnerKind!=="docker")throw new TypeError("Invalid supervisor hosting profile.");
+  proc.umask?.(0o077);processSupervisorActive=true;
+  let lease:SupervisorLease,paths:Awaited<ReturnType<typeof prepareDirectories>>;
+  try{paths=await prepareDirectories(options.dataDirectory);lease=await openSupervisorLease(paths.controlDatabase,configuration);}
+  catch(error){processSupervisorActive=false;throw error;}
+  const effective=Object.freeze({...options,dataDirectory:paths.root,publicUrl,supervisor:configuration});
+  let state:PlatformSupervisorStatus["state"]="standby",runtime:PlatformRuntime|undefined,guardian:Awaited<ReturnType<typeof armSupervisorGuardian>>|undefined;
+  let closed=false,owned=false,flight:Promise<void>|undefined,closeFlight:Promise<void>|undefined,lastStatus=lease.status(state);
+  const report=(error:unknown)=>{try{void Promise.resolve(options.onError?.(error)).catch(()=>undefined);}catch{}};
+  const unavailable=()=>{
+    const retryAfter=Math.max(1,Math.ceil(configuration.pollIntervalMs/1000));
+    const response=problem(503,"SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready; retry after leadership recovery.",retryAfter);
+    response.headers.set("retry-after",String(retryAfter));return response;
+  };
+  const fence=(error:unknown)=>{state="fenced";report(error);if(guardian)proc.kill(proc.pid,"SIGKILL");};
+  const renewal=setInterval(()=>{
+    if(!owned||!['starting','leader','closing'].includes(state))return;
+    try{lease.renew();}catch(error){fence(error);}
+  },configuration.pollIntervalMs);renewal.unref?.();
+  const tick=async()=>{
+    if(closed||state!=="standby")return;
+    if(!lease.acquire())return;
+    owned=true;
+    state="starting";
+    try{
+      await waitForSupervisorCleanup(paths.root,lease);lease.assertCurrent();
+      guardian=await armSupervisorGuardian(paths.root,lease);lease.assertCurrent();
+      runtime=await openPlatformScoped(effective,lease);lease.assertCurrent();
+      state=closed?"closing":"leader";
+    }catch(error){fence(error);if(!guardian){try{lease.release();}catch{}}throw error;}
+  };
+  const poll=setInterval(()=>{
+    if(flight||closed||state!=="standby")return;
+    flight=tick().catch(report).finally(()=>{flight=undefined;});
+  },configuration.pollIntervalMs);poll.unref?.();
+  try{flight=tick();await flight;}catch(error){clearInterval(poll);clearInterval(renewal);lease.close();processSupervisorActive=false;throw error;}finally{flight=undefined;}
+  return {
+    publicUrl,dataDirectory:paths.root,hostingProfile,runnerKind,
+    supervisor(){if(state==="closed")return lastStatus;if(owned){try{lease.assertCurrent();}catch(error){fence(error);throw error;}}lastStatus=lease.status(state);return lastStatus;},
+    async handle(request){
+      if(state!=="leader"||!runtime)return unavailable();
+      try{lease.assertCurrent();const response=await runtime.handle(request);lease.assertCurrent();return response;}
+      catch(error){if(error instanceof PlatformSupervisorError){fence(error);return unavailable();}throw error;}
+    },
+    authenticateServiceAccount(request){if(state!=="leader"||!runtime)throw new PlatformSupervisorError("SUPERVISOR_UNAVAILABLE","An authoritative supervisor is not ready.");lease.assertCurrent();return runtime.authenticateServiceAccount(request);},
+    close(){if(closeFlight)return closeFlight;closed=true;state="closing";clearInterval(poll);
+      closeFlight=(async()=>{
+        await flight;
+        await runtime?.close();await guardian?.stop();clearInterval(renewal);
+        if(owned)lease.release();owned=false;
+        try{lastStatus=lease.status("closed");}catch(error){
+          if(guardian)throw error;
+          // A superseded standby owns no duties or workers. Its local observer
+          // can close even when a newer catalog configuration fences reads.
+          lastStatus=Object.freeze({...lastStatus,state:"closed"});
+        }
+        lease.close();state="closed";processSupervisorActive=false;
+      })().catch(error=>{fence(error);throw error;});return closeFlight;
+    },
+  };
+}
+
+async function openPlatformScoped(options: ClankPlatformOptions,leadership?:SupervisorLease): Promise<PlatformRuntime> {
   const authentication = {
     concurrency: integerInRange(options.authentication?.concurrency ?? 2, "authentication.concurrency", 1, 16),
     maxQueue: integerInRange(options.authentication?.maxQueue ?? 16, "authentication.maxQueue", 1, 128),
@@ -1298,6 +1399,7 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
     );
   }
   const paths = await prepareDirectories(options.dataDirectory);
+  await assertPlatformSupervisorMode(paths.controlDatabase,Boolean(leadership));
   const runtimeGuardianDirectory = await prepareRuntimeGuardians(paths.root);
   const masterKey = await resolveMasterKey(paths.root, options.masterKey);
   const signupMode = options.signup ?? "bootstrap";
@@ -1306,7 +1408,7 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
     : signupMode === false
       ? "disabled"
       : "bootstrap";
-  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication);
+  const storage = await openPlatformDatabase(paths.controlDatabase, masterKey, authentication,leadership);
   const machineResponseGuards = new WeakMap<Request, () => void>();
   const evacuations = openNodeEvacuations(storage.internal);
   const requireNoEvacuation = (projectId: string) => { if (evacuations.activeForProject(projectId)) throw new PlatformError(409, "PROJECT_EVACUATING", "Resume or cancel the node evacuation before changing this project."); };
@@ -1983,6 +2085,7 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
   };
 
   const requireRuntimeLaunchAuthority = (projectId: string): void => {
+    leadership?.assertCurrent();
     if (closed) throw new PlatformError(503, "PLATFORM_CLOSED", "Platform closed while the application was starting.");
     projectLeaseAssertions.get(projectId)?.();
   };
@@ -10650,11 +10753,27 @@ async function openPlatformScoped(options: ClankPlatformOptions): Promise<Platfo
   };
 }
 
+async function assertPlatformSupervisorMode(path:string,enabled:boolean):Promise<void> {
+  if(enabled)return;
+  const fsName="node:fs/promises",sqliteName="node:sqlite",fs=await import(fsName);
+  try{
+    await fs.stat(path);const sqlite=await import(sqliteName),observer=new sqlite.DatabaseSync(path,{readOnly:true});
+    try{observer.exec("PRAGMA busy_timeout=5000");if(observer.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_platform_supervisor_state'").get())throw new PlatformSupervisorError("SUPERVISOR_MODE_REQUIRED","This catalog requires its configured supervisor topology; quiesce and recover before changing modes.");}
+    finally{observer.close();}
+  }catch(error){if((error as {code?:string}).code!=="ENOENT")throw error;}
+}
+
 async function openPlatformDatabase(path: string, masterKey: Uint8Array,
-  authentication: { concurrency: number; maxQueue: number }): Promise<PlatformDatabase> {
+  authentication: { concurrency: number; maxQueue: number },leadership?:SupervisorLease): Promise<PlatformDatabase> {
+  // Check the persisted topology marker before ordinary platform bootstrap can
+  // touch a catalog already owned by an upgraded multi-process supervisor.
+  await assertPlatformSupervisorMode(path,Boolean(leadership));
+  leadership?.assertCurrent();
   const schema = defineDatabase({});
   const database = await openSQLite(schema, { path });
   const internal = database[SQLITE_INTERNAL];
+  try{if(leadership){if(!internal.guardWrites)throw new Error("Native supervisor write authority is unavailable.");internal.guardWrites(connection=>leadership.assertCurrent(connection));}}
+  catch(error){database.close();throw error;}
   try {assertServiceAccountProtocol(internal);} catch(error) {database.close();throw error;}
   internal.exec(`CREATE TABLE IF NOT EXISTS clank_platform_rate_limits (
     key_hash TEXT PRIMARY KEY,

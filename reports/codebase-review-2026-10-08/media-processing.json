@@ -1,8 +1,8 @@
 {
   "feature": 29,
   "proposal": "https://github.com/nearbycoder/clank.run/issues/311",
-  "status": "verified-awaiting-protected-merge",
-  "counted": false,
+  "status": "merged",
+  "counted": true,
   "base": "e81ef931baff736eeb675daee3427b185644933a",
   "nativeEvidence": {
     "newFocusedChecks": 30,
@@ -33,18 +33,15 @@
     "actualDesktopAndPhoneContentLayoutAndHydratedSearch": true,
     "nativePointerKeyboardNavigation": false
   },
-  "pending": [
-    "Fresh hosted acceptance after report-only update",
-    "Normal protected expected-head merge"
-  ],
+  "pending": [],
   "limitations": [
     "Trusted server adapters must honor stable provider operation keys; external effects are not a distributed SQLite transaction",
     "No production codec/provider certification",
     "No point-in-time capture certification for separate bucket connection writes",
     "Expired operation IDs remain bounded tombstones; admission stops at configured capacity"
   ],
-  "acceptedFeatures": 25,
-  "remainingFeatures": 15,
+  "acceptedFeatures": 26,
+  "remainingFeatures": 14,
   "priorFullGates": {
     "source": "0b96ec8ff94cf973f36ce83991bb90a04258c1d0",
     "bothPassed": true,
@@ -127,5 +124,28 @@
     "codeQlNewAlerts": 0,
     "unresolvedThreads": 0,
     "annotation": "Ubuntu-latest migrates to Ubuntu26 beginning October19,2026; runner-images issue14748; actual notice read."
+  },
+  "acceptance": {
+    "feature": 29,
+    "counted": true,
+    "acceptedFeatures": 26,
+    "featureBatches": 23,
+    "remainingFeatures": 14,
+    "reviewedHead": "ebc85636f1ac0803756815d5513e67b371d8afa3",
+    "reviewedTree": "bb5decf96bf471c2178957ec6c458fe9ee3bf1cc",
+    "squash": "0729abca3ed24743b2af1a25089071e7107a81f7",
+    "normalProtectedExpectedHeadMerge": true,
+    "mergedTreeEqualsReviewedTree": true,
+    "allSixFinalChecksPass": true,
+    "finalHostedSha256": "c6e66d34b29d566244e694666875427338704526ea453d6a8eccdb58f7bb3cba",
+    "newCodeQlAlerts": 0,
+    "unresolvedThreads": 0,
+    "independentReview": false,
+    "authorCommentReviewId": 5478195998,
+    "bothMainCheckoutsSynced": true,
+    "originalFilesPreserved": 23,
+    "immutable42FileIndexSha256": "dd08c96769b8afad1607ba5aee1d159910ba3b1efbe824099daa9adac67ccc40",
+    "browserPointerKeyboardNavigationAccepted": false,
+    "newConsoleControls": false
   }
 }

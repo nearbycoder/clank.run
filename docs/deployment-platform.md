@@ -23,6 +23,8 @@ Bind independent development, staging and production projects, then promote a re
 artifact through the [environment promotion workflow](environment-promotions.md). Each target
 uses its own secrets, data and versioned migration policy.
 
+For multiple coordinators sharing one private Linux catalog, opt into [automatic supervisor leadership](supervisor-leadership.md). Dedicated standby processes take over retained desired state after the previous coordinator and tenant cleanup are fenced.
+
 ## Five-minute managed path
 
 ```sh

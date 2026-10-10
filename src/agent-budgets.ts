@@ -124,7 +124,7 @@ export async function openAgentBudgets<Context, Actions extends Record<string, A
   const resolve = (caller: Context): AgentBudgetIdentity => {
     const value = synchronous(options.identity(caller));
     if (!value) throw new AgentBudgetError("BUDGET_UNAUTHENTICATED", "Current credentials are required.");
-    token(value.ownerId); token(value.principalId);
+    identityToken(value.ownerId); identityToken(value.principalId);
     return Object.freeze({ ownerId: value.ownerId, principalId: value.principalId });
   };
   const transact = <Value>(caller: Context, handler: (context: AgentBudgetContext<Context>, db: WriteDatabase<any>) => Value): Value => {
@@ -164,7 +164,7 @@ export async function openAgentBudgets<Context, Actions extends Record<string, A
   };
   return Object.freeze<AgentBudgets<Context, Actions>>({
     grant(input, caller) {
-      token(input.principalId);
+      identityToken(input.principalId);
       const limits = amounts(input.limits);
       if (!Array.isArray(input.actions) || !input.actions.length || input.actions.length > 100 || new Set(input.actions).size !== input.actions.length) throw new TypeError("Choose distinct registered budget actions.");
       const revisions: Record<string, string> = Object.create(null);
@@ -268,6 +268,12 @@ function integer(value: unknown, minimum: number, maximum: number): number {
 }
 function token(value: unknown): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$/u.test(value)) throw new TypeError("Invalid budget identifier.");
+  return value;
+}
+// Native authentication IDs are base64url and may begin with '-' or '_'.
+// Keep action/revision/operation identifiers on their existing token contract.
+function identityToken(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-][A-Za-z0-9._:@/-]{0,199}$/u.test(value)) throw new TypeError("Invalid budget identity.");
   return value;
 }
 function amounts(value: AgentBudgetAmounts): AgentBudgetAmounts {
