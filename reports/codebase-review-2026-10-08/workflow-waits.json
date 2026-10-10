@@ -1,0 +1,246 @@
+{
+  "featureId": "19",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/293",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/295",
+  "status": "verified-awaiting-final-hosted-checks-and-protected-merge",
+  "acceptedFeatureCountBeforeMerge": 22,
+  "contract": {
+    "steps": "Typed decision/event dependencies persist one bounded request, absolute deadline and validated result without a runnable job, lease or occupied worker slot",
+    "authorization": "Decision resume executes only inside an accepted current reviewed action and the same SQLite transaction; verified requester must own the run. Trusted external adapter must independently authenticate its provider. No anonymous endpoint is installed",
+    "fences": "Current persisted signing policy, HMAC token bound to occurrence/deadline, exact version and schema are checked inside the write transaction",
+    "retry": "Exact current-authorized request returns a retained historical receipt without reapplying later effects; changed input or unknown purged identity refuses",
+    "transitions": "Resume, deny, cancellation and timeout serialize one versioned transition and at most one downstream job occurrence",
+    "secrets": "Only key fingerprint, nonce and token digest persisted; plaintext signing key/resume tokens omitted from manifests, public inventory, events and reviewed plans",
+    "inbox": "Long previews wrap on phones; successful native HTML decision forms redirect to current status, while JSON/non-HTML clients preserve their JSON response"
+  },
+  "limits": {
+    "graphSteps": 100,
+    "requestBytes": 16384,
+    "requestTitleCharacters": 1000,
+    "resultBytes": 65536,
+    "minimumTimeoutMs": 1000,
+    "maximumTimeoutMs": 2592000000,
+    "retainedWaits": 10000,
+    "retainedReceipts": 20000,
+    "authorityEviction": false
+  },
+  "migration": {
+    "protocol": 1,
+    "legacy": "Existing graph revision bytes and legacy persisted state constraints remain unchanged; waiting is derived from pending durable wait rows",
+    "policy": "Explicit signing key shared by controllers; increasing policy revision required for key change; retired live controllers and unknown protocols fail closed",
+    "disable": "Retained waits/receipts and policy fingerprints remain; new admission refuses",
+    "purge": "Explicit terminal retention removes associated waits/receipts; old IDs remain unknown",
+    "rollback": "Use a verified compatible binary/database/config snapshot; an older binary ignores the new wait contract"
+  },
+  "source": {
+    "head": "7b322450218c46deee7f0ba7d0fd1c8dc108a38d",
+    "tree": "ce38b3391b7fe84a0cecd7c6a765eaac2e0d3ea2",
+    "archiveSha256": "7313e1261f6218ec4db77ae95a176149eca0d3101134ffeffaf76961b7b29d70",
+    "files": 1044,
+    "integratedHead": "7b322450218c46deee7f0ba7d0fd1c8dc108a38d",
+    "integratedMain": "9a76326bd1a8e4f7ffdc97c6d3fdf7629a6eaf2a",
+    "postProofChanges": "Source03 adds only the concrete coverage guard repair, its test and changelog to the hash-equal main-integrated source02; all 1,044 inputs verified before acceptance reports",
+    "disposable": "Explicit QEMU Debian 13/Linux 6.12.111 disposable host; ordinary UID 1000; Node 26.10 and minimum Node 22.16"
+  },
+  "validation": {
+    "completeGates": [
+      {
+        "node": 26,
+        "counts": {
+          "tests": 2002,
+          "pass": 1999,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.83,
+          "branches": 80.8,
+          "functions": 90.03
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "384b92f6d7df0f9b5660e41266e18147b61655f703990c07281cfc4cbbb2614b"
+      },
+      {
+        "node": 22,
+        "counts": {
+          "tests": 2002,
+          "pass": 1999,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.82,
+          "branches": 80.83,
+          "functions": 90.07
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "e334aace72417e790089dd57a6894d48287e496c5cc20bc5447368bb28b7fd95"
+      }
+    ],
+    "historicalSource01": [
+      {
+        "node": 26,
+        "counts": {
+          "tests": 2000,
+          "pass": 1997,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.83,
+          "branches": 80.79,
+          "functions": 90.03
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "456a56cfd46b28de2e4931245ad705fb09b036b853051c5750c952cf6156ec25"
+      },
+      {
+        "node": 22,
+        "counts": {
+          "tests": 2000,
+          "pass": 1997,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.82,
+          "branches": 80.82,
+          "functions": 90.07
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "4d56355b606bca617ea49e6d3db163ca9b6d12e02d70600688cdc5380bcb7dd5"
+      }
+    ],
+    "historicalSource02": {
+      "node26": {
+        "node": 26,
+        "counts": {
+          "tests": 2001,
+          "pass": 1998,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.83,
+          "branches": 80.8,
+          "functions": 90.03
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "05ac6115922849df0fcd5430e79e669179a46e4173dd1e09a57018dda2da9ff6"
+      },
+      "node22": {
+        "reported": 2001,
+        "passed": 1998,
+        "failed": 0,
+        "skipped": 3,
+        "completeReleaseGate": false,
+        "failure": "Malformed V8 coverage JSON with exact property-name diagnostic outside the previous narrow retry whitelist",
+        "rawSha256": "cf9c294dceac2b6132f5a9953dd0ff6f363f06ff987e9386076559ffff6e61b1"
+      }
+    },
+    "focused": {
+      "reported": 56,
+      "passed": 56,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "newWaitCases": 13,
+      "rawSha256": "46a5dea92bb7b1e855fe12944456ec369d60f3943219f7562a59253797287d29"
+    },
+    "types": {
+      "existingDiagnostics": 159,
+      "newDiagnostics": 0,
+      "unchangedBaseline": 163,
+      "packedFixtures": 30,
+      "packedOpenApiExamplesPassed": true,
+      "rawSha256": "186bc9a3f7d045a1b50ff75e42e8dae475868ee57cac12aac43d84b22f8b7644"
+    },
+    "package": {
+      "files": 405,
+      "unpackedBytes": 6215673,
+      "unchangedCeiling": 6291456,
+      "headroom": 75783,
+      "dependencies": 0,
+      "rawSha256": "0cbcbcb725623817906e9c1b4326650d55376c2ac4e2399764e32e0d1d76f340"
+    },
+    "historySecurity": {
+      "actualPublishedHistoryPassed": true,
+      "rawSha256": "e5aa7592e49e66e49bb280f66986f00b6deb9a521b5392cc329086a43d4287a1"
+    },
+    "docs": {
+      "guides": 98,
+      "words": 171618,
+      "build": true,
+      "doctor": {
+        "pass": 6,
+        "warnings": 1,
+        "fail": 0
+      },
+      "offlineArtifact": "98d211bbe7ae92f142aca5488fbefa168f3da8a0e0a9c6ad2ee2a024a80cce6c",
+      "uploaded": false,
+      "httpMcp": "Eight HTTP surfaces plus MCP discovery, tools/list, docs.search and docs.read passed",
+      "desktopGuide": "workflow-waits-docs-desktop-01.png",
+      "phoneGuide": "workflow-waits-docs-phone-02.png",
+      "phoneSearchToGuide": "workflow-waits-docs-phone-search-01.png",
+      "phoneGeometry": {
+        "viewport": 390,
+        "document": 375
+      },
+      "browserMachineFormats": "In-app browser rejects machine-format navigation; successful actual HTTP/MCP reads retained separately"
+    }
+  },
+  "processEvidence": {
+    "lostResponse": "Actual numeric-loopback resume committed, response held, IPC marker received, controller SIGKILL/exit verified; fetch rejects and second controller replays the exact receipt with one downstream occurrence",
+    "races": "Twelve actual two-controller process races: four each duplicate, cancel and deadline; version moves once and receipts/job counts match outcome",
+    "revocation": "Real reviewed actions reject changed affected records or revoked requester/approver authority; unrelated writes and restart preserve valid record-bound approval",
+    "bounds": "10,000 retained waits and 20,000 receipts refuse further admission without evicting authority",
+    "invalid": "Async/oversized mappers, invalid schema, foreign token, stale policy/definition, missing config and unknown protocol fail without partial state"
+  },
+  "browserEvidence": {
+    "accepted": "Real framework auth/register, keyboard native approval, current reviewed commit and actual worker produce succeeded/browser-approved",
+    "phoneCommitted": "workflow-waits-browser-committed-phone-01.png",
+    "phoneWrap": "workflow-waits-inbox-phone-green-01.png",
+    "desktopInbox": "workflow-waits-inbox-desktop-01.png",
+    "revoked": "Revoking approving session and signing in again rejects the old reviewed commit with PREVIEW_STALE; fresh page remains waiting with no output",
+    "revokedScreenshot": "workflow-waits-browser-revoked-desktop-01.png",
+    "fixtureIsolation": "Synthetic local auth cookie name isolates parallel test applications; no production credentials used"
+  },
+  "retainedFailures": [
+    {
+      "proof": "Actual 390px native inbox preview overflowed to 655px",
+      "repair": "Preview whitespace wrapping reduces content width to 390px"
+    },
+    {
+      "proof": "Native HTML approval form returned 200 JSON; regression expected a current-status redirect",
+      "repair": "303 HTML redirect while preserving 200 JSON and non-HTML behavior"
+    },
+    {
+      "setup": "Early browser helpers shared the default localhost auth cookie; isolated synthetic cookie fixes test interference. First phone guide capture remained desktop, and one home-link selector did not match its accessible name",
+      "resolution": "Fresh isolated real auth flow, dedicated measured 390px tab and semantic accessible home/search links; wrong captures are retained and not counted as phone acceptance"
+    }
+  ],
+  "coverageArtifactRepair": {
+    "focusedGuardTests": 7,
+    "redRegressionSha256": "3ca28fcb64c4feb8bedfb8315d988b6d341187543fee759dfa3fb14d1ac46f07",
+    "greenSha256": "a58dc60f774d14b1c3d1d8df21ca82eddec33bdf830c4eeafe9fe5c36d3546ef",
+    "contract": "Exact property-name malformed JSON diagnostic receives the existing one retry only after every test passed; actual test failures, cancellations, unknown errors, missing measurements and coverage thresholds remain strict"
+  },
+  "evidenceIndexSha256": "d1d47d4aae54195739f34578e4532aa3daaf9022a92c8266a209ef5d14d37491",
+  "review": {
+    "independent": false,
+    "freshHostedChecks": "Required at the final metadata head",
+    "newCodeQlAlerts": "Must be zero",
+    "unresolvedThreads": "Must be zero",
+    "merge": "Normal protected expected-head squash, followed by exact tree equality and safe main-reference/primary sync preserving concurrent user branch"
+  },
+  "limitations": [
+    "Job execution and unrelated external side effects remain at least once and require provider idempotency",
+    "The application composes current role/provider authorization and reviewed action previews; no hosted identity provider or external integration certification claimed",
+    "Minimum-Node disposable Linux acceptance is not production Railway host certification"
+  ]
+}
