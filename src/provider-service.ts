@@ -572,6 +572,13 @@ async function openOwnedDeploymentProviderService(
   const stopCanary = async (projectId: string, expected?: Pick<DeploymentProviderCanaryState,"primary"|"operationId"|"controllerEpoch">): Promise<DeploymentProviderCanaryState | null> => {
     const journal = await readCanary(projectId);
     if (journal && expected && (!sameCanaryBinding(journal.current.primary,expected.primary) || journal.current.operationId!==expected.operationId || journal.current.controllerEpoch!==expected.controllerEpoch)) throw new Error("Provider canary cleanup identity is stale.");
+    if (journal) {
+      const isolatedProject=journal.current.candidateProjectId,owner=canaryProjectOwners.get(isolatedProject);
+      if (owner && owner!==projectId) throw new Error("Provider canary cleanup collides with unrelated ownership.");
+      // An old, internally valid journal can be restored beside a newer ordinary
+      // project. Validate its current owner before any journal or cleanup effect.
+      if (journal.current.phase!=="stopped" && (controls.has(isolatedProject) || await readProjectState(isolatedProject))) throw new Error("Provider canary cleanup collides with ordinary ownership.");
+    }
     // Reconstruct ownership only during serialized lifecycle or startup cleanup.
     // An asynchronous request read must not reclaim an already retired identity.
     if (journal && journal.current.phase!=="stopped") canaryProjectOwners.set(journal.current.candidateProjectId,projectId);
