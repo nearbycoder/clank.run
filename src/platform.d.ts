@@ -1,3 +1,4 @@
+import type {PlatformStatusPagesOptions} from "./platform-status-pages.js";
 import type { LinuxHostCertificationOptions } from "./host-certification.js";
 import type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
 export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
@@ -314,6 +315,8 @@ export interface PlatformBillingOptions {
     pastDueGraceMs?: number;
 }
 export interface ClankPlatformOptions {
+    /** Approved public health, customer domains and native subscriber inboxes. */
+    statusPages?: PlatformStatusPagesOptions;
   incidents?: import("./platform-incidents.js").PlatformIncidentOptions;
   /** Bounded native-ingress completion objectives and durable burn metadata. */
   slos?: import("./platform-slo.js").PlatformSloOptions;

@@ -911,3 +911,7 @@ compact retired keys, limits and rollback semantics.
 Project dependency configuration, checks, retained activations and verified recovery use
 `/api/projects/:id/dependencies`. See [deployment dependency gates](deployment-dependencies.md)
 for strict bodies, version/check binding, upload headers, rollback fencing and human override scope.
+
+## Customer status pages
+
+Use `createCustomerStatusClient()` from `@clank.run/framework/customer-status` for current human administration, public projections and own-account subscriber preferences/inboxes. `create`, `configure`, `preview`, `publish` and `unpublish` retain native versions and exact operation receipts. `domains`, `beginDomain` and `verifyDomain` use current native domain reservations. `publicPage` omits credentials and validates the strict public projection. `preferences`, `subscribe` and `notifications` act only on the actual native account. See [Customer status pages](customer-status-pages.md) for publication review, assurance, limits, custom domains and recovery.

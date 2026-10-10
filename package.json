@@ -20,6 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./customer-status": { "types": "./dist/customer-status.d.ts", "import": "./dist/customer-status.js" },
     "./project-slo": { "types": "./dist/project-slo.d.ts", "import": "./dist/project-slo.js" },
     "./media-processing": { "types": "./dist/media-processing.d.ts", "import": "./dist/media-processing.js" },
     "./service-accounts": { "types": "./dist/service-accounts.d.ts", "import": "./dist/service-accounts.js" },

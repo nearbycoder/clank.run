@@ -82,3 +82,5 @@ The control store allows up to 100 incidents per project, 100 notes and 50 refer
 Incident protocol 1 is checked at startup and throughout operations. An unsupported protocol refuses access before altering the incident tables. Back up the control SQLite store with your normal platform recovery process and retain a compatible binary. Closing the platform stops new incident work and aborts outstanding diagnostic reads. No notification delivery, public status publication or production monitoring certification is implied by an incident record.
 
 Local acceptance uses real authenticated control-plane requests, actual releases/error/trace/job/workflow/alert stores, role revocation during held bodies and diagnostics, two SQLite controllers, atomic audit rollback and an actual SIGKILL after commit but before HTTP delivery. Three existing environmental skips remain visible in full release checks; disposable fixtures do not certify an external production provider.
+
+Publish approved, dedicated customer copy through [customer status pages](customer-status-pages.md). Selecting a private incident supplies version-fenced provenance, without copying its private content.
