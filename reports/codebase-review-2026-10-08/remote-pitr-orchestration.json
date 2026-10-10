@@ -1,7 +1,7 @@
 {
   "feature": 10,
   "proposal": "https://github.com/nearbycoder/clank.run/issues/315",
-  "status": "platform-and-console-integration-in-progress",
+  "status": "draft-browser-acceptance-pending",
   "counted": false,
   "main": "7bdb73efc3bf297c566d63814223306b047b2792",
   "foundationNative": {
@@ -36,11 +36,11 @@
       }
     }
   },
-  "scope": "Native provider/controller and authenticated platform restore integration verified on Node 22 and 26, including killed source/controller processes and original lease expiration. Private console workflow implemented with focused tests. Complete feature 10 acceptance remains pending.",
+  "scope": "Native recovery SDK, provider/controller, authenticated platform restore, CLI, stateless HTTP MCP and private console implementation passed complete ordinary-user release gates. Actual recovery browser, keyboard, phone and device verification remain pending; feature 10 is not accepted.",
   "pending": [
     "Actual recovery browser flows, keyboard/focus/mobile and live access loss",
-    "Canonical documentation/offline HTTP MCP verification and complete ordinary-user release gates",
-    "Fresh hosted checks and normal protected expected-head merge"
+    "Browser identity verification; signed native fixture assertions are not device verification",
+    "Review and normal protected expected-head merge after acceptance"
   ],
   "acceptedFeatures": 27,
   "remainingFeatures": 13,
@@ -154,6 +154,92 @@
   },
   "browserVerification": {
     "status": "pending",
-    "scope": "Owned disposable Linux provider fixture with actual platform API and native SQLite catalog. The testing browser displayed the ordinary sign-in form and corrected synthetic inputs, but no successful browser sign-in or recovery submission has been observed. No prepared browser credential or security bypass was used. Console interaction and device passkey verification are not counted as passed."
+    "scope": "Two owned disposable native Linux fixtures served the ordinary sign-in form; no successful browser sign-in or recovery submission has been observed. Requested phone dimensions continued to report 1265 px, including the image with mobile in its planned filename. No prepared browser credential or security bypass was used. Native signed assertions do not establish device verification. Form script parsed successfully; this does not establish execution."
+  },
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/316",
+  "fullReleaseGates": {
+    "source": "0a349aa7b8e632fdf86dade81fe3c98ea15ad170",
+    "tree": "08315f2fd3bb4ab87cadced5280948f46c1ca3c8",
+    "tarSha256": "4397cadc2c3e8cd608c871544c8d258bb3c9e8719b0dda1163a9039ee4a638f4",
+    "inputs": 1130,
+    "ordinaryUid": 1000,
+    "scope": "Complete unmodified scripts/check.mjs on the source-18 snapshot, including native tests/coverage, all application builds and runnable docs examples, docs audit, packed-release conformance, dependency contract and security audit. Three intentional unsupported-host tests remain skipped. Does not establish actual browser recovery, device passkeys, phone layout or production host certification. Feature 10 remains uncounted.",
+    "results": {
+      "26": {
+        "log": "remote-pitr-node26-gate-02.log",
+        "sha256": "67adc569edbc36e66bfde89e1018731b84465e16634a9757aae3f43d4d53fc77",
+        "exit": 0,
+        "counts": {
+          "tests": 2178,
+          "pass": 2175,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.75,
+          81.07,
+          90.09
+        ]
+      },
+      "22": {
+        "log": "remote-pitr-node22-gate-02.log",
+        "sha256": "20780c8cd456d2795d72e065d98629e7bd2a681ff6aee61df68cf4b78ea5f2fe",
+        "exit": 0,
+        "counts": {
+          "tests": 2178,
+          "pass": 2175,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.74,
+          81.09,
+          90.12
+        ]
+      }
+    }
+  },
+  "hosted": {
+    "head": "0a349aa7b8e632fdf86dade81fe3c98ea15ad170",
+    "checks": 6,
+    "success": 6,
+    "codeqlNewAlerts": 0,
+    "analysisAnnotation": "Informational runner-image migration notice, read; no failed check.",
+    "proofSha256": "e0a92bdb463aeaf81dfc8de7b7430e1b0fe1274207ec86b571a124f6856c32dd"
+  },
+  "documentation": {
+    "guides": 101,
+    "build": "passed",
+    "doctor": "6 passed, 1 optional unlinked directory, 0 failures",
+    "offlineArtifact": "2fd765e549d17c12a1fd134c03457bf3c671d5d1cb483e1b5453a6840bb586c1",
+    "uploaded": false,
+    "httpSurfaces": 8,
+    "httpMcp": "discovery/list/search/read passed",
+    "proofSha256": "1f9a73119dafebc2c9274720634d85a58a4405d895aa2f9e0d5ad9a1db9e9943",
+    "browser": "Desktop home, guide and search observed at 1265 px; phone override and keyboard activation unverified."
+  },
+  "evidence": {
+    "index": "/tmp/clank-review-2026-10-08/remote-pitr-evidence-01/index.json",
+    "sha256": "b9ca763d487257f2a46073a82cf70b98061fd55a88c0a39398b92b375db7213f",
+    "files": 217,
+    "mode": "0400",
+    "activeLogsExcluded": true,
+    "originalFailuresPreserved": true
+  },
+  "package": {
+    "files": 415,
+    "unpackedBytes": 6270529,
+    "limit": 6291456,
+    "headroom": 20927,
+    "zeroNpmDependencies": true
+  },
+  "consumerTypes": {
+    "packedFixtures": 35,
+    "sourceDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163,
+    "logSha256": "2f424ac82f1165e26284d2484d3ad08b018dadd515903e49e77bd6ea41b643f4"
   }
 }
