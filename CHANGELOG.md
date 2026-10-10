@@ -10,6 +10,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
   and serialize resume, cancellation and timeout in SQLite transactions.
   Wrap long approval previews on phones and return native HTML form decisions to the inbox;
   preserve JSON and non-HTML client responses.
+- Recognize the exact malformed-property-name coverage diagnostic for the existing single
+  bounded artifact retry after every test passes; preserve failure and coverage-threshold refusal.
 
 - Fence retired organization offboarding credentials against the current persisted provider
   snapshot, including requests waiting for their body. Preserve dedicated and linking-disabled
