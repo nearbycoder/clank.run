@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {runInNewContext} from 'node:vm';
+import {platformConsolePage} from '../dist/platform-console.js';
+const settle=()=>new Promise(resolve=>setImmediate(resolve));
+const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return{promise,resolve,reject}};
+const checkpoint={id:'pitr_'+'1'.repeat(64),sequence:3,committedAt:1700000000000,bytes:10000,binding:{projectId:'source',releaseId:'retained_release',nodeId:'node',generation:3}};
+const metadata=()=>({policy:{version:4,enabled:true,intervalMs:60000,nextExportAt:null,pendingOperationId:null,lastError:null},checkpoints:[checkpoint],restores:[]});
+async function fixture(handler){
+  const html=await platformConsolePage('http://localhost',{user:null,csrfToken:null},'',false,false).text(),nodes=new Map(),calls=[];let serial=0;
+  const node=()=>({children:[],textContent:'',value:'',checked:false,disabled:false,hidden:false,dataset:{},append(...children){this.children.push(...children);if(this.tag==='select'&&!this.value&&children[0])this.value=children[0].value},setAttribute(name,value){this[name]=value},focus(){context.document.activeElement=this},reportValidity(){return true}});
+  const q=id=>{if(!nodes.has(id))nodes.set(id,node());return nodes.get(id)};q('#recovery-checkpoint').tag='select';
+  const initial={authenticated:true,email:'owner@example.test',csrfToken:'same-session',impersonation:null},state={currentProject:'source',projectTab:'backups',projectData:{detail:{project:{id:'source',slug:'source-app',name:'Source app'},access:{role:'owner'}}},dashboard:{projects:[]}};
+  const context={q,state,initial,crypto:{randomUUID:()=>String(++serial)},document:{activeElement:null},navigator:{credentials:null},Uint8Array,atob,btoa,formatDate:value=>String(value),formatBytes:value=>String(value),projectPath:(slug,tab)=>'/projects/'+slug+'/'+tab,clear(element){element.children=[];element.value='';element.textContent=''},el(tag,className,text){return Object.assign(node(),{tag,className,textContent:text??''})},async api(path,options){calls.push({path,options:options?JSON.parse(JSON.stringify(options)):undefined});return handler?handler(path,options,context):metadata()},handleAuthFailure(error){if(error.status===401){initial.authenticated=false;context.resetRecoveryView();return true}return false},loadDashboard:async()=>{},toast(){}};
+  const source=html.match(/\/\/ Recovery console:[\s\S]*?\/\/ End recovery console\./)?.[0];assert.ok(source);runInNewContext(source,context);await context.loadRecovery();return{...context,calls,html,nodes};
+}
+function restoreFields(f){f.q('#recovery-sequence').value='2';f.q('#recovery-name').value='Recovered ledger';f.q('#recovery-slug').value='recovered-ledger'}
+
+test('console review freezes the exact stopped-project restore and retries an unknown acknowledgment once per explicit click',async()=>{
+  let tries=0;const f=await fixture(async(path,options)=>{if(!options)return metadata();if(!tries++)throw new Error('Owned response lost');return{restore:{sequence:2,destinationProjectId:'reserved'}}});restoreFields(f);f.reviewRecovery('restore');assert.equal(f.calls.filter(c=>c.options).length,0);assert.match(f.q('#recovery-review').textContent,/sequence 2.*suspended project/);assert.equal(f.document.activeElement,f.q('#recovery-clear'));
+  await f.applyRecovery();assert.equal(f.calls.filter(c=>c.options).length,0);f.q('#recovery-confirmation').value='restore-recovery source-app '+checkpoint.id+' 2 recovered-ledger';await f.applyRecovery();assert.match(f.q('#recovery-error').textContent,/Acknowledgment unknown/);assert.equal(f.q('#recovery-name').disabled,true);assert.equal(f.q('#recovery-apply').textContent,'Retry exact recovery request');const first=f.calls.find(c=>c.options);assert.equal(first.options.body.expectedVersion,4);
+  await f.applyRecovery();const mutations=f.calls.filter(c=>c.options);assert.equal(mutations.length,2);assert.deepEqual(mutations[0],mutations[1]);assert.equal(f.q('#recovery-review-panel').hidden,true);assert.equal(f.q('#recovery-request').textContent,'');assert.equal(f.document.activeElement,f.q('#recovery-refresh'));
+});
+
+test('a submitted request serializes clicks and keeps its original review through current policy refresh',async()=>{
+  const held=deferred();let newer=false;const f=await fixture((path,options)=>options?held.promise:{...metadata(),policy:{...metadata().policy,version:newer?5:4}});f.reviewRecovery('checkpoint');const pending=f.applyRecovery();await settle();assert.equal(f.q('#recovery-apply').disabled,true);await f.applyRecovery();newer=true;await f.loadRecovery();held.reject(Object.assign(Error('Policy changed'),{status:409}));await pending;assert.equal(f.calls.filter(c=>c.options).length,1);assert.equal(JSON.parse(f.q('#recovery-request').textContent).expectedVersion,4);assert.match(f.q('#recovery-status').textContent,/version 5/);assert.match(f.q('#recovery-error').textContent,/exact request is retained/);
+});
+
+test('recovery account, credential and project changes fence late acknowledgments and clear private forms',async()=>{
+  for(const change of ['account','credential','project','signout']){const held=deferred(),f=await fixture((path,options)=>options?held.promise:metadata());restoreFields(f);f.reviewRecovery('restore');f.q('#recovery-confirmation').value=JSON.parse(f.q('#recovery-request').textContent).confirmation;const pending=f.applyRecovery();await settle();if(change==='account')f.initial.email='other@example.test';if(change==='credential')f.initial.csrfToken='rotated-session';if(change==='project')f.state.currentProject='other';if(change==='signout')f.initial.authenticated=false;f.resetRecoveryView();held.resolve({restore:{sequence:2,destinationProjectId:'private'}});await pending;assert.equal(f.q('#recovery-name').value,'');assert.equal(f.q('#recovery-request').textContent,'');assert.equal(f.q('#recovery-history').children.length,0);assert.equal(f.q('#recovery-controls').hidden,true);assert.equal(f.q('#recovery-apply').disabled,true);}
+});
+
+test('live read revocation clears checkpoints, reviewed operations and MFA material',async()=>{
+  let revoked=false;const f=await fixture(()=>{if(revoked)throw Object.assign(Error('Native owner removed'),{status:403});return metadata()});restoreFields(f);f.reviewRecovery('restore');f.q('#recovery-password').value='private';f.q('#recovery-code').value='123456';revoked=true;await f.loadRecovery();assert.equal(f.q('#recovery-controls').hidden,true);assert.equal(f.q('#recovery-checkpoints').children.length,0);assert.equal(f.q('#recovery-name').value,'');assert.equal(f.q('#recovery-password').value,'');assert.equal(f.q('#recovery-code').value,'');assert.match(f.q('#recovery-error').textContent,/current access/);
+});
+
+test('fresh verification never automatically submits the retained recovery request and obsolete verification cannot finish',async()=>{
+  const start=deferred();let factorCalls=0;const f=await fixture((path,options)=>{if(path.includes('reauthenticate/mfa/start')){factorCalls++;return start.promise}return metadata()});f.reviewRecovery('configure');f.q('#recovery-password').value='fixture-password';const beginning=f.q('#recovery-mfa-start').onsubmit({preventDefault(){}});await settle();assert.equal(factorCalls,1);assert.equal(f.calls.filter(c=>c.options&&c.path.includes('/point-in-time')).length,0);f.state.currentProject='other';f.resetRecoveryView();start.resolve({challengeId:'obsolete'});await beginning;await settle();assert.equal(f.q('#recovery-mfa-finish').hidden,true);assert.equal(f.q('#recovery-password').value,'');
+  const g=await fixture((path,options)=>path.includes('reauthenticate/mfa/start')?{challengeId:'native-challenge'}:metadata());g.reviewRecovery('configure');g.q('#recovery-password').value='fixture-password';g.q('#recovery-mfa-start').onsubmit({preventDefault(){}});await settle();assert.equal(g.q('#recovery-mfa-finish').hidden,false);g.q('#recovery-code').value='123456';g.q('#recovery-mfa-finish').onsubmit({preventDefault(){}});await settle();assert.equal(g.q('#recovery-mfa-finish').hidden,true);assert.match(g.q('#recovery-auth-status').textContent,/Identity verified/);assert.equal(g.calls.filter(c=>c.options&&c.path.includes('/point-in-time')).length,0);assert.equal(g.q('#recovery-review-panel').hidden,false);
+});
+
+test('reader and support views expose recovery metadata with disabled mutation controls',async()=>{
+  const f=await fixture();f.state.projectData.detail.access.role='viewer';await f.loadRecovery();assert.equal(f.q('#recovery-checkpoints').children.length,1);assert.equal(f.q('#recovery-restore').disabled,true);f.reviewRecovery('checkpoint');assert.equal(f.q('#recovery-review-panel').hidden,true);
+  f.initial.impersonation={id:'support-session'};await f.loadRecovery();assert.equal(f.q('#recovery-checkpoints').children.length,1);assert.equal(f.q('#recovery-passkey-verify').disabled,true);assert.equal(f.q('#recovery-configure').disabled,true);
+  assert.match(f.html,/id="recovery-sequence" name="sequence" autocomplete="off" type="number" min="0" step="1" required aria-describedby="recovery-horizon"/);assert.match(f.html,/id="recovery-error" role="status" tabindex="-1"/);
+});

@@ -71,6 +71,25 @@ test('a native ignored checkpoint acknowledgment cannot publish an archive or ad
   f.internal.exec('DROP TRIGGER ignore_checkpoint_ack');await f.reopen();assert.equal((await f.capture()).sequence,3);assert.equal(pointInTimeReceiptCount(f.node),1);
 }));
 
+test('ignored native policy writes cannot accept a configuration or change its current version',async()=>fixture(async f=>{
+  f.internal.exec("CREATE TRIGGER ignore_policy_insert BEFORE INSERT ON clank_platform_pitr_policies BEGIN SELECT RAISE(IGNORE); END;");
+  assert.throws(()=>f.enable(),/policy acknowledgment changed/);assert.equal(f.controller.policy('project_native'),null);assert.equal(f.internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind='configure'").get().n,0);
+  f.internal.exec('DROP TRIGGER ignore_policy_insert');f.enable();
+  f.internal.exec("CREATE TRIGGER ignore_policy_update BEFORE UPDATE ON clank_platform_pitr_policies BEGIN SELECT RAISE(IGNORE); END;");
+  assert.throws(()=>f.enable({operationId:'disable_ignored',expectedVersion:1,enabled:false}),/policy acknowledgment changed/);assert.equal(f.controller.policy('project_native').enabled,true);assert.equal(f.controller.policy('project_native').version,1);assert.equal(f.internal.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE id=?').get('disable_ignored').n,0);
+  f.internal.exec('DROP TRIGGER ignore_policy_update');assert.equal(f.enable({operationId:'disable_ignored',expectedVersion:1,enabled:false}).version,2);
+}));
+
+test('ignored native resolution writes preserve the pending export, reservation and disabled policy atomically',async()=>fixture(async f=>{
+  f.enable();f.internal.exec("CREATE TRIGGER refuse_ack BEFORE UPDATE OF state ON clank_platform_pitr_operations WHEN NEW.state='accepted' BEGIN SELECT RAISE(ABORT,'owned native acknowledgment fault'); END;");await assert.rejects(f.capture());f.internal.exec('DROP TRIGGER refuse_ack');f.enable({operationId:'disable_native_02',expectedVersion:1,enabled:false});
+  const input={operationId:'resolve_ignored',pendingOperationId:'checkpoint_native_01',expectedVersion:2},before=f.internal.prepare('SELECT receipt,reserved_bytes FROM clank_platform_pitr_operations WHERE id=?').get(input.pendingOperationId);
+  for(const table of ['operations','policies']){
+    f.internal.exec("CREATE TRIGGER ignore_resolution BEFORE UPDATE ON clank_platform_pitr_"+table+" BEGIN SELECT RAISE(IGNORE); END;");
+    assert.throws(()=>f.controller.resolve('project_native','owner_native',input,f.current),/resolution acknowledgment changed/);assert.equal(f.controller.policy('project_native').version,2);assert.equal(f.controller.policy('project_native').pendingOperationId,input.pendingOperationId);assert.deepEqual(f.internal.prepare('SELECT receipt,reserved_bytes FROM clank_platform_pitr_operations WHERE id=?').get(input.pendingOperationId),before);assert.equal(f.internal.prepare('SELECT state FROM clank_platform_pitr_operations WHERE id=?').get(input.pendingOperationId).state,'pending');assert.equal(f.internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations WHERE kind='resolve'").get().n,0);f.internal.exec('DROP TRIGGER ignore_resolution');
+  }
+  assert.equal(f.controller.resolve('project_native','owner_native',input,f.current).version,3);
+}));
+
 test('a pending checkpoint preserves its original provider generation through a controller restart and refuses a changed source before another request',async()=>fixture(async f=>{
   f.enable();f.internal.exec("CREATE TRIGGER refuse_ack BEFORE UPDATE OF state ON clank_platform_pitr_operations WHEN NEW.state='accepted' BEGIN SELECT RAISE(ABORT,'owned native acknowledgment fault'); END;");
   await assert.rejects(f.capture());f.internal.exec('DROP TRIGGER refuse_ack');await f.reopen();

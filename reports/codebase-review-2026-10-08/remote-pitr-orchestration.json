@@ -1,7 +1,7 @@
 {
   "feature": 10,
   "proposal": "https://github.com/nearbycoder/clank.run/issues/315",
-  "status": "foundation-verified-platform-integration-in-progress",
+  "status": "platform-and-console-integration-in-progress",
   "counted": false,
   "main": "7bdb73efc3bf297c566d63814223306b047b2792",
   "foundationNative": {
@@ -36,21 +36,59 @@
       }
     }
   },
-  "types": {
+  "scope": "Native provider/controller and authenticated platform restore integration verified on Node 22 and 26, including killed source/controller processes and original lease expiration. Private console workflow implemented with focused tests. Complete feature 10 acceptance remains pending.",
+  "pending": [
+    "Actual recovery browser flows, keyboard/focus/mobile and live access loss",
+    "Read-only MCP recovery inspection and browser restore preparation",
+    "Canonical documentation/offline HTTP MCP verification and complete ordinary-user release gates",
+    "Fresh hosted checks and normal protected expected-head merge"
+  ],
+  "acceptedFeatures": 27,
+  "remainingFeatures": 13,
+  "foundationTypes": {
     "sourceDiagnostics": 159,
     "newDiagnostics": 0,
     "unchangedBaseline": 163,
     "packedFixtures": 34,
     "logSha256": "d91b57b10a52748104cd745b1b4b42005e3524760567eb2f3c1175f5175f73b4"
   },
-  "scope": "Verified encrypted provider/controller archives and receipts, real provider HTTP, native rollback/corruption/migration and process-kill recovery. These do not constitute complete feature 10 acceptance.",
-  "pending": [
-    "Current-main authenticated platform integration and live authority checks",
-    "Bounded durable separate stopped-project restore with exact verified release artifact",
-    "Human console, CLI and MCP workflows and actual UI acceptance",
-    "Canonical documentation, package/security/type checks and complete ordinary-user release gates",
-    "Fresh hosted checks and normal protected expected-head merge"
-  ],
-  "acceptedFeatures": 27,
-  "remainingFeatures": 13
+  "platformIntegration": {
+    "source": {
+      "head": "56c77b0cb5adfc0e985e0bb06bab2024511b1dae",
+      "tree": "2ee42dbc13702de51fc93cdefe645f1805ce9661",
+      "tarSha256": "f9deb5e50b9e9041dcee9ff75ada702dcb57e4683496ac4a5b20d617408aecef"
+    },
+    "ordinaryUid": 1000,
+    "scope": "Focused private recovery SDK, controller, public project restore and packed CLI integration. Actual source volume loss, controller SIGKILL, unchanged 120000 ms native lease, same stopped destination, independent keys, native rollback/ignored updates, fresh signed human sessions and current machine read-only HTTP metadata. CLI fixture proves transport/plan contract, not native authorization. Excludes complete release gates, real browser flows, hardware/Docker certification and whole-feature acceptance.",
+    "nodes": {
+      "26": {
+        "log": "remote-pitr-platform-node26-13.log",
+        "sha256": "7ed45612c1197ef13993254af2f1384de5970e2dbb59119a1800f004c3d53b13",
+        "exit": 0,
+        "tests": 62,
+        "pass": 62,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "22": {
+        "log": "remote-pitr-platform-node22-13.log",
+        "sha256": "6e377b2671b3305ea954b35c277986307de0fb7251b74592d0b9176f9ee42196",
+        "exit": 0,
+        "tests": 62,
+        "pass": 62,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      }
+    },
+    "types": {
+      "log": "remote-pitr-types-18.log",
+      "sha256": "2f424ac82f1165e26284d2484d3ad08b018dadd515903e49e77bd6ea41b643f4",
+      "packedFixtures": 35,
+      "sourceDiagnostics": 159,
+      "newDiagnostics": 0,
+      "unchangedBaseline": 163
+    }
+  }
 }

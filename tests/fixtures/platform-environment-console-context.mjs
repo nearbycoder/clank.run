@@ -31,4 +31,7 @@ export function installEnvironmentConsoleContext(context, html) {
   const save=html.match(/^function saveEnvironmentDraft\(\)\{[\s\S]*?^\}/m)?.[0];
   assert.ok(reset&&save,'Console environment helpers must be present.');
   runInNewContext(reset+'\n'+save,context);
+  const recovery=html.match(/\/\/ Recovery console:[\s\S]*?\/\/ End recovery console\./)?.[0];
+  assert.ok(recovery,'Shared recovery console must be present.');
+  runInNewContext(recovery,context);
 }

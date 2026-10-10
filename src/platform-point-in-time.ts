@@ -167,9 +167,15 @@ export async function openPlatformPointInTime(options:{
     const prior=row(project);if(Number(prior?.version??0)!==input.expectedVersion)throw new Error("Recovery policy version changed.");
     if(input.enabled&&prior?.pending)throw new Error("A retained recovery export requires resolution before enabling a changed policy.");
     capacity();assertOwner(project,owner);const version=input.expectedVersion+1;number(version,1,Number.MAX_SAFE_INTEGER);
-    internal.prepare(`INSERT INTO clank_platform_pitr_policies VALUES(?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL,NULL,NULL)
-      ON CONFLICT(project) DO UPDATE SET version=excluded.version,owner=excluded.owner,enabled=excluded.enabled,interval=excluded.interval,next_at=excluded.next_at,error=NULL`).run(project,version,owner,input.enabled?1:0,input.intervalMs,input.enabled?Date.now()+input.intervalMs:null);
-    const receipt=policy(project)!;internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?, 'configure',?,'accepted',?,0,?)").run(project,input.operationId,fingerprint,JSON.stringify(receipt),Date.now());return receipt;
+    const nextAt=input.enabled?Date.now()+input.intervalMs:null;
+    const changed=internal.prepare(`INSERT INTO clank_platform_pitr_policies VALUES(?,?,?,?,?,?,NULL,NULL,NULL,NULL,NULL,NULL,NULL)
+      ON CONFLICT(project) DO UPDATE SET version=excluded.version,owner=excluded.owner,enabled=excluded.enabled,interval=excluded.interval,next_at=excluded.next_at,error=NULL`).run(project,version,owner,input.enabled?1:0,input.intervalMs,nextAt);
+    const retained=row(project);
+    if(Number(changed.changes)!==1||!retained||retained.owner!==owner||retained.version!==version||retained.enabled!==(input.enabled?1:0)||retained.interval!==input.intervalMs||retained.next_at!==nextAt)throw new Error("Recovery policy acknowledgment changed.");
+    const receipt=policy(project)!,encoded=JSON.stringify(receipt),accepted=internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?, 'configure',?,'accepted',?,0,?)").run(project,input.operationId,fingerprint,encoded,Date.now());
+    const operation=internal.prepare("SELECT kind,state,fingerprint,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,input.operationId);
+    synchronous(assertCurrent);assertOwner(project,owner);
+    if(Number(accepted.changes)!==1||operation?.kind!=="configure"||operation.state!=="accepted"||operation.fingerprint!==fingerprint||operation.receipt!==encoded||JSON.stringify(policy(project))!==encoded)throw new Error("Recovery policy acknowledgment changed.");return receipt;
   });
   const resolve=(project:string,owner:string,input:{operationId:string;pendingOperationId:string;expectedVersion:number},assertCurrent:()=>void):PlatformPointInTimeResolution=>transaction(()=>{
     protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");identifier(project);identifier(owner);operationIdentifier(input.operationId);operationIdentifier(input.pendingOperationId);number(input.expectedVersion,1,Number.MAX_SAFE_INTEGER-1);assertOwner(project,owner);
@@ -181,9 +187,12 @@ export async function openPlatformPointInTime(options:{
     const pending=internal.prepare("SELECT kind,state,reserved_bytes FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,input.pendingOperationId);
     if(pending?.kind!=="export"||pending.state!=="pending")throw new Error("Retained pending recovery intent changed.");number(Number(pending.reserved_bytes),maxBytes,maxBytes);capacity();synchronous(assertCurrent);assertOwner(project,owner);
     const receipt=Object.freeze({projectId:project,operationId:input.operationId,pendingOperationId:input.pendingOperationId,version:input.expectedVersion+1,state:"abandoned" as const});
-    internal.prepare("UPDATE clank_platform_pitr_operations SET state='abandoned',reserved_bytes=0 WHERE project=? AND id=? AND state='pending'").run(project,input.pendingOperationId);
-    internal.prepare("UPDATE clank_platform_pitr_policies SET version=?,pending=NULL,lease=NULL,lease_until=NULL,error=NULL WHERE project=?").run(receipt.version,project);
-    internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?,'resolve',?,'accepted',?,0,?)").run(project,input.operationId,fingerprint,JSON.stringify(receipt),Date.now());return receipt;
+    const abandoned=internal.prepare("UPDATE clank_platform_pitr_operations SET state='abandoned',reserved_bytes=0 WHERE project=? AND id=? AND state='pending'").run(project,input.pendingOperationId);
+    const changed=internal.prepare("UPDATE clank_platform_pitr_policies SET version=?,pending=NULL,lease=NULL,lease_until=NULL,error=NULL WHERE project=?").run(receipt.version,project);
+    const encoded=JSON.stringify(receipt),accepted=internal.prepare("INSERT INTO clank_platform_pitr_operations VALUES(?,?,'resolve',?,'accepted',?,0,?)").run(project,input.operationId,fingerprint,encoded,Date.now());
+    const retained=row(project),pendingAfter=internal.prepare("SELECT state,reserved_bytes FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,input.pendingOperationId),operation=internal.prepare("SELECT kind,state,fingerprint,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,input.operationId);
+    synchronous(assertCurrent);assertOwner(project,owner);
+    if(Number(abandoned.changes)!==1||Number(changed.changes)!==1||Number(accepted.changes)!==1||!retained||retained.owner!==owner||retained.version!==receipt.version||retained.enabled!==0||retained.pending!==null||retained.lease!==null||retained.lease_until!==null||pendingAfter?.state!=="abandoned"||pendingAfter.reserved_bytes!==0||operation?.kind!=="resolve"||operation.state!=="accepted"||operation.fingerprint!==fingerprint||operation.receipt!==encoded)throw new Error("Recovery resolution acknowledgment changed.");return receipt;
   });
   const performCapture=async(project:string,operationId:string,assertCurrent:()=>void):Promise<PlatformPointInTimeCheckpoint>=>{
     identifier(project);operationIdentifier(operationId);protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");
