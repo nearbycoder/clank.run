@@ -157,7 +157,7 @@ do not sandbox handler code. See [Durable jobs, workflow graphs, and cron](jobs-
 
 See [Platform security](platform-security.md) for the runner trust boundary.
 
-Linux database workers use pinned tenant directories inside bounded Bubblewrap namespaces, including descriptor-based backup publication. Hosts must provide the required namespace permissions and tools; failed setup refuses database work. See [SQLite worker isolation](sqlite-isolation.md). Non-Linux hosts still need an external filesystem/native-memory sandbox or trusted deployers.
+Linux database workers default to pinned tenant directories inside bounded Bubblewrap namespaces, including descriptor-based backup publication. Hosts must provide the required namespace permissions and tools; failed setup refuses database work. Explicit trusted process hosting can opt into bounded helpers with host-user filesystem/network authority and restricted signup. See [SQLite worker isolation](sqlite-isolation.md). Non-Linux hosts still need an external filesystem/native-memory sandbox or trusted deployers.
 
 ## Recommended production setup
 
@@ -196,7 +196,7 @@ Also:
 - configure email verification, recovery, MFA, passkeys, and bot protection to match the application's risk;
 - log internal exceptions through `onError` without returning them to clients;
 - keep Node and Clank patched and back up the database.
-- run one active built-in process supervisor per project/data directory until a remote worker/leader topology is configured;
+- run one active built-in supervisor per catalog, or explicitly configure [same-host automatic leadership](supervisor-leadership.md) in dedicated Linux coordinator processes;
 - keep every app's web, worker, and scheduler roles on the same durable SQLite volume, or provide a
   reviewed transactional shared-store implementation;
 - alert on dead letters, oldest-due age, lease expiry, and background restart loops;

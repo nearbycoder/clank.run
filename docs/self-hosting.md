@@ -19,6 +19,10 @@ configured worker/scheduler processes for each active project.
 | `HOST` | `127.0.0.1` | Listener address |
 | `CLANK_PLATFORM_URL` | loopback URL | Exact public console origin |
 | `CLANK_PLATFORM_DATA` | `.clank-platform` | Persistent root |
+| `CLANK_SUPERVISOR_ID` | Disabled | Opt-in [same-host automatic leadership](supervisor-leadership.md), shared configuration identity |
+| `CLANK_SUPERVISOR_REVISION` | Required with ID | Positive configuration revision, identical across compatible coordinators |
+| `CLANK_SUPERVISOR_LEASE_MS` | `15000` | Supervisor ownership duration, 5000–120000 ms |
+| `CLANK_SUPERVISOR_POLL_MS` | `500` | Checks/renewal cadence, 50 ms through one third of the lease |
 | `CLANK_PLATFORM_MASTER_KEY` | generated file | Base64/base64url 32-byte key |
 | `CLANK_SIGNUP` | `bootstrap` | `bootstrap`, `public`, or `disabled` |
 | `CLANK_RESEND_API_KEY` | none | Enable direct Resend invitation email; mutually exclusive with the gateway URL |
@@ -36,6 +40,7 @@ configured worker/scheduler processes for each active project.
 | `CLANK_AUTH_CONCURRENCY` | `2` | Concurrent platform password hashes, bounded to 1–16; hash strength is unchanged |
 | `CLANK_AUTH_MAX_QUEUE` | `16` | Waiting platform password operations, bounded to 1–128; overload returns `503 AUTH_BUSY` |
 | `CLANK_RUNNER` | selected by hosting profile | `process` or `docker` |
+| `CLANK_SQLITE_ISOLATION` | `namespace` | `trusted-process` explicitly permits bounded SQLite helpers without namespaces, only with trusted process hosting and restricted signup; see [SQLite worker isolation](sqlite-isolation.md#trusted-process-hosting) |
 | `CLANK_DOCKER_IMAGE` | Node image | Pin by digest in production |
 | `CLANK_APP_MEMORY` | `512m` | Container memory |
 | `CLANK_APP_CPUS` | `1` | Container CPUs |
