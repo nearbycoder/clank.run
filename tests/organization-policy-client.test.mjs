@@ -33,3 +33,36 @@ test('synthetic oversized or inconsistent transport responses fail closed and re
   const large=createOrganizationSecurityClient({auth:f.auth,fetch:async()=>Response.json({ok:true,padding:'x'.repeat(33000)})});await assert.rejects(large.read(company),error=>error.code==='ORGANIZATION_POLICY_RESPONSE');
   const malformed=createOrganizationSecurityClient({auth:f.auth,fetch:async()=>Response.json({ok:true,preview:{...preview,proposed:{...preview.proposed,allowed:true,reasons:['factor']}}})});await assert.rejects(malformed.preview(company,defaults),error=>error.code==='ORGANIZATION_POLICY_RESPONSE');
 });
+
+const timeoutAuth=reload=>({user:{peek:()=>({id:'policy_timeout_user'})},session:{peek:()=>({id:'policy_timeout_session'})},csrfHeader:()=>({}),reload});
+async function assertDeadline(operation) {
+  let timer;
+  try {await assert.rejects(Promise.race([operation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Policy deadline did not settle the held operation.')),1000);})]),error=>error.code==='ORGANIZATION_POLICY_TIMEOUT'&&error.status===504);}
+  finally {clearTimeout(timer);}
+}
+test('bounded policy deadline rejects an abort-ignoring transport and discards its late response without reloading auth',async()=>{
+  let release,signal,reloads=0,cancelled=0,calls=0;
+  const held=new Promise(resolve=>release=resolve),client=createOrganizationSecurityClient({auth:timeoutAuth(async()=>{reloads++;}),timeoutMs:100,fetch:(_url,options)=>{calls++;signal=options.signal;return held;}});
+  try {await assertDeadline(client.read(company));assert.equal(signal.aborted,true);}
+  finally {release(new Response(new ReadableStream({cancel(){cancelled++;}})));await new Promise(resolve=>setImmediate(resolve));}
+  assert.equal(calls,1);assert.equal(reloads,0);assert.equal(cancelled,1);
+});
+test('bounded policy deadline covers an abort-ignoring response body and an uncooperative stream cancellation',async()=>{
+  let signal,reloads=0,cancelled=0;
+  const response=new Response(new ReadableStream({start(){},cancel(){cancelled++;return new Promise(()=>{});}}));
+  const client=createOrganizationSecurityClient({auth:timeoutAuth(async()=>{reloads++;}),timeoutMs:100,fetch:async(_url,options)=>{signal=options.signal;return response;}});
+  try {await assertDeadline(client.read(company));assert.equal(signal.aborted,true);assert.equal(cancelled,1);assert.equal(reloads,0);}
+  finally {void response.body?.cancel().catch(()=>{});}
+});
+test('bounded policy deadline includes auth reload after either an accepted response or a transport error',async()=>{
+  for(const failTransport of [false,true]) {
+    let release,reloads=0;
+    const held=new Promise(resolve=>release=resolve),client=createOrganizationSecurityClient({auth:timeoutAuth(()=>{reloads++;return held;}),timeoutMs:100,fetch:async()=>{
+      if(failTransport)throw new Error('Controlled transport failure.');
+      return Response.json({ok:true,policy:{organizationId:company,...defaults,version:0,updatedAt:0}});
+    }});
+    try {await assertDeadline(client.read(company));assert.equal(reloads,1);}
+    finally {release();await new Promise(resolve=>setImmediate(resolve));}
+    assert.equal(reloads,1);
+  }
+});

@@ -15,6 +15,68 @@ import {
   planExternalMigrations,
   serve,
 } from "../dist/index.js";
+import { createDeploymentRuntimeIngress } from "../dist/provider-runtime.js";
+
+test("provider canary ingress selects only approved anonymous reads and strips candidate credentials and cookies", async () => {
+  const applications = [];
+  const providerRequests = [];
+  const metrics = [];
+  const runtimeIngress = createDeploymentRuntimeIngress();
+  let provider;
+  try {
+    for (const label of ["primary", "candidate"]) applications.push(await serve({ handle: async request => new Response(JSON.stringify({
+      label, method: request.method, path: new URL(request.url).pathname,
+      headers: Object.fromEntries(request.headers), body: await request.text(),
+    }), { headers: { "content-type": "application/json", "set-cookie": `${label}=changed; Path=/`, "clear-site-data": '"cookies"' } }) }, { port: 0 }));
+    await runtimeIngress.activate({ protocol: "clank-runtime/1", projectId: "project_primary", releaseId: "release_primary", generation: 3,
+      path: "/v1/clank/apps/project_primary", token: "primary-ingress-token-12345678901234567890", upstream: applications[0].url });
+    await runtimeIngress.activate({ protocol: "clank-runtime/1", projectId: "project_candidate", releaseId: "release_candidate", generation: 9,
+      path: "/v1/clank/apps/project_candidate", token: "candidate-ingress-token-12345678901234567890", upstream: applications[1].url });
+    provider = await serve({ handle: request => {
+      providerRequests.push({ path: new URL(request.url).pathname, headers: Object.fromEntries(request.headers) });
+      return runtimeIngress.handle(request);
+    } }, { port: 0 });
+    const route = { id: "canary_route", projectId: "project_primary", hosts: ["catalog.example.test"], upstream: provider.url,
+      active: true, releaseId: "release_primary", runtime: { protocol: "clank-runtime/1", generation: 3, path: "/v1/clank/apps/project_primary", token: "primary-ingress-token-12345678901234567890" },
+      canary: { upstream: provider.url, releaseId: "release_candidate", trafficPercent: 100, projectId: "project_candidate",
+        runtime: { protocol: "clank-runtime/1", generation: 9, path: "/v1/clank/apps/project_candidate", token: "candidate-ingress-token-12345678901234567890" }, readPaths: ["/catalog"] } };
+    const ingress = createManagedIngress({ routes: () => [route], retries: 0, onRequest: metric => metrics.push(metric) });
+    const read = await ingress.handle(new Request("https://catalog.example.test/catalog", { headers: { accept: "application/json", "x-customer-secret": "must-not-forward", "x-clank-runtime-ingress": "caller-forgery" } }));
+    assert.equal(read.status, 200); assert.equal(read.headers.has("set-cookie"), false);
+    assert.equal(read.headers.has("clear-site-data"), false); assert.equal(read.headers.get("cache-control"), "no-store");
+    const result = await read.json(); assert.equal(result.label, "candidate"); assert.equal(result.body, "");
+    assert.equal(result.headers.accept, "application/json");
+    for (const header of ["authorization", "cookie", "x-customer-secret", "x-clank-runtime-ingress"]) assert.equal(result.headers[header], undefined, header);
+    const forwarded = providerRequests.at(-1); assert.equal(forwarded.path, "/v1/clank/apps/project_candidate/catalog");
+    assert.equal(forwarded.headers["x-clank-project-id"], "project_candidate"); assert.equal(forwarded.headers["x-clank-runtime-generation"], "9");
+    assert.equal(forwarded.headers["x-clank-runtime-ingress"], route.canary.runtime.token);
+    assert.equal(metrics.at(-1).projectId, "project_primary"); assert.equal(metrics.at(-1).releaseId, "release_candidate");
+    for (const [path, init] of [["/unapproved", {}], ["/catalog?token=private", {}], ["/catalog", { headers: { cookie: "account=private" } }],
+      ["/catalog", { headers: { authorization: "Bearer private" } }], ["/catalog", { method: "POST", headers: { "content-type": "text/plain" }, body: "primary-write-body" }]]) {
+      const response = await ingress.handle(new Request(`https://catalog.example.test${path}`, init));
+      assert.equal(response.status, 200); assert.match(response.headers.get("set-cookie"), /^primary=/u);
+      const value = await response.json(); assert.equal(value.label, "primary");
+      if (init.body) assert.equal(value.body, init.body);
+      if (init.headers?.cookie) assert.equal(value.headers.cookie, init.headers.cookie);
+      if (init.headers?.authorization) assert.equal(value.headers.authorization, init.headers.authorization);
+      assert.equal(metrics.at(-1).releaseId, "release_primary");
+    }
+    const head = await ingress.handle(new Request("https://catalog.example.test/catalog", { method: "HEAD" }));
+    assert.equal(head.status, 200); assert.equal(head.body, null); assert.equal(head.headers.has("set-cookie"), false);
+    assert.equal(providerRequests.filter(request => request.path.includes("project_candidate")).length, 2);
+    const invalid = createManagedIngress({ routes: () => [{ ...route, canary: { ...route.canary, readPaths: ["/catalog?private=1"] } }] });
+    await assert.rejects(invalid.handle(new Request("https://catalog.example.test/catalog")), /read paths/iu);
+    await runtimeIngress.deactivate("project_candidate", 9, 1000);
+    const unavailable = await ingress.handle(new Request("https://catalog.example.test/catalog"));
+    assert.equal(unavailable.status, 503); await unavailable.text();
+    const primaryStillRunning = await ingress.handle(new Request("https://catalog.example.test/catalog", { method: "POST", body: "independent-primary-write" }));
+    assert.equal(primaryStillRunning.status, 200); assert.equal((await primaryStillRunning.json()).label, "primary");
+    assert.deepEqual(runtimeIngress.inspect().map(binding => [binding.projectId, binding.generation]), [["project_primary", 3]]);
+  } finally {
+    if (provider) await provider.close(); await runtimeIngress.close();
+    for (const application of applications) await application.close();
+  }
+});
 
 test("managed ingress preserves the public origin for application auth", async () => {
   const runtime = await openBackend(defineBackend({
