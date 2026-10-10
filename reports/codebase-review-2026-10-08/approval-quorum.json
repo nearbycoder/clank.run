@@ -1,0 +1,129 @@
+{
+  "featureId": "17",
+  "feature": "Approval quorum policies",
+  "status": "native-implementation-and-full-linux-gates-passed-acceptance-pending",
+  "accepted": false,
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/324",
+  "dependencies": [
+    {
+      "feature": "13",
+      "pullRequest": "https://github.com/nearbycoder/clank.run/pull/310",
+      "head": "5a1848216b765444660f53f8b13348596cfd89e2",
+      "accepted": false
+    }
+  ],
+  "source": {
+    "head": "8b1a49ee9d8cb0d54bc01f1fa08316d5f913071a",
+    "tree": "0bd2d717ea0e12af2eac00b9d58b147113588c3d",
+    "baseMain": "38ac812becdbfd1bd1ee0c1d3a686b32a4de9e1a",
+    "tarSha256": "6cd4628da17b5496c409b2e994b3414e76c1a689ebb9cd8c84efb60b1c01eb46",
+    "inputs": 1126
+  },
+  "evidenceIndex": {
+    "path": "/tmp/clank-review-2026-10-08/approval-quorum-evidence-01/index.json",
+    "sha256": "730f76d91d70cfcb778c8826a4d668036e7be1ab051ae2c0fb5dfa6277efc43a",
+    "files": 64
+  },
+  "nativeChecks": {
+    "reported": 40,
+    "passed": 40,
+    "cases": [
+      "Distinct native current human votes and required roles",
+      "Requester separation and duplicate/lost-response vote replay",
+      "Current native expiry, revocation, membership/policy change and sticky journal fences",
+      "Ignored or altered votes, receipts, audit and consumption roll back native writes",
+      "Real held HTTP request body followed by native revocation",
+      "Controller restart and clock rollback retire live authority",
+      "Native legacy-update trigger prevents downgrade to one approver",
+      "Compensation needs a new reviewed quorum",
+      "Actual SIGKILL after commit before response and two native controllers return one exact receipt"
+    ]
+  },
+  "fullLinuxGates": [
+    {
+      "node": "26",
+      "sourceHead": "8b1a49ee9d8cb0d54bc01f1fa08316d5f913071a",
+      "reported": 2149,
+      "passed": 2146,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 91.58,
+        "branches": 81.08,
+        "functions": 90.15
+      },
+      "logSha256": "157c5a1390c0448cd8eafd0c03c7816362aae780054f3fd097ae2e37df15ecbf",
+      "uid": 1000,
+      "command": "node --disable-warning=ExperimentalWarning scripts/check.mjs",
+      "host": "owned disposable Debian 13 Linux VM"
+    },
+    {
+      "node": "22",
+      "sourceHead": "8b1a49ee9d8cb0d54bc01f1fa08316d5f913071a",
+      "reported": 2149,
+      "passed": 2146,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": {
+        "lines": 91.57,
+        "branches": 81.08,
+        "functions": 90.17
+      },
+      "logSha256": "38e906d54efdfd419e7463f2e36b2686abf9ab18fb1ca997576c4ed31a034b9d",
+      "uid": 1000,
+      "command": "node --disable-warning=ExperimentalWarning scripts/check.mjs",
+      "host": "owned disposable Debian 13 Linux VM"
+    }
+  ],
+  "types": {
+    "fixtures": 36,
+    "existingDiagnostics": 159,
+    "newDiagnostics": 0,
+    "baseline": 163,
+    "baselineChanged": false,
+    "packedOpenApiPassed": true
+  },
+  "package": {
+    "files": 415,
+    "unpackedBytes": 6051170,
+    "compressedBytes": 1502637,
+    "headroomBytes": 240286,
+    "runtimeDependencies": 0,
+    "fileCapChanged": false,
+    "byteCapChanged": false
+  },
+  "documentation": {
+    "guides": 103,
+    "words": 180095,
+    "doctorPassed": 6,
+    "doctorOptionalProjectLinkWarnings": 1,
+    "doctorFailed": 0,
+    "offlineArtifactSha256": "311ffb0fbf02d1266c179cf5e9863a09dac3d506b873411dfe86285f18b0acab",
+    "uploaded": false,
+    "httpEndpoints": 8,
+    "mcpDiscoverySearchReadPassed": true,
+    "desktopAndPhoneHomeSearchGuideCaptured": true,
+    "nativeInboxPhoneWidth": 390,
+    "nativeInboxScrollWidth": 390,
+    "buttonMinimumHeight": 44
+  },
+  "browserInteraction": {
+    "nativeDecisionsAfterClick": 0,
+    "acceptancePassed": false,
+    "qualification": "Actual rendered form has enabled native controls; selected browser automation did not deliver click/Tab to the route. No injected event, external browser workaround or synthetic browser success is used."
+  },
+  "pending": [
+    "Current hosted checks",
+    "Independent review and protected merge",
+    "Dependency PR310 acceptance",
+    "Native browser approval by distinct humans and real keyboard/focus",
+    "Physical authenticator and production acceptance where required by deployment"
+  ],
+  "ledger": {
+    "accepted": 27,
+    "featureBatches": 24,
+    "remaining": 13
+  }
+}

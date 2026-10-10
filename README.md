@@ -317,6 +317,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Localization](docs/localization.md)
 - [Organization and account security](docs/organization-security.md)
 - [Organization security policy console](docs/organization-security-policies.md)
+- [Approval quorum policies](docs/approval-quorums.md)
 - [Dedicated organization service accounts](docs/service-accounts.md)
 - [Operational recovery, canaries, and alerts](docs/operational-recovery.md)
 - [Signed application releases](docs/release-attestations.md)

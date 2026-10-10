@@ -2,6 +2,12 @@
 
 ## Governance, lifecycle, and tooling
 
+Use `@clank.run/framework/reviewed-actions` for durable previews, decisions, atomic
+commits and receipts. `ReviewedAction.approvalQuorum` opts into distinct human
+approvers, required roles, requester separation, native membership/security versions
+and expiring votes. `ReviewedApprovalMembership`, `ReviewedApprovalQuorum` and
+`ReviewedApprovalProgress` describe that contract; see [approval quorum policies](approval-quorums.md).
+
 Use `@clank.run/framework/governance` for policy decisions, expiring agent approvals,
 entitlements, and feature flags. Use `@clank.run/framework/lifecycle` for revision replay,
 provenance, promotions, rollout guardrails, sanitized clones, portable exports, and capacity.

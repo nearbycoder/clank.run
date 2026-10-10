@@ -183,6 +183,8 @@ const RESERVED_TABLE_NAMES = new Set([
   "reviewed_plans",
   "reviewed_receipts",
   "reviewed_events",
+  "reviewed_votes",
+  "reviewed_quorum_state",
   "oauth_grant_constraints",
 ]);
 
@@ -1470,6 +1472,13 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         const value = handler(makeReader(dependencies, userId));
         assertSynchronous(value, "query");
         return { value, dependencies: [...dependencies.values()], version: readGlobalRevision(prepared) };
+      },
+      readDependenciesChanged(dependencies) {
+        if (!transactionActive || !activeChanges) throw new Error("Dependency mutation checks require an active write transaction.");
+        const records=[...activeChanges.records.values()];
+        return dependencies.some(dependency => records.some(record => record.table === dependency.table
+          && (dependency.id === undefined || dependency.id === record.id)
+          && (dependency.ownerId === undefined || dependency.ownerId === record.ownerId)));
       },
       purgeDeletedHistory(table, id) {
         ensureOpen();
