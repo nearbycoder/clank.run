@@ -55,11 +55,15 @@ Coordinators need separate HTTP listener ports behind a proxy using the same pub
 
 The catalog retains an increasing ownership epoch, a private owner/token hash, the exact Linux PID and process birth, and lease timestamps. A released lease retains its epoch. An expired capability cannot renew itself or become current again. A higher configuration revision fences older coordinators; ordinary configurations and adapter implementations must be kept compatible by the operator. The identity is an explicit deployment contract, not an automatic hash of callback closures or external service state.
 
+An unowned standby that encounters native SQLite catalog contention keeps waiting for its next poll; it creates no epoch and runs no supervisor duties. Other catalog errors remain visible. An existing owner still fails when contention prevents verifying or renewing its authority, so retrying standby admission cannot extend an unchecked lease.
+
 Only a current owner opens the active platform core. This includes startup recovery, tenant runtimes, domain reconciliation, preview cleanup, idle sweeps, release windows, scheduled backups, invitation delivery, audit exports, retention and operations monitoring. These duties share the supervisor epoch and keep their existing project, job, generation and delivery leases. Takeover does not erase a durable task claim, reset a retry counter or silently approve an interrupted promotion.
 
 Native catalog writes check current ownership inside the SQLite write transaction before work and again before commit. Losing authority rolls back data and associated revision/history changes. Runtime launch and request completion also check current ownership. Cached native SQL statements cannot bypass the transaction guard.
 
 Each owner arms an independent guardian through private IPC before active bootstrap. The guardian checks the actual coordinator's birth identity and current lease. It can terminate its own coordinator after lease loss, `SIGSTOP`, lost IPC or guardian failure. A standby waits for actual prior coordinator death and the existing tenant guardian cleanup before admitting replacement writers. A failed or malformed cleanup record keeps admission closed and remains available for operator investigation.
+
+The guardian compares the observed native lease against the clock after its database read. A valid renewal that commits while that read is delayed stays valid; an already expired lease, changed identity/configuration or clock regression still fences the coordinator immediately. Readiness failures retain bounded process and non-secret lease diagnostics without retrying a failed request.
 
 Recovery time includes the ownership lease, cleanup budget, retained project/task lease and application health check. Blocking startup recovers desired local applications before the coordinator becomes ready; `startupRecovery: "background"` keeps the existing asynchronous recovery behavior. A suspended project stays suspended. Existing scheduled work resumes when its current durable claims permit it.
 

@@ -43,6 +43,7 @@ export const groups = [
       ["retention-administration", "docs/retention-administration.md"],
       ["search-browsing", "docs/search-browsing.md"],
       ["database", "docs/database.md"],
+      ["postgres-application", "docs/postgres-application.md"],
       ["authorized-aggregates", "docs/authorized-aggregates.md"],
       ["migrations", "docs/migrations.md"],
       ["auth", "docs/auth.md"],

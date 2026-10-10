@@ -136,7 +136,7 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
       return undefined;
     };
     return Object.freeze<SupervisorLease>({options,databasePath:catalog,owner,processBirth,
-      acquire(){ensureOpen();return transaction(()=>{
+      acquire(){ensureOpen();try{return transaction(()=>{
         assertConfiguration();const at=now(),row=readLease();
         if(tokenHash){assertCurrent();return true;}
         if(Number(row.updated_at)>at)fail("SUPERVISOR_CLOCK_REGRESSION","Persisted supervisor clock is in the future.");
@@ -146,7 +146,12 @@ export async function openSupervisorLease(databasePath:string,input:PlatformSupe
         native.prepare("UPDATE clank_platform_supervisor_lease SET epoch=?,owner=?,token_hash=?,expires_at=?,updated_at=?,controller_pid=?,controller_birth=? WHERE singleton=1")
           .run(candidateEpoch,owner,candidateHash,at+options.leaseMs,at,proc.pid,processBirth);
         epoch=candidateEpoch;tokenHash=candidateHash;return true;
-      });},
+      });}catch(error){
+        // A standby owns no duties while another native writer holds the catalog.
+        // Its next poll can retry; an existing owner must still fence on failure.
+        if(!tokenHash&&(error as {code?:string}).code==="ERR_SQLITE_ERROR"&&(error as {errcode?:number}).errcode===5)return false;
+        throw error;
+      }},
       renew(){ensureOpen();transaction(()=>{assertCurrent();const at=now();native.prepare("UPDATE clank_platform_supervisor_lease SET expires_at=?,updated_at=? WHERE singleton=1 AND epoch=? AND owner=? AND token_hash=?")
         .run(at+options.leaseMs,at,epoch,owner,tokenHash);});},
       assertCurrent,
@@ -251,7 +256,9 @@ let stopping=false,lastNow=Date.now();
 const birth=()=>{try{const data=readFileSync('/proc/'+spec.controllerPid+'/stat','utf8'),fields=data.slice(data.lastIndexOf(')')+2).split(' ');return fields[0]==='Z'||fields[0]==='X'?null:fields[19];}catch(error){if(error.code==='ENOENT'||error.code==='ESRCH')return null;throw error;}};
 const save=phase=>{const temporary=spec.fence+'.tmp';writeFileSync(temporary,JSON.stringify({...record,phase,guardianPid:process.pid}),{mode:0o600});const fd=openSync(temporary,'r');try{fsyncSync(fd);}finally{closeSync(fd);}renameSync(temporary,spec.fence);const folder=openSync(dirname(spec.fence),'r');try{fsyncSync(folder);}finally{closeSync(folder);}};
 const clear=()=>{try{unlinkSync(spec.fence);}catch(error){if(error.code!=='ENOENT')throw error;}const folder=openSync(dirname(spec.fence),'r');try{fsyncSync(folder);}finally{closeSync(folder);}};
-const current=()=>{const now=Date.now();if(now<lastNow)throw new Error('Clock regression');lastNow=now;const state=native.prepare('SELECT * FROM clank_platform_supervisor_state WHERE singleton=1').get(),lease=native.prepare('SELECT * FROM clank_platform_supervisor_lease WHERE singleton=1').get();return state?.protocol===1&&state.configuration_id===spec.configurationId&&state.configuration_revision===spec.configurationRevision&&state.lease_ms===spec.leaseMs&&state.poll_ms===spec.pollMs&&lease?.epoch===spec.epoch&&lease.owner===spec.owner&&lease.token_hash===spec.tokenHash&&lease.controller_pid===spec.controllerPid&&lease.controller_birth===spec.controllerBirth&&lease.expires_at>now&&lease.updated_at<=now;};
+// Renewals can commit while the guardian waits for its native read. Evaluate
+// that observed row against the clock after reading, retaining strict expiry.
+const current=()=>{const state=native.prepare('SELECT * FROM clank_platform_supervisor_state WHERE singleton=1').get(),lease=native.prepare('SELECT * FROM clank_platform_supervisor_lease WHERE singleton=1').get(),now=Date.now();if(now<lastNow)throw new Error('Clock regression');lastNow=now;return state?.protocol===1&&state.configuration_id===spec.configurationId&&state.configuration_revision===spec.configurationRevision&&state.lease_ms===spec.leaseMs&&state.poll_ms===spec.pollMs&&lease?.epoch===spec.epoch&&lease.owner===spec.owner&&lease.token_hash===spec.tokenHash&&lease.controller_pid===spec.controllerPid&&lease.controller_birth===spec.controllerBirth&&lease.expires_at>now&&lease.updated_at<=now;};
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const fence=async()=>{if(stopping)return;stopping=true;clearInterval(timer);try{if(birth()===spec.controllerBirth)process.kill(spec.controllerPid,'SIGKILL');const until=Date.now()+5000;while(birth()===spec.controllerBirth&&Date.now()<until)await pause(25);if(birth()===spec.controllerBirth)throw new Error('Coordinator cleanup unresolved');clear();native.close();process.exit(0);}catch{try{save('failed');}catch{}process.exit(72);}};
 const check=()=>{try{if(!process.connected||!current())void fence();}catch{void fence();}};
