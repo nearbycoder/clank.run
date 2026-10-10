@@ -65,6 +65,8 @@ export interface DockerDeploymentRuntimeLaunchInput {
    * are retained as a memory-only activation plan until `activate()`.
    */
   readonly deferBackground?: boolean;
+  /** Candidate-only data mount: read-only, no declared jobs and forced outbound denial. Requires outbound-network enforcement; cannot be activated or committed. */
+  readonly isolatedReadOnly?: boolean;
 }
 
 export interface DockerDeploymentRuntimeCandidate {
@@ -74,6 +76,8 @@ export interface DockerDeploymentRuntimeCandidate {
   readonly generation: number;
   readonly capsuleSha256: string;
   readonly upstream: string;
+  /** Present only when filesystem/network enforcement and candidate-only admission are required. */
+  readonly isolatedReadOnly?: true;
 }
 
 export interface DockerDeploymentRuntimeState
@@ -216,6 +220,7 @@ interface RuntimeRecord {
   plannedContainers: number;
   dataDirectory: string;
   deferredBackground: boolean;
+  isolatedReadOnly: boolean;
   pendingBackground: PendingBackgroundPlan | null;
   controller: AbortController;
   logs: DockerDeploymentRuntimeLog[];
@@ -531,7 +536,7 @@ export async function openDockerDeploymentRuntimeLauncher(
           ? ["--publish", `127.0.0.1:${record.port}:${record.port}`]
           : []),
         "--mount", `type=bind,source=${dockerBindSource(launch.releaseDirectory)},target=/app,readonly`,
-        "--mount", `type=bind,source=${dockerBindSource(launch.dataDirectory)},target=/data`,
+        "--mount", `type=bind,source=${dockerBindSource(launch.dataDirectory)},target=/data${record.isolatedReadOnly ? ",readonly" : ""}`,
         "--workdir", "/app",
         image,
         "node",
@@ -671,9 +676,13 @@ export async function openDockerDeploymentRuntimeLauncher(
       if (!(input?.signal instanceof AbortSignal)) {
         throw new TypeError("signal must be an AbortSignal.");
       }
+      if (input.isolatedReadOnly !== undefined && typeof input.isolatedReadOnly !== 'boolean') throw new TypeError('isolatedReadOnly must be a boolean.');
+      const isolatedReadOnly=input.isolatedReadOnly===true;
+      if (isolatedReadOnly && !options.outboundNetwork) throw new TypeError('Isolated read-only candidates require outbound network enforcement.');
       const prepared = await preparedRuntime(fs, path, root, input.prepared);
       const config = prepared.config;
       const deferBackground = input.deferBackground === true;
+      if (isolatedReadOnly && ((config.jobs?.workers ?? 0)>0 || config.jobs?.scheduler)) throw new TypeError("Isolated read-only candidates cannot declare background workers or schedulers.");
       if (config.database.path !== prepared.databaseRelativePath) {
         throw new TypeError("Deployment database path does not match prepared provider data.");
       }
@@ -688,6 +697,7 @@ export async function openDockerDeploymentRuntimeLauncher(
             && existing.candidate.capsuleSha256 === prepared.capsuleSha256
             && existing.status !== "failed"
             && existing.deferredBackground === deferBackground
+            && existing.isolatedReadOnly === isolatedReadOnly
           ) {
             return existing.candidate;
           }
@@ -731,6 +741,7 @@ export async function openDockerDeploymentRuntimeLauncher(
           generation: prepared.generation,
           capsuleSha256: prepared.capsuleSha256,
           upstream: `http://127.0.0.1:${port}`,
+          ...(isolatedReadOnly ? {isolatedReadOnly:true as const} : {}),
         }) satisfies DockerDeploymentRuntimeCandidate;
         const record: RuntimeRecord = {
           candidate,
@@ -741,6 +752,7 @@ export async function openDockerDeploymentRuntimeLauncher(
           plannedContainers,
           dataDirectory: prepared.dataDirectory,
           deferredBackground: deferBackground,
+          isolatedReadOnly,
           pendingBackground: null,
           controller: new AbortController(),
           logs: [],
@@ -759,7 +771,8 @@ export async function openDockerDeploymentRuntimeLauncher(
         try {
           await prepareProject(prepared.projectId, record.controller.signal);
           if (options.outboundNetwork) {
-            const policy = typeof options.outboundNetwork === "function" ? options.outboundNetwork(prepared.projectId) : options.outboundNetwork;
+            const configuredPolicy = typeof options.outboundNetwork === "function" ? options.outboundNetwork(prepared.projectId) : options.outboundNetwork;
+            const policy = isolatedReadOnly ? {allowCidrs:[],hosts:{},nftExecutable:configuredPolicy.nftExecutable} : configuredPolicy;
             const plan = await createLinuxDockerNetworkPlan(owner, prepared.projectId, policy);
             const existing = await docker(["network", "inspect", plan.network], { allowFailure: true });
             if (existing.code === 0) {
@@ -806,8 +819,10 @@ export async function openDockerDeploymentRuntimeLauncher(
             dataDirectory: prepared.dataDirectory,
             environment: prepared.environment,
           };
-          if (deferBackground) record.pendingBackground = background;
-          else await startBackground(record, background, record.controller.signal);
+          if (!isolatedReadOnly) {
+            if (deferBackground) record.pendingBackground = background;
+            else await startBackground(record, background, record.controller.signal);
+          }
           throwIfAborted(record.controller.signal);
           if (closed) throw new Error("Docker deployment runtime launcher is closed.");
           if (record.status === "failed") {
@@ -837,6 +852,7 @@ export async function openDockerDeploymentRuntimeLauncher(
         if (!record || records.get(record.candidate.projectId) !== record) {
           throw new Error("Docker deployment runtime candidate is unknown.");
         }
+        if (record.isolatedReadOnly) throw new Error("Isolated read-only candidates must be stopped before authoritative deployment; activation is refused.");
         if (record.status === "active") return publicState(record);
         if (record.status === "failed") {
           await removeRecord(record);
@@ -872,6 +888,7 @@ export async function openDockerDeploymentRuntimeLauncher(
       if (!record || records.get(record.candidate.projectId) !== record) {
         throw new Error("Docker deployment runtime candidate is unknown.");
       }
+      if (record.isolatedReadOnly) throw new Error("Isolated read-only candidates cannot be committed as an authoritative runtime.");
       if (record.pendingBackground) {
         throw new Error("Deferred Docker background processes must be activated before commit.");
       }
