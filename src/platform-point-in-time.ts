@@ -80,6 +80,10 @@ export async function openPlatformPointInTime(options:{
   });
   const protocol=()=>{if(internal.prepare("SELECT protocol FROM clank_platform_pitr_state WHERE id=1").get()?.protocol!==1)throw new Error("Unsupported retained platform recovery protocol.");};
   const report=(error:unknown)=>{try{void Promise.resolve(onError?.(error)).catch(()=>undefined);}catch{}};
+  // A transport can include the policy, audit and public invalidation in its
+  // current native transaction. Opening another transaction would reject that
+  // operation; executing here keeps all of those writes under the same commit.
+  const transaction=<Value>(work:()=>Value):Value=>internal.inTransaction?work():internal.transaction(work);
   const row=(project:string)=>{
     protocol();const r=internal.prepare("SELECT * FROM clank_platform_pitr_policies WHERE project=?").get(identifier(project));
     if(r){
@@ -106,7 +110,7 @@ export async function openPlatformPointInTime(options:{
   const capacity=()=>{if(Number(internal.prepare("SELECT count(*) AS n FROM clank_platform_pitr_operations").get()!.n)>=10000)throw new Error("Retained recovery operation capacity is full.");};
   let closed=false,timer:ReturnType<typeof setTimeout>|undefined,flight:Promise<void>|undefined;
   const captures=new Set<Promise<PlatformPointInTimeCheckpoint>>(),cancellations=new Set<AbortController>();
-  const configure=(project:string,owner:string,input:{operationId:string;expectedVersion:number;enabled:boolean;intervalMs:number},assertCurrent:()=>void)=>internal.transaction(()=>{
+  const configure=(project:string,owner:string,input:{operationId:string;expectedVersion:number;enabled:boolean;intervalMs:number},assertCurrent:()=>void)=>transaction(()=>{
     protocol();synchronous(assertCurrent);if(closed)throw new Error("Recovery controller is closed.");identifier(project);identifier(owner);operationIdentifier(input.operationId);number(input.expectedVersion,0,Number.MAX_SAFE_INTEGER);number(input.intervalMs,1000,24*60*60*1000);if(typeof input.enabled!=="boolean")throw new TypeError("Recovery policy enabled must be boolean.");
     assertOwner(project,owner);
     const fingerprint=JSON.stringify({owner,...input}),old=internal.prepare("SELECT kind,state,fingerprint,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project,input.operationId);

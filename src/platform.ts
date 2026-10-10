@@ -8956,7 +8956,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
             storage.auth.requireFreshAuthentication(current,freshAuthenticationAge);
           }
         };
-        const perform=async<T>(work:()=>Promise<T>|T):Promise<T>=>{try{return await work();}catch(error){if(error instanceof PlatformError||error instanceof AuthError)throw error;try{options.onError?.(error);}catch{}throw new PlatformError(409,"RECOVERY_CONFLICT","Recovery state or provider authority changed; refresh its status or recover the retained operation.");}};
+        const perform=async<T>(work:()=>Promise<T>|T):Promise<T>=>{try{return await work();}catch(error){if(error instanceof PlatformError||error instanceof AuthError)throw error;try{void Promise.resolve(options.onError?.(error)).catch(()=>undefined);}catch{}throw new PlatformError(409,"RECOVERY_CONFLICT","Recovery state or provider authority changed; refresh its status or recover the retained operation.");}};
         if(operation==="point-in-time"&&request.method==="GET"){
           authority();return api({ok:true,policy:controller.policy(project.id),checkpoints:controller.checkpoints(project.id)});
         }

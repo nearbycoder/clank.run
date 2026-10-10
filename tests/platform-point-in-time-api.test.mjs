@@ -24,6 +24,11 @@ test('native current human policy configuration requires a real signed fresh ass
   await f.call(f.path,{...f.input,operationId:'native_recovery_configuration_02',expectedVersion:1,intervalMs:120000},200,'PUT');
   const replay=await f.call(f.path,f.input,200,'PUT');assert.equal(replay.receipt.version,1);assert.equal(replay.policy.version,2);assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.policy'").get().n,2);
   await f.call(f.path,{...f.input,operationId:'native_recovery_stale_03'},409,'PUT');assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,2);
+  f.native.exec("CREATE TRIGGER refuse_recovery_audit BEFORE INSERT ON clank_platform_audit WHEN NEW.action='recovery.policy' BEGIN SELECT RAISE(ABORT,'owned native recovery audit failure'); END;");
+  const interrupted={...f.input,operationId:'native_recovery_audit_failure',expectedVersion:2,intervalMs:180000};await f.call(f.path,interrupted,409,'PUT');
+  assert.equal(f.native.prepare('SELECT version FROM clank_platform_pitr_policies').get().version,2);assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_operations').get().n,2);
+  f.native.exec('DROP TRIGGER refuse_recovery_audit');await f.call(f.path,interrupted,200,'PUT');assert.equal(f.native.prepare('SELECT version FROM clank_platform_pitr_policies').get().version,3);
+  assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.policy'").get().n,3);
   const foreign=await f.account('foreign-recovery@example.test');await f.call(f.path,undefined,404,undefined,foreign);
 });
 
