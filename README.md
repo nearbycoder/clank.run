@@ -338,6 +338,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Service drivers for files, email, jobs, and webhooks](https://docs.clank.run/docs/services)
 - [Atomic local and S3-compatible object storage](https://docs.clank.run/docs/object-storage)
 - [Managed application buckets](https://docs.clank.run/docs/buckets)
+- [Durable media processing](https://docs.clank.run/docs/media-processing)
 - [Typed durable queues, worker processes, and cron](https://docs.clank.run/docs/jobs-and-cron)
 - [Structured logs, traces, metrics, and health](https://docs.clank.run/docs/observability)
 - [Durable distributed deployment and agent fencing](https://docs.clank.run/docs/distributed-deployment)

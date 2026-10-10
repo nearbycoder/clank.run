@@ -181,7 +181,7 @@ for (const expected of ["README.md", "SECURITY.md", "LICENSE", "dist/index.js", 
 // The 6 MiB byte ceiling remains unchanged; no file headroom is reserved.
 // Proposal #273 adds only the optional fleet module and its declaration.
 // Four deliberate public/private service-account runtime and declaration files.
-if ((packResult?.entryCount ?? 0) > 409) fail("Published package unexpectedly exceeds 409 files.");
+if ((packResult?.entryCount ?? 0) > 411) fail("Published package unexpectedly exceeds 411 files.");
 if ((packResult?.unpackedSize ?? 0) > 6 * 1024 * 1024) fail("Published package unexpectedly exceeds 6 MiB unpacked.");
 pass(`publish allowlist contains ${packResult?.entryCount ?? 0} bounded files`);
 

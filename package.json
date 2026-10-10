@@ -20,6 +20,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./media-processing": { "types": "./dist/media-processing.d.ts", "import": "./dist/media-processing.js" },
     "./service-accounts": { "types": "./dist/service-accounts.d.ts", "import": "./dist/service-accounts.js" },
     "./component-harness": { "types": "./dist/component-harness.d.ts", "import": "./dist/component-harness.js" },
     "./retention-administration": { "types": "./dist/retention-administration.d.ts", "import": "./dist/retention-administration.js" },

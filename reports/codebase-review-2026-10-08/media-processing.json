@@ -1,0 +1,48 @@
+{
+  "feature": 29,
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/311",
+  "status": "in-progress",
+  "counted": false,
+  "base": "e81ef931baff736eeb675daee3427b185644933a",
+  "nativeEvidence": {
+    "newFocusedChecks": 27,
+    "existingBucketJobRegressions": 65,
+    "actualSigkillAfterPublicationBeforeSettlement": true,
+    "actualTwoWorkerProcesses": true,
+    "actualProviderResponseLoss": true,
+    "providerAcceptedOperations": 1,
+    "providerAttemptsForLostResponse": 2,
+    "sameNativeCatalogPublicationReceipt": true,
+    "heldSourceDestinationSessionPolicyCancelLeaseExpiryProtocolFences": true
+  },
+  "types": {
+    "consumerFixtures": 33,
+    "existingDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163
+  },
+  "docs": {
+    "offlineArtifact": "93485eb6d4273e0f2609e230eee70074fc68abf57eb8db4993da2a63affccfe0",
+    "doctor": {
+      "passed": 6,
+      "optionalProjectLinkNotice": 1,
+      "failures": 0
+    },
+    "httpAndMcp": true,
+    "actualDesktopAndPhoneContentLayoutAndHydratedSearch": true,
+    "nativePointerKeyboardNavigation": false
+  },
+  "pending": [
+    "Full ordinary-user Linux Node26/minimum Node22 release checks",
+    "Fresh hosted checks and current review",
+    "Normal protected expected-head merge"
+  ],
+  "limitations": [
+    "Trusted server adapters must honor stable provider operation keys; external effects are not a distributed SQLite transaction",
+    "No production codec/provider certification",
+    "No point-in-time capture certification for separate bucket connection writes",
+    "Expired operation IDs remain bounded tombstones; admission stops at configured capacity"
+  ],
+  "acceptedFeatures": 25,
+  "remainingFeatures": 15
+}
