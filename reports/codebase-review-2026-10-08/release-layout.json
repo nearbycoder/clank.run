@@ -1,0 +1,156 @@
+{
+  "kind": "release prerequisite, not a roadmap feature",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/298",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/299",
+  "status": "verified-awaiting-final-hosted-checks-and-protected-merge",
+  "counts": {
+    "merged": 24,
+    "featureBatches": 21,
+    "remaining": 16
+  },
+  "contract": {
+    "scope": "Private unmapped framework release build only; public compile, examples, declarations and mapped builds retain exact output",
+    "preserved": "Every token, newline, runtime literal byte and comment/license",
+    "fallback": "Entire original module on ambiguous lexical ownership, escaped identifiers, nested Unicode-v character classes or template depth over 64",
+    "dependencies": 0,
+    "publishedFilesAdded": 0,
+    "compatibility": "Rebuilt columns/digests and Function.toString formatting can change; use identical compatible definitions across worker fleets; stored artifacts remain immutable",
+    "rollback": "Prior immutable compatible distribution and data snapshot; no data reformat"
+  },
+  "source": {
+    "head": "96d05592661599a9f9177949cd82ae0570500bb7",
+    "tree": "5bab13b866196386baf71397b25991bd5108f6e3",
+    "archiveSha256": "981f995d953ade623961a40395148f9bcd56eaa4363605f5cd83be8e107ac3aa",
+    "inputScope": "All 1070 tracked source inputs, including 19 stored baseline example JavaScript files",
+    "trackedInputs": 1070
+  },
+  "validation": {
+    "fullRelease": {
+      "26": {
+        "complete": true,
+        "tests": 2020,
+        "pass": 2017,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 3,
+        "coverage": [
+          91.68,
+          80.9,
+          90.03
+        ],
+        "rawSha256": "5a7d7f0e685a300b9bf8d5a68abf56886aded554d5a914a702fdccc30c3fd47a"
+      },
+      "22": {
+        "complete": true,
+        "tests": 2020,
+        "pass": 2017,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 3,
+        "coverage": [
+          91.68,
+          80.93,
+          90.08
+        ],
+        "rawSha256": "03917982110528a2eaf1c8deaeedd4684958f93fcead99728a1a1a326b3e885c"
+      }
+    },
+    "focused": {
+      "compilerBuildCli": 52,
+      "source02RawSha256": "b234689132fd6e5ed5719629d0a1362b9a07210aaee5689b208a7d236e68d26c",
+      "finalBoundedLocal": 4,
+      "finalMinimumNode22": 4,
+      "finalAllRepeatedInCompleteGates": true,
+      "moduleFixtures": 23
+    },
+    "nativeNormalization": {
+      "runtime": "22.16.0",
+      "modules": 150,
+      "exactCanonicalEmissionMatches": 150,
+      "different": 0,
+      "rawSha256": "349a187ac62b528e5bde07591d42c9c3b531cfcb3b54352131374e1e72923147",
+      "reportSha256": "b042c362c6baf0c2c428ba13322a89e8ec7eb80902b6834209723839e971861e",
+      "finalSource03BuiltBytesEqualToProofInputs": true
+    },
+    "types": {
+      "positiveNegativeFixtures": 31,
+      "existingDiagnostics": 159,
+      "newDiagnostics": 0,
+      "baseline": 163,
+      "openApiExamples": "passed",
+      "rawSha256": "f2ed5ad51e04dd7a6a06ec385ce55cbe91594c43a5d8ca8ad28aa92cbb9c834a",
+      "typeInputsAndAllPublishedBytesRemainExactAfterBoundTightening": true
+    },
+    "package": {
+      "files": 405,
+      "unpackedBytes": 6036861,
+      "unchangedCeiling": 6291456,
+      "headroom": 254595,
+      "netSavingsFromAcceptedFeature20": 206225,
+      "jsIndentationBytesRemoved": 206558,
+      "modulesChanged": 124,
+      "syntaxChecked": 150,
+      "rawSha256": "a3c52532238f650dc04fd2a7e21b5e9aacf1b422590189290825c489ddbf72ac"
+    },
+    "actualPublishedHistorySecurity": {
+      "passed": true,
+      "rawSha256": "e5aa7592e49e66e49bb280f66986f00b6deb9a521b5392cc329086a43d4287a1"
+    },
+    "documentation": {
+      "guides": 98,
+      "words": 172803,
+      "doctor": "6 passed, one optional unlinked-project notice, zero failures",
+      "offlineArtifact": "4b45b04d3ccfb48bb5f46d19bb2ce052ac5062fa228569013e9314d5cbbb47f1",
+      "uploaded": false,
+      "httpMcp": "Eight HTTP surfaces, discovery/tools/list, readonly docs_search and docs_read passed",
+      "httpMcpSha256": "9e31ab7fb838d976f32b8b0f196207660679389e6ab99fc8b07d3f5ca6e009a9",
+      "desktop": {
+        "viewport": 1280,
+        "document": 1265,
+        "guide": "release-layout-docs-desktop-02.png"
+      },
+      "phone": {
+        "viewport": 390,
+        "document": 375,
+        "guide": "release-layout-docs-phone-02.png",
+        "search": "release-layout-docs-phone-search-02.png"
+      },
+      "keyboard": "Home, full-text search and current guide navigation passed",
+      "browserWarningsAndErrors": 0,
+      "builtRuntimeBytesEqualFinalProofInputs": true
+    }
+  },
+  "retainedFailures": [
+    {
+      "proof": "Code indentation stayed in the prior release build",
+      "rawSha256": "764687b7b6051948de72cc7c9d3e1016db15ff99ad481af104a3bfa2a5ab7d2a",
+      "resolution": "Private release pass; actual example/compiler/mapped output stays exact"
+    },
+    {
+      "proof": "Initial scanner confused default/extends regexp literals with division and removed whitespace from later raw templates",
+      "rawSha256": "cfc65a68696d50ca360a24f4f36055234fe4a30fdefbaaf73bb01c7f2ccf19f3",
+      "resolution": "Recognize reserved expression boundaries; add actual executed adversarial fixtures. Contextual of remains ambiguous and private keyword properties remain values."
+    },
+    {
+      "proof": "Source01 Node26 full gate passed; Node22 failed four tests because every temporary build included a 258-level fixture which crashes the minimum native parser before the release pass",
+      "node22RawSha256": "55b899bf7b2e9fbc31cc086fa6ca8133638d5a2eac554ee5e87010d15b3c469c",
+      "resolution": "Keep full failed evidence, probe every fixture and parser depths/modes. Use stricter scanner depth64 with a depth66 fixture accepted by both runtimes, preserving the same fallback assertion. Source02 archive is a checkpoint, not a claimed complete gate."
+    },
+    {
+      "setup": "The initial SSH channel ended with 255 while its known remote gate driver continued; retained exit files and full output establish Node26 pass and Node22 failure. A broad full-text query did not rank the guide in its first five results.",
+      "resolution": "Do not overlap full gates or infer success from transport. Wait for actual remote completion; use a distinctive word from the current guide for actual search and retain the unsuccessful setup log."
+    }
+  ],
+  "evidenceIndexSha256": "df0c102645ffc064e6d9c1348353e53a06def324e7d9b4b5a48419f768d9e8ae",
+  "review": {
+    "independent": false,
+    "freshHostedChecks": "Required at final metadata head",
+    "newCodeQlAlerts": "Must be zero",
+    "unresolvedThreads": "Must be zero",
+    "merge": "Normal protected expected-head squash, exact tree verification and safe checkout synchronization"
+  },
+  "limitations": [
+    "Normalization and the complete suites establish current module behavior; reflective function formatting intentionally changes",
+    "No new production-provider or host certification is claimed"
+  ]
+}
