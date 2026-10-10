@@ -6,6 +6,12 @@ Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twe
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
+## Held token authority repair verified
+
+[PR #305](https://github.com/nearbycoder/clank.run/pull/305), under [proposal #304](https://github.com/nearbycoder/clank.run/issues/304), fences held native HTTP requests to their admitted token hash and exact grant. Rotation, reduced permissions, rebound project, revocation, expiry and disabled owner now reject at existing current-principal boundaries without secret or audit writes. The unchanged control succeeds. Before the repair, actual held requests with rotated or reduced grants incorrectly committed both effects. A private request-local fingerprint adds no public API, serialized fields or persistent schema. Durable release-window delegation retains its separately specified checks.
+
+Both full ordinary-user Linux Node 26/22 release gates pass 2,028 reported /2,025 passed /zero failed or cancelled /three existing skips. Packed types pass 31 fixtures with 159 existing /zero new diagnostics against unchanged baseline 163. The package remains 405 files /6,039,538 bytes /251,918 bytes below the unchanged 6 MiB ceiling, with zero dependencies. All 1,072 runtime inputs are retained; report-only changes preserve every other input. All six runtime-head hosted checks pass with no new CodeQL alerts or open inline threads; fresh final-head checks and protected acceptance remain required. This maintenance repair adds no roadmap feature. See [token authority evidence](current-token-authority.json).
+
 ## Release compaction and recursive watcher repair verified
 
 [Proposal #298](https://github.com/nearbycoder/clank.run/issues/298) and [PR #299](https://github.com/nearbycoder/clank.run/pull/299) add a private unmapped framework release pass and repair recursive compiler watch. Only leading indentation in known code regions is removed; tokens, comments/licenses, line endings and literal bytes remain. Ambiguous modules stay entirely unchanged, with a 64-level template bound. Public compiler output, examples, declarations and mapped builds remain exact. Rebuilt columns, digests and reflective function formatting can change; retained workflows require compatible fleet definitions and binaries.
