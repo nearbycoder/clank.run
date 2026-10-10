@@ -10,6 +10,7 @@ import {
 import {
   resolveBackupStorage,
   resolvePlatformHosting,
+  resolvePlatformSupervisor,
   resolveProviderPlacement,
   resolveRunnerArtifactStorage,
 } from "./platform-hosting.mjs";
@@ -98,6 +99,7 @@ const ingress = ingressEnabled ? {
 } : undefined;
 
 const platform = await openPlatform({
+  supervisor: resolvePlatformSupervisor(process.env),
   dataDirectory,
   publicUrl,
   startupRecovery: "background",
@@ -237,6 +239,7 @@ console.log(`Platform data: ${platform.dataDirectory}`);
 console.log(`Hosting profile: ${platform.hostingProfile}`);
 console.log(`Runner: ${runner.kind}`);
 console.log(`SQLite isolation: ${process.env.CLANK_SQLITE_ISOLATION ?? "namespace"}`);
+if(platform.supervisor)console.log(`Automatic supervisor: ${platform.supervisor().state} (configuration ${process.env.CLANK_SUPERVISOR_ID}, revision ${process.env.CLANK_SUPERVISOR_REVISION})`);
 if (process.env.CLANK_SQLITE_ISOLATION === "trusted-process") {
   console.warn("Trusted SQLite helpers: resource limits remain enabled; helpers share the control-plane filesystem and network authority.");
 }

@@ -18,6 +18,8 @@ export interface SQLiteInternalChangeRecorder {
     record(table: string, id: string, ownerId?: string | null): void;
 }
 export interface SQLiteInternal {
+    /** Install once before service admission; checks native ownership inside each write transaction. */
+    guardWrites?(guard: (connection: Pick<SQLiteInternal, "prepare">) => undefined): void;
     /** Install once, after schema bootstrap and before admitting requests. */
     captureTransactions?(factory: (connection: SQLiteCaptureConnection) => SQLiteTransactionCapture): void;
     /** True only while this database instance owns a write transaction. */

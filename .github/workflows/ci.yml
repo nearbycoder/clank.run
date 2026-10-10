@@ -70,7 +70,7 @@ jobs:
           sudo apparmor_parser --replace scripts/ci-linux.apparmor
 
       - name: Build and run unit/integration tests
-        # Keep failing test names and assertions at the end of bounded CI logs.
+        # Keep failing assertions at the end of bounded CI diagnostic logs.
         run: npm test -- --test-reporter=spec
 
       - name: Verify published file set

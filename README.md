@@ -283,6 +283,8 @@ npm run dev:auth       # http://127.0.0.1:4181
 To develop the open-source control plane, run `npm run dev:platform`. Local platform work can use
 `clank login --server=http://127.0.0.1:4200`; normal hosted use never needs the server flag.
 
+Self-hosted Linux operators can opt dedicated coordinators into [automatic supervisor leadership](https://docs.clank.run/docs/supervisor-leadership) on one private native SQLite catalog. Standbys recover retained desired state after ownership fencing and verified previous worker cleanup.
+
 For opt-in remote stateful projects, the package also ships `clank-runner` and
 `clank-provider`. The control plane stays local-by-default; operators explicitly enable provider
 placement, enroll a node, and select `--placement=provider` at project creation. See [Remote
@@ -339,6 +341,7 @@ Markdown, JSON, `llms.txt`, and a complete agent corpus.
 - [Service drivers for files, email, jobs, and webhooks](https://docs.clank.run/docs/services)
 - [Atomic local and S3-compatible object storage](https://docs.clank.run/docs/object-storage)
 - [Managed application buckets](https://docs.clank.run/docs/buckets)
+- [Durable media processing](https://docs.clank.run/docs/media-processing)
 - [Typed durable queues, worker processes, and cron](https://docs.clank.run/docs/jobs-and-cron)
 - [Structured logs, traces, metrics, and health](https://docs.clank.run/docs/observability)
 - [Durable distributed deployment and agent fencing](https://docs.clank.run/docs/distributed-deployment)

@@ -1,6 +1,31 @@
 import { McpToolError, type McpTool } from "./mcp.ts";
 import type { ObjectStore } from "./object-storage.ts";
 import { readRequestBytes, RequestInputError } from "./security.ts";
+import type { SQLiteStatement } from "./sqlite-internal.ts";
+
+/** @internal Opaque generation, never an object-store path or browser authority. */
+export interface BucketProcessingSource {
+  readonly bucket: string;
+  readonly key: string;
+  readonly generation: string;
+  readonly metadata: BucketObject;
+}
+/** @internal Supported native catalog integration for the durable media service. */
+export interface BucketProcessingBinding {
+  readonly databasePath: string;
+  snapshot(bucket: string, key: string, userId: string): BucketProcessingSource | null;
+  read(source: BucketProcessingSource, userId: string): Promise<BucketStoredObject>;
+  publish(input: { source: BucketProcessingSource; userId: string; bucket: string; key: string;
+    expectedGeneration: string | null; bytes: Uint8Array; contentType: string; signal: AbortSignal },
+    hooks: { check(): void; accept(connection: { prepare(sql: string): SQLiteStatement }, object: BucketObject, generation: string): void }): Promise<BucketObject>;
+}
+const processingBindings = new WeakMap<object, BucketProcessingBinding>();
+/** @internal A copied manager has no native publication capability. */
+export function bucketProcessingBinding(manager: BucketManager): BucketProcessingBinding {
+  const binding = processingBindings.get(manager);
+  if (!binding) throw new TypeError("An open native bucket manager is required.");
+  return binding;
+}
 
 export type BucketVisibility = "private" | "public";
 export type BucketOwnership = "app" | "user";
@@ -1198,8 +1223,10 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     key: string,
     value: Uint8Array | ArrayBuffer,
     putOptions: BucketPutOptions,
+    guard?: { readonly check: () => void; readonly accept?: (object: BucketObject) => void },
   ): Promise<BucketObject> => {
     const bytes = copyBytes(value);
+    guard?.check();
     const reservation = await reserve(definition, key, bytes.byteLength, putOptions.contentType, putOptions, {
       expectedSha256: putOptions.expectedSha256,
       ifSha256: putOptions.ifSha256,
@@ -1209,7 +1236,8 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       variant: putOptions.variant,
     });
     try {
-      return await finalize(reservation, bytes);
+      guard?.check();
+      return await finalize(reservation, bytes, guard ? { check: guard.check, accept: object => guard.accept?.(object) } : undefined);
     } catch (error) {
       // Server puts have no upload capability with which to retry validation.
       const removed = removeReservation(String(reservation.reservation_id));
@@ -1243,11 +1271,17 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     const row = rowForKey(definition.name, ownerFor(definition, identity), metadata.key)!;
     const stored = await options.store.get(String(row.storage_key));
     if (!stored) throw new BucketError(500, "BUCKET_OBJECT_MISSING", "Bucket object bytes are missing.");
+    if (stored.bytes.byteLength !== metadata.size) throw new BucketError(500, "BUCKET_INTEGRITY_FAILED", "Bucket object failed integrity verification.");
+    const bytes = copyBytes(stored.bytes);
     if (stored.metadata.size !== metadata.size || stored.metadata.sha256 !== metadata.sha256
-      || normalizeContentType(stored.metadata.contentType) !== metadata.contentType) {
+      || normalizeContentType(stored.metadata.contentType) !== metadata.contentType
+      || await sha256(bytes) !== metadata.sha256) {
       throw new BucketError(500, "BUCKET_INTEGRITY_FAILED", "Bucket object failed integrity verification.");
     }
-    return Object.freeze({ metadata, bytes: new Uint8Array(stored.bytes) });
+    if (rowForKey(definition.name, ownerFor(definition, identity), metadata.key)?.storage_key !== row.storage_key) {
+      throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Bucket generation changed during the read.");
+    }
+    return Object.freeze({ metadata, bytes });
   };
 
   const restoreVersion = async (definition: BucketDefinition, keyInput: string, idInput: string, input: BucketRestoreOptions,
@@ -1525,24 +1559,33 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
     const variant = boundedName(variantNameInput);
     const spec = definition.image.variants[variant];
     if (!spec) throw new BucketError(404, "IMAGE_VARIANT_NOT_FOUND", "Image variant not found.");
-    const source = await get(definition, key, transformOptions);
+    const owner = ownerFor(definition, transformOptions), sourceKey = bucketKey(key), signal = transformOptions.signal;
+    const sourceGeneration = rowForKey(definition.name, owner, sourceKey)?.storage_key;
+    const check = () => {
+      signal?.throwIfAborted();
+      if (!sourceGeneration || rowForKey(definition.name, owner, sourceKey)?.storage_key !== sourceGeneration) {
+        throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Source generation changed during the transform.");
+      }
+    };
+    const source = await get(definition, sourceKey, { userId: owner });
     if (!source || !source.metadata.image) throw new BucketError(404, "BUCKET_OBJECT_NOT_FOUND", "Source image not found.");
+    check();
     const output = await options.imageTransformer({
       bucket: definition,
       source,
       variant,
       spec,
-      signal: transformOptions.signal,
+      signal,
     });
     const bytes = copyBytes(output.bytes);
     const extension = spec.format === "original" ? source.metadata.image.format : spec.format;
     const variantKey = `variants/${source.metadata.id}/${variant}.${extension === "jpeg" ? "jpg" : extension}`;
     return put(definition, variantKey, bytes, {
-      ...transformOptions,
+      userId: owner,
       contentType: output.contentType,
       variantOf: source.metadata.id,
       variant,
-    });
+    }, { check });
   };
 
   const storedResponse = async (row: ObjectRow, request: Request, valid: () => boolean = () => true): Promise<Response> => {
@@ -1914,6 +1957,35 @@ export async function openBucketManager(options: OpenBucketManagerOptions): Prom
       native.close();
     },
   });
+  const generation = (row: ObjectRow) => String(row.storage_key).split("/").at(-1)!;
+  const snapshot = (bucket: string, key: string, userId: string): BucketProcessingSource | null => {
+    ensureOpen(); const definition = definitionFor(bucket), row = rowForKey(definition.name, ownerFor(definition, { userId }), bucketKey(key));
+    return row ? Object.freeze({ bucket: definition.name, key: String(row.object_key), generation: generation(row), metadata: objectFromRow(row) }) : null;
+  };
+  const assertSource = (source: BucketProcessingSource, userId: string) => {
+    const current = snapshot(source.bucket, source.key, userId);
+    if (!current || current.generation !== source.generation) throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Source generation is no longer current.");
+  };
+  processingBindings.set(manager, Object.freeze<BucketProcessingBinding>({
+    databasePath: catalogPath, snapshot,
+    async read(source, userId) {
+      assertSource(source, userId); const value = await get(definitionFor(source.bucket), source.key, { userId }); assertSource(source, userId);
+      if (!value) throw new BucketError(404, "BUCKET_OBJECT_NOT_FOUND", "Source object not found."); return value;
+    },
+    async publish(input, hooks) {
+      const { source, userId, bucket, key, expectedGeneration, contentType, signal } = input;
+      const frozenSource = Object.freeze({ ...source }); const bytes = copyBytes(input.bytes), definition = definitionFor(bucket);
+      const check = () => {
+        signal.throwIfAborted(); guardCurrent(hooks.check); assertSource(frozenSource, userId);
+        if ((snapshot(bucket, key, userId)?.generation ?? null) !== expectedGeneration) {
+          throw new BucketError(409, "BUCKET_OBJECT_CHANGED", "Destination generation changed during processing.");
+        }
+      };
+      return put(definition, key, bytes, { userId, contentType }, { check,
+        accept(object) { hooks.accept({ prepare: statement }, object, snapshot(bucket, key, userId)!.generation); },
+      });
+    },
+  }));
   await sweep();
   return manager;
 }

@@ -1,0 +1,328 @@
+{
+  "feature": 6,
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/313",
+  "status": "accepted",
+  "counted": true,
+  "base": "0729abca3ed24743b2af1a25089071e7107a81f7",
+  "implemented": [
+    "Retained native SQLite leadership epoch and exact private process identity",
+    "Native write transaction guard including cached SQL and raw transaction escape refusal",
+    "Independent coordinator guardian and SIGSTOP/lease-loss fencing",
+    "Platform standby polling, bounded 503 Retry-After and automatic core lifecycle takeover",
+    "Persisted topology marker rejects accidental ordinary supervisor mode"
+  ],
+  "currentProof": [
+    "Nine native lease checks including retained-state deletion refusal",
+    "Five native write guard checks",
+    "Six actual guardian process checks including acquisition SIGKILL and native expiry during arming",
+    "One actual empty-catalog leader/standby SIGSTOP takeover",
+    "Eight actual deployed lifecycle/cleanup/configuration checks including response loss after durable publication",
+    "One actual packaged platform CLI takeover and one strict environment contract check"
+  ],
+  "pending": [],
+  "acceptedFeatures": 27,
+  "remainingFeatures": 13,
+  "limits": [
+    "Same-host Linux private catalog only; no multi-region consensus or network filesystem guarantee",
+    "Dedicated coordinator process is terminated on lost leadership",
+    "External effects retain their explicit provider idempotency and generation contracts; no distributed transaction claim",
+    "Docker/provider host certification stays separate from native coordinator/process takeover proof"
+  ],
+  "focused": {
+    "reported": 65,
+    "passed": 65,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "newChecks": 29,
+    "existingRegressions": 36,
+    "logSha256": "8965995c04e44b9b72a733f20ed9f35d9857f58781a5b6d5b7bde9fc8f837b7f",
+    "supplementaryChecks": [
+      {
+        "log": "supervisor-acquisition-kill-01.log",
+        "passed": 1,
+        "sha256": "2edad306d88b2ecf29e1009b89a9f8bcfb1e8045c71d67e66e327296feda62a4"
+      },
+      {
+        "log": "supervisor-publication-kill-01.log",
+        "passed": 1,
+        "sha256": "90ec57fbcdbfe2a87b8aefe7bf53192209ccfbeb41ab2aaddf4e92952628f54d"
+      }
+    ],
+    "totalUniqueChecks": 67,
+    "totalNewChecks": 31
+  },
+  "types": {
+    "sourceDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163,
+    "packedFixtures": 34,
+    "logSha256": "d91b57b10a52748104cd745b1b4b42005e3524760567eb2f3c1175f5175f73b4"
+  },
+  "package": {
+    "baseFiles": 411,
+    "files": 413,
+    "baseBytes": 6104927,
+    "bytes": 6142287,
+    "growthBytes": 37360,
+    "unchangedByteCeiling": 6291456,
+    "headroom": 149169,
+    "addedFiles": [
+      "dist/platform-supervisor.d.ts",
+      "dist/platform-supervisor.js"
+    ]
+  },
+  "docs": {
+    "guides": 101,
+    "words": 177319,
+    "doctorPassed": 6,
+    "optionalUnlinkedProject": 1,
+    "doctorFailed": 0,
+    "offlineArtifact": "57539597bd46a6e3aeba561a5b3405ca7ec082ae50496b0d457162f5292aa4c9",
+    "httpAndMcpSha256": "2c8fa896eacac61349539e049df947d8ef8dff32ff7903b9ac18c21a102545f8",
+    "browserSha256": "66a6471ac6bd8bdbd88dbd3f5c6ecd858e5b8554166346b32b2e3d8851862c8c",
+    "browserLimit": "Actual home/search/guide content/layout is verified; Enter did not navigate and no activation is claimed."
+  },
+  "nativeSource01": {
+    "source": "c8c0b843ef5871f1490d69a985990612076fe462",
+    "tree": "40ec428002cc62e6eb2d3230d69b6226477e578a",
+    "tarSha256": "1c0f75bd62906349474bb71a3cb702c5bdb22c66b1ee1c5a5b5bdd3812a2a7b5",
+    "inputs": 1108,
+    "ordinaryUid": 1000,
+    "results": {
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 2107,
+          "pass": 2104,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.63,
+          81.03,
+          90.11
+        ],
+        "logSha256": "ecd5793fd5e2052d5544ae46fd9564b89ae4fca07c7ee4a07fc369b023012ca7"
+      },
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 2107,
+          "pass": 2104,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.01,
+          90.07
+        ],
+        "logSha256": "02d750ddf13ace5fd266805005242718c92d75f8f14e45332b5bc01627449611"
+      }
+    }
+  },
+  "hostedReview": {
+    "source": "c8c0b843ef5871f1490d69a985990612076fe462",
+    "node22Failure": "Native machine budget integration rejected a valid base64url identity prefix. Deterministic parser repair and replay/isolation regression added; updated full gates required.",
+    "conformanceFailure": "Failed; bounded 120000-character log excludes the assertion. Same cause is not established.",
+    "rawDiagnostics": [
+      "supervisor-hosted-failure-01-0.json",
+      "supervisor-hosted-failure-01-1.json",
+      "supervisor-hosted-failure-01-2.json",
+      "supervisor-hosted-failure-01-3.json"
+    ]
+  },
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/314",
+  "nativeSource02": {
+    "source": "064628015bcab9b4cfc16d769f010724234efb2c",
+    "tree": "ff02731af086fb9eacdc634e10ebbb8be8cd3aa4",
+    "tarSha256": "effe95b1576c8b383188ecf7752c5c55c15620c137d5637fd1bd14aad7089a71",
+    "inputs": 1108,
+    "ordinaryUid": 1000,
+    "results": {
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 2108,
+          "pass": 2105,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.04,
+          90.11
+        ],
+        "logSha256": "cac04369dbd6f98735cca46f58643ad32c5c4bee3c70a8c8612bc79a0c7e18c6"
+      },
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 2108,
+          "pass": 2105,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.01,
+          90.07
+        ],
+        "logSha256": "fd6689fca55a136f48db62783bbc37fa6850a3b420aaf0ffead72bf1158741f6"
+      }
+    }
+  },
+  "immutableEvidence": {
+    "files": 95,
+    "indexSha256": "cde1856375a32dcc284c2e68f224d08377b28afd8f6380f297ccada30f337847"
+  },
+  "hostedSource02": {
+    "head": "064628015bcab9b4cfc16d769f010724234efb2c",
+    "allSix": "success",
+    "newCodeQLAlerts": 0,
+    "unresolvedThreads": 0,
+    "annotations": "Actual Ubuntu 26 runner-migration notice read; no actionable annotation.",
+    "proofSha256": "6b99ebc67af66d00e39102a9394fbde88d101bc85137104bb35262e962ea7533"
+  },
+  "finalReportHeadFailure": {
+    "head": "b222dedafb367c77fb729719c9bace3f702fdcdd",
+    "runtime22": "success",
+    "runtime24": "success",
+    "conformance": "One test failed; bounded log excludes the assertion; cause remains unknown.",
+    "diagnosticsRepair": "Bounded first16 TAP failure blocks, total64KiB, emitted after forwarded stdout drains. Actual early-failure/later200KiB-output regression passes without retrying or changing its failed exit.",
+    "diagnosticTests": {
+      "passed": 8,
+      "failed": 0,
+      "logSha256": "be33b8e6f7acf38280f12c4d1a87ad5561715e81725cb20abc158a979fc97829"
+    }
+  },
+  "nativeSource03": {
+    "source": "ef72f0c9e55564eb2443a4c9fecb98e9b4589681",
+    "tree": "0bc4be8151b50042cd25e73029fbb881d3cd1aaa",
+    "tarSha256": "930ab84e796ce2c9a258dad600b94a461123b9b8d59271142fe67a25d6454afb",
+    "inputs": 1108,
+    "ordinaryUid": 1000,
+    "results": {
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.04,
+          90.1
+        ],
+        "logSha256": "797087b4b16a15413cfc016a5c96074081e47582993facd6fda66d051026254f"
+      },
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.02,
+          90.07
+        ],
+        "logSha256": "2194d8c03d20eb815b8f6bc40e85c13b2a62f7c340b623bc1d34eed76d5de4fa"
+      }
+    }
+  },
+  "nativeSource04": {
+    "source": "274b4b0bad46a5a62b7a11329342196254096aca",
+    "tree": "5dfb3827d6fff99f9dacf6080e92def5e725a187",
+    "tarSha256": "7bdc529002f752772a5a840d4806aed2afb46a4526d8fd553d63bc1c6f7fbaaa",
+    "inputs": 1108,
+    "ordinaryUid": 1000,
+    "results": {
+      "22": {
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.63,
+          81.04,
+          90.11
+        ],
+        "logSha256": "13e50372dcb27209f56c0bb046f9784517a1c2f0d87f85b5ec8d02359314556b"
+      },
+      "26": {
+        "exit": 0,
+        "counts": {
+          "tests": 2109,
+          "pass": 2106,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": [
+          91.64,
+          81.02,
+          90.07
+        ],
+        "logSha256": "036b5bb133304b336024e3782b60e838d81a65358cc5876aea9fc006078edf15"
+      }
+    }
+  },
+  "hostedSource04": {
+    "head": "274b4b0bad46a5a62b7a11329342196254096aca",
+    "allSix": "success",
+    "newCodeQLAlerts": 0,
+    "unresolvedThreads": 0,
+    "annotations": "Actual Ubuntu 26 runner migration notice read; no actionable annotation.",
+    "proofSha256": "8ff0421c8562145b9ce55c0098fbb0af152b654b85811310e914ff726dbd5ac2"
+  },
+  "actualDiagnosticFailure": {
+    "head": "ef72f0c9e55564eb2443a4c9fecb98e9b4589681",
+    "jobs": [
+      "Node 24",
+      "Packaged-release conformance"
+    ],
+    "assertion": "tests/supervisor-runtime-process.test.mjs:83; scheduler lastBackupId is null while its encrypted archive is already visible.",
+    "repair": "Bounded observation waits for exactly one listed archive, matching durable scheduler acknowledgment and a cleared running lease. Encryption, completion and no-overlapping-writer assertions remain strict.",
+    "focused": {
+      "passed": 8,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "logSha256": "41f3f7284d8ece01e39f23c8ead2e32044ee8e68c82c9d5e4b257fccd807c12a"
+    },
+    "earlierTruncatedFailures": "Remain unclassified; no shared cause is inferred."
+  },
+  "additionalImmutableEvidence": {
+    "files": 31,
+    "indexSha256": "783a3916d178a5813e6de593c787c807b839a95c0362e0717ca2ad92d950da82",
+    "previous95FileIndexUnchanged": true
+  },
+  "protectedAcceptance": {
+    "pullRequest": "https://github.com/nearbycoder/clank.run/pull/314",
+    "head": "730a464ebeb9ef539efd4d39dd71a63e54d2cc59",
+    "merge": "7bdb73efc3bf297c566d63814223306b047b2792",
+    "tree": "dc38208285eb0c9299facad74249aa9552ec8737",
+    "normalExpectedHeadSquash": true,
+    "allSixFinalChecks": "success",
+    "authorComment": 5478557857,
+    "independentApprovalClaim": false,
+    "originalLocalFilesPreserved": 23,
+    "proofSha256": "1fd3ae7b9e57ac266c7d69c3ce208001c1f5a80200f0524d2287825edf9e4f5d"
+  }
+}
