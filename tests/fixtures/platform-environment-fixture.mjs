@@ -10,8 +10,8 @@ import { createDeploymentBundle, deploymentDigest, parseDeploymentConfig } from 
 
 
 const origin = 'http://127.0.0.1:4200';
-async function childPlatform(options) {
-  const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'tests/fixtures/platform-promotion-controller.mjs', JSON.stringify(options)], { stdio: ['ignore','ignore','pipe','ipc'] });
+async function childPlatform(options, entry = 'tests/fixtures/platform-promotion-controller.mjs') {
+  const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', entry, JSON.stringify(options)], { stdio: ['ignore','ignore','pipe','ipc'] });
   let sequence = 0, stderr = ''; const pending = new Map();
   child.stderr.on('data', bytes => { stderr = (stderr + bytes).slice(-4096); });
   let ready, failed; const initialized = new Promise((resolve, reject) => { ready = resolve; failed = reject; });
@@ -44,7 +44,7 @@ export async function fixture(t, subprocess = false, overrides = {}) {
   const options = { dataDirectory: join(root, 'platform'), publicUrl: origin, signup: true,
     appPortStart, appPortEnd: appPortStart+30, backups: { intervalMs: false }, previews: { cleanupIntervalMs: false },
     ingress: { baseDomain: 'apps.example.test', domainRecheckIntervalMs: false }, ...overrides };
-  const open = () => subprocess ? childPlatform(options) : openPlatform(options);
+  const open = () => subprocess ? childPlatform(options, typeof subprocess === 'string' ? subprocess : undefined) : openPlatform(options);
   let platform;
   const servers = [];
   t.after(async () => {
@@ -108,6 +108,6 @@ export async function fixture(t, subprocess = false, overrides = {}) {
     authenticateServiceAccount(request) { return platform.authenticateServiceAccount(request); },
     async serve(transform) { const { serve } = await import('../../dist/node.js'); const server = await serve(async request => { const response = await platform.handle(request); return transform ? transform(request, response) : response; }, { hostname: '127.0.0.1', port: overrides.publicUrl ? Number(new URL(origin).port) : 0 }); servers.push(server); return `http://127.0.0.1:${server.port}`; },
     async restart() { await platform.close(); platform = await open(); },
-    async killAndRestart() { assert.ok(subprocess); await platform.kill(); platform = await open(); },
+    async killAndRestart(afterStopped) { assert.ok(subprocess); await platform.kill(); await afterStopped?.(); platform = await open(); },
   };
 }
