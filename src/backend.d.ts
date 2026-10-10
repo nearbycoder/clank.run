@@ -261,14 +261,17 @@ export interface SQLiteOptions {
     historyRetentionPerDocument?: number;
     onError?: (error: unknown) => void;
 }
-export interface SQLiteDatabase<Schema extends DatabaseSchema<any>> {
+export interface ApplicationDatabase<Schema extends DatabaseSchema<any>> {
     readonly schema: Schema;
     readonly version: number;
+    inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
     read<Value>(handler: (db: ReadDatabase<Schema>) => Value, scope?: DatabaseScope): Value;
     tracked<Value>(handler: (db: ReadDatabase<Schema>) => Value, scope?: DatabaseScope): TrackedResult<Value>;
     transaction<Value>(handler: (db: WriteDatabase<Schema>) => Value, scope?: DatabaseScope): Value;
     subscribe(listener: (change: DatabaseChange) => void): Cleanup;
     close(): void;
+}
+export interface SQLiteDatabase<Schema extends DatabaseSchema<any>> extends ApplicationDatabase<Schema> {
     /** @internal Used by Clank's own zero-dependency services. */
     readonly [SQLITE_INTERNAL]: SQLiteInternal;
 }
@@ -460,9 +463,9 @@ export interface BackendCaller<Profile extends object = DefaultAuthProfile> {
     subscribe<Reference extends FunctionReference<"query", any, any>>(reference: Reference, args: InputOf<Reference>, listener: (value: OutputOf<Reference>, version: number) => void): Cleanup;
     subscribe(path: string, input: unknown, listener: (value: unknown, version: number) => void): Cleanup;
 }
-export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined> {
+export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined, Storage extends ApplicationDatabase<Schema> = SQLiteDatabase<Schema>> {
     readonly definition: BackendDefinition<Schema, Functions, Auth, Jobs>;
-    readonly database: SQLiteDatabase<Schema>;
+    readonly database: Storage;
     readonly auth: Auth extends AuthDefinition<infer Profile> ? AuthRuntime<Profile> : undefined;
     readonly jobs: Jobs extends JobSystemDefinition<Schema, any> ? JobRuntime<Jobs> : undefined;
     readonly buckets: BucketManager | undefined;
@@ -495,7 +498,7 @@ export interface BackendRuntime<Schema extends DatabaseSchema<any>, Functions ex
   readonly organizationSecurity: OrganizationSecurityPolicyController | undefined;
     close(): void;
 }
-export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extends SQLiteOptions {
+export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any, Storage extends ApplicationDatabase<any> = SQLiteDatabase<any>> extends SQLiteOptions {
   organizationSecurity?: {readonly organizationId: string; readonly policy: OrganizationSecurityPolicyOptions};
   /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
   liveResume?: LiveResumeOptions;
@@ -504,7 +507,7 @@ export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extend
     offlineMutations?: MutationReceiptOptions;
     tracer?: Tracer;
     diagnostics?: boolean;
-    database?: SQLiteDatabase<any>;
+    database?: Storage;
     prefix?: string;
     verifyOrigin?: boolean;
     allowedOrigins?: readonly string[];
@@ -549,6 +552,7 @@ export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extend
         refreshTokenRotationMode?: "adaptive" | "strict";
     };
 }
+export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined, Storage extends ApplicationDatabase<Schema> = SQLiteDatabase<Schema>>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>, options: OpenBackendOptions<Schema, Storage>): Promise<BackendRuntime<Schema, Functions, Auth, Jobs, Storage>>;
 export declare function openBackend<Schema extends DatabaseSchema<any>, Functions extends FunctionTree, Auth extends AuthDefinition<any> | undefined = undefined, Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>, options?: OpenBackendOptions<Schema>): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>>;
 export declare function functionKey(path: string, args: unknown): string;
 export declare function stableStringify(value: unknown): string;

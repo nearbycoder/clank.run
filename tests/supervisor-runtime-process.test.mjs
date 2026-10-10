@@ -23,9 +23,10 @@ async function fixture(t){
     assert.deepEqual(await readdir(join(dataDirectory,'supervisor-guardians')).catch(error=>{if(error.code==='ENOENT')return [];throw error;}),[]);
     await rm(root,{recursive:true,force:true});await ports.release();
   });
-  const start=async(overrides={},onSpawn,mutate=false,pauseRelease=false)=>{
+  const start=async(overrides={},onSpawn,mutate=false,pauseRelease=false,delayedGuardianRead=false)=>{
     const child=fork(new URL('./fixtures/supervisor-platform-worker.mjs',import.meta.url),[],{env:{...process.env,CLANK_SUPERVISOR_FIXTURE_ROOT:dataDirectory,
-      CLANK_SUPERVISOR_FIXTURE_OPTIONS:JSON.stringify({...options,...overrides,supervisor:{...options.supervisor,...overrides.supervisor}}),CLANK_SUPERVISOR_MUTATE_OPTIONS:mutate?'1':'0',CLANK_SUPERVISOR_PAUSE_RELEASE_RESPONSE:pauseRelease?'1':'0'},stdio:['ignore','pipe','pipe','ipc']});
+      CLANK_SUPERVISOR_FIXTURE_OPTIONS:JSON.stringify({...options,...overrides,supervisor:{...options.supervisor,...overrides.supervisor}}),CLANK_SUPERVISOR_MUTATE_OPTIONS:mutate?'1':'0',CLANK_SUPERVISOR_PAUSE_RELEASE_RESPONSE:pauseRelease?'1':'0',
+      ...(delayedGuardianRead?{NODE_OPTIONS:[process.env.NODE_OPTIONS,'--import='+new URL('./fixtures/supervisor-delayed-native-read.mjs',import.meta.url).href].filter(Boolean).join(' '),CLANK_SUPERVISOR_DELAYED_READ_EVIDENCE:join(root,'delayed-read.json')}:{})},stdio:['ignore','pipe','pipe','ipc']});
     let output='',sequence=0;const pending=new Map(),exited=new Promise(resolve=>child.once('exit',(code,signal)=>{
       for(const entry of pending.values())entry.reject(new Error('Owned coordinator exited: '+output));pending.clear();resolve({code,signal});}));
     children.push({child,exited});onSpawn?.(child);for(const stream of [child.stdout,child.stderr])stream.on('data',value=>output=(output+value).slice(-8192));
@@ -34,10 +35,10 @@ async function fixture(t){
     assert.equal(ready.kind,'ready');
     child.on('message',message=>{if(message.kind==='release-published')return;const entry=pending.get(message.id);if(!entry)return;pending.delete(message.id);if(message.kind==='error')entry.reject(new Error(message.error));else entry.resolve(message);});
     const rpc=message=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});child.send({...message,id},error=>{if(error){pending.delete(id);reject(error);}});});
-    return {child,exited,ready,async status(){return rpc({kind:'status'});},async handle(request){
+    return {child,exited,ready,diagnostics(){return output;},async status(){return rpc({kind:'status'});},async handle(request){
       const result=await rpc({kind:'request',url:request.url,method:request.method,headers:[...request.headers],body:request.body?Buffer.from(await request.arrayBuffer()).toString('base64'):null});
       return new Response(Buffer.from(result.body,'base64'),{status:result.status,headers:result.headers});
-    },async stop(){child.send({kind:'stop'});assert.deepEqual(await exited,{code:0,signal:null});}};
+    },async stop(){child.send({kind:'stop'});const result=await exited;if(result.code!==0||result.signal!==null)t.diagnostic('Owned supervisor stop failure: '+JSON.stringify({pid:child.pid,...result,output}));assert.deepEqual(result,{code:0,signal:null});}};
   };
   const artifact=async()=>{
     const source=join(root,'release');await mkdir(join(source,'dist'),{recursive:true});await mkdir(join(source,'migrations'));
@@ -53,6 +54,22 @@ async function fixture(t){
 function request(path,body,session){return new Request(origin+path,{method:body===undefined?'GET':'POST',headers:{origin,
   ...(body===undefined?{}:{'content-type':'application/json'}),...(session?{cookie:session.cookie,'x-clank-csrf':session.csrf}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});}
 async function json(controller,path,body,session,expected=200){const response=await controller.handle(request(path,body,session)),data=await response.json();assert.equal(response.status,expected,JSON.stringify(data));return data;}
+
+test('a guardian evaluates the current clock after its delayed native lease read while the actual coordinator renews',{timeout:30000},async t=>{
+  const f=await fixture(t);
+  try{
+    const leader=await f.start({},undefined,false,false,true);assert.equal(leader.ready.status.state,'leader');
+    await sleep(600);assert.equal((await fetch(leader.ready.url+'/')).status,200);
+    const current=await leader.status();assert.equal(current.status.state,'leader');assert.equal(current.status.epoch,1);assert.deepEqual(current.errors,[]);
+    const evidence=JSON.parse(await readFile(join(f.root,'delayed-read.json'),'utf8'));
+    assert.ok(evidence.updatedAt>evidence.beforeReadAt,'The actual coordinator must renew during the delayed native read.');
+    assert.ok(evidence.updatedAt<=evidence.afterReadAt);assert.ok(evidence.expiresAt>evidence.afterReadAt);
+    await leader.stop();
+  }finally{
+    t.diagnostic('Actual delayed native lease observation: '+await readFile(join(f.root,'delayed-read.json'),'utf8').catch(error=>String(error)));
+    const child=f.children.at(-1)?.child;if(child)t.diagnostic('Owned coordinator exit: '+JSON.stringify({pid:child.pid,code:child.exitCode,signal:child.signalCode}));
+  }
+});
 
 for(const interruption of ['SIGKILL','SIGSTOP'])test(`existing standby restores the deployed tenant, one job writer and a due durable backup after actual ${interruption}`,{timeout:90000},async t=>{
   const f=await fixture(t),first=await f.start(),second=await f.start();assert.equal(first.ready.status.state,'leader');assert.equal(second.ready.status.state,'standby');
@@ -75,7 +92,23 @@ for(const interruption of ['SIGKILL','SIGSTOP'])test(`existing standby restores 
   const priorFences=new Set(await readdir(join(f.dataDirectory,'runtime-guardians'))),cleanupUntil=Date.now()+10000;
   while((await readdir(join(f.dataDirectory,'runtime-guardians'))).some(name=>priorFences.has(name))){assert.ok(Date.now()<cleanupUntil,'Old runtime guardians must complete cleanup.');await sleep(25);}
   const oldCount=count.get(old[0]).count;until=Date.now()+60000;let status;
-  do{assert.equal(count.get(old[0]).count,oldCount,'Old job writers cannot overlap replacement admission.');status=(await fetch(second.ready.url+'/')).status;if(status===200)break;assert.equal(status,503);assert.ok(Date.now()<until,'Existing standby must become authoritative.');await sleep(25);}while(true);
+  do{
+    assert.equal(count.get(old[0]).count,oldCount,'Old job writers cannot overlap replacement admission.');
+    try{status=(await fetch(second.ready.url+'/')).status;}
+    catch(error){
+      // Preserve the original single-attempt failure. Record only bounded,
+      // non-secret native state so a lost socket can be distinguished from
+      // an exited/fenced coordinator; never include its lease capability.
+      const detail={interruption,at:Date.now(),pid:second.child.pid,exitCode:second.child.exitCode,signalCode:second.child.signalCode,
+        error:{name:error.name,message:String(error.message).slice(0,512),cause:error.cause?{name:error.cause.name,code:error.cause.code,message:String(error.cause.message).slice(0,512)}:null},
+        output:second.diagnostics()};
+      try{detail.configuration=control.prepare('SELECT protocol,configuration_revision,lease_ms,poll_ms FROM clank_platform_supervisor_state WHERE singleton=1').get();
+        detail.lease=control.prepare('SELECT epoch,expires_at,updated_at,controller_pid FROM clank_platform_supervisor_lease WHERE singleton=1').get();}
+      catch(diagnosticError){detail.nativeReadError=String(diagnosticError).slice(0,512);}
+      t.diagnostic('Supervisor readiness connection failure: '+JSON.stringify(detail));throw error;
+    }
+    if(status===200)break;assert.equal(status,503);assert.ok(Date.now()<until,'Existing standby must become authoritative.');await sleep(25);
+  }while(true);
   const current=await second.status();assert.equal(current.status.state,'leader');assert.equal(current.status.epoch,2);assert.deepEqual(current.errors,[]);
   const afterResponse=await probe(second);assert.equal(afterResponse.status,200);const after=await afterResponse.json();assert.equal(after.value,before.value);assert.notEqual(after.pid,before.pid);
   until=Date.now()+10000;while(writers.all().length!==2){assert.ok(Date.now()<until,'A single replacement job worker must resume.');await sleep(25);}assert.equal(count.get(old[0]).count,oldCount);
