@@ -1,13 +1,16 @@
 # Changelog
 
+Clank follows semantic versioning. Entries describe user-visible framework, CLI, protocol, storage, security, and deployment changes.
+
+## Unreleased
+
 - Reduce framework release size by removing only leading indentation in known
   JavaScript code regions. Preserve comments, licenses, literals and line endings;
   ambiguous modules stay exact. Public compiler, examples and mapped builds retain
   their format. Rebuilt distribution digests and reflective function formatting change.
-
-Clank follows semantic versioning. Entries describe user-visible framework, CLI, protocol, storage, security, and deployment changes.
-
-## Unreleased
+- Keep compiler watch running through transient recursive scan errors on Node 22,
+  and reconcile renamed/deleted source filenames when native notifications disappear.
+  Reuse the serialized build queue and preserve failed build diagnostics.
 
 - Add explicit workflow compensation with typed idempotent cleanup jobs or manual barriers.
   Reserve bounded recovery capacity with the run, freeze stable cleanup occurrences and arguments,

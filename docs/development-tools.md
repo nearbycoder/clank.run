@@ -60,6 +60,12 @@ same definitions throughout a worker fleet and finish retained workflows with th
 compatible version. Existing verified artifacts retain their bytes. Rollback restores
 the prior immutable framework distribution; no persisted data is reformatted.
 
+`clank watch` keeps a persistent listener for transient recursive directory scan
+errors and checks source filenames once per second. This reconciles renamed or
+deleted directories when native notifications disappear, including on Node 22.16.
+File contents still refresh through native change notifications. Reconciliation
+uses the same serialized build queue and does not overlap output writers.
+
 Rollback: remove `preserveDevelopmentState` registrations and `data-dev-preserve` attributes, or use `clank dev --no-reload`. Stop the LSP process to disable editor integration. No database migration is involved.
 
 ## Semantic type-contract verification
