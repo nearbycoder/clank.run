@@ -7,10 +7,12 @@ import {signedStepUp} from './fixtures/platform-recovery-fresh-auth.mjs';
 import {recoveryMcpRequest} from './fixtures/platform-recovery-mcp.mjs';
 import {reservePlatformTestPorts} from './fixtures/platform-test-ports.mjs';
 
-async function setup(t,controllerProcess=false,http=false){
-  const provider=await capturedProvider(t),errors=[];let gate;
+async function setup(t,controllerProcess=false,http=false,keepSource=false){
+  const provider=await capturedProvider(t),errors=[];let gate,sourceGate;
   const restoreKey=provider.configuration.restoreKey;
+  const registeredSource=provider.configuration.source;
   provider.configuration.restoreKey=async(...args)=>{await gate?.();return restoreKey(...args);};
+  provider.configuration.source=async(...args)=>{await sourceGate?.();return registeredSource(...args);};
   const holdDirectory=join(provider.root,'key-lookup-barrier');if(controllerProcess)await mkdir(holdDirectory);
   const publicPorts=http?await reservePlatformTestPorts():null;let f;
   try{f=await fixture(t,controllerProcess?'tests/fixtures/platform-point-in-time-project-controller.mjs':false,{...(publicPorts?{publicUrl:'http://127.0.0.1:'+publicPorts.start}:{}),pointInTime:controllerProcess?{...provider.descriptor,holdDirectory}:provider.configuration,deploymentAgents:{registrationToken:provider.registrationToken,placement:{default:'local',activationTimeoutMs:30000}},onError(error){errors.push(error);t.diagnostic(String(error?.stack??error));}});}catch(error){await publicPorts?.release();throw error;}
@@ -22,9 +24,9 @@ async function setup(t,controllerProcess=false,http=false){
   const path=`/api/projects/${project.id}/point-in-time`;
   await f.call(path,{operationId:'enable_native_capture',expectedVersion:0,enabled:true,intervalMs:86400000,confirmation:'configure-recovery '+project.slug},200,'PUT');
   const checkpoint=(await f.call(path+'/checkpoints',{operationId:'capture_native_source',expectedVersion:1},201)).checkpoint;assert.equal(checkpoint.sequence,3);assert.equal(checkpoint.binding.releaseId,release.id);
-  await provider.loseSource();await assert.rejects(access(provider.node),{code:'ENOENT'});
+  if(!keepSource){await provider.loseSource();await assert.rejects(access(provider.node),{code:'ENOENT'});}
   const input={operationId:'restore_native_point_two',checkpointId:checkpoint.id,expectedVersion:1,throughSequence:2,name:'Recovered point two',slug:'recovered-point-two',confirmation:`restore-recovery ${project.slug} ${checkpoint.id} 2 recovered-point-two`};
-  return {...f,provider,project,release,artifact,native,path,input,checkpoint,errors,holdDirectory,setGate(value){gate=value;}};
+  return {...f,provider,project,release,artifact,native,path,input,checkpoint,errors,holdDirectory,setGate(value){gate=value;},setSourceGate(value){sourceGate=value;}};
 }
 function target(f){const row=f.native.prepare("SELECT id,active_release_id,runtime_policy FROM clank_platform_projects WHERE slug='recovered-point-two'").get();assert.ok(row);return row;}
 
@@ -59,6 +61,51 @@ test('current native membership loss during independent key resolution cannot pu
   assert.equal(Number(f.native.prepare('DELETE FROM clank_platform_memberships WHERE organization_id=? AND user_id=?').run(f.project.organizationId,f.owner.user.id).changes),1);release();assert.equal((await pending).error.code,'PROJECT_NOT_FOUND');
   assert.equal(target(f).active_release_id,null);assert.equal(target(f).runtime_policy,'suspended');assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.restore.accept'").get().n,0);
   assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_releases WHERE project_id=?").get(reserved.id).n,0);assert.equal(f.native.prepare("SELECT state FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(f.project.id,f.input.operationId).state,'pending');
+});
+
+for(const scope of ['source','destination'])test(`native project lease ${scope==='source'?'deletion':'replacement'} during recovery key lookup fences the ${scope} before database publication`,async t=>{
+  const f=await setup(t);let entered,release;const lookup=new Promise(resolve=>{entered=resolve;}),held=new Promise(resolve=>{release=resolve;});
+  f.setGate(async()=>{entered();await held;});
+  const pending=f.call(f.path+'/restores',f.input,409);await lookup;const reserved=target(f);
+  const resource='project:'+(scope==='source'?f.project.id:reserved.id);
+  const prior=f.native.prepare('SELECT owner,fence,token_hash FROM clank_distributed_leases WHERE resource=?').get(resource);assert.ok(prior);
+  const changed=scope==='source'?f.native.prepare('DELETE FROM clank_distributed_leases WHERE resource=?').run(resource)
+    :f.native.prepare('UPDATE clank_distributed_leases SET owner=?,fence=fence+1,token_hash=? WHERE resource=?').run('replacement_recovery_owner','0'.repeat(64),resource);
+  assert.equal(Number(changed.changes),1);release();const response=await pending;assert.equal(response.error.code,'PROJECT_LEASE_LOST');
+  assert.equal(target(f).active_release_id,null);assert.equal(target(f).runtime_policy,'suspended');
+  await assert.rejects(access(join(f.options.dataDirectory,'projects',reserved.id,'data','app.sqlite')),{code:'ENOENT'});
+  assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_releases WHERE project_id=?").get(reserved.id).n,0);
+  assert.equal(f.native.prepare("SELECT count(*) AS n FROM clank_platform_audit WHERE action='recovery.restore.accept'").get().n,0);
+  assert.equal(f.native.prepare("SELECT state FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(f.project.id,f.input.operationId).state,'pending');
+  t.diagnostic(JSON.stringify({scope,nativeLeaseMutation:scope==='source'?'deleted':'replaced',databasePublished:false,acceptedRestoreReceipts:0}));
+});
+
+test('native project lease deletion during checkpoint source resolution cannot contact the provider or accept an archive',async t=>{
+  const f=await setup(t,false,false,true);let entered,release;const lookup=new Promise(resolve=>{entered=resolve;}),held=new Promise(resolve=>{release=resolve;});
+  f.setSourceGate(async()=>{entered();await held;});
+  const pending=f.call(f.path+'/checkpoints',{operationId:'capture_after_lease_loss',expectedVersion:1},409);await lookup;
+  assert.equal(Number(f.native.prepare('DELETE FROM clank_distributed_leases WHERE resource=?').run('project:'+f.project.id).changes),1);
+  release();const response=await pending;assert.equal(response.error.code,'PROJECT_LEASE_LOST');
+  assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_checkpoints WHERE project=?').get(f.project.id).n,1);
+  assert.equal(f.native.prepare("SELECT state,receipt FROM clank_platform_pitr_operations WHERE project=? AND id='capture_after_lease_loss'").get(f.project.id).receipt,null);
+  const providerDatabase=new DatabaseSync(join(f.provider.node,f.project.id,'app.sqlite'),{readOnly:true});
+  try{assert.equal(providerDatabase.prepare('SELECT count(*) AS n FROM clank_pitr_remote_exports').get().n,1);}finally{providerDatabase.close();}
+});
+
+test('scheduled recovery checks its native project lease after held source resolution', {timeout:30000}, async t=>{
+  const f=await setup(t,false,false,true);let entered,release;const lookup=new Promise(resolve=>{entered=resolve;}),held=new Promise(resolve=>{release=resolve;});
+  f.setSourceGate(async()=>{entered();await held;});
+  try{
+    await f.call(f.path,{operationId:'enable_due_capture',expectedVersion:1,enabled:true,intervalMs:1000,confirmation:'configure-recovery '+f.project.slug},200,'PUT');
+    await lookup;
+    const pending=f.native.prepare('SELECT pending FROM clank_platform_pitr_policies WHERE project=?').get(f.project.id).pending;assert.match(pending,/^scheduled_/u);
+    assert.equal(Number(f.native.prepare('DELETE FROM clank_distributed_leases WHERE resource=?').run('project:'+f.project.id).changes),1);release();
+    const deadline=performance.now()+10000;
+    while(f.native.prepare('SELECT lease FROM clank_platform_pitr_policies WHERE project=?').get(f.project.id).lease!==null){if(performance.now()>=deadline)throw new Error('Scheduled recovery did not release its rejected native export.');await setTimeout(20);}
+    assert.equal(f.native.prepare('SELECT count(*) AS n FROM clank_platform_pitr_checkpoints WHERE project=?').get(f.project.id).n,1);
+    const operation=f.native.prepare('SELECT state,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?').get(f.project.id,pending);assert.equal(operation.state,'pending');assert.equal(operation.receipt,null);
+    assert.ok(f.errors.some(error=>error?.code==='PROJECT_LEASE_LOST'));
+  }finally{release();}
 });
 
 test('a native ignored project update cannot acknowledge an unusable restore and retains its exact stopped reservation for retry',async t=>{

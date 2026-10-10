@@ -1474,7 +1474,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if(options.pointInTime){
       const registeredSource=options.pointInTime.source;
       pointInTime=await openPlatformPointInTime({internal:storage.internal,directory:paths.root+"/point-in-time",onError:options.onError,
-        scheduledCapture(project,operation,current){return withProjectLock(project,()=>pointInTime!.capture(project,operation,current));},
+        scheduledCapture(project,operation,current){return withProjectLock(project,()=>pointInTime!.capture(project,operation,()=>{current();requireRecoveryProjectLease(project);}));},
         assertOwner(projectId,ownerId){
           const project=projectById(storage.internal,projectId),user=storage.internal.prepare("SELECT disabled FROM clank_auth_users WHERE id=?").get(ownerId);
           if(!project||project.parentProjectId||!user||user.disabled!==0)throw new PlatformError(403,"RECOVERY_OWNER_REVOKED","Recovery policy ownership is no longer current.");
@@ -2131,6 +2131,16 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     leadership?.assertCurrent();
     if (closed) throw new PlatformError(503, "PLATFORM_CLOSED", "Platform closed while the application was starting.");
     projectLeaseAssertions.get(projectId)?.();
+  };
+
+  const requireRecoveryProjectLease = (projectId: string): void => {
+    leadership?.assertCurrent();
+    const assertion = projectLeaseAssertions.get(projectId);
+    if (!assertion) throw new PlatformError(409, "PROJECT_LEASE_LOST", "Recovery no longer owns this project's native operation lease.");
+    // Consult the current native row at every asynchronous recovery boundary;
+    // the renewal timer and a final withProjectLock check cannot fence earlier
+    // filesystem publication or an already committed checkpoint receipt.
+    assertion();
   };
 
   const launchBackgroundProcesses = async (
@@ -9031,7 +9041,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         }
         if(operation==="point-in-time/checkpoints"&&request.method==="POST"){
           const input=plainObject(await readJsonRequest(request,4096));exact(input,["operationId","expectedVersion"]);authority();const operationId=boundedString(input.operationId,"operationId",1,128),version=integerInRange(input.expectedVersion,"expectedVersion",1,Number.MAX_SAFE_INTEGER);
-          const current=()=>{authority();if(controller.policy(project.id)?.version!==version)throw new PlatformError(409,"RECOVERY_POLICY_STALE","Review the current recovery policy version.");};
+          const current=()=>{authority();requireRecoveryProjectLease(project.id);if(controller.policy(project.id)?.version!==version)throw new PlatformError(409,"RECOVERY_POLICY_STALE","Review the current recovery policy version.");};
           const checkpoint=await perform(()=>withProjectLock(project.id,async()=>{current();const result=await controller.capture(project.id,operationId,current);current();return result;}));return api({ok:true,checkpoint},201);
         }
         if(operation==="point-in-time/restores"&&request.method==="POST"){
@@ -9044,13 +9054,13 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           if(!options.pointInTime?.restoreKey)throw new PlatformError(409,"RECOVERY_KEY_UNAVAILABLE","Configure independent recovery key resolution before restoring a project.");
           const fingerprint=JSON.stringify({owner:principal.userId,...requested});
           const action=perform(()=>withProjectLock(project.id,async()=>{
-            authority(true);if(closed)throw new PlatformError(409,"PLATFORM_CLOSING","Recovery cannot publish while the platform closes.");
+            authority(true);requireRecoveryProjectLease(project.id);if(closed)throw new PlatformError(409,"PLATFORM_CLOSING","Recovery cannot publish while the platform closes.");
             const prior=storage.internal.prepare("SELECT kind,state,fingerprint,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project.id,requested.operationId);
             if(prior&&(prior.kind!=="restore"||prior.fingerprint!==fingerprint||!["pending","accepted"].includes(String(prior.state))))throw new PlatformError(409,"RECOVERY_RETRY_CONFLICT","This recovery operation names a different request.");
             if(prior?.state==="accepted"){
               const receipt=JSON.parse(String(prior.receipt));accessibleProject(storage.internal,String(receipt.destinationProjectId),principal,"read");return receipt;
             }
-            const policyCurrent=()=>{authority(true);if(closed||controller.policy(project.id)?.version!==requested.expectedVersion)throw new PlatformError(409,"RECOVERY_POLICY_STALE","Review the current recovery policy before retrying the reserved restore.");};
+            const policyCurrent=()=>{authority(true);requireRecoveryProjectLease(project.id);if(closed||controller.policy(project.id)?.version!==requested.expectedVersion)throw new PlatformError(409,"RECOVERY_POLICY_STALE","Review the current recovery policy before retrying the reserved restore.");};
             policyCurrent();const checkpoint=controller.checkpoints(project.id).find(value=>value.id===requested.checkpointId);
             if(!checkpoint||requested.throughSequence>checkpoint.sequence)throw new PlatformError(409,"RECOVERY_POINT_UNAVAILABLE","The chosen point is outside the retained checkpoint horizon.");controller.archive(project.id,checkpoint.id,policyCurrent);
             const source=releaseById(storage.internal,checkpoint.binding.releaseId);
@@ -9082,7 +9092,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
               if(reserved?.state!=="pending"||reserved.receipt!==claimed||!destination||destination.ownerId!==principal.userId||destination.organizationId!==intent.organizationId||destination.activeReleaseId!==null||destination.runtimePolicy!=="suspended"||destination.databasePath!==intent.databasePath)throw new PlatformError(409,"RECOVERY_RESERVATION_CHANGED","The exact native recovery destination reservation changed.");
             });
             const current=()=>{
-              sourceCurrent();const native=storage.internal.prepare("SELECT state,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project.id,requested.operationId),destination=accessibleProject(storage.internal,destinationId,principal,"deploy").project;
+              sourceCurrent();requireRecoveryProjectLease(destinationId);const native=storage.internal.prepare("SELECT state,receipt FROM clank_platform_pitr_operations WHERE project=? AND id=?").get(project.id,requested.operationId),destination=accessibleProject(storage.internal,destinationId,principal,"deploy").project;
               if(native?.state!=="pending"||native.receipt!==claimed||Date.now()>=JSON.parse(claimed).leaseUntil||destination.placement!=="local"||destination.runtimePolicy!=="suspended"||destination.activeReleaseId!==null||destination.databasePath!==intent.databasePath||destination.organizationId!==intent.organizationId||destination.ownerId!==principal.userId||active.has(destinationId))throw new PlatformError(409,"RECOVERY_DESTINATION_CHANGED","The exact reserved stopped destination or operation lease changed.");
             };
             return withProjectLock(destinationId,async()=>{
