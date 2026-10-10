@@ -25,6 +25,9 @@ TypeScript applications. It combines fine-grained reactivity, compiler-powered T
 rendering with node-preserving hydration, built-in authentication, user-owned SQLite data, live
 queries, automatic MCP tools, immutable migrations, and health-gated deployment.
 
+The optional [PostgreSQL application subset](docs/postgres-application.md) keeps the same typed
+table/function contracts, with documented service limits, native transactions and explicit reconnect.
+
 “AI-first” does not mean adding a chat box to every page. It means every application has two
 first-class interfaces backed by the same typed contracts:
 
