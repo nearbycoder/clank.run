@@ -2,9 +2,17 @@
 
 Base: `4b990199965204f1200fcd0fb4ca2b7eb0b02bbc`, equal to freshly fetched `origin/main` on 2026-10-08.
 
-Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-six features are merged across twenty-three feature batches; fourteen remain. [Workflow compensation (20)](workflow-compensation.json) merged in [PR #297](https://github.com/nearbycoder/clank.run/pull/297) after both complete Node 26/22 release checks, all six fresh hosted checks and a protected expected-head squash. Accepted commit `d89d52514b259823b8ac28de04f95da642c905bf` exactly matches reviewed tree `0ead1fc75dc10831b5c271c8e202127c3b97e66c`; both main checkouts match it and all 23 existing local files are preserved. Non-independent author COMMENT `5476778312` is verification, not independent approval. Production Railway remains uncertified; earlier snapshots retain their original scope.
+Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twenty-seven features are merged across twenty-four feature batches; thirteen remain. [Workflow compensation (20)](workflow-compensation.json) merged in [PR #297](https://github.com/nearbycoder/clank.run/pull/297) after both complete Node 26/22 release checks, all six fresh hosted checks and a protected expected-head squash. Accepted commit `d89d52514b259823b8ac28de04f95da642c905bf` exactly matches reviewed tree `0ead1fc75dc10831b5c271c8e202127c3b97e66c`; both main checkouts match it and all 23 existing local files are preserved. Non-independent author COMMENT `5476778312` is verification, not independent approval. Production Railway remains uncertified; earlier snapshots retain their original scope.
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
+
+## Customer status pages implementation in progress
+
+[Proposal #327](https://github.com/nearbycoder/clank.run/issues/327) defines current native human approval, separate public labels/copy, version-bound incident/SLO provenance, native subscriber preferences/inboxes and separately reserved customer domains. The feature branch integrates accepted main `88776f32e48a370f90c9bac118e9b3436d3c0150` into the incident/SLO foundation. This is feature 40 work, not a new accepted-feature count.
+
+The current focused source passes 62 native cases across status controllers/SDK/HTTP/forms and existing incident/SLO/service-account controllers/HTTP. These cover exact retries, private incident non-disclosure, current passkey assurance, native membership removal/reinsertion, held bodies and DNS, ignored/altered native acknowledgments, reciprocal application-domain collision checks, native form CSRF, actual SIGKILL recovery and read-only SLO projection. Minimum Node 22 passes all 38 focused status cases. All 82 emitted-console regressions pass. Packed consumer types pass 37 fixtures with 159 existing and zero new source diagnostics against unchanged baseline 163. Full source-frozen Linux gates, fresh hosted review, documentation browser surfaces and real native keyboard activation remain pending. Actual desktop/phone native admin/public/subscriber layouts were inspected; all native buttons exceed 44 pixels and the phone has no horizontal overflow. Browser field entry works, but Enter and button activation delivered zero actual POSTs; this remains diagnostic evidence rather than interaction acceptance. No physical-authenticator or production-provider certification is claimed.
+
+The package retains zero dependencies and the unchanged 6 MiB byte limit. The exact file allowance is 425: main's 413 plus the eight incident/SLO foundation files and four customer-status runtime/declaration files. Native status records, individual public copy, twenty-entry public history/inbox responses and subscriber fanout remain bounded. Earlier failures remain private diagnostic evidence, including the initial subscriber SQL placeholder mismatch and the SLO nested-transaction boundary; neither is reported as passing.
 
 ## Automatic supervisor leadership verified awaiting protected merge
 
@@ -694,7 +702,7 @@ and supported limits. Feature 01 remains in progress until reviewed PR delivery;
 | 37 | SLO and error budget policies | Draft; not counted | Proposal #302 / draft PR #303; arithmetic/process/types checked; current-main integration and actual native console acceptance pending. |
 | 38 | Project cost attribution and budgets | Planned | Pending |
 | 39 | Retention administration and holds | Implemented | Scoped inventory, exact purge receipts, restart-persistent holds, protected history admission, expired-retry fencing and competing scheduled runners; 63 focused tests, 18 packed fixtures, full release gate and actual browser controls. `retention-administration.json`. |
-| 40 | Customer status pages | Planned | Pending |
+| 40 | Customer status pages | Native implementation in progress | Proposal #327; 62 focused native cases, 38 minimum-Node cases and 37 packed type fixtures pass; full gates and real browser controls pending |
 
 ## Validation and remaining work
 

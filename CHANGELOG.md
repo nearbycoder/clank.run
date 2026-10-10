@@ -4,6 +4,8 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Add reviewed customer status pages with expiring public health, dedicated incident copy, native account subscriber inboxes, version-fenced custom-domain ownership/routing and exact transactional publication receipts. Private operational payloads are never copied automatically.
+
 - Add persistent project incidents with current-access-fenced ownership, recovery notes, resolution, release/error/trace/job/workflow/alert references, bounded readonly diagnostic adapters and exact retry receipts. The native console and shared browser client use the same contract; inactive release cleanup retains safe context.
 - Add project service objectives with explicit native-ingress completion coverage, exact request/latency budget arithmetic, retained burn alerts, current-access-fenced policies and exact retry receipts. Restarts, missing measurements and overlapping collectors cannot establish compliance; native console edits preserve their original expected version.
 - Add opt-in same-host Linux supervisor leadership with native retained epochs, transaction fences, dedicated coordinator guardians and automatic standby recovery after verified tenant cleanup. Expose bounded CLI configuration and readonly local status; reject accidental ordinary-mode startup after enabling the topology.

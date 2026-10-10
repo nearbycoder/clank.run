@@ -1,5 +1,7 @@
 import { openNodeEvacuations, type NodeEvacuationPlan, type EvacuationProject, type NodeEvacuationHooks } from "./node-evacuation.ts";
 import { openProjectIncidents, ProjectIncidentError, type PlatformIncidentOptions, type IncidentAuthority } from "./platform-incidents.ts";
+import {openPlatformStatusPages,type PlatformStatusPagesOptions,type StatusPageAuthority} from "./platform-status-pages.ts";
+import {CustomerStatusError,type CustomerStatusSnapshot} from "./customer-status.ts";
 import { openProjectSlos, ProjectSloError, type PlatformSloOptions, type SloAuthority } from "./platform-slo.ts";
 import { createManagedCanary, validateManagedCanary, type ManagedCanaryOptions } from "./managed-canary.ts";
 import { decodeReleaseAttestation, verifyReleaseAttestation, type ReleaseAttestation, type ReleaseAttestationPolicy } from "./release-attestation.ts";
@@ -551,6 +553,8 @@ export interface ClankPlatformOptions {
   incidents?: PlatformIncidentOptions;
   /** Bounded native-ingress completion objectives and durable burn metadata. */
   slos?: PlatformSloOptions;
+  /** Approved public health, customer domains and native subscriber inboxes. */
+  statusPages?: PlatformStatusPagesOptions;
   /** Same-host Linux coordinators; each must occupy a dedicated process. Lost leadership terminates that process. */
   supervisor?: PlatformSupervisorOptions;
   /** Opt-in dedicated organization machine identities with project-scoped credentials. */
@@ -1461,6 +1465,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
   const secretRotations = await openSecretRotations(storage.internal, { encrypt: value => encryptSecret(value, masterKey), decrypt: value => decryptSecret(value, masterKey), validate: options.validateSecret });
   let projectIncidents: Awaited<ReturnType<typeof openProjectIncidents>>;
   let projectSlos: ReturnType<typeof openProjectSlos>;
+  let statusPages: ReturnType<typeof openPlatformStatusPages> | undefined;
   let closeProjectSlos: (() => void) | undefined;
   let serviceAccounts: ReturnType<typeof openPlatformServiceAccounts> | undefined;
   let auditExporter: Awaited<ReturnType<typeof openAuditExporter>> | undefined;
@@ -1495,6 +1500,27 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     if (options.auditExport) auditExporter = await openAuditExporter(storage.internal, options.auditExport);
     projectSlos = openProjectSlos(storage.internal, options.slos ?? {}, {collecting: ingressEnabled, onError: options.onError});
     closeProjectSlos = () => projectSlos.close();
+    statusPages = openPlatformStatusPages(storage.internal,options.statusPages??{}, {
+      hash:value=>Buffer.from(syncHash(value),'base64url').toString('hex'),
+      scope(projectId){const row=storage.internal.prepare('SELECT owner_id,organization_id,parent_project_id FROM clank_platform_projects WHERE id=?').get(projectId);return row?JSON.stringify([row.owner_id,row.organization_id,row.parent_project_id]):null;},
+      domainReserved(hostname){return hostname===publicHostname||hostname===customDomainTarget||hostname===baseDomain||Boolean(baseDomain&&hostname.endsWith('.'+baseDomain))||Boolean(storage.internal.prepare('SELECT 1 FROM clank_platform_domains WHERE hostname=?').get(hostname));},
+      incidentVersion(projectId,incidentId,authority){authority.authorize(true);if(storage.internal.prepare('SELECT protocol FROM clank_platform_incident_state WHERE singleton=1').get()?.protocol!==1)throw new CustomerStatusError(409,'STATUS_SOURCE_PROTOCOL','Private incident protocol changed.');const row=storage.internal.prepare('SELECT version FROM clank_platform_incidents WHERE project_id=? AND id=?').get(projectId,incidentId);if(!row)throw new CustomerStatusError(404,'STATUS_SOURCE_NOT_FOUND','Current private incident not found.');return Number(row.version);},
+      slo(projectId,policyId,authority){return projectSlos.snapshot(projectId,policyId,{userId:authority.userId,authorize(write){authority.authorize(write);},audit:authority.audit});},
+    });
+    storage.internal.exec('CREATE TABLE IF NOT EXISTS clank_platform_status_authority(scope TEXT PRIMARY KEY,version INTEGER NOT NULL CHECK(version>0)) STRICT');
+    const statusFence=(scope:string)=>`INSERT INTO clank_platform_status_authority VALUES(${scope},1) ON CONFLICT(scope) DO UPDATE SET version=version+1;`;
+    for(const [table,prefix,key,columns] of [
+      ['clank_auth_users','account','id','disabled,role'],
+      ['clank_auth_sessions','account','user_id','user_id,authenticated_at,authentication_method,expires_at,token_hash,csrf_token'],
+      ['clank_platform_memberships','organization','organization_id','role,user_id,organization_id,created_at,updated_at'],
+      ['clank_platform_project_members','project','project_id','permissions,user_id,project_id,created_at,updated_at'],
+      ['clank_platform_projects','project','id','owner_id,organization_id,parent_project_id'],
+    ] as const){
+      for(const event of ['INSERT','DELETE','UPDATE'] as const){
+        const generation=event==='INSERT'?statusFence(`'${prefix}:'||NEW.${key}`):event==='DELETE'?statusFence(`'${prefix}:'||OLD.${key}`):statusFence(`'${prefix}:'||OLD.${key}`)+statusFence(`'${prefix}:'||NEW.${key}`);
+        storage.internal.exec(`CREATE TRIGGER IF NOT EXISTS clank_status_fence_${table}_${event} AFTER ${event}${event==='UPDATE'?' OF '+columns:''} ON ${table} BEGIN ${generation} END`);
+      }
+    }
     if (options.retention) retentionController = await createRetentionController({ ...options.retention, native: storage.internal, kinds: ["audit"],
       refresh(userId, sessionId) { const auth = storage.auth.refreshSession(sessionId); return auth?.user?.id === userId ? auth : null; },
       scope(_context, resource) { return resource.organizationId ? `organization:${resource.organizationId}` : resource.ownerId ? `account:${resource.ownerId}` : "platform"; },
@@ -1519,6 +1545,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     pruneUsageStorage(storage.internal, usageOpenedAt, limits.usageRetentionMonths);
     reconcileBackupObjectBinding(storage.internal, backupObjects);
   } catch (error) {
+    statusPages?.close();
     closeProjectSlos?.();
     serviceAccounts?.close();
     retentionController?.close();
@@ -1780,6 +1807,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     save(challenge) {
       storage.internal.transaction(() => {
         authorize?.();
+        if(statusPages?.reservedHostname(challenge.hostname))throw new PlatformError(409,'DOMAIN_UNAVAILABLE','This hostname is reserved for a customer status page.');
         const existing = storage.internal.prepare(
           "SELECT id, project_id FROM clank_platform_domains WHERE hostname = ?",
         ).get(challenge.hostname);
@@ -6936,6 +6964,42 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     } finally { manager.close(); }
   } : undefined, options.onError) : undefined;
 
+  const statusAudit=(userId:string,projectId:string|null,action:string,metadata:Record<string,unknown>)=>{
+    const at=Date.now(),encoded=JSON.stringify(metadata),organizationId=projectId?projectById(storage.internal,projectId)?.organizationId??null:null;
+    const result=storage.internal.prepare('INSERT INTO clank_platform_audit(actor_user_id,actor_token_id,project_id,organization_id,action,metadata,created_at) VALUES(?,NULL,?,?,?,?,?)').run(userId,projectId,organizationId,action,encoded,at);
+    const saved=storage.internal.prepare('SELECT * FROM clank_platform_audit WHERE id=?').get(result.lastInsertRowid);
+    if(Number(result.changes)!==1||!saved||saved.actor_user_id!==userId||saved.actor_token_id!==null||saved.project_id!==projectId||saved.organization_id!==organizationId||saved.action!==action||saved.metadata!==encoded||saved.created_at!==at)throw new CustomerStatusError(409,'STATUS_ACKNOWLEDGEMENT','Native status audit was not retained exactly.');
+    return ()=>{if(JSON.stringify(storage.internal.prepare('SELECT * FROM clank_platform_audit WHERE id=?').get(result.lastInsertRowid))!==JSON.stringify(saved))throw new CustomerStatusError(409,'STATUS_ACKNOWLEDGEMENT','Native status audit changed before commit.');};
+  };
+  const statusAuthority=(principal:TokenPrincipal,projectId?:string):StatusPageAuthority=>{
+    const binding=()=>{
+      const project=projectId?projectById(storage.internal,projectId):null;
+      const keys=['account:'+principal.userId,...(projectId?['project:'+projectId]:[]),...(project?.organizationId?['organization:'+project.organizationId]:[])];
+      return JSON.stringify(keys.map(key=>[key,storage.internal.prepare('SELECT version FROM clank_platform_status_authority WHERE scope=?').get(key)?.version??0]));
+    };
+    const captured=binding();
+    return {
+      userId:principal.userId,binding,
+      authorize(write=false){
+        if(principal.machine||principal.tokenId!==null||!principal.sessionId||principal.impersonation)throw new PlatformError(403,'STATUS_HUMAN_REQUIRED','Use a current human browser session for status administration.');
+        requireCurrentPlatformPrincipal(storage,principal);
+        const current=storage.auth.refreshSession(principal.sessionId);if(!current?.user||current.user.id!==principal.userId)throw new PlatformError(401,'UNAUTHENTICATED','Sign in to continue.');
+        if(projectId){const access=accessibleProject(storage.internal,projectId,principal,'read');if(access.project.parentProjectId)throw new PlatformError(403,'STATUS_PARENT_REQUIRED','Use a production project for a customer status page.');requireOrganizationAdministration(access.role);}
+        if(binding()!==captured)throw new CustomerStatusError(409,'STATUS_AUTHORITY_CHANGED','Native account or workspace authority changed; inspect a new current review.');
+        if(write&&projectId)storage.auth.requireFreshAuthentication(current,300000);
+      },
+      audit(action,metadata){return statusAudit(principal.userId,projectId??null,action,metadata);},
+    };
+  };
+  const statusDomainBegin=(projectId:string,authority:StatusPageAuthority,input:unknown)=>statusPages!.beginDomain(projectId,authority,input,async existing=>{
+    let challenge=existing;const manager=createDomainManager({store:{save(value){challenge=value;},get(){return challenge;},byHostname(){return challenge;}},...(options.ingress?.resolveTxt?{resolveTxt:options.ingress.resolveTxt}:{})});return manager.begin(projectId,String((input as any).hostname));
+  });
+  const statusDomainVerify=(projectId:string,domainId:string,authority:StatusPageAuthority,input:unknown)=>statusPages!.verifyDomain(projectId,domainId,authority,input,async original=>{
+    let challenge=original;const manager=createDomainManager({store:{save(value){challenge=value;},get(){return challenge;},byHostname(){return challenge;}},...(options.ingress?.resolveTxt?{resolveTxt:options.ingress.resolveTxt}:{})});
+    const verified=original.status==='verified'?original:await withTimeout(manager.verify(original.id),domainRecheckTimeoutMs,'Domain ownership lookup timed out.');return {challenge:verified,report:await inspectRouting(verified.hostname)};
+  });
+  const statusResponse=(page:CustomerStatusSnapshot,head=false)=>new Response(head?null:statusPublicHtml(page,publicUrl),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"}});
+
   const handleRequest = async (request: Request): Promise<Response> => {
     if (closed) return problem(503, "PLATFORM_CLOSED", "Platform is closed.");
     try {
@@ -6964,7 +7028,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
           ? storage.internal.prepare(`SELECT id FROM clank_platform_projects
               WHERE slug = ? AND active_release_id IS NOT NULL`).get(builtInSlug)
           : undefined;
-        if (!allowed && !builtInAllowed) return new Response(null, { status: 403 });
+        let statusAllowed=false;try{statusAllowed=Boolean(statusPages?.publicHostname(hostname));}catch(error){if(!(error instanceof CustomerStatusError&&error.status===404))throw error;}
+        if (!allowed && !builtInAllowed && !statusAllowed) return new Response(null, { status: 403 });
         if (allowed) {
           storage.internal.prepare(`UPDATE clank_platform_domains SET certificate_status = 'eligible'
             WHERE id = ? AND certificate_status = 'pending'`).run(allowed.id);
@@ -6977,8 +7042,66 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       if (url.pathname === "/_clank/readyz" && request.method === "GET") {
         return readiness();
       }
+      if(normalizeHostname(url.hostname)!==publicHostname&&statusPages?.reservedHostname(normalizeHostname(url.hostname))){
+        if(request.method!=='GET'&&request.method!=='HEAD'||url.pathname!=='/'||url.search)return problem(404,'NOT_FOUND','Status page not found.');
+        const page=statusPages.publicHostname(normalizeHostname(url.hostname));return page?statusResponse(page,request.method==='HEAD'):problem(404,'NOT_FOUND','Status page not found.');
+      }
       if (ingress && normalizeHostname(url.hostname) !== publicHostname) {
         return await ingress.handle(request);
+      }
+      if(normalizeHostname(url.hostname)!==publicHostname)return problem(404,'NOT_FOUND','Platform host not found.');
+      const statusAdmin=/^\/projects\/([A-Za-z0-9_-]{8,128})\/status$/u.exec(url.pathname),statusSubscriber=/^\/status\/([a-z][a-z0-9-]{2,63})\/preferences$/u.exec(url.pathname);
+      if((statusAdmin||statusSubscriber)&&(request.method==='GET'||request.method==='POST')){
+        if(url.search)throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Status forms do not accept query fields.');
+        if(request.headers.has('authorization'))throw new CustomerStatusError(403,'STATUS_HUMAN_REQUIRED','Use a current human browser session.');
+        const auth=await requireBrowserAuth(storage.auth,request);rejectActiveImpersonation(storage.internal,request,auth);
+        const principal:TokenPrincipal={userId:auth.user!.id,email:auth.user!.email,sessionId:auth.session!.id,tokenId:null,organizationId:null,projectId:null,permissions:[],previewName:null,impersonation:null};
+        const authority=statusAuthority(principal,statusAdmin?.[1]);authority.authorize();let preview:ReturnType<NonNullable<typeof statusPages>['preview']>|undefined;
+        if(request.method==='POST'){
+          if(request.headers.get('content-type')?.split(';')[0]!=='application/x-www-form-urlencoded')throw new CustomerStatusError(415,'STATUS_FORM_REQUIRED','Use the native bounded status form.');
+          const fields=new URLSearchParams(new TextDecoder('utf-8',{fatal:true}).decode(await readRequestBytes(request,128*1024)));
+          if([...fields].reduce((n,[key,value])=>n+new TextEncoder().encode(key+value).byteLength,0)>32768)throw new CustomerStatusError(413,'STATUS_INPUT_BOUND','The decoded status form exceeds its bound.');
+          const action=fields.get('action');const names=action==='create'?['action','csrf','operationId','configuration']:action==='configure'?['action','csrf','operationId','configuration','expectedVersion']:action==='preview'?['action','csrf','expectedVersion','publication']:action==='publish'?['action','csrf','expectedVersion','previewId','previewDigest','operationId']:action==='unpublish'?['action','csrf','expectedVersion','operationId']:action==='domain.begin'?['action','csrf','expectedVersion','operationId','hostname']:action==='domain.verify'?['action','csrf','expectedVersion','operationId','domainId']:action==='preferences'?['action','csrf','expectedVersion','operationId','subscribed','component']:[];
+          if(!names.length||[...fields.keys()].some(k=>!names.includes(k))||names.filter(k=>k!=='component').some(k=>fields.getAll(k).length!==1))throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Use exact native status form fields.');
+          const headers=new Headers(request.headers);headers.set('x-clank-csrf',fields.get('csrf')!);await storage.auth.verifyCsrf(new Request(request.url,{method:'POST',headers}),auth);authority.authorize(true);
+          const expectedVersion=Number(fields.get('expectedVersion')),operationId=fields.get('operationId')!,projectId=statusAdmin?.[1];
+          const json=(field:string)=>{try{return JSON.parse(fields.get(field)!);}catch{throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Keep the draft and correct its JSON syntax.');}};
+          if(projectId){
+            if(action==='create')statusPages!.create(projectId,authority,{configuration:json('configuration'),operationId});
+            else if(action==='configure')statusPages!.configure(projectId,authority,{configuration:json('configuration'),expectedVersion,operationId});
+            else if(action==='preview')preview=statusPages!.preview(projectId,authority,{expectedVersion,publication:json('publication')});
+            else if(action==='publish')statusPages!.publish(projectId,authority,{expectedVersion,previewId:fields.get('previewId'),previewDigest:fields.get('previewDigest'),operationId});
+            else if(action==='unpublish')statusPages!.unpublish(projectId,authority,{expectedVersion,operationId});
+            else if(action==='domain.begin')await statusDomainBegin(projectId,authority,{expectedVersion,hostname:fields.get('hostname'),operationId});
+            else if(action==='domain.verify')await statusDomainVerify(projectId,fields.get('domainId')!,authority,{expectedVersion,operationId});
+            else throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Choose a status administration form.');
+          }else{
+            if(action!=='preferences'||!['yes','no'].includes(fields.get('subscribed')!))throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Choose native subscriber preferences.');
+            statusPages!.subscribe(statusSubscriber![1]!,authority,{subscribed:fields.get('subscribed')==='yes',components:fields.getAll('component'),expectedVersion,operationId});
+          }
+          if(!preview)return new Response(null,{status:303,headers:{location:url.pathname,'cache-control':'no-store'}});
+        }
+        let content:string;
+        const e=statusEscape,hidden=(key:string,value:string|number)=>`<input type="hidden" name="${key}" value="${e(String(value))}">`,common=(action:string,version?:number)=>hidden('action',action)+hidden('csrf',auth.csrfToken!)+(version===undefined?'':hidden('expectedVersion',version)),op=()=>hidden('operationId',crypto.randomUUID());
+        if(statusAdmin){
+          const page=statusPages!.page(statusAdmin[1]!,authority),configuration=page?.configuration??{slug:'customer-health',title:'Customer health',description:'Approved customer information.',components:[{key:'service',label:'Service',source:{kind:'manual',health:'unknown',observedAt:Date.now(),expiresAt:Date.now()+60000}}]},domains=page?statusPages!.domains(statusAdmin[1]!,authority):[];
+          content=`<h1>Customer status page</h1><p>Verify with a passkey or MFA in the last five minutes before changing or publishing this page. Enter only copy approved for customers.</p><form method="post">${common(page?'configure':'create',page?.version)}${op()}<label for="configuration">Public labels and health sources</label><textarea id="configuration" name="configuration" rows="16" required>${e(JSON.stringify(configuration,null,2))}</textarea><button type="submit">${page?'Save configuration':'Create private draft'}</button></form>`;
+          if(page){
+            content+=`<p>Version ${page.version}. ${page.published?'Published':'Private draft'}.</p><form method="post">${common('preview',page.version)}<label for="publication">Publication to preview</label><textarea id="publication" name="publication" rows="10" required>${e(JSON.stringify({kind:'page'},null,2))}</textarea><p>To publish an update, choose kind “update” and provide dedicated title, message, state and component keys in copy, plus incident: null or a private id and expectedVersion. Private incident context is never copied automatically.</p><button type="submit">Review public preview</button></form>`;
+            if(preview)content+=`<section><h2>Review exactly what customers will see</h2><pre>${e(preview.page.title)}\n${e(preview.page.description)}\n\n${preview.page.components.map(c=>e(c.label)+": "+e(c.health.replace(/-/gu," "))+(c.complete?"":" · coverage unavailable")).join("\n")}${preview.update?"\n\n"+e(preview.update.title)+"\n"+e(preview.update.state)+"\n"+e(preview.update.message):""}</pre><form method="post">${common('publish',preview.expectedVersion)}${hidden('previewId',preview.id)}${hidden('previewDigest',preview.digest)}${op()}<button type="submit">Publish reviewed public copy</button></form></section>`;
+            if(page.published)content+=`<a href="/status/${e(page.configuration.slug)}">Open public status page</a><form method="post">${common('unpublish',page.version)}${op()}<button type="submit">Unpublish page</button></form>`;
+            content+=`<h2>Customer domains</h2><form method="post">${common('domain.begin',page.version)}${op()}<label for="hostname">Exact customer hostname</label><input id="hostname" name="hostname" required maxlength="253" placeholder="status.example.com"><button type="submit">Begin domain ownership check</button></form>${domains.map(d=>`<section><h3>${e(d.hostname)}</h3><p>Ownership: ${e(d.ownership)}. Routing: ${e(d.routing)}.</p><p>Add TXT ${e(d.recordName)} with value ${e(d.recordValue)} and point the hostname at the configured platform edge.</p><form method="post">${common('domain.verify',page.version)}${hidden('domainId',d.id)}${op()}<button type="submit">Verify ownership and routing</button></form></section>`).join('')}`;
+          }
+        }else{
+          const name=statusSubscriber![1]!;let page:Pick<CustomerStatusSnapshot,'title'|'components'>;try{page=statusPages!.publicPage(name);}catch(error){if(!(error instanceof CustomerStatusError&&error.status===404))throw error;page={title:'Status page unavailable',components:[]};}const preferences=statusPages!.preferences(name,authority),inbox=statusPages!.notifications(name,authority,0);
+          content=`<h1>${e(page.title)} notifications</h1><p>Notifications appear in this account’s native inbox. No email or SMS is sent.</p><form method="post">${common('preferences',preferences.version)}${op()}<label for="subscribed">Receive public updates</label><select id="subscribed" name="subscribed"><option value="yes"${preferences.subscribed?' selected':''}>Subscribed</option><option value="no"${!preferences.subscribed?' selected':''}>Unsubscribed</option></select><fieldset><legend>Components · leave all unchecked for every component</legend>${page.components.map(c=>`<label class="check"><input type="checkbox" name="component" value="${e(c.key)}"${preferences.components.includes(c.key)?' checked':''}>${e(c.label)}</label>`).join('')}</fieldset><button type="submit">Save subscriber preferences</button></form><h2>Your latest notifications</h2>${inbox.notifications.length?inbox.notifications.map(n=>`<article><h3>${e(n.update.title)}</h3><p class="copy">${e(n.update.message)}</p><time>${e(new Date(n.createdAt).toISOString())}</time></article>`).join(''):'<p>No notifications yet.</p>'}<a href="/status/${e(name)}">Return to public status</a>`;
+        }
+        return new Response(statusFormHtml(content),{headers:{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','content-security-policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"}});
+      }
+      const publicStatus=/^\/(api\/)?status\/([a-z][a-z0-9-]{2,63})$/u.exec(url.pathname);
+      if(publicStatus&&(request.method==='GET'||request.method==='HEAD')){
+        if(url.search)throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Public status pages do not accept query fields.');
+        const page=statusPages!.publicPage(publicStatus[2]!);return publicStatus[1]?new Response(request.method==='HEAD'?null:JSON.stringify(page),{headers:{'content-type':'application/json','cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer'}}):statusResponse(page,request.method==='HEAD');
       }
       if (url.pathname === "/livez" && request.method === "GET") {
         return api({ ok: true, status: "alive" });
@@ -8168,6 +8291,19 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       }
 
       const principal = await requirePlatformPrincipal(storage, request, serviceAccounts);
+      const subscriberStatus=/^\/api\/status\/([a-z][a-z0-9-]{2,63})\/(preferences|notifications)$/u.exec(url.pathname);
+      if(subscriberStatus){
+        const authority=statusAuthority(principal);authority.authorize();
+        if(subscriberStatus[2]==='preferences'){
+          if(url.search)throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Preferences do not accept query fields.');
+          if(request.method==='GET')return api({ok:true,preferences:statusPages!.preferences(subscriberStatus[1]!,authority)});
+          if(request.method==='POST')return api({ok:true,preferences:statusPages!.subscribe(subscriberStatus[1]!,authority,await readJsonRequest(request,32768))});
+        }else if(request.method==='GET'){
+          if([...url.searchParams.keys()].some(k=>k!=='after')||url.searchParams.getAll('after').length>1||url.searchParams.has('after')&&!/^(0|[1-9][0-9]{0,15})$/u.test(url.searchParams.get('after')!))throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Choose one bounded notification cursor.');
+          return api({ok:true,page:statusPages!.notifications(subscriberStatus[1]!,authority,Number(url.searchParams.get('after')??0))});
+        }
+        throw new PlatformError(404,'NOT_FOUND','Status subscriber endpoint not found.');
+      }
       if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) requireCurrentPlatformPrincipal(storage, principal);
       if (principal.machine) {
         requireCurrentPlatformPrincipal(storage,principal);
@@ -8933,7 +9069,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       }
       const incidentOperation = operation === "incidents" || operation.startsWith("incidents/");
       const sloOperation = operation === "slo-policies" || operation.startsWith("slo-policies/");
-      const metadataOperation = incidentOperation || sloOperation;
+      const statusOperation=operation==='status-page'||operation.startsWith('status-page/');
+      const metadataOperation = incidentOperation || sloOperation || statusOperation;
       const incidentCredentialHash = metadataOperation && principal.tokenId !== null
         ? syncHash((request.headers.get("authorization") ?? "").slice(7)) : null;
       if (!metadataOperation && request.method !== "GET" && request.method !== "HEAD") requireNoEvacuation(project.id);
@@ -8946,6 +9083,24 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
         accessibleProject(storage.internal, project.id, principal, requiredPermission);
         if (/^backups\/[^/]+\/restore$/u.test(operation) || (!operation && request.method === "DELETE")) requireFreshPlatformAuthentication(principal);
       };
+      if(statusOperation){
+        if(url.search)throw new CustomerStatusError(422,'STATUS_INPUT_INVALID','Status administration does not accept query fields.');
+        const authority=statusAuthority(principal,project.id);authority.authorize(request.method!=='GET');
+        if(operation==='status-page'&&request.method==='GET')return api({ok:true,page:statusPages!.page(project.id,authority)});
+        if(operation==='status-page/domains'&&request.method==='GET')return api({ok:true,domains:statusPages!.domains(project.id,authority)});
+        if(request.method==='POST'){
+          const input=await readJsonRequest(request,32768);
+          if(operation==='status-page/create')return api({ok:true,page:statusPages!.create(project.id,authority,input)},201);
+          if(operation==='status-page/configure')return api({ok:true,page:statusPages!.configure(project.id,authority,input)});
+          if(operation==='status-page/preview')return api({ok:true,preview:statusPages!.preview(project.id,authority,input)});
+          if(operation==='status-page/publish')return api({ok:true,page:statusPages!.publish(project.id,authority,input)});
+          if(operation==='status-page/unpublish')return api({ok:true,page:statusPages!.unpublish(project.id,authority,input)});
+          if(operation==='status-page/domains/begin')return api({ok:true,domain:await statusDomainBegin(project.id,authority,input)},201);
+          const domain=/^status-page\/domains\/([A-Za-z0-9_-]{8,128})\/verify$/u.exec(operation);
+          if(domain)return api({ok:true,domain:await statusDomainVerify(project.id,domain[1]!,authority,input)});
+        }
+        throw new PlatformError(404,'NOT_FOUND','Status administration endpoint not found.');
+      }
       if (sloOperation) {
         if (url.searchParams.size) throw new PlatformError(422, "SLO_INPUT_INVALID", "SLO endpoints do not accept query fields.");
         const authority: SloAuthority = {
@@ -10704,6 +10859,8 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
       }
       throw new PlatformError(404, "NOT_FOUND", "Platform endpoint not found.");
     } catch (error) {
+      if(error instanceof CustomerStatusError)return problem(error.status,error.code,error.message);
+      if(error instanceof DomainVerificationError)return problem(422,'STATUS_DOMAIN_OWNERSHIP_PENDING',error.message);
       if (error instanceof ServiceAccountError) return problem(error.status,error.code,error.message);
       if (error instanceof BackendActionError) return problem(error.status, error.code, error.message);
       if (error instanceof PlatformError) return problem(error.status, error.code, error.message, error.retryAfter);
@@ -10803,6 +10960,7 @@ async function openPlatformScoped(options: ClankPlatformOptions,leadership?:Supe
     hostingProfile,
     runnerKind: runner.kind ?? "process",
     async close() {
+      statusPages?.close();
       projectSlos.close();
       projectIncidents.close();
       if (closed) return;
@@ -18621,3 +18779,11 @@ function fromBase64Url(value: string): Uint8Array {
 function safeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+function statusEscape(value:string):string{return value.replace(/[&<>"']/gu,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));}
+function statusPublicHtml(page:CustomerStatusSnapshot,canonical:string):string{
+  const e=statusEscape;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${e(page.title)}</title><style>body{font:16px/1.55 system-ui,sans-serif;margin:0;color:#182528;background:#f6f8f7}main{max-width:680px;margin:auto;padding:32px 20px}h1{line-height:1.15;font-size:2rem}section,article{background:white;border:1px solid #d5dfdc;border-radius:10px;padding:18px;margin:16px 0;overflow-wrap:anywhere}ul{list-style:none;padding:0}li{padding:14px 0;border-bottom:1px solid #d5dfdc;display:flex;gap:18px;justify-content:space-between;flex-wrap:wrap}a{display:inline-flex;min-height:44px;align-items:center;color:#155e51}a:focus-visible{outline:3px solid #155e51;outline-offset:4px}.copy{white-space:pre-wrap}time{color:#465958}</style></head><body><main><h1>${e(page.title)}</h1><p>${e(page.description)}</p><section aria-label="Component health"><h2>Current component health</h2><ul>${page.components.map(c=>`<li><strong>${e(c.label)}</strong><span>${e(c.health.replace(/-/gu,' '))}${c.complete?'':' · coverage unavailable'}</span></li>`).join('')}</ul></section><h2>Public updates</h2>${page.updates.length?page.updates.map(u=>`<article><h3>${e(u.title)}</h3><p>${e(u.state)}</p><p class="copy">${e(u.message)}</p><time datetime="${new Date(u.publishedAt).toISOString()}">${e(new Date(u.publishedAt).toISOString())}</time></article>`).join(''):'<p>No public updates have been published.</p>'}<a href="${e(new URL('/status/'+page.slug+'/preferences',canonical).href)}">Subscriber preferences and notifications</a></main></body></html>`;
+}
+
+function statusFormHtml(content:string):string{return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Customer status administration</title><style>body{font:16px/1.55 system-ui,sans-serif;margin:0;color:#182528;background:#f6f8f7}main{max-width:760px;margin:auto;padding:32px 20px;overflow-wrap:anywhere}h1{line-height:1.15}form,section,article{margin:20px 0;padding:18px;border:1px solid #cbd8d2;border-radius:10px;background:white}label{display:block;margin:12px 0 6px}input,textarea,select,button{font:inherit;box-sizing:border-box;max-width:100%}input,textarea,select{width:100%;min-height:44px;padding:10px;border:1px solid #73847e;border-radius:5px}textarea,pre{white-space:pre-wrap;overflow-wrap:anywhere}button{min-height:44px;padding:10px 16px;margin-top:14px;background:#155e51;color:white;border:0;border-radius:6px;cursor:pointer}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #177766;outline-offset:4px}.check{display:flex;gap:12px;align-items:center;min-height:44px}.check input{width:22px;min-height:22px}a{display:inline-flex;align-items:center;min-height:44px;color:#155e51}.copy{white-space:pre-wrap}</style></head><body><main>${content}</main></body></html>`;}

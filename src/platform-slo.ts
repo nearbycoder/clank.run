@@ -183,6 +183,10 @@ export function openProjectSlos(sql: SQLiteInternal, options: PlatformSloOptions
     if(required>maxBuckets)fail(409,"SLO_CAPACITY","Configured SLO windows exceed bounded measurement capacity.");
   };
   const api={
+    /** Private projection for a caller already holding the current native transaction. */
+    snapshot(projectId:string,policyId:string,authority:SloAuthority){
+      check(authority);const policy=current(projectId,policyId),evaluation=evaluate(policy),row=sql.prepare('SELECT * FROM clank_platform_slo_alerts WHERE policy_id=? AND policy_version=?').get(policy.id,policy.version);check(authority);return {policy,evaluation,alert:row?alertFrom(row):null};
+    },
     pulse,record,
     list(projectId:string,authority:SloAuthority){check(authority);id(projectId);const policies=sql.prepare('SELECT * FROM clank_platform_slo_policies WHERE project_id=? ORDER BY created_at,id LIMIT 10').all(projectId).map(policyFrom);return policies.map(policy=>assess(policy,authority));},
     read(projectId:string,policyId:string,authority:SloAuthority){check(authority);id(projectId);id(policyId);return assess(current(projectId,policyId),authority);},
