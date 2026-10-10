@@ -2,7 +2,7 @@
   "featureId": "19",
   "proposal": "https://github.com/nearbycoder/clank.run/issues/293",
   "pullRequest": "https://github.com/nearbycoder/clank.run/pull/295",
-  "status": "verified-awaiting-final-hosted-checks-and-protected-merge",
+  "status": "merged",
   "acceptedFeatureCountBeforeMerge": 22,
   "contract": {
     "steps": "Typed decision/event dependencies persist one bounded request, absolute deadline and validated result without a runnable job, lease or occupied worker slot",
@@ -40,7 +40,8 @@
     "integratedHead": "36f3a2bc632a3983be01801964945f9985d70f24",
     "integratedMain": "e394732d1b41309ca5c050975b20b67a7593b0a4",
     "postProofChanges": "Source04 combines the accepted mobile-navigation changes in src/platform-console.ts and tests/platform.test.mjs with source03 and acceptance metadata. All 1,045 tracked input hashes verified before these three report-only updates.",
-    "disposable": "Explicit QEMU Debian 13/Linux 6.12.111 disposable host; ordinary UID 1000; Node 26.10 and minimum Node 22.16"
+    "disposable": "Explicit QEMU Debian 13/Linux 6.12.111 disposable host; ordinary UID 1000; Node 26.10 and minimum Node 22.16",
+    "inputScope": "1,045 tracked source inputs excluding 19 build-generated example JavaScript outputs; the final three report-only updates preserve the other source hashes and tracked generated files."
   },
   "validation": {
     "completeGates": [
@@ -270,15 +271,53 @@
   "evidenceIndexSha256": "a448beddd80a6e11ae836b25dab42c14f2c5bd99c2f0daae63641444256cd33e",
   "review": {
     "independent": false,
-    "freshHostedChecks": "Required at the final metadata head",
-    "newCodeQlAlerts": "Must be zero",
-    "unresolvedThreads": "Must be zero",
-    "merge": "Normal protected expected-head squash, followed by exact tree equality and safe main-reference/primary sync preserving concurrent user branch"
+    "head": "b247a5265a0881043c4c9c38561a874345fb4b14",
+    "tree": "607d47ea4580bcb193923a48f306e3035aae0cc9",
+    "freshHostedChecks": [
+      {
+        "id": 114086097926,
+        "name": "CodeQL",
+        "conclusion": "success"
+      },
+      {
+        "id": 114085674350,
+        "name": "Node 22.16",
+        "conclusion": "success"
+      },
+      {
+        "id": 114085674321,
+        "name": "Node 24",
+        "conclusion": "success"
+      },
+      {
+        "id": 114085674317,
+        "name": "Packaged-release conformance",
+        "conclusion": "success"
+      },
+      {
+        "id": 114085674166,
+        "name": "Semantic and packed consumer types",
+        "conclusion": "success"
+      },
+      {
+        "id": 114085674138,
+        "name": "JavaScript and TypeScript analysis",
+        "conclusion": "success"
+      }
+    ],
+    "newCodeQlAlerts": 0,
+    "unresolvedThreads": 0,
+    "authorComment": 5476664073,
+    "merge": "e058e72015f890f15858efc8f96ce2390602d542",
+    "method": "Normal protected expected-head squash; exact reviewed tree equality verified",
+    "finalHostedProofSha256": "a255b30e70cce0a0894934ba4b6653c6e9cfa89551195105c24388ed85e870bb",
+    "checkoutSync": "Both main checkouts match accepted e058e72015f890f15858efc8f96ce2390602d542/tree607d47ea4580bcb193923a48f306e3035aae0cc9; original checkout had already moved to main. Earlier mobile branch reference is absent; this synchronization changed no other branch reference. All 23 existing local files preserved."
   },
   "limitations": [
     "Job execution and unrelated external side effects remain at least once and require provider idempotency",
     "The application composes current role/provider authorization and reviewed action previews; no hosted identity provider or external integration certification claimed",
     "Minimum-Node disposable Linux acceptance is not production Railway host certification"
   ],
-  "priorEvidenceIndexSha256": "d1d47d4aae54195739f34578e4532aa3daaf9022a92c8266a209ef5d14d37491"
+  "priorEvidenceIndexSha256": "d1d47d4aae54195739f34578e4532aa3daaf9022a92c8266a209ef5d14d37491",
+  "acceptedFeatureCountAfterMerge": 23
 }

@@ -475,6 +475,11 @@ are trusted server APIs; expose no unauthenticated operator endpoint. Cleanup us
 run's owner scope and fenced database/job publisher context, while handlers remain responsible
 for current business/provider permissions.
 
+Job/recovery tables are private and do not invalidate application-record query caches. For
+progress polling, authorize each HTTP request and call `getWorkflow` directly, or use a separate
+backend with `maxCacheEntries: 0`. An ordinary cached query or record-based live subscription
+does not automatically track job progress. Always recheck current access before returning it.
+
 At start, one transaction reserves capacity with the run and ready jobs: at most 100 graph
 steps and 10,000 retained compensation declarations globally. Capacity refuses new admission
 without evicting recovery authority. Routine workflow/job retention protects unresolved
