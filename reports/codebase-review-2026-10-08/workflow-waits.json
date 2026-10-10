@@ -33,13 +33,13 @@
     "rollback": "Use a verified compatible binary/database/config snapshot; an older binary ignores the new wait contract"
   },
   "source": {
-    "head": "7b322450218c46deee7f0ba7d0fd1c8dc108a38d",
-    "tree": "ce38b3391b7fe84a0cecd7c6a765eaac2e0d3ea2",
-    "archiveSha256": "7313e1261f6218ec4db77ae95a176149eca0d3101134ffeffaf76961b7b29d70",
-    "files": 1044,
-    "integratedHead": "7b322450218c46deee7f0ba7d0fd1c8dc108a38d",
-    "integratedMain": "9a76326bd1a8e4f7ffdc97c6d3fdf7629a6eaf2a",
-    "postProofChanges": "Source03 adds only the concrete coverage guard repair, its test and changelog to the hash-equal main-integrated source02; all 1,044 inputs verified before acceptance reports",
+    "head": "36f3a2bc632a3983be01801964945f9985d70f24",
+    "tree": "e711f7c56f844031bf164d7c2c1556a3454f3b24",
+    "archiveSha256": "8b8f0729a9a0d991e9e0eca3eaec25db6561036186b5e3a55d5d11c243335531",
+    "files": 1045,
+    "integratedHead": "36f3a2bc632a3983be01801964945f9985d70f24",
+    "integratedMain": "e394732d1b41309ca5c050975b20b67a7593b0a4",
+    "postProofChanges": "Source04 combines the accepted mobile-navigation changes in src/platform-console.ts and tests/platform.test.mjs with source03 and acceptance metadata. All 1,045 tracked input hashes verified before these three report-only updates.",
     "disposable": "Explicit QEMU Debian 13/Linux 6.12.111 disposable host; ordinary UID 1000; Node 26.10 and minimum Node 22.16"
   },
   "validation": {
@@ -59,7 +59,7 @@
           "functions": 90.03
         },
         "completeReleaseGate": true,
-        "rawSha256": "384b92f6d7df0f9b5660e41266e18147b61655f703990c07281cfc4cbbb2614b"
+        "rawSha256": "05bbb77e10aaae34a42aa92330098159c6dbceb3d5c78f7b2dc85b693ab9b9ce"
       },
       {
         "node": 22,
@@ -72,11 +72,11 @@
         },
         "coverage": {
           "lines": 91.82,
-          "branches": 80.83,
-          "functions": 90.07
+          "branches": 80.82,
+          "functions": 90.05
         },
         "completeReleaseGate": true,
-        "rawSha256": "e334aace72417e790089dd57a6894d48287e496c5cc20bc5447368bb28b7fd95"
+        "rawSha256": "f8f667617323b412ff338a8a09d8348bdbed9ca3e29eb5f7be2d29c8aae13493"
       }
     ],
     "historicalSource01": [
@@ -162,11 +162,11 @@
     },
     "package": {
       "files": 405,
-      "unpackedBytes": 6215673,
+      "unpackedBytes": 6216524,
       "unchangedCeiling": 6291456,
-      "headroom": 75783,
+      "headroom": 74932,
       "dependencies": 0,
-      "rawSha256": "0cbcbcb725623817906e9c1b4326650d55376c2ac4e2399764e32e0d1d76f340"
+      "rawSha256": "f04d680ea35f1518fcbf34133c17d8bb9187d11d20a2876afd7fac519efc7583"
     },
     "historySecurity": {
       "actualPublishedHistoryPassed": true,
@@ -174,25 +174,62 @@
     },
     "docs": {
       "guides": 98,
-      "words": 171618,
+      "words": 171643,
       "build": true,
       "doctor": {
         "pass": 6,
         "warnings": 1,
         "fail": 0
       },
-      "offlineArtifact": "98d211bbe7ae92f142aca5488fbefa168f3da8a0e0a9c6ad2ee2a024a80cce6c",
+      "offlineArtifact": "498ab34b87daad28f4e632dbbc42c460fe0a470c08d0ea18b2c114f1338a02d9",
       "uploaded": false,
       "httpMcp": "Eight HTTP surfaces plus MCP discovery, tools/list, docs.search and docs.read passed",
-      "desktopGuide": "workflow-waits-docs-desktop-01.png",
-      "phoneGuide": "workflow-waits-docs-phone-02.png",
-      "phoneSearchToGuide": "workflow-waits-docs-phone-search-01.png",
+      "desktopGuide": "workflow-waits-docs-desktop-04.png",
+      "phoneGuide": "workflow-waits-docs-phone-04.png",
+      "phoneSearchToGuide": "workflow-waits-docs-phone-search-04.png",
       "phoneGeometry": {
         "viewport": 390,
         "document": 375
       },
-      "browserMachineFormats": "In-app browser rejects machine-format navigation; successful actual HTTP/MCP reads retained separately"
-    }
+      "browserMachineFormats": "In-app browser rejects machine-format navigation; successful actual HTTP/MCP reads retained separately",
+      "httpMcpRawSha256": "0fd77d1f5382a1b8256d80a60e25f2a43d3403cbb17d96036c46a060929f87ef"
+    },
+    "historicalSource03": [
+      {
+        "node": 26,
+        "counts": {
+          "tests": 2002,
+          "pass": 1999,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.83,
+          "branches": 80.8,
+          "functions": 90.03
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "384b92f6d7df0f9b5660e41266e18147b61655f703990c07281cfc4cbbb2614b"
+      },
+      {
+        "node": 22,
+        "counts": {
+          "tests": 2002,
+          "pass": 1999,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.82,
+          "branches": 80.83,
+          "functions": 90.07
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "e334aace72417e790089dd57a6894d48287e496c5cc20bc5447368bb28b7fd95"
+      }
+    ]
   },
   "processEvidence": {
     "lostResponse": "Actual numeric-loopback resume committed, response held, IPC marker received, controller SIGKILL/exit verified; fetch rejects and second controller replays the exact receipt with one downstream occurrence",
@@ -230,7 +267,7 @@
     "greenSha256": "a58dc60f774d14b1c3d1d8df21ca82eddec33bdf830c4eeafe9fe5c36d3546ef",
     "contract": "Exact property-name malformed JSON diagnostic receives the existing one retry only after every test passed; actual test failures, cancellations, unknown errors, missing measurements and coverage thresholds remain strict"
   },
-  "evidenceIndexSha256": "d1d47d4aae54195739f34578e4532aa3daaf9022a92c8266a209ef5d14d37491",
+  "evidenceIndexSha256": "a448beddd80a6e11ae836b25dab42c14f2c5bd99c2f0daae63641444256cd33e",
   "review": {
     "independent": false,
     "freshHostedChecks": "Required at the final metadata head",
@@ -242,5 +279,6 @@
     "Job execution and unrelated external side effects remain at least once and require provider idempotency",
     "The application composes current role/provider authorization and reviewed action previews; no hosted identity provider or external integration certification claimed",
     "Minimum-Node disposable Linux acceptance is not production Railway host certification"
-  ]
+  ],
+  "priorEvidenceIndexSha256": "d1d47d4aae54195739f34578e4532aa3daaf9022a92c8266a209ef5d14d37491"
 }
