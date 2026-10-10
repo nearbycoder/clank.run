@@ -58,6 +58,8 @@ export interface DockerDeploymentRuntimeLaunchInput {
      * are retained as a memory-only activation plan until `activate()`.
      */
     readonly deferBackground?: boolean;
+    /** Enforce a candidate-only read-only data mount, no declared jobs and outbound denial. */
+    readonly isolatedReadOnly?: boolean;
 }
 
 export interface DockerDeploymentRuntimeCandidate {
@@ -67,6 +69,7 @@ export interface DockerDeploymentRuntimeCandidate {
     readonly generation: number;
     readonly capsuleSha256: string;
     readonly upstream: string;
+    readonly isolatedReadOnly?: true;
 }
 
 export interface DockerDeploymentRuntimeState extends DockerDeploymentRuntimeCandidate {

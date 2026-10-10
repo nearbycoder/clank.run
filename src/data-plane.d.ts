@@ -14,10 +14,19 @@ export interface IngressRoute {
     upstream: string;
     active: boolean;
     releaseId?: string;
-    canary?: { readonly upstream: string; readonly releaseId: string; readonly trafficPercent: number };
+    canary?: IngressCanaryRoute;
     /** Binds a remote provider origin to one exact application generation. */
     runtime?: IngressRuntimeRoute;
 }
+export type IngressCanaryRoute = {
+    readonly upstream: string;
+    readonly releaseId: string;
+    readonly trafficPercent: number;
+} & ({ readonly runtime?: undefined; readonly projectId?: undefined; readonly readPaths?: undefined } | {
+    readonly runtime: IngressRuntimeRoute;
+    readonly projectId: string;
+    readonly readPaths: readonly string[];
+});
 export interface IngressRouteStore {
     routes(): readonly IngressRoute[] | Promise<readonly IngressRoute[]>;
 }
