@@ -12,7 +12,7 @@ Runner choice changes the code boundary:
 
 Never operate the process runner as a public code sandbox.
 
-On Linux, the host's SQLite helpers run in bounded Bubblewrap namespaces with pinned, per-tenant filesystem capabilities. Concurrent path substitution cannot redirect those mounts or backup publication to another host directory. Install and permit the required namespace tools before upgrading; missing or denied isolation fails closed. See [SQLite worker isolation](sqlite-isolation.md) for the exact boundary, host requirements and verification. Non-Linux helpers lack this filesystem boundary and require trusted deployers or an external sandbox.
+By default on Linux, the host's SQLite helpers run in bounded Bubblewrap namespaces with pinned, per-tenant filesystem capabilities. Concurrent path substitution cannot redirect those mounts or backup publication to another host directory. Install and permit the required namespace tools before upgrading; missing or denied isolation fails closed. Explicit trusted process hosting can opt into bounded helpers without filesystem/network namespaces; this requires trusted deployers and rejects public signup. See [SQLite worker isolation](sqlite-isolation.md) for the exact boundary, host requirements and verification. Non-Linux helpers lack this filesystem boundary and require trusted deployers or an external sandbox.
 
 The packaged production entry point defaults to `CLANK_HOSTING_PROFILE=isolated`, which selects
 Docker and rejects a process runner. `CLANK_HOSTING_PROFILE=trusted` is an explicit low-cost

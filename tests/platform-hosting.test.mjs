@@ -295,3 +295,22 @@ test("programmatic isolated hosting requires an isolated runner and reports its 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("trusted SQLite processes require an explicit trusted profile, process runner, and restricted signup", async () => {
+  const root = join(tmpdir(), "clank-sqlite-invalid-policy-must-not-open");
+  for (const overrides of [
+    {},
+    { hostingProfile: "isolated", runner: { kind: "docker" } },
+    { hostingProfile: "trusted", runner: { kind: "docker" } },
+    { hostingProfile: "trusted", signup: true },
+  ]) {
+    await assert.rejects(openPlatform({
+      dataDirectory: root, publicUrl: "http://127.0.0.1:4200",
+      sqliteIsolation: "trusted-process", ...overrides,
+    }), /requires explicit trusted process hosting without public signup/u);
+  }
+  await assert.rejects(openPlatform({
+    dataDirectory: root, publicUrl: "http://127.0.0.1:4200",
+    hostingProfile: "trusted", sqliteIsolation: "disabled",
+  }), /sqliteIsolation must be/u);
+});

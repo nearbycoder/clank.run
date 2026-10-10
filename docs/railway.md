@@ -46,6 +46,7 @@ CLANK_PLATFORM_ADMIN_EMAILS=operator@example.com
 CLANK_SIGNUP=bootstrap
 CLANK_HOSTING_PROFILE=trusted
 CLANK_RUNNER=process
+CLANK_SQLITE_ISOLATION=trusted-process
 CLANK_INGRESS=1
 CLANK_INGRESS_BASE_DOMAIN=apps.clank.run
 CLANK_APP_URL_TEMPLATE=https://{slug}.apps.clank.run
@@ -107,6 +108,14 @@ The explicit `trusted` hosting profile is required because Railway's hosted cont
 provide a Docker daemon. It preserves the inexpensive single-service topology, but every invited
 deployer must be treated as having the control-plane Unix user's authority. Do not change
 `CLANK_SIGNUP` to `public` on this topology; the control plane refuses that unsafe combination.
+`CLANK_SQLITE_ISOLATION=trusted-process` explicitly runs database helpers with the same trusted
+Unix boundary as those applications. Railway's container can deny the nested Linux namespaces
+required by the default `namespace` mode even when Bubblewrap is installed. Helpers still run
+in separate processes with memory/CPU/deadline limits, cleared inherited/ambient capabilities, and stripped
+environment variables; they do not have a private filesystem or network namespace. This setting
+requires explicit trusted process hosting and rejects public signup. It is a control-plane
+service variable, not a `clank deploy` flag or an application manifest setting. See
+[SQLite worker isolation](sqlite-isolation.md#trusted-process-hosting).
 `CLANK_PLATFORM_ADMIN_EMAILS` is an exact, comma-separated operator allowlist. Matching accounts
 receive the separate `platform_admin` role; removing an address revokes that role on the next
 control-plane start. Global administration is available only to an interactive browser session,
