@@ -662,7 +662,8 @@ async function openOwnedDeploymentProviderService(
             },async()=> {await cleanupCandidate(null,{projectId:route.projectId,generation:1});});
           await check();
           if (!candidate) throw new Error("Provider canary runtime was not prepared.");
-          await ingress.activate({protocol:DEPLOYMENT_RUNTIME_PROTOCOL,...route,upstream:(candidate as DockerDeploymentRuntimeCandidate).upstream});
+          await ingress.activate({protocol:DEPLOYMENT_RUNTIME_PROTOCOL,projectId:route.projectId,releaseId:route.releaseId,
+            generation:route.generation,path:route.path,token:route.token,upstream:(candidate as DockerDeploymentRuntimeCandidate).upstream});
           await check();
           journal.current=Object.freeze({...state,phase:"running"});
           await atomicWriteJson(fs,path,canaryPath(primary.projectId),journal);

@@ -90,6 +90,9 @@ for (const phase of ['preparing', 'running', 'stopping']) test(`real provider co
   const image = process.env.CLANK_DOCKER_TEST_IMAGE ?? 'node:24-bookworm-slim';
   await command('docker', ['image', 'inspect', image]); // Never pull an unverified or mutable image implicitly.
   const root = await mkdtemp(join(tmpdir(), 'clank-provider-canary-native-'));
+  // SQLite workers clear the controller's administrative capabilities before
+  // resolving pinned mounts, so their uid must also own this private ancestor.
+  await chown(root, 1000, 1000);
   const providerRoot = join(root, 'provider'); await mkdir(providerRoot, { mode: 0o700 }); await chown(providerRoot, 1000, 1000);
   const owner = `canary-native-${randomUUID().replaceAll('-', '').slice(0, 16)}`;
   const projectId = 'native_canary_primary', releaseId = 'native_primary_release', candidateReleaseId = 'native_candidate_release';

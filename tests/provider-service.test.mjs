@@ -16,6 +16,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { createDeploymentBundle } from "../dist/deploy.js";
 import { openDeploymentProviderDataStore } from "../dist/provider-data.js";
+import { createDeploymentRuntimeIngress } from "../dist/provider-runtime.js";
 import {
   deploymentProviderDiagnosticsPath,
   deploymentProviderJobMutationPath,
@@ -812,6 +813,26 @@ test("configured provider canaries retain native cleanup intent, isolate a check
   } finally {await opened?.service.close();await fixture.close();}
 });
 
+test("provider canary preparation and retirement use the real ingress binding contract", async () => {
+  const fixture=await serviceFixture("canary-real-ingress"),ingress=createDeploymentRuntimeIngress();let opened;
+  try {
+    opened=await fixture.open({ingress,canaries:{readPaths:["/healthz"]}});
+    const primary=await fixture.runtime({generation:1,releaseId:"release_real_ingress_primary",mode:"initialize",snapshot:await sqliteSnapshot(fixture.root,"primary")});
+    await opened.service.reconcile(providerInput(primary,1));
+    const primaryBinding=ingress.inspect();assert.equal(primaryBinding.length,1);
+    const input={primary:await opened.service.canaries.binding("project_service_01"),controllerEpoch:1,operationId:"canary_real_ingress_01",
+      runtime:await fixture.runtime({generation:2,releaseId:"release_real_ingress_candidate",mode:"preserve"}),signal:new AbortController().signal};
+    const prepared=await opened.service.canaries.prepare(input);
+    assert.equal(prepared.phase,"running");assert.deepEqual(prepared.route.readPaths,["/healthz"]);
+    const bindings=ingress.inspect();assert.equal(bindings.length,2);
+    const candidate=bindings.find(binding=>binding.projectId===prepared.candidateProjectId);assert.ok(candidate);
+    assert.equal(candidate.releaseId,prepared.releaseId);assert.equal(candidate.path,prepared.route.path);assert.equal(candidate.latest,true);
+    assert.equal((await opened.service.canaries.stop(input)).phase,"stopped");
+    assert.deepEqual(ingress.inspect(),primaryBinding);
+    assert.equal((await opened.service.canaries.inspect("project_service_01")).phase,"stopped");
+  } finally {await opened?.service.close();await ingress.close();await fixture.close();}
+});
+
 test("provider canary reservation excludes ordinary reconciliation while native data preflight is pending", {timeout:30_000}, async () => {
   const fixture=await serviceFixture("canary-held-preflight");let opened,preparing;
   let releasePreflight,reachedPreflight,rejectPreflight;
@@ -1110,7 +1131,7 @@ async function serviceFixture(name) {
     async open(runtimeOptions = {}) {
       const events = [];
       const runtimes = fakeRuntimes(events, runtimeOptions);
-      const ingress = fakeIngress(events);
+      const ingress = runtimeOptions.ingress ?? fakeIngress(events);
       const service = await openDeploymentProviderService({
         rootDirectory: providerRoot,
         data: runtimeOptions.data ?? data,
