@@ -1006,13 +1006,23 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     }));
   };
 
-  const makeWriter = (changes: ReturnType<typeof changesForTransaction>, ownerId?: string | null): WriteDatabase<Schema> => ({
+  const makeWriter = (changes: ReturnType<typeof changesForTransaction>, ownerId?: string | null): WriteDatabase<Schema> => {
+    const token = snapshotToken;
+    const ensureWriter = () => {
+      ensureOpen();
+      if (!transactionActive || activeChanges !== changes || snapshotToken !== token) {
+        throw new Error("Writes require their original active database transaction.");
+      }
+    };
+    return {
     table<Name extends TableName<Schema>>(name: Name): WriteTable<Schema, Name> {
+      ensureWriter();
       const definition = tableDefinition(schema, name);
       const reader = makeReader(undefined, ownerId).table(name);
       return {
         ...reader,
         insert(raw) {
+          ensureWriter();
           const value = definition.schema.parse(raw) as TableValue<Schema["tables"][Name]>;
           if (definition.ownership === "user" && (ownerId === null || ownerId === undefined)) {
             throw new Error(`Owned table ${name} requires an authenticated user for inserts.`);
@@ -1043,6 +1053,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return id;
         },
         patch(id, patch, writeOptions = {}) {
+          ensureWriter();
           if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new TypeError("patch() expects an object.");
           for (const key of Object.keys(patch)) if (!(key in definition.fields)) throw new TypeError(`Unknown field in patch: ${key}`);
           const previous = getDocument(name, id, ownerId);
@@ -1081,6 +1092,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return documentWithMetadata(schema, name, value, id, previous._creationTime, nextVersion, storedOwner);
         },
         replace(id, raw, writeOptions = {}) {
+          ensureWriter();
           const previous = getDocument(name, id, ownerId);
           const expected = validatedExpectedVersion(writeOptions.ifVersion);
           if (expected !== undefined && previous?._version !== expected) {
@@ -1116,6 +1128,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return documentWithMetadata(schema, name, value, id, previous._creationTime, nextVersion, storedOwner);
         },
         delete(id, writeOptions = {}) {
+          ensureWriter();
           const previous = getDocument(name, id, ownerId);
           const expected = validatedExpectedVersion(writeOptions.ifVersion);
           if (expected !== undefined && previous?._version !== expected) {
@@ -1147,6 +1160,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return changed;
         },
         purgeDeleted(id, cursorInput) {
+          ensureWriter();
           const cursor = documentRevisionCursor(cursorInput, "purge cursor");
           const latest = getHistory(name, id, { limit: 1 }, ownerId)[0];
           if (!latest) return false;
@@ -1160,6 +1174,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return true;
         },
         restore(id, cursorInput, restoreOptions = {}) {
+          ensureWriter();
           const cursor = documentRevisionCursor(cursorInput, "restore cursor");
           const expected = validatedRestoreVersion(restoreOptions.ifVersion);
           const current = getDocument(name, id, ownerId);
@@ -1222,7 +1237,8 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         },
       };
     },
-  });
+  };
+  };
 
   const runTransaction = <Value>(
     handler: (changes: ReturnType<typeof changesForTransaction>) => Value,
