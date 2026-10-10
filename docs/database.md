@@ -41,7 +41,12 @@ The `clank_` and legacy `proact_` SQL namespaces are reserved. Safe application 
 
 ## Commit sequence
 
-Every mutation uses one synchronous `BEGIN IMMEDIATE` transaction:
+Every mutation uses one synchronous `BEGIN IMMEDIATE` transaction. Write contexts and tables
+expire when that transaction ends: retaining one cannot write later, borrow a subsequent
+transaction or bypass its revision journal. Pure read builders retain their existing deferred
+read behavior; use `read` or `tracked` when rows must share one consistent snapshot.
+
+The mutation sequence is:
 
 ```mermaid
 flowchart LR

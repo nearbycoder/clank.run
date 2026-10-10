@@ -6,7 +6,13 @@ Proposal: [issue #244](https://github.com/nearbycoder/clank.run/issues/244). Twe
 
 A feature is complete only when its documented acceptance evidence exists. Proposed contracts do not count as implemented features. The review baseline remains historical evidence; this ledger records subsequent work.
 
-## Supervisor guardian renewal/read race under review
+## SQLite transaction-context fencing under review
+
+Accepted main is `eb85a6d997538fabcd87e394378137083951c036`, the protected expected-head squash of [PR #330](https://github.com/nearbycoder/clank.run/pull/330). Both updated-source ordinary-user full gates pass 2,112 reported / 2,109 passed / zero failures or cancellations / three existing privileged skips; all six exact-head hosted checks pass, with no new changed-code CodeQL alerts or unresolved threads. Both main checkouts match the reviewed tree and all 23 pre-existing files remain unchanged. Feature acceptance remains 27 / 24 batches / 13 remaining. The prior guardian source snapshot and its documentation evidence keep their original qualification.
+
+The PostgreSQL shared-contract prototype exposed a native SQLite writer escaping its callback. An actual retained insert commits a row while the global revision remains zero, bypassing the transaction journal. All three new native regressions fail against the previous unmodified compiled backend. Each writer now checks its original active transaction, captured change set and snapshot token before any of the six mutation operations or a subsequent table lookup. Retained writers cannot borrow another transaction or owner, including a real async callback resumed after rollback. Pure read builders preserve existing compatibility. All 29 backend/context regressions pass on Node 26 and Node 22; full updated-source verification and protected review remain pending. This is maintenance, not another roadmap feature.
+
+## Supervisor guardian renewal/read race verification history
 
 Accepted main remains `88776f32e48a370f90c9bac118e9b3436d3c0150`; feature acceptance remains 27 / 24 batches / 13 remaining. Current policy and SLO hosted gates exposed a readiness connection loss and an unexpected actual coordinator SIGKILL during shutdown. Neither failed gate is reported as passing.
 

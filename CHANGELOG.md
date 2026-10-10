@@ -1,5 +1,7 @@
 # Changelog
 
+- Fence retained SQLite write contexts to their original active transaction, including deferred async callbacks, so writes cannot bypass revision journals or borrow another owner's transaction.
+
 Clank follows semantic versioning. Entries describe user-visible framework, CLI, protocol, storage, security, and deployment changes.
 
 ## Unreleased
