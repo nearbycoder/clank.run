@@ -17,10 +17,21 @@ export interface IngressRoute {
   upstream: string;
   active: boolean;
   releaseId?: string;
-  canary?: { readonly upstream: string; readonly releaseId: string; readonly trafficPercent: number };
+  canary?: IngressCanaryRoute;
   /** Binds a remote provider origin to one exact application generation. */
   runtime?: IngressRuntimeRoute;
 }
+
+/** A provider candidate receives only explicit public reads of isolated data. */
+export type IngressCanaryRoute = {
+  readonly upstream: string;
+  readonly releaseId: string;
+  readonly trafficPercent: number;
+} & ({ readonly runtime?: undefined; readonly projectId?: undefined; readonly readPaths?: undefined } | {
+  readonly runtime: IngressRuntimeRoute;
+  readonly projectId: string;
+  readonly readPaths: readonly string[];
+});
 
 export interface IngressRouteStore {
   routes(): readonly IngressRoute[] | Promise<readonly IngressRoute[]>;
@@ -153,15 +164,19 @@ export function createManagedIngress(options: {
         upstream: upstreamUrl(route.upstream, options.allowedUpstreamHosts),
         active: route.active === true,
         ...(route.releaseId ? { releaseId: opaque(route.releaseId, "release ID") } : {}),
-        ...(route.canary ? { canary: {
-          upstream: upstreamUrl(route.canary.upstream, options.allowedUpstreamHosts),
-          releaseId: opaque(route.canary.releaseId, "canary release ID"),
-          trafficPercent: integerRange(route.canary.trafficPercent, "canary traffic percent", 0, 100),
-        } } : {}),
+        ...(route.canary ? { canary: normalizeIngressCanary(route.canary, options.allowedUpstreamHosts) } : {}),
         ...(route.runtime === undefined
           ? {}
           : { runtime: normalizeIngressRuntimeRoute(route.runtime) }),
       };
+      if (normalized.canary?.runtime && (!normalized.runtime || normalized.canary.projectId === normalized.projectId
+        || normalized.canary.releaseId === normalized.releaseId || normalized.canary.runtime.path === normalized.runtime.path
+        || new URL(normalized.canary.upstream).origin !== new URL(normalized.upstream).origin)) {
+        throw new TypeError("Provider canary requires a distinct candidate on the exact primary provider origin.");
+      }
+      if (normalized.runtime && normalized.canary && !normalized.canary.runtime) {
+        throw new TypeError("Provider runtime canaries require generation-aware routing.");
+      }
       for (const host of normalized.hosts) {
         if (seen.has(host)) throw new Error(`Ingress host is assigned more than once: ${host}`);
         seen.add(host);
@@ -347,12 +362,21 @@ export function createManagedIngress(options: {
         }
       }
       let circuitKey = route.id;
-      if (route.canary) {
-        if (route.runtime) throw new Error("Provider runtime canaries require generation-aware routing.");
+      let selectedProviderCanary = false;
+      const canary = route.canary;
+      const canaryEligible = canary && (!canary.runtime || (
+        ["GET", "HEAD"].includes(request.method) && !url.search && !request.body
+        && !request.headers.has("authorization") && !request.headers.has("cookie")
+        && (!request.headers.has("content-length") || request.headers.get("content-length") === "0")
+        && canary.readPaths.includes(url.pathname)
+      ));
+      if (canaryEligible) {
         const ordinal = trafficOrdinals.get(route.id) ?? 0;
         trafficOrdinals.set(route.id, (ordinal + 1) % 100);
-        if (ordinal < route.canary.trafficPercent) {
-          route = { ...route, upstream: route.canary.upstream, releaseId: route.canary.releaseId, canary: undefined };
+        if (ordinal < canary.trafficPercent) {
+          selectedProviderCanary = Boolean(canary.runtime);
+          route = { ...route, upstream: canary.upstream, releaseId: canary.releaseId, canary: undefined,
+            ...(canary.runtime ? { projectId: canary.projectId, runtime: canary.runtime } : {}) };
           circuitKey += ":canary";
         }
       }
@@ -373,7 +397,12 @@ export function createManagedIngress(options: {
       // as //attacker.example directly to new URL(path, base) would otherwise
       // turn it into a scheme-relative URL and let request input select a host.
       const target = ingressTarget(route, url.pathname, url.search);
-      const headers = proxyRequestHeaders(request, host, options.trustProxy === true);
+      const headers = selectedProviderCanary ? new Headers({ "cache-control": "no-store" })
+        : proxyRequestHeaders(request, host, options.trustProxy === true);
+      if (selectedProviderCanary) {
+        const accept = request.headers.get("accept");
+        if (accept && accept.length <= 512) headers.set("accept", accept);
+      }
       headers.set("x-clank-project-id", route.projectId);
       setRuntimeIngressHeaders(headers, route.runtime);
       const attempts = ["GET", "HEAD"].includes(request.method) ? retries + 1 : 1;
@@ -399,10 +428,15 @@ export function createManagedIngress(options: {
           } else {
             clearCircuit(circuitKey, targetIdentity);
           }
+          const responseHeaders = proxyResponseHeaders(response.headers, route.id);
+          if (selectedProviderCanary) {
+            for (const name of ["set-cookie", "clear-site-data", "www-authenticate", "authentication-info", "proxy-authenticate"]) responseHeaders.delete(name);
+            responseHeaders.set("cache-control", "no-store");
+          }
           return finish(observed(new Response(response.body, {
             status: response.status,
             statusText: response.statusText,
-            headers: proxyResponseHeaders(response.headers, route.id),
+            headers: responseHeaders,
           })), true);
         } catch (error) {
           lastError = error;
@@ -942,6 +976,24 @@ function ingressRouteIdentity(route: IngressRoute): string {
     String(route.runtime.generation),
     route.runtime.path,
   ].join("\n");
+}
+
+function normalizeIngressCanary(input: IngressCanaryRoute, allowedHosts?: readonly string[]): IngressCanaryRoute {
+  if (!input || typeof input !== "object" || Array.isArray(input)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) throw new TypeError("Ingress canary must be a plain object.");
+  if (Object.keys(input).some(key => !["upstream", "releaseId", "trafficPercent", "runtime", "projectId", "readPaths"].includes(key))) throw new TypeError("Ingress canary contains an unknown field.");
+  const normalized = { upstream: upstreamUrl(input.upstream, allowedHosts), releaseId: opaque(input.releaseId, "canary release ID"),
+    trafficPercent: integerRange(input.trafficPercent, "canary traffic percent", 0, 100) };
+  if (input.runtime === undefined) {
+    if (input.projectId !== undefined || input.readPaths !== undefined) throw new TypeError("Provider canary requires an exact runtime binding.");
+    return Object.freeze(normalized);
+  }
+  if (typeof input.projectId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(input.projectId)) throw new TypeError("Provider canary project ID is invalid.");
+  if (!Array.isArray(input.readPaths) || input.readPaths.length < 1 || input.readPaths.length > 128
+    || new Set(input.readPaths).size !== input.readPaths.length || input.readPaths.some(path => typeof path !== "string" || path.length > 512
+      || !/^\/(?:[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*\/?)?$/u.test(path)
+      || path.split("/").some(segment => segment === "." || segment === ".."))) throw new TypeError("Provider canary read paths must be bounded, exact and unambiguous.");
+  return Object.freeze({ ...normalized, projectId: input.projectId, runtime: normalizeIngressRuntimeRoute(input.runtime), readPaths: Object.freeze([...input.readPaths]) });
 }
 
 function normalizeIngressRuntimeRoute(input: unknown): IngressRuntimeRoute {

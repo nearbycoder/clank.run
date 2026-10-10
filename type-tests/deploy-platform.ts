@@ -10,6 +10,8 @@ import {
   type DeploymentConfig,
   type ObjectStore,
   type PlatformRunnerOptions,
+  type IngressCanaryRoute,
+  type IngressRuntimeRoute,
 } from "@clank.run/framework";
 import type {
   DockerDeploymentRuntimeCandidate,
@@ -32,6 +34,24 @@ declare const isolatedDockerCandidate: DockerDeploymentRuntimeCandidate;
 isolatedDockerCandidate.isolatedReadOnly satisfies true | undefined;
 // @ts-expect-error candidate identity and isolation cannot be edited by a consumer
 isolatedDockerCandidate.isolatedReadOnly = true;
+declare const isolatedIngressBinding: IngressRuntimeRoute;
+const providerCanaryRoute: IngressCanaryRoute = {
+  upstream: "https://provider.example.test", releaseId: "candidate-release", trafficPercent: 10,
+  runtime: isolatedIngressBinding, projectId: "isolated_candidate", readPaths: ["/catalog"],
+};
+void providerCanaryRoute;
+// @ts-expect-error provider candidates require an explicit approved path list
+const unapprovedProviderCanary: IngressCanaryRoute = {
+  upstream: "https://provider.example.test", releaseId: "candidate-release", trafficPercent: 10,
+  runtime: isolatedIngressBinding, projectId: "isolated_candidate",
+};
+void unapprovedProviderCanary;
+// @ts-expect-error an isolated project cannot be selected without its exact provider runtime binding
+const unboundProviderCanary: IngressCanaryRoute = {
+  upstream: "https://provider.example.test", releaseId: "candidate-release", trafficPercent: 10,
+  projectId: "isolated_candidate", readPaths: ["/catalog"],
+};
+void unboundProviderCanary;
 
 const config: DeploymentConfig = parseDeploymentConfig({
   version: 1,
