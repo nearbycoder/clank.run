@@ -19,6 +19,10 @@ configured worker/scheduler processes for each active project.
 | `HOST` | `127.0.0.1` | Listener address |
 | `CLANK_PLATFORM_URL` | loopback URL | Exact public console origin |
 | `CLANK_PLATFORM_DATA` | `.clank-platform` | Persistent root |
+| `CLANK_SUPERVISOR_ID` | Disabled | Opt-in [same-host automatic leadership](supervisor-leadership.md), shared configuration identity |
+| `CLANK_SUPERVISOR_REVISION` | Required with ID | Positive configuration revision, identical across compatible coordinators |
+| `CLANK_SUPERVISOR_LEASE_MS` | `15000` | Supervisor ownership duration, 5000–120000 ms |
+| `CLANK_SUPERVISOR_POLL_MS` | `500` | Checks/renewal cadence, 50 ms through one third of the lease |
 | `CLANK_PLATFORM_MASTER_KEY` | generated file | Base64/base64url 32-byte key |
 | `CLANK_SIGNUP` | `bootstrap` | `bootstrap`, `public`, or `disabled` |
 | `CLANK_RESEND_API_KEY` | none | Enable direct Resend invitation email; mutually exclusive with the gateway URL |

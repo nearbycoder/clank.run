@@ -1,0 +1,89 @@
+{
+  "feature": 6,
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/313",
+  "status": "verified-focused-awaiting-full-release-gates",
+  "counted": false,
+  "base": "0729abca3ed24743b2af1a25089071e7107a81f7",
+  "implemented": [
+    "Retained native SQLite leadership epoch and exact private process identity",
+    "Native write transaction guard including cached SQL and raw transaction escape refusal",
+    "Independent coordinator guardian and SIGSTOP/lease-loss fencing",
+    "Platform standby polling, bounded 503 Retry-After and automatic core lifecycle takeover",
+    "Persisted topology marker rejects accidental ordinary supervisor mode"
+  ],
+  "currentProof": [
+    "Nine native lease checks including retained-state deletion refusal",
+    "Five native write guard checks",
+    "Six actual guardian process checks including acquisition SIGKILL and native expiry during arming",
+    "One actual empty-catalog leader/standby SIGSTOP takeover",
+    "Eight actual deployed lifecycle/cleanup/configuration checks including response loss after durable publication",
+    "One actual packaged platform CLI takeover and one strict environment contract check"
+  ],
+  "pending": [
+    "Both complete ordinary-user native Node26/minimum Node22 release gates on the hashed committed source",
+    "Fresh hosted checks, CodeQL/review-thread review and normal protected PR merge"
+  ],
+  "acceptedFeatures": 26,
+  "remainingFeatures": 14,
+  "limits": [
+    "Same-host Linux private catalog only; no multi-region consensus or network filesystem guarantee",
+    "Dedicated coordinator process is terminated on lost leadership",
+    "External effects retain their explicit provider idempotency and generation contracts; no distributed transaction claim",
+    "Docker/provider host certification stays separate from native coordinator/process takeover proof"
+  ],
+  "focused": {
+    "reported": 65,
+    "passed": 65,
+    "failed": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "newChecks": 29,
+    "existingRegressions": 36,
+    "logSha256": "8965995c04e44b9b72a733f20ed9f35d9857f58781a5b6d5b7bde9fc8f837b7f",
+    "supplementaryChecks": [
+      {
+        "log": "supervisor-acquisition-kill-01.log",
+        "passed": 1,
+        "sha256": "2edad306d88b2ecf29e1009b89a9f8bcfb1e8045c71d67e66e327296feda62a4"
+      },
+      {
+        "log": "supervisor-publication-kill-01.log",
+        "passed": 1,
+        "sha256": "90ec57fbcdbfe2a87b8aefe7bf53192209ccfbeb41ab2aaddf4e92952628f54d"
+      }
+    ],
+    "totalUniqueChecks": 67,
+    "totalNewChecks": 31
+  },
+  "types": {
+    "sourceDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163,
+    "packedFixtures": 34,
+    "logSha256": "d91b57b10a52748104cd745b1b4b42005e3524760567eb2f3c1175f5175f73b4"
+  },
+  "package": {
+    "baseFiles": 411,
+    "files": 413,
+    "baseBytes": 6104927,
+    "bytes": 6141921,
+    "growthBytes": 36994,
+    "unchangedByteCeiling": 6291456,
+    "headroom": 149535,
+    "addedFiles": [
+      "dist/platform-supervisor.d.ts",
+      "dist/platform-supervisor.js"
+    ]
+  },
+  "docs": {
+    "guides": 101,
+    "words": 177319,
+    "doctorPassed": 6,
+    "optionalUnlinkedProject": 1,
+    "doctorFailed": 0,
+    "offlineArtifact": "57539597bd46a6e3aeba561a5b3405ca7ec082ae50496b0d457162f5292aa4c9",
+    "httpAndMcpSha256": "2c8fa896eacac61349539e049df947d8ef8dff32ff7903b9ac18c21a102545f8",
+    "browserSha256": "66a6471ac6bd8bdbd88dbd3f5c6ecd858e5b8554166346b32b2e3d8851862c8c",
+    "browserLimit": "Actual home/search/guide content/layout is verified; Enter did not navigate and no activation is claimed."
+  }
+}

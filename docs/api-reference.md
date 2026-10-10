@@ -337,6 +337,7 @@ Optional module: `@clank.run/framework/component-harness`; see [component harnes
   for initialized co-located loopback provider targets under code-only policy. Current host
   proof is required before staging and acceptance; unsupported profiles fail closed.
 
+- `openPlatform({ supervisor })`: opt-in dedicated same-host Linux coordinators with retained ownership epochs, native transaction fencing, independent process guardians and automatic standby recovery. See [Automatic supervisor leadership](supervisor-leadership.md) for configuration, failure bounds and migration. Optional `PlatformRuntime.supervisor()` returns readonly local state/epoch/expiry/responsibilities; standbys serve `503` with `Retry-After`.
 - `openPlatform(options)`: browser dashboard, workspace people/invitation administration and
   activity, transparent monthly usage, device authorization, tokens, projects, transactionally
   enforced capacity and traffic limits, ingress metrics, DNS/domain lifecycle, TLS eligibility,

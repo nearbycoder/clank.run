@@ -7,9 +7,21 @@ import { openPlatform } from "../dist/platform.js";
 import {
   resolveBackupStorage,
   resolvePlatformHosting,
+  resolvePlatformSupervisor,
   resolveProviderPlacement,
   resolveRunnerArtifactStorage,
 } from "../scripts/platform-hosting.mjs";
+
+test("automatic supervisor environment settings are explicit, strict and bounded",()=>{
+  assert.equal(resolvePlatformSupervisor({}),undefined);
+  assert.deepEqual(resolvePlatformSupervisor({CLANK_SUPERVISOR_ID:"production-a",CLANK_SUPERVISOR_REVISION:"2"}),
+    {configurationId:"production-a",configurationRevision:2,leaseMs:15000,pollIntervalMs:500});
+  for(const environment of [{CLANK_SUPERVISOR_ID:"production-a"},{CLANK_SUPERVISOR_REVISION:"1"},
+    {CLANK_SUPERVISOR_ID:"../other",CLANK_SUPERVISOR_REVISION:"1"},
+    ...["0","1.5","1e3"," 1","9007199254740992"].map(value=>({CLANK_SUPERVISOR_ID:"production-a",CLANK_SUPERVISOR_REVISION:value})),
+    {CLANK_SUPERVISOR_ID:"production-a",CLANK_SUPERVISOR_REVISION:"1",CLANK_SUPERVISOR_LEASE_MS:"4999"},
+    {CLANK_SUPERVISOR_ID:"production-a",CLANK_SUPERVISOR_REVISION:"1",CLANK_SUPERVISOR_POLL_MS:"5001"}])assert.throws(()=>resolvePlatformSupervisor(environment));
+});
 
 test("development remains zero-setup while production defaults to isolated Docker hosting", () => {
   assert.deepEqual(
