@@ -40,6 +40,11 @@ test('actual SIGKILL after bucket and receipt commit reclaims the lease and sett
   const exited=new Promise(resolve=>child.once('exit',(code,signal)=>resolve({code,signal})));
   const publication=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Owned media worker did not publish: '+output)),15000);child.once('message',value=>{clearTimeout(timer);resolve(value);});child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',()=>{clearTimeout(timer);reject(new Error('Owned media worker exited before publication: '+output));});});
   assert.equal(publication.kind,'published');assert.equal(publication.operation,queued.id);assert.equal(publication.job,queued.jobId);
+  // A response barrier must keep the actual process alive while its parent
+  // inspects the committed native receipt, rather than winning an exit race.
+  await new Promise(resolve=>setTimeout(resolve,150));
+  assert.equal(child.exitCode,null,'The committed worker must remain held until the actual SIGKILL.');
+  assert.equal(child.signalCode,null);
   const inspection=new DatabaseSync(join(f.root,'catalog.sqlite'),{readOnly:true});
   // The live native worker can briefly hold a catalog lock while renewing its
   // attempt. Match the catalog's bounded wait before inspecting committed rows.

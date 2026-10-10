@@ -4,7 +4,10 @@ Clank follows semantic versioning. Entries describe user-visible framework, CLI,
 
 ## Unreleased
 
+- Fence retained SQLite write contexts to their original active transaction, including deferred async callbacks, so writes cannot bypass revision journals or borrow another owner's transaction.
+
 - Add the documented PostgreSQL application subset with typed tables, native owner-scoped transactions, revisions, explicit reconnect, verified TLS and bounded SCRAM transport. Refuse SQLite-only services and report unknown commit outcomes without replay.
+- Evaluate supervisor guardian lease timestamps after the native read so a valid concurrent renewal cannot spuriously fence its coordinator. Keep strict expiry, identity, configuration and clock-regression checks.
 
 - Add opt-in same-host Linux supervisor leadership with native retained epochs, transaction fences, dedicated coordinator guardians and automatic standby recovery after verified tenant cleanup. Expose bounded CLI configuration and readonly local status; reject accidental ordinary-mode startup after enabling the topology.
 
