@@ -1,0 +1,233 @@
+{
+  "featureId": "20",
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/296",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/297",
+  "status": "verified-awaiting-final-hosted-checks-and-protected-merge",
+  "acceptedFeatureCountBeforeMerge": 23,
+  "contract": {
+    "declaration": "Optional graph.step compensate: registered cleanup job declaring agent.idempotent=true with synchronous typed mapper, or bounded explicit manual reason",
+    "identity": "Typed input/run/step/original-job identities, stable provider operation key and discriminated succeeded result versus uncertain failed/cancelled attempted effect",
+    "trigger": "Failure, cancellation, denied/timed-out waits and output failure cancel/wait for forward children; never-attempted steps skip cleanup",
+    "order": "One cleanup job per run in deterministic reverse dependency order; successful runs never compensate and report not-needed",
+    "inventory": "Original failed/cancelled outcome retained beside separate recovery progress and ordered bounded step/job/result/error evidence",
+    "manual": "Irreversible declaration, exhausted/cancelled cleanup, malformed mapper or changed/missing definition records visible manual intervention and stops automatic upstream cleanup",
+    "fences": "Same-transaction occurrence, owner, current definition/protocol, stable key, frozen payload and active lease checks before claim/handler/SQLite effects and successful settlement",
+    "retention": "Routine job/workflow purge protects unresolved recovery and referenced forward/cleanup jobs; operator retry cannot reset retained attempts. Explicit inactive manual-evidence purge still refuses active jobs",
+    "authorization": "Original owner scope preserved; application independently checks current access on uncached progress requests and current business/provider permission in handlers; no anonymous operator endpoint or new approval authority"
+  },
+  "limits": {
+    "graphSteps": 100,
+    "retainedDeclarations": 10000,
+    "authorityEviction": false,
+    "manualReasonCharacters": 2000,
+    "argumentBytes": 65536,
+    "resultBytes": 65536,
+    "smallerConfiguredPayloadResultLimitsApply": true,
+    "cleanupErrorBytes": "Existing configured job error limit; explicit manual reasons have their own bounded declaration limit"
+  },
+  "migration": {
+    "protocol": 1,
+    "legacy": "Exact pre-compensation graph revision d2c2d017ac196bbb retained with no recovery tables for ordinary graphs",
+    "capacity": "Additive private state/run/step tables reserve capacity atomically with run/jobs before a future failure",
+    "definition": "Forward/cleanup handler source, cleanup schema/mapper and manual reason participate only for compensation graphs; changed/missing retained definitions fail into manual evidence",
+    "configuration": "Function source cannot capture mutable external configuration; use pure mappers and versioned validated input, identical fleet definition/configuration",
+    "rollback": "Older workers ignore this contract; use a verified compatible binary/database/configuration snapshot",
+    "purge": "Retained completed recovery can be removed with terminal run; deleting inactive manual evidence is an explicit trusted-operator choice, never an active-job override"
+  },
+  "source": {
+    "head": "5e176679d1e543a2eb5abc1f9d9d33c4c238ca12",
+    "tree": "f5cb3534772d83f796f5d959dbe1ef93fc3527bd",
+    "archiveSha256": "0c5f733341e7c79f665d197edc6376b88a54a79b1efc504f08e6201e98dc3712",
+    "files": 1068,
+    "inputScope": "All 1,068 tracked files, including the 19 tracked build-generated example JavaScript outputs restored before verification",
+    "integratedMain": "e058e72015f890f15858efc8f96ce2390602d542",
+    "integration": "Accepted durable-wait squash has the exact already-integrated predecessor tree. Six overlapping squash-ancestry conflicts resolved to the already accepted predecessor plus Feature20; all source01 input hashes and tree remained identical. Source02 adds only the concrete uncached-polling guide clarification and three accepted-wait reports.",
+    "postProofChanges": "Only README/IMPLEMENTATION acceptance reports and the new compensation report change after source02; all other 1,066 tracked source inputs remain hash-equal",
+    "disposable": "Explicit QEMU Debian13/Linux6.12.111 ordinary UID1000; Node26.10 and minimum Node22.16"
+  },
+  "validation": {
+    "completeGates": [
+      {
+        "node": 26,
+        "counts": {
+          "tests": 2016,
+          "pass": 2013,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.86,
+          "branches": 80.91,
+          "functions": 90.04
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "718b5c3dd09297a8fca19325b72d4f4f72c36f4af9ea6a5a7132c779c0625919"
+      },
+      {
+        "node": 22,
+        "counts": {
+          "tests": 2016,
+          "pass": 2013,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.85,
+          "branches": 80.93,
+          "functions": 90.08
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "564b5a40565aee047db8157ca8694a641e3213fb579dce3cc4f1331862261dca"
+      }
+    ],
+    "historicalSource01": [
+      {
+        "node": 26,
+        "counts": {
+          "tests": 2016,
+          "pass": 2013,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.86,
+          "branches": 80.91,
+          "functions": 90.04
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "5276914b9af0f70fccc7261ed8788c1eeb3cbf2feafa2a5e998b451ba5fa50d1"
+      },
+      {
+        "node": 22,
+        "counts": {
+          "tests": 2016,
+          "pass": 2013,
+          "fail": 0,
+          "cancelled": 0,
+          "skipped": 3
+        },
+        "coverage": {
+          "lines": 91.84,
+          "branches": 80.92,
+          "functions": 90.08
+        },
+        "completeReleaseGate": true,
+        "rawSha256": "a6161c7fc9e481ac551e7bc288e1bdaacbf421ce78d3daff13845e73d48b7aa2"
+      }
+    ],
+    "focused": {
+      "reported": 70,
+      "passed": 70,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "compensationCases": 14,
+      "rawSha256": "71e2ca97580d6feb05f556b40bc4605beddc662a6e1016b6753b9a057ee2ffaf"
+    },
+    "types": {
+      "existingDiagnostics": 159,
+      "newDiagnostics": 0,
+      "unchangedBaseline": 163,
+      "packedFixtures": 31,
+      "packedOpenApiExamplesPassed": true,
+      "rawSha256": "f2ed5ad51e04dd7a6a06ec385ce55cbe91594c43a5d8ca8ad28aa92cbb9c834a"
+    },
+    "package": {
+      "files": 405,
+      "unpackedBytes": 6243086,
+      "unchangedCeiling": 6291456,
+      "headroom": 48370,
+      "dependencies": 0,
+      "rawSha256": "906535e9ece8977c1093396dcf6bf9fae1ee5e2d471e4d5f6fb717ada8cbd5f9"
+    },
+    "historySecurity": {
+      "actualPublishedHistoryPassed": true,
+      "rawSha256": "e5aa7592e49e66e49bb280f66986f00b6deb9a521b5392cc329086a43d4287a1"
+    },
+    "docs": {
+      "guides": 98,
+      "words": 172643,
+      "build": true,
+      "doctor": {
+        "pass": 6,
+        "warnings": 1,
+        "fail": 0
+      },
+      "offlineArtifact": "95e72751c19b612cef82f662baa5e4341490897623e95fea2c7fa29836986a4b",
+      "uploaded": false,
+      "httpMcp": "Eight HTTP routes, MCP discovery/tools/list/docs_search/docs_read passed for updated canonical guide",
+      "httpMcpRawSha256": "fb97aae76053dc98d1c3151d7bee8e72ce0040e7c93a4327d0b7225b55f650e3",
+      "desktopGuide": "workflow-compensation-docs-desktop-01.png",
+      "phoneGuide": "workflow-compensation-docs-phone-01.png",
+      "phoneSearch": "workflow-compensation-docs-phone-search-01.png",
+      "phoneSearchToGuide": "workflow-compensation-docs-phone-search-guide-01.png",
+      "desktopGeometry": {
+        "viewport": 1280,
+        "document": 1265
+      },
+      "phoneGeometry": {
+        "viewport": 390,
+        "document": 375
+      },
+      "browserMachineFormats": "In-app browser machine-format limitation retained from prior feature; successful actual HTTP/MCP reads verified separately"
+    }
+  },
+  "processEvidence": {
+    "lostResponse": "Independent provider commits cleanup/resource release and durable receipt, holds response, emits IPC acceptance. Worker SIGKILL/exit verified; replacement waits for real lease expiry, repeats same frozen job/key, receives exact receipt at attempt2. Two requests but one provider operation for that cleanup; predecessor then cleans up once.",
+    "races": "Four actual two-worker controller races each produce one job/attempt/provider operation per cleanup step; one active cleanup per run",
+    "lease": "Stale held forward attempt cannot commit its SQLite effect after definition replacement and manual fence; active forward job prevents even explicit manual purge",
+    "coverage": "Intentionally killed fixture children omit NODE_V8_COVERAGE to avoid incomplete child artifacts; parent assertions and runtime coverage remain enabled with unchanged thresholds"
+  },
+  "browserEvidence": {
+    "scope": "Synthetic local authenticated application composes real framework mutation/query runtime, worker and independent provider; no new native product progress component is claimed",
+    "failure": "Keyboard starts/advances forward workflow; dependent cleanup b then predecessor a release both resources while original outcome remains failed",
+    "desktop": "workflow-compensation-browser-completed-desktop-01.png",
+    "phone": "workflow-compensation-browser-completed-phone-02.png",
+    "phoneGeometry": {
+      "viewport": 390,
+      "document": 390
+    },
+    "owner": "After real logout and second account login, no owner history is shown. Signing back in restores accepted owner history.",
+    "otherAccountPhone": "workflow-compensation-browser-other-account-phone-01.png",
+    "success": "Successful real browser workflow reports succeeded/not-needed and both cleanup declarations skipped",
+    "successDesktop": "workflow-compensation-browser-success-desktop-01.png",
+    "browserErrors": 0
+  },
+  "retainedFailures": [
+    {
+      "proof": "Initial fixture used tied creation timestamps/random IDs as event order and failed two ordering assertions",
+      "resolution": "Owned explicit ordinal writes establish actual transaction order; no runtime scheduling change claimed"
+    },
+    {
+      "proof": "Changed forward handler reused a compensation occurrence; cancelled manual-history step stayed queued",
+      "resolution": "Compensation graph revision includes forward handler source; bounded reconciliation updates terminal forward history even after manual fence",
+      "rawSha256": "64d1106b2d73888f14adb5b5925e1cc559ff806b6760750759fad7a869ea4f7e"
+    },
+    {
+      "proof": "Operator retry reset retained attempts; schema-valid cleanup payload substitution executed",
+      "resolution": "Operator retry refuses referenced occurrences; claim/handler/effect fences require exact frozen payload",
+      "rawSha256": "6534fe642c3808c80f976b31498d32d8659d54c3ab41a47b190e3ad0f7bbb000"
+    },
+    {
+      "setup": "Synthetic progress query cached a queued step after the actual job succeeded; first helper lacked UTF-8 metadata; newly opened/reused tabs ignored viewport settings until applied to the active tab; phone TOC link is hidden",
+      "resolution": "Use maxCacheEntries:0 for the separate fixture and document uncached authorized polling. UTF-8 metadata corrected. Only measured 390px captures count; 1280px wrong-phone captures retained as setup evidence. Phone uses visible heading anchor."
+    }
+  ],
+  "evidenceIndexSha256": "3d0d9c525beb1c80dcaf6f0daa7f6160db8741745f8d3c25a39508b011353ced",
+  "review": {
+    "independent": false,
+    "freshHostedChecks": "Required at final report head",
+    "newCodeQlAlerts": "Must be zero",
+    "unresolvedThreads": "Must be zero",
+    "merge": "Normal protected expected-head squash, then exact tree comparison and safe checkout sync"
+  },
+  "limitations": [
+    "External effects remain at least once and require durable provider idempotency/current business authorization; local abort cannot fence ignored remote requests",
+    "Private recovery tables do not invalidate application-record query caches; explicitly use authorized uncached progress polling",
+    "Manual intervention has no automatic resolution/retry API; export evidence and resolve provider state before deliberate inactive purge",
+    "Production Railway/provider topology is not certified by disposable/local acceptance"
+  ]
+}
