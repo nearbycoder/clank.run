@@ -15,6 +15,10 @@ const fixtures = {
   nested: 'export function snapshot() {\n    const value = `outer\n   ${(() => {\n       const inner = `inner\n   ${2 + 3}\n   `;\n       return inner;\n    })()}\n    end`;\n    return [value];\n}\n',
   comments: '/*! License: keep every    byte\n    including indentation. */\nexport function snapshot() {\n    // comment    spacing stays\n    const value = 5; /* another\n      indented comment */\n    return [value];\n}\n',
   division: 'export function snapshot() {\n    const value = 48;\n    const divisor = 2;\n    const result = (value) / divisor / /2/.source.length;\n    return [result, `raw\n   preserved`];\n}\n',
+  singleDivision: 'export function snapshot() {\n    const value = (48) / 2;\n    return [value, String.raw`raw\n    exact`];\n}\n',
+  singleDivisionAssign: 'export function snapshot() {\n    let value = 48;\n    (value) /= 2;\n    return [value, `raw\n    exact`];\n}\n',
+  singleDivisionLines: 'export function snapshot() {\r\n    const first = (48) / 2;\u2028    const second = (18) / 3;\u2029    return [first, second, `raw\r\n    exact`];\r\n}\r\n',
+  singleTemplateDivision: 'export function snapshot() {\n    return [String.raw`raw\n    ${(48) / 2\n    }\n    exact`];\n}\n',
   restricted: 'export function snapshot() {\n    outer: for (let i = 0; i < 2; i++) {\n      if (i === 0) continue outer\n      /["`]/.test("x");\n      break outer\n      /["`]/.test("x");\n    }\n    return [String.raw`raw\n   retained`];\n}\n',
   unicode: 'export function snapshot() {\n    const _value = 6;\n    const 𐐀 = 7;\n    const café = 8;\n    const object = {return: 9};\n    return [_value, 𐐀, café, object.return / 3];\n}\n',
   lineSeparators: 'export function snapshot() {\r\n    const value = 7;\u2028    const other = 8;\u2029    return [value + other, String.raw`raw\r\n   \r\n\t \r\nlast`];\r\n}\r\n',
@@ -76,7 +80,7 @@ test('actual built modules preserve executed literal, regex, comment, Unicode an
     const baseline = await import(pathToFileURL(join(root, `${name}-baseline.mjs`)).href);
     const actual = await import(pathToFileURL(join(root, 'dist', `${name}.js`)).href);
     assert.deepEqual(actual.snapshot(), baseline.snapshot(), name);
-    if (['ordinary', 'literals', 'nested', 'comments', 'division', 'unicode', 'lineSeparators', 'asi', 'privateProperty', 'expressionRegex', 'templateDivision', 'defaultRegex', 'extendsRegex'].includes(name)) {
+    if (['ordinary', 'literals', 'nested', 'comments', 'division', 'singleDivision', 'singleDivisionAssign', 'singleDivisionLines', 'singleTemplateDivision', 'unicode', 'lineSeparators', 'asi', 'privateProperty', 'expressionRegex', 'templateDivision', 'defaultRegex', 'extendsRegex'].includes(name)) {
       assert.ok(built.length < expected.length, `${name}: proof exercises an actually compacted module`);
     }
     assert.deepEqual(built.match(/\r\n|[\r\n\u2028\u2029]/gu), expected.match(/\r\n|[\r\n\u2028\u2029]/gu), `${name}: line endings`);

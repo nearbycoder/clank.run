@@ -45,13 +45,13 @@ The execution deadline begins when a queued task starts. The scheduler rotates w
 
 Linux additionally requires the `prlimit` system utility from util-linux at `/usr/bin/prlimit` or `/bin/prlimit`. Workers run without JIT compilation, with kernel limits of 256 MiB for the data segment, 1 GiB of address space, 10 CPU seconds, and disabled core dumps. A missing utility rejects database work. These are system requirements, not npm dependencies. Other operating systems enforce the deadline and V8 limit but need an external sandbox for native allocation limits; SQLite's `hard_heap_limit` is only defense in depth because standard Node builds disable the memory accounting needed to enforce it.
 
-`allowUnsafeMigrations: true` is only a request. The platform operator must also set `CLANK_ALLOW_UNSAFE_MIGRATIONS=1`; otherwise deployment is rejected. It relaxes SQL restrictions and should remain limited to reviewed operator migrations. The Linux filesystem namespace still applies, while non-Linux workers retain host-user filesystem authority.
+`allowUnsafeMigrations: true` is only a request. The platform operator must also set `CLANK_ALLOW_UNSAFE_MIGRATIONS=1`; otherwise deployment is rejected. It relaxes SQL restrictions and should remain limited to reviewed operator migrations. The selected worker isolation policy still applies; this flag does not change namespace requirements.
 
 ## Backup and failure
 
 Before applying pending migrations, Clank stops the active app. Planning and the pre-release snapshot can run while the prior release is still active. Backup uses Node's SQLite backup API. Backup and restore reject final symbolic links, verify source and destination integrity, keep files private, and replace through a verified temporary file. On migration, startup, or health failure Clank stops the candidate, restores the snapshot, and restarts the prior release.
 
-Linux workers require Bubblewrap at `/usr/bin/bwrap` and permission to create their namespaces. Selected database directories are pinned with no-follow descriptors and mounted into a private filesystem; backup publication retains its destination descriptor through replacement and cleanup. See [SQLite worker isolation](sqlite-isolation.md) for requirements and real regression tests. Non-Linux workers retain host-user filesystem authority, so they require trusted deployers or an external sandbox.
+Linux workers default to Bubblewrap at `/usr/bin/bwrap` and require permission to create their namespaces. Selected database directories are pinned with no-follow descriptors and mounted into a private filesystem; backup publication retains its destination descriptor through replacement and cleanup. Explicit trusted process hosting can select bounded helpers without filesystem/network namespaces. See [SQLite worker isolation](sqlite-isolation.md) for requirements and real regression tests. Non-Linux workers retain host-user filesystem authority, so they require trusted deployers or an external sandbox.
 
 Same-disk snapshots do not protect against disk loss. Export encrypted backups off-host and test restoration.
 

@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { createHash, createSign, generateKeyPairSync } from "node:crypto";
+import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import {
   createDeploymentCoordinatorClient,
@@ -24,6 +26,7 @@ import {
 } from "../dist/index.js";
 
 import { getClankTheme } from "../dist/ui-theme.js";
+import { reservePlatformTestPorts } from "./fixtures/platform-test-ports.mjs";
 
 const IMPERSONATION_RECENT_AUTH_MS_FOR_TEST = 30 * 60_000;
 
@@ -308,6 +311,53 @@ function memoryObjectStore() {
     }),
   };
 }
+
+test("trusted control plane deploys and backs up when its host denies SQLite namespaces", { skip: process.platform !== "linux" }, async t => {
+  const root = await mkdtemp(join(tmpdir(), "clank-platform-trusted-sqlite-"));
+  const ports = await reservePlatformTestPorts();
+  const spawn = childProcess.spawn;
+  let workers = 0;
+  t.mock.method(childProcess, "spawn", (executable, args, options) => {
+    if (args.includes("/usr/bin/bwrap")) throw new Error("test host denies namespaces");
+    if (executable === "/usr/bin/setpriv" && args.includes("/usr/bin/prlimit")) workers++;
+    return spawn(executable, args, options);
+  });
+  syncBuiltinESMExports();
+  let platform;
+  try {
+    platform = await openPlatform({
+      dataDirectory: join(root, "platform"), publicUrl: "http://127.0.0.1:4200",
+      hostingProfile: "trusted", runner: { kind: "process" }, sqliteIsolation: "trusted-process",
+      signup: "bootstrap", appPortStart: ports.start, appPortEnd: ports.end,
+      backups: { intervalMs: false },
+    });
+    const owner = await authorizeCli(platform, "trusted-sqlite@example.com");
+    const { project } = await payload(platform, jsonRequest("/api/projects", {
+      method: "POST", token: owner.accessToken, body: { name: "Trusted SQLite", slug: "trusted-sqlite" },
+    }), 201);
+    const migrations = [["0001_items.sql", "CREATE TABLE items(id INTEGER PRIMARY KEY);"]];
+    for (const [label, sql] of [["first", migrations], ["second", [...migrations, ["0002_labels.sql", "CREATE TABLE labels(value TEXT);"]]]]) {
+      const artifact = await appArtifact(join(root, "app"), label, sql);
+      const release = await deploy(platform, project.id, owner.accessToken, artifact, `trusted-sqlite-${label}`);
+      assert.equal(release.response.status, 201, JSON.stringify(release.body));
+      assert.equal(await fetch(release.body.release.directUrl).then(response => response.text()), label);
+    }
+    const backup = await payload(platform, jsonRequest(`/api/projects/${project.id}/backups`, {
+      method: "POST", token: owner.accessToken, body: { reason: "trusted worker regression" },
+    }), 201);
+    await payload(platform, jsonRequest(`/api/projects/${project.id}/backups/${backup.backup.id}/verify`, {
+      method: "POST", token: owner.accessToken, body: {},
+    }));
+    assert.ok(workers >= 5, "deployment planning, migration, snapshot, and backup used bounded workers");
+    const db = new DatabaseSync(join(root, "platform", "projects", project.id, "data", "app.sqlite"));
+    try { assert.equal(db.prepare("SELECT count(*) AS n FROM clank_migrations").get().n, 2); }
+    finally { db.close(); }
+  } finally {
+    await platform?.close();
+    t.mock.restoreAll(); syncBuiltinESMExports();
+    await ports.release(); await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("platform retains and serves exact release artifacts only to their leased deployment node", async () => {
   const root = await mkdtemp(join(tmpdir(), "clank-platform-runner-artifacts-"));

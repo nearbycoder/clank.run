@@ -1,5 +1,22 @@
 import { type McpTool } from "./mcp.js";
 import type { ObjectStore } from "./object-storage.js";
+import type { SQLiteStatement } from "./sqlite-internal.js";
+/** @internal Opaque generation, never an object-store path or browser authority. */
+export interface BucketProcessingSource {
+    readonly bucket: string;
+    readonly key: string;
+    readonly generation: string;
+    readonly metadata: BucketObject;
+}
+/** @internal Supported native catalog integration for the durable media service. */
+export interface BucketProcessingBinding {
+    readonly databasePath: string;
+    snapshot(bucket: string, key: string, userId: string): BucketProcessingSource | null;
+    read(source: BucketProcessingSource, userId: string): Promise<BucketStoredObject>;
+    publish(input: { source: BucketProcessingSource; userId: string; bucket: string; key: string; expectedGeneration: string | null; bytes: Uint8Array; contentType: string; signal: AbortSignal }, hooks: { check(): void; accept(connection: { prepare(sql: string): SQLiteStatement }, object: BucketObject, generation: string): void }): Promise<BucketObject>;
+}
+/** @internal A copied manager has no native publication capability. */
+export declare function bucketProcessingBinding(manager: BucketManager): BucketProcessingBinding;
 export type BucketVisibility = "private" | "public";
 export type BucketOwnership = "app" | "user";
 export type BucketBrowserAccess = "authenticated" | "public" | "server";

@@ -1,4 +1,8 @@
 import type { LinuxHostCertificationOptions } from "./host-certification.js";
+import type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
+export type { PlatformSupervisorOptions, PlatformSupervisorStatus } from "./platform-supervisor.js";
+import type {PlatformServiceAccountOptions} from "./platform-service-accounts.js";
+import type {AuthenticatedServiceAccount} from "./service-accounts.js";
 import type { ManagedCanaryOptions } from "./managed-canary.js";
 import type { ReleaseAttestationPolicy } from "./release-attestation.js";
 import type { PlatformOperationsOptions } from "./operations-monitor.js";
@@ -311,6 +315,9 @@ export interface PlatformBillingOptions {
 }
 export interface ClankPlatformOptions {
   incidents?: import("./platform-incidents.js").PlatformIncidentOptions;
+    /** Same-host Linux coordinators; each occupies a dedicated process terminated after leadership loss. */
+    supervisor?: PlatformSupervisorOptions;
+  serviceAccounts?: PlatformServiceAccountOptions;
   /**
    * Private operator certificates for co-located, loopback provider nodes.
    * Every provider promotion requires a current report under its exact node ID.
@@ -341,6 +348,8 @@ export interface ClankPlatformOptions {
      * Docker runner. Defaults from the selected runner for programmatic callers.
      */
     hostingProfile?: PlatformHostingProfile;
+    /** Defaults to namespaces. trusted-process requires explicit trusted process hosting and closed public signup. */
+    sqliteIsolation?: "namespace" | "trusted-process";
     runner?: PlatformRunnerOptions;
     /**
      * Enables the authenticated remote deployment-node coordination API.
@@ -458,7 +467,10 @@ export interface ClankPlatformOptions {
 }
 export type PlatformRuntimePolicy = "always_on" | "on_demand" | "suspended";
 export interface PlatformRuntime {
+    readonly supervisor?: () => PlatformSupervisorStatus;
     readonly handle: (request: Request) => Promise<Response>;
+    /** Resolve a current machine credential for trusted server-side budget adapters. */
+    authenticateServiceAccount(request: Request): AuthenticatedServiceAccount;
     readonly publicUrl: string;
     readonly dataDirectory: string;
     readonly hostingProfile: PlatformHostingProfile;

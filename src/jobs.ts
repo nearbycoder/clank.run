@@ -17,6 +17,13 @@ export type InferJobArgs<Args extends JobArgs> = Args extends Schema<any>
     : never;
 
 export type JobState = "queued" | "running" | "retry" | "succeeded" | "dead" | "cancelled";
+const jobAttemptChecks = new WeakMap<object, () => void>();
+/** @internal Consult the actual current claim; a copied context grants no authority. */
+export function assertJobAttemptCurrent(context: JobHandlerContext<any, any>): void {
+  const check = jobAttemptChecks.get(context);
+  if (!check) throw new Error("An active native job attempt is required.");
+  check();
+}
 export type CronConcurrency = "allow" | "forbid" | "replace";
 
 export interface JobRetryOptions {
@@ -1966,6 +1973,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       signal: controller.signal,
       jobs: scopedPublisher,
     });
+    jobAttemptChecks.set(context, assertClaim);
     const span = options.tracer?.startSpan(`job ${claimed.row.name}`.slice(0, 200), {
       kind: "consumer", parent: parseJobTrace(claimed.row.trace_context),
       attributes: { "clank.job.id": claimed.row.id, "clank.job.name": claimed.row.name, "clank.job.attempt": Number(claimed.row.attempts) },
@@ -2032,6 +2040,7 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
       }
     } finally {
       active = false;
+      jobAttemptChecks.delete(context);
       clearInterval(heartbeat);
       clearTimeout(timeout);
       span?.end();
@@ -2251,9 +2260,10 @@ export function openJobs<Definition extends JobSystemDefinition<any, any>>(
     cancel(id) {
       ensureOpen();
       const cancelledAt = now();
-      return internal.transaction(() => {
+      const cancel = () => {
         return requestJobCancellation(identifier(id, "job id", 128, true), cancelledAt);
-      });
+      };
+      return internal.inTransaction ? cancel() : internal.transaction(cancel);
     },
     retry(id, retryOptions = {}) {
       ensureOpen();

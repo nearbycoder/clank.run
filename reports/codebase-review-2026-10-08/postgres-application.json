@@ -1,0 +1,108 @@
+{
+  "feature": 21,
+  "proposal": "https://github.com/nearbycoder/clank.run/issues/331",
+  "pullRequest": "https://github.com/nearbycoder/clank.run/pull/333",
+  "acceptedCommit": "fd9a7ab638a814ebe4c3f1260933bfaf1171f3e9",
+  "reviewedHead": "af33523606ada6b22cb8589303b1984bd2462ae9",
+  "tree": "f76e1fa1a6a77c4b7e83ab2b44d0a7800e02de5a",
+  "featureCounts": {
+    "accepted": 28,
+    "batches": 25,
+    "remaining": 12
+  },
+  "fullGates": {
+    "node26": {
+      "reported": 2139,
+      "passed": 2136,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": [
+        91.57,
+        81.03,
+        90.12
+      ],
+      "logSha256": "d68d48d1002c3aa948146f05d4248ee6706f7114431e50ca61e8d144dc93bdbc"
+    },
+    "node22": {
+      "reported": 2139,
+      "passed": 2136,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 3,
+      "coverage": [
+        91.57,
+        81.05,
+        90.16
+      ],
+      "logSha256": "71a1be3775b943e44be01915150e917539dc69a3d7e5072aa231b0263ac1971f"
+    }
+  },
+  "nativeCases": 24,
+  "packedNativeConsumers": [
+    "Node 26.10",
+    "Node 22.16"
+  ],
+  "consumerTypes": {
+    "fixtures": 35,
+    "existingDiagnostics": 159,
+    "newDiagnostics": 0,
+    "unchangedBaseline": 163
+  },
+  "package": {
+    "files": 417,
+    "unpackedBytes": 5996193,
+    "compressedBytes": 1493480,
+    "headroomBytes": 295263,
+    "runtimeDependencies": 0,
+    "developmentDependencies": 0,
+    "sha256": "7736257a5ae2c632a56369491da18aafffbfc4550172cbe75c9ecc00752f43d0"
+  },
+  "docs": {
+    "guides": 102,
+    "words": 178628,
+    "localLinks": 344,
+    "indexedGuides": 97,
+    "declarations": 132,
+    "exports": 156,
+    "doctorPassed": 6,
+    "doctorWarnings": 1,
+    "doctorFailed": 0,
+    "offlineArtifact": "d0de2afdc7d4f302b23cf6331ffa9fffeb0b3e89281e4b925e0b77827e68d9b9",
+    "uploaded": false,
+    "actualHttpMcpChecks": 11,
+    "visuallyInspectedCaptures": 6
+  },
+  "source": {
+    "inputsVerifiedBeforeGates": 1122,
+    "tarSha256": "71014144328e703704b9f27cf36d8a8a18060d9906442f49f1b5eee620ab502d"
+  },
+  "hosted": {
+    "head": "af33523606ada6b22cb8589303b1984bd2462ae9",
+    "allChecksGreen": 8,
+    "ciRun": 38085952834,
+    "analysisRun": 38085952777,
+    "checkIds": [
+      114312734021,
+      114312365178,
+      114312365097,
+      114312365084,
+      114312365064,
+      114312365055,
+      114312364943,
+      114312364683
+    ],
+    "codeQL": "No new changed-code alerts",
+    "unresolvedThreads": 0,
+    "analysisAnnotation": "Verified Ubuntu 26 runner migration notice"
+  },
+  "authorComment": 5480827487,
+  "independentApproval": false,
+  "privateEvidence": {
+    "files": 41,
+    "indexSha256": "cc5eea3564178316437216272257c83da4ffffbbd4c219211e59994f1e1b421b",
+    "excluded": "Private credentials/settings, mutable server/tunnel logs"
+  },
+  "preservedLocalFiles": 23,
+  "qualification": "Actual native PostgreSQL 17.11/SCRAM/verified TLS in fresh owned ordinary-user clusters, actual process SIGKILL and actual native COMMIT acknowledgement loss. Fault proxies are development-loopback transport and do not fabricate rows or clocks. Unsupported SQLite services remain refused. No browser keyboard/button-navigation, physical-authenticator or production/provider certification claim."
+}

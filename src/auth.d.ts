@@ -3,6 +3,8 @@ import { type Renderable } from "./dom.js";
 import { type InferSchemaShape, type Schema, type SchemaShape } from "./ai.js";
 import type { DatabaseSchema, SQLiteDatabase } from "./backend.js";
 import type { Middleware } from "./server.js";
+/** @internal Native binding; serialized state is never a runtime capability. */
+export declare function authRuntimeDatabase(runtime: AuthRuntime<any>): SQLiteDatabase<any> | undefined;
 declare const AUTH_USER_ID: unique symbol;
 export type AuthUserId = string & {
     readonly [AUTH_USER_ID]: true;

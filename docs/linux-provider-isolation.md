@@ -41,6 +41,8 @@ Size the persistent quota to leave room for deployment snapshots, journal record
 
 These are IP/network policies, not URL/path policies. An allowed address grants connections to that address on all ports; it does not authenticate a particular remote service. Applications should still verify TLS identities. Runtime workers and schedulers receive the same network policy. Removing a runtime first removes its containers and network, then removes its owned nftables table. If network cleanup cannot be verified, the restrictive policy is retained. Following an unexpected provider crash, stale owned network/table pairs are replaced when that project is relaunched; an operator can remove unused pairs after confirming their containers are gone.
 
+A direct launcher can pass `isolatedReadOnly: true` when preparing a private candidate from a separate provider-owned data checkpoint. This requires configured outbound enforcement, overrides every operator egress allowance with denial, mounts `/data` read-only, and rejects declared workers and schedulers. The application must open SQLite in read-only mode and start without data writes. This flag does not create a checkpoint or publish traffic. Both `activate()` and `commit()` refuse these candidates: stop them and verify cleanup before using the ordinary authoritative deployment path with current primary data.
+
 The provider needs access to its local Docker daemon and nftables administration privileges. Clank manages only its own named tables and project bridges. Existing host firewall rules may further restrict allowed traffic. Host administrators must not disable or overwrite these rules while runtimes are active.
 
 ## Local verification
@@ -78,5 +80,7 @@ CLANK_DOCKER_INTEGRATION=1 CLANK_DISPOSABLE_TEST_HOST=1 \
 ```
 
 It creates real network namespaces and reachable positive-control endpoints inside the VM, starts an actual unprivileged application container through the provider launcher, verifies filesystem/capability/tmpfs restrictions, tests permitted and denied packets (including private, metadata and host destinations), and verifies container, network and policy cleanup. Together with the disposable XFS test this was exercised locally on Debian 13 with Docker 26.1.5. Production hosts must validate their own kernel, firewall, filesystem and namespace profiles; a passing disposable-host test does not change those host requirements.
+
+The read-only candidate case verifies native SQLite and filesystem write refusal, an unchanged checkpoint, no background containers, refusal of authoritative activation, and exact cleanup. Reachable public and host endpoints succeed in an unrestricted container first; the candidate must deny both, including a public address permitted by the operator's normal policy.
 
 The ordinary Linux isolation suite requires `bubblewrap`, `util-linux`, `iproute2`, `nftables` and `procps`, plus permission to create unprivileged user, mount and network namespaces. It fails when those enforcement capabilities are missing. Containerized control planes additionally require an explicitly reviewed seccomp/AppArmor profile that permits the helper namespaces; installing `bubblewrap` alone does not override a container runtime's restrictions. Do not replace that requirement with `--privileged` or a silent unsandboxed fallback.

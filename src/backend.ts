@@ -472,6 +472,37 @@ interface DatabaseSyncConstructor {
   new(path: string): DatabaseSyncLike;
 }
 
+function assertGuardedSQLiteSQL(sql:string,readPragmas=false):void {
+  if(readPragmas&&/^\s*PRAGMA\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:table_info|table_xinfo|index_list|index_info|index_xinfo|database_list|foreign_key_list)\s*(?:\([^;]*\))?\s*;?\s*$/iu.test(sql))return;
+  const forbidden=new Set(["BEGIN","COMMIT","END","ROLLBACK","SAVEPOINT","RELEASE","ATTACH","DETACH","PRAGMA","VACUUM"]);
+  let index=0,words:string[]=[],trigger=false,body=false,ended=false,cases=0;
+  while(index<sql.length){
+    const character=sql[index]!,next=sql[index+1];
+    if(character==='-'&&next==='-'){index+=2;while(index<sql.length&&sql[index]!=='\n')index++;continue;}
+    if(character==='/'&&next==='*'){index+=2;while(index<sql.length&&!(sql[index]==='*'&&sql[index+1]==='/'))index++;if(index>=sql.length)throw new Error("Unterminated guarded SQL comment.");index+=2;continue;}
+    if(character==="'"||character==='"'||character==='`'||character==='['){
+      const close=character==='['?']':character;index++;let closed=false;
+      while(index<sql.length){if(sql[index]===close){if(close!==']'&&sql[index+1]===close){index+=2;continue;}index++;closed=true;break;}index++;}
+      if(!closed)throw new Error("Unterminated guarded SQL literal.");if(!words.length)words.push("QUOTED");continue;
+    }
+    if(character===';'){
+      if(!trigger||ended){words=[];trigger=false;body=false;ended=false;cases=0;}index++;continue;
+    }
+    if(/[A-Za-z_]/u.test(character)){
+      const start=index++;while(index<sql.length&&/[A-Za-z0-9_]/u.test(sql[index]!))index++;
+      const word=sql.slice(start,index).toUpperCase();
+      if(!words.length&&forbidden.has(word))throw new Error("Native write authority forbids raw transaction controls and connection-changing SQL.");
+      if(ended)throw new Error("Unexpected SQL after guarded trigger body.");
+      words.push(word);
+      trigger=trigger||words[0]==='CREATE'&&(words[1]==='TRIGGER'||['TEMP','TEMPORARY'].includes(words[1]??'')&&words[2]==='TRIGGER');
+      if(trigger){if(!body&&word==='BEGIN')body=true;else if(body&&word==='CASE')cases++;else if(body&&word==='END'){if(cases)cases--;else ended=true;}}
+      continue;
+    }
+    index++;
+  }
+  if(trigger&&!ended)throw new Error("Incomplete guarded trigger body.");
+}
+
 export interface SQLiteOptions {
   /** Opt-in metadata-only SQL plans and execution statistics, bounded to 500 shapes. */
   queryDiagnostics?: boolean;
@@ -489,7 +520,8 @@ export interface SQLiteOptions {
   onError?: (error: unknown) => void;
 }
 
-export interface SQLiteDatabase<Schema extends DatabaseSchema<any>> {
+/** Portable generated-table contract. Native services require SQLiteDatabase. */
+export interface ApplicationDatabase<Schema extends DatabaseSchema<any>> {
   readonly schema: Schema;
   readonly version: number;
   inspectDatabaseQueries(): readonly DatabaseQueryDiagnostic[];
@@ -498,6 +530,9 @@ export interface SQLiteDatabase<Schema extends DatabaseSchema<any>> {
   transaction<Value>(handler: (db: WriteDatabase<Schema>) => Value, scope?: DatabaseScope): Value;
   subscribe(listener: (change: DatabaseChange) => void): Cleanup;
   close(): void;
+}
+
+export interface SQLiteDatabase<Schema extends DatabaseSchema<any>> extends ApplicationDatabase<Schema> {
   /** @internal Used by Clank's own zero-dependency services. */
   readonly [SQLITE_INTERNAL]: SQLiteInternal;
 }
@@ -651,6 +686,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
   let closed = false;
   const recoveryRequired = !!native.prepare("SELECT 1 FROM sqlite_schema WHERE name='clank_pitr_state'").get();
   let capture: import("./sqlite-internal.ts").SQLiteTransactionCapture | undefined;
+  let writeGuard: (() => void) | undefined;
   let transactionActive = false;
   let activeChanges: ReturnType<typeof changesForTransaction> | undefined;
   let readActive = false;
@@ -974,13 +1010,23 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     }));
   };
 
-  const makeWriter = (changes: ReturnType<typeof changesForTransaction>, ownerId?: string | null): WriteDatabase<Schema> => ({
+  const makeWriter = (changes: ReturnType<typeof changesForTransaction>, ownerId?: string | null): WriteDatabase<Schema> => {
+    const token = snapshotToken;
+    const ensureWriter = () => {
+      ensureOpen();
+      if (!transactionActive || activeChanges !== changes || snapshotToken !== token) {
+        throw new Error("Writes require their original active database transaction.");
+      }
+    };
+    return {
     table<Name extends TableName<Schema>>(name: Name): WriteTable<Schema, Name> {
+      ensureWriter();
       const definition = tableDefinition(schema, name);
       const reader = makeReader(undefined, ownerId).table(name);
       return {
         ...reader,
         insert(raw) {
+          ensureWriter();
           const value = definition.schema.parse(raw) as TableValue<Schema["tables"][Name]>;
           if (definition.ownership === "user" && (ownerId === null || ownerId === undefined)) {
             throw new Error(`Owned table ${name} requires an authenticated user for inserts.`);
@@ -1011,6 +1057,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return id;
         },
         patch(id, patch, writeOptions = {}) {
+          ensureWriter();
           if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new TypeError("patch() expects an object.");
           for (const key of Object.keys(patch)) if (!(key in definition.fields)) throw new TypeError(`Unknown field in patch: ${key}`);
           const previous = getDocument(name, id, ownerId);
@@ -1049,6 +1096,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return documentWithMetadata(schema, name, value, id, previous._creationTime, nextVersion, storedOwner);
         },
         replace(id, raw, writeOptions = {}) {
+          ensureWriter();
           const previous = getDocument(name, id, ownerId);
           const expected = validatedExpectedVersion(writeOptions.ifVersion);
           if (expected !== undefined && previous?._version !== expected) {
@@ -1084,6 +1132,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return documentWithMetadata(schema, name, value, id, previous._creationTime, nextVersion, storedOwner);
         },
         delete(id, writeOptions = {}) {
+          ensureWriter();
           const previous = getDocument(name, id, ownerId);
           const expected = validatedExpectedVersion(writeOptions.ifVersion);
           if (expected !== undefined && previous?._version !== expected) {
@@ -1115,6 +1164,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return changed;
         },
         purgeDeleted(id, cursorInput) {
+          ensureWriter();
           const cursor = documentRevisionCursor(cursorInput, "purge cursor");
           const latest = getHistory(name, id, { limit: 1 }, ownerId)[0];
           if (!latest) return false;
@@ -1128,6 +1178,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
           return true;
         },
         restore(id, cursorInput, restoreOptions = {}) {
+          ensureWriter();
           const cursor = documentRevisionCursor(cursorInput, "restore cursor");
           const expected = validatedRestoreVersion(restoreOptions.ifVersion);
           const current = getDocument(name, id, ownerId);
@@ -1190,7 +1241,8 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         },
       };
     },
-  });
+  };
+  };
 
   const runTransaction = <Value>(
     handler: (changes: ReturnType<typeof changesForTransaction>) => Value,
@@ -1211,6 +1263,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
     try {
       native.exec("BEGIN IMMEDIATE");
       began = true;
+      writeGuard?.();
       capture?.before();
       value = handler(changes);
       assertSynchronous(value, "mutation");
@@ -1284,6 +1337,7 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
         }
       }
       capture?.commit();
+      writeGuard?.();
       native.exec("COMMIT");
     } catch (error) {
       if (began) {
@@ -1372,6 +1426,16 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       native.close();
     },
     [SQLITE_INTERNAL]: {
+      guardWrites(guard) {
+        ensureOpen();
+        if (writeGuard || transactionActive || readActive || typeof guard !== "function") throw new Error("Native write authority requires an idle database and can only be installed once.");
+        const connection=Object.freeze({prepare:(sql:string)=>native.prepare(sql)});
+        writeGuard=()=>{
+          const value=guard(connection);
+          if(value!==undefined){void Promise.resolve(value).catch(()=>undefined);throw new TypeError("Native write authority must synchronously return undefined.");}
+        };
+        try { writeGuard(); } catch(error) { writeGuard=undefined; throw error; }
+      },
       captureTransactions(factory) {
         ensureOpen();
         if (capture || transactionActive || readActive) throw new Error("Recovery capture requires an idle database and can only be installed once.");
@@ -1383,8 +1447,9 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       },
       exec(sql) {
         ensureOpen();
-        if (capture) {
-          if (/\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|ATTACH|DETACH|PRAGMA|VACUUM)\b/iu.test(sql)) throw new Error("Recovery capture forbids raw transaction controls and connection-changing SQL.");
+        if (capture || writeGuard) {
+          if(writeGuard)assertGuardedSQLiteSQL(sql);
+          if (capture&&/\b(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE|ATTACH|DETACH|PRAGMA|VACUUM)\b/iu.test(sql)) throw new Error("Recovery capture forbids raw transaction controls and connection-changing SQL.");
           if (transactionActive) native.exec(sql); else runTransaction(() => native.exec(sql));
         } else {
           if (recoveryRequired) throw new Error("This database requires point-in-time recovery capture before schema access.");
@@ -1394,9 +1459,10 @@ export function createSQLiteDatabase<Schema extends DatabaseSchema<any>>(
       prepare(sql) {
         let statement = prepared(sql);
         const invoke = <Value>(handler: () => Value): Value => {
-          if ((capture || recoveryRequired) && readActive && !/^\s*(?:SELECT|EXPLAIN)\b/iu.test(sql)) throw new Error("Recovery forbids service writes inside a read snapshot.");
+          if(writeGuard)assertGuardedSQLiteSQL(sql,true);
+          if ((capture || recoveryRequired || writeGuard) && readActive && !/^\s*(?:SELECT|EXPLAIN)\b/iu.test(sql)) throw new Error(capture || recoveryRequired ? "Recovery forbids service writes inside a read snapshot." : "Native write authority forbids service writes inside a read snapshot.");
           if (capture) statement = native.prepare(sql);
-          return (capture || recoveryRequired) && !transactionActive && !readActive ? runTransaction(() => handler()) : handler();
+          return (capture || recoveryRequired || writeGuard) && !transactionActive && !readActive ? runTransaction(() => handler()) : handler();
         };
         return { all: (...args) => invoke(() => statement.all(...args)), get: (...args) => invoke(() => statement.get(...args)), run: (...args) => invoke(() => statement.run(...args)) };
       },
@@ -1942,9 +2008,10 @@ export interface BackendRuntime<
   Functions extends FunctionTree,
   Auth extends AuthDefinition<any> | undefined = undefined,
   Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
+  Storage extends ApplicationDatabase<Schema> = SQLiteDatabase<Schema>,
 > {
   readonly definition: BackendDefinition<Schema, Functions, Auth, Jobs>;
-  readonly database: SQLiteDatabase<Schema>;
+  readonly database: Storage;
   readonly auth: Auth extends AuthDefinition<infer Profile> ? AuthRuntime<Profile> : undefined;
   readonly jobs: Jobs extends JobSystemDefinition<Schema, any> ? JobRuntime<Jobs> : undefined;
   /** First-class application buckets, when configured for this backend. */
@@ -1977,7 +2044,8 @@ export interface QueryDiagnostic {
   readonly subscriptions: number;
 }
 
-export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extends SQLiteOptions {
+export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any,
+  Storage extends ApplicationDatabase<any> = SQLiteDatabase<any>> extends SQLiteOptions {
   /** Retain bounded session/query-scoped snapshots for efficient SSE reconnects. */
   liveResume?: LiveResumeOptions;
   agentActivity?: AgentActivityOptions;
@@ -1987,7 +2055,7 @@ export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extend
   tracer?: Tracer;
   /** Enable local query metadata inspection; arguments, identities, and values are excluded. */
   diagnostics?: boolean;
-  database?: SQLiteDatabase<any>;
+  database?: Storage;
   prefix?: string;
   verifyOrigin?: boolean;
   allowedOrigins?: readonly string[];
@@ -2040,15 +2108,29 @@ export interface OpenBackendOptions<DB extends DatabaseSchema<any> = any> extend
   };
 }
 
+export function openBackend<
+  Schema extends DatabaseSchema<any>, Functions extends FunctionTree,
+  Auth extends AuthDefinition<any> | undefined = undefined,
+  Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
+  Storage extends ApplicationDatabase<Schema> = SQLiteDatabase<Schema>,
+>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>,
+  options: OpenBackendOptions<Schema, Storage>): Promise<BackendRuntime<Schema, Functions, Auth, Jobs, Storage>>;
+export function openBackend<
+  Schema extends DatabaseSchema<any>, Functions extends FunctionTree,
+  Auth extends AuthDefinition<any> | undefined = undefined,
+  Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
+>(definition: BackendDefinition<Schema, Functions, Auth, Jobs>,
+  options?: OpenBackendOptions<Schema>): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>>;
 export async function openBackend<
   Schema extends DatabaseSchema<any>,
   Functions extends FunctionTree,
   Auth extends AuthDefinition<any> | undefined = undefined,
   Jobs extends JobSystemDefinition<Schema, any> | undefined = undefined,
+  Storage extends ApplicationDatabase<Schema> = SQLiteDatabase<Schema>,
 >(
   definition: BackendDefinition<Schema, Functions, Auth, Jobs>,
-  options: OpenBackendOptions<Schema> = {},
-): Promise<BackendRuntime<Schema, Functions, Auth, Jobs>> {
+  options: OpenBackendOptions<Schema, Storage> = {},
+): Promise<BackendRuntime<Schema, Functions, Auth, Jobs, Storage>> {
   const heartbeatMs = positiveIntegerOption(options.heartbeat ?? 20_000, "heartbeat");
   const maxRequestBytes = positiveIntegerOption(options.maxRequestBytes ?? 64 * 1024, "maxRequestBytes");
   const maxResponseBytes = positiveIntegerOption(options.maxResponseBytes ?? 4 * 1024 * 1024, "maxResponseBytes");
@@ -2086,13 +2168,23 @@ export async function openBackend<
       }
     }
   }
-  const database = options.database as SQLiteDatabase<Schema> | undefined
+  const database: ApplicationDatabase<Schema> = options.database
     ?? await openSQLite(definition.schema, options);
+  const portable = !(SQLITE_INTERNAL in database);
+  // A portable application store must never be mistaken for the native store
+  // used by authentication, queues, receipts and review services.
+  if (portable && (database.schema !== definition.schema || definition.auth || definition.jobs
+    || options.agentActivity || options.reviewedActions || options.offlineMutations || options.buckets
+    || Object.values(definition.schema.tables).some((table: any) => table.ownership !== "public")
+    || [...registry.values()].some(fn => fn.access !== "public"))) {
+    throw new TypeError("Portable application backends support public functions over the same public-table schema; SQLite authentication, jobs, activity, reviewed actions, offline receipts and buckets are unsupported.");
+  }
+  const serviceDatabase = portable ? undefined : database as SQLiteDatabase<Schema>;
   const jobsRuntime = definition.jobs
     ? openJobs(definition.jobs, {
         ...options.jobs,
         tracer: options.jobs?.tracer ?? options.tracer,
-        database,
+        database: serviceDatabase!,
         onError(error, job) {
           try { void Promise.resolve(options.jobs?.onError?.(error, job)).catch(() => undefined); } catch { /* Continue notifying other observers. */ }
           try { void Promise.resolve(options.onError?.(error)).catch(() => undefined); } catch { /* Observers cannot change queue state. */ }
@@ -2105,17 +2197,17 @@ export async function openBackend<
   const activityRevisions = new WeakMap<Request, { beforeRevision: number; afterRevision: number; receiptId?: string; changes?: readonly ReviewedRecordChange[]; compensationAvailable?: boolean }>();
   let mutationReceipt: ReturnType<typeof openMutationReceipts> | undefined;
   try {
-    activity = options.agentActivity ? openAgentActivity(database, options.agentActivity) : undefined;
-    mutationReceipt = options.offlineMutations ? openMutationReceipts(database, options.offlineMutations) : undefined;
+    activity = options.agentActivity ? openAgentActivity(serviceDatabase!, options.agentActivity) : undefined;
+    mutationReceipt = options.offlineMutations ? openMutationReceipts(serviceDatabase!, options.offlineMutations) : undefined;
     authRuntime = definition.auth
-      ? await openAuth(definition.auth, database, {
+      ? await openAuth(definition.auth, serviceDatabase!, {
           onError: options.onError,
           allowedOrigins: options.allowedOrigins,
         }) as AuthRuntime<AuthProfileOf<Auth>>
       : undefined;
     if (options.reviewedActions) {
       if (!authRuntime) throw new TypeError("Reviewed actions require application authentication.");
-      reviewedActions = openReviewedActions(database, authRuntime, { allowedOrigins: options.allowedOrigins, ...options.reviewedActions, prefix: options.reviewedActions.prefix ?? `${prefix}/approvals` });
+      reviewedActions = openReviewedActions(serviceDatabase!, authRuntime, { allowedOrigins: options.allowedOrigins, ...options.reviewedActions, prefix: options.reviewedActions.prefix ?? `${prefix}/approvals` });
     }
   } catch (error) {
     jobsRuntime?.close();
@@ -2361,7 +2453,7 @@ export async function openBackend<
 
   const oauth = agentOptions && authRuntime
     ? createProjectOAuth({
-        database,
+        database: serviceDatabase!,
         auth: authRuntime,
         mcpPath,
         oauthPrefix,
@@ -2609,10 +2701,10 @@ export async function openBackend<
     });
   };
 
-  const runtime: BackendRuntime<Schema, Functions, Auth, Jobs> = {
+  const runtime: BackendRuntime<Schema, Functions, Auth, Jobs, Storage> = {
     definition,
     reviewedActions,
-    database,
+    database: database as Storage,
     auth: authRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["auth"],
     jobs: jobsRuntime as BackendRuntime<Schema, Functions, Auth, Jobs>["jobs"],
     buckets: options.buckets,

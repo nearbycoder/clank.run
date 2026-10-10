@@ -35,6 +35,31 @@ jobs:
           npm run build
           node scripts/type-contracts.mjs --typescript "$RUNNER_TEMP/clank-type-tools/node_modules/typescript/lib/typescript.js" --type-roots "$RUNNER_TEMP/clank-type-tools/node_modules/@types"
 
+  postgres:
+    name: Native PostgreSQL / Node ${{ matrix.node }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.16", "26.10"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Install native test server
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql openssl
+      - name: Exercise both stores against an owned native cluster
+        run: node scripts/verify-postgres.mjs
+
   runtime:
     name: Node ${{ matrix.node }}
     runs-on: ubuntu-24.04
@@ -70,7 +95,8 @@ jobs:
           sudo apparmor_parser --replace scripts/ci-linux.apparmor
 
       - name: Build and run unit/integration tests
-        run: npm test
+        # Keep failing assertions at the end of bounded CI diagnostic logs.
+        run: npm test -- --test-reporter=spec
 
       - name: Verify published file set
         run: npm pack --dry-run

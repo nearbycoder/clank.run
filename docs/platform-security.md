@@ -12,7 +12,7 @@ Runner choice changes the code boundary:
 
 Never operate the process runner as a public code sandbox.
 
-On Linux, the host's SQLite helpers run in bounded Bubblewrap namespaces with pinned, per-tenant filesystem capabilities. Concurrent path substitution cannot redirect those mounts or backup publication to another host directory. Install and permit the required namespace tools before upgrading; missing or denied isolation fails closed. See [SQLite worker isolation](sqlite-isolation.md) for the exact boundary, host requirements and verification. Non-Linux helpers lack this filesystem boundary and require trusted deployers or an external sandbox.
+By default on Linux, the host's SQLite helpers run in bounded Bubblewrap namespaces with pinned, per-tenant filesystem capabilities. Concurrent path substitution cannot redirect those mounts or backup publication to another host directory. Install and permit the required namespace tools before upgrading; missing or denied isolation fails closed. Explicit trusted process hosting can opt into bounded helpers without filesystem/network namespaces; this requires trusted deployers and rejects public signup. See [SQLite worker isolation](sqlite-isolation.md) for the exact boundary, host requirements and verification. Non-Linux helpers lack this filesystem boundary and require trusted deployers or an external sandbox.
 
 The packaged production entry point defaults to `CLANK_HOSTING_PROFILE=isolated`, which selects
 Docker and rejects a process runner. `CLANK_HOSTING_PROFILE=trusted` is an explicit low-cost
@@ -327,7 +327,7 @@ Also pin image digests, patch the kernel/runtime, apply seccomp/AppArmor/SELinux
 - Validate allowed hosts.
 - Add upstream auth/upload/request rate limits; the built-in shared limiter is a control-plane backstop, not a DDoS edge.
 
-Distributed leases, authenticated workers, desired generations, durable idempotent operations, node draining, retries, and monotonic fences are available. The built-in child-process supervisor still keeps process ownership in memory, so run one active supervisor per project/data directory unless using a remote worker/leader integration.
+Distributed leases, authenticated workers, desired generations, durable idempotent operations, node draining, retries, and monotonic fences are available. Run one active supervisor per catalog unless explicitly enabling [automatic supervisor leadership](supervisor-leadership.md). That same-host Linux topology adds a retained catalog epoch, native transaction guards and independent coordinator guardians; it requires dedicated processes and verified previous tenant cleanup before takeover. Separate hosts and multi-region consensus need a different protocol.
 
 Managed ingress routes only exact verified hosts to loopback or explicit allowlisted upstreams, strips hop-by-hop and `Connection`-nominated headers, bounds request bodies and timeouts, retries only safe methods, and opens failure circuits. TLS certificates, DNS automation, WAF/DDoS controls, and WebSocket proxying belong at the external edge.
 

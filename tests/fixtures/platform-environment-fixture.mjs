@@ -105,6 +105,7 @@ export async function fixture(t, subprocess = false, overrides = {}) {
   };
   return { root, owner, options, development, staging, production, path, bind, artifact, upload, promotion, probe, account, call,
     handle(request) { return platform.handle(request); },
+    authenticateServiceAccount(request) { return platform.authenticateServiceAccount(request); },
     async serve(transform) { const { serve } = await import('../../dist/node.js'); const server = await serve(async request => { const response = await platform.handle(request); return transform ? transform(request, response) : response; }, { hostname: '127.0.0.1', port: overrides.publicUrl ? Number(new URL(origin).port) : 0 }); servers.push(server); return `http://127.0.0.1:${server.port}`; },
     async restart() { await platform.close(); platform = await open(); },
     async killAndRestart() { assert.ok(subprocess); await platform.kill(); platform = await open(); },

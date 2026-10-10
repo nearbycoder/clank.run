@@ -30,6 +30,26 @@ function run(f, grant, operationId = "one", text = "hello", caller = "agent") {
 }
 function code(expected) { return error => error instanceof AgentBudgetError && error.code === expected; }
 
+test("base64url identity prefixes preserve native budget replay and exact owner isolation", async () => {
+  const f = await fixture();
+  try {
+    f.credentials.set("admin", { ownerId: "_organization", principalId: "-human" });
+    f.credentials.set("agent", { ownerId: "_organization", principalId: "-machine" });
+    f.credentials.set("other-owner", { ownerId: "organization", principalId: "-machine" });
+    const grant = f.grant({ principalId: "-machine" });
+    const receipt = run(f, grant);
+    await f.reopen();
+    assert.deepEqual(run(f, grant), receipt);
+    assert.equal(f.budgets.preview(grant.id, "agent").used.calls, 1);
+    assert.equal(f.database.read(db => db.table("items").collect(), { userId: "_organization" }).length, 1);
+    assert.equal(f.database.read(db => db.table("items").collect(), { userId: "organization" }).length, 0);
+    assert.throws(() => run(f, grant, "cross-owner", "refused", "other-owner"), code("BUDGET_NOT_FOUND"));
+    f.credentials.set("agent", { ownerId: "_organization\n", principalId: "-machine" });
+    assert.throws(() => run(f, grant), /Invalid budget identity/);
+    assert.equal(f.database.version, 1);
+  } finally { await f.close(); }
+});
+
 test("budgets debit the accepted mutation atomically and replay after restart without spending twice", async () => {
   const f = await fixture();
   try {

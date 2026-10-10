@@ -27,6 +27,8 @@ export async function pinSQLiteDirectory(input: string, create = false): Promise
   } catch (error) { await handle.close(); throw error; }
 }
 
+export const SQLITE_RESOURCE_LIMITS = ["--data=268435456:268435456", "--as=1073741824:1073741824",
+  "--cpu=10:10", "--core=0:0"] as const;
 interface Mount { path: string; writable: boolean; create?: boolean; optional?: boolean }
 let coverageSequence = 0;
 export interface SQLiteSandbox {
@@ -151,8 +153,7 @@ export async function prepareSQLiteSandbox(module: string, operation: string, va
         bindFd(directory.fd, mount.path, mount.writable);
       } catch (error) { if (!mount.optional || (error as { code?: string }).code !== "ENOENT") throw error; }
     }
-    sandboxArgs.push("--", "/usr/bin/prlimit", "--data=268435456:268435456", "--as=1073741824:1073741824",
-      "--cpu=10:10", "--core=0:0", "--", "/runtime/node", ...childArguments);
+    sandboxArgs.push("--", "/usr/bin/prlimit", ...SQLITE_RESOURCE_LIMITS, "--", "/runtime/node", ...childArguments);
     try {
       await fs.access("/usr/bin/bwrap", 1);
       await fs.access("/usr/bin/prlimit", 1);

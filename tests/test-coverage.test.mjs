@@ -218,3 +218,26 @@ test("addition", () => assert.equal(add(2, 3), 5));`);
     await runCoverageGate({ execute: async () => ({ code: result.status, outputTail: result.stdout }) });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("an actual early failed assertion remains visible after a bounded hosted log tail while the release gate still fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "clank-coverage-failure-tail-"));
+  try {
+    await mkdir(join(root,"dist"));await mkdir(join(root,"tests"));
+    await writeFile(join(root,"package.json"),'{"type":"module"}');
+    await writeFile(join(root,"dist","measured.js"),'export const identity = value => value;\n');
+    await writeFile(join(root,"tests","native.test.mjs"),`import test from "node:test";
+import assert from "node:assert/strict";
+import {identity} from "../dist/measured.js";
+test("early native failure",()=>assert.equal(identity("actual"),"expected","retained-native-assertion-marker"));
+test("later native output",async()=>{await new Promise(resolve=>setTimeout(resolve,100));console.log("later output "+"x".repeat(200000));assert.equal(identity(1),1);});`);
+    const runner=join(root,"gate.mjs"),gate=new URL("../scripts/coverage-gate.mjs",import.meta.url).href;
+    await writeFile(runner,`import {runCoverageGate} from ${JSON.stringify(gate)};\ntry { await runCoverageGate(); } catch(error) { console.error(error.message); process.exitCode=1; }\n`);
+    const env={...process.env};delete env.NODE_V8_COVERAGE;delete env.NODE_TEST_CONTEXT;
+    const result=spawnSync(process.execPath,[runner],{cwd:root,env,encoding:"utf8",timeout:30000,maxBuffer:4*1024*1024});
+    assert.equal(result.error,undefined);assert.equal(result.status,1);
+    assert.ok(result.stdout.length>120000);assert.ok(!result.stdout.slice(-120000).includes("retained-native-assertion-marker"));
+    assert.match(result.stderr,/Retained native test failures/u);assert.match(result.stderr,/retained-native-assertion-marker/u);assert.match(result.stderr,/Tests exited with 1\./u);
+    assert.ok(result.stderr.length<64*1024+1024);assert.ok(!result.stderr.includes("retrying"));
+    assert.equal((result.stdout.match(/# tests 2\b/gu)??[]).length,1);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
