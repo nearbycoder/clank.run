@@ -66,6 +66,7 @@ import {
 import {
   BucketError,
   createBucketMcpTools,
+  bindBucketAttachmentContext,
   type BucketManager,
 } from "./buckets.ts";
 
@@ -1787,7 +1788,7 @@ export interface SyncClient {
     ...args: InputTuple<InputOf<Reference>>
   ): Promise<OutputOf<Reference>>;
   mutateOnce<Reference extends FunctionReference<"mutation", any, any>>(
-    reference: Reference, args: InputOf<Reference>, receipt: { key: string; userId: string },
+    reference: Reference, args: InputOf<Reference>, receipt: { key: string; userId: string; signal?: AbortSignal },
   ): Promise<OutputOf<Reference>>;
   live<Reference extends FunctionReference<"query", any, any>>(
     reference: Reference,
@@ -1832,8 +1833,9 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
   const EventSourceConstructor = options.eventSource ?? (globalThis as unknown as { EventSource?: new(url: string) => EventSourceLike }).EventSource;
   const seeds = new Map<string, { value: unknown; version: number }>();
 
-  const call = async (kind: "query" | "mutation", reference: FunctionReference<any, any, any>, args: unknown, receipt?: { key: string; userId: string }) => {
+  const call = async (kind: "query" | "mutation", reference: FunctionReference<any, any, any>, args: unknown, receipt?: { key: string; userId: string; signal?: AbortSignal }) => {
     if (!fetcher) throw new Error("fetch is not available in this runtime.");
+    receipt?.signal?.throwIfAborted();
     const response = await fetcher(`${base}/__clank/${kind}/${encodeURIComponent(functionPath(reference))}`, {
       method: "POST",
       credentials: "same-origin",
@@ -1843,12 +1845,14 @@ export function createSyncClient(options: SyncClientOptions = {}): SyncClient {
         ...(receipt ? { "x-clank-mutation-key": receipt.key, "x-clank-offline-user": receipt.userId } : {}),
       },
       body: JSON.stringify(args ?? {}),
+      signal: receipt?.signal,
     });
     const payload = await response.json().catch(() => ({ ok: false })) as {
       ok: boolean;
       value?: unknown;
       error?: { code?: string; message?: string };
     };
+    receipt?.signal?.throwIfAborted();
     if (!response.ok || !payload.ok) {
       throw new BackendClientError(
         payload.error?.code ?? "BACKEND_FAILED",
@@ -2273,9 +2277,13 @@ export async function openBackend<
     const value = database.transaction(
       (db) => {
         const execute = () => {
-          const output = fn.handler(handlerContext(db, auth, "mutation") as any, args);
-          assertSynchronous(output, "mutation");
-          return finalizeBackendOutput(fn, output, maxResponseBytes);
+          const context = handlerContext(db, auth, "mutation");
+          const unbind = options.buckets && auth?.user ? bindBucketAttachmentContext(context, options.buckets, database[SQLITE_INTERNAL], auth.user.id) : undefined;
+          try {
+            const output = fn.handler(context as any, args);
+            assertSynchronous(output, "mutation");
+            return finalizeBackendOutput(fn, output, maxResponseBytes);
+          } finally { unbind?.(); }
         };
         return key !== undefined ? mutationReceipt!(key, auth!.user!.id, path, stableStringify(args), execute) : execute();
       },
